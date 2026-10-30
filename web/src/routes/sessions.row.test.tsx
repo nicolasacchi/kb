@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { SessionListRow } from "./sessions";
-import type { SessionRow } from "../api/sessions";
+import type { SessionEvidenceOut, SessionRow } from "../api/sessions";
 
 function mk(over: Partial<SessionRow>): SessionRow {
   return {
@@ -67,5 +67,72 @@ describe("SessionListRow (worklog)", () => {
     expect(name.className).toContain("kb-ses__row-name--prompt");
     expect(name.textContent!.length).toBe(80);
     expect(document.querySelector(".kb-ses__row-preview")).toBeNull();
+  });
+
+  // OL IDEA3 — the evidence verdict, in words, after the facts.
+  const evidence = (over: Partial<SessionEvidenceOut>): SessionEvidenceOut => ({
+    verdict: "verified",
+    phrase: "cargo test passed after the last edit",
+    deciding: {
+      label: "cargo test",
+      cmd: "cargo test -p widget",
+      runners: ["cargo-test"],
+      outcome: "pass",
+      text: "passed",
+    },
+    checks_total: 1,
+    checks_after_edit: 1,
+    edits_ignored: 0,
+    uncommitted: false,
+    ...over,
+  });
+
+  it("appends the verdict phrase to the facts line, its title the deciding command", () => {
+    renderRow(mk({ display_name: "Build the widget", evidence: evidence({}) }));
+    const facts = document.querySelectorAll(".kb-ses__row-stats");
+    expect(facts.length).toBe(1);
+    expect(facts[0].textContent).toBe(
+      "widget · claude · 1h · 2 memories · cargo test passed after the last edit",
+    );
+    const span = screen.getByTestId("session-row-evidence");
+    expect(span.getAttribute("data-verdict")).toBe("verified");
+    expect(span.getAttribute("title")).toBe("$ cargo test -p widget");
+    // Words only: no glyph and no verdict-coloured class on the row.
+    expect(span.className).toBe("");
+  });
+
+  it("spells every row verdict and nothing for the quiet ones", () => {
+    for (const verdict of ["failing", "unconfirmed", "stale", "unchecked"] as const) {
+      cleanup();
+      renderRow(mk({ evidence: evidence({ verdict, phrase: `phrase for ${verdict}` }) }));
+      expect(screen.getByTestId("session-row-evidence").textContent).toBe(`phrase for ${verdict}`);
+    }
+    for (const ev of [
+      evidence({ verdict: "no_edits", phrase: undefined, deciding: undefined }),
+      evidence({ verdict: "not_extracted", phrase: undefined, deciding: undefined }),
+      undefined,
+    ]) {
+      cleanup();
+      renderRow(mk({ evidence: ev }));
+      expect(screen.queryByTestId("session-row-evidence")).toBeNull();
+      expect(document.querySelector(".kb-ses__row-stats")!.textContent).toBe(
+        "widget · claude · 1h · 2 memories",
+      );
+    }
+  });
+
+  it("shows the phrase alone when the facts line is empty", () => {
+    renderRow(
+      mk({
+        folder: undefined,
+        harness: "",
+        duration_ms: 0,
+        memory_count: 0,
+        evidence: evidence({ verdict: "unchecked", phrase: "edited, no checks ran", deciding: undefined }),
+      }),
+    );
+    const stats = document.querySelector(".kb-ses__row-stats")!;
+    expect(stats.textContent).toBe("edited, no checks ran");
+    expect(screen.getByTestId("session-row-evidence").getAttribute("title")).toBeNull();
   });
 });

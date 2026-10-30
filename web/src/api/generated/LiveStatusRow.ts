@@ -19,8 +19,28 @@ import type { StateSource } from "./StateSource";
 export type LiveStatusRow = { session_id: string, harness: string, holder: Holder, state: LiveState, source: StateSource, confidence: Confidence, since_unix: number, since_secs: number, project?: string, cwd?: string, model?: string, title?: string, resume: string, last_line?: string, kb?: string, artifact_id?: string, 
 /**
  * [`map_event`]'s holder mapping keeps `blocked` a flag on
- * `Holder::Agent` rather than a new `LiveState` variant — a presenter
- * may render this + `detail_reason` as a distinct sub-label inside the
- * working/stalled lane.
+ * `Holder::Agent` rather than a new `LiveState` variant. It feeds the
+ * "Needs you" lane: a sticky flag on a working/stalled agent row, set
+ * by a `blocked` beat, kept by `tool` beats and cleared by any other
+ * event (OL IDEA1). Tier-0 rows are never blocked.
  */
-blocked: boolean, detail_reason?: string, };
+blocked: boolean, detail_reason?: string, 
+/**
+ * The tool the pending permission prompt names, when the hook parsed
+ * one (a validated `[A-Za-z0-9_.:-]` token). Blocked rows only.
+ */
+blocked_tool?: string, 
+/**
+ * Unix seconds of the beat that raised the block. Blocked rows only.
+ */
+blocked_since_unix?: number, 
+/**
+ * The most recent tool this session STARTED that kb heard about (a
+ * name-only label, never arguments). Started is not running. Quiet
+ * agent-held hook rows only (OL IDEA4).
+ */
+last_tool?: string, 
+/**
+ * Unix seconds that tool was started. Present exactly when `last_tool` is.
+ */
+last_tool_at?: number, };

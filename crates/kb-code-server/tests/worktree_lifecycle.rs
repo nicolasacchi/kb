@@ -47,6 +47,7 @@ async fn boot_with_repos(repos: &[(&str, &Path)]) -> Boot {
             .map(|(name, path)| RepoEntry {
                 name: name.to_string(),
                 path: std::fs::canonicalize(path).unwrap(),
+                projects: Vec::new(),
             })
             .collect(),
         kb_daemon: KbDaemonSection {

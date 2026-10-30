@@ -28,10 +28,14 @@ import { relativeAge } from "../lib/time";
 import { harnessGlyph } from "../lib/sessionChips";
 import type { LiveStatusRow } from "../api/sessions";
 import {
+  blockedLabel,
+  blockedSince,
   bucketLiveSessions,
   isLongWait,
   isPresumedEnded,
   isStalled,
+  LAST_TOOL_TITLE,
+  lastToolLabel,
   liveHonestyKind,
   liveHonestyLabel,
   liveHonestyTitle,
@@ -47,6 +51,7 @@ export default function LiveSessionsNowBand({
 }) {
   const lanes = bucketLiveSessions(rows);
   const empty =
+    lanes.blocked.length === 0 &&
     lanes.inProgress.length === 0 &&
     lanes.waiting.length === 0 &&
     lanes.finished.length === 0;
@@ -54,6 +59,26 @@ export default function LiveSessionsNowBand({
   if (empty) return null;
   return (
     <div className="kb-now" data-testid="sessions-now-band" aria-label="live sessions">
+      {lanes.blocked.length > 0 && (
+        <section
+          id="kb-now-blocked"
+          className="kb-now__lane kb-now__lane--blocked"
+          data-testid="now-lane-blocked"
+        >
+          <h3 className="kb-now__lane-head">
+            Needs you
+            <span className="kb-now__lane-count">{lanes.blocked.length}</span>
+          </h3>
+          <div className="kb-now__lane-caption" data-testid="now-lane-blocked-caption">
+            Agents waiting on a permission prompt or a question
+          </div>
+          <ol className="kb-now__rows">
+            {lanes.blocked.map((r) => (
+              <LiveRow key={r.session_id} row={r} now={now} kind="blocked" />
+            ))}
+          </ol>
+        </section>
+      )}
       {lanes.inProgress.length > 0 && (
         <section className="kb-now__lane kb-now__lane--progress" data-testid="now-lane-progress">
           <h3 className="kb-now__lane-head">
@@ -117,7 +142,7 @@ function LiveRow({
 }: {
   row: LiveStatusRow;
   now: number;
-  kind: "progress" | "waiting" | "finished";
+  kind: "blocked" | "progress" | "waiting" | "finished";
 }) {
   const honesty = liveHonestyKind(row);
   // Primary identifier: project (the thing the operator actually scans
@@ -126,7 +151,13 @@ function LiveRow({
   // primary — so the two lines never repeat the same fact.
   const primary = row.project || row.title || row.cwd || row.session_id;
   const secondary = row.project && row.title ? row.title : row.last_line;
-  const elapsed = relativeAge(row.since_unix, now);
+  const elapsed = relativeAge(kind === "blocked" ? blockedSince(row) : row.since_unix, now);
+  // OL IDEA4 — what a quiet agent-held row last started. Never on a waiting
+  // or blocked row; on a finished row only when it is a presumed end.
+  const lastTool =
+    kind === "progress" || (kind === "finished" && isPresumedEnded(row))
+      ? lastToolLabel(row, now)
+      : null;
   return (
     <li className="kb-now__row" data-testid="now-row" data-live-state={row.state}>
       <span
@@ -169,6 +200,15 @@ function LiveRow({
               presumed ended
             </span>
           )}
+          {lastTool && (
+            <span
+              className="kb-now__row-lasttool"
+              data-testid="now-row-last-tool"
+              title={LAST_TOOL_TITLE}
+            >
+              {lastTool}
+            </span>
+          )}
           {honesty && (
             <span
               className="kb-now__row-honesty"
@@ -180,6 +220,15 @@ function LiveRow({
             </span>
           )}
         </span>
+        {kind === "blocked" && (
+          <span
+            className="kb-now__row-blocked"
+            data-testid="now-row-blocked-reason"
+            title={row.detail_reason ?? undefined}
+          >
+            {blockedLabel(row)}
+          </span>
+        )}
         {secondary && (
           <span className="kb-now__row-line2" title={row.last_line ?? undefined}>
             {secondary}

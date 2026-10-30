@@ -47,6 +47,7 @@ async fn boot(
         repos: vec![RepoEntry {
             name: repo_name.to_string(),
             path: std::fs::canonicalize(repo_dir).unwrap(),
+            projects: Vec::new(),
         }],
         // Never risk a real network call to an operator's own kb daemon —
         // the trailer arm resolves fully locally, which is all these

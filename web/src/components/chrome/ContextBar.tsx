@@ -58,6 +58,7 @@ export default function ContextBar({
   bareUrl,
   folio = false,
   onToggleFolio,
+  reading,
   splitMode,
   onSplit,
   flow,
@@ -107,6 +108,16 @@ export default function ContextBar({
   /// `f` is reserved for the Wave-2 hint-mode toggle elsewhere.
   folio?: boolean;
   onToggleFolio?: () => void;
+  /// OL READ2 - reading mode (kb's house voice on the artifact, live, via the
+  /// iframe runtime). Absent => no row (native notes, panes with no iframe).
+  /// `pressed` is the runtime's last ACK, not the click; `unsuitable` is the
+  /// caption of a page the runtime declined (row disabled, caption shown).
+  /// First in the menu: on a phone this is the strongest daily action.
+  reading?: {
+    pressed: boolean;
+    unsuitable?: string | null;
+    onToggle: () => void;
+  };
   /// W3.P-b — the two-pane compare split (`?pane2=`, see lib/paneUrl.ts).
   /// ContextBar IS per-pane chrome (unlike the inspector rail, which stays a
   /// route-level singleton — invariant #30), so each pane renders its own
@@ -329,6 +340,23 @@ export default function ContextBar({
         <MoreMenu>
           {(close) => (
             <>
+              {reading && (
+                <MenuRow
+                  act="reading"
+                  on={reading.pressed}
+                  icon={<Icon.Type />}
+                  label="Reading mode"
+                  keyHint="r"
+                  title="reading mode - kb's reading style for this page (r)"
+                  pressed={reading.pressed}
+                  disabled={!!reading.unsuitable}
+                  caption={reading.unsuitable ?? undefined}
+                  onClick={() => {
+                    reading.onToggle();
+                    close();
+                  }}
+                />
+              )}
               <MenuRow
                 act="anchor"
                 on={anchored}
@@ -544,6 +572,8 @@ function MenuRow({
   fail,
   pressed,
   live,
+  disabled,
+  caption,
 }: {
   act: string;
   icon: ReactNode;
@@ -557,6 +587,10 @@ function MenuRow({
   fail?: boolean;
   pressed?: boolean;
   live?: boolean;
+  /// OL READ2 - a row that cannot act right now (it keeps its place in the
+  /// menu; `caption` says why).
+  disabled?: boolean;
+  caption?: string;
 }) {
   const cls = `kb-ctxbar__mi${on ? " is-on" : ""}${ok ? " is-ok" : ""}${
     fail ? " is-fail" : ""
@@ -568,6 +602,7 @@ function MenuRow({
         {label}
       </span>
       {keyHint && <kbd className="kb-ctxbar__mi-key">{keyHint}</kbd>}
+      {caption && <span className="kb-ctxbar__mi-cap">{caption}</span>}
     </>
   );
   if (href) {
@@ -594,6 +629,7 @@ function MenuRow({
       className={cls}
       title={title}
       aria-pressed={pressed}
+      disabled={disabled}
       onClick={onClick}
     >
       {body}

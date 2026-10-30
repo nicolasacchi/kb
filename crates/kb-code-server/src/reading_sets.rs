@@ -1444,6 +1444,7 @@ mod tests {
         RepoEntry {
             name: "r".to_string(),
             path: std::path::PathBuf::from(path),
+            projects: Vec::new(),
         }
     }
 

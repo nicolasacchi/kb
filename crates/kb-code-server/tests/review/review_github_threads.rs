@@ -57,6 +57,7 @@ async fn boot_with_repo(name: &str, path: &Path) -> (tempfile::TempDir, String) 
         repos: vec![RepoEntry {
             name: name.to_string(),
             path: std::fs::canonicalize(path).unwrap(),
+            projects: Vec::new(),
         }],
         kb_daemon: disabled_kb_daemon(),
         ..KbCodeConfig::default()
@@ -225,6 +226,7 @@ async fn github_threads_maps_the_diff_hunks_last_line_onto_the_latest_patchset()
         repos: vec![RepoEntry {
             name: "fixture".to_string(),
             path: dir.clone(),
+            projects: Vec::new(),
         }],
         kb_daemon: disabled_kb_daemon(),
         github: GithubSection {
@@ -296,6 +298,7 @@ async fn github_threads_reports_an_honest_orphan_when_the_hunk_matches_nothing()
         repos: vec![RepoEntry {
             name: "fixture".to_string(),
             path: dir.clone(),
+            projects: Vec::new(),
         }],
         kb_daemon: disabled_kb_daemon(),
         github: GithubSection {
@@ -356,6 +359,7 @@ async fn github_threads_reports_general_true_for_an_issue_style_comment() {
         repos: vec![RepoEntry {
             name: "fixture".to_string(),
             path: dir.clone(),
+            projects: Vec::new(),
         }],
         kb_daemon: disabled_kb_daemon(),
         github: GithubSection {
@@ -430,6 +434,7 @@ async fn github_threads_nests_replies_under_the_root_via_in_reply_to_id() {
         repos: vec![RepoEntry {
             name: "fixture".to_string(),
             path: dir.clone(),
+            projects: Vec::new(),
         }],
         kb_daemon: disabled_kb_daemon(),
         github: GithubSection {
@@ -519,6 +524,7 @@ async fn github_threads_degrades_to_unavailable_reason_when_github_is_down_never
         repos: vec![RepoEntry {
             name: "fixture".to_string(),
             path: dir.clone(),
+            projects: Vec::new(),
         }],
         kb_daemon: disabled_kb_daemon(),
         github: GithubSection {

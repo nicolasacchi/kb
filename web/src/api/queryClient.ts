@@ -312,6 +312,14 @@ export const queryClient = new QueryClient({
 //                                  natural remount recomputes it for free —
 //                                  same non-bridged shape as the
 //                                  funnel/research-rollup entries above
+//   ["changes", since]             OL IDEA5 — `GET /api/changes?since=`, the
+//                                  Front Page "since you left" strip (the
+//                                  PROJECT axis: sessions + commits + slate
+//                                  posts). staleTime Infinity; bridged by
+//                                  ONE burst gate fired on session.captured,
+//                                  slate.updated and slate.deleted below. No
+//                                  new SSE kind: a capture or a slate append
+//                                  is the only thing that can change it.
 //   ["slates"]                     SL4 — GET /api/slates: every slate's slug,
 //                                  head seq, topics and per-section counts.
 //                                  ONE entry shared by the /slates list and
@@ -719,6 +727,16 @@ export function startSseInvalidationBridge(): () => void {
   //                    refetchOnWindowFocus, no new SSE kind. Handoffs are
   //                    ephemeral drafts whose freshness is a wall-clock
   //                    concern, not a live collaboration feed.
+
+  // OL IDEA5 — the Front Page "since you left" strip. One burst gate (a
+  // capture storm or a slate flurry refetches once per cooldown window), three
+  // SUBSCRIPTIONS on kinds the bridge already handles above — registered last,
+  // so every older handler's invalidations keep their order. Prefix match
+  // reaches every ["changes", since] entry.
+  const changesGate = makeBurstGate(() => invalidate(["changes"]));
+  for (const t of ["session.captured", "slate.updated", "slate.deleted"]) {
+    on(t, () => changesGate(""));
+  }
 
   // Gap: the events inside the gap are unknowable — every cached
   // server-state entry may be stale, so invalidate the world. Active

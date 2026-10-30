@@ -1,5 +1,6 @@
 import {
   forwardRef,
+  type CSSProperties,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -36,7 +37,11 @@ import {
   type TreeMode,
 } from "../lib/treeQuery";
 import { attentionTintStyle } from "../lib/attentionRamp";
-import { loadAttentionOverlay, saveAttentionOverlay } from "../lib/prefs";
+import { loadAttentionOverlay, saveAttentionOverlay, savePresenceOverlay } from "../lib/prefs";
+import { rowPresence } from "../lib/presenceRow";
+import { usePresenceView } from "../hooks/usePresence";
+import { markOpened, setCurrentFile } from "../lib/presenceStore";
+import { PresenceGlyph } from "./PresenceGlyph";
 
 export interface FileTreeHandle {
   /// `/` — jump focus into the quick-filter input.
@@ -261,6 +266,18 @@ const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileTree(
   const scrollParentRef = useRef<HTMLDivElement | null>(null);
 
   const hotspotsMap = useHotspotsMap(repo, attentionOn);
+  // OL PRES3 - rows the live mirror named, attributed by kb's presence relay.
+  const presence = usePresenceView(repo);
+
+  // Opening a file clears its presence mark (the seen-set): only a touch
+  // AFTER this instant lights the row again.
+  useEffect(() => {
+    if (!repo) return undefined;
+    // Remember what is open, so a touch that lands on it later counts as seen.
+    setCurrentFile(repo, selectedPath || undefined);
+    if (selectedPath) markOpened(repo, selectedPath);
+    return () => setCurrentFile(repo, undefined);
+  }, [repo, selectedPath]);
   const lanes = LANE_PRESETS[lanePreset % LANE_PRESETS.length];
 
   // kbc-tree/1 is index-only — see the component doc.
@@ -490,11 +507,12 @@ const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileTree(
 
   return (
     <div
-      className="kbc-tree"
+      className={"kbc-tree" + (presence.reduced ? " kbc-tree--reduced-motion" : "")}
       data-kbc-tree
       data-kbc-tree-view={view}
       data-kbc-tree-mode={mode}
       data-kbc-attention-overlay={attentionOn ? "on" : "off"}
+      data-kbc-presence-overlay={presence.pref ? "on" : "off"}
     >
       <div className="kbc-tree__head">
         <div className="kbc-tree__views" role="group" aria-label="Tree projection">
@@ -527,6 +545,22 @@ const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileTree(
           />
           <span>attention overlay</span>
         </label>
+        <button
+          type="button"
+          className="kbc-tree__presence-toggle"
+          aria-pressed={presence.pref}
+          data-kbc-presence-toggle
+          data-kbc-presence-caption={presence.caption}
+          title={
+            presence.caption
+              ? `Mark files agents just changed (presence unavailable: ${presence.caption})`
+              : "Mark files agents just changed, attributed by kb when it can"
+          }
+          onClick={() => savePresenceOverlay(!presence.pref)}
+        >
+          <Icon.Spark aria-hidden />
+          <span>presence</span>
+        </button>
       </div>
       <input
         ref={filterInputRef}
@@ -623,6 +657,21 @@ const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileTree(
           scope not applied — showing the unscoped tree
         </p>
       ) : null}
+      {presence.pref && presence.caption && presence.caption !== "kb disabled" ? (
+        <p className="kbc-tree__note kbc-tree__note--muted" data-kbc-presence-note>
+          presence unavailable: {presence.caption}
+        </p>
+      ) : null}
+      {presence.pref && presence.burst && presence.burst.count > 0 ? (
+        <p className="kbc-tree__note kbc-tree__note--muted" data-kbc-presence-burst>
+          {presence.burst.count} files changed at once (a checkout or rebase) - not marked
+        </p>
+      ) : null}
+      {presence.worktrees.map((w) => (
+        <p key={w.worktree} className="kbc-tree__note kbc-tree__note--muted" data-kbc-presence-worktree={w.worktree}>
+          {w.files} file{w.files === 1 ? "" : "s"} edited in worktree {w.worktree} (not this checkout)
+        </p>
+      ))}
       {(response?.notes ?? []).map((n) => (
         <p key={n} className="kbc-tree__note" data-kbc-tree-note>
           {n}
@@ -670,6 +719,13 @@ const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileTree(
                 : undefined;
             // Absence of a behavioral row ⇒ untinted (≠ zero score).
             const tint = attentionOn && hot ? attentionTintStyle(hot.hotspot.score) : undefined;
+            // Presence: a file row shows its own mark; a COLLAPSED directory
+            // its roll-up (lib/presenceRow.ts).
+            const pr = rowPresence(
+              row.kind === "file" && row.path ? presence.marks.get(row.path) : undefined,
+              row.kind === "dir" && row.path ? presence.dirs.get(row.path) : undefined,
+              isOpen,
+            );
             return (
               <div
                 key={row.id}
@@ -679,7 +735,8 @@ const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileTree(
                   (isFocused ? " kbc-tree__row--focused" : "") +
                   (isPicked ? " kbc-tree__row--picked" : "") +
                   (row.kind !== "file" ? " kbc-tree__row--dir" : "") +
-                  (hot ? " kbc-tree__row--attention" : "")
+                  (hot ? " kbc-tree__row--attention" : "") +
+                  (pr ? ` ${pr.className}` : "")
                 }
                 style={{
                   position: "absolute",
@@ -690,8 +747,13 @@ const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileTree(
                   transform: `translateY(${vi.start}px)`,
                   paddingLeft: `${8 + row.depth * 14}px`,
                   ...(tint ?? {}),
+                  ...((pr?.style ?? {}) as CSSProperties),
                 }}
-                title={hot ? hotspotTitle(hot) : undefined}
+                title={pr?.label ?? (hot ? hotspotTitle(hot) : undefined)}
+                data-kbc-presence-level={pr ? String(pr.level) : undefined}
+                data-kbc-presence-trust={pr?.trust}
+                data-kbc-presence-sid={pr?.sid}
+                data-kbc-presence-count={pr?.count !== undefined ? String(pr.count) : undefined}
                 onMouseDown={(e) => {
                   const rung = rungForMouse(e);
                   if (!rung || rung === "here" || rung === "other" || row.kind !== "file" || !row.path || !onRamp)
@@ -735,6 +797,7 @@ const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileTree(
                 {mode === "highlight" && row.kind !== "file" && (row.match_count ?? 0) > 0 ? (
                   <span className="kbc-tree__matchcount">{row.match_count}</span>
                 ) : null}
+                {pr ? <PresenceGlyph label={pr.label} count={pr.count} /> : null}
                 <FactsCells facts={row.facts} />
               </div>
             );

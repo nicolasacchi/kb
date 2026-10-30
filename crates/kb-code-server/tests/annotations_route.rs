@@ -51,6 +51,7 @@ async fn boot_with_repos(entries: &[(&str, &Path)]) -> (tempfile::TempDir, Strin
             .map(|(name, path)| RepoEntry {
                 name: name.to_string(),
                 path: std::fs::canonicalize(path).unwrap(),
+                projects: Vec::new(),
             })
             .collect(),
         kb_daemon: KbDaemonSection {

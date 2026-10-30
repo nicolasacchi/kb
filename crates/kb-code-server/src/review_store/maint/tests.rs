@@ -94,6 +94,7 @@ fn env() -> Env {
     let repos = vec![RepoEntry {
         name: "widgets-01".into(),
         path: fx.one.clone(),
+        projects: Vec::new(),
     }];
     let mut ids = HashMap::new();
     ids.insert(
@@ -826,10 +827,12 @@ fn two_member_env() -> TwoMember {
         RepoEntry {
             name: "widgets-01".into(),
             path: one.clone(),
+            projects: Vec::new(),
         },
         RepoEntry {
             name: "widgets-02".into(),
             path: two.clone(),
+            projects: Vec::new(),
         },
     ];
     let mut ids = HashMap::new();
@@ -1083,10 +1086,12 @@ fn a_multi_member_seed_leaves_the_store_at_one_pack() {
         RepoEntry {
             name: "widgets-01".into(),
             path: one.clone(),
+            projects: Vec::new(),
         },
         RepoEntry {
             name: "widgets-02".into(),
             path: two.clone(),
+            projects: Vec::new(),
         },
     ];
     let mut ids = HashMap::new();
@@ -1161,10 +1166,12 @@ fn a_member_unresolvable_this_process_keeps_its_refs_and_reports_partial() {
         RepoEntry {
             name: "widgets-01".into(),
             path: one.clone(),
+            projects: Vec::new(),
         },
         RepoEntry {
             name: "widgets-02".into(),
             path: two.clone(),
+            projects: Vec::new(),
         },
     ];
     let mut ids = HashMap::new();
@@ -1198,6 +1205,7 @@ fn a_member_unresolvable_this_process_keeps_its_refs_and_reports_partial() {
     let repos_missing_two = vec![RepoEntry {
         name: "widgets-01".into(),
         path: one.clone(),
+        projects: Vec::new(),
     }];
     let rs_degraded = ReviewStores::new(&ReviewSection::default(), &home, &repos_missing_two, &ids);
 

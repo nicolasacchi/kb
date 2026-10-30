@@ -97,6 +97,7 @@ export const REGISTRY: readonly Binding[] = [
   // still owns real execution.
   { keys: "[ / ]", scope: "reader", group: "Reader", label: "Previous / next sibling in folder", actionId: "reader.sibling", when: "routes/detail.tsx" },
   { keys: "o / O", scope: "reader", group: "Reader", label: "Toggle full-screen reading", actionId: "reader.toggleImmersive", when: "routes/detail.tsx" },
+  { keys: "r", scope: "reader", group: "Reader", label: "Toggle reading mode (kb's reading style) on this artifact", actionId: "reader.toggleReading", when: "components/reader/ArtifactPane.tsx - focused pane" },
   { keys: "b / B", scope: "reader", group: "Reader", label: "Open the bare artifact in a new tab", actionId: "reader.openBare", when: "routes/detail.tsx" },
   // W2.6b — "y p": copy the artifact's provenance block (title + permalink
   // + id + origin session, when known — see `lib/quote.ts`'s

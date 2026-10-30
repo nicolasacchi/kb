@@ -279,6 +279,7 @@ fn store_mutex_held_does_not_starve_healthz_probe() {
         repos: vec![RepoEntry {
             name: "starve".to_string(),
             path: repo_path,
+            projects: Vec::new(),
         }],
         ..KbCodeConfig::default()
     };

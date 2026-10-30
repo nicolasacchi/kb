@@ -6287,6 +6287,8 @@ export interface SyntaxOut {
 // kb_relay.rs`) are ts-rs generated. Both always answer 200; `unavailable` is
 // a caption ("kb unreachable" | "kb search timed out" | "kb disabled" |
 // "kb_sibling_mismatch"), never an error.
+export type { KbBlockedOut } from "./generated/KbBlockedOut";
+export type { KbBlockedRowOut } from "./generated/KbBlockedRowOut";
 export type { KbDocHitOut } from "./generated/KbDocHitOut";
 export type { KbSearchOut } from "./generated/KbSearchOut";
 export type { KbUiOut } from "./generated/KbUiOut";

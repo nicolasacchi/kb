@@ -217,3 +217,155 @@ describe("LiveSessionsNowBand — waiting lane scope", () => {
     );
   });
 });
+
+describe("LiveSessionsNowBand - OL IDEA1 Needs you lane", () => {
+  it("renders the blocked lane FIRST with the tool label and elapsed from blocked_since", () => {
+    render(
+      <LiveSessionsNowBand
+        rows={[
+          row({ session_id: "p", state: "working" }),
+          row({ session_id: "w", state: "waiting", holder: "human" }),
+          row({
+            session_id: "b",
+            blocked: true,
+            blocked_tool: "Bash",
+            detail_reason: "Claude needs your permission to use Bash",
+            blocked_since_unix: NOW_SECS - 600,
+            since_unix: NOW_SECS,
+          }),
+        ]}
+        now={NOW_MS}
+      />,
+    );
+    const lanes = Array.from(
+      screen.getByTestId("sessions-now-band").querySelectorAll("section"),
+    ).map((s) => s.getAttribute("data-testid"));
+    expect(lanes).toEqual(["now-lane-blocked", "now-lane-progress", "now-lane-waiting"]);
+    const lane = screen.getByTestId("now-lane-blocked");
+    expect(lane.id).toBe("kb-now-blocked");
+    expect(lane.textContent).toContain("Needs you");
+    expect(lane.textContent).toContain("Agents waiting on a permission prompt or a question");
+    expect(screen.getByTestId("now-row-blocked-reason").textContent).toBe("permission: Bash");
+    expect(screen.getByTestId("now-row-blocked-reason").getAttribute("title")).toBe(
+      "Claude needs your permission to use Bash",
+    );
+    // elapsed counts from blocked_since (10m), not from the later heartbeat.
+    expect(lane.querySelector(".kb-now__row-time")?.textContent).toBe("10m");
+    // the row is not in the in-progress lane.
+    expect(screen.getByTestId("now-lane-progress").querySelectorAll("li").length).toBe(1);
+  });
+
+  it("shows no stalled? marker on a blocked row and still offers resume", () => {
+    render(
+      <LiveSessionsNowBand
+        rows={[row({ session_id: "b", state: "stalled", blocked: true })]}
+        now={NOW_MS}
+      />,
+    );
+    expect(screen.queryByTestId("now-row-stalled")).toBeNull();
+    expect(screen.getByTestId("now-row-resume-copy")).toBeTruthy();
+    expect(screen.getByTestId("now-row-blocked-reason").textContent).toBe("needs you");
+  });
+});
+
+describe("OL IDEA4 - the last tool a quiet row started", () => {
+  const stalledBash = {
+    session_id: "q",
+    state: "stalled" as const,
+    since_unix: NOW_SECS - 2400,
+    last_tool: "Bash",
+    last_tool_at: NOW_SECS - 38 * 60,
+  };
+
+  it("shows `last: Bash · 38m` beside the stalled? marker, with the honest tooltip", () => {
+    render(<LiveSessionsNowBand rows={[row(stalledBash)]} now={NOW_MS} />);
+    const chip = screen.getByTestId("now-row-last-tool");
+    expect(chip.textContent).toBe("last: Bash · 38m");
+    expect(chip.getAttribute("title")).toContain("may have died");
+    expect(chip.textContent).not.toMatch(/running/i);
+    expect(screen.getByTestId("sessions-now-band").textContent).not.toMatch(/running/i);
+    // the `?` doubt marker is still there: the evidence does not replace it.
+    expect(screen.getByTestId("now-row-stalled")).toBeTruthy();
+  });
+
+  it("shows nothing on a working row that carries no evidence", () => {
+    render(<LiveSessionsNowBand rows={[row({ session_id: "w", state: "working" })]} now={NOW_MS} />);
+    expect(screen.queryByTestId("now-row-last-tool")).toBeNull();
+  });
+
+  it("shows nothing when only one of the two fields is present", () => {
+    render(
+      <LiveSessionsNowBand
+        rows={[row({ session_id: "h", state: "stalled", last_tool: "Bash" })]}
+        now={NOW_MS}
+      />,
+    );
+    expect(screen.queryByTestId("now-row-last-tool")).toBeNull();
+  });
+
+  it("shows nothing on a waiting row even if the fields are present", () => {
+    render(
+      <LiveSessionsNowBand
+        rows={[
+          row({
+            session_id: "wt",
+            state: "waiting",
+            holder: "human",
+            last_tool: "Bash",
+            last_tool_at: NOW_SECS - 600,
+          }),
+        ]}
+        now={NOW_MS}
+      />,
+    );
+    expect(screen.getByTestId("now-lane-waiting")).toBeTruthy();
+    expect(screen.queryByTestId("now-row-last-tool")).toBeNull();
+  });
+
+  it("shows nothing on a blocked row (the Needs you lane is left as it is)", () => {
+    render(
+      <LiveSessionsNowBand rows={[row({ ...stalledBash, session_id: "bl", blocked: true })]} now={NOW_MS} />,
+    );
+    expect(screen.getByTestId("now-lane-blocked")).toBeTruthy();
+    expect(screen.queryByTestId("now-row-last-tool")).toBeNull();
+  });
+
+  it("shows it on a presumed_ended row in the finished lane", () => {
+    render(
+      <LiveSessionsNowBand
+        rows={[
+          row({
+            session_id: "pe",
+            state: "presumed_ended",
+            holder: "agent",
+            since_unix: NOW_SECS - 9 * 3600,
+            last_tool: "Bash",
+            last_tool_at: NOW_SECS - 9 * 3600,
+          }),
+        ]}
+        now={NOW_MS}
+      />,
+    );
+    const lane = screen.getByTestId("now-lane-finished");
+    expect(lane.querySelector("[data-testid=now-row-last-tool]")?.textContent).toBe("last: Bash · 9h");
+    expect(screen.getByTestId("now-row-presumed-ended")).toBeTruthy();
+  });
+
+  it("does not show it on an ordinary finished row", () => {
+    render(
+      <LiveSessionsNowBand
+        rows={[
+          row({
+            session_id: "f",
+            state: "finished",
+            holder: "none",
+            last_tool: "Bash",
+            last_tool_at: NOW_SECS - 600,
+          }),
+        ]}
+        now={NOW_MS}
+      />,
+    );
+    expect(screen.queryByTestId("now-row-last-tool")).toBeNull();
+  });
+});

@@ -54,7 +54,7 @@ column above you're reading:**
 
 | Harness | Push (`hook`/`observed`) wiring today | `--local` (pull) |
 |---|---|---|
-| Claude Code | Full lifecycle: `SessionStart`/`UserPromptSubmit`/`Stop`/`SessionEnd`/`Notification` + a throttled `PostToolUse` heartbeat. | Reads `~/.claude/projects` directly. |
+| Claude Code | Full lifecycle: `SessionStart`/`UserPromptSubmit`/`Stop`/`SessionEnd`/`Notification` + a throttled `PostToolUse` heartbeat + a deduped `PreToolUse` tool-start beat. | Reads `~/.claude/projects` directly. |
 | Codex | `UserPromptSubmit`/`Stop` only — no verified `SessionEnd`/`Notification`-equivalent hook exists yet, so "finished" stays ambiguous for codex (it exits after `exec`, lingers interactively). | Reads `~/.codex/sessions`. |
 | Kimi Code | `UserPromptSubmit`/`Stop`/`SessionEnd`. | Reads `~/.kimi-code` (or wherever `KIMI_CODE_HOME` points). |
 | opencode | **Not wired until you apply it** — see below; the plugin file lives outside this repo. | Reads `~/.local/share/opencode/opencode.db` (sqlite; opencode has no durable busy/idle state at all, so this lane is `Presumed`-only by construction — "who spoke last", never a real live signal). |
@@ -66,6 +66,32 @@ capture — just at `confidence: presumed`, aged off that capture, never
 truly live. `kb sessions status --local` bypasses all of this: it reads
 each harness's own files directly, regardless of whether any beat hook
 is wired.
+
+### `last:` — what the session last started
+
+A quiet agent-held row can name the last tool it started: `stalled? · last:
+Bash 38m` in the table, `last: Bash · 38m` beside the `stalled?` marker in the
+Now band. It appears only on `stalled` and `presumed_ended` rows, and on a
+`working` row once it has been silent for 5 minutes (`TOOL_EVIDENCE_QUIET_SECS`);
+never on a waiting, cold or finished row, and never on a capture-derived
+(Tier-0) row. It is **name only**: an MCP tool shows as `mcp`, and a name that
+fails the label grammar (`^[A-Za-z][A-Za-z0-9_.-]{0,31}$`) shows as `unknown`.
+Arguments and paths are never sent. Today it is Claude only; the other
+harnesses carry no field. In daemon mode the fact comes from the
+`PreToolUse` beat; `--local` reads the transcript's last `tool_use` record
+(inside the 256 KiB tail window) instead.
+
+**Started is not running.** kb hears tool starts, never ends, so the label says
+`last:` and the `?` stays. Reading it:
+
+- `stalled? · last: Bash` — a long command or a hung one. Check before killing it.
+- `stalled? · last: AskUserQuestion` — it is waiting on you.
+- bare `stalled?` — no tool started this turn, so the model call itself is quiet.
+- `presumed ended · last: Bash 9h` — the process died mid-call.
+
+The evidence is a label on the row, never an input to the state: it cannot
+move a row between lanes, change `stalled`, or appear in a `session.state`
+event.
 
 ## `kb sessions status`
 
@@ -106,25 +132,30 @@ a `tool` beat that also names the file it touched, so kb-code can mark files
 agents are in right now. `kb-beat.sh` sends `detail.paths` (absolute,
 lexically normalised, at most 8, anything over 1024 bytes, with a control
 character or with a `..` escape is dropped), plus the session's repo identity:
-`detail.root` (the worktree root) and `detail.project` (the basename of the
-main checkout, so every worktree of one repo shares a label). The identity is
+`detail.root` (the worktree root), `detail.project` (the basename of the
+main checkout, so every worktree of one repo shares a label) and, when the
+session runs in a linked worktree, `detail.worktree` (the basename of that
+worktree's directory, never a path; absent for the main checkout). The identity is
 computed once per session and cwd and cached under the cache dir, never on each
-beat. `KB_BEAT_PATHS=0` removes all four fields.
+beat. `KB_BEAT_PATHS=0` removes all of these fields.
 
 The daemon keeps, per session, the last 48 touches in memory only (nothing is
 written to disk; a restart empties them), as paths **relative to the beat's
 `root`** plus `project`; a path outside the root is dropped, and neither the
 absolute path nor the root is stored. Touches older than an hour are pruned,
 and a repeat touch of the same file moves to the newest position (its
-timestamp is refreshed) rather than adding a row. A write-tool call can produce
-two `tool` beats (the throttled generic group and the direct path-carrying
-group); this is harmless, since the state mapping is unchanged and no event is
-emitted. A beat whose `root` is `/` is ignored; otherwise the daemon trusts the
+timestamp is refreshed) rather than adding a row. A write-tool call
+sends exactly one `tool` beat: `kb-beat-throttle.sh` forwards it past its
+min-interval gate (a `KB_BEAT_HEARTBEAT=0` still silences only the ordinary
+heartbeat; `KB_BEAT_PATHS=0` leaves a write tool throttled like any other
+tool, since there is nothing to report). A beat whose `root` is `/` is ignored; otherwise the daemon trusts the
 root the beat states and only relativises against it (attribution, not
 authorization). A touch emits no event: `session.state` still fires only on a state change.
 
 `GET /api/sessions/live-touches` serves them (`kb-live-touches/1`:
-`{project, rel, session_id, harness, state, age_secs, tool}` per touch, freshest
+`{project, worktree?, rel, session_id, harness, state, age_secs, tool}` per touch
+(`worktree` is the linked worktree's basename and is absent for the main
+checkout, so the same `rel` in two worktrees is two touches), freshest
 first, at most 500 with `truncated`). It rides `auth_bearer` like
 `live-status` and is identical for loopback and bearer callers, because the
 response cannot contain an absolute path and the caller supplies no roots.
@@ -133,7 +164,7 @@ response cannot contain an absolute path and the caller supplies no roots.
 
 | Harness | File presence | Notes |
 |---|---|---|
-| Claude Code | yes | Write tools only, via the `PostToolUse` matcher group. |
+| Claude Code | yes | Write tools only, through `kb-beat-throttle.sh` on `PostToolUse`. |
 | codex, Kimi, opencode, grok, omp | no | Their beats carry no paths. |
 
 Known gaps: files changed through `Bash` (a `sed -i`, a formatter, a `git
@@ -148,9 +179,10 @@ the relative paths and the project label, never the host's directory layout.
 
 Claude Code's own `hooks.json` (`plugins/kb-memory/hooks/hooks.json`) is
 already wired for `SessionStart`/`UserPromptSubmit`/`Stop`/`SessionEnd`/
-`Notification`, plus `kb-beat-throttle.sh` on `PostToolUse` and a second
-`PostToolUse` group that runs `kb-beat.sh claude tool` directly for the write
-tools (file presence, below) — the same
+`Notification`, plus `kb-beat-throttle.sh` on `PostToolUse`, which also
+carries the write-tool file-presence beat (below): an `Edit`/`Write`/
+`MultiEdit`/`NotebookEdit` call skips the min-interval gate and goes straight
+to `kb-beat.sh claude tool`, so one hook process tree serves each edit — the same
 plugin install that wires memory recall/capture wires this too, no
 extra step. The gate is the same one every capture hook already uses:
 if `KB_SESSIONS_DIR` isn't set for a project, every beat script no-ops
@@ -169,7 +201,9 @@ POST itself is fire-and-forget: a detached background subshell with
 |---|---|---|
 | `KB_SESSIONS_DIR` | unset | **Required gate** for every beat (both scripts) — kb not configured for this project ⇒ silent no-op. Same variable the capture hooks already use. |
 | `KB_BEAT` | unset | `0`/`false`/`FALSE`/`no`/`NO` kills **every** beat (lifecycle AND heartbeat), both scripts. |
-| `KB_BEAT_HEARTBEAT` | unset | `0`/`false`/`FALSE`/`no`/`NO` disables **only** the `PostToolUse` mid-turn heartbeat (`kb-beat-throttle.sh`); lifecycle beats (`start`/`prompt`/`turn_end`/`end`/`blocked`) keep firing. |
+| `KB_BEAT_HEARTBEAT` | unset | `0`/`false`/`FALSE`/`no`/`NO` disables **only** the `PostToolUse` mid-turn heartbeat (`kb-beat-throttle.sh`); lifecycle beats (`start`/`prompt`/`turn_end`/`end`/`blocked`, and the `unblocked` that resolves a block) keep firing. |
+| `KB_BEAT_TOOLS` | unset | `0`/`false`/`FALSE`/`no`/`NO` disables only the `PreToolUse` tool-start beat (`kb-beat-pretool.sh`). `KB_BEAT_HEARTBEAT=0` also silences it, since it is a mid-turn beat. |
+| `KB_BEAT_TOOLS_MIN_INTERVAL_SECS` | `180` | Min seconds between tool-start beats while the SAME tool name repeats; a change of name always sends. |
 | `KB_BEAT_HEARTBEAT_MIN_INTERVAL_SECS` | `180` | Min seconds between heartbeat beats for one session (`kb-beat-throttle.sh`; keyed on a per-session marker file's mtime, since there's no capture artifact to stat here). |
 | `KB_DAEMON_URL` | `http://127.0.0.1:4000` | Daemon base URL the beat POSTs to. |
 | `KB_BEAT_PATH` | `/api/sessions/beat` | The beat route path. Left overridable so a future repoint doesn't require touching the script. |
@@ -212,22 +246,94 @@ no hook payload shape for it yet. Grok sessions are visible via
 `--local` (which reads `events.jsonl` directly) or, once a capture has
 landed, as a Tier-0 `presumed` row in the daemon-backed default.
 
+## Blocked on you
+
+An agent that is stopped on a permission prompt or a question still holds
+the turn, so the state stays `working` (or `stalled`); what changes is a
+sticky `blocked` flag on that row. It is a presentation, not a seventh
+state: the Sessions page lists those rows first under **Needs you**, the
+header chip leads with `N blocked`, `kb sessions status` marks the row
+`needs you: permission: <tool>`, kb-code's Home puts a line for it first in
+its own "Needs you" section, and `session.state` fires when the flag flips.
+
+**Which Claude Code Notifications block.** The hook decides (the harness
+vocabulary lives in the caller). Claude Code sends `notification_type`;
+only the first three rows beat `blocked`, everything else sends no beat at
+all, including types added later.
+
+| `notification_type` | Result |
+|---|---|
+| `permission_prompt` | `blocked` (the reason covers plan approvals and sandbox network prompts too) |
+| `elicitation_dialog` | `blocked` |
+| `elicitation_url_dialog` | `blocked` |
+| `idle_prompt`, `auth_success`, `agent_needs_input`, `worker_permission_prompt`, `agent_completed`, `elicitation_complete`, `elicitation_response`, `plugin_notification`, any unknown type | no beat |
+| none (older Claude Code) | `blocked` only if the message starts `Claude needs your permission`; anything else, no beat |
+
+The last point fixes a live misclassification: Claude sends `idle_prompt`
+about a minute after a turn ends, and the hook used to turn every
+Notification into `blocked`, so an idle session flipped from `waiting` back
+to `working` and later read `stalled?`. The reason text is capped at 120
+characters; `detail.tool` is parsed only from the canonical
+`Claude needs your permission to use <Tool>` text and only when it is a plain
+tool name.
+
+**Effects on the flag.** `blocked` sets it (and stamps when). A `tool`
+heartbeat keeps it, so a parallel subagent's `PostToolUse` cannot silently
+clear a prompt nobody answered. `start`, `prompt`, `unblocked`, `turn_end`
+and `end` clear it.
+
+**The inferred unblock.** Claude Code has no hook between "permission
+granted" and the tool finishing. When a block is raised the hook records
+which agent (`agent_id`, empty for the main thread) it belongs to in a small
+per-session marker; the throttle emits `unblocked` on the first
+`PostToolUse` from that same agent. That beat bypasses the 180 s interval
+gate and `KB_BEAT_HEARTBEAT=0` (it is a lifecycle beat), once per block.
+
+| Harness | How a block is raised and cleared |
+|---|---|
+| Claude Code | `Notification` (table above); cleared by the inferred `unblocked`, a prompt, or turn end. |
+| omp | Explicit `tool_approval_requested` / `tool_approval_resolved` events, unchanged. |
+| opencode | Only if its README plugin snippet is applied. |
+| codex, Kimi, Grok | No Notification analogue: their rows are never blocked. |
+
+**Honest gaps.**
+
+- An approved long tool keeps "Needs you" until it finishes, because no hook
+  fires in between; the row shows since when.
+- Parallel tool calls on the same agent can clear a block that is still
+  pending: the inferred unblock fires on the first PostToolUse from that
+  agent, even if another tool is still waiting on its prompt.
+- A denied prompt clears at your next prompt or at turn end.
+- A prompt you answer within about 6 seconds never notifies, so it never
+  blocks.
+- A subagent prompt whose Notification carries no `agent_id` clears only when
+  the subagent returns or the turn ends.
+- A daemon restart loses the flag until the next prompt (the registry is in
+  memory; Tier-0 rows are never blocked).
+- Eight hours of silence ends the claim: the row becomes `presumed_ended`
+  and leaves the lane.
+- A second prompt while a missed unblock still holds the flag is not
+  re-announced (`session.state` fires on a change of `(state, blocked)`).
+
 ## Notification, without writing daemon code
 
 kb has one sanctioned outbound path — the `[webhooks]` event→URL bridge
 (see [`configuration.md` → `[webhooks]`](configuration.md#webhooks)) —
 and one machine-readable event stream (`kb events --follow`). The
-`session.state` SSE kind (fires **only on a derived-state change**,
-never per beat) is what either path subscribes to. No new outbound code
+`session.state` SSE kind (fires **only on a change of the derived
+view `(state, blocked)`**, never per beat) is what either path subscribes to. No new outbound code
 was written for this: both routes below are configuration, or a small
 example script, never a daemon change — kb's own recorded posture is
 "no push mechanics in the daemon" (see README → Non-goals), and building
 an ntfy client into kb would cross it.
 
 The payload on `session.state` is deliberately small:
-`{session_id, harness, state, holder, project, since_unix}` — **no**
-`title`/`last_line` (those only ever ride the request/response bodies,
-never the broadcast).
+`{session_id, harness, state, holder, project, since_unix, blocked,
+blocked_tool?}` — `blocked_tool` is a validated tool-name token and appears
+only while blocked. There is **no** `title`/`last_line`/`detail_reason`
+(those only ever ride the request/response bodies, never the broadcast). It
+fires on a change of `(state, blocked)`, so becoming blocked or unblocked
+is its own event even though the state stays `working`.
 
 This example assumes you already run delivery infrastructure such as ntfy
 (`https://ntfy.example.com`, default access `deny-all` — publishing needs a
@@ -253,7 +359,8 @@ Fields verified against `WebhooksSection`
 (`crates/kb-core/src/config.rs`): `url` (required, `http`/`https` only),
 `types` (exact-match allowlist on the event envelope's `type` — there is
 no payload-level filter, so this forwards **every** `session.state`
-transition matching the type, not just `waiting`), `timeout_ms`
+transition matching the type, not just `waiting`; blocked and unblocked edges
+are forwarded too), `timeout_ms`
 (default 5000), `allow_private` (default `false`; loopback + public
 unicast always pass, link-local/metadata/multicast are refused even with
 it on — see `crates/kb-core/src/webhook_url.rs`).
@@ -294,8 +401,11 @@ back-pressures the daemon. Never build a synchronous decision on it.
 ```bash
 kb events --follow --types session.state --json \
   | jq --unbuffered -r '
-      select(.payload.state == "waiting") |
-      "\(.payload.project // "?") · \(.payload.harness) session \(.payload.session_id[0:8]) is waiting on you"
+      select(.payload.blocked == true or .payload.state == "waiting") |
+      if .payload.blocked == true
+      then "\(.payload.project // "?") · \(.payload.harness) session \(.payload.session_id[0:8]) needs your permission (\(.payload.blocked_tool // "prompt"))"
+      else "\(.payload.project // "?") · \(.payload.harness) session \(.payload.session_id[0:8]) is waiting on you"
+      end
     ' \
   | while IFS= read -r line; do
       curl -fsS \

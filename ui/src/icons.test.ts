@@ -77,6 +77,7 @@ const EXPECTED_NAMES = [
   "ThumbDown",
   "ThumbUp",
   "Trash",
+  "Type",
   "UnifiedView",
   "Unlink",
   "Warn",

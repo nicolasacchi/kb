@@ -21,6 +21,16 @@
     },
     {
       "project": "demo",
+      "worktree": "demo-feature",
+      "rel": "src/lib.rs",
+      "session_id": "33333333-aaaa-4bbb-8ccc-000000000003",
+      "harness": "claude",
+      "state": "working",
+      "age_secs": 60,
+      "tool": "Edit"
+    },
+    {
+      "project": "demo",
       "rel": "docs/readme.md",
       "session_id": "11111111-aaaa-4bbb-8ccc-000000000001",
       "harness": "claude",

@@ -443,15 +443,26 @@ pub async fn per_type(Path((kind, version)): Path<(String, String)>) -> Response
             ]})
         }
         "slate.deleted" => json!({"type": kind, "payload": ["slug"]}),
-        "session.state" => {
-            json!({"type": kind, "payload": [
-                "session_id", "harness", "state", "holder", "project", "since_unix"
-            ]})
-        }
+        "session.state" => json!({"type": kind, "payload": SESSION_STATE_KEYS}),
         _ => unreachable!("contains-check above"),
     };
     Json(schema).into_response()
 }
+
+/// The declared payload keys of `session.state`; a `?` suffix marks a key
+/// that is present only sometimes (`blocked_tool` appears only while the
+/// session is blocked and the hook named a valid tool). The emitter is
+/// `routes::sessions::session_state_payload`; a test there ties the two.
+pub const SESSION_STATE_KEYS: [&str; 8] = [
+    "session_id",
+    "harness",
+    "state",
+    "holder",
+    "project",
+    "since_unix",
+    "blocked",
+    "blocked_tool?",
+];
 
 /// The declared payload keys of `maintenance.backup.written`.
 pub const BACKUP_WRITTEN_KEYS: [&str; 3] = ["kb", "path", "remote"];

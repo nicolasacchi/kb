@@ -375,3 +375,16 @@
 .kbc-trailind__btn--off {
   color: var(--ink-mute);
 }
+
+/* OL PRES3 - the Spine's right-slot presence chip (absent when quiet). */
+.kbc-topbar__presence {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+  text-decoration: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+}

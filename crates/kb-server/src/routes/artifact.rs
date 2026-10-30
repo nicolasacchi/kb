@@ -649,6 +649,10 @@ fn runtime_js(target_origin: &str) -> String {
     try {{
       window.parent.postMessage({{ kind: 'kb:read-ready' }}, SEND);
     }} catch (e) {{}}
+    // A page the daemon already styled is visibly ON: say so (after the
+    // ready, which resets the parent's per-document state) so the More-menu
+    // row and the next `r` start from the truth instead of 'unknown'.
+    if (READ_SERVED && document.getElementById(READ_STYLE_ID) && !readOptedOut()) readAck('on');
   }}
   if (document.readyState === 'loading') {{
     document.addEventListener('DOMContentLoaded', readReady);
@@ -2177,6 +2181,19 @@ mod tests {
         assert!(tail.contains("addEventListener('DOMContentLoaded', readReady)"));
         assert!(tail.contains("}, SEND)"));
         assert_eq!(runtime_js("*").matches("kb:read-ready").count(), 1);
+    }
+
+    #[test]
+    fn runtime_acks_on_at_ready_for_a_page_styled_at_serve_time() {
+        let tail = runtime_between("function readReady", "// Link-peek relay");
+        let ready = tail.find("kind: 'kb:read-ready'").expect("ready post");
+        let ack = tail
+            .find("if (READ_SERVED && document.getElementById(READ_STYLE_ID) && !readOptedOut()) readAck('on');")
+            .expect("served-page ack");
+        assert!(
+            ready < ack,
+            "the ack must follow the ready, which resets parent state"
+        );
     }
 
     #[test]

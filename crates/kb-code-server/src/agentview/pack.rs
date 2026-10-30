@@ -719,6 +719,7 @@ mod tests {
         let repo = RepoEntry {
             name: "r".to_string(),
             path: tmp.path().to_path_buf(),
+            projects: Vec::new(),
         };
         // Caller order: big first, small second. Budget only fits ONE of
         // the two whole (small.txt is 10 tokens, big.txt is 100 tokens).
@@ -751,6 +752,7 @@ mod tests {
         let repo = RepoEntry {
             name: "r".to_string(),
             path: tmp.path().to_path_buf(),
+            projects: Vec::new(),
         };
         let paths = vec!["bin.dat".to_string(), "text.txt".to_string()];
         let contents = fill_content_budget(&repo, &paths, 1_000);
@@ -765,6 +767,7 @@ mod tests {
         let repo = RepoEntry {
             name: "r".to_string(),
             path: tmp.path().to_path_buf(),
+            projects: Vec::new(),
         };
         let paths = vec!["a.txt".to_string()];
         // 100 chars = 25 tokens; budget of 5 tokens = 20 chars head.

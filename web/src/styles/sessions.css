@@ -94,6 +94,14 @@
    (the "you are the bottleneck" color, matching the design doc's own
    mockup); finished = muted — the same three-color grammar the design's
    own lane sketches use. */
+.kb-now__lane--blocked .kb-now__lane-head {
+  color: var(--danger);
+}
+.kb-now__row-blocked {
+  color: var(--danger);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
 .kb-now__lane--progress .kb-now__lane-head {
   color: var(--accent, #8a7fff);
 }
@@ -187,6 +195,18 @@
   font: 500 9.5px/1 var(--font-mono, ui-monospace);
   color: var(--ink-dim, #726c65);
   border: 1px dashed var(--rule, #2a2a2a);
+  border-radius: 3px;
+  padding: 1px 4px;
+  white-space: nowrap;
+}
+/* OL IDEA4 — `last: Bash · 38m`, what a quiet agent-held row last started.
+   Same quiet-evidence shape as the honesty marker above; tokens only. */
+.kb-now__row-lasttool {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--ink-dim);
+  border: 1px dashed var(--rule);
   border-radius: 3px;
   padding: 1px 4px;
   white-space: nowrap;

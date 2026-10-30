@@ -82,6 +82,7 @@ async fn boot(kb: KbDaemonSection) -> Boot {
         repos: vec![RepoEntry {
             name: "fixture".to_string(),
             path: dir,
+            projects: Vec::new(),
         }],
         kb_daemon: kb,
         ..KbCodeConfig::default()

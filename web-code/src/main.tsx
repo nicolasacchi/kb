@@ -7,6 +7,7 @@ import { UI_PROBE } from "@kb/ui/probe";
 import { applyTheme, loadTheme } from "./lib/prefs";
 import { followKbTheme } from "./lib/kbTheme";
 import { queryClient, startSseInvalidationBridge } from "./api/queryClient";
+import { startPresenceListener } from "./lib/presenceStore";
 import "./styles/tokens.css";
 // V70-A7 — the generated `[data-kbc-theme]` blocks. Imported here, right
 // after tokens.css, so the palette layer is complete before the first
@@ -75,6 +76,8 @@ if (typeof history !== "undefined" && "scrollRestoration" in history) {
 }
 
 startSseInvalidationBridge();
+// OL PRES3 - the presence touch ring listens from boot, not from first tree mount.
+startPresenceListener();
 
 const root = document.getElementById("root");
 if (!root) throw new Error("#root missing");

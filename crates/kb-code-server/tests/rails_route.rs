@@ -87,6 +87,7 @@ async fn boot() -> Boot {
         repos: vec![RepoEntry {
             name: REPO.to_string(),
             path: std::fs::canonicalize(repo.path()).unwrap(),
+            projects: Vec::new(),
         }],
         kb_daemon: KbDaemonSection {
             enabled: false,
@@ -405,6 +406,7 @@ async fn a_non_rails_repo_is_empty_with_a_reason() {
         repos: vec![RepoEntry {
             name: "plain".to_string(),
             path: std::fs::canonicalize(plain.path()).unwrap(),
+            projects: Vec::new(),
         }],
         kb_daemon: KbDaemonSection {
             enabled: false,

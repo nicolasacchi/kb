@@ -32,6 +32,7 @@ fn cfg(repo_name: &str, path: &Path) -> KbCodeConfig {
         repos: vec![RepoEntry {
             name: repo_name.to_string(),
             path: std::fs::canonicalize(path).unwrap(),
+            projects: Vec::new(),
         }],
         kb_daemon: KbDaemonSection {
             enabled: false,

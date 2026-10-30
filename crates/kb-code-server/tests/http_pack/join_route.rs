@@ -44,6 +44,7 @@ async fn boot_with_repo(name: &str, path: &Path) -> (tempfile::TempDir, String) 
         repos: vec![RepoEntry {
             name: name.to_string(),
             path: std::fs::canonicalize(path).unwrap(),
+            projects: Vec::new(),
         }],
         // Never risk a real network call to an operator's actual kb daemon
         // during this suite — see the module doc.
@@ -248,6 +249,7 @@ async fn on_boot_backfill_precomputes_before_any_explicit_call() {
         repos: vec![RepoEntry {
             name: "r".to_string(),
             path: dir.clone(),
+            projects: Vec::new(),
         }],
         kb_daemon: KbDaemonSection {
             enabled: false,

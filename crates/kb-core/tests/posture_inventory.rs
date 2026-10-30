@@ -55,6 +55,14 @@ const INVENTORY: &[(&str, Class)] = &[
     ("VersionsMode", Reviewed("vcs: version source selector")),
     ("WatchMode", Reviewed("watcher: notify vs poll")),
     ("AtlasLayoutChoice", Reviewed("atlas layout selector")),
+    (
+        "ToolUpdate",
+        Reviewed(
+            "live registry: what a beat does to the display-only last-tool label; \
+             never an input to the derived state, proven by \
+             test:tool_evidence_never_changes_the_derived_state",
+        ),
+    ),
 ];
 
 fn workspace_crates() -> PathBuf {

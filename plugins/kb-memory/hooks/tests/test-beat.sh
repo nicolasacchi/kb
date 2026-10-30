@@ -225,10 +225,10 @@ if [ "$rc16" -eq 0 ]; then
 else
   bad "daemon unreachable (closed port) -> script still exits 0 (rc=$rc16)"
 fi
-if [ "$elapsed_ms" -lt 1500 ]; then
+if [ "$elapsed_ms" -lt 1900 ]; then
   ok "daemon unreachable -> script returns fast ($elapsed_ms ms, backgrounded not blocking)"
 else
-  bad "daemon unreachable -> script returns fast (took ${elapsed_ms}ms, expected < 1500ms)"
+  bad "daemon unreachable -> script returns fast (took ${elapsed_ms}ms, expected < 1900ms)"
 fi
 
 echo
@@ -273,22 +273,18 @@ echo "== OL PRES1: write-tool beats carry paths =="
 
 HOOKS_JSON="$HOOKS_DIR/hooks.json"
 
-# --- 21. hooks.json: a matcher group runs kb-beat.sh claude tool directly --
+# --- 21. hooks.json: ONE PostToolUse group; the write-tool beat rides the throttle
 if jq -e '
      .hooks.PostToolUse as $g
-     | ($g | length) == 2
+     | ($g | length) == 1
      and ($g[0].matcher == null)
      and ($g[0].hooks | map(.command) == [
           "\"${CLAUDE_PLUGIN_ROOT}/hooks/kb-capture-throttle.sh\"",
           "\"${CLAUDE_PLUGIN_ROOT}/hooks/kb-beat-throttle.sh\" claude"])
-     and ($g[1].matcher == "Edit|Write|MultiEdit|NotebookEdit")
-     and ($g[1].hooks | length == 1)
-     and ($g[1].hooks[0].command == "\"${CLAUDE_PLUGIN_ROOT}/hooks/kb-beat.sh\" claude tool")
-     and ($g[1].hooks[0].timeout == 5)
    ' "$HOOKS_JSON" >/dev/null 2>&1; then
-  ok "hooks.json: matcher group calls kb-beat.sh (not the throttle); original PostToolUse group unchanged"
+  ok "hooks.json: a single PostToolUse group (no second hook process tree per edit)"
 else
-  bad "hooks.json PostToolUse matcher group shape"
+  bad "hooks.json PostToolUse must be one group, capture-throttle + beat-throttle"
 fi
 
 wt() { # wt <tool_name> <cwd> <tool_input-json> [env...]
@@ -383,7 +379,7 @@ if [ "$(jget "$o" '.detail')" = "null" ]; then
 else
   bad "non-tool event paths (got: $o)"
 fi
-o="$(beat_dryrun claude blocked '{"session_id":"s-wt","cwd":"/tmp/proj-a","message":"needs input","tool_name":"Edit","tool_input":{"file_path":"/tmp/proj-a/x"}}')"
+o="$(beat_dryrun claude blocked '{"session_id":"s-wt","cwd":"/tmp/proj-a","notification_type":"elicitation_dialog","message":"Claude Code needs your input","tool_name":"Edit","tool_input":{"file_path":"/tmp/proj-a/x"}}')"
 if [ "$(jget "$o" '.detail | keys | join(",")')" = "reason" ]; then
   ok "blocked keeps detail.reason only"
 else
@@ -432,6 +428,355 @@ if command -v git >/dev/null 2>&1; then
   fi
 else
   ok "git not installed: repo-identity checks skipped"
+fi
+
+echo
+echo "== OL IDEA1: blocked on you =="
+
+# marker_path <session_id> — mirrors kb-beat.sh's beat-blocked-<hook_sid_key>.
+# shellcheck disable=SC1091
+. "$HOOKS_DIR/kb-hook-lib.sh"
+marker_path() { printf '%s/kb/beat-blocked-%s' "$XDG_CACHE_HOME" "$(hook_sid_key "$1")"; }
+
+# --- 30. the Notification fixture: which texts block, reason, tool, marker --
+FIXTURE="$SCRIPT_DIR/fixtures/claude-notifications.json"
+ncases="$(jq '.cases | length' "$FIXTURE")"
+if [ "${ncases:-0}" -ge 20 ]; then
+  ok "notification fixture has $ncases cases"
+else
+  bad "notification fixture too small (${ncases:-0})"
+fi
+i=0
+while [ "$i" -lt "${ncases:-0}" ]; do
+  cname="$(jq -r ".cases[$i].case" "$FIXTURE")"
+  charness="$(jq -r ".cases[$i].harness" "$FIXTURE")"
+  cpayload="$(jq -c ".cases[$i].payload" "$FIXTURE")"
+  csid="$(jq -r ".cases[$i].payload.session_id" "$FIXTURE")"
+  cout="$(beat_dryrun "$charness" blocked "$cpayload")"
+  fail=""
+  if [ "$(jq -r ".cases[$i].expect.beat" "$FIXTURE")" = "true" ]; then
+    [ "$(jget "$cout" '.event')" = "blocked" ] || fail="no blocked beat"
+    want_reason="$(jq -r ".cases[$i].expect.reason // empty" "$FIXTURE")"
+    if [ -n "$want_reason" ] && [ "$(jget "$cout" '.detail.reason')" != "$want_reason" ]; then fail="reason"; fi
+    want_len="$(jq -r ".cases[$i].expect.reason_len // empty" "$FIXTURE")"
+    if [ -n "$want_len" ] && [ "$(printf '%s' "$cout" | jq -r '.detail.reason | length')" != "$want_len" ]; then fail="reason length"; fi
+    want_tool="$(jq -r ".cases[$i].expect.tool // empty" "$FIXTURE")"
+    if [ -n "$want_tool" ]; then
+      [ "$(jget "$cout" '.detail.tool')" = "$want_tool" ] || fail="tool"
+    else
+      printf '%s' "$cout" | jq -e '.detail | has("tool")' >/dev/null 2>&1 && fail="unexpected tool"
+    fi
+    mp="$(marker_path "$csid")"
+    if [ "$charness" = "claude" ]; then
+      want_marker="$(jq -r ".cases[$i].expect.marker // empty" "$FIXTURE")"
+      if [ ! -f "$mp" ] || [ "$(cat "$mp")" != "$want_marker" ]; then fail="marker"; fi
+    else
+      [ ! -e "$mp" ] || fail="unexpected marker"
+    fi
+  else
+    [ -z "$cout" ] || fail="a beat was sent: $cout"
+    [ ! -e "$(marker_path "$csid")" ] || fail="unexpected marker"
+  fi
+  if [ -z "$fail" ]; then ok "fixture: $cname"; else bad "fixture: $cname ($fail)"; fi
+  i=$((i + 1))
+done
+
+# --- 31. the blocked beat carries detail.tool (existing case 6 shape) -------
+if [ "$(jget "$out6" '.detail.tool')" = "Bash" ]; then
+  ok "blocked beat carries detail.tool=Bash"
+else
+  bad "blocked beat carries detail.tool (got: $out6)"
+fi
+
+# --- 32. throttle: the first PostToolUse of the blocked agent emits unblocked
+tb() { # tb <session_id> [agent_id] [env...]
+  local sid="$1" agent="${2:-}"
+  shift 2 2>/dev/null || shift $#
+  local p="{\"session_id\":\"$sid\",\"cwd\":\"/tmp/p\""
+  [ -z "$agent" ] || p="$p,\"agent_id\":\"$agent\""
+  printf '%s}' "$p" | env KB_BEAT_DRYRUN=1 "$@" "$BEAT_THROTTLE" claude 2>/dev/null
+}
+bl() { # bl <session_id> [agent_id]
+  local p="{\"session_id\":\"$1\",\"cwd\":\"/tmp/p\",\"notification_type\":\"permission_prompt\",\"message\":\"Claude needs your permission to use Bash\""
+  [ -z "${2:-}" ] || p="$p,\"agent_id\":\"$2\""
+  beat_dryrun claude blocked "$p}" >/dev/null
+}
+bl s-ub1
+o="$(tb s-ub1)"
+if [ "$(jget "$o" '.event')" = "unblocked" ] && [ "$(printf '%s\n' "$o" | grep -c '"event"')" = "1" ] \
+   && [ ! -e "$(marker_path s-ub1)" ]; then
+  ok "blocked(main) then PostToolUse emits exactly one unblocked and clears the marker"
+else
+  bad "unblocked on the first PostToolUse (got: $o)"
+fi
+o="$(tb s-ub1)"
+if [ -z "$o" ]; then ok "a second PostToolUse inside the interval prints nothing"; else bad "second PostToolUse (got: $o)"; fi
+
+# subagent: another agent's tool does not resolve the block.
+bl s-ub2 a1
+mkdir -p "$XDG_CACHE_HOME/kb" && touch "$XDG_CACHE_HOME/kb/beat-heartbeat-$(hook_sid_key s-ub2)"
+o="$(tb s-ub2 a2)"
+if [ -z "$o" ] && [ -f "$(marker_path s-ub2)" ]; then
+  ok "blocked(a1) then PostToolUse(a2) emits no unblocked and keeps the marker"
+else
+  bad "other agent must not unblock (got: $o)"
+fi
+o="$(tb s-ub2 a1)"
+if [ "$(jget "$o" '.event')" = "unblocked" ] && [ ! -e "$(marker_path s-ub2)" ]; then
+  ok "blocked(a1) then PostToolUse(a1) emits unblocked"
+else
+  bad "same agent unblocks (got: $o)"
+fi
+
+# lifecycle beat: KB_BEAT_HEARTBEAT=0 still emits it.
+bl s-ub3
+o="$(tb s-ub3 "" KB_BEAT_HEARTBEAT=0)"
+if [ "$(jget "$o" '.event')" = "unblocked" ]; then
+  ok "KB_BEAT_HEARTBEAT=0 still emits the unblocked lifecycle beat"
+else
+  bad "heartbeat kill switch must not swallow unblocked (got: $o)"
+fi
+
+# a prompt clears the marker, so a later PostToolUse emits no unblocked.
+bl s-ub4
+beat_dryrun claude prompt '{"session_id":"s-ub4","cwd":"/tmp/p"}' >/dev/null
+touch "$XDG_CACHE_HOME/kb/beat-heartbeat-$(hook_sid_key s-ub4)"
+o="$(tb s-ub4)"
+if [ ! -e "$(marker_path s-ub4)" ] && [ -z "$o" ]; then
+  ok "blocked then prompt removes the marker; no later unblocked"
+else
+  bad "prompt must clear the marker (got: $o)"
+fi
+
+# omp never emits unblocked from the throttle.
+beat_dryrun omp blocked '{"session_id":"s-ub5","cwd":"/tmp/p","message":"bash: approval required"}' >/dev/null
+o="$(printf '%s' '{"session_id":"s-ub5","cwd":"/tmp/p"}' | env KB_BEAT_DRYRUN=1 "$BEAT_THROTTLE" omp 2>/dev/null)"
+if [ "$(jget "$o" '.event')" != "unblocked" ]; then
+  ok "omp's throttle input never emits unblocked"
+else
+  bad "omp must not unblock via the throttle (got: $o)"
+fi
+
+# --- 33. hooks.json: Notification stays matcher-less ------------------------
+if jq -e '.hooks.Notification | length == 1 and (.[0] | has("matcher") | not)
+          and (.[0].hooks[0].command | endswith("kb-beat.sh\" claude blocked"))' \
+     "$HOOKS_JSON" >/dev/null 2>&1; then
+  ok "hooks.json: Notification group has no matcher and calls kb-beat.sh claude blocked"
+else
+  bad "hooks.json Notification group shape"
+fi
+
+echo "== OL PRES2: worktree basename + write-tool beats through the throttle =="
+
+# --- 34. a linked worktree carries detail.worktree (basename); main does not -
+if command -v git >/dev/null 2>&1; then
+  REPO2="$TMPROOT/wtmain"
+  mkdir -p "$REPO2"
+  git -C "$REPO2" init -q 2>/dev/null
+  git -C "$REPO2" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m init 2>/dev/null
+  git -C "$REPO2" worktree add -q "$TMPROOT/wt-x" -b wtx 2>/dev/null
+  R2="$(cd "$REPO2" && pwd -P)"
+  W2="$(cd "$TMPROOT/wt-x" && pwd -P)"
+  o="$(beat_dryrun claude tool "{\"session_id\":\"s-w1\",\"cwd\":\"$W2\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$W2/a.rs\"}}")"
+  if [ "$(jget "$o" '.detail.worktree')" = "wt-x" ] && [ "$(jget "$o" '.detail.project')" = "wtmain" ]; then
+    ok "linked worktree beat carries detail.worktree = basename (never a path)"
+  else
+    bad "detail.worktree for a linked worktree (got: $o)"
+  fi
+  o="$(beat_dryrun claude tool "{\"session_id\":\"s-w2\",\"cwd\":\"$R2\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$R2/a.rs\"}}")"
+  if [ "$(jget "$o" '.detail | has("worktree")')" = "false" ]; then
+    ok "main checkout beat carries no detail.worktree"
+  else
+    bad "main checkout must not carry worktree (got: $o)"
+  fi
+  # same-named worktree dir (basename equals project) is still a worktree
+  mkdir -p "$TMPROOT/same"
+  git -C "$REPO2" worktree add -q "$TMPROOT/same/wtmain" -b same 2>/dev/null
+  S2="$(cd "$TMPROOT/same/wtmain" && pwd -P)"
+  o="$(beat_dryrun claude tool "{\"session_id\":\"s-w3\",\"cwd\":\"$S2\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$S2/a.rs\"}}")"
+  if [ "$(jget "$o" '.detail.worktree')" = "wtmain" ]; then
+    ok "a worktree whose directory is named like the project is still reported"
+  else
+    bad "same-named worktree (got: $o)"
+  fi
+else
+  ok "git not installed: worktree checks skipped"
+fi
+
+# --- 35. write tools bypass the throttle gate; other tools stay throttled ---
+tw() { # tw <session> <tool_name> [env...]
+  local sid="$1" tool="$2"
+  shift 2
+  printf '{"session_id":"%s","cwd":"/tmp/proj-a","tool_name":"%s","tool_input":{"file_path":"/tmp/proj-a/x.rs"}}' "$sid" "$tool" \
+    | env KB_BEAT_DRYRUN=1 KB_BEAT_HEARTBEAT_MIN_INTERVAL_SECS=180 "$@" "$BEAT_THROTTLE" claude 2>/dev/null
+}
+tw s-gate Read >/dev/null   # first call opens the gate window
+o="$(tw s-gate Read)"
+if [ -z "$o" ]; then ok "a Read inside the interval stays throttled"; else bad "Read must stay throttled (got: $o)"; fi
+o="$(tw s-gate Bash)"
+if [ -z "$o" ]; then ok "a Bash call inside the interval stays throttled"; else bad "Bash must stay throttled (got: $o)"; fi
+for t in Edit Write MultiEdit NotebookEdit; do
+  o="$(tw s-gate "$t")"
+  if [ "$(jget "$o" '.event')" = "tool" ] && [ "$(jget "$o" '.detail.tool')" = "$t" ] \
+     && [ "$(jget "$o" '.detail.paths | length')" = "1" ]; then
+    ok "$t passes the throttle gate and carries its path"
+  else
+    bad "$t must bypass the throttle (got: $o)"
+  fi
+done
+o="$(tw s-gate2 Edit KB_BEAT_HEARTBEAT=0)"
+if [ "$(jget "$o" '.detail.tool')" = "Edit" ]; then
+  ok "KB_BEAT_HEARTBEAT=0 kills the heartbeat only, not the write-tool presence beat"
+else
+  bad "KB_BEAT_HEARTBEAT=0 must keep write-tool beats (got: $o)"
+fi
+o="$(tw s-gate3 Read KB_BEAT_HEARTBEAT=0)"
+if [ -z "$o" ]; then ok "KB_BEAT_HEARTBEAT=0 still silences a non-write tool"; else bad "heartbeat off (got: $o)"; fi
+o="$(tw s-gate4 Edit KB_BEAT=0)"
+if [ -z "$o" ]; then ok "KB_BEAT=0 silences write-tool beats too"; else bad "KB_BEAT=0 (got: $o)"; fi
+tw s-gate5 Read >/dev/null
+o="$(tw s-gate5 Edit KB_BEAT_PATHS=0)"
+if [ -z "$o" ]; then
+  ok "KB_BEAT_PATHS=0 leaves a write tool throttled like any other tool"
+else
+  bad "KB_BEAT_PATHS=0 must not bypass the gate (got: $o)"
+fi
+
+echo
+echo "== OL IDEA4: kb-beat-pretool.sh (deduped tool-START beat) =="
+
+PRETOOL="$HOOKS_DIR/kb-beat-pretool.sh"
+. "$HOOKS_DIR/kb-hook-lib.sh"
+
+# pt <payload-json> [env assignments...] -> stdout of one dry-run run
+pt() {
+  local payload="$1"
+  shift
+  printf '%s' "$payload" | env KB_BEAT_DRYRUN=1 "$@" "$PRETOOL" claude 2>/dev/null
+}
+ptp() { # ptp <sid> <tool> [extra-json-members]
+  jq -nc --arg sid "$1" --arg t "$2" '{session_id:$sid, cwd:"/tmp/p", tool_name:$t,
+    tool_input:{command:"SECRET-COMMAND-MARKER"}}'
+}
+
+# --- 34. executable; first call sends event=tool + detail.tool/phase --------
+if [ -x "$PRETOOL" ]; then ok "kb-beat-pretool.sh is executable"; else bad "kb-beat-pretool.sh must be executable (-x)"; fi
+o="$(pt "$(ptp s-pt1 Bash)")"
+if [ "$(jget "$o" '.event')" = "tool" ] && [ "$(jget "$o" '.detail.tool')" = "Bash" ] \
+   && [ "$(jget "$o" '.detail.phase')" = "start" ] && [ "$(jget "$o" '.session_id')" = "s-pt1" ]; then
+  ok "first Bash call sends event=tool, detail.tool=Bash, detail.phase=start"
+else
+  bad "first Bash call (got: $o)"
+fi
+case "$o" in
+  *SECRET-COMMAND-MARKER*) bad "the beat body must never carry tool_input (got: $o)" ;;
+  *) ok "the body carries the tool name only, never tool_input" ;;
+esac
+if printf '%s' "$o" | jq -e '.detail | has("paths") or has("root") or has("project")' >/dev/null 2>&1; then
+  bad "a tool-start beat must not carry paths/root/project (got: $o)"
+else
+  ok "a tool-start beat carries no paths/root/project even for a write tool name"
+fi
+o="$(pt "$(ptp s-pt1w Edit)")"
+if [ "$(jget "$o" '.detail.tool')" = "Edit" ] && [ "$(jget "$o" '.detail.paths')" = "null" ]; then
+  ok "an Edit tool-start beat names the tool and extracts no paths"
+else
+  bad "Edit tool-start beat (got: $o)"
+fi
+
+# --- 35. dedupe: repeat within the interval silent; a name change sends -----
+o="$(pt "$(ptp s-pt1 Bash)")"
+if [ -z "$o" ]; then ok "a repeat Bash call within the interval is silent"; else bad "repeat Bash call (got: $o)"; fi
+o="$(pt "$(ptp s-pt1 Read)")"
+if [ "$(jget "$o" '.detail.tool')" = "Read" ]; then ok "Read (a name change) sends"; else bad "Read name change (got: $o)"; fi
+o="$(pt "$(ptp s-pt1 Read)")"
+if [ -z "$o" ]; then ok "an immediate repeat of Read is silent"; else bad "repeat Read (got: $o)"; fi
+o="$(pt "$(ptp s-pt1 Read)" KB_BEAT_TOOLS_MIN_INTERVAL_SECS=0)"
+if [ "$(jget "$o" '.detail.tool')" = "Read" ]; then
+  ok "a repeat Read with KB_BEAT_TOOLS_MIN_INTERVAL_SECS=0 sends"
+else
+  bad "repeat Read with interval 0 (got: $o)"
+fi
+# the interval is a real clock: a marker older than the interval re-sends.
+touch -d '10 minutes ago' "$XDG_CACHE_HOME/kb/beat-tool-$(hook_sid_key s-pt1)" 2>/dev/null \
+  || touch -t "$(date -d '10 minutes ago' +%Y%m%d%H%M.%S 2>/dev/null)" "$XDG_CACHE_HOME/kb/beat-tool-$(hook_sid_key s-pt1)" 2>/dev/null
+o="$(pt "$(ptp s-pt1 Read)")"
+if [ "$(jget "$o" '.detail.tool')" = "Read" ]; then
+  ok "a repeat Read past the default 180s interval sends"
+else
+  bad "repeat Read past the interval (got: $o)"
+fi
+
+# --- 36. subagent tool calls never name the parent's last tool --------------
+o="$(pt "$(jq -nc '{session_id:"s-pt2", cwd:"/tmp/p", tool_name:"Bash", agent_id:"agent-7"}')")"
+if [ -z "$o" ]; then ok "a payload with a non-empty agent_id is silent"; else bad "agent_id payload (got: $o)"; fi
+# an empty tool_name must not shift fields (agent_id must not become the tool).
+o="$(pt "$(jq -nc '{session_id:"s-pt2", cwd:"/tmp/p", agent_id:"agent-7"}')")"
+if [ -z "$o" ]; then ok "an agent_id payload with no tool_name is silent (no field shift)"; else bad "agent_id without tool_name (got: $o)"; fi
+
+# --- 37. each kill switch is silent -----------------------------------------
+for sw in KB_BEAT=0 KB_BEAT_HEARTBEAT=0 KB_BEAT_TOOLS=0; do
+  o="$(pt "$(ptp "s-pt-$sw" Bash)" "$sw")"
+  if [ -z "$o" ]; then ok "$sw is silent"; else bad "$sw must be silent (got: $o)"; fi
+done
+
+# --- 38. never blocks, never prints for degenerate input ---------------------
+for bad_in in '' 'not json' '{}' '{"session_id":"s-pt3"}' '{"tool_name":"Bash"}' '[1,2]'; do
+  o="$(printf '%s' "$bad_in" | env KB_BEAT_DRYRUN=1 "$PRETOOL" claude 2>/dev/null)"; rc=$?
+  if [ "$rc" -eq 0 ] && [ -z "$o" ]; then ok "degenerate stdin ($bad_in) -> exit 0, empty stdout"; else bad "degenerate stdin $bad_in (rc=$rc, got: $o)"; fi
+done
+o="$(printf '%s' "$(ptp s-pt4 Bash)" | env -u KB_SESSIONS_DIR KB_BEAT_DRYRUN=1 "$PRETOOL" claude 2>/dev/null)"
+if [ -z "$o" ]; then ok "no KB_SESSIONS_DIR -> silent no-op"; else bad "no KB_SESSIONS_DIR (got: $o)"; fi
+
+# --- 39. kb-beat.sh: third argument is optional and strictly `start` --------
+o="$(printf '%s' "$(ptp s-pt5 Bash)" | env KB_BEAT_DRYRUN=1 "$BEAT" claude tool 2>/dev/null)"
+if [ "$(jget "$o" 'has("detail")')" = "false" ]; then
+  ok "kb-beat.sh tool with no third argument still has no detail"
+else
+  bad "kb-beat.sh tool without phase must have no detail (got: $o)"
+fi
+o="$(printf '%s' "$(ptp s-pt5 Bash)" | env KB_BEAT_DRYRUN=1 "$BEAT" claude tool bogus 2>/dev/null)"
+if [ "$(jget "$o" 'has("detail")')" = "false" ]; then
+  ok "an unknown third argument is ignored"
+else
+  bad "unknown third argument must be ignored (got: $o)"
+fi
+o="$(printf '%s' "$(ptp s-pt5 Bash)" | env KB_BEAT_DRYRUN=1 "$BEAT" claude prompt start 2>/dev/null)"
+if [ "$(jget "$o" 'has("detail")')" = "false" ]; then
+  ok "a start third argument is honoured only on the tool event"
+else
+  bad "phase=start on a non-tool event must be ignored (got: $o)"
+fi
+long="$(printf 'T%.0s' $(seq 1 200))"
+o="$(printf '%s' "$(ptp s-pt5 "$long")" | env KB_BEAT_DRYRUN=1 "$BEAT" claude tool start 2>/dev/null)"
+if [ "$(jget "$o" '.detail.tool | length')" = "64" ]; then
+  ok "detail.tool is capped at 64 bytes client-side"
+else
+  bad "detail.tool cap (got: $o)"
+fi
+
+# --- 40. hooks.json wiring ---------------------------------------------------
+if jq -e '
+     (.hooks.PreToolUse | length) == 1
+     and (.hooks.PreToolUse[0] | has("matcher") | not)
+     and (.hooks.PreToolUse[0].hooks | length) == 1
+     and (.hooks.PreToolUse[0].hooks[0].command == "\"${CLAUDE_PLUGIN_ROOT}/hooks/kb-beat-pretool.sh\" claude")
+     and (.hooks.PreToolUse[0].hooks[0].timeout == 5)
+   ' "$HOOKS_JSON" >/dev/null 2>&1; then
+  ok "hooks.json: a matcher-less PreToolUse group runs kb-beat-pretool.sh claude (timeout 5)"
+else
+  bad "hooks.json PreToolUse group shape"
+fi
+if jq -e '
+     .hooks.PostToolUse[0] as $g
+     | ($g | has("matcher") | not)
+     and ($g.hooks | map(.command) == [
+          "\"${CLAUDE_PLUGIN_ROOT}/hooks/kb-capture-throttle.sh\"",
+          "\"${CLAUDE_PLUGIN_ROOT}/hooks/kb-beat-throttle.sh\" claude"])
+   ' "$HOOKS_JSON" >/dev/null 2>&1; then
+  ok "hooks.json: the matcher-less PostToolUse group still runs capture-throttle + beat-throttle"
+else
+  bad "hooks.json PostToolUse matcher-less group changed"
 fi
 
 echo

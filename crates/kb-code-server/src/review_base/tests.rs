@@ -696,6 +696,7 @@ fn fixture_with(no_remote: bool) -> Fx {
     let repos = vec![RepoEntry {
         name: REPO.into(),
         path: clone.clone(),
+        projects: Vec::new(),
     }];
     let mut ids = HashMap::new();
     ids.insert(
@@ -1359,6 +1360,7 @@ async fn start_pr_and_snapshot_routes_capture_in_the_store_not_the_clone() {
         repos: vec![RepoEntry {
             name: REPO.into(),
             path: fx.clone.clone(),
+            projects: Vec::new(),
         }],
         kb_daemon: crate::config::KbDaemonSection {
             enabled: false,
@@ -1780,6 +1782,7 @@ async fn unregistered_state_with(
         repos: vec![RepoEntry {
             name: REPO.into(),
             path: fx.clone.clone(),
+            projects: Vec::new(),
         }],
         kb_daemon: crate::config::KbDaemonSection {
             enabled: false,
@@ -1899,6 +1902,7 @@ async fn forge_api_reads_the_store_project_with_the_gh_cli_token() {
         repos: vec![RepoEntry {
             name: REPO.into(),
             path: fx.clone.clone(),
+            projects: Vec::new(),
         }],
         kb_daemon: crate::config::KbDaemonSection {
             enabled: false,
@@ -2216,6 +2220,7 @@ async fn sweep_reads_the_store_project_and_a_fork_pr_can_never_close_the_review(
         &RepoEntry {
             name: REPO.into(),
             path: fx.clone.clone(),
+            projects: Vec::new(),
         },
         None,
         fake_gh(gh_dir.path(), "alice"),
@@ -2802,6 +2807,7 @@ async fn reuse_pr_review_refreshes_the_origin_base_before_capturing() {
     let repo = RepoEntry {
         name: REPO.into(),
         path: fx.clone.clone(),
+        projects: Vec::new(),
     };
     let review = state.store.get_review(id).unwrap().unwrap();
     let (status, body) = crate::reviews::reuse_pr_review(
@@ -2835,6 +2841,7 @@ async fn reuse_pr_review_follows_a_forge_retarget_unless_the_base_was_explicit()
     let repo = RepoEntry {
         name: REPO.into(),
         path: fx.clone.clone(),
+        projects: Vec::new(),
     };
     let id = no_store_pr_review(&state, "refs/remotes/origin/main", "explicit");
     let reuse = |state: crate::state::SharedState, repo: RepoEntry, id: i64| async move {

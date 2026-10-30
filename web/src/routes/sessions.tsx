@@ -37,6 +37,7 @@ import {
   type RecollectSessionOut,
   type ResearchOut,
   type SessionCommentsResponse,
+  type SessionDetail,
   type SessionFileOut,
   type SessionRow,
   type ThreadOut,
@@ -44,6 +45,18 @@ import {
 import { useState } from "react";
 import { sessionDisplayName } from "../lib/sessionDisplayName";
 import { sessionRowTitle, sessionMetaParts } from "../lib/sessionRowParts";
+import {
+  CHECKS_CAPTION,
+  NO_EDITS_LINE,
+  NOT_EXTRACTED_LINE,
+  UNCOMMITTED_LINE,
+  checkWhen,
+  ignoredEditsNote,
+  notNamedLine,
+  resumeEvidenceLines,
+  rowEvidence,
+  segmentCaption,
+} from "../lib/sessionEvidence";
 import { triggerDownload, sessionExportUrl } from "../lib/download";
 import { dayBucket, dayHeading } from "../lib/time";
 import {
@@ -1208,6 +1221,10 @@ export function SessionListRow({
   const husk = substanceBadge(row.substance);
   const title = sessionRowTitle(row);
   const meta = sessionMetaParts(row);
+  // OL IDEA3 — the verdict, in words, after the facts: was the code checked
+  // after its last edit. Surfaced, never scored: it changes no order, no
+  // filter, no colour.
+  const evidence = rowEvidence(row.evidence);
   // W5/R9b/LF-1 — derived staleness/presence dot: Tier 0 is a static,
   // honestly-labelled chip; W7 upgrades to Tier 1 (writer-activity
   // EVIDENCE, `presenceSet` from `GET /api/sessions/presence`) when the
@@ -1279,9 +1296,21 @@ export function SessionListRow({
             {preview.text}
           </span>
         )}
-        {meta.length > 0 && (
+        {(meta.length > 0 || evidence) && (
           <span className="kb-ses__row-stats" title={row.cwd ?? row.kb}>
             {meta.join(" · ")}
+            {evidence && (
+              <>
+                {meta.length > 0 ? " · " : ""}
+                <span
+                  data-testid="session-row-evidence"
+                  data-verdict={evidence.verdict}
+                  title={evidence.title}
+                >
+                  {evidence.phrase}
+                </span>
+              </>
+            )}
           </span>
         )}
       </button>
@@ -1582,15 +1611,23 @@ function ResumeSection({
   files,
   decisions,
   commits,
+  detail,
 }: {
   row: SessionRow;
   files: SessionFileOut[];
   decisions: DecisionOut[];
   commits: CommitOut[];
+  detail: SessionDetail | null;
 }) {
   const [copied, setCopied] = useState(false);
   const edited = files.filter((f) => f.action !== "read");
-  const text = buildResume(row, edited, decisions, commits);
+  const text = buildResume(
+    row,
+    edited,
+    decisions,
+    commits,
+    resumeEvidenceLines(detail?.evidence ?? row.evidence),
+  );
   const copy = () => {
     void navigator.clipboard?.writeText(text).then(
       () => {
@@ -1623,6 +1660,7 @@ function buildResume(
   edited: SessionFileOut[],
   decisions: DecisionOut[],
   commits: CommitOut[],
+  evidenceLines: string[] = [],
 ): string {
   const lines: string[] = [];
   lines.push(`Resuming: ${sessionDisplayName(row)}`);
@@ -1650,6 +1688,8 @@ function buildResume(
     for (const c of commits)
       lines.push(`  - ${c.sha ?? "-------"} ${c.subject ?? c.kind}`);
   }
+  // OL IDEA3 — the same two lines `kb sessions resume` prints.
+  if (evidenceLines.length > 0) lines.push("", ...evidenceLines);
   return lines.join("\n");
 }
 
@@ -1841,6 +1881,8 @@ function SessionInspector(props: {
           render path is one fewer thing to drift; see the W3 build report. */}
       <OutcomeSection outcome={row.outcome} />
 
+      <ChecksSection row={row} detail={detail} />
+
       <section className="kb-ses__ins-section">
         <h3>Memories produced</h3>
         {loading && <p className="kb-ses__ins-loading">loading…</p>}
@@ -1943,6 +1985,7 @@ function SessionInspector(props: {
         files={files}
         decisions={decisions}
         commits={commits}
+        detail={detail}
       />
 
       <section className="kb-ses__ins-section">
@@ -1998,6 +2041,72 @@ function OutcomeSection({ outcome }: { outcome: string | null | undefined }) {
     <section className="kb-ses__ins-section kb-ses__ins-outcome" data-testid="session-outcome">
       <h3>Outcome</h3>
       <p className="kb-ses__ins-outcome-text">{outcome}</p>
+    </section>
+  );
+}
+
+// OL IDEA3 — the session evidence card: was the code checked after it was
+// last edited. The sentence and every per-check line are the SERVER's
+// (`kb_core::sessions::checks`); this section lays them out and adds the
+// captions that say what the evidence can and cannot see. Surfaced, never
+// scored: it reorders and filters nothing.
+export function ChecksSection({
+  row,
+  detail,
+}: {
+  row: SessionRow;
+  detail: SessionDetail | null;
+}) {
+  const ev = detail?.evidence ?? row.evidence;
+  // An older daemon sends no evidence: say nothing rather than guess.
+  if (!ev) return null;
+  const checks = detail?.checks ?? [];
+  const notNamed = notNamedLine(detail?.unnamed_edits, detail?.unnamed_edits_total);
+  const segment = segmentCaption(row.segment_idx, row.segment_count);
+  const lead =
+    ev.verdict === "not_extracted"
+      ? NOT_EXTRACTED_LINE
+      : ev.verdict === "no_edits"
+        ? NO_EDITS_LINE
+        : ev.phrase;
+  return (
+    <section className="kb-ses__ins-section" data-testid="session-checks">
+      <h3>Checks</h3>
+      {lead && (
+        <p className="kb-ses__ins-outcome-text" data-testid="session-checks-phrase">
+          {lead}
+        </p>
+      )}
+      {checks.length > 0 && (
+        <ul className="kb-ses__ins-list">
+          {checks.map((c, i) => (
+            <li key={`${i}:${c.cmd}`} data-testid="session-check" data-outcome={c.outcome}>
+              <span>{c.text}</span> · <span>{c.label}</span> · <code>{c.cmd}</code>
+              {c.at ? ` · ${formatStarted(c.at)}` : ""}
+              {checkWhen(c) ? ` · ${checkWhen(c)}` : ""}
+            </li>
+          ))}
+        </ul>
+      )}
+      {notNamed && (
+        <p className="kb-ses__ins-empty" data-testid="session-checks-not-named">
+          {notNamed}
+        </p>
+      )}
+      {ev.uncommitted && (
+        <p className="kb-ses__ins-empty" data-testid="session-checks-uncommitted">
+          {UNCOMMITTED_LINE}
+        </p>
+      )}
+      {segment && (
+        <p className="kb-ses__ins-empty" data-testid="session-checks-segment">
+          {segment}
+        </p>
+      )}
+      <p className="kb-ses__ins-empty" data-testid="session-checks-caption">
+        {CHECKS_CAPTION}
+        {ignoredEditsNote(ev.edits_ignored)}
+      </p>
     </section>
   );
 }

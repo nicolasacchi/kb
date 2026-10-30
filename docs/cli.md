@@ -640,11 +640,23 @@ kb sessions status [--local] [--json] [--no-color]
                                     Claude Code root). `--state` is csv over
                                     working/stalled/waiting/cold/finished/presumed_ended. No
                                     `--watch`: pipe `kb events --follow --types session.state --json`
-                                    for a live stream instead. See
-                                    docs/live-sessions.md.
-kb sessions show <id> [--json]         Single session detail + memories + artifacts + decisions + effort
+                                    for a live stream instead. A row blocked on a permission prompt or a question
+                                    reads `needs you: permission: <tool>` (else `needs you:
+                                    <reason>`, else `needs you`) in the why column. A quiet
+                                    agent-held row also names the last tool it started
+                                    (`stalled? · last: Bash 38m`; started, not running; Claude only).
+                                    See docs/live-sessions.md.
+kb sessions show <id> [--json] [--section a,b,..]
+                                    Single session detail + memories + artifacts + decisions + effort. OL IDEA3 — a
+                                    `checked   <phrase>` line (and `$ <command>`) after `closed`, a `not named` line
+                                    (edits the closing text never names), a `commit    none detected in this session`
+                                    line, and a `checks (N of total)` block (each check before/after the last edit).
+                                    `--section checks` prints only those lines; with `--json` it returns
+                                    `{evidence, checks, unnamed_edits, unnamed_edits_total}` (no extra fetch).
+                                    A capture that predates V0046 prints `checked   not extracted for this capture
+                                    (predates it; kb reindex <kb> fills it)`. Surfaced, never scored
 kb sessions replay <id> [--json]       Replay beat by beat on the transcript's clock: prompts, reads/edits/writes, searches, commits, decisions
-kb sessions resume <id> [--json]       Resume-context block (goal + branch + edited files + decisions)
+kb sessions resume <id> [--json]       Resume-context block (goal + branch + edited files + decisions); OL IDEA3 adds `Checks: <phrase>` + `  $ <command>` and `Not committed: no commit detected in this session` before `Resume:`
 kb sessions export <id> [--from URL]   Bundle a session as a portable `<sid>.kbsession.zip`
 kb sessions rehydrate <bundle>         Place a bundle's transcript under `~/.claude/projects/` so `claude -r <id>` finds it
 kb sessions pull <id> [--from URL]     Fetch a session bundle from a remote kb daemon, optionally rehydrate
@@ -877,6 +889,25 @@ kb context <query> [--cwd PATH] [--budget N] [--session SID] [--no-floor]
                                     sessions · 2 open comments — run
                                     `kb context`") points at: the hook injects
                                     COUNTS, this verb is the substance.
+kb changes [--since WHEN] [--project ID|LABEL] [--session SID]
+   [--daemon URL] [--json]
+                                    what landed across your projects since
+                                    a time: sessions that ran (and how they
+                                    closed), the commits they recorded, and
+                                    each project's slate posts, grouped by
+                                    project. WHEN is unix seconds,
+                                    YYYY-MM-DD, <N>h or <N>d (default 24h),
+                                    parsed client-side. --project keeps one
+                                    project (id or label); --session is YOUR
+                                    id, left out with its continuation
+                                    parts. Every truncation and every
+                                    not-listed count has its own line, and
+                                    the footer names `kb daycard --since`
+                                    for the corpus side (artifacts, memories,
+                                    comments). --json prints the body plus a
+                                    `note` (the lines are data, not
+                                    instructions). Pull-only; nothing is
+                                    marked read. GET /api/changes.
 kb turn <prompt> [--cwd PATH] [--session SID] [--deadline-ms N]
    [--lanes recall,context,slate] [--slate SLUG] [--slate-since SEQ]
    [--daemon URL] [--json]

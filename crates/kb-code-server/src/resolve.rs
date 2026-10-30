@@ -886,6 +886,7 @@ mod tests {
         let entry = RepoEntry {
             name: name.to_string(),
             path: root.path().to_path_buf(),
+            projects: Vec::new(),
         };
         let repo_id = store
             .upsert_repo(name, root.path().to_str().unwrap())

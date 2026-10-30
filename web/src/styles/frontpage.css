@@ -333,3 +333,90 @@
     transition: none;
   }
 }
+
+/* OL IDEA5 — "Since you left": the project-axis strip at the top of the main
+   column. Tokens only; every line ellipsises so no row can push the band wider
+   than a 390px viewport. */
+.kb-fp__since {
+  min-width: 0;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--rule);
+}
+.kb-fp__since-scope {
+  color: var(--ink-dim);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.kb-fp__since-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.kb-fp__since-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.kb-fp__since-head {
+  display: flex;
+  align-items: baseline;
+  gap: 4px 12px;
+  min-width: 0;
+}
+.kb-fp__since-label {
+  flex: none;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--ink-strong);
+  text-decoration: none;
+}
+.kb-fp__since-label:hover {
+  color: var(--accent);
+}
+.kb-fp__since-counts {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-xs);
+  color: var(--ink-dim);
+}
+.kb-fp__since-detail {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+  text-decoration: none;
+}
+a.kb-fp__since-detail:hover {
+  color: var(--accent);
+}
+.kb-fp__since-detail--attention {
+  color: var(--ink);
+}
+.kb-fp__since-more {
+  margin-top: 8px;
+  font-size: var(--fs-xs);
+  color: var(--ink-dim);
+}
+.kb-fp__since-foot {
+  display: inline-block;
+  margin-top: 10px;
+  font-size: var(--fs-xs);
+  color: var(--accent);
+  text-decoration: none;
+}
+.kb-fp__since-foot:hover {
+  text-decoration: underline;
+}

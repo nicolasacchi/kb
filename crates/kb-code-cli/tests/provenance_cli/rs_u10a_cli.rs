@@ -80,6 +80,7 @@ async fn boot(repo: &Path) -> (tempfile::TempDir, String) {
         repos: vec![RepoEntry {
             name: "widgets".to_string(),
             path: repo.to_path_buf(),
+            projects: Vec::new(),
         }],
         kb_daemon: KbDaemonSection {
             enabled: false,

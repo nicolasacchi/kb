@@ -1279,6 +1279,165 @@ impl KbClient {
     }
 }
 
+impl KbClient {
+    /// `GET {url}/api/sessions/live-status?blocked=1` (OL IDEA1) - the
+    /// sessions kb knows to be blocked on the operator, for the Home "Needs
+    /// you" line. Same posture as every call here: disabled short-circuits,
+    /// the kb-sibling/1 handshake fails closed, the shared [`TIMEOUT`]
+    /// applies, nothing is cached. Only the fields the line needs are
+    /// deserialized (unknown fields ignored), and only `blocked == true` rows
+    /// are kept: an older kb ignores `?blocked` and answers every live row.
+    pub async fn blocked_sessions(&self) -> Result<Vec<KbBlockedSession>> {
+        if !self.cfg.enabled {
+            return Err(KbClientError::Disabled);
+        }
+        self.ensure_sibling().await?;
+        let client = self.client()?;
+        let url = format!(
+            "{}/api/sessions/live-status",
+            self.cfg.url_str().trim_end_matches('/')
+        );
+        let resp = self
+            .get(client, &url)
+            .query(&[("blocked", "1")])
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_timeout() {
+                    KbClientError::Timeout(url.clone())
+                } else {
+                    KbClientError::Unreachable(url.clone(), e.to_string())
+                }
+            })?;
+        if !resp.status().is_success() {
+            return Err(KbClientError::BadStatus(resp.status()));
+        }
+        let body: KbLiveStatusRelay = resp.json().await.map_err(|e| {
+            if e.is_timeout() {
+                KbClientError::Timeout(url.clone())
+            } else {
+                KbClientError::Parse(e.to_string())
+            }
+        })?;
+        Ok(body.sessions.into_iter().filter(|r| r.blocked).collect())
+    }
+}
+
+/// The subset of kb's `live-status` body the blocked relay needs.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct KbLiveStatusRelay {
+    #[serde(default)]
+    pub sessions: Vec<KbBlockedSession>,
+}
+
+/// One live-status row, reduced to what the Home line shows. `blocked`
+/// defaults to false so a row from a kb that predates the field is dropped.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct KbBlockedSession {
+    #[serde(default)]
+    pub session_id: String,
+    #[serde(default)]
+    pub harness: String,
+    #[serde(default)]
+    pub project: Option<String>,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub blocked: bool,
+    #[serde(default)]
+    pub blocked_tool: Option<String>,
+    #[serde(default)]
+    pub blocked_since_unix: Option<i64>,
+    #[serde(default)]
+    pub since_unix: i64,
+}
+
+impl KbClient {
+    /// `GET {url}/api/sessions/live-touches[?project=..&max_age_secs=..]` —
+    /// OL PRES1's scrubbed "which files are agents editing right now" read
+    /// (kb-live-touches/1), consumed by [`crate::presence`]. Every row is a
+    /// project label plus a path RELATIVE to a root kb never kept; there is
+    /// no absolute path to leak. `projects` is passed as repeated `project=`
+    /// filters (empty = unfiltered; kb rejects more than 32 and so does this
+    /// client, locally, before the wire). Same handshake, token and shared
+    /// [`TIMEOUT`] as every other call here (a small in-memory read on
+    /// kb's side); nothing is cached. A kb that predates PRES1 answers 404,
+    /// surfaced as `BadStatus(404)` for the caller to caption.
+    pub async fn live_touches(
+        &self,
+        projects: &[String],
+        max_age_secs: i64,
+    ) -> Result<LiveTouchesRelay> {
+        if !self.cfg.enabled {
+            return Err(KbClientError::Disabled);
+        }
+        if projects.len() > LIVE_TOUCHES_MAX_PROJECTS {
+            return Err(KbClientError::BadStatus(reqwest::StatusCode::BAD_REQUEST));
+        }
+        self.ensure_sibling().await?;
+        let client = self.client()?;
+        let url = format!(
+            "{}/api/sessions/live-touches",
+            self.cfg.url_str().trim_end_matches('/')
+        );
+        let mut query: Vec<(&str, String)> =
+            projects.iter().map(|p| ("project", p.clone())).collect();
+        query.push(("max_age_secs", max_age_secs.to_string()));
+        let resp = self
+            .get(client, &url)
+            .query(&query)
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_timeout() {
+                    KbClientError::Timeout(url.clone())
+                } else {
+                    KbClientError::Unreachable(url.clone(), e.to_string())
+                }
+            })?;
+        if !resp.status().is_success() {
+            return Err(KbClientError::BadStatus(resp.status()));
+        }
+        resp.json().await.map_err(|e| {
+            if e.is_timeout() {
+                KbClientError::Timeout(url.clone())
+            } else {
+                KbClientError::Parse(e.to_string())
+            }
+        })
+    }
+}
+
+/// kb's own cap on repeated `project=` filters on live-touches.
+pub const LIVE_TOUCHES_MAX_PROJECTS: usize = 32;
+
+/// The subset of kb's `kb-live-touches/1` body the presence relay reads.
+/// `worktree` (OL PRES2) is the basename of a linked worktree, absent for
+/// the main checkout and for a kb older than PRES2.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct LiveTouchesRelay {
+    #[serde(default)]
+    pub touches: Vec<LiveTouch>,
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+/// One touched file, newest-first as kb serves it.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct LiveTouch {
+    pub project: String,
+    #[serde(default)]
+    pub worktree: Option<String>,
+    pub rel: String,
+    pub session_id: String,
+    #[serde(default)]
+    pub harness: String,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub age_secs: i64,
+}
+
 /// Ceiling on a relayed kb search page (OL S1) — the omnibox lane shows a
 /// handful of rows; 20 is the brief's hard cap.
 pub const SEARCH_RELAY_MAX_LIMIT: u32 = 20;
@@ -2947,6 +3106,87 @@ mod tests {
             KbClientError::SiblingMismatch(_)
         ));
     }
+    // --- OL IDEA1 - blocked_sessions ----------------------------------------
+
+    fn live_status_router(
+        seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        body: serde_json::Value,
+    ) -> Router {
+        Router::new().route(
+            "/api/sessions/live-status",
+            get(move |axum::extract::RawQuery(q): axum::extract::RawQuery| {
+                let seen = seen.clone();
+                let body = body.clone();
+                async move {
+                    seen.lock().unwrap().push(q.unwrap_or_default());
+                    Json(body)
+                }
+            }),
+        )
+    }
+
+    #[tokio::test]
+    async fn blocked_sessions_disabled_short_circuits_without_a_network_call() {
+        let client = KbClient::new(KbDaemonSection {
+            enabled: false,
+            url: Some("http://127.0.0.1:0".to_string()),
+            token_file: None,
+            public_url: None,
+        });
+        let err = client.blocked_sessions().await.unwrap_err();
+        assert!(matches!(err, KbClientError::Disabled));
+    }
+
+    #[tokio::test]
+    async fn blocked_sessions_unreachable_daemon_is_reported_not_panicked() {
+        let client = KbClient::new(cfg("http://127.0.0.1:0".to_string()));
+        let err = client.blocked_sessions().await.unwrap_err();
+        assert!(matches!(err, KbClientError::Unreachable(_, _)));
+    }
+
+    #[tokio::test]
+    async fn blocked_sessions_asks_for_blocked_1_and_drops_unblocked_rows() {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let router = live_status_router(
+            seen.clone(),
+            serde_json::json!({ "sessions": [
+                {"session_id": "a", "harness": "claude", "project": "kb", "state": "working",
+                 "blocked": true, "blocked_tool": "Bash", "blocked_since_unix": 100,
+                 "since_unix": 150, "cwd": "/ignored", "future": 1},
+                {"session_id": "b", "harness": "claude", "state": "working",
+                 "blocked": false, "since_unix": 90},
+                {"session_id": "old-kb", "harness": "claude", "state": "waiting", "since_unix": 80}
+            ]}),
+        );
+        let (addr, _server) = mock_kb_server(router).await;
+        let client = KbClient::new(cfg(format!("http://{addr}")));
+        let rows = client.blocked_sessions().await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].session_id, "a");
+        assert_eq!(rows[0].blocked_tool.as_deref(), Some("Bash"));
+        assert_eq!(rows[0].blocked_since_unix, Some(100));
+        let q = seen.lock().unwrap().clone();
+        assert_eq!(q.len(), 1);
+        assert!(q[0].split('&').any(|p| p == "blocked=1"), "{q:?}");
+    }
+
+    #[tokio::test]
+    async fn blocked_sessions_older_kb_row_without_the_new_fields_maps() {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let router = live_status_router(
+            seen,
+            serde_json::json!({ "sessions": [
+                {"session_id": "a", "harness": "claude", "state": "working",
+                 "blocked": true, "since_unix": 123}
+            ]}),
+        );
+        let (addr, _server) = mock_kb_server(router).await;
+        let client = KbClient::new(cfg(format!("http://{addr}")));
+        let rows = client.blocked_sessions().await.unwrap();
+        assert_eq!(rows[0].blocked_tool, None);
+        assert_eq!(rows[0].blocked_since_unix, None);
+        assert_eq!(rows[0].since_unix, 123);
+    }
 
     // --- OL SIBL3: code_refs_by_target -------------------------------------
 
@@ -3026,6 +3266,175 @@ mod tests {
         assert!(matches!(
             c.code_refs_by_target("k", "x.rs").await,
             Err(KbClientError::Timeout(_))
+        ));
+    }
+
+    // --- OL PRES2 — `live_touches` ---------------------------------------
+
+    const LIVE_TOUCHES_FIXTURE: &str =
+        include_str!("../../../../tests/fixtures/live-touches-v1.json");
+
+    fn touches_router(seen: Arc<std::sync::Mutex<Vec<String>>>) -> Router {
+        Router::new().route(
+            "/api/sessions/live-touches",
+            get(move |uri: axum::http::Uri| {
+                let seen = seen.clone();
+                async move {
+                    seen.lock()
+                        .unwrap()
+                        .push(uri.query().unwrap_or("").to_string());
+                    (
+                        [(axum::http::header::CONTENT_TYPE, "application/json")],
+                        LIVE_TOUCHES_FIXTURE,
+                    )
+                }
+            }),
+        )
+    }
+
+    #[tokio::test]
+    async fn live_touches_deserialises_the_committed_kb_fixture() {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (addr, _server) = mock_kb_server(touches_router(seen.clone())).await;
+        let client = KbClient::new(cfg(format!("http://{addr}")));
+        let r = client
+            .live_touches(&["demo".to_string(), "other".to_string()], 600)
+            .await
+            .unwrap();
+        let want: serde_json::Value = serde_json::from_str(LIVE_TOUCHES_FIXTURE).unwrap();
+        assert_eq!(r.touches.len(), want["touches"].as_array().unwrap().len());
+        assert_eq!(r.touches[0].project, "demo");
+        assert_eq!(r.touches[0].worktree, None);
+        assert_eq!(r.touches[0].rel, "src/lib.rs");
+        assert_eq!(r.touches[0].age_secs, 4);
+        let wt = r.touches.iter().find(|t| t.worktree.is_some()).unwrap();
+        assert_eq!(wt.worktree.as_deref(), Some("demo-feature"));
+        assert!(!r.truncated);
+        let q = seen.lock().unwrap()[0].clone();
+        assert!(
+            q.contains("project=demo") && q.contains("project=other"),
+            "{q}"
+        );
+        assert!(q.contains("max_age_secs=600"), "{q}");
+    }
+
+    #[tokio::test]
+    async fn live_touches_without_filters_sends_only_the_age() {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (addr, _server) = mock_kb_server(touches_router(seen.clone())).await;
+        let client = KbClient::new(cfg(format!("http://{addr}")));
+        client.live_touches(&[], 900).await.unwrap();
+        assert_eq!(seen.lock().unwrap()[0], "max_age_secs=900");
+    }
+
+    #[tokio::test]
+    async fn live_touches_refuses_more_than_32_filters_locally() {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (addr, _server) = mock_kb_server(touches_router(seen.clone())).await;
+        let client = KbClient::new(cfg(format!("http://{addr}")));
+        let many: Vec<String> = (0..33).map(|i| format!("p{i}")).collect();
+        assert!(client.live_touches(&many, 900).await.is_err());
+        assert!(seen.lock().unwrap().is_empty(), "never reached the wire");
+    }
+
+    #[tokio::test]
+    async fn live_touches_disabled_short_circuits() {
+        let client = KbClient::new(KbDaemonSection {
+            enabled: false,
+            url: Some("http://127.0.0.1:0".to_string()),
+            token_file: None,
+            public_url: None,
+        });
+        assert!(matches!(
+            client.live_touches(&[], 900).await.unwrap_err(),
+            KbClientError::Disabled
+        ));
+    }
+
+    #[tokio::test]
+    async fn live_touches_fails_closed_on_sibling_mismatch() {
+        let router = hello_router(serde_json::json!({
+            "sibling_protocol": "kb-sibling/2",
+            "sibling_major": 2
+        }))
+        .route(
+            "/api/sessions/live-touches",
+            get(|| async { (axum::http::StatusCode::OK, LIVE_TOUCHES_FIXTURE) }),
+        );
+        let (addr, _server) = mock_kb_server(router).await;
+        let client = KbClient::new(cfg(format!("http://{addr}")));
+        assert!(matches!(
+            client.live_touches(&[], 900).await.unwrap_err(),
+            KbClientError::SiblingMismatch(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn live_touches_grandfathers_an_absent_hello() {
+        // hello_router with a body lacking the sibling fields = a legacy peer.
+        let router = hello_router(serde_json::json!({"name": "kb"})).route(
+            "/api/sessions/live-touches",
+            get(|| async {
+                (
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    LIVE_TOUCHES_FIXTURE,
+                )
+            }),
+        );
+        let (addr, _server) = mock_kb_server(router).await;
+        let client = KbClient::new(cfg(format!("http://{addr}")));
+        assert!(!client
+            .live_touches(&[], 900)
+            .await
+            .unwrap()
+            .touches
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn live_touches_404_403_and_garbage_are_typed_errors() {
+        for (status, want) in [
+            (axum::http::StatusCode::NOT_FOUND, 404u16),
+            (axum::http::StatusCode::FORBIDDEN, 403u16),
+        ] {
+            let router = Router::new().route(
+                "/api/sessions/live-touches",
+                get(move || async move { (status, "no") }),
+            );
+            let (addr, _server) = mock_kb_server(router).await;
+            let client = KbClient::new(cfg(format!("http://{addr}")));
+            match client.live_touches(&[], 900).await.unwrap_err() {
+                KbClientError::BadStatus(s) => assert_eq!(s.as_u16(), want),
+                other => panic!("expected BadStatus({want}), got {other:?}"),
+            }
+        }
+        let router =
+            Router::new().route("/api/sessions/live-touches", get(|| async { "not json" }));
+        let (addr, _server) = mock_kb_server(router).await;
+        let client = KbClient::new(cfg(format!("http://{addr}")));
+        assert!(matches!(
+            client.live_touches(&[], 900).await.unwrap_err(),
+            KbClientError::Parse(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn live_touches_past_the_shared_timeout_is_a_timeout() {
+        let router = Router::new().route(
+            "/api/sessions/live-touches",
+            get(|| async {
+                tokio::time::sleep(TIMEOUT + Duration::from_millis(500)).await;
+                (
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    LIVE_TOUCHES_FIXTURE,
+                )
+            }),
+        );
+        let (addr, _server) = mock_kb_server(router).await;
+        let client = KbClient::new(cfg(format!("http://{addr}")));
+        assert!(matches!(
+            client.live_touches(&[], 900).await.unwrap_err(),
+            KbClientError::Timeout(_)
         ));
     }
 }

@@ -846,6 +846,7 @@ somethingnewgitinvented yes
         RepoEntry {
             name: name.to_string(),
             path: PathBuf::from(path),
+            projects: Vec::new(),
         }
     }
 

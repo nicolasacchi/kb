@@ -457,7 +457,7 @@ fn ledger_bytes(paths: &KbPaths, slug: &SlateSlug) -> u64 {
 }
 
 /// Every slug with a `meta.json`, sorted. Blocking; callers wrap it.
-fn list_slugs(paths: &KbPaths) -> Vec<SlateSlug> {
+pub(crate) fn list_slugs(paths: &KbPaths) -> Vec<SlateSlug> {
     let root = paths.state.join("slates");
     let Ok(entries) = std::fs::read_dir(&root) else {
         return Vec::new();
@@ -583,7 +583,7 @@ fn read_opts(
 /// The projection SL2 asks for when it needs facts rather than a rendering
 /// — counts, board membership, `hide` entries. `all: true`, `Mode::Full`,
 /// no topic filter: the budget and the hybrid cut are RENDERING concerns.
-fn facts_opts(slug: &SlateSlug) -> ProjectOpts {
+pub(crate) fn facts_opts(slug: &SlateSlug) -> ProjectOpts {
     ProjectOpts {
         all: true,
         slug: slug.to_string(),
@@ -594,12 +594,12 @@ fn facts_opts(slug: &SlateSlug) -> ProjectOpts {
 /// Everything a read handler needs, loaded once. `loopback` decides the
 /// scrub floor; the posts are scrubbed BEFORE anything projects them, so
 /// no surface can leak a full `cwd` by forgetting to call the scrubber.
-struct Loaded {
-    meta: SlateMeta,
-    posts: Vec<Post>,
+pub(crate) struct Loaded {
+    pub(crate) meta: SlateMeta,
+    pub(crate) posts: Vec<Post>,
 }
 
-fn load_for_read(
+pub(crate) fn load_for_read(
     paths: &KbPaths,
     slug: &SlateSlug,
     loopback: bool,

@@ -142,6 +142,7 @@ pub mod atlas_field;
 pub mod attachments;
 pub mod boards;
 pub mod capture;
+pub mod changes;
 pub mod coderefs;
 pub mod comments;
 pub mod compact;

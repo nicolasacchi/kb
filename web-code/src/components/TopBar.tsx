@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useMatch, useSearchParams } from "react-router";
 import RepoPill from "./RepoPill";
 import CurrentReviewChip from "./CurrentReviewChip";
+import { PresenceChip } from "./PresencePulse";
 import NavSheet from "./NavSheet";
 import { Icon } from "./iconSet";
 import TrailIndicator from "./trail/TrailIndicator";
@@ -140,6 +141,8 @@ export default function TopBar() {
                 {/* V80-M3 — "which review am I working," hidden entirely when
                     unset. ≤860px it moves into the NavSheet instead. */}
                 {explicitRepo && <CurrentReviewChip />}
+                {/* OL PRES3 - agent activity in this repo; nothing when quiet. */}
+                <PresenceChip repo={explicitRepo ?? undefined} />
                 {/* D24 — "the only teaching chrome above the fold is a Space
                     hint and `?`". Hidden on mobile, where there is no
                     keyboard to teach (recon R9). */}

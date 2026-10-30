@@ -2032,8 +2032,9 @@ remote review mutations are on), and Sibling (kb-sibling/1 identity and build). 
 "Daemon status" section is now one link to it.
 
 **Home.** Leads with where you were: a Continue hero (the latest location and its
-first lines) and up to four more recent locations; then "Needs you" (non-empty
-inbox lanes only, one quiet line otherwise); then Repos.
+first lines) and up to four more recent locations; then "Needs you" (a line for sessions
+kb reports as blocked on you first, then the non-empty inbox lanes only, one
+quiet line otherwise); then Repos.
 
 **The quiet reader.** The chrome above line 1 is the top bar plus one pane-header
 row. Path breadcrumbs render in the top bar's scope slot; the pane header is
@@ -2087,7 +2088,7 @@ below.
 
 kb and kb-code are one fleet, so each app can show the other's side. The only
 live call direction is still kb-code -> kb (kb-sibling/1; architecture
-invariant #2), so there are two read-only relays on kb-code and one inert
+invariant #2), so there are three read-only relays on kb-code and one inert
 link on kb's side.
 
 **Documents in kb-code's omnibox.** `GET /api/kb/search?q=&limit=` asks kb's
@@ -2104,6 +2105,27 @@ is unchanged), and a kb-sibling/1 mismatch returns
 `unavailable: "kb_sibling_mismatch"`. The lane shows each as a muted line,
 never an error. Nothing is cached or persisted.
 
+**Agent presence (OL PRES2).** `GET /api/kb/presence[?repo=NAME]` asks kb's
+`GET /api/sessions/live-touches` (kb-live-touches/1, already scrubbed: a project
+label plus a repo-relative path, no absolute path, no transcript text) and maps
+each project label onto a configured repo: first a repo's
+`[[repos]] projects = ["..."]` alias, then its `name`, then the basename of its
+`path`, all case-insensitive. A rule that matches two repos makes the label
+ambiguous: its touches are skipped and counted ("N edits in ambiguous
+projects"), never guessed; a label no rule matches counts toward "N edits
+outside configured repos". The alias exists for a repo whose directory is named
+differently where the agent runs than where kb-code sees it: a repo
+bind-mounted into the container as `/repos/kb-archive` from a host directory
+`kb-archive-checkout` reports the project `kb-archive-checkout`, which matches
+neither the name nor the container-side basename, so it is listed as
+`projects = ["kb-archive-checkout"]`. A touch made in a linked worktree carries
+the worktree's directory basename and is returned as its own row with
+`worktree` set; it must never be drawn on the main checkout's file. The route
+is an ordinary bearer read (not on the doc-lens CORS routes), always answers
+200 (`available:false` plus a closed-vocabulary caption on any failure), reuses
+the short shared `KbClient` timeout, and caches and persists nothing. The
+payload is `kbc-presence/1`; see `docs/http-api.md`.
+
 **Theme family follows kb.** kb stores `theme_family` in its `ui` settings
 (`PATCH /api/settings`). `GET /api/kb/ui` relays `{theme, theme_family}` with
 the same `unavailable` semantics. On boot kb-code's SPA applies that family
@@ -2112,6 +2134,19 @@ always wins and is never written back to kb. The theme picker says which one
 is in force: "Following kb" or "Chosen here". The light/dark appearance does
 not follow.
 
+**Blocked sessions on Home.** `GET /api/kb/blocked` asks kb's
+`GET /api/sessions/live-status?blocked=1` through `KbClient` (same handshake,
+the shared 1.5 s timeout) and returns `{sessions: [{session_id, harness,
+project?, blocked_tool?, since_unix}], kb_public_url, total, truncated}`:
+oldest block first, 20 rows at most, and nothing but those fields (no cwd,
+title, last line, reason text, model or host). Home's "Needs you" section
+leads with one line for it, `1 session blocked on you . kb . permission: Bash`
+or `N sessions blocked on you`, linking to kb's `/sessions#kb-now-blocked` when
+`[kb_daemon] public_url` is set (the section badge adds the blocked count). The
+route answers 200 with an `unavailable` caption when kb is disabled,
+unreachable or on a sibling mismatch, and Home then shows nothing extra. Home
+polls it every 15 s while the tab is visible. Nothing is cached or persisted.
+
 **Code in kb's command palette.** kb's Cmd+K shows one row, "Search code for
 "q" in kb-code", linking to `{code_url}/search?q=` in a new tab when the
 active kb has a `[kb.*] code_url`, and nothing when it does not. kb does not
@@ -2119,7 +2154,8 @@ query kb-code from the browser: the doc-lens CORS route set is pinned to the
 doc-lens read routes on purpose (any loopback origin passes the CORS
 predicate, so adding the code search route would hand repository contents to
 every page open in the operator's browser), and `/api/kb/search` and
-`/api/kb/ui` are asserted absent from it in `cors_layer_route_set_is_pinned`.
+`/api/kb/ui` (and `/api/kb/presence`) are asserted absent from it in
+`cors_layer_route_set_is_pinned`.
 
 ## Cited-by chip and section crossing (OL SIBL1)
 

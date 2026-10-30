@@ -217,6 +217,12 @@
   border-color: color-mix(in oklab, var(--warn) 35%, var(--rule));
   text-decoration: none;
 }
+/* OL IDEA1 - a blocked session (a permission prompt nobody answered) is
+   stronger than "waiting": danger ink, danger-tinted rule. */
+.kb-waiting--blocked {
+  color: var(--danger);
+  border-color: color-mix(in oklab, var(--danger) 35%, var(--rule));
+}
 
 /* kb desk v2 — Header attention pill. Same chip geometry as .kb-anchor/
    .kb-inbox/.kb-waiting; --accent because this is "something to read",
@@ -5829,6 +5835,19 @@ a.proposal-row__chip:hover {
 }
 .kb-ctxbar__mi-lbl {
   flex: 1;
+}
+.kb-ctxbar__mi:disabled {
+  cursor: default;
+  color: var(--ink-dim);
+  flex-wrap: wrap;
+}
+.kb-ctxbar__mi:disabled:hover {
+  background: none;
+}
+.kb-ctxbar__mi-cap {
+  flex-basis: 100%;
+  font-size: var(--fs-xs);
+  color: var(--ink-dim);
 }
 .kb-ctxbar__mi-key {
   font-family: var(--font-mono);
