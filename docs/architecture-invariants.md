@@ -1696,6 +1696,8 @@ query cache (`web/src/lib/memento.ts`, goldens mirrored case-for-case against
 `kb_core::versions`'s) rather than issuing a second fetch — keep the two in
 lock-step, the same way #29's wikilink grammar is kept.
 
+**OL TIME1 (v0.50).** The Library time scrubber's batch read, `GET /api/kb/{kb}/docs/as-of?at=&ids=`, is an OVERLAY over this same façade, not a new resolver: every item is the per-artifact `memento_for` answer (pinned by `asof_item_equals_per_artifact_memento`), `/docs` stays as-of-blind (it ignores `at`), and ranking/search are never as-of.
+
 ### 15. Gallery row-set memo keys on a storage-actor index generation
 
 `GET /docs` shares ONE `list_docs(u32::MAX)` scan + `edge_counts()` GROUP BY per
@@ -2759,6 +2761,8 @@ selection) is a client concern that ends in `ids=`; only a genuinely new
 *predicate over the corpus* earns an atom, and earning one means touching
 `galleryUrl.ts` + `fetchDocsPage` + `docs_query::matches` + `routes/docs.rs`
 together, with goldens.
+
+**OL TIME1 (v0.50).** The time scrubber does NOT grow this grammar with an `at` atom — `/docs` ignores `at` (pinned by `docs_ignores_at_param_byte_identical`); the as-of answer for the visible page rides the separate overlay route `GET …/docs/as-of?at=&ids=` (ids capped at 100, 400 over the cap, never truncation).
 
 ## Where to find things
 

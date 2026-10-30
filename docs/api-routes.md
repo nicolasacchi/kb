@@ -55,6 +55,7 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | GET | `/api/kb/{kb}/daycard` | `routes::daycard::get` |
 | POST | `/api/kb/{kb}/desk` | `routes::desk::create` |
 | GET | `/api/kb/{kb}/docs` | `routes::docs::list` |
+| GET | `/api/kb/{kb}/docs/as-of` | `routes::docs_asof::as_of` |
 | GET | `/api/kb/{kb}/docs/by-path/{*path}` | `routes::docs::get_by_path` |
 | GET | `/api/kb/{kb}/docs/{id}` | `routes::docs::get` |
 | GET | `/api/kb/{kb}/docs/{id}/code-refs` | `routes::coderefs::for_doc` |
@@ -241,4 +242,4 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | GET | `/api/users` | `routes::users::list` |
 | GET | `/api/why` | `routes::sessions::why` |
 
-_231 routes._
+_232 routes._

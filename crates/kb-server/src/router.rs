@@ -122,6 +122,10 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
             "/kb/{kb}/docs/by-path/{*path}",
             get(routes::docs::get_by_path),
         )
+        // OL TIME1 — the Library time scrubber's per-artifact as-of overlay:
+        // ONE batched read over the #14 façade. Static `as-of` segment wins
+        // over the `{id}` route below (same matchit precedent as `by-path`).
+        .route("/kb/{kb}/docs/as-of", get(routes::docs_asof::as_of))
         .route("/kb/{kb}/docs/{id}", get(routes::docs::get))
         .route("/kb/{kb}/artifact/{id}", get(routes::docs::artifact_bytes))
         // Track V — artifact version timeline + text/raw diff (read-only).
