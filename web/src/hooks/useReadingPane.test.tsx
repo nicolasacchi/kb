@@ -270,6 +270,23 @@ describe("bare r key", () => {
     expect(toggle).toHaveBeenCalledTimes(1);
   });
 
+  it("a phone's always-mounted reader-tools sheet only blocks the key while it is open", () => {
+    const toggle = vi.fn();
+    renderHook(() => useReadingKey(true, toggle));
+    const sheet = document.createElement("aside");
+    sheet.id = "kb-reader-sheet";
+    sheet.setAttribute("role", "dialog");
+    sheet.setAttribute("aria-modal", "true");
+    document.body.appendChild(sheet);
+    key(); // mounted but closed
+    expect(toggle).toHaveBeenCalledTimes(1);
+    const route = document.createElement("div");
+    route.className = "detail detail--inspector-open";
+    document.body.appendChild(route);
+    key(); // open
+    expect(toggle).toHaveBeenCalledTimes(1);
+  });
+
   it("isReadingKey is false for a non-r key", () => {
     expect(isReadingKey(new KeyboardEvent("keydown", { key: "t" }))).toBe(false);
   });

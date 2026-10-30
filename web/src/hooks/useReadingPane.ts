@@ -18,7 +18,6 @@ import {
   type ReadMessage,
   type ReadingMode,
 } from "./useReadingMode";
-import { isOverlayOpen } from "./useRovingCursor";
 
 /// Annotator repaint cadence after the page reflowed: one frame, then once
 /// fonts and the layout around them have settled.
@@ -138,6 +137,22 @@ export function useReadingPane(o: UseReadingPaneOptions): ReadingMode {
   return reading;
 }
 
+/// A modal dialog is open - the same markers `isOverlayOpen` (useRovingCursor)
+/// and HotkeyRoot use, with one exception. On a phone the reader-tools sheet
+/// (`#kb-reader-sheet`, PreviewInspector `asSheet`) is `role=dialog
+/// aria-modal` in the DOM for as long as the reader is mounted, open or not,
+/// so only an OPEN sheet (`.detail--inspector-open` on the route) counts.
+export function modalOpen(doc: Document = document): boolean {
+  const sheetOpen = !!doc.querySelector(".detail--inspector-open");
+  for (const n of Array.from(
+    doc.querySelectorAll('dialog[open], [role="dialog"][aria-modal="true"]'),
+  )) {
+    if (n.id === "kb-reader-sheet" && !sheetOpen) continue;
+    return true;
+  }
+  return false;
+}
+
 /// Whether a keydown is a bare `r` meant for the reader: lowercase, no
 /// modifier of any kind (shift included), not mid-IME, not typing in an
 /// input/textarea/select/contenteditable (CM6 composers are contenteditable),
@@ -155,7 +170,7 @@ export function isReadingKey(e: KeyboardEvent): boolean {
   ) {
     return false;
   }
-  return !isOverlayOpen();
+  return !modalOpen();
 }
 
 /// Bare `r` toggles reading mode on the FOCUSED pane: every pane mounts this,
