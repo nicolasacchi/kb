@@ -178,6 +178,8 @@ fn classify_with_conn(
              durable busy/idle signal on disk; see design §4)"
         )),
         version: None,
+        last_tool: None,
+        last_tool_at: None,
     })
 }
 

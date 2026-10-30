@@ -116,6 +116,12 @@ pub const ABANDON_AFTER_SECS: i64 = 8 * 3600;
 /// wrong (subagent transcripts aren't sessions) and too slow to poll.
 pub const LIVE_TAIL_BYTES: u64 = 256 * 1024;
 
+/// OL IDEA4 — how long a `working` agent-held session must be silent before
+/// the "last tool it started" evidence is worth showing beside it
+/// ([`super::live::tool_evidence_visible`]). `stalled` and `presumed_ended`
+/// always qualify; a fresh `working` row has no doubt to explain.
+pub const TOOL_EVIDENCE_QUIET_SECS: i64 = 5 * 60;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,5 +173,6 @@ mod tests {
         assert_eq!(COLD_AFTER_SECS, 8 * 3600);
         assert_eq!(ABANDON_AFTER_SECS, 8 * 3600);
         assert_eq!(LIVE_TAIL_BYTES, 256 * 1024);
+        assert_eq!(TOOL_EVIDENCE_QUIET_SECS, 5 * 60);
     }
 }

@@ -240,6 +240,8 @@ pub fn classify_grok_session(
         transcript_path: events_path,
         why: Some(why),
         version: None,
+        last_tool: None,
+        last_tool_at: None,
     })
 }
 
