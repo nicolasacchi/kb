@@ -334,7 +334,7 @@ test.describe("slate board — pin, composer, refusals, drawings", () => {
   // by katex, only that a math-bearing source does not crash the render.
   for (const [name, label] of [
     ["plain", "plain label"],
-    ["math", "$$x^2 + y^2$$"],
+    ["math-bearing ($$ source, katex not exercised under htmlLabels:false)", "$$x^2 + y^2$$"],
   ] as const) {
     test(`the sketch entry renders a mermaid diagram with a ${name} label without a console error`, async ({
       page,
