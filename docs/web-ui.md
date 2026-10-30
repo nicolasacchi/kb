@@ -243,6 +243,9 @@ the following features apply:
   the active page is reflected in the URL (`?p=`).
 - **Annotate mode** — the pen icon toggles the comments layer on/off.
 - **Citation doors** — a cited code path (`<code>crates/x/y.rs:120</code>`) is a link into kb-code at that ref (new tab); dashed = kb's unverified hint, solid/dotted once a checkout is chosen and kb-code has checked it. Only when the kb has a `code_url`.
+- **Reading mode** — `r` (or More > Reading mode) re-typesets the artifact in kb's reading style: a serif, narrow column in light or dark. Settings > Preferences can make it the default per corpus. Pages that are mostly media, or that carry `<meta name="kb-reading" content="off">`, are left as authored; styleless pages (memories) are served in the same voice by the daemon and `r` turns it off. See [authoring-artifacts.md](authoring-artifacts.md#opting-out-of-reading-mode-kb-reading).
+- **Time machine** (`?at=<unix>`) — the reader opens one artifact as it stood at an instant: the nearest earlier version (git, index snapshot or working tree, the same façade as the versions panel), captioned, with a then | now split and an "Open as of..." date control in the versions panel. A historical view is not a read (no history row, no progress). Sub-pages and sibling assets are not time-travelled, and native notes do not support it. A corpus with no `.git` (for instance a bind-mount without it) offers only index-snapshot and working-tree versions.
+- **Code chip** — the reader names where the nearest cited code lives and opens it in kb-code; it says plainly when kb has only read the citation and not checked it. The verified state needs the kb origin in kb-code's `[doclens] origins`.
 
 ### Reviewing (comments)
 

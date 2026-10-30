@@ -284,6 +284,11 @@ web-code/          kb-code's own SPA (React 18 + Vite + TS, mirrors web/'s
                        Spine scope slot, one pane-header row, toolbar verbs +
                        More); rail = five homes + All; ReaderLegacy deleted.
                        Full text: web-code/CLAUDE.md.
+                       **v9.1 "Crossings"** (kb v0.51): the Cited-by chip and strip
+                       also read kb's live code refs (`source: pinned|kb-live`), Home
+                       shows kb-blocked sessions, and the file tree marks files agents
+                       just changed (presence, attributed in kb-code's own trust
+                       words). Full text: web-code/CLAUDE.md.
                        `just ci-code-spa` (build + vitest);
                        web-code/e2e/ Playwright harness (`just ci-code-e2e`)
 corpus/canon/      4 sample artifacts (frozen — copied from research)
