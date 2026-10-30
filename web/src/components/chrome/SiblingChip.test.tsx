@@ -229,6 +229,52 @@ describe("Header Code chip", () => {
     expect(screen.getByTestId("no-chip")).toBeTruthy();
   });
 
+  it("renders no chip at or below 860px (mobile is a reader)", async () => {
+    const real = window.matchMedia;
+    window.matchMedia = ((q: string) => ({
+      matches: q === "(max-width: 860px)",
+      media: q,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      onchange: null,
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+    try {
+      renderAt("/a/k/notes/doc.html?repo=app");
+      await waitFor(() => expect(client.fetchCodeRefs).toHaveBeenCalled());
+      expect(screen.getByTestId("no-chip")).toBeTruthy();
+    } finally {
+      window.matchMedia = real;
+    }
+  });
+
+  it("renders no chip on the Links tab with the rail open, and appears once the rail collapses", async () => {
+    localStorage.setItem("kb:inspector-collapsed.detail", "false");
+    localStorage.setItem("kb:inspector-tab.detail", "links");
+    renderAt("/a/k/notes/doc.html?repo=app");
+    await waitFor(() => expect(client.fetchCodeRefs).toHaveBeenCalled());
+    expect(screen.getByTestId("no-chip")).toBeTruthy();
+    await act(async () => {
+      localStorage.setItem("kb:inspector-collapsed.detail", "true");
+      window.dispatchEvent(new CustomEvent("kb:inspector-collapsed.detail"));
+    });
+    expect(await screen.findByTestId("sibling-code-chip")).toBeTruthy();
+  });
+
+  it("a pinned repo with no ?repo= still verifies (the lens runs on the pin)", async () => {
+    doclens.fetchDocLensScorecard.mockResolvedValue({ ...SCORECARD, pinned_repo: "app" });
+    renderAt("/a/k/notes/doc.html");
+    await waitFor(() =>
+      expect(screen.getByTestId("sibling-code-chip").parentElement?.getAttribute("data-kb-sibling-kind")).toBe(
+        "verified",
+      ),
+    );
+    expect(doclens.fetchDocLens).toHaveBeenCalledTimes(1);
+    expect(doclens.fetchDocLens.mock.calls[0]).toContain("app");
+  });
+
   it("a doc with no usable path is a button that opens the Links tab", async () => {
     client.fetchCodeRefs.mockResolvedValue(
       codeRefs([{ ...pathRef(0, null, "o/r", 4), kind: "issue" }]),

@@ -9,6 +9,21 @@
 //
 // The target follows the pane's LIVE `kb:section` (the runtime's postMessage,
 // exact-origin checked like TocSpy/HotkeyRoot), falling back to `?sec=`.
+//
+// Known scopes (disclosed, not hidden):
+// - PANE 1 ONLY. In `?pane2=` split mode the route's `/a/:kb/*` is pane 1;
+//   the listener's exact-origin check admits only that artifact, so pane 2's
+//   sections never move the chip.
+// - The hide rule reads the inspector's collapsed flag and sub-tab, both
+//   persisted. The reader's comments/versions `panelMode` is route-local
+//   state in detail.tsx and not readable here: with the rail open on a
+//   Code-bearing tab but showing the comments/versions panel the chip stays
+//   hidden (and its `inspect` button, when shown on a collapsed rail, opens
+//   the Links tab, which the panel then covers until the user closes it).
+//   Lifting panelMode into a shared store would be a second home for route
+//   state (#23); accepted instead.
+// - `rel` mirrors detail.tsx's `params["*"]` (react-router already decodes
+//   it), so the shared ["doc", kb, rel] key matches byte for byte.
 
 import { useEffect, useMemo, useState } from "react";
 import { matchPath, useLocation, useSearchParams } from "react-router-dom";
@@ -52,8 +67,12 @@ export function useSiblingChip(): SiblingChipModel | null {
   const codeRefsQuery = useCodeRefs(kb, docId, onReader);
   const refs = codeRefsQuery.data?.refs ?? [];
   const hasCodeRefs = codeRefsQuery.data !== undefined && refs.length > 0;
-  const repoParam = searchParams.get("repo");
+  const urlRepo = searchParams.get("repo");
   const scorecardQuery = useDocLensScorecard(codeUrl, kb ?? "", docId ?? "", onReader && !!docId && hasCodeRefs);
+  // The lens repo is `?repo=`, else the doc's pin (as ProvenanceThread does):
+  // the Links tab seeds `?repo=` from the pin, so this lands on the same
+  // query key, but a collapsed rail (Links tab unmounted) must still verify.
+  const repoParam = urlRepo || scorecardQuery.data?.pinned_repo || null;
   const lensQuery = useDocLens(
     codeUrl,
     kb ?? "",

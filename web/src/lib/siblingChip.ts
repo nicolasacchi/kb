@@ -244,7 +244,7 @@ export function siblingChipState(input: SiblingChipInput): SiblingChipState {
     refCount: input.refCount,
     extractedAt: input.extractedAt,
     hasCodeUrl: true,
-    pinned: !!input.repoParam,
+    pinned: !!(input.repoParam || input.scorecard?.pinned_repo),
     scorecardOk: input.scorecard !== undefined,
     lens: input.lens,
     crossErr: input.crossErr,
