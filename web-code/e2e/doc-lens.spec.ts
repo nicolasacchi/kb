@@ -411,6 +411,11 @@ test.describe("cited-by (DCB-W3.B)", () => {
       "href",
       `http://127.0.0.1:${DOCLENS_FIXTURE_PORT}/a/${DOCLENS_KB}/${DOCLENS_DOC_PATH}?sec=${DOCLENS_GROUP_KEY}`,
     );
+    // The chip must not paint over the search slot (it once collapsed to 0 width).
+    const search = await page.locator("[data-kb-spine-slot=search]").boundingBox();
+    const box = await chip.boundingBox();
+    expect(search && search.width).toBeGreaterThan(100);
+    expect(search!.x + search!.width).toBeLessThanOrEqual(box!.x + 1);
   });
 
   test("a claim with no anchor crosses to the doc-level href", async ({ page }) => {
