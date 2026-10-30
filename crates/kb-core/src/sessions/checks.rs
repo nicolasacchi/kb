@@ -872,9 +872,42 @@ fn secret_name_re() -> &'static Regex {
     R.get_or_init(|| Regex::new(r"(?i)token|secret|passw|key|auth|cred").expect("valid regex"))
 }
 
-/// Replace the value of every `NAME=value` whose NAME looks secret with `***`.
+fn extra_secret_res() -> &'static [(Regex, &'static str)] {
+    static R: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
+    R.get_or_init(|| {
+        let v = |p: &str| Regex::new(p).expect("valid regex");
+        vec![
+            // `scheme://user:password@host` credentials.
+            (v(r#"(://)[^/\s:@'"]+:[^/\s@'"]+@"#), "${1}***@"),
+            // `Authorization: Bearer x` / `Authorization: x` headers.
+            (
+                v(r#"(?i)(authorization["']?\s*[:=]\s*)(?:(?:bearer|basic|token)\s+)?[^\s'"]+"#),
+                "${1}***",
+            ),
+            // Other secret-named headers: `X-Api-Key: x`, `X-Auth-Token: x`.
+            (
+                v(r#"(?i)([A-Za-z-]*(?:api-?key|token|secret|passw|cred)[A-Za-z-]*\s*:\s*)[^\s'"]+"#),
+                "${1}***",
+            ),
+            // A bare `Bearer x` / `Basic x` credential.
+            (v(r#"(?i)\b(bearer|basic)\s+[^\s'"*][^\s'"]*"#), "${1} ***"),
+            // Flags with a secret-looking name: `--token x`, `--password=x`.
+            (
+                v(
+                    r#"(?i)(--?[A-Za-z0-9_-]*(?:token|secret|passw|key|auth|cred)[A-Za-z0-9_-]*)([=\s]+)("[^"]*"|'[^']*'|[^\s"';&|-][^\s"';&|]*)"#,
+                ),
+                "${1}${2}***",
+            ),
+        ]
+    })
+}
+
+/// Mask secrets in a command line: the value of every `NAME=value` whose NAME
+/// looks secret, plus URL credentials, `Authorization`/secret-named headers,
+/// bare `Bearer`/`Basic` credentials and secret-named `--flag value` pairs.
+/// Best effort over a closed set of forms, not a general secret scanner.
 pub fn redact_secrets(s: &str) -> String {
-    secret_assign_re()
+    let mut out = secret_assign_re()
         .replace_all(s, |c: &regex::Captures| {
             let name = &c[1];
             if secret_name_re().is_match(name) {
@@ -883,7 +916,11 @@ pub fn redact_secrets(s: &str) -> String {
                 c[0].to_string()
             }
         })
-        .into_owned()
+        .into_owned();
+    for (re, rep) in extra_secret_res() {
+        out = re.replace_all(&out, *rep).into_owned();
+    }
+    out
 }
 
 fn collapse_ws(s: &str) -> String {
@@ -2373,6 +2410,30 @@ mod tests {
         assert!(!c.cmd.contains("a b"));
         assert_eq!(redact_secrets("MY_KEY=zzz"), "MY_KEY=***");
         assert_eq!(redact_secrets("PLAIN=zzz"), "PLAIN=zzz");
+    }
+
+    #[test]
+    fn non_env_secret_forms_redacted() {
+        let r = redact_secrets(
+            "curl --token abc -H 'Authorization: Bearer xyz' https://u:pw@h/x && cargo test",
+        );
+        assert!(
+            !r.contains("abc") && !r.contains("xyz") && !r.contains("pw@"),
+            "{r}"
+        );
+        assert!(
+            r.contains("--token ***") && r.contains("https://***@h/x"),
+            "{r}"
+        );
+        assert!(r.ends_with("cargo test"), "{r}");
+        let r = redact_secrets("curl -H 'X-Api-Key: k123' --password=hunter2 --keep-going");
+        assert!(!r.contains("k123") && !r.contains("hunter2"), "{r}");
+        assert!(r.contains("--keep-going"), "{r}");
+        assert_eq!(redact_secrets("a Bearer tok b"), "a Bearer *** b");
+        let c = classify_command("curl --token abc https://h && cargo test").unwrap();
+        assert!(!c.cmd.contains("abc"), "{}", c.cmd);
+        let once = redact_secrets("x --token abc Authorization: Bearer q");
+        assert_eq!(redact_secrets(&once), once);
     }
 
     #[test]
