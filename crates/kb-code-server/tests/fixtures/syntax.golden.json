@@ -239,8 +239,8 @@
       "tier": "full",
       "grammar": "tree-sitter-md",
       "scanner": null,
-      "symbol_salt": "markdown@0.5.3+q1",
-      "highlight_salt": "markdown@0.5.3+h1+roles2",
+      "symbol_salt": "markdown@0.5.4+q1",
+      "highlight_salt": "markdown@0.5.4+h1+roles2",
       "injection_host": true,
       "injections": [
         "bash",
