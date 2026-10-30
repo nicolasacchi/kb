@@ -99,13 +99,58 @@ live stream, pipe the event bus instead:
 kb events --follow --types session.state --json
 ```
 
+## File presence
+
+A Claude write-tool call (`Edit`, `Write`, `MultiEdit`, `NotebookEdit`) sends
+a `tool` beat that also names the file it touched, so kb-code can mark files
+agents are in right now. `kb-beat.sh` sends `detail.paths` (absolute,
+lexically normalised, at most 8, anything over 1024 bytes, with a control
+character or with a `..` escape is dropped), plus the session's repo identity:
+`detail.root` (the worktree root) and `detail.project` (the basename of the
+main checkout, so every worktree of one repo shares a label). The identity is
+computed once per session and cwd and cached under the cache dir, never on each
+beat. `KB_BEAT_PATHS=0` removes all four fields.
+
+The daemon keeps, per session, the last 48 touches in memory only (nothing is
+written to disk; a restart empties them), as paths **relative to the beat's
+`root`** plus `project`; a path outside the root is dropped, and neither the
+absolute path nor the root is stored. Touches older than an hour are pruned,
+and a repeat touch of the same file moves to the newest position (its
+timestamp is refreshed) rather than adding a row. A write-tool call can produce
+two `tool` beats (the throttled generic group and the direct path-carrying
+group); this is harmless, since the state mapping is unchanged and no event is
+emitted. A beat whose `root` is `/` is ignored; otherwise the daemon trusts the
+root the beat states and only relativises against it (attribution, not
+authorization). A touch emits no event: `session.state` still fires only on a state change.
+
+`GET /api/sessions/live-touches` serves them (`kb-live-touches/1`:
+`{project, rel, session_id, harness, state, age_secs, tool}` per touch, freshest
+first, at most 500 with `truncated`). It rides `auth_bearer` like
+`live-status` and is identical for loopback and bearer callers, because the
+response cannot contain an absolute path and the caller supplies no roots.
+`?project=` (repeatable, max 32) narrows it, `?max_age_secs=` defaults to 900
+(clamped to 60..3600) and `?harness=` is a csv.
+
+| Harness | File presence | Notes |
+|---|---|---|
+| Claude Code | yes | Write tools only, via the `PostToolUse` matcher group. |
+| codex, Kimi, opencode, grok, omp | no | Their beats carry no paths. |
+
+Known gaps: files changed through `Bash` (a `sed -i`, a formatter, a `git
+checkout`) and files only read are invisible; a path reached through a symlink
+that differs from the git top-level is dropped as outside the root. In a
+container deployment the hook runs on the host, so the daemon only ever sees
+the relative paths and the project label, never the host's directory layout.
+
 ## Wiring the beat hooks
 
 ### What's wired by default
 
 Claude Code's own `hooks.json` (`plugins/kb-memory/hooks/hooks.json`) is
 already wired for `SessionStart`/`UserPromptSubmit`/`Stop`/`SessionEnd`/
-`Notification`, plus `kb-beat-throttle.sh` on `PostToolUse` — the same
+`Notification`, plus `kb-beat-throttle.sh` on `PostToolUse` and a second
+`PostToolUse` group that runs `kb-beat.sh claude tool` directly for the write
+tools (file presence, below) — the same
 plugin install that wires memory recall/capture wires this too, no
 extra step. The gate is the same one every capture hook already uses:
 if `KB_SESSIONS_DIR` isn't set for a project, every beat script no-ops
@@ -129,6 +174,7 @@ POST itself is fire-and-forget: a detached background subshell with
 | `KB_DAEMON_URL` | `http://127.0.0.1:4000` | Daemon base URL the beat POSTs to. |
 | `KB_BEAT_PATH` | `/api/sessions/beat` | The beat route path. Left overridable so a future repoint doesn't require touching the script. |
 | `KB_BEAT_CONTENT` | unset | `0` omits `last_line` (Claude's `Stop`-carried `last_assistant_message`, capped 240 chars) even when available. |
+| `KB_BEAT_PATHS` | unset | `0` removes `detail.tool` / `detail.paths` / `detail.root` / `detail.project` from write-tool beats (see [File presence](#file-presence)). |
 | `KB_BEAT_LEASE_SECS` | `900` | `lease_secs` sent with every beat. |
 | `KB_BEAT_DRYRUN` | unset | `1` prints the JSON body to stdout instead of POSTing — no backgrounding, no curl. Used by `tests/test-beat.sh`; also a handy manual sanity check: `echo '{"session_id":"x","cwd":"/tmp"}' | KB_SESSIONS_DIR=/tmp KB_BEAT_DRYRUN=1 plugins/kb-memory/hooks/kb-beat.sh claude start`. |
 
@@ -297,7 +343,7 @@ case the design set out to satisfy.
   for why `/beat`/`/live-status` are `auth_bearer` while `/presence`/
   `/{id}/live` stay loopback-only.
 - [`http-api.md`](http-api.md) — `POST /api/sessions/beat`,
-  `GET /api/sessions/live-status`.
+  `GET /api/sessions/live-status`, `GET /api/sessions/live-touches`.
 - [`docs/research/kb-live-sessions-cockpit-2026-08.html`](research/kb-live-sessions-cockpit-2026-08.html) —
   the design round: harness-by-harness evidence, the wire contract, and
   the refusals (no control surface, no persisted state, no per-user

@@ -20,7 +20,7 @@
 use crate::middleware::error_to_problem_json;
 use crate::state::KbHandles;
 use axum::{
-    extract::{ConnectInfo, Path, Query, State},
+    extract::{ConnectInfo, Path, Query, RawQuery, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     Json,
@@ -7509,16 +7509,115 @@ pub struct BeatBody {
     pub detail: Option<BeatDetail>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct BeatDetail {
     #[serde(default)]
     pub reason: Option<String>,
-    /// Design §5's wire example carries `tool` alongside `reason`;
-    /// kb-beat.sh (LSC-3) never sends it. Declared-but-unused rather than
-    /// omitted so the wire shape is documented honestly (an actually
-    /// undeclared field would be ignored anyway).
+    /// The write tool's name (`Edit`/`Write`/`MultiEdit`/`NotebookEdit`) on
+    /// an `event == "tool"` beat; stored with each touch.
     #[serde(default)]
     pub tool: Option<String>,
+    /// OL PRES1 — absolute paths a write-tool beat touched. Only honoured
+    /// on `event == "tool"`; see [`sanitize_touches`].
+    /// Deliberately `Value`s: a non-string entry is dropped by
+    /// [`sanitize_touches`], never a reason to reject the beat.
+    #[serde(default)]
+    pub paths: Vec<serde_json::Value>,
+    /// The session's repo root (worktree top-level). Used ONLY to relativise
+    /// `paths`; never stored, never returned.
+    #[serde(default)]
+    pub root: Option<String>,
+    /// The session's project label (basename of the MAIN checkout).
+    #[serde(default)]
+    pub project: Option<String>,
+}
+
+/// Longest path/root/project string a beat may carry (bytes).
+const BEAT_PATH_MAX_BYTES: usize = 1024;
+/// Most paths one beat may carry; the rest are dropped.
+const BEAT_PATHS_MAX: usize = 8;
+
+fn beat_str_ok(s: &str) -> bool {
+    !s.is_empty() && s.len() <= BEAT_PATH_MAX_BYTES && !s.chars().any(|c| c.is_control())
+}
+
+/// Split an absolute path into its components. `None` when it is not
+/// absolute, is over-long or carries a control character (NUL included), or
+/// has a `..` segment. Empty and `.` segments are skipped.
+fn abs_components(p: &str) -> Option<Vec<&str>> {
+    if !beat_str_ok(p) || !p.starts_with('/') {
+        return None;
+    }
+    let mut out = Vec::new();
+    for seg in p.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => return None,
+            s => out.push(s),
+        }
+    }
+    Some(out)
+}
+
+/// OL PRES1 — turn a beat's `detail` into the touches to remember. Paths are
+/// honoured only on `event == "tool"`, only when the beat also carries a
+/// valid `root` and `project`, and each path must lie component-wise under
+/// `root`; what is kept is the path RELATIVE to `root`. Anything else
+/// (non-absolute, over-long, control chars, a `..` segment, outside the
+/// root, a 9th path) is dropped silently — the beat itself is always
+/// accepted. The absolute path and the root are not retained.
+fn sanitize_touches(
+    event: &str,
+    detail: Option<&BeatDetail>,
+    now_unix: i64,
+) -> Vec<crate::live_registry::Touch> {
+    let Some(d) = detail else { return Vec::new() };
+    if event != "tool" || d.paths.is_empty() {
+        return Vec::new();
+    }
+    // A root of "/" (zero components) would make every absolute path
+    // "inside" it, so the rel would be the whole path. Refuse it. Any other
+    // root is trusted as the beat states it: the scrub is relative-path-only
+    // (attribution, not authorization; invariant #4).
+    let Some(root) = d
+        .root
+        .as_deref()
+        .and_then(abs_components)
+        .filter(|r| !r.is_empty())
+    else {
+        return Vec::new();
+    };
+    let project = d.project.as_deref().map(str::trim).unwrap_or("");
+    if !beat_str_ok(project) || project.len() > 128 || project.contains('/') {
+        return Vec::new();
+    }
+    let tool = d
+        .tool
+        .as_deref()
+        .filter(|t| {
+            !t.is_empty()
+                && t.len() <= 32
+                && t.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
+        })
+        .unwrap_or("unknown");
+    d.paths
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .take(BEAT_PATHS_MAX)
+        .filter_map(|p| {
+            let comps = abs_components(p)?;
+            if comps.len() <= root.len() || comps[..root.len()] != root[..] {
+                return None;
+            }
+            Some(crate::live_registry::Touch {
+                project: project.to_string(),
+                rel: comps[root.len()..].join("/"),
+                at_unix: now_unix,
+                tool: tool.to_string(),
+            })
+        })
+        .collect()
 }
 
 /// kb-beat.sh's own default (`KB_BEAT_LEASE_SECS`, design §5's example
@@ -7634,6 +7733,8 @@ pub async fn beat(State(state): State<Arc<KbHandles>>, Json(body): Json<BeatBody
     let last_line = body.last_line.filter(|s| !s.trim().is_empty()).map(|s| {
         kb_core::sessions::truncate_chars_ellipsis(&s, kb_core::sessions::OUTCOME_WIRE_MAX_CHARS)
     });
+    let touches: std::collections::VecDeque<_> =
+        sanitize_touches(&body.event, body.detail.as_ref(), now_unix).into();
     let detail_reason = body
         .detail
         .and_then(|d| d.reason)
@@ -7654,6 +7755,7 @@ pub async fn beat(State(state): State<Arc<KbHandles>>, Json(body): Json<BeatBody
         blocked,
         detail_reason,
         touched_unix: now_unix,
+        touches,
     };
 
     let outcome = state.live_registry.record_beat(row, now_unix);
@@ -8085,6 +8187,157 @@ pub async fn live_status(
     resp
 }
 
+/// One row of `GET /api/sessions/live-touches` (kb-live-touches/1). Every
+/// field is either a kb-chosen label or a path RELATIVE to a repo root the
+/// daemon never kept; there is no cwd, title, last_line, model, host or
+/// absolute path anywhere in this type, so none can reach the wire.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LiveTouchRow {
+    pub project: String,
+    pub rel: String,
+    pub session_id: String,
+    pub harness: String,
+    pub state: LiveState,
+    pub age_secs: i64,
+    pub tool: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LiveTouchesResponse {
+    pub schema: &'static str,
+    pub touches: Vec<LiveTouchRow>,
+    pub truncated: bool,
+}
+
+/// Hard cap on touches returned by one call.
+const LIVE_TOUCHES_CAP: usize = 500;
+/// `?project=` is repeatable up to this many times.
+const LIVE_TOUCHES_MAX_PROJECTS: usize = 32;
+const LIVE_TOUCHES_MAX_QUERY_BYTES: usize = 8 * 1024;
+const LIVE_TOUCHES_DEFAULT_AGE_SECS: i64 = 900;
+
+/// Pure core of the route: filter by project/harness/age, sort (freshest
+/// first, then project, rel, session_id — a total order, so the output is
+/// deterministic), cap at [`LIVE_TOUCHES_CAP`].
+fn build_live_touches(
+    snap: Vec<crate::live_registry::TouchSnapshot>,
+    projects: &[String],
+    harnesses: &[String],
+    max_age_secs: i64,
+    now_unix: i64,
+) -> LiveTouchesResponse {
+    let mut rows: Vec<LiveTouchRow> = Vec::new();
+    for s in snap {
+        if !harnesses.is_empty() && !harnesses.contains(&s.harness) {
+            continue;
+        }
+        for t in s.touches {
+            let age = (now_unix - t.at_unix).max(0);
+            if age > max_age_secs {
+                continue;
+            }
+            if !projects.is_empty() && !projects.iter().any(|p| p.eq_ignore_ascii_case(&t.project))
+            {
+                continue;
+            }
+            rows.push(LiveTouchRow {
+                project: t.project,
+                rel: t.rel,
+                session_id: s.session_id.clone(),
+                harness: s.harness.clone(),
+                state: s.state,
+                age_secs: age,
+                tool: t.tool,
+            });
+        }
+    }
+    rows.sort_by(|a, b| {
+        (a.age_secs, &a.project, &a.rel, &a.session_id).cmp(&(
+            b.age_secs,
+            &b.project,
+            &b.rel,
+            &b.session_id,
+        ))
+    });
+    let truncated = rows.len() > LIVE_TOUCHES_CAP;
+    rows.truncate(LIVE_TOUCHES_CAP);
+    LiveTouchesResponse {
+        schema: "kb-live-touches/1",
+        touches: rows,
+        truncated,
+    }
+}
+
+/// `GET /api/sessions/live-touches?project=<name>&project=…&max_age_secs=&harness=`
+/// — OL PRES1: which files agents are touching right now, for kb-code's
+/// presence marks. Rides `auth_bearer` exactly like [`live_status`] (the LSC
+/// "token + forced scrub" graduation, invariant #11) and is IDENTICAL for a
+/// loopback and a bearer peer: the scrub is structural, not per-peer. The
+/// registry kept only paths relative to a root the beat supplied, so the
+/// response cannot contain an absolute path, and the caller supplies no
+/// roots (a `root=/` style probe has nothing to widen). A non-loopback
+/// request without a token never reaches this handler (the normal 401).
+///
+/// `project` is optional and repeatable (max 32); `max_age_secs` defaults to
+/// 900 and clamps to 60..=3600; `harness` is a csv (unknown token => 400).
+/// Clamp a caller's `max_age_secs` to the served window (60 s floor, 1 h ceiling).
+fn clamp_touch_age(v: i64) -> i64 {
+    v.clamp(60, 3600)
+}
+
+pub async fn live_touches(
+    State(state): State<Arc<KbHandles>>,
+    RawQuery(raw): RawQuery,
+) -> Response {
+    let raw = raw.unwrap_or_default();
+    if raw.len() > LIVE_TOUCHES_MAX_QUERY_BYTES {
+        return error_to_problem_json(&kb_core::Error::BadRequest(
+            "live-touches query exceeds 8 KiB".to_string(),
+        ));
+    }
+    let mut projects: Vec<String> = Vec::new();
+    let mut harnesses: Vec<String> = Vec::new();
+    let mut max_age = LIVE_TOUCHES_DEFAULT_AGE_SECS;
+    for (k, v) in form_urlencoded::parse(raw.as_bytes()) {
+        match k.as_ref() {
+            "project" => {
+                if v.is_empty() || v.len() > 256 || v.chars().any(|c| c.is_control()) {
+                    return error_to_problem_json(&kb_core::Error::BadRequest(
+                        "invalid project filter value".to_string(),
+                    ));
+                }
+                projects.push(v.into_owned());
+                if projects.len() > LIVE_TOUCHES_MAX_PROJECTS {
+                    return error_to_problem_json(&kb_core::Error::BadRequest(format!(
+                        "at most {LIVE_TOUCHES_MAX_PROJECTS} project filters"
+                    )));
+                }
+            }
+            "max_age_secs" => {
+                max_age = v
+                    .trim()
+                    .parse::<i64>()
+                    .unwrap_or(LIVE_TOUCHES_DEFAULT_AGE_SECS);
+            }
+            "harness" => match parse_harness_csv(&v) {
+                Ok(h) => harnesses.extend(h),
+                Err(resp) => return resp,
+            },
+            _ => {}
+        }
+    }
+    let max_age = clamp_touch_age(max_age);
+    let now_unix = chrono::Utc::now().timestamp();
+    let snap = state.live_registry.touches_snapshot(now_unix);
+    let mut resp = Json(build_live_touches(
+        snap, &projects, &harnesses, max_age, now_unix,
+    ))
+    .into_response();
+    resp.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    resp
+}
+
 #[cfg(test)]
 mod lsc2_tests {
     use super::*;
@@ -8277,6 +8530,295 @@ mod lsc2_tests {
         assert_eq!(parsed.last_line.as_deref(), Some("ping"));
         assert!(parsed.detail.is_none());
         assert!(parsed.title.is_none());
+    }
+
+    fn detail(paths: &[&str], root: Option<&str>, project: Option<&str>) -> BeatDetail {
+        BeatDetail {
+            reason: None,
+            tool: Some("Edit".to_string()),
+            paths: paths.iter().map(|s| serde_json::json!(s)).collect(),
+            root: root.map(str::to_string),
+            project: project.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn beat_detail_paths_accepted_only_on_tool_event() {
+        let d = detail(
+            &["/work/demo/repo/src/a.rs"],
+            Some("/work/demo/repo"),
+            Some("repo"),
+        );
+        let t = sanitize_touches("tool", Some(&d), 100);
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].rel, "src/a.rs");
+        assert_eq!(t[0].project, "repo");
+        assert_eq!(t[0].tool, "Edit");
+        assert_eq!(t[0].at_unix, 100);
+        for ev in ["start", "prompt", "turn_end", "blocked", "unblocked", "end"] {
+            assert!(sanitize_touches(ev, Some(&d), 100).is_empty(), "{ev}");
+        }
+        assert!(sanitize_touches("tool", None, 100).is_empty());
+    }
+
+    #[test]
+    fn invalid_paths_are_dropped_without_rejecting_the_beat() {
+        let long = format!("/work/demo/repo/{}", "a".repeat(1100));
+        let d = detail(
+            &[
+                "/work/demo/repo/ok.rs",
+                "relative/x.rs",
+                "/work/demo/repo/../../etc/passwd",
+                "/work/demo/repo/a\u{7}b",
+                "/work/demo/repo/nul\u{0}x",
+                "/work/demo/repo2/other.rs",
+                "/etc/passwd",
+                "/work/demo/repo",
+                long.as_str(),
+            ],
+            Some("/work/demo/repo"),
+            Some("repo"),
+        );
+        let t = sanitize_touches("tool", Some(&d), 1);
+        assert_eq!(
+            t.iter().map(|x| x.rel.as_str()).collect::<Vec<_>>(),
+            ["ok.rs"]
+        );
+        // Missing/invalid root or project => no touches, still no error.
+        assert!(sanitize_touches("tool", Some(&detail(&["/a/b"], None, Some("p"))), 1).is_empty());
+        assert!(
+            sanitize_touches("tool", Some(&detail(&["/a/b"], Some("rel"), Some("p"))), 1)
+                .is_empty()
+        );
+        assert!(sanitize_touches("tool", Some(&detail(&["/a/b"], Some("/a"), None)), 1).is_empty());
+        assert!(
+            sanitize_touches("tool", Some(&detail(&["/a/b"], Some("/a"), Some("x/y"))), 1)
+                .is_empty()
+        );
+        // The whole beat body still deserialises and maps.
+        let json = serde_json::json!({
+            "session_id": "s", "harness": "claude", "event": "tool",
+            "at": "2026-08-21T20:41:02Z",
+            "detail": {"tool": "Edit", "paths": ["/a/b", 5], "root": "/a"},
+        });
+        // A wrong-typed path entry must not reject the beat; it is dropped.
+        let body: BeatBody = serde_json::from_value(json).unwrap();
+        let t = sanitize_touches("tool", body.detail.as_ref(), 1);
+        assert!(t.is_empty(), "no project => nothing stored");
+        let json = serde_json::json!({
+            "session_id": "s", "harness": "claude", "event": "tool",
+            "at": "2026-08-21T20:41:02Z",
+            "detail": {"tool": "Edit", "paths": ["/a/b", 5, null], "root": "/a", "project": "p"},
+        });
+        let body: BeatBody = serde_json::from_value(json).unwrap();
+        let t = sanitize_touches("tool", body.detail.as_ref(), 1);
+        assert_eq!(t.len(), 1);
+    }
+
+    #[test]
+    fn ninth_path_is_dropped_and_rel_never_starts_with_slash() {
+        let paths: Vec<String> = (0..9).map(|i| format!("/r/f{i}.rs")).collect();
+        let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+        let t = sanitize_touches("tool", Some(&detail(&refs, Some("/r"), Some("p"))), 1);
+        assert_eq!(t.len(), 8);
+        assert!(t.iter().all(|x| !x.rel.starts_with('/')));
+        // Root "/" is refused: it would turn the whole absolute path into rel.
+        let t = sanitize_touches("tool", Some(&detail(&["/x/y"], Some("/"), Some("p"))), 1);
+        assert!(t.is_empty());
+        let t = sanitize_touches("tool", Some(&detail(&["/x/y"], Some("/x"), Some("p"))), 1);
+        assert_eq!(t[0].rel, "y");
+    }
+
+    #[test]
+    fn derive_state_is_identical_with_and_without_paths() {
+        // map_event/derive_state never see the detail; the same event maps
+        // to the same holder either way.
+        assert_eq!(map_event("tool"), Some((Holder::Agent, false)));
+        let with: BeatBody = serde_json::from_value(serde_json::json!({
+            "session_id": "s", "harness": "claude", "event": "tool",
+            "at": "2026-08-21T20:41:02Z",
+            "detail": {"tool": "Edit", "paths": ["/r/a"], "root": "/r", "project": "p"},
+        }))
+        .unwrap();
+        let without: BeatBody = serde_json::from_value(serde_json::json!({
+            "session_id": "s", "harness": "claude", "event": "tool",
+            "at": "2026-08-21T20:41:02Z",
+        }))
+        .unwrap();
+        assert_eq!(map_event(&with.event), map_event(&without.event));
+        let reg = crate::live_registry::LiveRegistry::new();
+        let mk = |sid: &str, ts: Vec<crate::live_registry::Touch>| crate::live_registry::LiveRow {
+            session_id: sid.to_string(),
+            harness: "claude".to_string(),
+            holder: Holder::Agent,
+            last_activity_unix: 500,
+            lease_secs: 900,
+            host: None,
+            pid: None,
+            cwd: None,
+            model: None,
+            title: None,
+            last_line: None,
+            blocked: false,
+            detail_reason: None,
+            touched_unix: 500,
+            touches: ts.into(),
+        };
+        let a = reg.record_beat(
+            mk("a", sanitize_touches("tool", with.detail.as_ref(), 500)),
+            500,
+        );
+        let b = reg.record_beat(mk("b", Vec::new()), 500);
+        assert_eq!((a.state, a.confidence), (b.state, b.confidence));
+    }
+
+    fn snap(
+        sid: &str,
+        harness: &str,
+        touches: Vec<(&str, &str, i64)>,
+    ) -> crate::live_registry::TouchSnapshot {
+        crate::live_registry::TouchSnapshot {
+            session_id: sid.to_string(),
+            harness: harness.to_string(),
+            state: LiveState::Working,
+            touches: touches
+                .into_iter()
+                .map(|(p, r, at)| crate::live_registry::Touch {
+                    project: p.to_string(),
+                    rel: r.to_string(),
+                    at_unix: at,
+                    tool: "Edit".to_string(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn live_touches_project_filter_age_and_order() {
+        let now = 10_000;
+        let s = vec![
+            snap("s2", "claude", vec![("beta", "b.rs", now - 5)]),
+            snap(
+                "s1",
+                "claude",
+                vec![("alpha", "z.rs", now - 10), ("alpha", "a.rs", now - 10)],
+            ),
+            snap("s3", "claude", vec![("alpha", "old.rs", now - 2000)]),
+        ];
+        let all = build_live_touches(s.clone(), &[], &[], 900, now);
+        let order: Vec<_> = all.touches.iter().map(|t| t.rel.as_str()).collect();
+        assert_eq!(
+            order,
+            ["b.rs", "a.rs", "z.rs"],
+            "freshest first, then project/rel"
+        );
+        assert!(!all.truncated);
+        let only_alpha = build_live_touches(s.clone(), &["ALPHA".to_string()], &[], 900, now);
+        assert_eq!(only_alpha.touches.len(), 2);
+        let wide = build_live_touches(s.clone(), &["alpha".to_string()], &[], 3600, now);
+        assert_eq!(wide.touches.len(), 3);
+        let codex = build_live_touches(s, &[], &["codex".to_string()], 900, now);
+        assert!(codex.touches.is_empty());
+    }
+
+    #[test]
+    fn live_touches_max_age_clamps_to_floor_ceiling_and_default() {
+        assert_eq!(clamp_touch_age(0), 60);
+        assert_eq!(clamp_touch_age(999_999), 3600);
+        assert_eq!(clamp_touch_age(LIVE_TOUCHES_DEFAULT_AGE_SECS), 900);
+        let now = 10_000;
+        let s = vec![snap("s1", "claude", vec![("alpha", "old.rs", now - 3601)])];
+        let r = build_live_touches(s, &[], &[], clamp_touch_age(999_999), now);
+        assert!(
+            r.touches.is_empty(),
+            "3601 s old is past the 3600 s ceiling"
+        );
+    }
+
+    #[test]
+    fn live_touches_truncates_at_500() {
+        let now = 10_000;
+        let names: Vec<String> = (0..600).map(|i| format!("f{i:04}.rs")).collect();
+        let touches: Vec<(&str, &str, i64)> =
+            names.iter().map(|n| ("p", n.as_str(), now - 1)).collect();
+        let r = build_live_touches(vec![snap("s", "claude", touches)], &[], &[], 900, now);
+        assert_eq!(r.touches.len(), 500);
+        assert!(r.truncated);
+    }
+
+    #[test]
+    fn live_touches_key_set_is_pinned_and_has_no_absolute_path() {
+        let now = 10_000;
+        let r = build_live_touches(
+            vec![snap("s", "claude", vec![("demo", "src/a.rs", now - 3)])],
+            &[],
+            &[],
+            900,
+            now,
+        );
+        let v = serde_json::to_value(&r).unwrap();
+        let mut top: Vec<_> = v.as_object().unwrap().keys().cloned().collect();
+        top.sort();
+        assert_eq!(top, ["schema", "touches", "truncated"]);
+        let mut keys: Vec<_> = v["touches"][0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            [
+                "age_secs",
+                "harness",
+                "project",
+                "rel",
+                "session_id",
+                "state",
+                "tool"
+            ]
+        );
+        for row in v["touches"].as_array().unwrap() {
+            assert!(!row["rel"].as_str().unwrap().starts_with('/'));
+        }
+    }
+
+    /// The committed contract fixture (`tests/fixtures/live-touches-v1.json`).
+    /// `KB_UPDATE_FIXTURES=1` rewrites it; otherwise the test asserts the
+    /// serialised response equals the committed file.
+    #[test]
+    fn live_touches_fixture_matches() {
+        let now = 1_800_000_000;
+        let r = build_live_touches(
+            vec![
+                snap(
+                    "11111111-aaaa-4bbb-8ccc-000000000001",
+                    "claude",
+                    vec![
+                        ("demo", "src/lib.rs", now - 4),
+                        ("demo", "docs/readme.md", now - 120),
+                    ],
+                ),
+                snap(
+                    "22222222-aaaa-4bbb-8ccc-000000000002",
+                    "claude",
+                    vec![("demo", "src/lib.rs", now - 30)],
+                ),
+            ],
+            &[],
+            &[],
+            900,
+            now,
+        );
+        let got = serde_json::to_string_pretty(&r).unwrap() + "\n";
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/live-touches-v1.json");
+        if std::env::var("KB_UPDATE_FIXTURES").as_deref() == Ok("1") {
+            std::fs::write(&path, &got).unwrap();
+        }
+        let want = std::fs::read_to_string(&path).expect("tests/fixtures/live-touches-v1.json");
+        assert_eq!(got, want, "run with KB_UPDATE_FIXTURES=1 to regenerate");
     }
 }
 

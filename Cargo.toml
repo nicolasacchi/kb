@@ -294,7 +294,7 @@ tree-sitter-embedded-template = "0.25"
 #   wrapper that would pull `tree-sitter` in directly) is left OFF.
 tree-sitter-css = "=0.25.0"
 tree-sitter-scss = "=1.0.0"
-tree-sitter-md = { version = "=0.5.3", default-features = false }
+tree-sitter-md = { version = "=0.5.4", default-features = false }
 
 # ripgrep engine (code-search surface) — Unlicense OR MIT. grep-matcher is
 # already pulled in transitively by grep-searcher/grep-regex (see

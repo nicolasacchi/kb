@@ -2012,7 +2012,7 @@ a.kb-idschip:hover {
   color: var(--ink);
 }
 .kb-pinsp__topics-toggle:focus-visible {
-  outline: var(--focus-ring, 2px solid var(--accent));
+  outline: 2px solid var(--accent);
 }
 .kb-pinsp__folder-pos {
   color: var(--ink-mute);
@@ -6622,7 +6622,7 @@ a.proposal-row__chip:hover {
   font-family: var(--font-sans);
   font-size: var(--fs-xs);
   line-height: 1.35;
-  color: var(--ink-soft, var(--ink-mute));
+  color: var(--ink-mute);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

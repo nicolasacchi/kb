@@ -645,6 +645,63 @@ pub async fn heal_duplicate_rows(storage: &StorageHandle, kb: &str, from: &str) 
     }
 }
 
+/// OL ERR1 — dismiss every open error row whose path lives under one of
+/// `roots` and no longer exists on disk (a rename/delete that outlived its
+/// error row: nothing ever re-ingests a missing path, so the row would stay
+/// open forever). A path that cannot be stat'ed (`Err`) is kept. Logs one line
+/// per call when it resolves anything. Best-effort. Returns rows dismissed.
+pub async fn resolve_vanished_errors(
+    storage: &StorageHandle,
+    kb_name: &KbName,
+    roots: &[&Path],
+) -> usize {
+    // An unmounted / missing source root makes `try_exists` answer `false`
+    // for every path under it; healing then would dismiss rows for files that
+    // merely sit behind a dead mount. Only roots that exist count.
+    let live: Vec<&Path> = roots
+        .iter()
+        .copied()
+        .filter(|r| matches!(r.try_exists(), Ok(true)))
+        .collect();
+    if live.is_empty() {
+        return 0;
+    }
+    let roots = &live[..];
+    let rows = match storage.list_open_errors().await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(kb = %kb_name, error = %e, "reconcile: list_open_errors failed; vanished-path error heal skipped");
+            return 0;
+        }
+    };
+    let mut resolved = 0usize;
+    for row in rows {
+        if !roots.iter().any(|r| row.path.starts_with(r)) {
+            continue;
+        }
+        if !matches!(row.path.try_exists(), Ok(false)) {
+            continue;
+        }
+        let Ok(typed) = error_id_from_stored(&row.id) else {
+            continue;
+        };
+        match storage.dismiss_error(typed).await {
+            Ok(()) => resolved += 1,
+            Err(e) => {
+                tracing::warn!(kb = %kb_name, id = %row.id, error = %e, "dismiss vanished-path error failed (non-fatal)")
+            }
+        }
+    }
+    if resolved > 0 {
+        tracing::info!(
+            kb = %kb_name,
+            resolved,
+            "reconcile: resolved open ingest errors for paths that no longer exist",
+        );
+    }
+    resolved
+}
+
 /// Full reconcile pass: walks the filesystem (emitting `watch.modify`
 /// for every non-skipped HTML file), then queries storage for known
 /// rows under `source_root` and emits a synthetic `watch.delete` for
@@ -849,6 +906,9 @@ pub async fn reconcile(
             tracing::warn!(kb = %kb_name, error = %e, "reconcile: orphan sweep failed");
         }
     }
+
+    // OL ERR1 — open error rows for files that no longer exist close here.
+    resolve_vanished_errors(&storage, &kb_name, &[&canonical_root, &source_root]).await;
 
     ReconcileSummary {
         completed_at: now_unix(),
@@ -2512,6 +2572,23 @@ async fn prepare_doc(
     // reconciler can fan out hundreds of these per pass.
     let bytes = match tokio::fs::read(path).await {
         Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // OL ERR1 — ENOENT during ingest is the rename/delete race (the
+            // watcher or walk saw the path, the file was gone by read time),
+            // i.e. skipped as a delete race, not an ingest failure. Record no
+            // error and close any open row a prior binary left for it; the
+            // watcher's own delete event / the reconcile delete pass drops
+            // the index row. Other io errors still record below.
+            if let Err(ce) = storage.clear_errors_for_path(path.to_path_buf()).await {
+                tracing::warn!(
+                    kb = %kb_name,
+                    path = %path.display(),
+                    error = %ce,
+                    "clearing error rows for a vanished path failed (non-fatal)"
+                );
+            }
+            return Ok(None);
+        }
         Err(e) => {
             let _ = record_failure(
                 kb_name,
@@ -7551,7 +7628,10 @@ done
     }
 
     #[tokio::test]
-    async fn missing_file_emits_error_event() {
+    async fn non_enoent_read_failure_still_emits_error_event() {
+        // OL ERR1 — ENOENT is a delete (see
+        // `enoent_during_ingest_is_a_delete_not_an_error`); any OTHER io
+        // read failure (here EISDIR: the path is a directory) still records.
         let (bus, storage, kb, slug, tmp) = setup().await;
         let quarantine = tmp.path().join("quarantine");
 
@@ -7580,7 +7660,8 @@ done
         });
 
         let mut rx = bus.subscribe();
-        let missing = tmp.path().join("does-not-exist.html");
+        let missing = tmp.path().join("is-a-dir.html");
+        std::fs::create_dir(&missing).unwrap();
         bus.emit(
             "watch.create",
             json!({"kb": kb.as_str(), "path": missing.to_string_lossy()}),
@@ -9768,5 +9849,150 @@ done
             storage.index_generation() > g0,
             "a repair bumps the generation"
         );
+    }
+
+    /// OL ERR1 — a file that vanishes between the event and the read (ENOENT)
+    /// is a delete: it records NO open error and closes one a prior binary
+    /// left for the path. Non-vacuous: before the fix the read failure
+    /// recorded a fresh `io` row (so `open` was non-empty).
+    #[tokio::test]
+    async fn enoent_during_ingest_is_a_delete_not_an_error() {
+        let (bus, storage, kb, slug, tmp) = setup().await;
+        let quarantine = tmp.path().join("quarantine");
+        let indexer_rx = bus.subscribe();
+        let (b, st, k, sl, q) = (
+            bus.clone(),
+            storage.clone(),
+            kb.clone(),
+            slug.clone(),
+            quarantine.clone(),
+        );
+        let _indexer = tokio::spawn(async move {
+            run(
+                k,
+                sl,
+                st,
+                b,
+                q,
+                indexer_rx,
+                None,
+                None,
+                crate::iframe::DEFAULT_HOST_SUFFIX.to_string(),
+                crate::vcs::VersionsMode::Off,
+                0,
+                Vec::new(),
+            )
+            .await
+        });
+
+        let ghost = tmp.path().join("ghost.html");
+        storage
+            .record_error(
+                "io".into(),
+                slug.clone(),
+                ghost.clone(),
+                "read failed: No such file or directory (os error 2)".into(),
+                None,
+                unix_now(),
+            )
+            .await
+            .unwrap();
+        let real = tmp.path().join("real.html");
+        std::fs::write(&real, "<html><title>Real</title><body>x</body></html>").unwrap();
+
+        let mut rx = bus.subscribe();
+        bus.emit(
+            "watch.modify",
+            json!({"kb": kb.as_str(), "path": ghost.to_string_lossy()}),
+        );
+        // Same FIFO queue: once `real` is indexed, `ghost` was processed.
+        bus.emit(
+            "watch.create",
+            json!({"kb": kb.as_str(), "path": real.to_string_lossy()}),
+        );
+        timeout(Duration::from_secs(10), async {
+            loop {
+                let env = rx.recv().await.expect("bus closed");
+                if env.type_ == "artifact.indexed"
+                    && env.payload["path"]
+                        .as_str()
+                        .unwrap_or("")
+                        .ends_with("real.html")
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("timeout waiting for real.html to index");
+
+        let open = storage.list_open_errors().await.unwrap();
+        assert!(
+            open.is_empty(),
+            "ENOENT must not leave an open error: {open:?}"
+        );
+    }
+
+    /// OL ERR1 — reconcile resolves open error rows whose file is gone and
+    /// leaves rows for files that still exist.
+    #[tokio::test]
+    async fn reconcile_resolves_open_errors_for_missing_paths_only() {
+        let (bus, storage, kb, slug, tmp) = setup().await;
+        let gone = tmp.path().join("authors/old-agent.md");
+        let alive = tmp.path().join("alive.html");
+        std::fs::write(&alive, "<html><title>A</title><body>x</body></html>").unwrap();
+        for p in [&gone, &alive] {
+            storage
+                .record_error(
+                    "io".into(),
+                    slug.clone(),
+                    p.clone(),
+                    "read failed: No such file or directory (os error 2)".into(),
+                    None,
+                    unix_now(),
+                )
+                .await
+                .unwrap();
+        }
+        assert_eq!(storage.list_open_errors().await.unwrap().len(), 2);
+
+        let (tx, _rx) = mpsc::channel(INGEST_QUEUE_CAPACITY);
+        let _ = reconcile(
+            IngestSink::new(tx, bus.clone(), kb.clone()),
+            storage.clone(),
+            tmp.path().to_path_buf(),
+            Vec::new(),
+        )
+        .await;
+
+        let open = storage.list_open_errors().await.unwrap();
+        assert_eq!(
+            open.len(),
+            1,
+            "only the existing path's row stays: {open:?}"
+        );
+        assert_eq!(open[0].path, alive);
+    }
+
+    /// OL ERR1 — a missing source root (dead mount) heals nothing.
+    #[tokio::test]
+    async fn resolve_vanished_errors_skips_a_missing_root() {
+        let (_bus, storage, kb, slug, tmp) = setup().await;
+        let root = tmp.path().join("unmounted");
+        let row = root.join("a.md");
+        storage
+            .record_error(
+                "io".into(),
+                slug.clone(),
+                row,
+                "read failed: No such file or directory (os error 2)".into(),
+                None,
+                unix_now(),
+            )
+            .await
+            .unwrap();
+        let n = resolve_vanished_errors(&storage, &kb, &[root.as_path()]).await;
+        assert_eq!(n, 0);
+        assert_eq!(storage.list_open_errors().await.unwrap().len(), 1);
     }
 }

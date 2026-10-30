@@ -187,7 +187,7 @@
 }
 
 .kbc-usages__row:hover {
-  background: var(--bg-hover, color-mix(in oklab, var(--fg) 6%, transparent));
+  background: color-mix(in oklab, var(--fg) 6%, transparent);
 }
 
 .kbc-usages__row.is-cursor {
@@ -245,7 +245,7 @@
   border: 1px solid var(--rule);
   border-radius: 8px;
   background: var(--bg-elev, var(--bg));
-  box-shadow: var(--shadow-2, 0 8px 28px rgb(0 0 0 / 35%));
+  box-shadow: var(--shadow-lift);
   font-size: var(--fs-sm);
 }
 
@@ -411,7 +411,7 @@
   border: 1px solid var(--rule);
   border-radius: 999px;
   background: var(--bg-elev, var(--bg));
-  box-shadow: var(--shadow-2, 0 6px 20px rgb(0 0 0 / 30%));
+  box-shadow: var(--shadow-lift);
   font-size: var(--fs-sm);
 }
 

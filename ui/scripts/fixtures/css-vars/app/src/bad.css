@@ -1,0 +1,4 @@
+.bare { padding: var(--fx-bare-missing); }
+.literal { padding: var(--fx-literal-missing, 4px); }
+.nested-both { padding: var(--fx-nested-missing, var(--fx-nested-fallback-missing)); }
+.nested-outer { padding: var(--fx-outer-missing, var(--fx-defined)); }

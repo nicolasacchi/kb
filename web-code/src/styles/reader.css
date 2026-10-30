@@ -811,7 +811,7 @@
   flex: 0 0 auto;
 }
 .kbc-tree__note--warn {
-  border-left-color: var(--warn-bor, var(--accent-bor));
+  border-left-color: var(--accent-bor);
   color: var(--ink);
 }
 .kbc-tree__sticky {
@@ -2276,10 +2276,10 @@
   text-decoration: underline;
 }
 .kbc-ws-workspace-chip.is-dirty {
-  border-color: var(--warn-bor, var(--accent-bor));
+  border-color: var(--accent-bor);
 }
 .kbc-ws-workspace-chip__dirty {
-  color: var(--warn-ink, var(--accent-soft));
+  color: var(--accent-soft);
   font-weight: 700;
 }
 .kbc-ws-workspace-chip__update,

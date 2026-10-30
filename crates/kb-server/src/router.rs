@@ -471,6 +471,15 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
         // posture is safe here. Static, registered before `/{session_id}`.
         .route("/sessions/beat", post(routes::sessions::beat))
         .route("/sessions/live-status", get(routes::sessions::live_status))
+        // OL PRES1 — which files live agent sessions are touching. Same
+        // posture as `live-status` directly above (`auth_bearer`, identical
+        // for loopback and bearer peers); the scrub is structural — the
+        // registry only keeps root-relative paths. See
+        // `routes::sessions::live_touches`.
+        .route(
+            "/sessions/live-touches",
+            get(routes::sessions::live_touches),
+        )
         // SL2 (`docs/research/kb-slate-design-2026-09.html` §9) — the
         // per-project blackboard. Daemon-wide (NO `{kb}` segment: a slate
         // keys on a PROJECT, and a project maps to several kbs or none —

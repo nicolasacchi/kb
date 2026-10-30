@@ -50,9 +50,9 @@
   width: min(420px, calc(100vw - 24px));
   background: var(--bg-panel);
   border: 1px solid var(--rule);
-  border-radius: var(--radius-2, 8px);
-  box-shadow: var(--shadow-2, 0 6px 24px rgb(0 0 0 / 0.35));
-  padding: var(--space-2, 8px) var(--space-3, 12px);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lift);
+  padding: var(--pad-2) calc(var(--pad-2) + var(--pad-1));
   font-size: var(--fs-sm);
   pointer-events: none;
 }
@@ -60,7 +60,7 @@
 .kbc-scent--inline {
   position: static;
   width: auto;
-  margin: var(--space-1, 4px) 0 var(--space-2, 8px);
+  margin: var(--pad-1) 0 var(--pad-2);
   box-shadow: none;
   background: var(--bg-panel-2);
 }
@@ -68,8 +68,8 @@
 .kbc-scent__head {
   display: flex;
   align-items: center;
-  gap: var(--space-2, 8px);
-  margin-bottom: var(--space-1, 4px);
+  gap: var(--pad-2);
+  margin-bottom: var(--pad-1);
 }
 
 .kbc-scent__where {
@@ -84,13 +84,13 @@
   font-family: var(--font-mono, monospace);
   font-size: var(--fs-sm);
   white-space: pre-wrap;
-  margin-bottom: var(--space-2, 8px);
+  margin-bottom: var(--pad-2);
 }
 
 .kbc-scent__grid {
   display: grid;
   grid-template-columns: max-content 1fr;
-  gap: 2px var(--space-2, 8px);
+  gap: 2px var(--pad-2);
 }
 
 .kbc-scent__field {
@@ -115,8 +115,8 @@
 }
 
 .kbc-scent__keys {
-  margin-top: var(--space-2, 8px);
-  padding-top: var(--space-1, 4px);
+  margin-top: var(--pad-2);
+  padding-top: var(--pad-1);
   border-top: 1px solid var(--rule);
   color: var(--ink-mute);
   font-size: var(--fs-xs);
@@ -127,8 +127,8 @@
 .kbc-panechrome {
   display: flex;
   align-items: center;
-  gap: var(--space-2, 8px);
-  padding: 2px var(--space-2, 8px);
+  gap: var(--pad-2);
+  padding: 2px var(--pad-2);
   border-bottom: 1px solid var(--rule);
   min-height: 22px;
   font-size: var(--fs-xs);
@@ -147,7 +147,7 @@
 .kbc-panechrome__mods {
   display: flex;
   align-items: center;
-  gap: var(--space-1, 4px);
+  gap: var(--pad-1);
 }
 
 /* OL-C11 — the pane header row: [← →] filename … toolbar. OL-P1: the
@@ -174,11 +174,11 @@
 .kbc-panechrome__chip {
   background: transparent;
   border: 1px dashed var(--accent);
-  border-radius: var(--radius-1, 4px);
+  border-radius: var(--radius-sm);
   color: var(--accent);
   cursor: pointer;
   font: inherit;
-  padding: 0 var(--space-1, 4px);
+  padding: 0 var(--pad-1);
 }
 
 .kbc-panehist {
@@ -193,7 +193,7 @@
   gap: 2px;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: var(--radius-1, 4px);
+  border-radius: var(--radius-sm);
   color: var(--ink-mute);
   cursor: pointer;
   padding: 1px 3px;
@@ -225,8 +225,8 @@
 .kbc-trailbar {
   display: flex;
   align-items: center;
-  gap: var(--space-2, 8px);
-  padding: 2px var(--space-3, 12px);
+  gap: var(--pad-2);
+  padding: 2px calc(var(--pad-2) + var(--pad-1));
   border-bottom: 1px solid var(--rule);
   background: var(--bg-panel-2);
 }
@@ -234,21 +234,21 @@
 .kbc-trailchip {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1, 4px);
+  gap: var(--pad-1);
   font-size: var(--fs-sm);
 }
 
 .kbc-trailchip__back {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1, 4px);
+  gap: var(--pad-1);
   background: transparent;
   border: 1px solid var(--rule);
-  border-radius: var(--radius-1, 4px);
+  border-radius: var(--radius-sm);
   color: var(--fg);
   cursor: pointer;
   font: inherit;
-  padding: 1px var(--space-2, 8px);
+  padding: 1px var(--pad-2);
 }
 
 .kbc-trailchip__key {
@@ -264,10 +264,10 @@
 /* ── the inline peek block widget ─────────────────────────────────────── */
 
 .kbc-inpeek {
-  margin: var(--space-1, 4px) 0 var(--space-1, 4px) 2.5em;
+  margin: var(--pad-1) 0 var(--pad-1) 2.5em;
   border: 1px solid var(--rule);
   border-left: 3px solid var(--accent);
-  border-radius: var(--radius-2, 8px);
+  border-radius: var(--radius-md);
   background: var(--bg-panel-2);
   overflow: hidden;
   font-size: 0.86em;
@@ -281,8 +281,8 @@
 .kbc-inpeek__crumbs {
   display: flex;
   align-items: center;
-  gap: var(--space-1, 4px);
-  padding: 2px var(--space-2, 8px);
+  gap: var(--pad-1);
+  padding: 2px var(--pad-2);
   border-bottom: 1px solid var(--rule);
   font-size: 0.78em;
 }
@@ -312,7 +312,7 @@
 .kbc-inpeek__close {
   background: transparent;
   border: 1px solid transparent;
-  border-radius: var(--radius-1, 4px);
+  border-radius: var(--radius-sm);
   color: var(--ink-mute);
   cursor: pointer;
   font: inherit;
@@ -329,13 +329,13 @@
 .kbc-inpeek__body {
   max-height: 60vh;
   overflow: auto;
-  padding: var(--space-1, 4px) 0;
+  padding: var(--pad-1) 0;
 }
 
 .kbc-inpeek__line {
   display: flex;
-  gap: var(--space-2, 8px);
-  padding: 0 var(--space-2, 8px);
+  gap: var(--pad-2);
+  padding: 0 var(--pad-2);
   font-family: var(--font-mono, monospace);
   white-space: pre;
   cursor: pointer;
@@ -360,7 +360,7 @@
 
 .kbc-inpeek__msg {
   color: var(--ink-mute);
-  padding: var(--space-2, 8px);
+  padding: var(--pad-2);
 }
 
 .kbc-inpeek__msg--error {
@@ -369,8 +369,8 @@
 
 .kbc-inpeek__foot {
   display: flex;
-  gap: var(--space-2, 8px);
-  padding: 2px var(--space-2, 8px);
+  gap: var(--pad-2);
+  padding: 2px var(--pad-2);
   border-top: 1px solid var(--rule);
   color: var(--ink-mute);
   font-size: 0.74em;
@@ -384,7 +384,7 @@
 
 .kbc-hovertip {
   max-width: 460px;
-  padding: var(--space-2, 8px);
+  padding: var(--pad-2);
   font-size: var(--fs-sm);
 }
 
@@ -398,8 +398,8 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2, 8px);
-  margin-top: var(--space-1, 4px);
+  gap: var(--pad-2);
+  margin-top: var(--pad-1);
   color: var(--ink-mute);
   font-size: var(--fs-xs);
 }
@@ -409,14 +409,14 @@
 }
 
 .kbc-hovertip__doc {
-  margin: var(--space-1, 4px) 0 0;
+  margin: var(--pad-1) 0 0;
   white-space: pre-wrap;
   color: var(--ink-mute);
 }
 
 .kbc-hovertip__prov,
 .kbc-hovertip__empty {
-  margin-top: var(--space-1, 4px);
+  margin-top: var(--pad-1);
   color: var(--ink-mute);
   font-size: var(--fs-xs);
 }
@@ -426,7 +426,7 @@
 }
 
 .kbc-hovertip__keys {
-  margin-top: var(--space-1, 4px);
+  margin-top: var(--pad-1);
   padding-top: 2px;
   border-top: 1px solid var(--rule);
   color: var(--ink-mute);
@@ -438,8 +438,8 @@
 .kbc-recent-locs__vias {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-1, 4px);
-  padding: var(--space-1, 4px) var(--space-3, 12px);
+  gap: var(--pad-1);
+  padding: var(--pad-1) calc(var(--pad-2) + var(--pad-1));
   border-bottom: 1px solid var(--rule);
 }
 
@@ -451,7 +451,7 @@
   cursor: pointer;
   font: inherit;
   font-size: var(--fs-xs);
-  padding: 0 var(--space-2, 8px);
+  padding: 0 var(--pad-2);
 }
 
 .kbc-recent-locs__viachip.is-active {
@@ -462,7 +462,7 @@
 .kbc-recent-locs__via {
   color: var(--ink-mute);
   font-size: var(--fs-xs);
-  margin-left: var(--space-2, 8px);
+  margin-left: var(--pad-2);
 }
 
 .kbc-recent-locs__snippet {

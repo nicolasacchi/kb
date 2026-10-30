@@ -1,0 +1,33 @@
+{
+  "schema": "kb-live-touches/1",
+  "touches": [
+    {
+      "project": "demo",
+      "rel": "src/lib.rs",
+      "session_id": "11111111-aaaa-4bbb-8ccc-000000000001",
+      "harness": "claude",
+      "state": "working",
+      "age_secs": 4,
+      "tool": "Edit"
+    },
+    {
+      "project": "demo",
+      "rel": "src/lib.rs",
+      "session_id": "22222222-aaaa-4bbb-8ccc-000000000002",
+      "harness": "claude",
+      "state": "working",
+      "age_secs": 30,
+      "tool": "Edit"
+    },
+    {
+      "project": "demo",
+      "rel": "docs/readme.md",
+      "session_id": "11111111-aaaa-4bbb-8ccc-000000000001",
+      "harness": "claude",
+      "state": "working",
+      "age_secs": 120,
+      "tool": "Edit"
+    }
+  ],
+  "truncated": false
+}

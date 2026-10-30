@@ -610,7 +610,7 @@ body,
   top: 0;
   bottom: 0;
   width: 4px;
-  background: var(--accent-tag, var(--accent));
+  background: var(--accent);
 }
 .gallery-hero__body {
   position: relative;
@@ -618,7 +618,7 @@ body,
   background:
     radial-gradient(
       ellipse at top right,
-      color-mix(in oklch, var(--accent-tag, var(--accent)) 12%, transparent),
+      color-mix(in oklch, var(--accent) 12%, transparent),
       transparent 60%
     ),
     var(--collage-bg);
@@ -883,7 +883,7 @@ body,
   background:
     radial-gradient(
       ellipse at top right,
-      color-mix(in oklch, var(--accent-tag, var(--accent)) 14%, transparent),
+      color-mix(in oklch, var(--accent) 14%, transparent),
       transparent 65%
     ),
     var(--collage-bg);
@@ -902,7 +902,7 @@ body,
   top: 0;
   bottom: 0;
   width: 3px;
-  background: var(--accent-tag, var(--accent));
+  background: var(--accent);
 }
 .prev-hyb-title {
   font-family: var(--font-serif);
@@ -935,13 +935,13 @@ body,
   place-items: center;
   border-radius: 5px;
   border: 1px solid
-    color-mix(in oklch, var(--accent-tag, var(--accent)) 22%, var(--rule));
+    color-mix(in oklch, var(--accent) 22%, var(--rule));
   background: color-mix(
     in oklch,
-    var(--accent-tag, var(--accent)) 6%,
+    var(--accent) 6%,
     transparent
   );
-  color: var(--accent-tag, var(--accent));
+  color: var(--accent);
 }
 .prev-hyb-glyph svg {
   width: 11px;
