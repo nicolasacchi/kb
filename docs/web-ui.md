@@ -261,6 +261,7 @@ the following features apply:
 - **Multi-page artifacts** — relative sibling links navigate in place;
   the active page is reflected in the URL (`?p=`).
 - **Annotate mode** — the pen icon toggles the comments layer on/off.
+- **Citation doors** — a cited code path (`<code>crates/x/y.rs:120</code>`) is a link into kb-code at that ref (new tab); dashed = kb's unverified hint, solid/dotted once a checkout is chosen and kb-code has checked it. Only when the kb has a `code_url`.
 
 ### Reviewing (comments)
 

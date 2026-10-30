@@ -577,3 +577,22 @@
     border-top: 1px solid var(--rule);
   }
 }
+
+/* OL IDEA6 - the citation is the door (native notes). A cited code path
+   becomes a link into kb-code; the CLASS is the line style, never a colour:
+   solid = exact or moved, dotted = unsure, dashed = kb's own unverified hint.
+   Mirrors the inline style the artifact runtime sets on a door. */
+.kb-note-md a.kb-coderef-door {
+  text-decoration-line: underline;
+  text-underline-offset: 0.2em;
+}
+.kb-note-md a.kb-coderef-door--exact,
+.kb-note-md a.kb-coderef-door--moved {
+  text-decoration-style: solid;
+}
+.kb-note-md a.kb-coderef-door--unsure {
+  text-decoration-style: dotted;
+}
+.kb-note-md a.kb-coderef-door--hint {
+  text-decoration-style: dashed;
+}

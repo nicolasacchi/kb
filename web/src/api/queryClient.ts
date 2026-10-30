@@ -733,6 +733,9 @@ export function startSseInvalidationBridge(): () => void {
   //                    staleTime (30s) + a manual refresh affordance next to
   //                    the rendered `resolved_unix` stand in for SSE-
   //                    precise freshness on a live git-tree read.
+  //                    The reader's citation doors (useCodeDoors, OL IDEA6) are
+  //                    a second observer of these same keys, with no refresh
+  //                    of their own.
   //   ["slateGrounding", …] — SL7d/D29, the slate board's groundedness
   //                    captions. The SAME cross-daemon category as
   //                    ["doclens", …] just above (kb-code has no wiring into

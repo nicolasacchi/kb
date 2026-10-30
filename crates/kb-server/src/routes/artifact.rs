@@ -37,6 +37,10 @@ const RUNTIME_PATH: &str = "/_kb/runtime.js";
 /// reaches a style sink.
 const READING_CSS_PATH: &str = "/_kb/reading.css";
 const READING_CSS: &str = include_str!("reading.css");
+/// IDEA6 - the "citation is the door" block, spliced into `runtime_js`. It is
+/// plain ES2015 defining `kbInstallCodeDoors(TARGET)`; the parent posts the
+/// doors, the block decorates matching `<code>` elements with attributes only.
+const DOORS_JS: &str = include_str!("runtime_doors.js");
 /// READ1b - the artifact host's font route: `/_kb/fonts/<name>.woff2`, served
 /// from the SPA bundle's own `fonts/` directory (the self-hosted Source Serif 4
 /// and JetBrains Mono subsets), so the house sheet's `@font-face` set resolves
@@ -772,6 +776,10 @@ fn runtime_js(target_origin: &str) -> String {
     snapshot();                                        // true leave-point
     try {{ location.replace(url.href); }} catch (err) {{ location.href = url.href; }}
   }});
+
+  // --- IDEA6: the citation is the door (see runtime_doors.js) ------------
+{DOORS_JS}
+  kbInstallCodeDoors(TARGET);
 }})();
 "#
     )
@@ -2477,5 +2485,89 @@ mod tests {
             .collect();
         assert_eq!(runtime_keys, spa_keys);
         assert_eq!(runtime_keys.len(), 8);
+    }
+
+    // --- IDEA6: the citation is the door ---------------------------------
+
+    // invariant:20 runtime-doors-spliced
+    #[test]
+    fn runtime_splices_code_doors() {
+        let js = runtime_js("*");
+        assert!(js.contains(DOORS_JS));
+        assert_eq!(js.matches("kbInstallCodeDoors(TARGET);").count(), 1);
+        // Installed inside the IIFE, after the link relay, before it closes.
+        assert!(js.find("kbInstallCodeDoors(TARGET);") > js.find("addEventListener('click'"));
+        assert!(js.trim_end().ends_with("})();"));
+    }
+
+    // invariant:20 runtime-doors-attribute-only
+    #[test]
+    fn code_doors_block_is_attribute_only() {
+        let code: String = DOORS_JS
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for bad in [
+            "createElement",
+            "appendChild",
+            "insertBefore",
+            "replaceChild",
+            "replaceWith",
+            "removeChild",
+            ".remove(",
+            "innerHTML",
+            "outerHTML",
+            "insertAdjacent",
+            "textContent =",
+            "postMessage(",
+            "location.",
+        ] {
+            assert!(!code.contains(bad), "doors block uses {bad}");
+        }
+    }
+
+    // invariant:20 runtime-doors-guard-inbound
+    #[test]
+    fn code_doors_guard_inbound_messages() {
+        let d = DOORS_JS;
+        assert!(d.contains("ev.source !== window.parent"));
+        assert!(d.contains("TARGET !== '*' && ev.origin !== TARGET"));
+        assert!(d.contains("u.protocol !== 'http:' && u.protocol !== 'https:'"));
+        assert!(d.contains("'noopener,noreferrer'"));
+        assert!(d.contains("data.kind !== 'kb:coderefs'"));
+    }
+
+    // invariant:20 runtime-doors-golden
+    #[test]
+    fn code_doors_golden_matches_extractor() {
+        let golden: serde_json::Value =
+            serde_json::from_str(include_str!("runtime_doors.golden.json")).expect("golden json");
+        assert_eq!(golden["schema"], "kb-coderef-doors-golden/1");
+        let cases = golden["cases"].as_array().expect("cases");
+        assert!(cases.len() >= 5);
+        for case in cases {
+            let name = case["name"].as_str().unwrap();
+            let body = case["body"].as_str().unwrap();
+            let e = kb_core::coderefs::extract(&format!("<html><body>{body}</body></html>"));
+            let got: Vec<(u64, String, bool)> = e
+                .refs
+                .iter()
+                .map(|r| (u64::from(r.ordinal), r.raw_text.clone(), r.declared))
+                .collect();
+            let want: Vec<(u64, String, bool)> = case["refs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| {
+                    (
+                        r["ordinal"].as_u64().unwrap(),
+                        r["raw"].as_str().unwrap().to_string(),
+                        r["declared"].as_bool().unwrap(),
+                    )
+                })
+                .collect();
+            assert_eq!(got, want, "case {name}");
+        }
     }
 }
