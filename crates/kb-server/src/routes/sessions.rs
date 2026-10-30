@@ -9615,4 +9615,32 @@ mod evidence_wire_tests {
             assert!(out.evidence_full.is_none());
         }
     }
+
+    // invariant:11 the server's ranking routes never read session evidence
+    #[test]
+    fn no_ranking_route_reads_session_evidence() {
+        const RANKERS: &[(&str, &str)] = &[
+            ("routes/search.rs", include_str!("search.rs")),
+            ("routes/inbox.rs", include_str!("inbox.rs")),
+            ("routes/resurface.rs", include_str!("resurface.rs")),
+            ("routes/desk.rs", include_str!("desk.rs")),
+            ("routes/context.rs", include_str!("context.rs")),
+            ("routes/memory.rs", include_str!("memory.rs")),
+        ];
+        for (name, src) in RANKERS {
+            for needle in [
+                "checks::",
+                "evidence_json",
+                "EvidenceSummary",
+                "SessionEvidenceOut",
+            ] {
+                assert!(
+                    !src.contains(needle),
+                    "{name} names `{needle}` -- session evidence is SURFACED, NEVER SCORED: \
+                     it may be rendered beside a session row, never folded into a rank, \
+                     a sort key or a filter"
+                );
+            }
+        }
+    }
 }
