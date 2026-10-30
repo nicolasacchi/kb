@@ -195,6 +195,12 @@ skip = [
     { crate = "phf_codegen", version = "0.13.1", reason = "jieba-macros / selectors 0.37-0.38 / web_atoms 0.2.5" },
     { crate = "phf_generator", version = "0.13.1", reason = "via phf_codegen 0.13 (string_cache_codegen 0.6.1 build)" },
     { crate = "phf_shared", version = "0.12.1", reason = "via phf 0.12" },
+    # rand_core: 0.10 via getrandom 0.4 / chacha20 / rand_xorshift (proptest 1.12);
+    # the older 0.9 line serves rand 0.9 (lance/datafusion/lancedb/hf-hub/
+    # tokenizers/quinn-proto/rand_distr), rand_chacha 0.9 and rand_xoshiro 0.7.
+    # Skipping the OLDER version (house rule). rand/bit-set/bit-vec stay single
+    # in cargo-deny's resolved graph, so they need no entry.
+    { crate = "rand_core", version = "0.9.5", reason = "rand 0.9 / rand_chacha 0.9 / rand_xoshiro 0.7 (lance, datafusion, hf-hub; proptest 1.12 + getrandom 0.4 use 0.10)" },
     { crate = "r-efi", version = "5.3.0", reason = "getrandom 0.3 (uefi target)" },
     # reqwest: kb's direct edge is on 0.13 (V76-R4e; reqwest-eventsource 0.6
     # dropped for kb-cli's in-house SSE parser). 0.12.28 stays transitive-only
