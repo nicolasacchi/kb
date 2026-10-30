@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   FINISHED_LANE_CAP,
+  blockedCount,
+  blockedLabel,
+  blockedSince,
   bucketLiveSessions,
   isLongWait,
   isPresumedEnded,
@@ -183,5 +186,54 @@ describe("state-decoration helpers", () => {
     expect(isLongWait(row({ session_id: "a", state: "waiting" }))).toBe(false);
     expect(isPresumedEnded(row({ session_id: "a", state: "presumed_ended" }))).toBe(true);
     expect(isPresumedEnded(row({ session_id: "a", state: "finished" }))).toBe(false);
+  });
+});
+
+describe("OL IDEA1 - the blocked lane", () => {
+  it("a blocked working/stalled row goes ONLY to blocked, not inProgress", () => {
+    const lanes = bucketLiveSessions([
+      row({ session_id: "a", state: "working", blocked: true }),
+      row({ session_id: "b", state: "stalled", blocked: true }),
+      row({ session_id: "c", state: "working" }),
+    ]);
+    expect(lanes.blocked.map((r) => r.session_id).sort()).toEqual(["a", "b"]);
+    expect(lanes.inProgress.map((r) => r.session_id)).toEqual(["c"]);
+  });
+
+  it("sorts longest-blocked first by blocked_since_unix, falling back to since_unix", () => {
+    const lanes = bucketLiveSessions([
+      row({ session_id: "new", blocked: true, blocked_since_unix: NOW - 10, since_unix: NOW }),
+      row({ session_id: "old", blocked: true, blocked_since_unix: NOW - 900, since_unix: NOW }),
+      row({ session_id: "legacy", blocked: true, since_unix: NOW - 300 }),
+    ]);
+    expect(lanes.blocked.map((r) => r.session_id)).toEqual(["old", "legacy", "new"]);
+  });
+
+  it("a blocked presumed_ended row stays in finished", () => {
+    const lanes = bucketLiveSessions([
+      row({ session_id: "x", state: "presumed_ended", holder: "none", blocked: true }),
+    ]);
+    expect(lanes.blocked).toEqual([]);
+    expect(lanes.finished.map((r) => r.session_id)).toEqual(["x"]);
+  });
+
+  it("blockedCount counts the lane and leaves waitingCount alone", () => {
+    const rows = [
+      row({ session_id: "a", blocked: true }),
+      row({ session_id: "b", state: "waiting", holder: "human" }),
+    ];
+    expect(blockedCount(rows)).toBe(1);
+    expect(waitingCount(rows)).toBe(1);
+  });
+
+  it("blockedSince and blockedLabel", () => {
+    expect(blockedSince({ blocked_since_unix: 5, since_unix: 9 })).toBe(5);
+    expect(blockedSince({ since_unix: 9 })).toBe(9);
+    expect(blockedLabel({ blocked_tool: "Bash", detail_reason: "x" })).toBe("permission: Bash");
+    expect(blockedLabel({ detail_reason: "  Claude Code needs your input " })).toBe(
+      "Claude Code needs your input",
+    );
+    expect(blockedLabel({})).toBe("needs you");
+    expect(blockedLabel({ detail_reason: "   " })).toBe("needs you");
   });
 });
