@@ -294,6 +294,16 @@ impl EnrichmentHook for SessionCaptureHook {
                 act.user_turns,
             );
 
+            // V0046/IDEA3 -- the closed-grammar check evidence, built from the
+            // tracker the activity parse already ran (before `harness` moves
+            // into the row). Surfaced, never scored; not part of the R1 digest.
+            let evidence_json = serde_json::to_string(&crate::sessions::checks::build_evidence(
+                &act.check_runs,
+                &harness,
+                act.last_assistant_text.as_deref(),
+            ))
+            .ok();
+
             let row = crate::storage::sqlite::SessionRow {
                 artifact_id: artifact_id.clone(),
                 session_id: facts.session_id.clone(),
@@ -328,15 +338,7 @@ impl EnrichmentHook for SessionCaptureHook {
                 substance: Some(substance.to_string()),
                 segment_of: act.segment_of.clone(),
                 segment_idx: act.segment_idx,
-                // V0046/IDEA3 -- the closed-grammar check evidence, built from
-                // the tracker the activity parse already ran. Surfaced, never
-                // scored; not part of the R1 digest.
-                evidence_json: serde_json::to_string(&crate::sessions::checks::build_evidence(
-                    &act.check_runs,
-                    &harness,
-                    act.last_assistant_text.as_deref(),
-                ))
-                .ok(),
+                evidence_json,
             };
             if let Err(e) = ctx.storage.sessions_upsert(row).await {
                 tracing::warn!(
