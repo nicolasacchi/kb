@@ -68,15 +68,21 @@ async function open(page: Page, f: string): Promise<Frame> {
 }
 
 async function frame(page: Page): Promise<Frame> {
-  const h = await page.locator("iframe.detail__frame").first().elementHandle();
-  const f = await h!.contentFrame();
-  expect(f).not.toBeNull();
-  return f as Frame;
+  let f: Frame | null = null;
+  await expect
+    .poll(async () => {
+      const h = await page.locator("iframe.detail__frame").first().elementHandle();
+      f = h ? await h.contentFrame() : null;
+      return f !== null;
+    })
+    .toBe(true);
+  return f as unknown as Frame;
 }
 
 const bodyFont = (f: Frame) => f.evaluate(() => getComputedStyle(document.body).fontFamily);
 const styleCount = (f: Frame) => f.evaluate(() => document.querySelectorAll("#kb-read-style").length);
-const SERIF = /Source Serif 4|Charter|Georgia|serif/i;
+// NOT /serif/: the fixtures' own stack ends in "sans-serif".
+const SERIF = /Source Serif 4|Charter/;
 
 async function readingRow(page: Page) {
   const bar = page.getByRole("navigation", { name: "artifact context" });
@@ -204,20 +210,23 @@ test.describe("reading mode", () => {
     expect(await page.evaluate(() => window.history.length)).toBe(history);
   });
 
-  test("spike: the SPA's colour-scheme reaches the iframe as prefers-color-scheme", async ({ page }) => {
-    // OS says light; the SPA is set to dark. If Chromium propagates the
-    // embedding element's used color-scheme into the frame's media queries,
-    // every artifact that honours prefers-color-scheme follows the SPA theme
-    // with no help from reading mode.
-    await page.emulateMedia({ colorScheme: "light" });
+  test("spike (recorded): an artifact's prefers-color-scheme follows the OS, not the SPA theme", async ({ page }) => {
+    // The SPA sets `color-scheme` on <html> (ui/src/themes/apply.ts) and the
+    // iframe element inherits it. CI result on Chromium: that does NOT reach
+    // the frame's media queries - an artifact honouring prefers-color-scheme
+    // follows the OS. That is why `kb:read` carries the SPA's scheme
+    // explicitly, and why no copy may say an artifact "follows the theme"
+    // on its own. This pins the observed behaviour so a Chromium change shows.
     await page.addInitScript(() => {
       localStorage.setItem("kb:prefs", JSON.stringify({ theme: "dark" }));
     });
+    await page.emulateMedia({ colorScheme: "light" });
     const f = await open(page, "opt-out.html");
     const dark = () => f.evaluate(() => matchMedia("(prefers-color-scheme: dark)").matches);
-    expect(await dark()).toBe(true);
-    await page.getByRole("button", { name: "cycle theme" }).click(); // dark -> light
-    await expect.poll(dark).toBe(false);
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    expect(await dark()).toBe(false); // SPA dark, OS light -> the frame sees light
+    await page.emulateMedia({ colorScheme: "dark" });
+    await expect.poll(dark).toBe(true); // ... and it tracks the OS
   });
 
   test("a canvas-heavy page and an opted-out page each give one toast, a disabled row, and no sheet", async ({ page }) => {
