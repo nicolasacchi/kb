@@ -2314,6 +2314,12 @@ async fn cors_layer_route_set_is_pinned() {
             true,
             "OL S1 — same-origin only, never CORS'd",
         ),
+        (
+            "/api/kb/blocked",
+            false,
+            true,
+            "OL IDEA1 — same-origin only, never CORS'd",
+        ),
         // RS-U3/RS-U7/RS-U9 — the review-store family, every route of it
         // mounted on the `loopback_only` `transcripts_api` router on purpose.
         // The card read is asserted-absent here for the same reason

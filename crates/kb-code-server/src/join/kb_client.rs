@@ -1232,6 +1232,79 @@ impl KbClient {
     }
 }
 
+impl KbClient {
+    /// `GET {url}/api/sessions/live-status?blocked=1` (OL IDEA1) - the
+    /// sessions kb knows to be blocked on the operator, for the Home "Needs
+    /// you" line. Same posture as every call here: disabled short-circuits,
+    /// the kb-sibling/1 handshake fails closed, the shared [`TIMEOUT`]
+    /// applies, nothing is cached. Only the fields the line needs are
+    /// deserialized (unknown fields ignored), and only `blocked == true` rows
+    /// are kept: an older kb ignores `?blocked` and answers every live row.
+    pub async fn blocked_sessions(&self) -> Result<Vec<KbBlockedSession>> {
+        if !self.cfg.enabled {
+            return Err(KbClientError::Disabled);
+        }
+        self.ensure_sibling().await?;
+        let client = self.client()?;
+        let url = format!(
+            "{}/api/sessions/live-status",
+            self.cfg.url_str().trim_end_matches('/')
+        );
+        let resp = self
+            .get(client, &url)
+            .query(&[("blocked", "1")])
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_timeout() {
+                    KbClientError::Timeout(url.clone())
+                } else {
+                    KbClientError::Unreachable(url.clone(), e.to_string())
+                }
+            })?;
+        if !resp.status().is_success() {
+            return Err(KbClientError::BadStatus(resp.status()));
+        }
+        let body: KbLiveStatusRelay = resp.json().await.map_err(|e| {
+            if e.is_timeout() {
+                KbClientError::Timeout(url.clone())
+            } else {
+                KbClientError::Parse(e.to_string())
+            }
+        })?;
+        Ok(body.sessions.into_iter().filter(|r| r.blocked).collect())
+    }
+}
+
+/// The subset of kb's `live-status` body the blocked relay needs.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct KbLiveStatusRelay {
+    #[serde(default)]
+    pub sessions: Vec<KbBlockedSession>,
+}
+
+/// One live-status row, reduced to what the Home line shows. `blocked`
+/// defaults to false so a row from a kb that predates the field is dropped.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct KbBlockedSession {
+    #[serde(default)]
+    pub session_id: String,
+    #[serde(default)]
+    pub harness: String,
+    #[serde(default)]
+    pub project: Option<String>,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub blocked: bool,
+    #[serde(default)]
+    pub blocked_tool: Option<String>,
+    #[serde(default)]
+    pub blocked_since_unix: Option<i64>,
+    #[serde(default)]
+    pub since_unix: i64,
+}
+
 /// Ceiling on a relayed kb search page (OL S1) — the omnibox lane shows a
 /// handful of rows; 20 is the brief's hard cap.
 pub const SEARCH_RELAY_MAX_LIMIT: u32 = 20;
@@ -2899,5 +2972,86 @@ mod tests {
             client.ui_settings().await.unwrap_err(),
             KbClientError::SiblingMismatch(_)
         ));
+    }
+    // --- OL IDEA1 - blocked_sessions ----------------------------------------
+
+    fn live_status_router(
+        seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        body: serde_json::Value,
+    ) -> Router {
+        Router::new().route(
+            "/api/sessions/live-status",
+            get(move |axum::extract::RawQuery(q): axum::extract::RawQuery| {
+                let seen = seen.clone();
+                let body = body.clone();
+                async move {
+                    seen.lock().unwrap().push(q.unwrap_or_default());
+                    Json(body)
+                }
+            }),
+        )
+    }
+
+    #[tokio::test]
+    async fn blocked_sessions_disabled_short_circuits_without_a_network_call() {
+        let client = KbClient::new(KbDaemonSection {
+            enabled: false,
+            url: Some("http://127.0.0.1:0".to_string()),
+            token_file: None,
+            public_url: None,
+        });
+        let err = client.blocked_sessions().await.unwrap_err();
+        assert!(matches!(err, KbClientError::Disabled));
+    }
+
+    #[tokio::test]
+    async fn blocked_sessions_unreachable_daemon_is_reported_not_panicked() {
+        let client = KbClient::new(cfg("http://127.0.0.1:0".to_string()));
+        let err = client.blocked_sessions().await.unwrap_err();
+        assert!(matches!(err, KbClientError::Unreachable(_, _)));
+    }
+
+    #[tokio::test]
+    async fn blocked_sessions_asks_for_blocked_1_and_drops_unblocked_rows() {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let router = live_status_router(
+            seen.clone(),
+            serde_json::json!({ "sessions": [
+                {"session_id": "a", "harness": "claude", "project": "kb", "state": "working",
+                 "blocked": true, "blocked_tool": "Bash", "blocked_since_unix": 100,
+                 "since_unix": 150, "cwd": "/ignored", "future": 1},
+                {"session_id": "b", "harness": "claude", "state": "working",
+                 "blocked": false, "since_unix": 90},
+                {"session_id": "old-kb", "harness": "claude", "state": "waiting", "since_unix": 80}
+            ]}),
+        );
+        let (addr, _server) = mock_kb_server(router).await;
+        let client = KbClient::new(cfg(format!("http://{addr}")));
+        let rows = client.blocked_sessions().await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].session_id, "a");
+        assert_eq!(rows[0].blocked_tool.as_deref(), Some("Bash"));
+        assert_eq!(rows[0].blocked_since_unix, Some(100));
+        let q = seen.lock().unwrap().clone();
+        assert_eq!(q.len(), 1);
+        assert!(q[0].split('&').any(|p| p == "blocked=1"), "{q:?}");
+    }
+
+    #[tokio::test]
+    async fn blocked_sessions_older_kb_row_without_the_new_fields_maps() {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let router = live_status_router(
+            seen,
+            serde_json::json!({ "sessions": [
+                {"session_id": "a", "harness": "claude", "state": "working",
+                 "blocked": true, "since_unix": 123}
+            ]}),
+        );
+        let (addr, _server) = mock_kb_server(router).await;
+        let client = KbClient::new(cfg(format!("http://{addr}")));
+        let rows = client.blocked_sessions().await.unwrap();
+        assert_eq!(rows[0].blocked_tool, None);
+        assert_eq!(rows[0].blocked_since_unix, None);
+        assert_eq!(rows[0].since_unix, 123);
     }
 }

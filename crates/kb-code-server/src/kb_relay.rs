@@ -6,6 +6,10 @@
 //!   kb_public_url }` for the omnibox "Documents" lane.
 //! * `GET /api/kb/ui` — kb's `ui.theme_family` / `ui.theme`, so a browser
 //!   that has not chosen a family in kb-code can follow kb's.
+//! * `GET /api/kb/blocked` (OL IDEA1) — the sessions kb reports as blocked on
+//!   the operator, reduced to `{session_id, harness, project?, blocked_tool?,
+//!   since_unix}` for the Home "Needs you" line. No cwd, title, last line,
+//!   reason text, model or host crosses this wire.
 //!
 //! Invariant #2: both go through [`crate::join::kb_client::KbClient`] — the
 //! one live call direction is kb-code -> kb, kb-sibling/1 handshake included,
@@ -19,7 +23,9 @@
 //! error.
 
 use crate::doclens::doc_href;
-use crate::join::kb_client::{KbClientError, KbSearchRelay, KbUiRelay, SEARCH_RELAY_MAX_LIMIT};
+use crate::join::kb_client::{
+    KbBlockedSession, KbClientError, KbSearchRelay, KbUiRelay, SEARCH_RELAY_MAX_LIMIT,
+};
 use crate::state::SharedState;
 use axum::extract::{Query, State};
 use axum::http::header;
@@ -132,6 +138,102 @@ pub struct KbUiOut {
     pub unavailable: Option<String>,
 }
 
+// One blocked-session row. `since_unix` is when the block began (kb's
+// `blocked_since_unix`, else the row's last activity).
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+pub struct KbBlockedRowOut {
+    pub session_id: String,
+    pub harness: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub project: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub blocked_tool: Option<String>,
+    #[cfg_attr(feature = "ts-export", ts(type = "number"))]
+    pub since_unix: i64,
+}
+
+// `GET /api/kb/blocked`. `total` counts every blocked session kb reported;
+// `sessions` is capped at BLOCKED_MAX_ROWS and `truncated` says so.
+// `kb_public_url` is empty unless a browser-facing public url is configured.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+pub struct KbBlockedOut {
+    pub sessions: Vec<KbBlockedRowOut>,
+    pub kb_public_url: String,
+    #[cfg_attr(feature = "ts-export", ts(type = "number"))]
+    pub total: usize,
+    pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub unavailable: Option<String>,
+}
+
+/// Rows `/api/kb/blocked` returns at most.
+pub const BLOCKED_MAX_ROWS: usize = 20;
+
+/// A tool name kb-code will pass on: 1..=128 chars of `[A-Za-z0-9_.:-]`.
+fn valid_tool_name(t: &str) -> bool {
+    (1..=128).contains(&t.len())
+        && t.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
+}
+
+/// Caption for a blocked read that failed. Timeouts are "kb unreachable"
+/// here: the search-only "kb search timed out" caption would be wrong.
+fn blocked_unavailable_caption(err: &KbClientError) -> &'static str {
+    match err {
+        KbClientError::SiblingMismatch(_) => "kb_sibling_mismatch",
+        KbClientError::Disabled => "kb disabled",
+        _ => "kb unreachable",
+    }
+}
+
+/// Compose the `/api/kb/blocked` body. Pure. A bad `blocked_tool` is dropped
+/// (the row stays); rows sort oldest-block first, then by session id.
+pub fn blocked_body(
+    result: Result<Vec<KbBlockedSession>, KbClientError>,
+    public_url: &str,
+) -> KbBlockedOut {
+    match result {
+        Ok(rows) => {
+            let mut out: Vec<KbBlockedRowOut> = rows
+                .into_iter()
+                .map(|r| KbBlockedRowOut {
+                    since_unix: r.blocked_since_unix.unwrap_or(r.since_unix),
+                    blocked_tool: r.blocked_tool.filter(|t| valid_tool_name(t)),
+                    project: r.project.filter(|p| !p.is_empty()),
+                    session_id: r.session_id,
+                    harness: r.harness,
+                })
+                .collect();
+            out.sort_by(|a, b| {
+                a.since_unix
+                    .cmp(&b.since_unix)
+                    .then_with(|| a.session_id.cmp(&b.session_id))
+            });
+            let total = out.len();
+            out.truncate(BLOCKED_MAX_ROWS);
+            KbBlockedOut {
+                sessions: out,
+                kb_public_url: public_url.to_string(),
+                total,
+                truncated: total > BLOCKED_MAX_ROWS,
+                unavailable: None,
+            }
+        }
+        Err(e) => KbBlockedOut {
+            sessions: Vec::new(),
+            kb_public_url: public_url.to_string(),
+            total: 0,
+            truncated: false,
+            unavailable: Some(blocked_unavailable_caption(&e).to_string()),
+        },
+    }
+}
+
 /// Compose the `/api/kb/search` body from kb's answer. Pure. A hit with no
 /// `kb` (single-kb shape) or no resolvable permalink is dropped rather than
 /// rendered as a dead row.
@@ -233,6 +335,19 @@ pub async fn kb_search_route(
             search_body(state.kb_client.search(q, limit).await, &public_base)
         }
     };
+    ([(header::CACHE_CONTROL, "no-store")], Json(body))
+}
+
+/// `GET /api/kb/blocked`.
+pub async fn kb_blocked_route(State(state): State<SharedState>) -> impl IntoResponse {
+    let cfg = &state.kb_daemon;
+    // Never put the internal federation url in a browser-bound link.
+    let public_url = if has_public_url(cfg) {
+        cfg.public_base().to_string()
+    } else {
+        String::new()
+    };
+    let body = blocked_body(state.kb_client.blocked_sessions().await, &public_url);
     ([(header::CACHE_CONTROL, "no-store")], Json(body))
 }
 
@@ -453,6 +568,128 @@ mod tests {
                 .unavailable
                 .as_deref(),
             Some("kb_sibling_mismatch")
+        );
+    }
+
+    fn blocked(
+        id: &str,
+        since: i64,
+        blocked_since: Option<i64>,
+        tool: Option<&str>,
+    ) -> KbBlockedSession {
+        KbBlockedSession {
+            session_id: id.to_string(),
+            harness: "claude".to_string(),
+            project: Some("kb".to_string()),
+            state: "working".to_string(),
+            blocked: true,
+            blocked_tool: tool.map(str::to_string),
+            blocked_since_unix: blocked_since,
+            since_unix: since,
+        }
+    }
+
+    #[test]
+    fn blocked_body_sorts_oldest_first_and_prefers_blocked_since() {
+        let body = blocked_body(
+            Ok(vec![
+                blocked("b", 50, None, None),
+                blocked("c", 500, Some(10), Some("Bash")),
+                blocked("a", 50, None, None),
+            ]),
+            "https://kb.example.com",
+        );
+        let ids: Vec<&str> = body
+            .sessions
+            .iter()
+            .map(|r| r.session_id.as_str())
+            .collect();
+        assert_eq!(ids, ["c", "a", "b"]);
+        assert_eq!(body.sessions[0].since_unix, 10);
+        // an older-kb row (no blocked_since_unix) maps with since = since_unix
+        assert_eq!(body.sessions[1].since_unix, 50);
+        assert_eq!(body.total, 3);
+        assert!(!body.truncated);
+        assert_eq!(body.kb_public_url, "https://kb.example.com");
+        assert!(wire(&body).get("unavailable").is_none());
+    }
+
+    #[test]
+    fn blocked_body_caps_at_twenty_and_reports_the_total() {
+        let rows: Vec<_> = (0..25)
+            .map(|i| blocked(&format!("s{i:02}"), i, None, None))
+            .collect();
+        let body = blocked_body(Ok(rows), "");
+        assert_eq!(body.sessions.len(), BLOCKED_MAX_ROWS);
+        assert_eq!(body.total, 25);
+        assert!(body.truncated);
+    }
+
+    #[test]
+    fn blocked_body_drops_a_bad_tool_but_keeps_the_row() {
+        let body = blocked_body(
+            Ok(vec![
+                blocked("a", 1, None, Some("Bash; rm")),
+                blocked("b", 2, None, Some("mcp__x__y")),
+                blocked("c", 3, None, Some("")),
+            ]),
+            "",
+        );
+        assert_eq!(body.sessions.len(), 3);
+        assert_eq!(body.sessions[0].blocked_tool, None);
+        assert_eq!(body.sessions[1].blocked_tool.as_deref(), Some("mcp__x__y"));
+        assert_eq!(body.sessions[2].blocked_tool, None);
+    }
+
+    #[test]
+    fn degraded_blocked_is_an_empty_200_shape_with_a_caption() {
+        let d = blocked_body(Err(KbClientError::Disabled), "");
+        assert!(d.sessions.is_empty());
+        assert_eq!(d.unavailable.as_deref(), Some("kb disabled"));
+        assert_eq!(
+            blocked_body(Err(KbClientError::SiblingMismatch("x".into())), "")
+                .unavailable
+                .as_deref(),
+            Some("kb_sibling_mismatch")
+        );
+        for e in [
+            KbClientError::Timeout("u".into()),
+            KbClientError::Unreachable("u".into(), "boom".into()),
+            KbClientError::Parse("x".into()),
+            KbClientError::BadStatus(reqwest::StatusCode::NOT_FOUND),
+        ] {
+            let b = blocked_body(Err(e), "");
+            assert_eq!(b.unavailable.as_deref(), Some("kb unreachable"));
+            assert_eq!((b.total, b.truncated), (0, false));
+        }
+    }
+
+    #[test]
+    fn blocked_wire_carries_exactly_the_declared_keys() {
+        let body = blocked_body(
+            Ok(vec![blocked("a", 1, Some(2), Some("Bash"))]),
+            "https://kb.example.com",
+        );
+        let v = wire(&body);
+        let mut top: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+        top.sort_unstable();
+        assert_eq!(top, ["kb_public_url", "sessions", "total", "truncated"]);
+        let mut row: Vec<&str> = v["sessions"][0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        row.sort_unstable();
+        assert_eq!(
+            row,
+            [
+                "blocked_tool",
+                "harness",
+                "project",
+                "session_id",
+                "since_unix"
+            ]
         );
     }
 }
