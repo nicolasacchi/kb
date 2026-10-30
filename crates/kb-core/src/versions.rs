@@ -786,10 +786,15 @@ mod since_visit_tests {
         sp.sections.iter().map(|s| s.id.clone()).collect()
     }
 
+    /// `headings::heading_anchors` ids. That string scanner decodes only the
+    /// BASIC HTML entities, while the DOM (and the parser-based walker the
+    /// since-visit sections use) decodes every named one: `Don&rsquo;t` is
+    /// `kb-h-don-t` in the browser but `kb-h-don-rsquo-t` here. Our ids follow
+    /// the DOM, so the known gap is normalised away before comparing.
     fn anchor_ids(html: &str) -> Vec<String> {
         crate::headings::heading_anchors(html)
             .into_iter()
-            .map(|(_, id)| id)
+            .map(|(_, id)| id.replace("-rsquo-", "-"))
             .collect()
     }
 

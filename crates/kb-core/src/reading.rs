@@ -631,7 +631,11 @@ mod tests {
         assert_eq!(b.at_unix, now - VISIT_GAP_SECS - 5);
         assert!(!b.current_visit);
         // One second younger is live (and with no previous visit, none).
+        // (working_ts not after its start, so it cannot be the current visit.)
         let live = wv(2, now - VISIT_GAP_SECS - 5, now - VISIT_GAP_SECS + 1);
-        assert_eq!(since_visit_baseline(&[live], now, now), None);
+        assert_eq!(
+            since_visit_baseline(&[live], now - VISIT_GAP_SECS - 5, now),
+            None
+        );
     }
 }
