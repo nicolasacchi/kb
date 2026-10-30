@@ -785,35 +785,51 @@ select:focus-visible,
   min-width: 0;
   overflow: hidden;
 }
-/* kb desk v2 — slim "changed since last read" strip above the artifact
+/* OL IDEA2 — "changed since your last visit" strip above the artifact
    (parent chrome, never inside the iframe). Warn-tinted like the daemon-
    down banner: a notice, not an error. */
-.kb-desk-banner {
+.kb-since-visit {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   padding: 6px 14px;
   font-size: var(--fs-sm);
   color: var(--ink);
   background: color-mix(in oklab, var(--warn) 14%, var(--bg-panel));
   border-bottom: 1px solid color-mix(in oklab, var(--warn) 45%, var(--rule));
 }
-.kb-desk-banner__msg {
-  flex: 1 1 auto;
+.kb-since-visit__msg {
+  flex: none;
   min-width: 0;
 }
-.kb-desk-banner__prev {
+.kb-since-visit__count,
+.kb-since-visit__more,
+.kb-since-visit__plain {
   flex: none;
-  color: var(--accent);
-  text-decoration: none;
-  font-size: var(--fs-xs);
+  color: var(--ink-mute);
 }
-.kb-desk-banner__prev:hover {
+.kb-since-visit__removed {
+  flex: none;
+  color: var(--ink-mute);
+}
+.kb-since-visit__chip,
+.kb-since-visit__act {
+  flex: none;
+  border: 0;
+  padding: 0 2px;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+.kb-since-visit__chip:hover,
+.kb-since-visit__act:hover {
   text-decoration: underline;
 }
-.kb-desk-banner__x {
+.kb-since-visit__x {
   flex: none;
+  margin-left: auto;
   width: 22px;
   height: 22px;
   border: 0;
@@ -824,7 +840,7 @@ select:focus-visible,
   display: grid;
   place-items: center;
 }
-.kb-desk-banner__x:hover {
+.kb-since-visit__x:hover {
   color: var(--ink);
   background: color-mix(in oklab, var(--ink) 8%, transparent);
 }

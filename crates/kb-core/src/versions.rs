@@ -537,10 +537,13 @@ pub enum SectionChange {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ChangedSection {
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub level: Option<u8>,
     pub change: SectionChange,
     pub added: u32,

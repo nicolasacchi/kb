@@ -185,6 +185,12 @@ Filter via the left rail and arrange via the Library's ViewBar:
   selecting a folder filters to it and its descendants.
 - **Capabilities**, **date range** (7d / 30d / all), and an
   **index-only** toggle.
+- **Reading** — all / never opened / in progress / read / **changed since
+  visit** (`?read=changed`): artifacts you opened in the reader and that
+  were modified after your newest such visit. Library only; agent reads
+  never count as your visit, and the other Reading tokens (and search)
+  are unchanged. The same index-snapshot caveats as the reader's
+  since-visit banner apply.
 - **Sort** by recent / indexed / title / words, with a direction toggle.
 - **Group** flat or by folder.
 - **Search** — open the command palette (the magnifying glass or
@@ -232,6 +238,19 @@ the following features apply:
 - **Sibling navigation** — prev/next within the artifact's folder.
 - **Reading progress** — your scroll position is persisted per visit (a
   30-minute window) and resumes when you reopen.
+- **Since your last visit** — a one-line banner above the artifact when
+  it changed after your last visit ("Changed since your last visit, Oct
+  12 · 2 sections: Risks, Appendix · View changes"). Section chips jump
+  to the heading; View changes opens the versions dock with the version
+  you last saw preselected. Agent reads (`kb cat`/`get`/`read`) are not
+  visits, and a browser open right after `kb read` is its own visit.
+  Caveats, stated plainly: a deployment without `.git` keeps index
+  snapshots (25 per artifact), so a visit older than the oldest kept
+  snapshot says "the version you saw is no longer kept"; several edits
+  between visits show as one cumulative diff; edits made during your
+  last visit show next time; in git mode, uncommitted edits made before
+  your visit can appear. Dismiss is per tab and returns when the file
+  changes again. Hidden while reading an `?at=` version.
 - **Multi-page artifacts** — relative sibling links navigate in place;
   the active page is reflected in the URL (`?p=`).
 - **Annotate mode** — the pen icon toggles the comments layer on/off.

@@ -414,3 +414,57 @@ async fn since_visit_writes_no_history_row() {
     }
     assert_eq!(r.history_len().await, before);
 }
+
+impl Rig {
+    async fn docs_read(&self, read: &str) -> Vec<String> {
+        let docs: Vec<Value> = self
+            .c
+            .get(url(
+                self.addr,
+                &format!("/api/kb/smoke/docs?limit=50&read={read}"),
+            ))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let mut rels: Vec<String> = docs
+            .iter()
+            .map(|d| d["source_relative"].as_str().unwrap().to_string())
+            .collect();
+        rels.sort();
+        rels
+    }
+}
+
+// invariant:35 read=changed is web-opened AND modified since; invariant:19 cli opens never count
+#[tokio::test]
+async fn docs_read_changed_lists_web_visited_then_modified_only() {
+    let files: Vec<(&str, String)> = ["a.html", "b.html", "c.html", "d.html"]
+        .iter()
+        .map(|n| (*n, doc(n, "low")))
+        .collect();
+    let r = rig(&files, None, Some(-100)).await;
+    r.open("a.html", "web").await; // web-opened, then modified: IN
+    r.open("b.html", "web").await; // web-opened, unmodified: out
+    r.open("c.html", "cli").await; // cli-opened, modified: out
+                                   // d.html: never opened, modified: out
+    for n in ["a.html", "c.html", "d.html"] {
+        r.rewrite(n, &doc(n, "much higher"), 120);
+    }
+    let got = common::poll_until("read=changed lists the web-visited doc", || async {
+        let rels = r.docs_read("changed").await;
+        (!rels.is_empty()).then_some(rels)
+    })
+    .await;
+    assert_eq!(got, vec!["a.html".to_string()]);
+    // OR semantics with a legacy token: d.html is never-opened (the legacy
+    // rollup counts c.html's cli open, so c.html is NOT never-opened).
+    let both = common::poll_until("read=changed,never-opened", || async {
+        let rels = r.docs_read("changed,never-opened").await;
+        (rels.contains(&"d.html".to_string())).then_some(rels)
+    })
+    .await;
+    assert_eq!(both, vec!["a.html".to_string(), "d.html".to_string()]);
+}

@@ -215,6 +215,27 @@ describe("SSE → TanStack invalidation bridge (invariant #23)", () => {
     ]);
   });
 
+  // OL IDEA2 — a new OPEN moves read-faceted Library shelves; nothing else.
+  it("history.recorded kind=open also invalidates read-faceted docs queries only", () => {
+    emit("history.recorded", { kb: "demo", kind: "open" });
+    const docsCall = spy.mock.calls
+      .map((c: unknown[]) => c[0] as {
+        queryKey: unknown[];
+        predicate?: (q: { queryKey: unknown[] }) => boolean;
+      })
+      .find((c) => c.queryKey[0] === "docs");
+    expect(docsCall?.queryKey).toEqual(["docs", "demo"]);
+    const pred = docsCall!.predicate!;
+    expect(pred({ queryKey: ["docs", "demo", { read: ["changed"] }, 200] })).toBe(true);
+    expect(pred({ queryKey: ["docs", "demo", { read: [] }, 200] })).toBe(false);
+    expect(pred({ queryKey: ["docs", "demo", { tags: ["x"] }, 200] })).toBe(false);
+    expect(pred({ queryKey: ["sinceVisit", "demo", "abc"] })).toBe(false);
+    // Non-open history events (search / comment) leave the shelves alone.
+    spy.mockClear();
+    emit("history.recorded", { kb: "demo", kind: "search" });
+    expect(keys().some((k) => (k as unknown[])[0] === "docs")).toBe(false);
+  });
+
   // LSC-4 — session.state fires only on a derived-state TRANSITION (never
   // per beat), so a direct un-gated invalidation of the live-status query
   // is enough — no burst gate, unlike the bursty artifact-churn kinds above.

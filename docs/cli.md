@@ -288,6 +288,19 @@ kb diff <target> [--from REF] [--to REF] [--raw] [--kb NAME] [--json] [--daemon 
                                     prints an EPOCH HONESTY caveat when the
                                     window starts before this daemon's
                                     tombstone era (see `kb memory log`).
+kb diff <target> --since-visit [--kb NAME] [--json] [--daemon URL]
+                                    OL IDEA2: what changed since the
+                                    operator's last WEB visit (agent reads
+                                    never count): state, baseline, the
+                                    version it compared with (nearest
+                                    prior), changed sections with +/-
+                                    counts, then the hunks; the floor when
+                                    the version is no longer kept. --json
+                                    prints `GET …/since-visit` verbatim.
+                                    Conflicts with --from/--to/--between/
+                                    --raw. Answers for the identity the
+                                    request resolves to (loopback: the
+                                    operator).
 kb memory log <id> [--kb NAME] [--daemon URL] [--json]
                                     MI-W2.4a: walk one supersede chain, both
                                     directions (what {id} supersedes; what

@@ -51,7 +51,9 @@ export const queryClient = new QueryClient({
 // The contract every migrated hook follows (invalidation matches by
 // key PREFIX, so ["docs", kb] hits every paged/filtered variant):
 //
-//   ["docs", kb, ...params]        gallery / folder row sets
+//   ["docs", kb, ...params]        gallery / folder row sets (a `history.
+//                                  recorded` OPEN also invalidates those
+//                                  whose params.read is set — OL IDEA2)
 //   ["doc", kb, relPath]           single artifact by path
 //   ["doc", kb, "by-id", id]       link-flow — an artifact resolved by ID
 //                                  (`api/artifactLookup.ts`: an artifact-
@@ -378,6 +380,14 @@ function makeBurstGate(fire: (key: string) => void) {
   };
 }
 
+/// True for a `["docs", kb, params, …]` key whose `params.read` is non-empty.
+export function hasReadFacet(queryKey: readonly unknown[]): boolean {
+  const params = queryKey[2];
+  if (!params || typeof params !== "object") return false;
+  const read = (params as { read?: unknown }).read;
+  return Array.isArray(read) ? read.length > 0 : !!read;
+}
+
 /// Start the SSE → invalidation bridge. Idempotent by convention (call
 /// once from main.tsx); returns a teardown for symmetry/HMR.
 export function startSseInvalidationBridge(): () => void {
@@ -571,6 +581,16 @@ export function startSseInvalidationBridge(): () => void {
   }
   on("history.recorded", (p) => {
     const kb = kbOf(p);
+    // OL IDEA2 — a new OPEN moves read-faceted Library shelves (`?read=…`,
+    // incl. `changed`). Only those docs queries: an unfiltered docs query
+    // does not depend on visits, and ["sinceVisit", …] is an on-open answer
+    // that is deliberately not bridged.
+    if (p.kind === "open") {
+      void queryClient.invalidateQueries({
+        queryKey: kb ? ["docs", kb] : ["docs"],
+        predicate: (q) => hasReadFacet(q.queryKey),
+      });
+    }
     invalidate(kb ? ["readingProgress", kb] : ["readingProgress"]);
     // Resurface strip — a new visit moves the unfinished-read term (visit
     // grain only, like the lists below; scroll/dwell grain has no SSE, #19).
@@ -711,6 +731,17 @@ export function startSseInvalidationBridge(): () => void {
   //                    kb's `sse` facade at all), with the same 30s
   //                    staleTime and `retry: false`; a failed fetch is an
   //                    honest `unknown` caption, never a retried guess.
+  //   ["sinceVisit", kb, id] — OL IDEA2, the per-artifact "changed since
+  //                    your last visit" answer (`useSinceVisit`). An ON-OPEN
+  //                    answer: `staleTime: Infinity` + `refetchOnMount:
+  //                    "always"` = one fetch per reader mount, no SSE
+  //                    wiring. A change landing mid-visit already live-
+  //                    reloads the page and shows next open; refetching on
+  //                    artifact churn would flag the operator's own note
+  //                    autosaves as changes on every save. (Its visit
+  //                    signal reaches the docs shelves instead: see the
+  //                    `history.recorded` handler's read-faceted ["docs"]
+  //                    invalidation.)
   //   ["desk"] / ["desk", kb] — kb desk v2 (`GET /api/desk`, `useDesk`).
   //                    Joins this no-SSE-tie set: finite staleTime (60s) +
   //                    refetchOnWindowFocus, no new SSE kind. Handoffs are

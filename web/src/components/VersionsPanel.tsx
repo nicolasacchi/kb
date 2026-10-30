@@ -36,6 +36,7 @@ export default function VersionsPanel({
   id,
   at = null,
   onOpenAsOf,
+  initialFrom = null,
 }: {
   kb: string;
   id: string;
@@ -50,6 +51,12 @@ export default function VersionsPanel({
   // body as it stood. Omitted ⇒ the control is not rendered (a pane that has no
   // `?at=` coordinate of its own, e.g. the second pane).
   onOpenAsOf?: (at: number) => void;
+  // OL IDEA2 — "View changes" from the since-visit banner: preselect this
+  // version ref as the diff's `from`. Beats the `?at=` memento and the
+  // default; an unknown ref falls back to today's default. `nonce` makes a
+  // repeat click on the same ref re-apply the selection (and reset one the
+  // user changed since).
+  initialFrom?: { ref: string; nonce: number } | null;
 }) {
   const { versions, mode, loading, error } = useVersions(kb, id, true);
   const [pick, setPick] = useState(() => (at === null ? "" : localInputFromAt(at)));
@@ -91,7 +98,7 @@ export default function VersionsPanel({
     setFrom(null);
     setHunks([]);
     setDiffError(null);
-  }, [kb, id, at]);
+  }, [kb, id, at, initialFrom?.nonce]);
 
   // Default `from` = the most recent version older than the working tree, so
   // opening the panel shows "what changed last". CT-F6: with a resolved
@@ -102,13 +109,17 @@ export default function VersionsPanel({
   // diff's `to` side and can never also be its `from`.
   useEffect(() => {
     if (from !== null) return;
+    const requested = initialFrom
+      ? versions.find((v) => v.ref === initialFrom.ref && v.source !== "working")
+      : undefined;
     const resolved = memento?.version ?? null;
     const target =
-      resolved && resolved.source !== "working"
+      requested ??
+      (resolved && resolved.source !== "working"
         ? resolved
-        : versions.find((v) => v.source !== "working");
+        : versions.find((v) => v.source !== "working"));
     if (target) setFrom(target.ref);
-  }, [versions, from, memento]);
+  }, [versions, from, memento, initialFrom]);
 
   // (Re)fetch the diff whenever the selected version or wire mode changes.
   useEffect(() => {
