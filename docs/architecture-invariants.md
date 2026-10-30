@@ -2595,7 +2595,7 @@ focus-keyed rather than pane-local:
     sessionStorage (like the scroll-restoration tier, not the registers tier)
     and browser-local ⇒ same **recorded CLI-parity exemption** as registers.
 
-*SIBL1 (v0.50):* the shared Spine gained an optional `crossing` slot (not hidden at <=860px) that kb-code's TopBar fills with a Cited-by chip reusing the rail strip's `useDocRefs` query; it is chrome beside the single inspector rail, not a second home for an action, and adds no key binding.
+*SIBL1 (v0.50):* the shared Spine gained an optional `crossing` slot (not hidden at <=860px) that kb-code's TopBar fills with a Cited-by chip reusing the rail strip's `useDocRefs` query; it is chrome beside the single inspector rail, not a second home for an action, and adds no key binding. *READ2 (v0.50):* reading mode - ContextBar More-menu row (first) + bare `r`, per-pane, per-kb local-pref default, live `kb:read` toggle (server-owned /_kb/reading.css, enums-only payload); orthogonal to `?view=`; never rewrites artifact text or body nodes.
 
 ### 31. Scroll restoration keys on the full URL; the in-app back must replay it (X1)
 
