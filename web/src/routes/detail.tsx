@@ -1090,6 +1090,16 @@ export default function Detail() {
   // Its origin guard is EXACT (`isOriginOfArtifact`), which is what makes a
   // second pane's beacons unable to land in this artifact's visit row.)
 
+  // OL IDEA2 — state for the since-visit banner's "View changes" (see
+  // `openVersionsFor`). Declared above the early returns: a hook after them
+  // changes the hook count between the loading and loaded renders.
+  const [versionsFrom, setVersionsFrom] = useState<{
+    kb: string;
+    id: string;
+    ref: string;
+    nonce: number;
+  } | null>(null);
+
   // Vim-style Esc: drop one layer at a time. Drafting → cancel draft;
   // pencil-on → turn pencil off (panel stays open, mirrors
   // handleToggleAnnotate's off-path). Declared before the early returns
@@ -1222,12 +1232,6 @@ export default function Detail() {
   // closed, annotate off), on the pane the banner belongs to, with `ref`
   // preselected as the diff's `from` (`null` ⇒ the dock's own default).
   // In-app state, not a URL param. The nonce re-applies a repeat click.
-  const [versionsFrom, setVersionsFrom] = useState<{
-    kb: string;
-    id: string;
-    ref: string;
-    nonce: number;
-  } | null>(null);
   const openVersionsFor = (
     pane: 1 | 2,
     bannerKb: string,

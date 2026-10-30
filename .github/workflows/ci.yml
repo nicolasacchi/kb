@@ -683,15 +683,6 @@ jobs:
           fi
           python3 scripts/ci/witness.py playwright "$KB_WITNESS_DIR/pw-e2e.json" --lane e2e "${prev[@]}"
 
-      - name: Upload e2e failure traces (TEMP idea2 debug)
-        if: ${{ failure() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: e2e-results-debug
-          path: tests/e2e/test-results
-          retention-days: 3
-          if-no-files-found: warn
-
       - name: Upload witness report
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
