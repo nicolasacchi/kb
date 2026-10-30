@@ -262,12 +262,14 @@ kb versions <target> [--at DATE] [--kb NAME] [--json] [--daemon URL]
                                     timeline, and not `recall --as-of`,
                                     which stays rejected).
 (no CLI verb) GET /api/kb/{kb}/docs/as-of?at=&ids=
-                                    OL TIME1: the Library time scrubber's
-                                    batched as-of overlay. Parity
-                                    exemption: a browser-only affordance
-                                    over a page of visible rows; the
-                                    per-artifact answer is already `kb
-                                    versions --at`, which it equals.
+                                    OL TIME1: a batched per-artifact
+                                    as-of read. Parity exemption: a
+                                    browser-only affordance over a page of
+                                    visible rows; the per-artifact answer
+                                    is already `kb versions --at`, which
+                                    it equals. The reader's `?at=` body
+                                    (OL TIME2) is likewise browser-only;
+                                    its text form is `kb diff --between`.
 kb diff <target> [--from REF] [--to REF] [--raw] [--kb NAME] [--json] [--daemon URL]
    | diff <target> --between <D1> <D2> [--raw] [--kb NAME] [--json] [--daemon URL]
                                     what changed between two versions.
@@ -642,9 +644,17 @@ kb sessions status [--local] [--json] [--no-color]
                                     reads `needs you: permission: <tool>` (else `needs you:
                                     <reason>`, else `needs you`) in the why column. See
                                     docs/live-sessions.md.
-kb sessions show <id> [--json]         Single session detail + memories + artifacts + decisions + effort
+kb sessions show <id> [--json] [--section a,b,..]
+                                    Single session detail + memories + artifacts + decisions + effort. OL IDEA3 — a
+                                    `checked   <phrase>` line (and `$ <command>`) after `closed`, a `not named` line
+                                    (edits the closing text never names), a `commit    none detected in this session`
+                                    line, and a `checks (N of total)` block (each check before/after the last edit).
+                                    `--section checks` prints only those lines; with `--json` it returns
+                                    `{evidence, checks, unnamed_edits, unnamed_edits_total}` (no extra fetch).
+                                    A capture that predates V0046 prints `checked   not extracted for this capture
+                                    (predates it; kb reindex <kb> fills it)`. Surfaced, never scored
 kb sessions replay <id> [--json]       Replay beat by beat on the transcript's clock: prompts, reads/edits/writes, searches, commits, decisions
-kb sessions resume <id> [--json]       Resume-context block (goal + branch + edited files + decisions)
+kb sessions resume <id> [--json]       Resume-context block (goal + branch + edited files + decisions); OL IDEA3 adds `Checks: <phrase>` + `  $ <command>` and `Not committed: no commit detected in this session` before `Resume:`
 kb sessions export <id> [--from URL]   Bundle a session as a portable `<sid>.kbsession.zip`
 kb sessions rehydrate <bundle>         Place a bundle's transcript under `~/.claude/projects/` so `claude -r <id>` finds it
 kb sessions pull <id> [--from URL]     Fetch a session bundle from a remote kb daemon, optionally rehydrate

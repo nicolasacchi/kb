@@ -171,14 +171,25 @@ GET  /api/kb/{kb}/docs/as-of?at=<unix>&ids=<id>,<id>,...
                                             | error — one failing item never
                                             fails the request) | unknown (no
                                             such id). 400 problem+json: `at`
-                                            missing/malformed or more than a
-                                            day in the future; `ids` empty or
+                                            missing/malformed (ANY instant is
+                                            otherwise answered; the working
+                                            tree wins at `t >= mtime`, so
+                                            clients clamp); `ids` empty or
                                             more than 100 (refused, never
                                             truncated). Ordinary bearer auth
                                             (401 token-less non-loopback), no
                                             loopback gate. An OVERLAY:
                                             `GET .../docs` ignores `at`, and
                                             ranking/search are never as-of.
+                                            Intended consumers: a page of
+                                            visible artifacts that wants
+                                            "which version stood at T" for
+                                            many ids in one call (one request
+                                            instead of N `versions?at=`
+                                            reads). The reader does not use
+                                            it: it opens ONE artifact's body
+                                            via `?at=` on the artifact origin
+                                            (see below).
 GET  /api/kb/{kb}/artifacts/{id}/diff[?from=&to=&mode=text|raw]
                                             diff between two version refs
                                             (defaults: most recent prior
@@ -751,6 +762,42 @@ GET  /api/sessions[?cursor=<unix>&limit=N   Cross-kb list of captured Claude
                                             so nothing is hidden silently;
                                             any other value is a 400) keeps
                                             only the LAST part of each chain.
+                                            OL IDEA3 — every row carries an
+                                            additive `evidence` object: the
+                                            session evidence card, DERIVED at
+                                            read time from the persisted
+                                            `sessions.evidence_json` (V0046).
+                                            `verdict` is one of `verified`
+                                            (a check passed after the last
+                                            edit) · `failing` · `unconfirmed`
+                                            (checks ran after the last edit
+                                            but none ended decisively) ·
+                                            `stale` (the last check ran
+                                            before the last edit) ·
+                                            `unchecked` (edited, no check at
+                                            all) · `no_edits` · `not_extracted`
+                                            (a NULL, unreadable or
+                                            future-versioned column: a
+                                            pre-V0046 capture, `kb reindex`
+                                            fills it). Alongside it: `phrase`
+                                            (the ONE sentence, absent for
+                                            `no_edits`/`not_extracted`),
+                                            `deciding` (the check it rests
+                                            on: `label`, `cmd`, `outcome`,
+                                            `basis`, `why`, `exit_code`,
+                                            `at`, `after_last_edit`, `text`),
+                                            `last_edit_at`, `checks_total`,
+                                            `checks_after_edit`,
+                                            `edits_ignored` and `uncommitted`
+                                            (files edited, no commit
+                                            detected). MAIN TRANSCRIPT ONLY:
+                                            edits are Edit/Write tool calls
+                                            (edits made through Bash or by
+                                            subagents are not seen) and
+                                            checks are a closed list of test,
+                                            lint and build commands. SURFACED,
+                                            NEVER SCORED: no route sorts,
+                                            filters or ranks on it.
 GET  /api/sessions/recall-coverage[?days=7]  v0.44 F10 — recall-hook coverage
                                             per harness over the trailing
                                             window (default 7, clamp 1-365),
@@ -800,7 +847,16 @@ GET  /api/sessions/{session_id}             Single session + memory_ids list.
                                             as the list plus `segment_chain`
                                             (every part's session id, part 1
                                             first; absent for an ordinary
-                                            session), and `memory_ids` for the
+                                            session), the `evidence` object
+                                            above plus `checks` (the newest 16
+                                            checks the capture ran, oldest
+                                            first, each with its server-made
+                                            `text` and `after_last_edit`),
+                                            `unnamed_edits` (basenames of
+                                            counted edits the closing text
+                                            never names, capped at 12) and
+                                            `unnamed_edits_total` (each absent
+                                            when empty), and `memory_ids` for the
                                             RAW id also covers memories
                                             stamped with a part's own id (a
                                             part asked by its own id reads
@@ -2252,6 +2308,35 @@ GET  /                                      with Host=<id>.artifacts.localhost
                                             isolated artifact serve
 GET  /  (with ?cm=on)                       same, plus injected window.__KB_COMMENTS
                                             + /_kb/annotate.js (v0.2 annotator)
+GET  /  (with ?at=<unix>)                   OL TIME2, the reader's time
+                                            machine: the artifact's ENTRY
+                                            body as it stood at that instant,
+                                            nearest-prior through the same
+                                            `memento_for` as `versions?at=`,
+                                            fetched with `VersionCtx::raw_at`
+                                            and pushed through TODAY'S
+                                            outbound pipeline (kb-prompt strip
+                                            on non-loopback, probe/runtime
+                                            injection). Response headers:
+                                            `Memento-Datetime` (the resolved
+                                            version's OWN time),
+                                            `X-Kb-As-Of-Relation: exact |
+                                            nearest-prior`, `Cache-Control:
+                                            private, no-store`. A working-tree
+                                            hit (`t >= mtime`) serves today's
+                                            file unchanged. 404 problem+json
+                                            when nothing is that old (the
+                                            note names the oldest version), the
+                                            kb has `versions = "off"`, or the
+                                            artifact is a session transcript;
+                                            400 on a malformed `at`. Never
+                                            appends the annotator (`cm=on` is
+                                            ignored: anchors belong to the
+                                            original DOM) and writes no
+                                            history row or reading progress.
+                                            Sub-pages and sibling assets are
+                                            today's (relative links resolve to
+                                            today's siblings).
 GET  /_kb/annotate.js                       served on artifact subdomains
                                             from web/dist/annotate.js
 GET  /_kb/probe.js                          served on artifact subdomains
@@ -2263,7 +2348,12 @@ GET  /_kb/reading.css                       reading-mode stylesheet, served on
                                             artifact subdomains only; the
                                             runtime fetches it when the parent
                                             posts kb:read (content-hash ETag,
-                                            304 on If-None-Match, 1h max-age)
+                                            304 on If-None-Match, 1h max-age;
+                                            ends with the house @font-face set)
+GET  /_kb/fonts/<name>.woff2                the house fonts (Source Serif 4,
+                                            JetBrains Mono) from the SPA
+                                            bundle's fonts/ directory, artifact
+                                            subdomains only; immutable, 1y
 ```
 
 The Origin allowlist accepts `localhost:4000` (back-compat), any `*.artifacts.localhost`, the daemon's own `Host:` (same-origin SPA → daemon), and any `localhost`/`127.0.0.1` when `KB_DEV_ORIGIN_ANY=1`. Errors are RFC 7807 `application/problem+json`.

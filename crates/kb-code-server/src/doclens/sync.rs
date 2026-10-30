@@ -93,6 +93,7 @@ use std::time::Duration;
 
 use super::resolve::{resolve_lens, PathState};
 use super::wire::CodeLensOut;
+use crate::join::kb_client::CodeRefsDoc;
 
 /// `GET /api/doc-refs`'s wire schema.
 pub const DOC_REFS_SCHEMA: &str = "doc-refs/1";
@@ -818,6 +819,50 @@ pub struct DocRefClaim {
     pub line_end: Option<i64>,
     pub line_state: Option<String>,
     pub seen_at: i64,
+    /// OL SIBL3 - where the claim came from. [`SOURCE_PINNED`]: a synced
+    /// `doc_refs` row (a resolved claim for a PINNED doc). [`SOURCE_LIVE`]:
+    /// kb's own `?by_target=` answer for this exact path, a labelled HINT
+    /// (kb has no tree) with no `line_state`. A pinned row for the same
+    /// citation always replaces the live one.
+    pub source: &'static str,
+}
+
+/// [`DocRefClaim::source`] for a synced `doc_refs` row.
+pub const SOURCE_PINNED: &str = "pinned";
+/// [`DocRefClaim::source`] for a claim read live from kb's `by_target`.
+pub const SOURCE_LIVE: &str = "kb-live";
+
+/// One kb the live lookup asked and did not get an answer from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LiveLookupFailure {
+    pub kb: String,
+    /// `unreachable` | `timeout` | `sibling_mismatch` | `bad_status` | `parse`.
+    pub reason: &'static str,
+}
+
+/// OL SIBL3 - what the live (kb `by_target`) half of the response could
+/// establish, so the strip can tell three absences apart: "no document cites
+/// this file" (`ok`, zero claims), "kb could not be asked" (`failed` /
+/// `partial`), and "only pinned docs were looked at" (`off`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LiveLookup {
+    /// `off` (nothing to ask: `[doclens] kbs` empty or `[kb_daemon]` off) |
+    /// `ok` (every allowlisted kb answered) | `partial` (some did) |
+    /// `failed` (none did).
+    pub state: &'static str,
+    /// The allowlisted kbs that were asked.
+    pub kbs: Vec<String>,
+    pub failed: Vec<LiveLookupFailure>,
+}
+
+impl LiveLookup {
+    pub(crate) fn off() -> Self {
+        Self {
+            state: "off",
+            kbs: Vec::new(),
+            failed: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -833,6 +878,9 @@ pub struct DocRefsOut {
     /// present", never a live link.
     pub live: bool,
     pub claims: Vec<DocRefClaim>,
+    /// OL SIBL3 - see [`LiveLookup`]. [`doc_refs_for`] (the pinned half)
+    /// reports `off`; [`doc_refs_merged`] fills it in.
+    pub live_lookup: LiveLookup,
 }
 
 /// The engine behind `GET /api/doc-refs` — split from the handler so the
@@ -883,6 +931,7 @@ pub(crate) fn doc_refs_for(
             line_end: r.line_end,
             line_state: r.line_state,
             seen_at: r.seen_at,
+            source: SOURCE_PINNED,
         })
         .collect();
     Ok(DocRefsOut {
@@ -891,7 +940,167 @@ pub(crate) fn doc_refs_for(
         path: path.to_string(),
         live,
         claims,
+        live_lookup: LiveLookup::off(),
     })
+}
+
+fn failure_reason(e: &crate::join::kb_client::KbClientError) -> &'static str {
+    use crate::join::kb_client::KbClientError as E;
+    match e {
+        E::Timeout(_) => "timeout",
+        E::SiblingMismatch(_) => "sibling_mismatch",
+        E::BadStatus(_) => "bad_status",
+        E::Parse(_) => "parse",
+        _ => "unreachable",
+    }
+}
+
+/// Fold one kb's `by_target` docs into claims about `path`. Only refs whose
+/// `path_hint` IS `path` become claims (kb returns each matching doc with ALL
+/// of its refs). The section anchor comes from the ref's `group` looked up in
+/// the doc's `groups` (the producer sets `key == anchor`; the anchor wins if
+/// it ever differs).
+pub(crate) fn live_claims(
+    kb: &str,
+    docs: &[crate::join::kb_client::CodeRefsDoc],
+    path: &str,
+    public_base: &str,
+) -> Vec<DocRefClaim> {
+    let mut out = Vec::new();
+    for d in docs {
+        let doc_path = d.doc_path.clone().unwrap_or_default();
+        for r in &d.refs {
+            if r.path_hint.as_deref() != Some(path) {
+                continue;
+            }
+            let group = r
+                .group
+                .as_deref()
+                .and_then(|g| d.groups.iter().find(|x| x.key == g));
+            let anchor = group
+                .map(|g| g.anchor.clone().unwrap_or_else(|| g.key.clone()))
+                .or_else(|| r.group.clone());
+            let label = group.map(|g| g.label.clone()).filter(|l| !l.is_empty());
+            out.push(DocRefClaim {
+                kb: kb.to_string(),
+                doc_id: d.doc_id.clone(),
+                doc_title: d
+                    .title
+                    .clone()
+                    .filter(|t| !t.trim().is_empty())
+                    .or_else(|| {
+                        doc_path
+                            .rsplit('/')
+                            .find(|s| !s.is_empty())
+                            .map(str::to_string)
+                    })
+                    .unwrap_or_else(|| d.doc_id.clone()),
+                doc_public_href: super::doc_href(public_base, kb, &doc_path),
+                doc_section_href: super::doc_href_at(public_base, kb, &doc_path, anchor.as_deref()),
+                group_anchor: anchor,
+                doc_path: doc_path.clone(),
+                group_label: label,
+                raw_hint: r.raw.clone(),
+                line_start: r.line_start.map(i64::from),
+                line_end: r.line_end.map(i64::from),
+                line_state: None,
+                seen_at: d.extracted_at.unwrap_or(0),
+                source: SOURCE_LIVE,
+            });
+        }
+    }
+    out
+}
+
+/// Union pinned and live claims. The identity of a citation is
+/// `(kb, doc_id, raw_hint)` (the raw text carries its own line span); where both sides have it
+/// the PINNED row wins (it carries the resolved `line_state`), otherwise the
+/// live row is kept. Stable-sorted by `(kb, doc_id)`, pinned first inside a
+/// doc, so the wire order stays deterministic.
+pub(crate) fn merge_claims(pinned: Vec<DocRefClaim>, live: Vec<DocRefClaim>) -> Vec<DocRefClaim> {
+    type Key = (String, String, String);
+    let key = |c: &DocRefClaim| -> Key { (c.kb.clone(), c.doc_id.clone(), c.raw_hint.clone()) };
+    let have: std::collections::HashSet<Key> = pinned.iter().map(key).collect();
+    let mut all = pinned;
+    all.extend(live.into_iter().filter(|c| !have.contains(&key(c))));
+    all.sort_by(|a, b| (&a.kb, &a.doc_id).cmp(&(&b.kb, &b.doc_id)));
+    all
+}
+
+/// The engine behind `GET /api/doc-refs`: [`doc_refs_for`]'s pinned claims
+/// unioned with kb's live `by_target` answer for the same path, fanned over
+/// the `[doclens] kbs` allowlist (each `by_target` request is bounded by the
+/// client's `SEARCH_TIMEOUT`; the one-shot sibling handshake that precedes
+/// the first call is a separate request with its own client deadline). A kb that cannot answer is NAMED in
+/// `live_lookup.failed`; it never fails the response, and its silence is not
+/// evidence that nothing cites the file. Nothing is persisted.
+pub(crate) async fn doc_refs_merged(
+    state: &SharedState,
+    repo: &str,
+    path: &str,
+) -> Result<DocRefsOut, ApiError> {
+    let state_for_read = state.clone();
+    let (repo_s, path_s) = (repo.to_string(), path.to_string());
+    let mut out = state
+        .store
+        .run_blocking(move |_store| doc_refs_for(&state_for_read, &repo_s, &path_s))
+        .await?;
+    if !state.kb_client.is_enabled() || !state.doclens.enabled() {
+        return Ok(out);
+    }
+    let kbs: Vec<String> = state
+        .doclens
+        .kbs
+        .iter()
+        .filter(|k| super::validate_kb_segment(k).is_ok())
+        .cloned()
+        .collect();
+    if kbs.is_empty() {
+        return Ok(out);
+    }
+    let norm_path = out.path.clone();
+    type LiveResult = (
+        String,
+        Result<Vec<CodeRefsDoc>, crate::join::kb_client::KbClientError>,
+    );
+    let futs: Vec<futures::future::BoxFuture<'_, LiveResult>> = kbs
+        .iter()
+        .map(|kb| {
+            let client = state.kb_client.clone();
+            let (kb, p) = (kb.clone(), norm_path.clone());
+            Box::pin(async move {
+                let r = client.code_refs_by_target(&kb, &p).await;
+                (kb, r)
+            }) as futures::future::BoxFuture<'_, LiveResult>
+        })
+        .collect();
+    let results = crate::fanout::buffered_join(futs, crate::fanout::DEFAULT_FANOUT_CAP).await;
+    let public_base = state.kb_daemon.public_base();
+    let mut live = Vec::new();
+    let mut failed = Vec::new();
+    for (kb, r) in results {
+        match r {
+            Ok(docs) => live.extend(live_claims(&kb, &docs, &norm_path, public_base)),
+            Err(e) => failed.push(LiveLookupFailure {
+                reason: failure_reason(&e),
+                kb,
+            }),
+        }
+    }
+    let lookup_state = if failed.is_empty() {
+        "ok"
+    } else if failed.len() == kbs.len() {
+        "failed"
+    } else {
+        "partial"
+    };
+    out.claims = merge_claims(std::mem::take(&mut out.claims), live);
+    out.live_lookup = LiveLookup {
+        state: lookup_state,
+        kbs,
+        failed,
+    };
+    Ok(out)
 }
 
 /// `GET /api/doc-refs?repo=&path=` — the reverse lookup, on the ORDINARY
@@ -904,20 +1113,9 @@ pub async fn doc_refs_route(
     State(state): State<SharedState>,
     Query(p): Query<DocRefsParams>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // `doc_refs_for` keeps its own `&SharedState` signature (rule: sync
-    // helpers keep their signature — it is ALSO called directly, sync, from
-    // `sync_tests.rs`) — the async boundary is here, so the whole call
-    // (two sequential store reads) runs on the blocking pool via a cloned
-    // `SharedState` (cheap `Arc` clone); the `&Store` `run_blocking` hands
-    // in is unused since `doc_refs_for` reaches the store through `state`
-    // itself.
-    let state_for_read = state.clone();
-    let repo = p.repo.clone();
-    let path = p.path.clone();
-    let out = state
-        .store
-        .run_blocking(move |_store| doc_refs_for(&state_for_read, &repo, &path))
-        .await?;
+    // The pinned half (`doc_refs_for`) runs on the blocking pool inside
+    // `doc_refs_merged`; the live half is async network I/O to kb.
+    let out = doc_refs_merged(&state, &p.repo, &p.path).await?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(out)))
 }
 

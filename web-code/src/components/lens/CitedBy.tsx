@@ -21,7 +21,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useDocRefs } from "../../hooks/useDocRefs";
-import { CITEDBY_OPEN_EVENT, citedByLabel, citedByRowLabel } from "../../lib/citedBy";
+import { CITEDBY_OPEN_EVENT, citedByLabel, citedByNote, citedByRowLabel } from "../../lib/citedBy";
 import { safeHref } from "../../lib/safeHref";
 import { Icon } from "../iconSet";
 
@@ -53,11 +53,20 @@ export default function CitedBy({ repo, path }: CitedByProps) {
     return () => window.removeEventListener(CITEDBY_OPEN_EVENT, onOpen);
   }, []);
 
-  // `null` before the fetch resolves, on error, or when the repo/path pair
-  // has zero claims — an absent citation is the overwhelmingly common case
-  // and must not compete visually with the 6 real tabs
-  // (`InspectorRailProps.citedBy`'s own doc).
-  if (!data || data.claims.length === 0) return null;
+  // `null` before the fetch resolves or on error. OL-SIBL3: once it HAS
+  // resolved, zero claims renders one muted line saying which kind of absence
+  // it is (nothing cites the file / kb could not be asked / only pinned docs
+  // were looked at) instead of silence, which could not tell them apart. That
+  // line deliberately carries no `data-kbc-citedby` (it is not the strip).
+  if (!data) return null;
+  const note = citedByNote(data.claims.length, data.live_lookup);
+  if (data.claims.length === 0) {
+    return note ? (
+      <div className="kbc-inspector__citedby-note" role="note" data-kbc-citedby-absence={note.kind}>
+        {note.text}
+      </div>
+    ) : null;
+  }
 
   const label = citedByLabel(data.claims, data.live);
 
@@ -79,6 +88,11 @@ export default function CitedBy({ repo, path }: CitedByProps) {
         </span>
         <Icon.ChevDown />
       </button>
+      {note && (
+        <div className="kbc-inspector__citedby-note" role="note" data-kbc-citedby-note={note.kind}>
+          {note.text}
+        </div>
+      )}
       {open && (
         <ul className="kbc-inspector__citedby-list" id="kbc-citedby-list" data-kbc-citedby-list>
           {data.claims.map((c, i) => (
@@ -115,6 +129,15 @@ export default function CitedBy({ repo, path }: CitedByProps) {
                 <span className="kbc-inspector__citedby-hint" data-kbc-citedby-hint>
                   {c.raw_hint}
                 </span>
+                {c.source === "kb-live" && (
+                  <span
+                    className="kbc-inspector__citedby-source"
+                    data-kbc-citedby-source="kb-live"
+                    title="Read live from kb for this exact path; not checked against a pinned checkout"
+                  >
+                    unpinned - live from kb
+                  </span>
+                )}
               </span>
             </li>
           ))}

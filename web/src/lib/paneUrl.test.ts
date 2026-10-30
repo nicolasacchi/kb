@@ -1,5 +1,5 @@
 import { describe, expect, it, test } from "vitest";
-import { formatPane2, parsePane2, samePane, type PaneLoc } from "./paneUrl";
+import { paneSplitOpen, formatPane2, parsePane2, samePane, type PaneLoc } from "./paneUrl";
 
 // The grammar is golden-pinned in BOTH directions: `formatPane2` byte-exact
 // strings (so a future refactor can't quietly change the wire shape a shared
@@ -156,5 +156,24 @@ describe("samePane", () => {
         { kb: "canon", sourceRelative: "b.html" },
       ),
     ).toBe(false);
+  });
+});
+
+describe("paneSplitOpen (OL TIME2)", () => {
+  const a = { kb: "canon", sourceRelative: "a.html" };
+  const b = { kb: "canon", sourceRelative: "b.html" };
+  it("shows a split for a different artifact, never on mobile or with no pane2", () => {
+    expect(paneSplitOpen(b, a, null, false)).toBe(true);
+    expect(paneSplitOpen(b, a, null, true)).toBe(false);
+    expect(paneSplitOpen(null, a, null, false)).toBe(false);
+  });
+  it("refuses a self-split in the ordinary reader", () => {
+    expect(paneSplitOpen(a, a, null, false)).toBe(false);
+  });
+  it("allows the same artifact in both panes only while ?at= is set (then|now)", () => {
+    expect(paneSplitOpen(a, a, 1_700_000_000, false)).toBe(true);
+    // at=0 is a real (if ancient) instant, not "absent".
+    expect(paneSplitOpen(a, a, 0, false)).toBe(true);
+    expect(paneSplitOpen(a, a, 1_700_000_000, true)).toBe(false);
   });
 });

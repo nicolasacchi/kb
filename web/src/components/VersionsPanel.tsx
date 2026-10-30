@@ -9,6 +9,7 @@ import { fetchDiff, type DiffHunk, type Version } from "../api/versions";
 import { fetchArtifactHtml, isAbortError } from "../api/client";
 import { bucketHunksBySection, extractHeadings, type HeadingEntry } from "../lib/galley";
 import { resolveMemento } from "../lib/memento";
+import { atFromLocalInput, localInputFromAt } from "../lib/asOf";
 
 const WORKING = "WORKING";
 
@@ -34,6 +35,7 @@ export default function VersionsPanel({
   kb,
   id,
   at = null,
+  onOpenAsOf,
 }: {
   kb: string;
   id: string;
@@ -43,8 +45,18 @@ export default function VersionsPanel({
   // `kb_core::versions::resolve_memento`) — no extra fetch. Per-artifact
   // only: it selects a version, it does not filter or rank anything.
   at?: number | null;
+  // OL TIME2 — "Open as of…": hand the picked instant (unix seconds, already
+  // clamped to now) to the route, which writes `?at=` so the reader serves the
+  // body as it stood. Omitted ⇒ the control is not rendered (a pane that has no
+  // `?at=` coordinate of its own, e.g. the second pane).
+  onOpenAsOf?: (at: number) => void;
 }) {
   const { versions, mode, loading, error } = useVersions(kb, id, true);
+  const [pick, setPick] = useState(() => (at === null ? "" : localInputFromAt(at)));
+  useEffect(() => {
+    setPick(at === null ? "" : localInputFromAt(at));
+  }, [at, kb, id]);
+  const pickedAt = atFromLocalInput(pick, Math.floor(Date.now() / 1000));
   const [from, setFrom] = useState<string | null>(null);
   // W2.14 — `viewMode` is the UI-level toggle (three positions); `galley` is
   // a display SKIN over text-mode data, never its own wire mode (the recon's
@@ -189,6 +201,36 @@ export default function VersionsPanel({
         {/* v0.22 — the redundant ✕ is gone: the rail's versions icon toggles
             the panel (click again to close). */}
       </header>
+
+      {onOpenAsOf && (
+        <form
+          className="vp__openas"
+          data-testid="versions-open-as-of"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (pickedAt !== null) onOpenAsOf(pickedAt);
+          }}
+        >
+          <label htmlFor="vp-openas-in">Open as of…</label>
+          <input
+            id="vp-openas-in"
+            className="vp__openas-in"
+            type="datetime-local"
+            value={pick}
+            max={localInputFromAt(Math.floor(Date.now() / 1000))}
+            onChange={(e) => setPick(e.target.value)}
+            data-testid="versions-open-as-of-input"
+          />
+          <button
+            type="submit"
+            className="vp__openas-btn"
+            disabled={pickedAt === null}
+            data-testid="versions-open-as-of-go"
+          >
+            open
+          </button>
+        </form>
+      )}
 
       {/* CT-F6 — the Memento banner. Renders only for a `?at=` reader and
           only once the timeline has loaded (resolving against an empty list

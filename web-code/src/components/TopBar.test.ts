@@ -9,6 +9,8 @@ import { act } from "react-dom/test-utils";
 import { MemoryRouter } from "react-router";
 import type { DocRefClaim, DocRefsOut } from "../api/types";
 
+type LiveLookup = DocRefsOut["live_lookup"];
+
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const h = vi.hoisted(() => ({ refs: null as null | { data: unknown } }));
@@ -43,12 +45,15 @@ function claim(o: Partial<DocRefClaim>): DocRefClaim {
     line_end: 2,
     line_state: "confirmed",
     seen_at: 1,
+    source: "pinned",
     ...o,
   };
 }
 
-function refs(claims: DocRefClaim[]): { data: DocRefsOut } {
-  return { data: { schema: "doc-refs/1", repo: "x", path: "y.rs", live: true, claims } };
+const OK_LOOKUP: LiveLookup = { state: "ok", kbs: ["platform"], failed: [] };
+
+function refs(claims: DocRefClaim[], live_lookup: LiveLookup = OK_LOOKUP): { data: DocRefsOut } {
+  return { data: { schema: "doc-refs/1", repo: "x", path: "y.rs", live: true, claims, live_lookup } };
 }
 
 let root: Root | null = null;
@@ -128,5 +133,51 @@ describe("TopBar crossing chip", () => {
     expect(el.querySelector("[data-kbc-citedby-link]")?.getAttribute("href")).toBe(
       "https://kb.example/a/platform/docs/fixture-doc.html?sec=kb-h-a",
     );
+  });
+
+  // OL-SIBL3 - three distinct absences, each its own muted line.
+  it("zero claims after kb answered says no document cites the file", () => {
+    h.refs = refs([]);
+    const el = mount("/r/x/y.rs");
+    const note = el.querySelector("[data-kbc-citedby-absence]");
+    expect(note?.getAttribute("data-kbc-citedby-absence")).toBe("none");
+    expect(note?.textContent).toBe("No document cites this file");
+    expect(el.querySelector("[data-kbc-citedby]")).toBeNull();
+  });
+
+  it("zero claims with kb unreachable is not the same sentence", () => {
+    h.refs = refs([], { state: "failed", kbs: ["platform"], failed: [{ kb: "platform", reason: "unreachable" }] });
+    const el = mount("/r/x/y.rs");
+    const note = el.querySelector("[data-kbc-citedby-absence]");
+    expect(note?.getAttribute("data-kbc-citedby-absence")).toBe("unreachable");
+    expect(note?.textContent).toContain("did not answer");
+  });
+
+  it("a sibling mismatch is named as such", () => {
+    h.refs = refs([], { state: "failed", kbs: ["platform"], failed: [{ kb: "platform", reason: "sibling_mismatch" }] });
+    const el = mount("/r/x/y.rs");
+    expect(el.querySelector("[data-kbc-citedby-absence]")?.getAttribute("data-kbc-citedby-absence")).toBe("mismatch");
+  });
+
+  it("with the live lookup off the line says only pinned documents were checked", () => {
+    h.refs = refs([], { state: "off", kbs: [], failed: [] });
+    const el = mount("/r/x/y.rs");
+    const note = el.querySelector("[data-kbc-citedby-absence]");
+    expect(note?.getAttribute("data-kbc-citedby-absence")).toBe("no-pinned");
+    expect(note?.textContent).toBe("No pinned document cites this file");
+  });
+
+  it("claims plus a failed kb keep the strip and add an incomplete-list note", () => {
+    h.refs = refs([claim({})], { state: "partial", kbs: ["platform", "b"], failed: [{ kb: "b", reason: "timeout" }] });
+    const el = mount("/r/x/y.rs");
+    expect(el.querySelector("[data-kbc-citedby]")).not.toBeNull();
+    expect(el.querySelector("[data-kbc-citedby-note]")?.textContent).toContain("may be incomplete");
+  });
+
+  it("a kb-live row is labelled unpinned; a pinned row is not", () => {
+    h.refs = refs([claim({ source: "kb-live", line_state: null }), claim({ doc_id: "doc2", source: "pinned" })]);
+    const el = mount("/r/x/y.rs");
+    act(() => el.querySelector<HTMLButtonElement>("[data-kbc-citedby-toggle]")!.click());
+    expect(el.querySelectorAll("[data-kbc-citedby-source=kb-live]").length).toBe(1);
   });
 });

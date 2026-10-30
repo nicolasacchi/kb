@@ -1131,4 +1131,58 @@ test.describe("MI-W4.2c — 'Memories recalled' (the pull side of 'Memories prod
       insp.locator('[data-testid="session-recalls-list"] li').first(),
     ).toContainText("aaaaaaaaaaaa", { timeout: 10_000 });
   });
+
+  // OL IDEA3 — the session evidence card: a session that edited a file and
+  // then ran `cargo test` says so on its worklog row, and the inspector's
+  // Checks section names the command. (No `<`, `>` or `&` anywhere in the
+  // transcript: it rides inside a `<pre>`.)
+  test("a session that ran its tests after its last edit says so, row and inspector", async ({
+    page,
+  }) => {
+    const base = `http://127.0.0.1:${PORT}`;
+    const sid = "spec-evidence-001";
+    const lines = [
+      `{"type":"user","timestamp":"2026-06-21T09:00:00Z","cwd":"/proj/widget","gitBranch":"main","promptSource":"typed","message":{"role":"user","content":"fix the widget counter"}}`,
+      `{"type":"assistant","timestamp":"2026-06-21T09:01:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"ev-e1","name":"Edit","input":{"file_path":"/proj/widget/src/counter.rs","old_string":"a","new_string":"b"}}]}}`,
+      `{"type":"user","timestamp":"2026-06-21T09:01:05Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"ev-e1","content":"The file has been updated.","is_error":false}]}}`,
+      `{"type":"assistant","timestamp":"2026-06-21T09:02:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"ev-t1","name":"Bash","input":{"command":"cargo test -p widget"}}]}}`,
+      `{"type":"user","timestamp":"2026-06-21T09:02:30Z","toolUseResult":{"stdout":"test result: ok. 3 passed","stderr":"","interrupted":false},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"ev-t1","content":"test result: ok. 3 passed","is_error":false}]}}`,
+    ];
+    const seed = await page.request.post(`${base}/api/kb/mem/artifacts`, {
+      data: {
+        title: "Session transcript 20260621T090000Z",
+        body_html: `<pre>${lines.join("\n")}</pre>`,
+        category: "memory-session",
+        session_id: sid,
+      },
+    });
+    expect(seed.ok()).toBeTruthy();
+
+    // Wait for the capture hook to persist the evidence column.
+    const deadline = Date.now() + 15_000;
+    let verdict = "";
+    while (Date.now() < deadline) {
+      const r = await page.request.get(`${base}/api/sessions/${sid}`);
+      if (r.ok()) {
+        const b = (await r.json()) as { evidence?: { verdict?: string } };
+        verdict = b.evidence?.verdict ?? "";
+        if (verdict === "verified") break;
+      }
+      await new Promise((rs) => setTimeout(rs, 200));
+    }
+    expect(verdict, "the evidence verdict must be derived").toBe("verified");
+
+    await page.goto(`${base}/sessions`);
+    const row = page.locator(`[data-session-id="${sid}"]`);
+    await expect(row).toBeVisible({ timeout: 10_000 });
+    await expect(row.locator('[data-testid="session-row-evidence"]')).toHaveText(
+      "cargo test passed after the last edit",
+    );
+
+    await row.locator(".kb-ses__row-btn").click();
+    const checks = page.locator('[data-testid="session-checks"]');
+    await expect(checks).toBeVisible({ timeout: 10_000 });
+    await expect(checks).toContainText("cargo test -p widget");
+  });
 });
+

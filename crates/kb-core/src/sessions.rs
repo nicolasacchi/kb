@@ -72,6 +72,11 @@ pub mod projects;
 /// link). The route owns the storage reads; this module owns the story.
 pub mod narrative;
 
+/// OL IDEA3 -- the session evidence card: the closed-grammar verification
+/// commands a session ran, their outcomes, and the read-time verdict "was the
+/// code checked after its last edit". Pure; SURFACED, never scored.
+pub mod checks;
+
 pub use projects::{
     project_registry, registry_entry, resolve_project_filter, resolve_registry_project,
     set_project_registry, ProjectDef, ProjectFilter, ResolvedProject,
@@ -309,6 +314,12 @@ pub struct SessionActivity {
     /// V0045/seg1 — the same record's `segmentIdx` (1-based part index; a
     /// JSON number or a numeric string). `None` unless `segment_of` is set.
     pub segment_idx: Option<i64>,
+    /// OL IDEA3 -- the verification commands the MAIN transcript ran, the
+    /// counted edits and the successful pushes, folded by
+    /// [`checks::Tracker`] in this same single pass. Persisted (as
+    /// `checks::SessionEvidence`) in `sessions.evidence_json`; never read by
+    /// the R1 digest.
+    pub check_runs: checks::CheckRuns,
     /// V0029 — first non-empty top-level `version` field across the JSONL
     /// (the `first_transcript_field(jsonl, "version")` rule, computed inline
     /// here instead of via a second pass over the transcript).
@@ -730,6 +741,8 @@ fn parse_session_activity_lines<S: AsRef<str>>(
     // dedup — Vec stays the ordered store; HashSet is O(1) contains only.
     let mut files_seen: std::collections::HashSet<FileTouch> = std::collections::HashSet::new();
     let mut research_seen: std::collections::HashSet<Research> = std::collections::HashSet::new();
+    // OL IDEA3 -- check-run / edit tracking (main transcript only).
+    let mut check_tracker = checks::Tracker::new();
 
     for line in lines {
         let line = line.as_ref().trim();
@@ -939,6 +952,9 @@ fn parse_session_activity_lines<S: AsRef<str>>(
             // W4/R8/ADD-2 — pair a grokclaude Bash result back to its command
             // and recover the job ulid, if confidently present.
             extract_grok_job(&v, &mut pending_grok, &mut act.research, &mut research_seen);
+            // OL IDEA3 -- pair check/edit/push results; read background
+            // completions.
+            check_tracker.on_user_event(&v);
         }
 
         // tool-call file touches (assistant content blocks).
@@ -982,6 +998,8 @@ fn parse_session_activity_lines<S: AsRef<str>>(
                         continue;
                     }
                     act.tool_calls += 1;
+                    // OL IDEA3 -- record a check run / edit / push call.
+                    check_tracker.on_tool_use(&v, b, act.tool_calls);
                     let name = b.get("name").and_then(|x| x.as_str()).unwrap_or("");
                     // P5 — a git commit/push/tag Bash call: remember it by id so
                     // its result (with the SHA) can be paired back.
@@ -1050,6 +1068,7 @@ fn parse_session_activity_lines<S: AsRef<str>>(
         .map(|(c, _)| c);
     act.user_turns = user_turns;
     act.last_assistant_text = closing_substantial.or(closing_any);
+    act.check_runs = check_tracker.finish();
     act.active_secs = active_secs(&event_times);
     act.skipped_lines = skipped_lines;
     if skipped_lines > 0 {

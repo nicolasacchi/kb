@@ -15,14 +15,14 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-fn page(title: &str) -> String {
+pub(crate) fn page(title: &str) -> String {
     format!(
         "<!doctype html><html><head><title>{title}</title></head>\
          <body><h1>{title}</h1><p>hello {title}</p></body></html>"
     )
 }
 
-fn session_doc(title: &str) -> String {
+pub(crate) fn session_doc(title: &str) -> String {
     format!(
         "<!doctype html><html><head><title>{title}</title>\
          <meta name=\"kb-category\" content=\"memory-session\"></head>\
@@ -33,6 +33,16 @@ fn session_doc(title: &str) -> String {
 async fn boot(
     files: &[(&str, String)],
     versions: Option<&str>,
+) -> (tempfile::TempDir, std::net::SocketAddr, PathBuf) {
+    boot_with(files, versions, None).await
+}
+
+/// `boot` plus an optional `[kb.*.outbound]` section (OL TIME2's artifact
+/// tests drive the serve-path scrub through it).
+pub(crate) async fn boot_with(
+    files: &[(&str, String)],
+    versions: Option<&str>,
+    outbound: Option<kb_core::config::OutboundSection>,
 ) -> (tempfile::TempDir, std::net::SocketAddr, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let source = tmp.path().join("corpus");
@@ -56,7 +66,7 @@ async fn boot(
             reranker_model: None,
             chunked_embeddings: false,
             graph_boost: None,
-            outbound: None,
+            outbound,
             atlas: None,
             templates: BTreeMap::new(),
             memory_scope: None,
@@ -105,11 +115,11 @@ async fn boot(
     (tmp, addr, source)
 }
 
-fn url(addr: std::net::SocketAddr, path: &str) -> String {
+pub(crate) fn url(addr: std::net::SocketAddr, path: &str) -> String {
     format!("http://{addr}{path}")
 }
 
-fn now() -> i64 {
+pub(crate) fn now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -282,7 +292,6 @@ async fn asof_git_absent_no_500() {
 async fn asof_bad_requests_are_400_problem_json() {
     let (_t, addr, ids, c) = boot_ids(&[("a.html", page("A"))], None).await;
     let id = &ids["a.html"];
-    let far = now() + 3 * 86_400;
     let over = (0..101)
         .map(|i| format!("{i:012x}"))
         .collect::<Vec<_>>()
@@ -290,7 +299,6 @@ async fn asof_bad_requests_are_400_problem_json() {
     for q in [
         format!("ids={id}"),              // missing at
         format!("at=yesterday&ids={id}"), // malformed at
-        format!("at={far}&ids={id}"),     // future at
         "at=1000".to_string(),            // missing ids
         "at=1000&ids=".to_string(),       // empty ids
         format!("at=1000&ids={over}"),    // over the cap, not truncated
@@ -311,6 +319,20 @@ async fn asof_bad_requests_are_400_problem_json() {
             .status(),
         200
     );
+}
+
+/// OL TIME2 dropped the future-`at` refusal: any instant is answered, and a
+/// far-future one lands on the working tree (which wins at `t >= mtime`).
+#[tokio::test]
+async fn asof_far_future_at_is_a_working_tree_hit() {
+    let (_t, addr, ids, c) = boot_ids(&[("a.html", page("A"))], None).await;
+    let id = &ids["a.html"];
+    let far = now() + 400 * 86_400;
+    let resp = as_of(&c, addr, &format!("at={far}&ids={id}")).await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["items"][0]["state"], "hit");
+    assert_eq!(body["items"][0]["memento"]["version"]["source"], "working");
 }
 
 /// `/docs` is NOT an as-of surface: `at` is ignored and the bytes match.

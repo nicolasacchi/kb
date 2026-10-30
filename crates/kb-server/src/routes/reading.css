@@ -21,7 +21,7 @@ html[data-kb-read][data-kb-read="dark"] {
   color-scheme: dark;
 }
 html[data-kb-read] body {
-  font-family: Charter, "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  font-family: "Source Serif 4", Charter, "Iowan Old Style", "Palatino Linotype", Georgia, serif;
   font-size: clamp(17px, 1.1vw + 14px, 20px);
   line-height: 1.65;
   max-width: min(68ch, 100% - 2 * clamp(16px, 5vw, 40px));
@@ -36,10 +36,10 @@ html[data-kb-read] body :is(p, li, dd, dt, td, th, blockquote, figcaption, span,
   color: inherit;
 }
 html[data-kb-read] body :is(h1, h2, h3, h4, h5, h6) {
-  font-family: Charter, "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  font-family: "Source Serif 4", Charter, "Iowan Old Style", "Palatino Linotype", Georgia, serif;
   color: var(--kb-read-fg);
   line-height: 1.25;
-  font-weight: 700;
+  font-weight: 600;
   margin: 1.8em 0 0.6em;
 }
 html[data-kb-read] body h1 { font-size: 2em; }
@@ -61,7 +61,7 @@ html[data-kb-read] body:lang(ja), html[data-kb-read] body:lang(zh), html[data-kb
   max-width: 40em;
 }
 html[data-kb-read] body :is(code, pre, kbd, samp) {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   font-size: 0.9em;
 }
 html[data-kb-read] body pre {

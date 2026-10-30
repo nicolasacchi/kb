@@ -291,3 +291,80 @@
   text-decoration: line-through;
   opacity: 0.85;
 }
+
+/* OL TIME2 — the caption strip on a historical render (`?at=`): parent chrome
+   above the iframe, in flow (never fixed/sticky), accent-edged like the
+   versions panel's memento banner. A miss is muted, not red. */
+.asof-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  font-size: var(--fs-sm);
+  color: var(--ink);
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--rule);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.asof-bar--miss {
+  color: var(--ink-mute);
+  box-shadow: inset 2px 0 0 var(--rule);
+}
+.asof-bar__msg {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.asof-bar__acts {
+  flex: none;
+  display: inline-flex;
+  gap: 8px;
+}
+.asof-bar__btn {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--accent);
+  font-size: var(--fs-xs);
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.asof-bar__btn:hover {
+  background: color-mix(in oklab, var(--ink) 8%, transparent);
+}
+
+/* The versions panel's "Open as of…" control. */
+.vp__openas {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 6px 10px;
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+  border-bottom: 1px solid var(--rule);
+  flex: 0 0 auto;
+}
+.vp__openas-in {
+  min-width: 0;
+  font: inherit;
+  color: var(--ink);
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  padding: 2px 4px;
+}
+.vp__openas-btn {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.vp__openas-btn:disabled {
+  color: var(--ink-mute);
+  cursor: default;
+}

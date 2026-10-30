@@ -2154,6 +2154,26 @@ section, falling back to the doc-level href. With several docs, or no usable
 href, it is a button that expands the "Cited by" strip in the inspector rail.
 It reads the same query as that strip and adds no key binding.
 
+## Cited-by reads kb live, not only pinned docs (OL SIBL3)
+
+The `doc_refs` index only covers PINNED docs and only `present` rows, so on its
+own the Cited-by strip is empty for almost every file and cannot tell "nothing
+cites this" from "nobody pinned the citing doc". `GET /api/doc-refs` therefore
+also asks kb, per request, for `GET /api/kb/{kb}/code-refs?by_target=<path>`
+(an exact `path_hint` match) on every kb in `[doclens] kbs`, concurrently, each
+call bounded by the search-relay deadline. Nothing is persisted and kb learns
+nothing: kb-code asks, kb answers.
+
+Each claim carries `source`: `pinned` (a synced row, with `line_state`) or
+`kb-live` (a labelled hint, `line_state: null`; its section href comes from the
+ref's `group`). Where both exist for the same citation (`kb`, `doc_id`,
+`raw_hint`) the pinned row wins. The response also carries `live_lookup`
+(`state` `off|ok|partial|failed`, the kbs asked, and per-kb `failed[].reason`
+`unreachable|timeout|sibling_mismatch|bad_status|parse`), so the strip shows
+three different absences: "No document cites this file" (kb answered),
+"kb ... did not answer" or "speaks a different sibling contract" (kb could not
+be asked), and "No pinned document cites this file" (live lookup off).
+
 ## Review diff v2 (v7.3, Track K)
 
 The full-page review reader (`/r/{repo}/~reviews/{id}/diff[/<path>]`) is
