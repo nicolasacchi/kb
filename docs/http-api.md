@@ -737,6 +737,42 @@ GET  /api/sessions[?cursor=<unix>&limit=N   Cross-kb list of captured Claude
                                             so nothing is hidden silently;
                                             any other value is a 400) keeps
                                             only the LAST part of each chain.
+                                            OL IDEA3 — every row carries an
+                                            additive `evidence` object: the
+                                            session evidence card, DERIVED at
+                                            read time from the persisted
+                                            `sessions.evidence_json` (V0046).
+                                            `verdict` is one of `verified`
+                                            (a check passed after the last
+                                            edit) · `failing` · `unconfirmed`
+                                            (checks ran after the last edit
+                                            but none ended decisively) ·
+                                            `stale` (the last check ran
+                                            before the last edit) ·
+                                            `unchecked` (edited, no check at
+                                            all) · `no_edits` · `not_extracted`
+                                            (a NULL, unreadable or
+                                            future-versioned column: a
+                                            pre-V0046 capture, `kb reindex`
+                                            fills it). Alongside it: `phrase`
+                                            (the ONE sentence, absent for
+                                            `no_edits`/`not_extracted`),
+                                            `deciding` (the check it rests
+                                            on: `label`, `cmd`, `outcome`,
+                                            `basis`, `why`, `exit_code`,
+                                            `at`, `after_last_edit`, `text`),
+                                            `last_edit_at`, `checks_total`,
+                                            `checks_after_edit`,
+                                            `edits_ignored` and `uncommitted`
+                                            (files edited, no commit
+                                            detected). MAIN TRANSCRIPT ONLY:
+                                            edits are Edit/Write tool calls
+                                            (edits made through Bash or by
+                                            subagents are not seen) and
+                                            checks are a closed list of test,
+                                            lint and build commands. SURFACED,
+                                            NEVER SCORED: no route sorts,
+                                            filters or ranks on it.
 GET  /api/sessions/recall-coverage[?days=7]  v0.44 F10 — recall-hook coverage
                                             per harness over the trailing
                                             window (default 7, clamp 1-365),
@@ -786,7 +822,16 @@ GET  /api/sessions/{session_id}             Single session + memory_ids list.
                                             as the list plus `segment_chain`
                                             (every part's session id, part 1
                                             first; absent for an ordinary
-                                            session), and `memory_ids` for the
+                                            session), the `evidence` object
+                                            above plus `checks` (the newest 16
+                                            checks the capture ran, oldest
+                                            first, each with its server-made
+                                            `text` and `after_last_edit`),
+                                            `unnamed_edits` (basenames of
+                                            counted edits the closing text
+                                            never names, capped at 12) and
+                                            `unnamed_edits_total` (each absent
+                                            when empty), and `memory_ids` for the
                                             RAW id also covers memories
                                             stamped with a part's own id (a
                                             part asked by its own id reads
