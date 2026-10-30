@@ -2250,9 +2250,15 @@ lights it again. This trail matters because session-diff is loopback-only and
 live capture is off by default in prod. A collapsed directory shows the
 freshest descendant's rail plus a distinct-file count; an expanded one shows
 nothing extra. A worktree touch is a muted count and caption, never a mark on
-the main checkout's file. A single frame naming more than 20 paths is a
-checkout or rebase: it is never marked (the `repo.head_moved` banner already
-tells the operator), and the tree says so in one muted line.
+the main checkout's file. Attribution is a claim about the
+moment of the change: each touch is attributed once, at the first snapshot
+fetched 3 s or more after it, and then frozen (`freezeTouches`), so a later
+session can never relabel it. A touch on the file already open is seen as it
+lands. A single frame naming more than 20 paths is a checkout, rebase or mass
+rewrite: it is never marked per path, and the tree shows one muted line for two
+minutes (an ordinary touch replaces it sooner). The `repo.head_moved` banner is
+separate and appears only if HEAD actually moved. Row text for assistive tech is
+a visually hidden span (`PresenceGlyph`), since tree rows carry no role.
 
 Polling exception (#23-style): kb has no event that reaches this daemon, so
 `usePresence` carries a finite `staleTime`, a 10 s `refetchInterval`, no
@@ -2260,7 +2266,8 @@ background refetch, and is enabled only while the pref is on AND the document is
 visible. Its key `["presence", repo]` rides the generic per-repo bridge, so a
 mirror event refetches it at once. Home's RepoCard line, the Spine chip and the
 tree read that one key (one poll per repo). The 5 s re-render tick runs only
-while a mark is showing and is dropped under `prefers-reduced-motion`. The pref
+while a mark, the burst line or the pulse is showing; under
+`prefers-reduced-motion` it slows to 30 s (labels only). The pref
 `presenceOverlay` defaults ON. No key binding was added.
 
 ## v0.44 notes

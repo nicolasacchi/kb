@@ -81,7 +81,7 @@ test.describe("Presence in the file tree", () => {
     await expect(row(page)).toHaveAttribute("data-kbc-presence-trust", "exact");
     await expect(row(page)).toHaveAttribute("data-kbc-presence-level", "3");
     await expect(row(page)).toHaveAttribute("data-kbc-presence-sid", "3f2a9c11");
-    await expect(row(page)).toHaveAttribute("aria-label", /^Edited by claude session 3f2a /);
+    await expect(row(page).locator("[data-kbc-presence-label]")).toHaveText(/^Edited by claude session 3f2a /);
   });
 
   test("no beat for the path but one working session is a candidate; no session at all is neutral", async ({
@@ -91,7 +91,7 @@ test.describe("Presence in the file tree", () => {
     await open(page);
     await mirrorTouch(page, [KNOWN_FILE]);
     await expect(row(page)).toHaveAttribute("data-kbc-presence-trust", "candidate");
-    await expect(row(page)).toHaveAttribute("aria-label", /^Probably claude session 3f2a/);
+    await expect(row(page).locator("[data-kbc-presence-label]")).toHaveText(/^Probably claude session 3f2a/);
 
     await page.unroute("**/api/kb/presence*");
     await mockRelay(page, []);
@@ -99,7 +99,7 @@ test.describe("Presence in the file tree", () => {
     await expect(row(page)).toBeVisible();
     await mirrorTouch(page, [KNOWN_FILE]);
     await expect(row(page)).toHaveAttribute("data-kbc-presence-trust", "neutral");
-    await expect(row(page)).toHaveAttribute("aria-label", /^Changed /);
+    await expect(row(page).locator("[data-kbc-presence-label]")).toHaveText(/^Changed /);
     await expect(row(page)).not.toHaveAttribute("data-kbc-presence-sid", /.+/);
   });
 
@@ -129,10 +129,43 @@ test.describe("Presence in the file tree", () => {
     await mockRelay(page, [beat({ age_secs: 661 })]);
     await page.clock.fastForward("11:00");
     await expect(row(page)).toHaveAttribute("data-kbc-presence-level", "1");
-    await expect(row(page)).toHaveAttribute("aria-label", /not opened since$/);
+    await expect(row(page).locator("[data-kbc-presence-label]")).toHaveText(/not opened since$/);
 
     await page.clock.fastForward("55:00");
     await expect(row(page)).not.toHaveAttribute("data-kbc-presence-level", /.+/);
+  });
+
+  test("a burst is one muted line, marks nothing, and an ordinary touch replaces it", async ({ page }) => {
+    await mockRelay(page, [beat()]);
+    await open(page);
+    await mirrorTouch(
+      page,
+      Array.from({ length: 25 }, (_, i) => `burst${i}.rs`),
+    );
+    await expect(page.locator("[data-kbc-presence-burst]")).toContainText("25 files changed at once");
+    await expect(page.locator("[data-kbc-presence-level]")).toHaveCount(0);
+    await mirrorTouch(page, [KNOWN_FILE]);
+    await expect(page.locator("[data-kbc-presence-burst]")).toHaveCount(0);
+    await expect(row(page)).toHaveAttribute("data-kbc-presence-level", /.+/);
+  });
+
+  test("a touch on the file already open is seen, not marked", async ({ page }) => {
+    await mockRelay(page, [beat()]);
+    await open(page);
+    await row(page).click();
+    await mirrorTouch(page, [KNOWN_FILE]);
+    await page.waitForTimeout(500);
+    await expect(row(page)).not.toHaveAttribute("data-kbc-presence-level", /.+/);
+  });
+
+  test("the Spine chip and the Home card line read the same pulse", async ({ page }) => {
+    await mockRelay(page, [beat()]);
+    await open(page);
+    await expect(page.locator("[data-kbc-topbar-presence]")).toContainText("1 working");
+    await page.goto(`${BASE}/`);
+    await expect(
+      page.locator(`[data-kbc-home-card="${REPO_NAME}"] [data-kbc-home-presence]`),
+    ).toContainText("1 session working");
   });
 
   test("an unavailable relay is captioned, not an error toast", async ({ page }) => {

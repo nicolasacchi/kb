@@ -28,6 +28,7 @@ import {
 } from "../lib/presence";
 import {
   burstFor,
+  freezeTouches,
   openedAtFor,
   presenceVersion,
   subscribePresence,
@@ -39,6 +40,8 @@ import { usePrefersReducedMotion } from "./usePrefersReducedMotion";
 export const PRESENCE_POLL_MS = 10_000;
 /// Re-render cadence for fade levels, only while a mark is showing.
 export const PRESENCE_TICK_MS = 5_000;
+/// Under reduced motion only the text labels refresh, on a slower cadence.
+export const PRESENCE_TICK_REDUCED_MS = 30_000;
 
 export function presenceKey(repo: string) {
   return ["presence", repo] as const;
@@ -123,15 +126,21 @@ export function usePresenceView(repo: string | undefined): PresenceView {
   const reduced = usePrefersReducedMotion();
   const q = usePresence(repo, pref);
   const snap = q.data;
-  useSyncExternalStore(subscribePresence, presenceVersion, presenceVersion);
+  const storeVersion = useSyncExternalStore(subscribePresence, presenceVersion, presenceVersion);
   const touches = repo && pref ? touchesFor(repo) : [];
-  const tickOn = pref && !reduced && (touches.length > 0 || (snap?.files.length ?? 0) > 0);
-  usePerfTick(tickOn, PRESENCE_TICK_MS);
-  // Re-derive on every render: the inputs (store version, snapshot, tick) all
-  // re-render this hook, and the derivation is a few hundred rows at most.
+  // Freeze attribution at the first snapshot past the grace (never re-derived).
+  useEffect(() => {
+    if (repo) freezeTouches(repo, snap);
+  }, [repo, snap, storeVersion]);
   const nowPerf = performance.now();
   const attributed = attribute(touches, snap);
   const marks = repo && pref ? buildMarks(attributed, openedAtFor(repo), nowPerf) : new Map();
+  const burst = repo && pref ? burstFor(repo, nowPerf) : undefined;
+  const summary = pref ? summarize(snap, nowPerf) : null;
+  // Tick only while something time-dependent is showing; the mark set is
+  // already ring-pruned, so this stops once everything has expired.
+  const tickOn = pref && (marks.size > 0 || !!burst || summary !== null);
+  usePerfTick(tickOn, reduced ? PRESENCE_TICK_REDUCED_MS : PRESENCE_TICK_MS);
   return {
     pref,
     reduced,
@@ -140,8 +149,8 @@ export function usePresenceView(repo: string | undefined): PresenceView {
     marks,
     dirs: rollup(marks),
     worktrees: pref ? worktreeCounts(snap, nowPerf) : [],
-    burst: repo && pref ? burstFor(repo) : undefined,
-    summary: pref ? summarize(snap, nowPerf) : null,
+    burst,
+    summary,
   };
 }
 
@@ -152,6 +161,7 @@ export function usePresenceSummary(repo: string | undefined): PresenceSummary | 
   const reduced = usePrefersReducedMotion();
   const q = usePresence(repo, pref);
   const snap = q.data;
-  usePerfTick(pref && !reduced && (snap?.files.length ?? 0) > 0, PRESENCE_TICK_MS);
-  return pref ? summarize(snap, performance.now()) : null;
+  const summary = pref ? summarize(snap, performance.now()) : null;
+  usePerfTick(summary !== null, reduced ? PRESENCE_TICK_REDUCED_MS : PRESENCE_TICK_MS);
+  return summary;
 }

@@ -30,8 +30,16 @@ export const ATTRIBUTION_WINDOW_SECS = 15;
 /// The ring: an unopened touch stays this long, then is forgotten.
 export const RING_SECS = 3600;
 /// A single `mirror.updated` naming more paths than this is a checkout or
-/// rebase, not an edit: it is never marked (`repo.head_moved`'s banner owns it).
+/// rebase (or a mass formatter run), not an edit: it is never marked per path.
+/// The tree shows one muted line for `BURST_SECS`; the `repo.head_moved`
+/// banner appears separately, and only if HEAD actually moved.
 export const BURST_PATHS = 20;
+/// The tree's "N files changed at once" line expires after this long.
+export const BURST_SECS = 120;
+/// A touch is attributed (and then frozen) from the first snapshot fetched at
+/// least this long after it: the grace absorbs relay lag between the edit and
+/// the beat reaching kb.
+export const ATTRIBUTION_GRACE_MS = 3000;
 /// The window the Home / Spine summary counts files in.
 export const SUMMARY_WINDOW_SECS = 600;
 
@@ -94,6 +102,9 @@ export interface MirrorTouch {
   repo: string;
   path: string;
   at: number;
+  /// Set once, by `freezeTouches`, and never changed: attribution is a claim
+  /// about the moment of the change, not a live view of today's sessions.
+  attr?: AttributedTouch;
 }
 
 export type Trust = "exact" | "candidate" | "neutral";
@@ -126,6 +137,7 @@ export function attribute(
   }
   const window = ATTRIBUTION_WINDOW_SECS * 1000;
   return touches.map((t) => {
+    if (t.attr) return t.attr;
     const hits = snap
       ? main
           .filter((f) => f.path === t.path && Math.abs(beatAt(f, snap) - t.at) <= window)

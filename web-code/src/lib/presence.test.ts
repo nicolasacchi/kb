@@ -91,6 +91,14 @@ describe("attribute", () => {
     expect(attribute([touch("x", 1)], undefined)[0].trust).toBe("neutral");
     expect(attribute([touch("x", 1)], snap([file({})], 100_000, false))[0].trust).toBe("neutral");
   });
+  it("a frozen attribution is returned as is, whatever the current snapshot says", () => {
+    const [frozen] = attribute([touch("src/z.rs", 98_000)], undefined);
+    expect(frozen.trust).toBe("neutral");
+    const t = { ...touch("src/z.rs", 98_000), attr: frozen };
+    // exactly one working session now: an unfrozen touch would become a candidate
+    expect(attribute([touch("src/z.rs", 98_000)], snap([file({})]))[0].trust).toBe("candidate");
+    expect(attribute([t], snap([file({})]))[0].trust).toBe("neutral");
+  });
   it("worktree rows never attribute the main checkout's file", () => {
     const [a] = attribute([touch("src/a.rs", 98_000)], snap([file({ worktree: "wt" })]));
     expect(a.trust).toBe("neutral");

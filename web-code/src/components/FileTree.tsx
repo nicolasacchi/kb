@@ -40,7 +40,8 @@ import { attentionTintStyle } from "../lib/attentionRamp";
 import { loadAttentionOverlay, saveAttentionOverlay, savePresenceOverlay } from "../lib/prefs";
 import { rowPresence } from "../lib/presenceRow";
 import { usePresenceView } from "../hooks/usePresence";
-import { markOpened } from "../lib/presenceStore";
+import { markOpened, setCurrentFile } from "../lib/presenceStore";
+import { PresenceGlyph } from "./PresenceGlyph";
 
 export interface FileTreeHandle {
   /// `/` — jump focus into the quick-filter input.
@@ -271,7 +272,11 @@ const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileTree(
   // Opening a file clears its presence mark (the seen-set): only a touch
   // AFTER this instant lights the row again.
   useEffect(() => {
-    if (repo && selectedPath) markOpened(repo, selectedPath);
+    if (!repo) return undefined;
+    // Remember what is open, so a touch that lands on it later counts as seen.
+    setCurrentFile(repo, selectedPath || undefined);
+    if (selectedPath) markOpened(repo, selectedPath);
+    return () => setCurrentFile(repo, undefined);
   }, [repo, selectedPath]);
   const lanes = LANE_PRESETS[lanePreset % LANE_PRESETS.length];
 
@@ -745,7 +750,6 @@ const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileTree(
                   ...((pr?.style ?? {}) as CSSProperties),
                 }}
                 title={pr?.label ?? (hot ? hotspotTitle(hot) : undefined)}
-                aria-label={pr?.label}
                 data-kbc-presence-level={pr ? String(pr.level) : undefined}
                 data-kbc-presence-trust={pr?.trust}
                 data-kbc-presence-sid={pr?.sid}
@@ -793,14 +797,7 @@ const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileTree(
                 {mode === "highlight" && row.kind !== "file" && (row.match_count ?? 0) > 0 ? (
                   <span className="kbc-tree__matchcount">{row.match_count}</span>
                 ) : null}
-                {pr ? (
-                  <span className="kbc-tree__presence" aria-hidden>
-                    <Icon.Spark />
-                    {pr.count !== undefined ? (
-                      <span className="kbc-tree__presence-count">{pr.count}</span>
-                    ) : null}
-                  </span>
-                ) : null}
+                {pr ? <PresenceGlyph label={pr.label} count={pr.count} /> : null}
                 <FactsCells facts={row.facts} />
               </div>
             );
