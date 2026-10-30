@@ -865,11 +865,63 @@ pub async fn serve(
         return error_to_problem_json(&err);
     }
 
-    let bytes = match std::fs::read(&resolved) {
-        Ok(b) => b,
-        Err(e) => {
-            return (StatusCode::NOT_FOUND, format!("read failed: {e}")).into_response();
+    // OL TIME2 — `?at=<unix>` on the ENTRY file serves the body as it stood
+    // (nearest-prior through the same `memento_for` the versions route uses),
+    // pushed through TODAY'S pipeline below. Sibling assets and sub-pages are
+    // never time-travelled (they resolve to today's siblings, as the reader's
+    // caption says). A historical render is NOT a read: this handler writes
+    // no history row and no reading progress for any request, and the SPA
+    // suppresses its visit beacons for an `?at=` pane.
+    let as_of_at = if raw_path == "/" {
+        match requested_as_of(&uri) {
+            Ok(v) => v,
+            Err(e) => return error_to_problem_json(&kb_core::Error::BadRequest(e)),
         }
+    } else {
+        None
+    };
+    let mut historical: Option<HistoricalRender> = None;
+    let mut then_text: Option<String> = None;
+    if let Some(at) = as_of_at {
+        let is_transcript = matches!(
+            ctx.storage.get_by_id(artifact_id.to_string()).await,
+            Ok(Some(d)) if d.kb_category.as_deref() == Some("memory-session")
+        );
+        if is_transcript {
+            // Transcripts are episodic memory (#11), not versioned documents.
+            let err = kb_core::Error::NotFound(
+                "transcripts are not versioned documents; there is no earlier body to open".into(),
+            );
+            return error_to_problem_json(&err);
+        }
+        match super::versions::as_of_body(ctx, &resolved, artifact_id, at).await {
+            super::versions::AsOfBody::Working => {}
+            super::versions::AsOfBody::Then {
+                text,
+                version,
+                exact,
+            } => {
+                historical = Some(HistoricalRender {
+                    at,
+                    version_ts: version.ts_unix,
+                    exact,
+                });
+                then_text = Some(text);
+            }
+            super::versions::AsOfBody::Unserved(note) => {
+                return error_to_problem_json(&kb_core::Error::NotFound(note));
+            }
+        }
+    }
+
+    let bytes = match then_text {
+        Some(t) => t.into_bytes(),
+        None => match std::fs::read(&resolved) {
+            Ok(b) => b,
+            Err(e) => {
+                return (StatusCode::NOT_FOUND, format!("read failed: {e}")).into_response();
+            }
+        },
     };
 
     let content_type = super::guess_content_type(&resolved);
@@ -957,7 +1009,10 @@ pub async fn serve(
             Ok(s) => s,
             Err(e) => return error_to_problem_json(&e),
         };
-        let cm_on = wants_annotator(&uri);
+        // A historical render never carries the annotator: anchors are
+        // cssPath/snippet on the ORIGINAL DOM (#6), so a comment authored
+        // against an old body would anchor to a DOM the file no longer has.
+        let cm_on = historical.is_none() && wants_annotator(&uri);
         let with_annotator = if cm_on {
             match build_comments_payload(&state, ctx, artifact_id) {
                 Ok(payload) => match inject_annotator(
@@ -988,13 +1043,22 @@ pub async fn serve(
         let rel_json = serde_json::to_string(&rel).unwrap_or_else(|_| "\"\"".into());
         let spa_json =
             serde_json::to_string(spa_origin_lit(&state.origin)).unwrap_or_else(|_| "\"\"".into());
+        // A historical render opened as its own tab bounces to the wrapper
+        // WITH its coordinate, so the new tab is the same moment in time.
+        let at_query_json = serde_json::to_string(
+            &historical
+                .as_ref()
+                .map(|h| format!("?at={}", h.at))
+                .unwrap_or_default(),
+        )
+        .unwrap_or_else(|_| "\"\"".into());
         let bounce_js = format!(
             "(function(){{\
                if(window.top!==window.self)return;\
                try{{var r=document.referrer;if(!r||new URL(r).hostname.indexOf('.artifacts.')<0)return;}}catch(e){{return;}}\
                var SPA={spa_json}||(location.protocol+'//'+location.host.replace(/^[^.]+\\.artifacts\\./,''));\
                var KB={kb_json},REL={rel_json};\
-               location.replace(SPA+'/a/'+encodeURIComponent(KB)+'/'+REL.split('/').map(encodeURIComponent).join('/'));\
+               location.replace(SPA+'/a/'+encodeURIComponent(KB)+'/'+REL.split('/').map(encodeURIComponent).join('/')+{at_query_json});\
              }})();"
         );
         let with_bounce = match inject_inline_head_script(&with_annotator, &bounce_js) {
@@ -1016,7 +1080,24 @@ pub async fn serve(
         // a reverse proxy from leaking one user's comments to another)
         // and force private, no-store so no proxy ever caches the
         // user-specific comment payload.
-        if cm_on {
+        if let Some(h) = &historical {
+            // The answer for a given `at` changes the moment the working
+            // tree is rewritten or a newer snapshot lands, so it is never
+            // cached; `Memento-Datetime` (RFC 7089) is the resolved
+            // version's OWN datetime, not the requested one.
+            resp.headers_mut().insert(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("private, no-store"),
+            );
+            if let Some(v) = super::versions::http_date(h.version_ts) {
+                resp.headers_mut().insert("memento-datetime", v);
+            }
+            if let Ok(v) = HeaderValue::from_str(if h.exact { "exact" } else { "nearest-prior" }) {
+                resp.headers_mut().insert("x-kb-as-of-relation", v);
+            }
+            resp.headers_mut()
+                .insert(header::VARY, HeaderValue::from_static("Accept, Cookie"));
+        } else if cm_on {
             resp.headers_mut().insert(
                 header::CACHE_CONTROL,
                 HeaderValue::from_static("private, no-store"),
@@ -1140,6 +1221,36 @@ fn find_hashed_annotator(spa_dist: &Path) -> Option<PathBuf> {
                 .is_some_and(|n| n.starts_with("annotate-") && n.ends_with(".js"))
         })
         .max()
+}
+
+/// OL TIME2 — the facts about a historical render that the response headers
+/// carry (the body itself is indistinguishable from today's pipeline output).
+struct HistoricalRender {
+    /// The requested instant (echoed into the new-tab bounce).
+    at: i64,
+    /// The resolved version's OWN timestamp (`Memento-Datetime`).
+    version_ts: i64,
+    /// True only when the version landed on the requested second.
+    exact: bool,
+}
+
+/// `?at=<unix seconds>` on an artifact origin. `Ok(None)` when absent; a
+/// present but malformed value is an explicit 400 rather than a silent
+/// fall-back to today's body (that would present the present as the past).
+/// Any instant is accepted: the façade answers every `at`, and the working
+/// tree wins at `t >= mtime`.
+fn requested_as_of(uri: &Uri) -> Result<Option<i64>, String> {
+    let Some(q) = uri.query() else {
+        return Ok(None);
+    };
+    match q
+        .split('&')
+        .filter_map(|kv| kv.split_once('='))
+        .find(|(k, _)| *k == "at")
+    {
+        Some((_, v)) => super::versions::parse_at(v).map(Some),
+        None => Ok(None),
+    }
 }
 
 /// True iff the URL has `?cm=on` (or any other truthy `cm=`) in the query string.

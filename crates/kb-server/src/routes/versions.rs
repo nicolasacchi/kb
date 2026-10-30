@@ -280,11 +280,63 @@ fn memento_out(versions: &[Version], at_unix: i64) -> MementoOut {
     }
 }
 
+/// What `?at=<unix>` on an artifact's own origin should serve (OL TIME2).
+/// Built on the SAME [`memento_for`] the versions route and the batch
+/// overlay use, so the body the reader paints is always the version those
+/// two name for that instant.
+pub(crate) enum AsOfBody {
+    /// The instant resolved to the working tree (at or after the file's
+    /// mtime): today's file, served unchanged.
+    Working,
+    /// An older version's verbatim source bytes, plus which version it is.
+    Then {
+        text: String,
+        version: Version,
+        exact: bool,
+    },
+    /// Nothing is that old (the note names the floor) or the version cannot
+    /// be read back. Never degrades to the oldest version.
+    Unserved(String),
+}
+
+/// Resolve `at` for one artifact's entry file and fetch the bytes of the
+/// version it names (`VersionCtx::raw_at`). A snapshot that cannot be read
+/// back is an honest `Unserved`, not today's body.
+pub(crate) async fn as_of_body(ctx: &KbContext, abs: &FsPath, id: &str, at_unix: i64) -> AsOfBody {
+    if ctx.versions_mode == kb_core::vcs::VersionsMode::Off {
+        return AsOfBody::Unserved(
+            "versions are off for this kb; there is no history to open".into(),
+        );
+    }
+    let rel = rel_to_git(ctx, abs);
+    let (_timeline, memento) = memento_for(ctx, abs, rel.clone(), id, at_unix).await;
+    let (exact, note) = (memento.exact, memento.note);
+    let Some(version) = memento.version else {
+        return AsOfBody::Unserved(
+            note.unwrap_or_else(|| "no version of this artifact is that old".to_string()),
+        );
+    };
+    if version.source == "working" {
+        return AsOfBody::Working;
+    }
+    match version_ctx(ctx, abs, rel, id).raw_at(&version.r#ref).await {
+        Ok(text) => AsOfBody::Then {
+            text,
+            exact,
+            version,
+        },
+        Err(e) => AsOfBody::Unserved(format!(
+            "version {} could not be read back: {e}",
+            version.short
+        )),
+    }
+}
+
 /// RFC 1123 / IMF-fixdate in GMT — the format RFC 7089 requires for
 /// `Memento-Datetime`. `None` for a timestamp chrono can't represent or a
 /// rendering that somehow isn't a valid header value (never in practice;
 /// the format is pure ASCII).
-fn http_date(ts: i64) -> Option<axum::http::HeaderValue> {
+pub(crate) fn http_date(ts: i64) -> Option<axum::http::HeaderValue> {
     let s = chrono::DateTime::from_timestamp(ts, 0)?
         .format("%a, %d %b %Y %H:%M:%S GMT")
         .to_string();
