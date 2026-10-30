@@ -342,7 +342,7 @@ test.describe("slate board — pin, composer, refusals, drawings", () => {
       });
       page.on("pageerror", (e) => errors.push(String(e)));
 
-      await page.goto("/sketch.html");
+      await page.goto(`${BASE}/sketch.html`);
       await page.evaluate((src) => {
         window.postMessage({ type: "kb-sketch/1", source: src }, "*");
       }, `flowchart LR\n  a["${label}"] --> b["plain"]`);
