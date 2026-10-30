@@ -359,6 +359,19 @@ Markdown artifacts (the rendered `<code>` elements either way), never over the
   explicitly skips the remap — there is no committed content to blame
   against.
 
+**The citation is the door.** In the SPA reader, a `<code>` element whose
+WHOLE text is a citation (or that carries `data-kb-ref`) becomes clickable: it
+is underlined and opens kb-code at that ref in a new tab. The underline says how
+far kb trusts it — dashed is kb's own unverified hint (it opens kb-code's file
+search), and it becomes solid (confirmed, or moved to the line kb-code found) or
+dotted (the file is there but the line is not verified, or it is ambiguous) once
+a checkout is chosen in the Links tab and kb-code has checked it. A path inside a
+listing (`<pre><code>see a/b.rs:7 here</code></pre>`), prose outside `<code>`,
+code inside a link, button or `<summary>`, gem/vendor (`external`) paths, issue
+links and symbols with no unique match do not become doors. A kb without a
+`code_url`, an artifact's `?p=` sub-pages and historical (`?at=`) renders get
+none.
+
 **Check what you wrote**: `kb refs <doc> --lint` reports every INFERRED-but-
 undeclared reference in a doc — the authoring-loop check before hand-adding
 `data-kb-ref` to the ones worth pinning.

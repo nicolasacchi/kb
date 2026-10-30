@@ -1909,6 +1909,36 @@ chip / `u` / browser Back) rides a per-tab sessionStorage stack
 scroll offset enters the pane's kb-probe seed ladder BETWEEN the `?sec=`/`?turn=`
 deep links and the server's resume value.
 
+*Citation-door amendment (OL IDEA6):* the citation is the door. A `<code>`
+citation inside an artifact opens kb-code at that ref. The parent SPA computes
+one door per code reference from data it already has (the `coderef/1` refs plus
+the Links tab's own doclens queries, same keys — a second observer of the #23
+exception, no refresh of its own) and posts `{kind: "kb:coderefs", doors}` into
+its own frame at the exact `artifactOrigin` target (#7). The runtime block
+(`routes/runtime_doors.js`, spliced into `runtime_js`) accepts the message only
+from `window.parent` (and the configured origin when one is set), validates each
+door independently (http/https href, closed class set), and decorates the
+matching `<code>` elements — whole-element text or `data-kb-ref`, the k-th
+occurrence of a raw taking the k-th ordinal, a nested `<code>` skipped exactly as
+the extractor skips it, a citation inside a link/button/`<summary>`/`<label>`
+consuming its ordinal without being decorated — with ATTRIBUTES and inline style
+properties only (`data-kb-coderef*`, `title`, `role`, `tabindex`, an underline
+keyed to the trust class: solid exact/moved, dotted unsure, dashed hint). It
+never inserts, wraps, removes or retexts a node, so the annotator's css-path and
+snippet anchors (#6) are untouched, and it posts nothing back: a plain click (or
+Enter) calls `window.open(href, "_blank", "noopener,noreferrer")` from the
+click itself, which rides the existing `allow-popups` sandbox flags and adds no
+router push and no history entry. The trust class comes only from a successful
+codelens/1 payload (#2: kb mints nothing and stores nothing); without one the
+door is a dashed `hint` that opens kb-code's `#file` search and says why it is
+unverified. A kb with no valid `code_url`, a `?p=` sub-page and a historical
+(`?at=`) render get no doors. The golden `runtime_doors.golden.json` ties the
+Rust extractor to the runtime's matching rule. Residual: an artifact's own
+script can read the decoration, i.e. learn whether the paths it cites resolved
+in the chosen checkout — the same posture as the annotator's comment payload
+(see `privateNoteGate.test.ts`). Native notes get the same doors as a hast pass
+wrapping the matched inline `code` in an anchor.
+
 ### 21. Daemon binds an IPv6 loopback companion alongside IPv4 loopback
 
 `serve_with_paths` binds `[server] addr` (default `127.0.0.1:4000`) and, when

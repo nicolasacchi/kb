@@ -198,7 +198,7 @@ core; the worker advances cursors, tabs mirror `kb:lid:<url>`.
 `window.location` heuristic). **Every inbound postMessage must be
 gated by `isArtifactOrigin(e.origin, suffix)`** before trusting it. The
 parent↔iframe message set: outbound `cm:mode`/`cm:flash`/`cm:refresh`;
-inbound `cm:add`/`cm:probe`/`open-artifact`/`pm:page`/`kb-probe`/`kb:scroll`.
+inbound `cm:add`/`cm:probe`/`open-artifact`/`pm:page`/`kb-probe`/`kb:scroll`; outbound `kb:coderefs` (the citation doors, OL IDEA6 — the runtime opens a door itself, nothing comes back).
 
 **SSE.** Never open `EventSource` or stream `/api/events` from tab code —
 use the `sse` singleton (invariant #24: the SharedWorker owns the
