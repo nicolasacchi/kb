@@ -192,6 +192,7 @@ pub mod shutdown;
 pub mod slates;
 pub mod slo;
 pub mod sources;
+pub mod since_visit;
 pub mod spa;
 pub mod stats;
 pub mod tags;

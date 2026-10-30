@@ -1004,9 +1004,49 @@ pub fn text_blocks(html: &str) -> String {
     let mut lines: Vec<String> = Vec::new();
     let mut cur = String::new();
     // `*body` derefs the ElementRef to the underlying NodeRef.
-    walk_blocks(*body, &mut lines, &mut cur);
+    walk_blocks(*body, &mut lines, &mut cur, &mut None);
     flush_line(&mut lines, &mut cur);
     lines.join("\n")
+}
+
+/// One h1–h3 section of a document's [`text_blocks`] output: the runtime's
+/// DOM heading id (a scroll target only), the heading's text and level, and
+/// the 0-based index in the `text_blocks` lines where the heading's text
+/// lands. Lines under h4–h6 belong to the enclosing h1–h3 section.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProseSection {
+    pub id: String,
+    pub title: String,
+    pub level: u8,
+    pub start_line: usize,
+}
+
+/// Collector threaded through [`walk_blocks`] when the caller wants sections
+/// as well as lines. `ordinal` counts EMITTED (non-blank) headings — the
+/// runtime's `out.length` for the `kb-h-h<n>` fallback.
+#[derive(Debug, Default)]
+pub(crate) struct SectionTracker {
+    pub sections: Vec<ProseSection>,
+    ordinal: usize,
+}
+
+/// [`text_blocks`] plus its h1–h3 sections, from ONE walk (the same walker,
+/// so `text` is byte-identical to `text_blocks(html)`).
+pub fn text_blocks_sectioned(html: &str) -> (String, Vec<ProseSection>) {
+    let doc = Html::parse_document(html);
+    let p = ParserSet::instance();
+    let Some(body) = doc.select(&p.body).next() else {
+        return (String::new(), Vec::new());
+    };
+    let mut lines: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut tracker = Some(SectionTracker::default());
+    walk_blocks(*body, &mut lines, &mut cur, &mut tracker);
+    flush_line(&mut lines, &mut cur);
+    (
+        lines.join("\n"),
+        tracker.map(|t| t.sections).unwrap_or_default(),
+    )
 }
 
 // --- Helpers -----------------------------------------------------------------
@@ -1222,7 +1262,14 @@ pub(crate) const TEXT_SKIP_TAGS: &[&str] = &["script", "style", "template", "nos
 
 /// Depth-first walk for [`text_blocks`]: append inline text to `cur`, and
 /// flush `cur` to `lines` at every block boundary (and `<br>`).
-fn walk_blocks(node: ego_tree::NodeRef<scraper::Node>, lines: &mut Vec<String>, cur: &mut String) {
+/// With a `tracker`, every non-blank h1–h3 also records a [`ProseSection`]
+/// (`None` — what [`text_blocks`] passes — changes nothing about the output).
+fn walk_blocks(
+    node: ego_tree::NodeRef<scraper::Node>,
+    lines: &mut Vec<String>,
+    cur: &mut String,
+    tracker: &mut Option<SectionTracker>,
+) {
     for child in node.children() {
         match child.value() {
             scraper::Node::Text(t) => {
@@ -1245,16 +1292,49 @@ fn walk_blocks(node: ego_tree::NodeRef<scraper::Node>, lines: &mut Vec<String>, 
                 }
                 if BLOCK_TAGS.contains(&name) {
                     flush_line(lines, cur);
-                    walk_blocks(child, lines, cur);
+                    if let (Some(t), Some(level)) = (tracker.as_mut(), heading_level(name)) {
+                        let text = scraper::ElementRef::wrap(child)
+                            .map(|e| e.text().collect::<String>())
+                            .unwrap_or_default();
+                        let text = text.trim();
+                        if !text.is_empty() {
+                            // An existing non-blank `id` wins verbatim (the
+                            // runtime only assigns one when `!h.id`).
+                            let id = match el.attr("id") {
+                                Some(existing) if !existing.trim().is_empty() => {
+                                    existing.trim().to_string()
+                                }
+                                _ => crate::headings::heading_id(text, t.ordinal),
+                            };
+                            t.ordinal += 1;
+                            t.sections.push(ProseSection {
+                                id,
+                                title: text.split_whitespace().collect::<Vec<_>>().join(" "),
+                                level,
+                                start_line: lines.len(),
+                            });
+                        }
+                    }
+                    walk_blocks(child, lines, cur, tracker);
                     flush_line(lines, cur);
                 } else {
                     // Inline element (a, span, em, strong, code, …) — stay on
                     // the current line.
-                    walk_blocks(child, lines, cur);
+                    walk_blocks(child, lines, cur, tracker);
                 }
             }
             _ => {}
         }
+    }
+}
+
+/// `1..=3` for `h1`..`h3` (the runtime's `querySelectorAll('h1, h2, h3')`).
+fn heading_level(name: &str) -> Option<u8> {
+    match name {
+        "h1" => Some(1),
+        "h2" => Some(2),
+        "h3" => Some(3),
+        _ => None,
     }
 }
 

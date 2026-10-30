@@ -356,6 +356,66 @@ pub fn summarize(
     }
 }
 
+/// Visit-resume gap: an `open` within this many seconds of the previous web
+/// visit's `updated_at` resumes that row instead of starting a new one. Also
+/// the liveness predicate [`since_visit_baseline`] uses, so "the current
+/// visit" and "the row a new open would resume" can never drift apart.
+pub const VISIT_GAP_SECS: i64 = 30 * 60;
+
+/// One web-class visit (`history.kind = 'open'`, `source` NULL or `web`) —
+/// the input to [`since_visit_baseline`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WebVisit {
+    pub id: i64,
+    pub started_at: i64,
+    pub updated_at: i64,
+}
+
+/// Where "since your last visit" measures from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SinceVisitBaseline {
+    /// The baseline instant: always a visit's START, never its `updated_at`.
+    pub at_unix: i64,
+    /// True when the baseline is the visit still in progress (the doc changed
+    /// after that visit began); false when it is the previous, finished visit.
+    pub current_visit: bool,
+}
+
+/// Pure baseline rule for the since-visit banner (#19: an open is a visit,
+/// not a read). `visits` is the caller's web visits for one artifact, newest
+/// first by `(started_at, id)`; only the first two are consulted.
+///
+/// A visit is *live* iff `now - updated_at < VISIT_GAP_SECS` — exactly the
+/// predicate a new open uses to resume it. Live and started before the
+/// working-tree change ⇒ that visit is the baseline (`current_visit`); live
+/// otherwise ⇒ fall back to the previous visit; finished ⇒ it is the
+/// baseline. Over-showing is the safe failure, so edits made DURING a visit
+/// show next time.
+pub fn since_visit_baseline(
+    visits: &[WebVisit],
+    working_ts: i64,
+    now: i64,
+) -> Option<SinceVisitBaseline> {
+    let v1 = visits.first()?;
+    let live = now - v1.updated_at < VISIT_GAP_SECS;
+    if !live {
+        return Some(SinceVisitBaseline {
+            at_unix: v1.started_at,
+            current_visit: false,
+        });
+    }
+    if v1.started_at < working_ts {
+        return Some(SinceVisitBaseline {
+            at_unix: v1.started_at,
+            current_visit: true,
+        });
+    }
+    visits.get(1).map(|v2| SinceVisitBaseline {
+        at_unix: v2.started_at,
+        current_visit: false,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -505,5 +565,73 @@ mod tests {
         // whole-page numbers still computed
         assert_eq!(s.completion_pct, 100);
         assert_eq!(s.visit_count, 1);
+    }
+
+    // ---- since-visit baseline (IDEA2) ---------------------------------
+
+    fn wv(id: i64, started_at: i64, updated_at: i64) -> WebVisit {
+        WebVisit {
+            id,
+            started_at,
+            updated_at,
+        }
+    }
+
+    // invariant:19 an open is a visit; the baseline is a visit's start
+    #[test]
+    fn since_visit_baseline_none_without_visits() {
+        assert_eq!(since_visit_baseline(&[], 100, 1_000), None);
+    }
+
+    #[test]
+    fn since_visit_baseline_finished_visit_is_the_baseline() {
+        let now = 10_000;
+        let v1 = wv(2, 1_000, 1_000 + 60);
+        let b = since_visit_baseline(&[v1], 5_000, now).unwrap();
+        assert_eq!(b.at_unix, 1_000);
+        assert!(!b.current_visit);
+    }
+
+    #[test]
+    fn since_visit_baseline_live_visit_started_before_change_is_current_visit() {
+        let now = 10_000;
+        let v1 = wv(2, now - 300, now - 10);
+        let v2 = wv(1, 100, 200);
+        let b = since_visit_baseline(&[v1, v2], now - 200, now).unwrap();
+        assert_eq!(b.at_unix, now - 300);
+        assert!(b.current_visit);
+    }
+
+    #[test]
+    fn since_visit_baseline_live_visit_after_change_falls_back_to_previous() {
+        let now = 10_000;
+        let v1 = wv(2, now - 300, now - 10);
+        let v2 = wv(1, 100, 200);
+        let b = since_visit_baseline(&[v1, v2], now - 400, now).unwrap();
+        assert_eq!(b.at_unix, 100);
+        assert!(!b.current_visit);
+    }
+
+    #[test]
+    fn since_visit_baseline_live_visit_after_change_without_previous_is_none() {
+        let now = 10_000;
+        let v1 = wv(2, now - 300, now - 10);
+        assert_eq!(since_visit_baseline(&[v1], now - 400, now), None);
+        // working_ts == started_at is not "before the change": still none.
+        assert_eq!(since_visit_baseline(&[v1], now - 300, now), None);
+    }
+
+    #[test]
+    fn since_visit_baseline_gap_boundary_equal_is_finished() {
+        let now = 10_000;
+        // now - updated_at == VISIT_GAP_SECS: the resume predicate is `<`,
+        // so this visit is finished, not live.
+        let v1 = wv(2, now - VISIT_GAP_SECS - 5, now - VISIT_GAP_SECS);
+        let b = since_visit_baseline(&[v1], now, now).unwrap();
+        assert_eq!(b.at_unix, now - VISIT_GAP_SECS - 5);
+        assert!(!b.current_visit);
+        // One second younger is live (and with no previous visit, none).
+        let live = wv(2, now - VISIT_GAP_SECS - 5, now - VISIT_GAP_SECS + 1);
+        assert_eq!(since_visit_baseline(&[live], now, now), None);
     }
 }

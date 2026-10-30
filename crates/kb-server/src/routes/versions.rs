@@ -58,17 +58,19 @@ pub struct VersionsParams {
 /// - a MISS (`found: false`) carries `note` + `oldest_ts_unix` instead of
 ///   quietly degrading to the oldest version.
 ///
-/// NOT ts-exported on purpose: the SPA resolves the memento client-side from
-/// the timeline it already holds in the `["versions", kb, id]` query cache
-/// (`web/src/lib/memento.ts`, golden-pinned in lock-step with
-/// `kb_core::versions::resolve_memento`), so it never reads this shape off
-/// the wire — exporting a binding no SPA code imports would be pure drift.
+/// ts-exported since OL IDEA2: the since-visit response embeds it verbatim,
+/// so the SPA now reads this shape off the wire (the `…/versions?at=`
+/// resolution itself is still done client-side from the timeline cache by
+/// `web/src/lib/memento.ts`, golden-pinned in lock-step with
+/// `kb_core::versions::resolve_memento`).
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Serialize)]
 pub struct MementoOut {
     /// Echo of the requested instant (unix seconds).
     pub at_unix: i64,
     /// Always `"nearest-prior"` — the resolution rule, stated on every
     /// response so a client never has to infer it.
+    #[cfg_attr(feature = "ts-export", ts(type = "\"nearest-prior\""))]
     pub relation: &'static str,
     /// Did anything resolve at all?
     pub found: bool,
@@ -76,12 +78,15 @@ pub struct MementoOut {
     pub exact: bool,
     /// The resolved version, verbatim from the timeline above.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub version: Option<Version>,
     /// Oldest known version's timestamp — the floor a miss ran past.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub oldest_ts_unix: Option<i64>,
     /// Honest "nothing is that old" sentence; absent when `found`.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub note: Option<String>,
 }
 
@@ -166,7 +171,7 @@ pub(crate) fn rel_to_git(ctx: &KbContext, abs: &FsPath) -> Option<String> {
     })
 }
 
-fn version_ctx<'a>(
+pub(crate) fn version_ctx<'a>(
     ctx: &'a KbContext,
     abs: &'a FsPath,
     rel_to_git: Option<String>,

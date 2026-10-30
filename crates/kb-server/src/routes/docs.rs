@@ -717,14 +717,42 @@ pub async fn list(
     // a rollup map through a pure function that's tested (and reused by
     // the folder/tag aggregators) without one. One extra whole-table fetch
     // per request when the facet is active; never cached (invariant #15).
+    //
+    // IDEA2 — `changed` is the one token that does NOT ride the legacy
+    // rollup: it is "web-opened AND modified since the newest web open"
+    // (`reading_last_web_open`, cli opens never count — #19). Each map is
+    // fetched only when a token that needs it was requested, and a row is
+    // kept iff ANY requested token matches (OR across both families).
     let read_tokens = parse_read(params.read.as_deref());
     if !read_tokens.is_empty() {
-        let full_rollup = ctx
-            .storage
-            .reading_rollup(user.clone())
-            .await
-            .unwrap_or_default();
-        filtered.retain(|r| read_token_matches(&r.doc.id, &full_rollup, &read_tokens));
+        let want_changed = read_tokens.contains(&ReadToken::Changed);
+        let legacy_tokens: Vec<ReadToken> = read_tokens
+            .iter()
+            .copied()
+            .filter(|t| *t != ReadToken::Changed)
+            .collect();
+        let full_rollup = if legacy_tokens.is_empty() {
+            Default::default()
+        } else {
+            ctx.storage
+                .reading_rollup(user.clone())
+                .await
+                .unwrap_or_default()
+        };
+        let last_web = if want_changed {
+            ctx.storage
+                .reading_last_web_open(user.clone())
+                .await
+                .unwrap_or_default()
+        } else {
+            Default::default()
+        };
+        filtered.retain(|r| {
+            (!legacy_tokens.is_empty()
+                && read_token_matches(&r.doc.id, &full_rollup, &legacy_tokens))
+                || (want_changed
+                    && changed_token_matches(r.doc.mtime_unix, last_web.get(&r.doc.id).copied()))
+        });
     }
 
     // CT-F4 — `?sort=residue` orders by "how many memories were kept from
@@ -1003,6 +1031,9 @@ enum ReadToken {
     Unread,
     InProgress,
     Read,
+    /// IDEA2 — web-opened AND modified after the newest web open. Library
+    /// (`/docs`) only; `/search`'s own `parse_read` drops it as unknown.
+    Changed,
 }
 
 /// Parse the `read` csv into the set of tokens to keep. Unknown tokens are
@@ -1017,6 +1048,7 @@ fn parse_read(s: Option<&str>) -> Vec<ReadToken> {
                 "unread" => Some(ReadToken::Unread),
                 "in_progress" => Some(ReadToken::InProgress),
                 "read" => Some(ReadToken::Read),
+                "changed" => Some(ReadToken::Changed),
                 _ => None,
             })
             .collect(),
@@ -1040,8 +1072,20 @@ fn read_token_matches(
             ReadToken::Unread => rr.state == ReadState::Unread,
             ReadToken::InProgress => rr.state == ReadState::InProgress,
             ReadToken::Read => rr.state == ReadState::Read,
+            // Not a rollup state: answered by `changed_token_matches`.
+            ReadToken::Changed => false,
         }),
         None => tokens.contains(&ReadToken::NeverOpened),
+    }
+}
+
+/// IDEA2 — the `changed` token's verdict for one row: a web open exists AND
+/// the document's `mtime_unix` is strictly newer than that open's
+/// `started_at`. Pure; a row with no mtime or no web open never matches.
+fn changed_token_matches(mtime_unix: Option<i64>, last_web_open: Option<i64>) -> bool {
+    match (mtime_unix, last_web_open) {
+        (Some(m), Some(opened)) => m > opened,
+        _ => false,
     }
 }
 
@@ -1666,6 +1710,32 @@ mod tests {
             parse_read(Some(" read , in_progress ")),
             vec![ReadToken::Read, ReadToken::InProgress]
         );
+    }
+
+    // invariant:35 read=changed is a Library token
+    #[test]
+    fn parse_read_accepts_changed() {
+        assert_eq!(parse_read(Some("changed")), vec![ReadToken::Changed]);
+        assert_eq!(
+            parse_read(Some("changed, never-opened")),
+            vec![ReadToken::Changed, ReadToken::NeverOpened]
+        );
+    }
+
+    // invariant:19 changed counts web opens only
+    #[test]
+    fn changed_token_requires_web_open_and_newer_mtime() {
+        assert!(changed_token_matches(Some(11), Some(10)));
+        assert!(
+            !changed_token_matches(Some(10), Some(10)),
+            "equal is unchanged"
+        );
+        assert!(!changed_token_matches(Some(9), Some(10)));
+        assert!(!changed_token_matches(Some(11), None), "never web-opened");
+        assert!(!changed_token_matches(None, Some(10)));
+        // The legacy matcher never answers for it.
+        let rollup: HashMap<String, ReadRollup> = HashMap::new();
+        assert!(!read_token_matches("a", &rollup, &[ReadToken::Changed]));
     }
 
     // invariant:35 read-facet (docs-gallery filter grammar)
