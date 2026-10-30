@@ -555,13 +555,12 @@ fn skip_wrapper(toks: &[String], i: usize) -> Option<usize> {
         "env" => {
             let mut k = i + 1;
             while let Some(x) = at(k) {
-                if x == "-i" || x == "-" || x == "--" {
-                    k += 1;
-                } else if x == "-u" {
+                if x == "-u" {
                     k += 2;
-                } else if x.starts_with("-u") && x.len() > 2 {
-                    k += 1;
-                } else if is_assignment(x) {
+                } else if matches!(x, "-i" | "-" | "--")
+                    || (x.starts_with("-u") && x.len() > 2)
+                    || is_assignment(x)
+                {
                     k += 1;
                 } else {
                     break;
@@ -592,9 +591,8 @@ fn skip_wrapper(toks: &[String], i: usize) -> Option<usize> {
             while let Some(x) = at(k) {
                 if x == "-c" || x == "-n" {
                     k += 2;
-                } else if (x.starts_with("-c") || x.starts_with("-n")) && x.len() > 2 {
-                    k += 1;
-                } else if x == "-t" {
+                } else if ((x.starts_with("-c") || x.starts_with("-n")) && x.len() > 2) || x == "-t"
+                {
                     k += 1;
                 } else {
                     break;
@@ -702,8 +700,7 @@ pub fn strip_wrappers(segment: &str) -> Vec<String> {
         }
     }
     let mut i = 0usize;
-    loop {
-        let Some(t) = toks.get(i) else { break };
+    while let Some(t) = toks.get(i) {
         if is_assignment(t) {
             i += 1;
             continue;
