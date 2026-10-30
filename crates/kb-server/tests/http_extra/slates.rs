@@ -161,7 +161,11 @@ pub(crate) async fn post(
     (status, v)
 }
 
-pub(crate) async fn get_json(client: &reqwest::Client, addr: std::net::SocketAddr, path: &str) -> Value {
+pub(crate) async fn get_json(
+    client: &reqwest::Client,
+    addr: std::net::SocketAddr,
+    path: &str,
+) -> Value {
     client
         .get(url(addr, path))
         .send()

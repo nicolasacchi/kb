@@ -7,8 +7,8 @@
 mod common;
 
 mod capture;
-mod changes;
 mod cat_read;
+mod changes;
 mod comments;
 mod desk;
 mod diff_between_epoch;
