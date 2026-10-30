@@ -9,7 +9,7 @@ binaries and the full text of each license that governs them.
 
 ## Overview
 
-- MIT License: 523
+- MIT License: 525
 - Apache License 2.0: 94
 - ISC License: 24
 - Unicode License v3: 23
@@ -2252,7 +2252,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 Used by:
 
-- [comrak 0.52.0](https://github.com/kivikakk/comrak)
+- [comrak 0.56.0](https://github.com/kivikakk/comrak)
 
 ```
 Copyright (c) &lt;year&gt; &lt;owner&gt; 
@@ -4728,7 +4728,9 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- [jetscii 0.5.3](https://github.com/shepmaster/jetscii)
+- [fearless_simd 1.1.0](https://github.com/linebender/fearless_simd)
+- [fearless_simd_macros 0.1.0](https://github.com/linebender/fearless_simd)
+- [memchr-n 0.1.9](https://github.com/kivikakk/memchr-n)
 
 ```
 Copyright (c) 2015-2018 Jake Goulding
