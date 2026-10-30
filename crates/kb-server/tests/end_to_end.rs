@@ -24807,6 +24807,78 @@ async fn segmented_session_chain_reads_through_the_routes() {
     );
 }
 
+/// OL IDEA3 -- the session evidence card rides the existing routes: the list
+/// row carries the derived verdict and phrase, the detail adds the per-check
+/// list and the unnamed edits. Content is the synthetic verify-after-edit
+/// fixture (Edit -> piped `cargo test` read from its output -> Edit ->
+/// background `cargo clippy` settled by a task-notification).
+#[tokio::test]
+async fn session_detail_carries_evidence_and_checks() {
+    let sid = "5e1c9a42-7b3d-4f08-a6e1-0c2d8b9f4a17";
+    let jsonl = include_str!("../../kb-core/tests/session_fixtures/verify-after-edit.jsonl");
+    let global = vec![(
+        "session-20260610T090000Z-verify-after-edit.html",
+        session_transcript_html(sid, "20260610T090000Z", jsonl),
+    )];
+    let (_tmp, addr) = boot_memory_corpora(&global, &[]).await;
+    let client = reqwest::Client::new();
+    wait_for_session(&client, addr, sid).await;
+
+    let list: serde_json::Value = client
+        .get(url(addr, "/api/sessions?limit=50"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let row = list["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["session_id"] == sid)
+        .expect("the session row")
+        .clone();
+    let ev = &row["evidence"];
+    assert_eq!(ev["verdict"], "verified");
+    assert_eq!(ev["phrase"], "cargo clippy passed after the last edit");
+    assert_eq!(
+        ev["deciding"]["cmd"],
+        "cargo clippy -p widget -- -D warnings"
+    );
+    assert_eq!(ev["checks_total"], 2);
+    assert_eq!(ev["checks_after_edit"], 1);
+    assert_eq!(ev["uncommitted"], true, "edited files, no commit detected");
+    assert!(
+        row.get("evidence_full").is_none(),
+        "the full evidence is never serialised"
+    );
+
+    let detail: serde_json::Value = client
+        .get(url(addr, &format!("/api/sessions/{sid}")))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(detail["evidence"]["verdict"], "verified");
+    let checks = detail["checks"].as_array().expect("checks on the detail");
+    assert_eq!(checks.len(), 2);
+    assert_eq!(checks[0]["label"], "cargo test");
+    assert_eq!(checks[0]["text"], "passed (read from its output)");
+    assert_eq!(checks[0]["after_last_edit"], false);
+    assert_eq!(checks[1]["label"], "cargo clippy");
+    assert_eq!(checks[1]["text"], "passed (background run)");
+    assert_eq!(checks[1]["after_last_edit"], true);
+    assert_eq!(detail["unnamed_edits"], serde_json::json!(["render.rs"]));
+    assert_eq!(detail["unnamed_edits_total"], 1);
+}
+
 // --- OL PRES1: live-touches (scrubbed file presence on auth_bearer) ---------
 
 async fn post_beat(
@@ -25012,5 +25084,343 @@ async fn touch_beat_on_already_working_session_emits_no_session_state_event() {
     assert_eq!(
         frames, 1,
         "only the start beat transitions; saw {frames}:\n{buf}"
+    );
+}
+
+// --- OL IDEA1: blocked on you (sticky flag, ?blocked=1, scrub, SSE edges) ---
+
+/// Every `session.state` payload in a captured `/api/events` body that names
+/// `session_id`, in order.
+fn session_state_frames(body: &str, session_id: &str) -> Vec<serde_json::Value> {
+    let mut kind = String::new();
+    body.lines()
+        .filter_map(|line| {
+            if let Some(e) = line.strip_prefix("event:") {
+                kind = e.trim().to_string();
+                return None;
+            }
+            let data = line.strip_prefix("data:")?;
+            let v: serde_json::Value = serde_json::from_str(data.trim()).ok()?;
+            (kind == "session.state").then_some(v["payload"].clone())
+        })
+        .filter(|p| p["session_id"] == session_id)
+        .collect()
+}
+
+#[tokio::test]
+async fn blocked_beats_are_sticky_scrubbed_and_edge_triggered() {
+    use futures::StreamExt;
+    let (_tmp, addr) = boot_with_token().await;
+    let client = reqwest::Client::new();
+    let sid = "sid-blocked-1";
+    let reason = "Claude needs your permission to use Bash";
+
+    post_beat(&client, addr, sid, "start", serde_json::json!({})).await;
+    post_beat(
+        &client,
+        addr,
+        sid,
+        "blocked",
+        serde_json::json!({"reason": reason, "tool": "Bash"}),
+    )
+    .await;
+    post_beat(&client, addr, sid, "tool", serde_json::json!({})).await;
+    post_beat(&client, addr, sid, "tool", serde_json::json!({})).await;
+
+    let get_blocked = |extra: Vec<(&'static str, String)>| {
+        let client = client.clone();
+        async move {
+            let mut req = client.get(url(addr, "/api/sessions/live-status?blocked=1"));
+            for (k, v) in extra {
+                req = req.header(k, v);
+            }
+            let resp = req.send().await.unwrap();
+            assert_eq!(resp.status().as_u16(), 200);
+            resp.json::<serde_json::Value>().await.unwrap()
+        }
+    };
+
+    let body = get_blocked(vec![]).await;
+    let rows = body["sessions"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{body}");
+    assert_eq!(rows[0]["session_id"], sid);
+    assert_eq!(rows[0]["blocked"], true);
+    assert_eq!(rows[0]["blocked_tool"], "Bash");
+    assert!(rows[0]["blocked_since_unix"].as_i64().is_some(), "{body}");
+    assert_eq!(rows[0]["detail_reason"], reason);
+
+    // A bearer, non-loopback caller sees a re-capped reason.
+    let scrubbed = get_blocked(vec![
+        ("X-Forwarded-For", "8.8.8.8".to_string()),
+        ("Authorization", format!("Bearer {FIXTURE_TOKEN}")),
+    ])
+    .await;
+    let r = scrubbed["sessions"][0]["detail_reason"].as_str().unwrap();
+    assert!(r.chars().count() <= 120, "{r}");
+
+    post_beat(&client, addr, sid, "unblocked", serde_json::json!({})).await;
+    let after = get_blocked(vec![]).await;
+    assert!(after["sessions"].as_array().unwrap().is_empty(), "{after}");
+
+    // An invalid tool name never rejects the beat and is never stored.
+    let sid2 = "sid-blocked-2";
+    post_beat(&client, addr, sid2, "start", serde_json::json!({})).await;
+    post_beat(
+        &client,
+        addr,
+        sid2,
+        "blocked",
+        serde_json::json!({"reason": reason, "tool": "Bash; rm"}),
+    )
+    .await;
+    let body2 = get_blocked(vec![]).await;
+    let rows2 = body2["sessions"].as_array().unwrap();
+    assert_eq!(rows2.len(), 1, "{body2}");
+    assert_eq!(rows2[0]["session_id"], sid2);
+    assert!(rows2[0].get("blocked_tool").is_none(), "{body2}");
+
+    // SSE: start, the blocked edge, the unblocked edge -- and no free text.
+    let resp = client.get(url(addr, "/api/events")).send().await.unwrap();
+    let mut buf = String::new();
+    let mut stream = resp.bytes_stream();
+    let _ = tokio::time::timeout(Duration::from_millis(800), async {
+        while let Some(chunk) = stream.next().await {
+            if let Ok(bytes) = chunk {
+                buf.push_str(&String::from_utf8_lossy(&bytes));
+            }
+        }
+    })
+    .await;
+    let frames = session_state_frames(&buf, sid);
+    assert_eq!(
+        frames.len(),
+        3,
+        "start + blocked edge + unblocked edge: {frames:?}"
+    );
+    assert_eq!(frames[0]["blocked"], false);
+    assert_eq!(frames[1]["blocked"], true);
+    assert_eq!(frames[1]["blocked_tool"], "Bash");
+    assert_eq!(frames[2]["blocked"], false);
+    assert!(
+        !buf.contains("needs your permission"),
+        "free text leaked:\n{buf}"
+    );
+}
+
+// --- OL IDEA4: a quiet live session names the last tool it started ----------
+
+/// Like `post_beat`, but with an explicit beat `at` (unix seconds).
+async fn post_tool_beat(
+    client: &reqwest::Client,
+    addr: std::net::SocketAddr,
+    sid: &str,
+    event: &str,
+    detail: serde_json::Value,
+    at_unix: i64,
+) {
+    let at = chrono::DateTime::from_timestamp(at_unix, 0)
+        .unwrap()
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let resp = client
+        .post(url(addr, "/api/sessions/beat"))
+        .header("Origin", ORIGIN)
+        .json(&serde_json::json!({
+            "v": 1, "session_id": sid, "harness": "claude", "event": event,
+            "at": at, "cwd": "/work/demo/repo", "detail": detail,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "beat {event}: {:?}",
+        resp.text().await
+    );
+}
+
+#[tokio::test]
+async fn live_status_names_the_last_started_tool_scrubbed_for_bearer_peers() {
+    let (_tmp, addr) = boot_with_token().await;
+    let client = reqwest::Client::new();
+    let now = chrono::Utc::now().timestamp();
+    let min = 60;
+    let start = serde_json::json!({});
+    let bash = serde_json::json!({"tool": "Bash", "phase": "start"});
+
+    // A: quiet for 49 minutes behind a Bash start; a later heartbeat keeps it.
+    post_tool_beat(
+        &client,
+        addr,
+        "sid-t-a",
+        "start",
+        start.clone(),
+        now - 60 * min,
+    )
+    .await;
+    post_tool_beat(
+        &client,
+        addr,
+        "sid-t-a",
+        "tool",
+        bash.clone(),
+        now - 50 * min,
+    )
+    .await;
+    post_tool_beat(
+        &client,
+        addr,
+        "sid-t-a",
+        "tool",
+        serde_json::json!({}),
+        now - 49 * min,
+    )
+    .await;
+    // B: a hostile tool name reduces to "unknown".
+    post_tool_beat(
+        &client,
+        addr,
+        "sid-t-b",
+        "start",
+        start.clone(),
+        now - 60 * min,
+    )
+    .await;
+    post_tool_beat(
+        &client,
+        addr,
+        "sid-t-b",
+        "tool",
+        serde_json::json!({"tool": "/etc/passwd leak-marker", "phase": "start"}),
+        now - 50 * min,
+    )
+    .await;
+    // C: a fresh Bash start is plain working, no evidence yet.
+    post_tool_beat(&client, addr, "sid-t-c", "start", start.clone(), now - 2).await;
+    post_tool_beat(&client, addr, "sid-t-c", "tool", bash.clone(), now).await;
+    // D: the turn ended after the tool -> waiting, tool cleared.
+    post_tool_beat(
+        &client,
+        addr,
+        "sid-t-d",
+        "start",
+        start.clone(),
+        now - 60 * min,
+    )
+    .await;
+    post_tool_beat(
+        &client,
+        addr,
+        "sid-t-d",
+        "tool",
+        bash.clone(),
+        now - 50 * min,
+    )
+    .await;
+    post_tool_beat(
+        &client,
+        addr,
+        "sid-t-d",
+        "turn_end",
+        start.clone(),
+        now - 49 * min,
+    )
+    .await;
+
+    let resp = client
+        .get(url(addr, "/api/sessions/live-status"))
+        .header("X-Forwarded-For", "8.8.8.8")
+        .header("Authorization", format!("Bearer {FIXTURE_TOKEN}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let text = resp.text().await.unwrap();
+    assert!(!text.contains("/etc/passwd"), "{text}");
+    assert!(!text.contains("leak-marker"), "{text}");
+    let body: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let row = |sid: &str| {
+        body["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["session_id"] == sid)
+            .unwrap_or_else(|| panic!("no row {sid}: {text}"))
+            .clone()
+    };
+
+    let a = row("sid-t-a");
+    assert_eq!(a["state"], "stalled", "{a}");
+    assert_eq!(a["last_tool"], "Bash", "{a}");
+    assert_eq!(a["last_tool_at"], now - 50 * min, "{a}");
+    let b = row("sid-t-b");
+    assert_eq!(b["state"], "stalled", "{b}");
+    assert_eq!(b["last_tool"], "unknown", "{b}");
+    let c = row("sid-t-c");
+    assert_eq!(c["state"], "working", "{c}");
+    assert!(
+        c.get("last_tool").is_none() && c.get("last_tool_at").is_none(),
+        "{c}"
+    );
+    let d = row("sid-t-d");
+    assert_eq!(d["state"], "waiting", "{d}");
+    assert!(
+        d.get("last_tool").is_none() && d.get("last_tool_at").is_none(),
+        "{d}"
+    );
+}
+
+/// A flood of tool-START beats on an already-working session must put
+/// nothing on the bus beyond the first transition, and the SSE payload
+/// never carries the tool.
+#[tokio::test]
+async fn pretool_beats_on_a_working_session_emit_no_session_state_event() {
+    use futures::StreamExt;
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let now = chrono::Utc::now().timestamp();
+    post_tool_beat(
+        &client,
+        addr,
+        "sid-pre-flood",
+        "start",
+        serde_json::json!({}),
+        now,
+    )
+    .await;
+    for i in 0..25 {
+        post_tool_beat(
+            &client,
+            addr,
+            "sid-pre-flood",
+            "tool",
+            serde_json::json!({"tool": format!("ToolNo{i}"), "phase": "start"}),
+            now,
+        )
+        .await;
+    }
+    let resp = client.get(url(addr, "/api/events")).send().await.unwrap();
+    let mut buf = String::new();
+    let mut stream = resp.bytes_stream();
+    let _ = tokio::time::timeout(Duration::from_millis(1500), async {
+        while let Some(chunk) = stream.next().await {
+            if let Ok(bytes) = chunk {
+                buf.push_str(&String::from_utf8_lossy(&bytes));
+            }
+        }
+    })
+    .await;
+    let frames = buf
+        .lines()
+        .filter_map(|l| l.strip_prefix("event:"))
+        .filter(|e| e.trim() == "session.state")
+        .count();
+    assert_eq!(
+        frames, 1,
+        "only the start beat transitions; saw {frames}:\n{buf}"
+    );
+    assert!(
+        !buf.contains("ToolNo"),
+        "tool name leaked onto the bus:\n{buf}"
     );
 }

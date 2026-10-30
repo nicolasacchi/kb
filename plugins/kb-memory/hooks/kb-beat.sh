@@ -11,8 +11,15 @@
 # ~/.codex/hooks.json, Kimi's config.toml, opencode's plugin `event`
 # handler), not here:
 #
-#   kb-beat.sh <harness> <event>
+#   kb-beat.sh <harness> <event> [phase]
 #   kb-beat.sh claude turn_end
+#   kb-beat.sh claude tool start      (kb-beat-pretool.sh only)
+#
+# The optional third argument is honoured ONLY as `start` on a `tool` event: a
+# tool-START beat (Claude PreToolUse) that carries `detail.tool` (the tool
+# NAME, capped at 64 bytes; `tool_input` is never read) and `detail.phase`
+# ("start"). Any other third argument is ignored and the body is exactly the
+# two-argument one.
 #
 # THE DISCIPLINE (design §5): a beat reports an EVENT, never a STATE.
 # event is one of start|prompt|tool|turn_end|blocked|unblocked|end — this
@@ -68,6 +75,11 @@
 #                                 write-tool file-presence fields, Claude
 #                                 PostToolUse Edit|Write|MultiEdit|
 #                                 NotebookEdit only) even when available.
+#   (blocked, claude) a Notification of type permission_prompt |
+#                                 elicitation_dialog | elicitation_url_dialog
+#                                 beats `blocked`; any other type sends nothing.
+#   (tool start) KB_BEAT_TOOLS / KB_BEAT_TOOLS_MIN_INTERVAL_SECS are read by
+#                                 kb-beat-pretool.sh, not here.
 #   KB_BEAT_DRYRUN=1             print the JSON body to stdout INSTEAD of
 #                                 posting; no backgrounding, no curl. The
 #                                 test harness's only hook into this
@@ -85,6 +97,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 
 harness="${1:-}"
 event="${2:-}"
+phase_arg="${3:-}"
 [ -n "$harness" ] && [ -n "$event" ] || exit 0
 
 input="$(cat 2>/dev/null)" || input=""
@@ -97,23 +110,25 @@ jq_field() {
 }
 
 # beat_repo_identity — sets detail_root / detail_project for $cwd. Computed
-# ONCE per (session, cwd): the answer is cached in a two-line file under the
+# ONCE per (session, cwd): the answer is cached in a three-line file under the
 # cache dir (line 1 = worktree root, line 2 = project = basename of the MAIN
-# checkout, so every worktree of one repo shares a project label). Outside git
+# checkout, so every worktree of one repo shares a project label, line 3 =
+# worktree = basename of the root when it is a LINKED worktree, else empty). Outside git
 # it falls back to the cwd and its basename. Every git call is bounded (1s) and
 # any failure degrades to the fallback — it can never fail the hook.
 beat_repo_identity() {
-  local cdir key f top common
+  local cdir key f top common main_top
   cdir="${XDG_CACHE_HOME:-$HOME/.cache}/kb"
   key="$(printf '%s' "$session_id" | tr -c 'A-Za-z0-9_-' '_')"
   key="${key:0:40}-$(printf '%s\n%s' "$session_id" "$cwd" | cksum | cut -d' ' -f1)"
-  f="$cdir/beat-repo-$key"
+  f="$cdir/beat-repo2-$key"
   if [ -r "$f" ]; then
-    { IFS= read -r detail_root; IFS= read -r detail_project; } <"$f" 2>/dev/null || true
+    { IFS= read -r detail_root; IFS= read -r detail_project; IFS= read -r detail_worktree; } <"$f" 2>/dev/null || true
   fi
   if [ -z "$detail_root" ] || [ -z "$detail_project" ]; then
     detail_root=""
     detail_project=""
+    detail_worktree=""
     if command -v git >/dev/null 2>&1; then
       top="$(_beat_t1 git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)" || top=""
       common="$(_beat_t1 git -C "$cwd" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || common=""
@@ -121,7 +136,11 @@ beat_repo_identity() {
         detail_root="$top"
         if [ -n "$common" ]; then
           common="${common%/}"
-          detail_project="$(basename "$(dirname "$common")")"
+          main_top="$(dirname "$common")"
+          detail_project="$(basename "$main_top")"
+          # A LINKED worktree (its top-level is not the main checkout):
+          # name it by basename, never a path.
+          [ "$top" = "$main_top" ] || detail_worktree="$(basename "$top")"
         else
           detail_project="$(basename "$top")"
         fi
@@ -131,9 +150,10 @@ beat_repo_identity() {
       detail_root="${cwd%/}"
       [ -n "$detail_root" ] || detail_root="/"
       detail_project="$(basename "$cwd")"
+      detail_worktree=""
     fi
     if mkdir -p "$cdir" 2>/dev/null; then
-      printf '%s\n%s\n' "$detail_root" "$detail_project" >"$f.$$" 2>/dev/null \
+      printf '%s\n%s\n%s\n' "$detail_root" "$detail_project" "$detail_worktree" >"$f.$$" 2>/dev/null \
         && mv -f "$f.$$" "$f" 2>/dev/null
       rm -f "$f.$$" 2>/dev/null
     fi
@@ -191,13 +211,63 @@ if [ "$harness" = "claude" ] && [ "$event" = "turn_end" ] \
   last_line="${last_line:0:240}"
 fi
 
-# detail.reason — blocked only, whatever the Notification payload gives.
-detail_reason=""
-if [ "$event" = "blocked" ]; then
-  detail_reason="$(jq_field '.message // .matcher // empty' "$input")"
+# Blocked-marker helper (claude only). hook_sid_key comes from the shared lib;
+# sourced fail-open: without it the marker logic is skipped silently and the
+# daemon flag still sets (it just clears at the next prompt / turn end).
+beat_marker=""
+if [ "$harness" = "claude" ]; then
+  _beat_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || _beat_dir=""
+  if [ -n "$_beat_dir" ] && [ -r "$_beat_dir/kb-hook-lib.sh" ]; then
+    . "$_beat_dir/kb-hook-lib.sh" 2>/dev/null || true
+  fi
+  if command -v hook_sid_key >/dev/null 2>&1; then
+    beat_marker="${XDG_CACHE_HOME:-$HOME/.cache}/kb/beat-blocked-$(hook_sid_key "$session_id")"
+  fi
+  case "$event" in
+    start | prompt | turn_end | end)
+      [ -z "$beat_marker" ] || rm -f "$beat_marker" 2>/dev/null
+      ;;
+  esac
 fi
 
-# detail.tool / detail.paths / detail.root / detail.project — a Claude
+# detail.reason — blocked only, whatever the Notification payload gives,
+# capped at 120 chars (Claude's own UI text, not transcript bytes).
+# detail.tool for a blocked beat (claude only) is the tool named by the
+# canonical "Claude needs your permission to use <Tool>" text, when the
+# captured token is a plain tool name.
+#
+# Claude only: which Notifications are blocks is decided HERE (the harness
+# vocabulary lives in the caller). notification_type permission_prompt |
+# elicitation_dialog | elicitation_url_dialog block; every other type,
+# including unknown future ones (idle_prompt, auth_success, ...), sends no
+# beat at all. A payload with no notification_type (older Claude Code) blocks
+# only on the "Claude needs your permission" text. Other harnesses keep the
+# unfiltered path.
+detail_reason=""
+blocked_tool=""
+if [ "$event" = "blocked" ]; then
+  detail_reason="$(jq_field '.message // .matcher // empty' "$input")"
+  if [ "$harness" = "claude" ]; then
+    detail_reason="${detail_reason:0:120}"
+    ntype="$(jq_field '.notification_type // empty' "$input")"
+    nmsg="$(jq_field '.message // empty' "$input")"
+    case "$ntype" in
+      permission_prompt | elicitation_dialog | elicitation_url_dialog) ;;
+      "")
+        case "$nmsg" in
+          "Claude needs your permission"*) ;;
+          *) exit 0 ;;
+        esac
+        ;;
+      *) exit 0 ;;
+    esac
+    if [[ "$nmsg" =~ ^Claude\ needs\ your\ permission\ to\ use\ ([A-Za-z0-9_.:-]{1,128})$ ]]; then
+      blocked_tool="${BASH_REMATCH[1]}"
+    fi
+  fi
+fi
+
+# detail.tool / detail.paths / detail.root / detail.project / detail.worktree — a Claude
 # write-tool PostToolUse beat ONLY (event=tool, tool_name in the write-tool
 # set), opt-out via KB_BEAT_PATHS=0. Paths are normalised lexically (NO git
 # realpath, no filesystem access): a relative path is joined onto cwd, "."
@@ -206,11 +276,12 @@ fi
 # base is dropped; at most 8 survive. root/project (the session's repo
 # identity) are computed ONCE per (session, cwd) and cached under the
 # cache dir, never on every beat.
-detail_tool=""
+detail_tool="$blocked_tool"
 detail_paths='[]'
 detail_root=""
 detail_project=""
-if [ "$harness" = "claude" ] && [ "$event" = "tool" ] \
+detail_worktree=""
+if [ "$harness" = "claude" ] && [ "$event" = "tool" ] && [ "$phase_arg" != "start" ] \
    && [ "${KB_BEAT_PATHS:-}" != "0" ]; then
   tool_name="$(jq_field '.tool_name // empty' "$input")"
   case "$tool_name" in
@@ -248,6 +319,20 @@ if [ "$harness" = "claude" ] && [ "$event" = "tool" ] \
   esac
 fi
 
+# detail.tool / detail.phase — a tool-START beat only (event=tool, third
+# argument `start`; kb-beat-pretool.sh is the one caller). The NAME only: the
+# daemon reduces it again through its own label grammar. No path extraction
+# runs for it (above), and tool_input is never read.
+detail_phase=""
+if [ "$event" = "tool" ] && [ "$phase_arg" = "start" ]; then
+  start_tool="$(jq_field '.tool_name // empty' "$input")"
+  start_tool="$(LC_ALL=C; printf '%s' "${start_tool:0:64}")"
+  if [ -n "$start_tool" ]; then
+    detail_tool="$start_tool"
+    detail_phase="start"
+  fi
+fi
+
 host="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo unknown)"
 pid="${PPID:-0}"
 case "$pid" in '' | *[!0-9]*) pid=0 ;; esac
@@ -270,8 +355,10 @@ body="$(jq -n \
   --arg detail_reason "$detail_reason" \
   --arg detail_tool "$detail_tool" \
   --argjson detail_paths "$detail_paths" \
+  --arg detail_phase "$detail_phase" \
   --arg detail_root "$detail_root" \
   --arg detail_project "$detail_project" \
+  --arg detail_worktree "$detail_worktree" \
   '{v: 1, session_id: $session_id, harness: $harness, event: $event, at: $at}
    + (if $host != "" then {host: $host} else {} end)
    + (if $pid > 0 then {pid: $pid} else {} end)
@@ -281,12 +368,23 @@ body="$(jq -n \
    + (if $last_line != "" then {last_line: $last_line} else {} end)
    + ( ( (if $detail_reason != "" then {reason: $detail_reason} else {} end)
        + (if $detail_tool != "" then {tool: $detail_tool} else {} end)
+       + (if $detail_phase != "" then {phase: $detail_phase} else {} end)
        + (if ($detail_paths | length) > 0
           then {paths: $detail_paths, root: $detail_root, project: $detail_project}
+               + (if $detail_worktree != "" then {worktree: $detail_worktree} else {} end)
           else {} end) ) as $d
      | if ($d | length) > 0 then {detail: $d} else {} end )
   ' 2>/dev/null)"
 [ -n "$body" ] || exit 0
+
+# Blocked marker: records which agent (empty = main thread) owns the pending
+# prompt, so kb-beat-throttle.sh can emit `unblocked` on that agent's next
+# PostToolUse. Written even in DRYRUN so the harness can test it.
+if [ "$harness" = "claude" ] && [ "$event" = "blocked" ] && [ -n "$beat_marker" ]; then
+  if mkdir -p "$(dirname "$beat_marker")" 2>/dev/null; then
+    printf '%s' "$(jq_field '.agent_id // empty' "$input")" >"$beat_marker" 2>/dev/null || true
+  fi
+fi
 
 if [ "${KB_BEAT_DRYRUN:-}" = "1" ]; then
   printf '%s\n' "$body"

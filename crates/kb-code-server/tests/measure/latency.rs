@@ -285,6 +285,7 @@ fn search_lanes_meet_their_p50_latency_budget_on_a_real_scale_corpus() {
         let repo_entry = kb_code_server::config::RepoEntry {
             name: "lat".into(),
             path: repo_root.clone(),
+            projects: Vec::new(),
         };
         let repos = vec![repo_entry.clone()];
         let mut repo_ids = std::collections::HashMap::new();
@@ -403,6 +404,7 @@ fn search_lanes_meet_their_p50_latency_budget_on_a_real_scale_corpus() {
         let repo_entry = kb_code_server::config::RepoEntry {
             name: "lat".into(),
             path: repo_root.clone(),
+            projects: Vec::new(),
         };
         // Warm (usages_counts_at materializes the same classifier as usages_at).
         let frow = store
@@ -559,6 +561,7 @@ fn search_lanes_meet_their_p50_latency_budget_on_a_real_scale_corpus() {
         let repo_entry = kb_code_server::config::RepoEntry {
             name: "lat".into(),
             path: repo_root.clone(),
+            projects: Vec::new(),
         };
         let bf = kb_code_server::behavioral::backfill_repo(&repo_entry, repo_id, &cfg, &store)
             .expect("behavioral backfill");
@@ -871,6 +874,7 @@ fn pr_room_reads_meet_their_p50_latency_budget_on_a_multi_review_fixture() {
         let repo_entry = kb_code_server::config::RepoEntry {
             name: "kb".into(),
             path: repo_root.clone(),
+            projects: Vec::new(),
         };
 
         // Warm + sanity: the fixture really does produce 50+ call sites.

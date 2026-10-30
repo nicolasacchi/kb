@@ -68,6 +68,7 @@ async fn boot_with_repo(name: &str, path: &Path) -> (tempfile::TempDir, String) 
         repos: vec![RepoEntry {
             name: name.to_string(),
             path: std::fs::canonicalize(path).unwrap(),
+            projects: Vec::new(),
         }],
         kb_daemon: disabled_kb_daemon(),
         ..KbCodeConfig::default()
@@ -399,6 +400,7 @@ async fn prs_route_lists_open_prs_from_a_mocked_github_api() {
         repos: vec![RepoEntry {
             name: "fixture".to_string(),
             path: dir.clone(),
+            projects: Vec::new(),
         }],
         kb_daemon: disabled_kb_daemon(),
         github: GithubSection {
@@ -457,6 +459,7 @@ async fn prs_route_degrades_to_unavailable_reason_on_a_403_never_500s() {
         repos: vec![RepoEntry {
             name: "fixture".to_string(),
             path: dir.clone(),
+            projects: Vec::new(),
         }],
         kb_daemon: disabled_kb_daemon(),
         github: GithubSection {
@@ -555,6 +558,7 @@ async fn pr_comments_route_merges_review_and_issue_comments() {
         repos: vec![RepoEntry {
             name: "fixture".to_string(),
             path: dir.clone(),
+            projects: Vec::new(),
         }],
         kb_daemon: disabled_kb_daemon(),
         github: GithubSection {
@@ -718,6 +722,7 @@ async fn pr_route_returns_full_detail_for_a_merged_pr() {
         repos: vec![RepoEntry {
             name: "fixture".to_string(),
             path: dir.clone(),
+            projects: Vec::new(),
         }],
         kb_daemon: disabled_kb_daemon(),
         github: GithubSection {
@@ -773,6 +778,7 @@ async fn pr_route_degrades_to_unavailable_reason_never_500s() {
         repos: vec![RepoEntry {
             name: "fixture".to_string(),
             path: dir.clone(),
+            projects: Vec::new(),
         }],
         kb_daemon: disabled_kb_daemon(),
         github: GithubSection {
@@ -844,6 +850,7 @@ async fn pr_checks_route_reports_normalized_checks_for_the_prs_head_sha() {
         repos: vec![RepoEntry {
             name: "fixture".to_string(),
             path: dir.clone(),
+            projects: Vec::new(),
         }],
         kb_daemon: disabled_kb_daemon(),
         github: GithubSection {
@@ -906,6 +913,7 @@ async fn pr_reviews_route_reports_per_reviewer_state_and_decision() {
         repos: vec![RepoEntry {
             name: "fixture".to_string(),
             path: dir.clone(),
+            projects: Vec::new(),
         }],
         kb_daemon: disabled_kb_daemon(),
         github: GithubSection {
@@ -1066,6 +1074,7 @@ async fn create_review_pr_binds_captures_ps1_and_enriches_metadata() {
         repos: vec![RepoEntry {
             name: "fixture".to_string(),
             path: dir.clone(),
+            projects: Vec::new(),
         }],
         kb_daemon: disabled_kb_daemon(),
         github: GithubSection {
@@ -1135,6 +1144,7 @@ async fn create_review_pr_degrades_metadata_on_a_github_side_403_but_still_creat
         repos: vec![RepoEntry {
             name: "fixture".to_string(),
             path: dir.clone(),
+            projects: Vec::new(),
         }],
         kb_daemon: disabled_kb_daemon(),
         github: GithubSection {
@@ -1188,6 +1198,7 @@ async fn create_review_pr_reports_no_credentials_on_a_404_without_a_token() {
         repos: vec![RepoEntry {
             name: "fixture".to_string(),
             path: dir.clone(),
+            projects: Vec::new(),
         }],
         kb_daemon: disabled_kb_daemon(),
         github: GithubSection {
@@ -1222,6 +1233,7 @@ async fn create_review_pr_gh_token_is_refused_off_loopback() {
         repos: vec![RepoEntry {
             name: "fixture".to_string(),
             path: dir.clone(),
+            projects: Vec::new(),
         }],
         kb_daemon: disabled_kb_daemon(),
         ..KbCodeConfig::default()
@@ -1259,6 +1271,7 @@ async fn create_review_pr_reuses_an_open_binding() {
         repos: vec![RepoEntry {
             name: "fixture".to_string(),
             path: dir.clone(),
+            projects: Vec::new(),
         }],
         kb_daemon: disabled_kb_daemon(),
         github: GithubSection {
@@ -1305,6 +1318,7 @@ async fn create_review_pr_closed_is_409_unless_on_closed_reopen_or_new() {
         repos: vec![RepoEntry {
             name: "fixture".to_string(),
             path: dir.clone(),
+            projects: Vec::new(),
         }],
         kb_daemon: disabled_kb_daemon(),
         github: GithubSection {
@@ -1408,6 +1422,7 @@ async fn review_refs_list_and_gc_dry_run_vs_apply() {
         repos: vec![RepoEntry {
             name: "fixture".to_string(),
             path: dir.clone(),
+            projects: Vec::new(),
         }],
         kb_daemon: disabled_kb_daemon(),
         github: GithubSection {
@@ -2035,6 +2050,7 @@ async fn additive_pr_binding_and_report_fields_reflect_a_bound_review_with_a_rep
         repos: vec![RepoEntry {
             name: "fixture".to_string(),
             path: dir.clone(),
+            projects: Vec::new(),
         }],
         kb_daemon: disabled_kb_daemon(),
         github: GithubSection {
@@ -2171,6 +2187,7 @@ async fn pr_status_reports_local_match_and_live_success_with_zero_commits_behind
         repos: vec![RepoEntry {
             name: "fixture".to_string(),
             path: dir.clone(),
+            projects: Vec::new(),
         }],
         kb_daemon: disabled_kb_daemon(),
         github: GithubSection {
@@ -2222,6 +2239,7 @@ async fn pr_status_reports_local_mismatch_after_a_further_local_commit_without_a
         repos: vec![RepoEntry {
             name: "fixture".to_string(),
             path: dir.clone(),
+            projects: Vec::new(),
         }],
         kb_daemon: disabled_kb_daemon(),
         github: GithubSection {
@@ -2310,6 +2328,7 @@ async fn pr_status_degrades_the_live_half_when_github_is_unavailable() {
         repos: vec![RepoEntry {
             name: "fixture".to_string(),
             path: dir.clone(),
+            projects: Vec::new(),
         }],
         kb_daemon: disabled_kb_daemon(),
         github: GithubSection {
@@ -2667,6 +2686,7 @@ async fn boot_pr_fixture(dir: &Path, gh_addr: SocketAddr) -> (tempfile::TempDir,
         repos: vec![RepoEntry {
             name: "fixture".to_string(),
             path: dir.to_path_buf(),
+            projects: Vec::new(),
         }],
         kb_daemon: disabled_kb_daemon(),
         github: GithubSection {

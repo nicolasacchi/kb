@@ -118,6 +118,7 @@ async fn since_reads_a_rebase_as_rebase_only_and_an_edit_as_exactly_the_new_hunk
     let (_tmp, base) = boot(vec![RepoEntry {
         name: "r".to_string(),
         path: std::fs::canonicalize(dir).unwrap(),
+        projects: Vec::new(),
     }])
     .await;
     let client = reqwest::Client::new();
@@ -231,6 +232,7 @@ async fn since_refuses_honestly() {
     let (_tmp, base) = boot(vec![RepoEntry {
         name: "r".to_string(),
         path: std::fs::canonicalize(repo_tmp.path()).unwrap(),
+        projects: Vec::new(),
     }])
     .await;
     let client = reqwest::Client::new();
@@ -331,6 +333,7 @@ async fn the_queue_lists_unanswered_human_questions_and_disputes_until_the_agent
     let (_tmp, base) = boot(vec![RepoEntry {
         name: "r".to_string(),
         path: std::fs::canonicalize(repo_tmp.path()).unwrap(),
+        projects: Vec::new(),
     }])
     .await;
     let client = reqwest::Client::new();
@@ -435,6 +438,7 @@ async fn an_agreed_finding_is_a_follow_up_until_a_suggestion_lands() {
     let (_tmp, base) = boot(vec![RepoEntry {
         name: "r".to_string(),
         path: std::fs::canonicalize(repo_tmp.path()).unwrap(),
+        projects: Vec::new(),
     }])
     .await;
     let client = reqwest::Client::new();

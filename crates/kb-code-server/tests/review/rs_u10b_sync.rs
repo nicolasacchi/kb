@@ -47,6 +47,7 @@ fn cfg(path: &Path, gh_addr: SocketAddr) -> KbCodeConfig {
         repos: vec![RepoEntry {
             name: REPO.to_string(),
             path: path.to_path_buf(),
+            projects: Vec::new(),
         }],
         kb_daemon: KbDaemonSection {
             enabled: false,

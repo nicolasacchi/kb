@@ -207,6 +207,7 @@ async fn boot(repo: &Path, kb_addr: SocketAddr) -> Boot {
         repos: vec![RepoEntry {
             name: "delta".to_string(),
             path: std::fs::canonicalize(repo).unwrap(),
+            projects: Vec::new(),
         }],
         kb_daemon: KbDaemonSection {
             enabled: true,

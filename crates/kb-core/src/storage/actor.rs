@@ -1290,6 +1290,12 @@ pub enum StorageMsg {
         offset: u32,
         reply: oneshot::Sender<Result<Vec<CommitMapRow>>>,
     },
+    /// OL IDEA5 — sessions with activity after `since_unix` (read lane).
+    SessionsActiveSince {
+        since_unix: i64,
+        limit: u32,
+        reply: oneshot::Sender<Result<Vec<SessionRow>>>,
+    },
     /// R4 — session research: replace one session's research signals.
     SessionResearchReplace {
         artifact_id_session: String,
@@ -1655,6 +1661,7 @@ fn is_read_lane(msg: &StorageMsg) -> bool {
             | StorageMsg::SessionCommitsForSessions { .. }
             | StorageMsg::SessionCommitsBySha { .. }
             | StorageMsg::SessionCommitsPage { .. }
+            | StorageMsg::SessionsActiveSince { .. }
             | StorageMsg::SessionResearchForSession { .. }
             | StorageMsg::SessionResearchForSessions { .. }
             | StorageMsg::SessionResearchByJob { .. }
@@ -3573,6 +3580,13 @@ impl StorageActor {
                 reply,
             } => {
                 let _ = reply.send(self.db.session_commits_page(since, limit, offset));
+            }
+            StorageMsg::SessionsActiveSince {
+                since_unix,
+                limit,
+                reply,
+            } => {
+                let _ = reply.send(self.db.sessions_active_since(since_unix, limit));
             }
             StorageMsg::SessionResearchReplace {
                 artifact_id_session,
@@ -5740,6 +5754,21 @@ impl StorageHandle {
         .await
     }
 
+    /// OL IDEA5 — sessions with activity (`MAX(ended_at, started_at)`) after
+    /// `since_unix`, newest activity first, newest capture only.
+    pub async fn sessions_active_since(
+        &self,
+        since_unix: i64,
+        limit: u32,
+    ) -> Result<Vec<SessionRow>> {
+        self.send_and_await(|reply| StorageMsg::SessionsActiveSince {
+            since_unix,
+            limit,
+            reply,
+        })
+        .await
+    }
+
     /// R4 — session research: replace one session's research signals.
     pub async fn session_research_replace(
         &self,
@@ -6288,6 +6317,7 @@ mod tests {
             substance: None,
             segment_of: None,
             segment_idx: None,
+            evidence_json: None,
         };
         h.sessions_upsert(row).await.unwrap();
         let g0 = h.index_generation();
@@ -7047,6 +7077,12 @@ mod tests {
             reply
         }));
         assert!(lane(|reply| StorageMsg::CountRows { reply }));
+        // OL IDEA5 — the activity-window sessions read.
+        assert!(lane(|reply| StorageMsg::SessionsActiveSince {
+            since_unix: 0,
+            limit: 1,
+            reply
+        }));
         assert!(lane(|reply| StorageMsg::BacklinksOf {
             id: "a".into(),
             reply

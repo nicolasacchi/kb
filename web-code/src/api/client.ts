@@ -5,6 +5,7 @@
 // `/api/...` fetch, proxied to 127.0.0.1:4747 in dev (`vite.config.ts`) and
 // same-origin once `web-code/dist` is served by the daemon itself.
 
+import type { PresenceWire } from "../lib/presence";
 import type { SeqListOut } from "./seq";
 import type {
   AnchorKind,
@@ -91,6 +92,7 @@ import type {
   TreeResponse,
   TreeV2Response,
   UnifiedSearchResponse,
+  KbBlockedOut,
   KbSearchOut,
   KbUiOut,
   AgeOut,
@@ -381,6 +383,22 @@ export function fetchKbSearch(
   signal?: AbortSignal,
 ): Promise<KbSearchOut> {
   return getJson<KbSearchOut>("/api/kb/search", { q, limit: String(limit) }, signal);
+}
+
+/// `GET /api/kb/presence?repo=` - kbc-presence/1 (OL PRES2): the files agents
+/// touched recently, mapped onto this repo. Always a body: a missing kb is
+/// `available:false` with a caption, never a rejection. Only
+/// `hooks/usePresence.ts` calls it.
+export function fetchPresence(repo: string, signal?: AbortSignal): Promise<PresenceWire> {
+  return getJson<PresenceWire>("/api/kb/presence", { repo }, signal);
+}
+
+/// `GET /api/kb/blocked` - the sessions kb reports as blocked on the operator,
+/// relayed by kb-code-server (OL IDEA1). Always resolves with a body: a missing
+/// kb is `unavailable`, not a rejection. `hooks/useKbBlocked.ts` is the sole
+/// caller.
+export function fetchKbBlocked(signal?: AbortSignal): Promise<KbBlockedOut> {
+  return getJson<KbBlockedOut>("/api/kb/blocked", {}, signal);
 }
 
 /// `GET /api/kb/ui` - kb's theme family, relayed (OL S1). `lib/kbTheme.ts`.

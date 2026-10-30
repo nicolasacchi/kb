@@ -469,6 +469,43 @@ GET  /api/kb/search?q=&limit=              OL S1: kb's `GET /api/search`
                                             "kb disabled"}`, a kb-sibling/1
                                             mismatch `unavailable:
                                             "kb_sibling_mismatch"`.
+GET  /api/kb/blocked                       OL IDEA1: kb's
+                                            `GET /api/sessions/live-status?
+                                            blocked=1` reduced to `{sessions:
+                                            [{session_id, harness, project?,
+                                            blocked_tool?, since_unix}],
+                                            kb_public_url, total, truncated}`
+                                            (oldest block first, 20 rows max).
+                                            No cwd, title, last line, reason,
+                                            model or host. `kb_public_url` is
+                                            empty unless `[kb_daemon]
+                                            public_url` is set. Always 200:
+                                            `unavailable:"kb disabled" |
+                                            "kb unreachable" |
+                                            "kb_sibling_mismatch"`.
+GET  /api/kb/presence[?repo=NAME]          OL PRES2: kb's `GET /api/sessions/
+                                            live-touches` mapped onto the
+                                            configured repos, as
+                                            `kbc-presence/1` `{available,
+                                            caption?, now_unix, files:[{repo,
+                                            worktree?, path, session_id,
+                                            harness, state, age_secs}]}`,
+                                            newest first, one row per
+                                            (repo, worktree, path, session),
+                                            200 rows max. A row with
+                                            `worktree` is an edit in a linked
+                                            worktree, NOT in the main
+                                            checkout's file. Always 200: a
+                                            failure gives `available:false`
+                                            plus a caption ("kb disabled",
+                                            "kb_sibling_mismatch", "kb timed
+                                            out", "kb unreachable", "kb too
+                                            old for presence", "unknown
+                                            repo"); unmapped / ambiguous
+                                            projects are counted in the
+                                            caption ("N edits outside
+                                            configured repos", "N edits in
+                                            ambiguous projects").
 GET  /api/kb/ui                            OL S1: kb's `theme_family` +
                                             `theme` from `GET /api/settings`
                                             (malformed values -> null), same
@@ -798,6 +835,42 @@ GET  /api/sessions[?cursor=<unix>&limit=N   Cross-kb list of captured Claude
                                             so nothing is hidden silently;
                                             any other value is a 400) keeps
                                             only the LAST part of each chain.
+                                            OL IDEA3 — every row carries an
+                                            additive `evidence` object: the
+                                            session evidence card, DERIVED at
+                                            read time from the persisted
+                                            `sessions.evidence_json` (V0046).
+                                            `verdict` is one of `verified`
+                                            (a check passed after the last
+                                            edit) · `failing` · `unconfirmed`
+                                            (checks ran after the last edit
+                                            but none ended decisively) ·
+                                            `stale` (the last check ran
+                                            before the last edit) ·
+                                            `unchecked` (edited, no check at
+                                            all) · `no_edits` · `not_extracted`
+                                            (a NULL, unreadable or
+                                            future-versioned column: a
+                                            pre-V0046 capture, `kb reindex`
+                                            fills it). Alongside it: `phrase`
+                                            (the ONE sentence, absent for
+                                            `no_edits`/`not_extracted`),
+                                            `deciding` (the check it rests
+                                            on: `label`, `cmd`, `outcome`,
+                                            `basis`, `why`, `exit_code`,
+                                            `at`, `after_last_edit`, `text`),
+                                            `last_edit_at`, `checks_total`,
+                                            `checks_after_edit`,
+                                            `edits_ignored` and `uncommitted`
+                                            (files edited, no commit
+                                            detected). MAIN TRANSCRIPT ONLY:
+                                            edits are Edit/Write tool calls
+                                            (edits made through Bash or by
+                                            subagents are not seen) and
+                                            checks are a closed list of test,
+                                            lint and build commands. SURFACED,
+                                            NEVER SCORED: no route sorts,
+                                            filters or ranks on it.
 GET  /api/sessions/recall-coverage[?days=7]  v0.44 F10 — recall-hook coverage
                                             per harness over the trailing
                                             window (default 7, clamp 1-365),
@@ -847,7 +920,16 @@ GET  /api/sessions/{session_id}             Single session + memory_ids list.
                                             as the list plus `segment_chain`
                                             (every part's session id, part 1
                                             first; absent for an ordinary
-                                            session), and `memory_ids` for the
+                                            session), the `evidence` object
+                                            above plus `checks` (the newest 16
+                                            checks the capture ran, oldest
+                                            first, each with its server-made
+                                            `text` and `after_last_edit`),
+                                            `unnamed_edits` (basenames of
+                                            counted edits the closing text
+                                            never names, capped at 12) and
+                                            `unnamed_edits_total` (each absent
+                                            when empty), and `memory_ids` for the
                                             RAW id also covers memories
                                             stamped with a part's own id (a
                                             part asked by its own id reads
@@ -1062,8 +1144,37 @@ POST /api/sessions/beat                     LSC-2/3 (live-sessions cockpit
                                             registry (LF-7), 7-day TTL, capped
                                             at 4096 sessions. Fires
                                             `session.state` SSE only when the
-                                            derived state actually CHANGES
-                                            (never per beat, #24). Response
+                                            derived view `(state, blocked)`
+                                            actually CHANGES (never per beat,
+                                            #24); the payload is
+                                            `{session_id, harness, state,
+                                            holder, project, since_unix,
+                                            blocked, blocked_tool?}`, never
+                                            free text. `blocked` is STICKY
+                                            (OL IDEA1): a `blocked` beat sets
+                                            it, a `tool` beat keeps it,
+                                            `start|prompt|unblocked|turn_end|
+                                            end` clear it. On a `blocked`
+                                            beat `detail.reason` is capped at
+                                            120 chars and `detail.tool` is
+                                            kept only as a plain token
+                                            (`[A-Za-z0-9_.:-]`, 1..128); an
+                                            invalid tool never rejects the
+                                            beat. OL IDEA4 — a `tool` beat
+                                            with `detail:{tool, phase:"start"}`
+                                            (Claude `PreToolUse`, deduped
+                                            hook-side) records the newest
+                                            STARTED tool in memory: the name
+                                            is reduced to a label (`mcp` for
+                                            `mcp__…`, `unknown` outside
+                                            `^[A-Za-z][A-Za-z0-9_.-]{0,31}$`)
+                                            and the instant is capped at now;
+                                            `start|prompt|turn_end|end` clear
+                                            it, every other beat keeps it, and
+                                            an older beat never replaces a
+                                            newer one. No event is emitted for
+                                            it and the SSE payload never
+                                            carries it. Response
                                             `{ok, session_id, state, holder,
                                             confidence}`. `auth_bearer` — see
                                             invariant #11's LSC amendment for
@@ -1077,7 +1188,8 @@ POST /api/sessions/beat                     LSC-2/3 (live-sessions cockpit
                                             see
                                             docs/live-sessions.md).
 GET  /api/sessions/live-status              LSC-2 — the merged cockpit read:
-     [?state=&harness=&project=&limit=]     every beat-tracked registry row
+     [?state=&harness=&project=&limit=      every beat-tracked registry row
+      &blocked=1]
                                             (`source:"hook"`,
                                             `confidence:"observed"`) PLUS a
                                             Tier-0 degraded layer rebuilt from
@@ -1102,17 +1214,40 @@ GET  /api/sessions/live-status              LSC-2 — the merged cockpit read:
                                             gets the SAME rows through a
                                             forced-scrub floor (`cwd`
                                             collapsed to its basename,
-                                            `last_line` re-capped) rather
-                                            than a 403. `Cache-Control:
+                                            `last_line` and `detail_reason`
+                                            re-capped) rather than a 403.
+                                            A blocked row also carries
+                                            `blocked_tool?` and
+                                            `blocked_since_unix?`. OL IDEA4:
+                                            a quiet agent-held hook row also
+                                            carries `last_tool?` (a label,
+                                            never arguments) and
+                                            `last_tool_at?` (unix seconds) —
+                                            only when the state is `stalled`
+                                            or `presumed_ended`, or `working`
+                                            and silent >= 5 min; absent
+                                            otherwise and on every Tier-0
+                                            row. Started, not running. A
+                                            non-loopback caller's scrub drops
+                                            a `last_tool` that fails the
+                                            label grammar.
+                                            `?blocked=1|true|on` keeps only
+                                            rows blocked on the operator
+                                            (not `presumed_ended`) and skips
+                                            the Tier-0 fan-out, so it is
+                                            memory-only. `Cache-Control:
                                             no-store`. CLI: `kb sessions
                                             status` (this IS the default
                                             mode; `--local` is the
                                             direct-disk, every-harness twin).
 GET  /api/sessions/live-touches            OL PRES1 — which files live agent
      [?project=…&project=…                  sessions are touching: per touch
-      &max_age_secs=&harness=]              `{project, rel, session_id,
-                                            harness, state, age_secs, tool}`
-                                            (kb-live-touches/1), freshest
+      &max_age_secs=&harness=]              `{project, worktree?, rel,
+                                            session_id, harness, state,
+                                            age_secs, tool}` (`worktree` =
+                                            a linked worktree's basename,
+                                            absent for the main checkout;
+                                            kb-live-touches/1), freshest
                                             first, 500 cap + `truncated`.
                                             `rel` is relative to a repo root
                                             the daemon never kept, so no
@@ -1579,6 +1714,109 @@ GET  /api/turn?q=…|prompt=…[&session=SID&cwd=PATH&deadline_ms=N
                                             corpus that answered keyword-only
                                             because its query embedder is down
                                             is named `embed`. No re-ranking.
+
+# OL IDEA5 — "since you left", the PROJECT axis
+GET  /api/changes?since=<unix>[&project=ID_OR_LABEL&session=SID]
+                                            what happened across PROJECTS
+                                            since a time: the sessions that
+                                            ran (and how they closed), the
+                                            commits they recorded, and what
+                                            was posted on each project's
+                                            slate. The CORPUS axis (artifacts,
+                                            memory notes, comments raised) is
+                                            NOT rebuilt here: it stays
+                                            GET /api/kb/{kb}/daycard?since=
+                                            (corpus axis = daycard?since), and
+                                            the Front Page strip links to
+                                            /ambient for it. `since` is
+                                            REQUIRED unix seconds (absent or
+                                            unparseable = 400 problem+json). A
+                                            `since` more than 300s in the
+                                            future is a 400; up to 300s ahead
+                                            (client clock skew) is clamped to
+                                            now and answers an empty 200.
+                                            Older than 31 days is clamped to
+                                            31 days with `window_clamped:
+                                            true`. `since_unix` echoes the
+                                            APPLIED bound and `to_unix` is
+                                            now: the window is wall-clock and
+                                            not reproducible across requests.
+                                            Lanes, each labelled "activity
+                                            since", never "events since":
+                                            sessions are keyed on ACTIVITY
+                                            (MAX(ended_at, started_at)), so a
+                                            session that began before `since`
+                                            and kept working after it is
+                                            listed (`started_before_since`);
+                                            newest capture only (#11), at most
+                                            500 per corpus (`sessions_scan_
+                                            capped`), the caller's own
+                                            `session` and its continuation
+                                            parts excluded, trivial sessions
+                                            counted in `trivial_sessions_
+                                            hidden` but not listed, and every
+                                            session COUNT is of LOGICAL
+                                            sessions (parts are listed, a
+                                            chain counts once). Commits are
+                                            listed under the session that
+                                            recorded them (newest first, 5
+                                            per session, `commits_total`);
+                                            kb stores no commit time, so a
+                                            session with `started_before_
+                                            since` may list commits made
+                                            before the watermark. The slate
+                                            lane reads the append-only ledger
+                                            by `at` (daemon receipt clock)
+                                            through the SAME projection's
+                                            hidden map `kb slate` uses, never
+                                            the board-membership delta, so a
+                                            `done` and a take posted and done
+                                            inside the window both count:
+                                            take/idea/tried/mark/drop posts
+                                            count in `other_total`, posts
+                                            dropped or superseded in
+                                            `retracted_total` (neither is
+                                            listed), the rest are listed (8
+                                            max, `closed` where a `done`
+                                            closed them), and a slate rotated
+                                            inside the window sets
+                                            `archived_in_window` (archived
+                                            posts are named, not read).
+                                            Groups: one per project, using the
+                                            SAME identity as
+                                            /api/sessions/projects (registry
+                                            id, else the derived
+                                            `project_key`/cwd key), so a group
+                                            id is accepted by
+                                            /sessions?project=; a slate joins
+                                            the group whose id, else label,
+                                            equals its slug, else is its own
+                                            `source: "slate"` group; rows with
+                                            no project go to one
+                                            "(unattributed)" group. Ordered by
+                                            `latest_unix` (time, never a
+                                            score), at most 20 groups
+                                            (`projects_total`/`projects_
+                                            truncated`). `project=` keeps
+                                            groups whose id or label equals
+                                            the value, and filters ONLY `projects[]`: `trivial_sessions_hidden`,
+                                            `sessions_scan_capped` and
+                                            `degraded[]` stay fleet-wide.
+                                            A failing corpus is
+                                            named in `degraded[]` and an
+                                            unreadable slate in
+                                            `slates_skipped[]`; neither 500s.
+                                            The wire NEVER carries cwd,
+                                            repo_root, transcript text, or a
+                                            slate post's body/refs/prov (the
+                                            slate read always uses the
+                                            strictest scrub floor), so the
+                                            route is bearer-visible on the
+                                            plain /api tree like /context —
+                                            it narrows /api/sessions* and
+                                            /api/slates*, never widens them.
+                                            Responses are `Cache-Control:
+                                            no-store`. CLI: `kb changes`.
 
 # v0.38 CT-D1 — the ONE context pack
 GET  /api/context?q=…[&cwd=PATH&budget=N&session=SID&no_floor=true

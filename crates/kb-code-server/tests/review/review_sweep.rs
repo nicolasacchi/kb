@@ -67,6 +67,7 @@ fn cfg_for(dir: &Path, gh_addr: SocketAddr) -> KbCodeConfig {
         repos: vec![RepoEntry {
             name: "fixture".to_string(),
             path: dir.to_path_buf(),
+            projects: Vec::new(),
         }],
         kb_daemon: disabled_kb_daemon(),
         github: GithubSection {

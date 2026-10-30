@@ -62,6 +62,7 @@ async fn boot(name: &str, path: &Path, trails: TrailsSection) -> Boot {
         repos: vec![RepoEntry {
             name: name.to_string(),
             path: std::fs::canonicalize(path).unwrap(),
+            projects: Vec::new(),
         }],
         kb_daemon: KbDaemonSection {
             enabled: false,

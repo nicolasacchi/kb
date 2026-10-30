@@ -36,7 +36,7 @@
 
 use anyhow::{bail, Result};
 use kb_core::sessions::live::{
-    Confidence, Holder, LivePolicy, LiveSession, LiveState, StateSource,
+    is_tool_label, Confidence, Holder, LivePolicy, LiveSession, LiveState, StateSource,
 };
 use kb_core::sessions::live_adapters::{self, LiveRoots};
 use kb_core::sessions::HARNESSES;
@@ -133,6 +133,21 @@ async fn fetch_daemon_rows(daemon: Option<&str>, bearer: Option<&str>) -> Result
     Ok(raw.iter().filter_map(live_session_from_wire).collect())
 }
 
+/// The `why` of a row blocked on the operator (OL IDEA1): `needs you:
+/// permission: <tool>` when the hook named a tool, else `needs you:
+/// <reason>`, else a bare `needs you`. `None` for a row that is not blocked.
+fn blocked_why(blocked: bool, tool: Option<&str>, reason: Option<&str>) -> Option<String> {
+    if !blocked {
+        return None;
+    }
+    let reason = reason.map(str::trim).filter(|r| !r.is_empty());
+    Some(match (tool.filter(|t| !t.is_empty()), reason) {
+        (Some(t), _) => format!("needs you: permission: {t}"),
+        (None, Some(r)) => format!("needs you: {r}"),
+        (None, None) => "needs you".to_string(),
+    })
+}
+
 /// One `kb-server::routes::sessions::LiveStatusRow` JSON object → a
 /// `LiveSession`. Deliberately re-parses the wire JSON by hand (rather than
 /// importing the server's struct directly) — the established convention in
@@ -173,12 +188,11 @@ fn live_session_from_wire(v: &serde_json::Value) -> Option<LiveSession> {
         _ => return None,
     };
     let blocked = v["blocked"].as_bool().unwrap_or(false);
-    let detail_reason = v["detail_reason"].as_str().map(str::to_string);
-    let why = if blocked {
-        Some(detail_reason.unwrap_or_else(|| "blocked".to_string()))
-    } else {
-        None
-    };
+    let why = blocked_why(
+        blocked,
+        v["blocked_tool"].as_str(),
+        v["detail_reason"].as_str(),
+    );
 
     Some(LiveSession {
         session_id,
@@ -197,6 +211,13 @@ fn live_session_from_wire(v: &serde_json::Value) -> Option<LiveSession> {
         resume: v["resume"].as_str().unwrap_or_default().to_string(),
         why,
         version: None,
+        // OL IDEA4 — re-checked against the label grammar on read: a
+        // malformed name from a skewed daemon is dropped, never rendered.
+        last_tool: v["last_tool"]
+            .as_str()
+            .filter(|t| is_tool_label(t))
+            .map(str::to_string),
+        last_tool_at: v["last_tool_at"].as_i64(),
     })
 }
 
@@ -263,9 +284,10 @@ fn filter_and_render(
         return Ok(());
     }
 
-    print_lane("IN PROGRESS", &in_progress, no_color);
-    print_lane("WAITING ON YOU", &waiting, no_color);
-    print_lane("FINISHED / COLD", &finished, no_color);
+    let now_unix = chrono::Utc::now().timestamp();
+    print_lane("IN PROGRESS", &in_progress, no_color, now_unix);
+    print_lane("WAITING ON YOU", &waiting, no_color, now_unix);
+    print_lane("FINISHED / COLD", &finished, no_color, now_unix);
     Ok(())
 }
 
@@ -405,7 +427,37 @@ fn harness_glyph(harness: &str) -> &'static str {
     }
 }
 
-fn print_lane(name: &str, rows: &[&LiveSession], no_color: bool) {
+/// OL IDEA4 — `last: Bash 38m`: the name of the most recent tool the
+/// session STARTED and how long ago. `None` unless BOTH fields are present.
+/// Started is not running, hence `last:` and never `running`.
+fn evidence_label(
+    last_tool: Option<&str>,
+    last_tool_at: Option<i64>,
+    now_unix: i64,
+) -> Option<String> {
+    let (tool, at) = (last_tool?, last_tool_at?);
+    Some(format!("last: {tool} {}", fmt_elapsed(now_unix - at)))
+}
+
+/// The bracketed debug tag of one row: the state prefix, the tool evidence
+/// (joined to the prefix with ` · `, or alone), then `why` after one space.
+/// A row without evidence composes exactly as it did before OL IDEA4.
+fn compose_tag(prefix: Option<&str>, evidence: Option<&str>, why: Option<&str>) -> String {
+    let head = match (prefix, evidence) {
+        (Some(p), Some(e)) => format!("{p} · {e}"),
+        (Some(p), None) => p.to_string(),
+        (None, Some(e)) => e.to_string(),
+        (None, None) => String::new(),
+    };
+    match (head.is_empty(), why) {
+        (false, Some(w)) => format!("{head} {w}"),
+        (false, None) => head,
+        (true, Some(w)) => w.to_string(),
+        (true, None) => String::new(),
+    }
+}
+
+fn print_lane(name: &str, rows: &[&LiveSession], no_color: bool, now_unix: i64) {
     if rows.is_empty() {
         return;
     }
@@ -417,12 +469,8 @@ fn print_lane(name: &str, rows: &[&LiveSession], no_color: bool) {
         let title = r.title.as_deref().unwrap_or("(no title)");
         let sid8: String = r.session_id.chars().take(8).collect();
         let glyph = harness_glyph(&r.harness);
-        let tag = match (state_prefix(r.state), r.why.as_deref()) {
-            (Some(prefix), Some(why)) => format!("{prefix} {why}"),
-            (Some(prefix), None) => prefix.to_string(),
-            (None, Some(why)) => why.to_string(),
-            (None, None) => String::new(),
-        };
+        let evidence = evidence_label(r.last_tool.as_deref(), r.last_tool_at, now_unix);
+        let tag = compose_tag(state_prefix(r.state), evidence.as_deref(), r.why.as_deref());
         let line = format!(
             "  {elapsed:>6}  {glyph} {:<16}  {:<52}  {sid8}  [{tag}]",
             crate::commands::sessions::truncate(project, 16),
@@ -503,6 +551,8 @@ mod tests {
             resume: format!("claude -r {session_id}"),
             why: Some("stop_reason=tool_use, tail=assistant".to_string()),
             version: None,
+            last_tool: None,
+            last_tool_at: None,
         }
     }
 
@@ -628,5 +678,109 @@ mod tests {
         let err = filter_and_render(rows, true, None, None, Some("bogus"), None, true, "empty")
             .unwrap_err();
         assert!(err.to_string().contains("unknown --harness value"));
+    }
+
+    fn wire(extra: serde_json::Value) -> serde_json::Value {
+        let mut v = serde_json::json!({
+            "session_id": "s", "harness": "claude", "holder": "agent",
+            "state": "working", "source": "hook", "confidence": "observed",
+            "since_unix": 1, "since_secs": 2,
+        });
+        v.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        v
+    }
+
+    #[test]
+    fn a_blocked_row_reads_needs_you_in_three_forms() {
+        let with_tool = live_session_from_wire(&wire(serde_json::json!({
+            "blocked": true, "blocked_tool": "Bash", "detail_reason": "Claude needs your permission to use Bash"
+        })))
+        .unwrap();
+        assert_eq!(
+            with_tool.why.as_deref(),
+            Some("needs you: permission: Bash")
+        );
+        let reason_only = live_session_from_wire(&wire(serde_json::json!({
+            "blocked": true, "detail_reason": "Claude Code needs your input"
+        })))
+        .unwrap();
+        assert_eq!(
+            reason_only.why.as_deref(),
+            Some("needs you: Claude Code needs your input")
+        );
+        let bare = live_session_from_wire(&wire(serde_json::json!({"blocked": true}))).unwrap();
+        assert_eq!(bare.why.as_deref(), Some("needs you"));
+    }
+
+    #[test]
+    fn a_non_blocked_row_has_no_why() {
+        let r = live_session_from_wire(&wire(serde_json::json!({
+            "blocked": false, "detail_reason": "stale text"
+        })))
+        .unwrap();
+        assert_eq!(r.why, None);
+    }
+    #[test]
+    fn evidence_label_formats_name_and_age_and_needs_both_fields() {
+        let now = 10_000;
+        assert_eq!(
+            evidence_label(Some("Bash"), Some(now - 38 * 60), now).as_deref(),
+            Some("last: Bash 38m")
+        );
+        assert_eq!(
+            evidence_label(Some("Bash"), Some(now - 3_600 - 5 * 60), now).as_deref(),
+            Some("last: Bash 1h05m")
+        );
+        assert_eq!(evidence_label(Some("Bash"), None, now), None);
+        assert_eq!(evidence_label(None, Some(now), now), None);
+        assert_eq!(evidence_label(None, None, now), None);
+    }
+
+    #[test]
+    fn compose_tag_is_unchanged_without_evidence_and_appends_it_after_the_prefix() {
+        let (p, e, w) = (
+            Some("stalled?"),
+            Some("last: Bash 38m"),
+            Some("stop_reason=tool_use"),
+        );
+        // Without evidence: byte-identical to the pre-IDEA4 composition.
+        assert_eq!(compose_tag(p, None, w), "stalled? stop_reason=tool_use");
+        assert_eq!(compose_tag(p, None, None), "stalled?");
+        assert_eq!(compose_tag(None, None, w), "stop_reason=tool_use");
+        assert_eq!(compose_tag(None, None, None), "");
+        // With evidence: after the prefix with " · ", or alone; why follows.
+        assert_eq!(
+            compose_tag(p, e, w),
+            "stalled? · last: Bash 38m stop_reason=tool_use"
+        );
+        assert_eq!(compose_tag(p, e, None), "stalled? · last: Bash 38m");
+        assert_eq!(
+            compose_tag(None, e, w),
+            "last: Bash 38m stop_reason=tool_use"
+        );
+        assert_eq!(compose_tag(None, e, None), "last: Bash 38m");
+    }
+
+    #[test]
+    fn live_session_from_wire_reads_last_tool_fields() {
+        let r = live_session_from_wire(&wire(serde_json::json!({
+            "last_tool": "Bash", "last_tool_at": 1234
+        })))
+        .unwrap();
+        assert_eq!(r.last_tool.as_deref(), Some("Bash"));
+        assert_eq!(r.last_tool_at, Some(1234));
+        let none = live_session_from_wire(&wire(serde_json::json!({}))).unwrap();
+        assert!(none.last_tool.is_none() && none.last_tool_at.is_none());
+        // A name outside the label grammar is dropped, never rendered.
+        let bad = live_session_from_wire(&wire(serde_json::json!({
+            "last_tool": "/bin/sh -c x", "last_tool_at": 5
+        })))
+        .unwrap();
+        assert!(bad.last_tool.is_none());
+        // The --json surface omits the fields when absent.
+        let v = serde_json::to_value(&none).unwrap();
+        assert!(v.get("last_tool").is_none() && v.get("last_tool_at").is_none());
     }
 }

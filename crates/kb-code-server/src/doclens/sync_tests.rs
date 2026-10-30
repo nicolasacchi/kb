@@ -412,6 +412,7 @@ async fn fixture(docs: Vec<Value>, page_size: usize, kbs: &[&str], batch_cap: us
         repos: vec![RepoEntry {
             name: "alpha".to_string(),
             path: std::fs::canonicalize(repo.path()).unwrap(),
+            projects: Vec::new(),
         }],
         kb_daemon: KbDaemonSection {
             enabled: true,

@@ -423,6 +423,12 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
         // above (plain api tree + loopback bypass, no rate-limit bucket) —
         // it composes reads the caller could already make one at a time.
         .route("/context", get(routes::context::get))
+        // OL IDEA5 — "since you left": the PROJECT axis (sessions + their
+        // commits + slate posts, grouped by project) since a time. Same auth
+        // posture as /context (plain api tree + loopback bypass, no
+        // rate-limit bucket): every field is already bearer-visible via
+        // /api/sessions* and /api/slates*; this route narrows, never widens.
+        .route("/changes", get(routes::changes::get))
         // Turn block — in-process composition of the reads `kb context` and
         // `kb recall` already serve. Same auth posture as `/context`.
         .route("/turn", get(routes::turn::get))

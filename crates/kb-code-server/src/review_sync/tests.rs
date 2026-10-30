@@ -357,6 +357,7 @@ fn fixture() -> Fx {
     let repos = vec![RepoEntry {
         name: REPO.into(),
         path: clone.clone(),
+        projects: Vec::new(),
     }];
     let mut ids = HashMap::new();
     ids.insert(

@@ -218,6 +218,19 @@ fn i64_as_u64_sat(v: i64) -> u64 {
     u64::try_from(v.max(0)).unwrap_or(u64::MAX)
 }
 
+/// The `sessions` column list [`SessionRow`] is read from — shared by
+/// `sessions_list_with` and `sessions_active_since` so both go through
+/// `Db::map_session_row` with one positional contract.
+const SESSION_ROW_COLS: &str = "artifact_id, session_id, started_at, ended_at,
+                            message_count, first_user_prompt, source_relative,
+                            title, cwd, git_branch, files_read_count, files_edited_count,
+                            token_total, tool_calls, model, error_count,
+                            subagent_count, subagent_tokens, subagent_tool_calls,
+                            subagent_files_edited, subagent_launched_unstatted,
+                            project_key, repo_root, harness, cc_version,
+                            last_assistant_text, all_cwds, commit_count, user_turns,
+                            active_secs, substance, segment_of, segment_idx, evidence_json";
+
 impl Db {
     /// Open (or create) the database at `path` and run all pending migrations.
     /// Idempotent across processes thanks to refinery's `refinery_schema_history`
@@ -4059,10 +4072,10 @@ impl Db {
                  subagent_files_edited, subagent_launched_unstatted,
                  project_key, repo_root, harness, cc_version,
                  last_assistant_text, all_cwds, commit_count, user_turns,
-                 active_secs, substance, segment_of, segment_idx, is_newest)
+                 active_secs, substance, segment_of, segment_idx, evidence_json, is_newest)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
                      ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21,
-                     ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, 0)
+                     ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, 0)
              ON CONFLICT(artifact_id) DO UPDATE SET
                 session_id                  = excluded.session_id,
                 started_at                  = excluded.started_at,
@@ -4095,7 +4108,8 @@ impl Db {
                 active_secs                 = excluded.active_secs,
                 substance                   = excluded.substance,
                 segment_of                  = excluded.segment_of,
-                segment_idx                 = excluded.segment_idx",
+                segment_idx                 = excluded.segment_idx,
+                evidence_json               = excluded.evidence_json",
             params![
                 row.artifact_id,
                 row.session_id,
@@ -4130,6 +4144,7 @@ impl Db {
                 row.substance,
                 row.segment_of,
                 row.segment_idx,
+                row.evidence_json,
             ],
         )?;
         recompute_is_newest(&tx, &row.session_id)?;
@@ -5335,7 +5350,7 @@ impl Db {
                     subagent_files_edited, subagent_launched_unstatted,
                     project_key, repo_root, harness, cc_version,
                     last_assistant_text, all_cwds, commit_count, user_turns,
-                    active_secs, substance, segment_of, segment_idx
+                    active_secs, substance, segment_of, segment_idx, evidence_json
              FROM sessions
              WHERE session_id IN ({placeholders})
              ORDER BY started_at DESC, artifact_id ASC"
@@ -5377,7 +5392,7 @@ impl Db {
                     subagent_files_edited, subagent_launched_unstatted,
                     project_key, repo_root, harness, cc_version,
                     last_assistant_text, all_cwds, commit_count, user_turns,
-                    active_secs, substance, segment_of, segment_idx
+                    active_secs, substance, segment_of, segment_idx, evidence_json
              FROM sessions
              WHERE artifact_id IN ({placeholders})"
         );
@@ -5447,15 +5462,6 @@ impl Db {
         harness: &[String],
         collapse_logical: bool,
     ) -> Result<Vec<SessionRow>> {
-        const COLS: &str = "artifact_id, session_id, started_at, ended_at,
-                            message_count, first_user_prompt, source_relative,
-                            title, cwd, git_branch, files_read_count, files_edited_count,
-                            token_total, tool_calls, model, error_count,
-                            subagent_count, subagent_tokens, subagent_tool_calls,
-                            subagent_files_edited, subagent_launched_unstatted,
-                            project_key, repo_root, harness, cc_version,
-                            last_assistant_text, all_cwds, commit_count, user_turns,
-                            active_secs, substance, segment_of, segment_idx";
         // Build the WHERE dynamically: the optional keyset cursor and the
         // optional folder (A1) filter are ANDed; placeholder indices are
         // assigned in bind order so the two stay in lockstep. The folder
@@ -5605,13 +5611,35 @@ impl Db {
             format!("WHERE {}", conds.join(" AND "))
         };
         let sql = format!(
-            "SELECT {COLS} FROM sessions {where_clause} \
+            "SELECT {SESSION_ROW_COLS} FROM sessions {where_clause} \
              ORDER BY started_at DESC, artifact_id ASC LIMIT ?{lim}"
         );
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt
             .query_map(
                 rusqlite::params_from_iter(binds.iter().map(|b| b.as_ref())),
+                Self::map_session_row,
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// OL IDEA5 — sessions with ACTIVITY after `since_unix`, newest activity
+    /// first. Activity is `MAX(ended_at, started_at)`, so a session that began
+    /// before the watermark and kept working after it is included (a
+    /// `started_at` floor would miss it). Newest capture only (#11); parts of
+    /// a segmented session are separate rows (V0045). Bounded by `limit`.
+    pub fn sessions_active_since(&self, since_unix: i64, limit: u32) -> Result<Vec<SessionRow>> {
+        let sql = format!(
+            "SELECT {SESSION_ROW_COLS} FROM sessions \
+             WHERE is_newest = 1 AND MAX(ended_at, started_at) > ?1 \
+             ORDER BY MAX(ended_at, started_at) DESC, session_id ASC, artifact_id ASC \
+             LIMIT ?2"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(
+                rusqlite::params![since_unix, limit as i64],
                 Self::map_session_row,
             )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -6078,7 +6106,7 @@ impl Db {
                     subagent_files_edited, subagent_launched_unstatted,
                     project_key, repo_root, harness, cc_version,
                     last_assistant_text, all_cwds, commit_count, user_turns,
-                    active_secs, substance, segment_of, segment_idx
+                    active_secs, substance, segment_of, segment_idx, evidence_json
              FROM sessions
              WHERE session_id = ?1
              ORDER BY started_at DESC, artifact_id ASC
@@ -6205,6 +6233,7 @@ impl Db {
             substance: r.get(30)?,
             segment_of: r.get(31)?,
             segment_idx: r.get(32)?,
+            evidence_json: r.get(33)?,
         })
     }
 
@@ -7635,6 +7664,11 @@ pub struct SessionRow {
     /// V0045/seg1 — 1-based part index from the adapter-meta line's
     /// `segmentIdx` (`None` for ordinary sessions and part 1).
     pub segment_idx: Option<i64>,
+    /// V0046/IDEA3 — the closed-grammar check evidence a capture ran
+    /// (`kb_core::sessions::checks::SessionEvidence` as JSON, versioned by its
+    /// own `v`). `None` = not extracted (a pre-V0046 capture; `kb reindex`
+    /// backfills). SURFACED, never scored: no reader sorts or filters on it.
+    pub evidence_json: Option<String>,
 }
 
 /// One row from the `session_decisions` table (V0018/S9) — a steering moment.
@@ -10667,7 +10701,77 @@ mod tests {
             substance: Some("substantive".into()),
             segment_of: None,
             segment_idx: None,
+            evidence_json: None,
         }
+    }
+
+    #[test]
+    fn sessions_active_since_includes_straddlers_and_newest_capture_only() {
+        let mut db = db();
+        // Started before the watermark, ended after it: a straddler.
+        let mut straddler = session_row("art-strad", "sid-strad", 1_000);
+        straddler.ended_at = 5_000;
+        db.sessions_upsert(&straddler).unwrap();
+        // Ended before the watermark: out.
+        let mut old = session_row("art-old", "sid-old", 1_000);
+        old.ended_at = 1_500;
+        db.sessions_upsert(&old).unwrap();
+        // Two captures of one session_id, both active: one row (the newest).
+        let mut cap1 = session_row("art-multi-1", "sid-multi", 3_000);
+        cap1.ended_at = 3_100;
+        db.sessions_upsert(&cap1).unwrap();
+        let mut cap2 = session_row("art-multi-2", "sid-multi", 3_200);
+        cap2.ended_at = 3_300;
+        db.sessions_upsert(&cap2).unwrap();
+
+        let rows = db.sessions_active_since(2_000, 50).unwrap();
+        let ids: Vec<&str> = rows.iter().map(|r| r.session_id.as_str()).collect();
+        assert!(ids.contains(&"sid-strad"), "straddler is in: {ids:?}");
+        assert!(
+            !ids.contains(&"sid-old"),
+            "ended before since is out: {ids:?}"
+        );
+        assert_eq!(
+            ids.iter().filter(|s| **s == "sid-multi").count(),
+            1,
+            "two captures of one session_id yield one row: {ids:?}"
+        );
+        let multi = rows.iter().find(|r| r.session_id == "sid-multi").unwrap();
+        assert_eq!(multi.artifact_id, "art-multi-2");
+        // The bound is exclusive.
+        assert!(db
+            .sessions_active_since(5_000, 50)
+            .unwrap()
+            .iter()
+            .all(|r| r.session_id != "sid-strad"));
+    }
+
+    #[test]
+    fn sessions_active_since_orders_by_activity_and_honours_limit() {
+        let mut db = db();
+        for (aid, sid, start, end) in [
+            ("a1", "sid-a", 100, 900),
+            ("b1", "sid-b", 500, 600),
+            ("c1", "sid-c", 700, 700),
+            ("d1", "sid-d", 800, 1_000),
+        ] {
+            let mut r = session_row(aid, sid, start);
+            r.ended_at = end;
+            db.sessions_upsert(&r).unwrap();
+        }
+        let ids = |rows: Vec<SessionRow>| -> Vec<String> {
+            rows.into_iter().map(|r| r.session_id).collect()
+        };
+        assert_eq!(
+            ids(db.sessions_active_since(0, 50).unwrap()),
+            ["sid-d", "sid-a", "sid-c", "sid-b"],
+            "ordered by MAX(ended_at, started_at) desc"
+        );
+        assert_eq!(
+            ids(db.sessions_active_since(0, 2).unwrap()),
+            ["sid-d", "sid-a"],
+            "limit keeps the newest"
+        );
     }
 
     #[test]
@@ -14926,6 +15030,7 @@ mod tests {
             substance: None,
             segment_of: None,
             segment_idx: None,
+            evidence_json: None,
         })
         .unwrap();
         db.session_files_replace(
@@ -16641,6 +16746,106 @@ mod tests {
         assert!(
             crate::sibling::volume_epoch(&db.conn).unwrap().unwrap() > older_binary_epoch,
             "a migrated volume is AHEAD of a V0044 binary: refuse_if_volume_ahead must refuse it"
+        );
+    }
+
+    #[test]
+    fn v0046_adds_nullable_evidence_column() {
+        // The column exists and is NULL on a row that never set it: NULL is
+        // "not extracted" (a pre-V0046 capture), never a backfilled verdict.
+        let mut db = db();
+        db.sessions_upsert(&session_row("plain-ev", "sid-plain-ev", 1_700_000_000))
+            .unwrap();
+        let ev: Option<String> = db
+            .conn
+            .query_row(
+                "SELECT evidence_json FROM sessions WHERE artifact_id = 'plain-ev'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(ev, None, "no backfill: ordinary rows stay NULL");
+        // No index: the column is surfaced, never filtered or sorted on.
+        let idx_n: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type = 'index' AND sql LIKE '%evidence_json%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(idx_n, 0);
+        assert!(
+            schema_epoch() >= 46,
+            "V0046 must be embedded, epoch is {}",
+            schema_epoch()
+        );
+        assert_eq!(
+            crate::sibling::volume_epoch(&db.conn).unwrap(),
+            Some(schema_epoch())
+        );
+        let older_binary_epoch = 45u32;
+        assert!(
+            crate::sibling::volume_epoch(&db.conn).unwrap().unwrap() > older_binary_epoch,
+            "a migrated volume is AHEAD of a V0045 binary: refuse_if_volume_ahead must refuse it"
+        );
+    }
+
+    #[test]
+    fn sessions_upsert_round_trips_evidence_json() {
+        let mut db = db();
+        let body = r#"{"v":1,"checks":[],"checks_total":0,"edit_count":1,"edits_ignored":0}"#;
+        let mut r = session_row("ev-1", "sid-ev-1", 1_700_000_000);
+        r.evidence_json = Some(body.to_string());
+        db.sessions_upsert(&r).unwrap();
+        let got = db.sessions_get("sid-ev-1").unwrap().unwrap();
+        assert_eq!(got.evidence_json.as_deref(), Some(body));
+        // Every reader that maps a session row carries it.
+        let many = db.sessions_get_many(&["sid-ev-1".to_string()]).unwrap();
+        assert_eq!(many[0].evidence_json.as_deref(), Some(body));
+        let by_art = db
+            .sessions_get_by_artifact_ids(&["ev-1".to_string()])
+            .unwrap();
+        assert_eq!(by_art[0].evidence_json.as_deref(), Some(body));
+        let listed = db
+            .sessions_list(100, None, None, None, None, &Default::default(), &[], &[])
+            .unwrap();
+        assert_eq!(listed[0].evidence_json.as_deref(), Some(body));
+        // A re-capture rewrites it, and a re-extraction to NULL clears it.
+        r.evidence_json = None;
+        db.sessions_upsert(&r).unwrap();
+        assert_eq!(
+            db.sessions_get("sid-ev-1").unwrap().unwrap().evidence_json,
+            None
+        );
+    }
+
+    // invariant:11 evidence is surfaced, never a sort key
+    #[test]
+    fn sessions_list_order_ignores_evidence() {
+        let mut db = db();
+        let failing = r#"{"v":1,"checks":[{"seq":9,"runners":["cargo-test"],"label":"cargo test","cmd":"cargo test","outcome":"fail"}],"checks_total":1,"edit_count":1,"edits_ignored":0,"last_edit_seq":3}"#;
+        let verified = r#"{"v":1,"checks":[{"seq":9,"runners":["cargo-test"],"label":"cargo test","cmd":"cargo test","outcome":"pass"}],"checks_total":1,"edit_count":1,"edits_ignored":0,"last_edit_seq":3}"#;
+        let mut older = session_row("ev-old", "sid-ev-old", 1_700_000_000);
+        older.evidence_json = Some(verified.to_string());
+        let mut newer = session_row("ev-new", "sid-ev-new", 1_700_100_000);
+        newer.evidence_json = Some(failing.to_string());
+        let mut none = session_row("ev-mid", "sid-ev-mid", 1_700_050_000);
+        none.evidence_json = None;
+        for r in [&older, &newer, &none] {
+            db.sessions_upsert(r).unwrap();
+        }
+        let ids: Vec<String> = db
+            .sessions_list(100, None, None, None, None, &Default::default(), &[], &[])
+            .unwrap()
+            .into_iter()
+            .map(|r| r.session_id)
+            .collect();
+        assert_eq!(
+            ids,
+            ["sid-ev-new", "sid-ev-mid", "sid-ev-old"],
+            "list order is started_at descending whatever the verdicts are"
         );
     }
 

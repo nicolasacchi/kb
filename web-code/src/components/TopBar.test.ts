@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({ refs: null as null | { data: unknown } }));
 vi.mock("./RepoPill", () => ({ default: () => null }));
 vi.mock("./RefChip", () => ({ default: () => null }));
 vi.mock("./CurrentReviewChip", () => ({ default: () => null }));
+vi.mock("./PresencePulse", () => ({ PresenceChip: () => null }));
 vi.mock("./NavSheet", () => ({ default: () => null }));
 vi.mock("./trail/TrailIndicator", () => ({ default: () => null }));
 vi.mock("../commands/learn", () => ({ SpaceHint: () => null }));

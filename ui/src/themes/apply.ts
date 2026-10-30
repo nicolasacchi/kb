@@ -120,6 +120,10 @@ export function applyThemeColorMeta(): void {
   if (!meta.parentNode) head.appendChild(meta);
 }
 
+/// Fired on `window` after the theme attributes change (`setThemeAttributes`,
+/// hence `applyTheme` and the picker previews).
+export const THEME_APPLIED_EVENT = "kb:theme-applied";
+
 /// Set the three attributes WITHOUT touching contrast, the theme-color meta
 /// or the OS listener: the cheap half, used directly by picker previews.
 export function setThemeAttributes(
@@ -133,6 +137,10 @@ export function setThemeAttributes(
   const id = resolveThemeId(family, appearance, prefersLight(), host);
   if (id) root.setAttribute("data-kbc-theme", id);
   else root.removeAttribute("data-kbc-theme");
+  // Every theme change funnels through here, so this is the one place a
+  // listener (kb's reader re-sending the colour scheme to the artifact
+  // iframe) can hear it without watching the attribute.
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(THEME_APPLIED_EVENT));
 }
 
 export interface ApplyThemeOptions extends ThemeHostOptions {

@@ -1,0 +1,24 @@
+-- OL IDEA3 -- the session evidence card: which verification commands a
+-- capture ran, in what order relative to its edits, and how they ended.
+--
+-- evidence_json holds `kb_core::sessions::checks::SessionEvidence` as JSON
+-- (versioned by its own `v`): the NEWEST 16 checks a capture's main
+-- transcript ran (a CLOSED grammar of test / lint / build runners, never a
+-- guess), the edit counters and the unnamed-edit basenames. The verdict
+-- ("tests passed after the last edit") is DERIVED at read time from this
+-- column; nothing about it is stored.
+--
+-- NULL means NOT EXTRACTED (every pre-V0046 capture). There is no backfill
+-- here: `kb reindex <kb>` of the sessions corpus fills it from the captured
+-- transcript, and a new capture gets it at capture time. It is SURFACED,
+-- never scored: no reader sorts, filters or ranks on it, and it never enters
+-- the R1 digest or the `code` lane.
+--
+-- The column rides the `sessions` row, so the artifact-id lifecycle
+-- registries (cascade, sweep, relocate) already move and delete it.
+--
+-- Additive and nullable, no index. Rollback caveat: this bumps the refinery
+-- epoch, so an older binary refuses to boot on a migrated volume
+-- (`refuse_if_volume_ahead`); see docs/self-host.md "Rolling back across
+-- V0046".
+ALTER TABLE sessions ADD COLUMN evidence_json TEXT;

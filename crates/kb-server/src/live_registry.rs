@@ -37,9 +37,13 @@ pub const TOUCH_TTL_SECS: i64 = 3600;
 /// One remembered write-tool touch: a path RELATIVE to the session's repo
 /// root (the daemon never stores the absolute path or the root), the project
 /// label the beat carried, the receipt-clock instant and the tool name.
+/// `worktree` is the BASENAME of a linked worktree's directory (OL PRES2),
+/// `None` for the main checkout; it is part of a touch's identity, so the
+/// same `rel` in two worktrees of one project are two touches.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Touch {
     pub project: String,
+    pub worktree: Option<String>,
     pub rel: String,
     pub at_unix: i64,
     pub tool: String,
@@ -54,6 +58,44 @@ pub struct TouchSnapshot {
     pub harness: String,
     pub state: LiveState,
     pub touches: Vec<Touch>,
+}
+
+/// OL IDEA4 — the newest tool a session STARTED (a `tool_label`, never
+/// arguments) and the beat `at` that said so. In memory only (LF-7).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LastTool {
+    pub name: String,
+    pub at_unix: i64,
+}
+
+/// What one beat does to a row's [`LastTool`]. Input only: the stored row
+/// always carries `Keep`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ToolUpdate {
+    /// Leave the remembered tool as it was (heartbeats, blocked, ...).
+    #[default]
+    Keep,
+    /// A turn boundary at this beat `at`: forget the tool.
+    Clear { at_unix: i64 },
+    /// A tool-start beat.
+    Started(LastTool),
+}
+
+/// Apply a [`ToolUpdate`] to the previous tool. Monotonic: a late-arriving
+/// older beat never wins (a start or clear with `at` older than the
+/// remembered tool's keeps it; on a tie the newer arrival wins).
+pub fn next_last_tool(prev: Option<&LastTool>, update: &ToolUpdate) -> Option<LastTool> {
+    match update {
+        ToolUpdate::Keep => prev.cloned(),
+        ToolUpdate::Started(t) => match prev {
+            Some(p) if t.at_unix < p.at_unix => Some(p.clone()),
+            _ => Some(t.clone()),
+        },
+        ToolUpdate::Clear { at_unix } => match prev {
+            Some(p) if *at_unix < p.at_unix => Some(p.clone()),
+            _ => None,
+        },
+    }
 }
 
 /// Cap on distinct `session_id`s held at once. The operator runs ~55
@@ -100,6 +142,12 @@ pub struct LiveRow {
     /// within the working/stalled lane.
     pub blocked: bool,
     pub detail_reason: Option<String>,
+    /// The tool a `blocked` beat named (`detail.tool`), validated at intake;
+    /// only ever set on a blocked row.
+    pub blocked_tool: Option<String>,
+    /// Unix seconds of the `blocked` beat that set the flag (that beat's own
+    /// `at`); only ever set on a blocked row.
+    pub blocked_since_unix: Option<i64>,
     /// Wall-clock receipt time (unix seconds) — the TTL/LRU-by-touch clock.
     /// Distinct from `last_activity_unix`; see that field's doc comment.
     pub touched_unix: i64,
@@ -107,6 +155,13 @@ pub struct LiveRow {
     /// carried. On the stored row (and the returned [`RecordOutcome::row`]):
     /// the merged ring, oldest first, at most [`TOUCH_RING_CAP`].
     pub touches: VecDeque<Touch>,
+    /// OL IDEA4 — on input: what this beat does to the remembered tool.
+    /// Always `Keep` on the stored row and the returned row.
+    pub tool_update: ToolUpdate,
+    /// OL IDEA4 — stored/computed: the newest started tool, merged by
+    /// [`next_last_tool`] under the registry lock. Ignores any value the
+    /// caller put here; display evidence only, never a `derive_state` input.
+    pub last_tool: Option<LastTool>,
 }
 
 /// The outcome of one [`LiveRegistry::record_beat`] call: the row as
@@ -121,6 +176,19 @@ pub struct RecordOutcome {
     pub state: LiveState,
     pub confidence: Confidence,
     pub previous_state: Option<LiveState>,
+    /// The `blocked` flag the session carried immediately BEFORE this beat
+    /// (`None` for a session's first-ever beat).
+    pub previous_blocked: Option<bool>,
+}
+
+/// What a beat does to the sticky `blocked` flag (OL IDEA1): `blocked` sets
+/// it, a `tool` heartbeat keeps whatever the row had, every other event
+/// clears it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockEffect {
+    Set,
+    Keep,
+    Clear,
 }
 
 /// The daemon-wide live registry. `std::sync::Mutex` — every method here is
@@ -140,7 +208,23 @@ impl LiveRegistry {
     /// first and evicting the least-recently-touched row if inserting a
     /// brand-new key would exceed [`REGISTRY_CAP`]. Returns the derived
     /// state before/after so the caller can detect a transition.
-    pub fn record_beat(&self, mut row: LiveRow, now_unix: i64) -> RecordOutcome {
+    pub fn record_beat(&self, row: LiveRow, now_unix: i64) -> RecordOutcome {
+        let effect = if row.blocked {
+            BlockEffect::Set
+        } else {
+            BlockEffect::Clear
+        };
+        self.record_beat_effect(row, now_unix, effect)
+    }
+
+    /// [`Self::record_beat`] with an explicit effect on the sticky blocked
+    /// flag, applied under the same lock as the touch-ring carry-forward.
+    pub fn record_beat_effect(
+        &self,
+        mut row: LiveRow,
+        now_unix: i64,
+        effect: BlockEffect,
+    ) -> RecordOutcome {
         let policy = LivePolicy::default();
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -159,6 +243,40 @@ impl LiveRegistry {
             .0
         });
 
+        let previous_blocked = g.get(&row.session_id).map(|old| old.blocked);
+
+        // Blocked flag (OL IDEA1), resolved under this one lock: Set takes
+        // this beat's reason/tool and stamps `since` with the beat's own
+        // `at` (Claude sends one notification per prompt, so a second blocked
+        // beat is a new prompt); Keep carries a blocked old row's four fields
+        // forward; Clear drops them all.
+        match effect {
+            BlockEffect::Set => {
+                row.blocked = true;
+                row.blocked_since_unix = Some(row.last_activity_unix);
+            }
+            BlockEffect::Keep => match g.get(&row.session_id).filter(|old| old.blocked) {
+                Some(old) => {
+                    row.blocked = true;
+                    row.detail_reason = old.detail_reason.clone();
+                    row.blocked_tool = old.blocked_tool.clone();
+                    row.blocked_since_unix = old.blocked_since_unix;
+                }
+                None => {
+                    row.blocked = false;
+                    row.detail_reason = None;
+                    row.blocked_tool = None;
+                    row.blocked_since_unix = None;
+                }
+            },
+            BlockEffect::Clear => {
+                row.blocked = false;
+                row.detail_reason = None;
+                row.blocked_tool = None;
+                row.blocked_since_unix = None;
+            }
+        }
+
         // Cap enforcement: only relevant when inserting a KEY THAT DOESN'T
         // ALREADY EXIST (an update to an existing session never grows the
         // map). Evict the row with the oldest `touched_unix`.
@@ -174,7 +292,7 @@ impl LiveRegistry {
 
         // Touch ring (OL PRES1): carry the old ring forward under this same
         // lock, drop expired entries, then merge this beat's touches —
-        // a repeat of (project, rel) moves to the back with its fresh
+        // a repeat of (project, worktree, rel) moves to the back with its fresh
         // instant, and the oldest entry is evicted past the cap. An `end`
         // beat carries no touches and so leaves the ring intact.
         let mut ring: VecDeque<Touch> = g
@@ -185,7 +303,7 @@ impl LiveRegistry {
         for t in std::mem::take(&mut row.touches) {
             if let Some(pos) = ring
                 .iter()
-                .position(|x| x.project == t.project && x.rel == t.rel)
+                .position(|x| x.project == t.project && x.worktree == t.worktree && x.rel == t.rel)
             {
                 ring.remove(pos);
             }
@@ -195,6 +313,14 @@ impl LiveRegistry {
             }
         }
         row.touches = ring;
+
+        // Last started tool (OL IDEA4): merged under this same lock, from the
+        // stored row's value and this beat's update; no `.await` (#15).
+        row.last_tool = next_last_tool(
+            g.get(&row.session_id)
+                .and_then(|old| old.last_tool.as_ref()),
+            &std::mem::take(&mut row.tool_update),
+        );
 
         let (state, confidence) = derive_state(
             row.holder,
@@ -210,6 +336,7 @@ impl LiveRegistry {
             state,
             confidence,
             previous_state,
+            previous_blocked,
         }
     }
 
@@ -299,14 +426,31 @@ mod tests {
             last_line: None,
             blocked: false,
             detail_reason: None,
+            blocked_tool: None,
+            blocked_since_unix: None,
             touched_unix,
             touches: VecDeque::new(),
+            tool_update: ToolUpdate::Keep,
+            last_tool: None,
         }
+    }
+
+    fn lt(name: &str, at: i64) -> LastTool {
+        LastTool {
+            name: name.to_string(),
+            at_unix: at,
+        }
+    }
+
+    fn with_update(mut r: LiveRow, u: ToolUpdate) -> LiveRow {
+        r.tool_update = u;
+        r
     }
 
     fn touch(rel: &str, at: i64) -> Touch {
         Touch {
             project: "demo".to_string(),
+            worktree: None,
             rel: rel.to_string(),
             at_unix: at,
             tool: "Edit".to_string(),
@@ -323,6 +467,237 @@ mod tests {
             .into_iter()
             .flat_map(|s| s.touches.into_iter().map(|t| t.rel))
             .collect()
+    }
+
+    fn blocked_row(sid: &str, at: i64) -> LiveRow {
+        let mut r = row(sid, Holder::Agent, at, at);
+        r.blocked = true;
+        r.detail_reason = Some("Claude needs your permission to use Bash".to_string());
+        r.blocked_tool = Some("Bash".to_string());
+        r
+    }
+
+    fn stored(reg: &LiveRegistry, now: i64) -> LiveRow {
+        reg.snapshot(now).remove(0).0
+    }
+
+    #[test]
+    fn set_then_keep_carries_all_four_blocked_fields() {
+        let reg = LiveRegistry::new();
+        let now = 1_000_000;
+        reg.record_beat_effect(blocked_row("a", now), now, BlockEffect::Set);
+        let out = reg.record_beat_effect(
+            row("a", Holder::Agent, now + 30, now + 30),
+            now + 30,
+            BlockEffect::Keep,
+        );
+        assert_eq!(out.previous_blocked, Some(true));
+        let r = stored(&reg, now + 30);
+        assert!(r.blocked);
+        assert_eq!(r.blocked_tool.as_deref(), Some("Bash"));
+        assert_eq!(
+            r.detail_reason.as_deref(),
+            Some("Claude needs your permission to use Bash")
+        );
+        assert_eq!(r.blocked_since_unix, Some(now));
+    }
+
+    #[test]
+    fn set_then_clear_drops_the_blocked_fields() {
+        let reg = LiveRegistry::new();
+        let now = 1_000_000;
+        reg.record_beat_effect(blocked_row("a", now), now, BlockEffect::Set);
+        reg.record_beat(row("a", Holder::Agent, now + 5, now + 5), now + 5);
+        let r = stored(&reg, now + 5);
+        assert!(!r.blocked);
+        assert!(r.detail_reason.is_none() && r.blocked_tool.is_none());
+        assert!(r.blocked_since_unix.is_none());
+    }
+
+    #[test]
+    fn set_then_turn_end_clears_and_the_holder_is_human() {
+        let reg = LiveRegistry::new();
+        let now = 1_000_000;
+        reg.record_beat_effect(blocked_row("a", now), now, BlockEffect::Set);
+        let out = reg.record_beat_effect(
+            row("a", Holder::Human, now + 5, now + 5),
+            now + 5,
+            BlockEffect::Clear,
+        );
+        assert_eq!(out.state, LiveState::Waiting);
+        let r = stored(&reg, now + 5);
+        assert!(!r.blocked && r.blocked_since_unix.is_none());
+    }
+
+    #[test]
+    fn keep_with_no_prior_blocked_row_is_not_blocked() {
+        let reg = LiveRegistry::new();
+        let now = 1_000_000;
+        let first =
+            reg.record_beat_effect(row("a", Holder::Agent, now, now), now, BlockEffect::Keep);
+        assert_eq!(first.previous_blocked, None);
+        assert!(!stored(&reg, now).blocked);
+        reg.record_beat_effect(
+            row("a", Holder::Agent, now + 1, now + 1),
+            now + 1,
+            BlockEffect::Keep,
+        );
+        assert!(!stored(&reg, now + 1).blocked);
+    }
+
+    #[test]
+    fn a_second_set_resets_since_to_the_new_beat() {
+        let reg = LiveRegistry::new();
+        let now = 1_000_000;
+        reg.record_beat_effect(blocked_row("a", now), now, BlockEffect::Set);
+        reg.record_beat_effect(blocked_row("a", now + 90), now + 90, BlockEffect::Set);
+        assert_eq!(stored(&reg, now + 90).blocked_since_unix, Some(now + 90));
+    }
+
+    #[test]
+    fn next_last_tool_starts_keeps_and_clears() {
+        let a = lt("Bash", 100);
+        assert_eq!(next_last_tool(None, &ToolUpdate::Keep), None);
+        assert_eq!(next_last_tool(Some(&a), &ToolUpdate::Keep), Some(a.clone()));
+        assert_eq!(
+            next_last_tool(None, &ToolUpdate::Started(a.clone())),
+            Some(a.clone())
+        );
+        let b = lt("Read", 200);
+        assert_eq!(
+            next_last_tool(Some(&a), &ToolUpdate::Started(b.clone())),
+            Some(b)
+        );
+        assert_eq!(
+            next_last_tool(Some(&a), &ToolUpdate::Clear { at_unix: 150 }),
+            None
+        );
+        assert_eq!(
+            next_last_tool(None, &ToolUpdate::Clear { at_unix: 1 }),
+            None
+        );
+        // A tie: the newer arrival wins, for a start and for a clear.
+        let tie = lt("Grep", 100);
+        assert_eq!(
+            next_last_tool(Some(&a), &ToolUpdate::Started(tie.clone())),
+            Some(tie)
+        );
+        assert_eq!(
+            next_last_tool(Some(&a), &ToolUpdate::Clear { at_unix: 100 }),
+            None
+        );
+    }
+
+    #[test]
+    fn next_last_tool_ignores_an_older_start_or_clear() {
+        let a = lt("Bash", 200);
+        assert_eq!(
+            next_last_tool(Some(&a), &ToolUpdate::Started(lt("Read", 199))),
+            Some(a.clone())
+        );
+        assert_eq!(
+            next_last_tool(Some(&a), &ToolUpdate::Clear { at_unix: 199 }),
+            Some(a)
+        );
+    }
+
+    #[test]
+    fn record_beat_carries_last_tool_across_heartbeats_and_clears_on_turn_boundaries() {
+        let reg = LiveRegistry::new();
+        let now = 1_000_000;
+        let out = reg.record_beat(
+            with_update(
+                row("a", Holder::Agent, now, now),
+                ToolUpdate::Started(lt("Bash", now)),
+            ),
+            now,
+        );
+        assert_eq!(out.row.last_tool, Some(lt("Bash", now)));
+        assert_eq!(out.row.tool_update, ToolUpdate::Keep);
+        // A heartbeat (Keep) carries it.
+        reg.record_beat(row("a", Holder::Agent, now + 30, now + 30), now + 30);
+        assert_eq!(stored(&reg, now + 30).last_tool, Some(lt("Bash", now)));
+        assert_eq!(stored(&reg, now + 30).tool_update, ToolUpdate::Keep);
+        // A caller-supplied `last_tool` on input is ignored (Keep carries the old).
+        let mut forged = row("a", Holder::Agent, now + 40, now + 40);
+        forged.last_tool = Some(lt("Forged", now + 40));
+        reg.record_beat(forged, now + 40);
+        assert_eq!(stored(&reg, now + 40).last_tool, Some(lt("Bash", now)));
+        // A newer start replaces it.
+        reg.record_beat(
+            with_update(
+                row("a", Holder::Agent, now + 50, now + 50),
+                ToolUpdate::Started(lt("Read", now + 50)),
+            ),
+            now + 50,
+        );
+        assert_eq!(stored(&reg, now + 50).last_tool, Some(lt("Read", now + 50)));
+        // A turn boundary clears it.
+        reg.record_beat(
+            with_update(
+                row("a", Holder::Human, now + 60, now + 60),
+                ToolUpdate::Clear { at_unix: now + 60 },
+            ),
+            now + 60,
+        );
+        assert_eq!(stored(&reg, now + 60).last_tool, None);
+        // A first-ever Keep beat has no tool.
+        reg.record_beat(row("b", Holder::Agent, now, now), now);
+        let b = reg
+            .snapshot(now)
+            .into_iter()
+            .find(|(r, _, _)| r.session_id == "b")
+            .unwrap()
+            .0;
+        assert_eq!(b.last_tool, None);
+    }
+
+    // invariant:11 tool evidence never changes the derived state
+    #[test]
+    fn tool_evidence_never_changes_the_derived_state() {
+        let with = LiveRegistry::new();
+        let without = LiveRegistry::new();
+        let t = 1_000_000;
+        let seq: Vec<(Holder, i64, ToolUpdate)> = vec![
+            (Holder::Agent, t, ToolUpdate::Clear { at_unix: t }),
+            (
+                Holder::Agent,
+                t + 10,
+                ToolUpdate::Started(lt("Bash", t + 10)),
+            ),
+            (Holder::Agent, t + 3000, ToolUpdate::Keep),
+            (
+                Holder::Agent,
+                t + 3010,
+                ToolUpdate::Started(lt("Read", t + 3010)),
+            ),
+            (
+                Holder::Human,
+                t + 3020,
+                ToolUpdate::Clear { at_unix: t + 3020 },
+            ),
+            (
+                Holder::Agent,
+                t + 3030,
+                ToolUpdate::Started(lt("Edit", t + 3030)),
+            ),
+            (
+                Holder::Ended,
+                t + 3040,
+                ToolUpdate::Clear { at_unix: t + 3040 },
+            ),
+        ];
+        for (holder, at, upd) in seq {
+            let a = with.record_beat(with_update(row("s", holder, at, at), upd), at);
+            let b = without.record_beat(row("s", holder, at, at), at);
+            assert_eq!(a.state, b.state);
+            assert_eq!(a.confidence, b.confidence);
+            assert_eq!(a.previous_state, b.previous_state);
+            assert_eq!(
+                with.snapshot(at + 5000)[0].1,
+                without.snapshot(at + 5000)[0].1
+            );
+        }
     }
 
     #[test]
@@ -481,6 +856,33 @@ mod tests {
             vec!["b.rs", "a.rs"]
         );
         assert_eq!(t[1].at_unix, now + 9);
+    }
+
+    #[test]
+    fn same_rel_in_two_worktrees_stays_two_touches() {
+        let reg = LiveRegistry::new();
+        let now = 1_000_000;
+        let mut wt = touch("a.rs", now);
+        wt.worktree = Some("feat".to_string());
+        reg.record_beat(
+            with_touches(
+                row("a", Holder::Agent, now, now),
+                vec![touch("a.rs", now), wt],
+            ),
+            now,
+        );
+        let mut wt2 = touch("a.rs", now + 3);
+        wt2.worktree = Some("feat".to_string());
+        reg.record_beat(
+            with_touches(row("a", Holder::Agent, now + 3, now + 3), vec![wt2]),
+            now + 3,
+        );
+        let snap = reg.touches_snapshot(now + 3);
+        let t = &snap[0].touches;
+        assert_eq!(t.len(), 2, "main + worktree, the repeat deduped in place");
+        assert_eq!(t[0].worktree, None);
+        assert_eq!(t[1].worktree.as_deref(), Some("feat"));
+        assert_eq!(t[1].at_unix, now + 3);
     }
 
     #[test]

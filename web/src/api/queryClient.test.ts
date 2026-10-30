@@ -174,12 +174,12 @@ describe("SSE → TanStack invalidation bridge (invariant #23)", () => {
   // handler here.
   it("session.captured rides the memories gate AND refreshes the timeline lanes", () => {
     emit("session.captured", { kb: "demo" });
-    expect(keys()).toEqual([["memories"], ["timeline", "demo"]]);
+    expect(keys()).toEqual([["memories"], ["timeline", "demo"], ["changes"]]);
   });
 
   it("session.captured without a kb invalidates the whole timeline prefix", () => {
     emit("session.captured", {});
-    expect(keys()).toEqual([["memories"], ["timeline"]]);
+    expect(keys()).toEqual([["memories"], ["timeline"], ["changes"]]);
   });
 
   // artifact.removed is dual-purpose: a docs-churn signal (row leaves the
@@ -251,7 +251,7 @@ describe("SSE → TanStack invalidation bridge (invariant #23)", () => {
   // exact key set" line is guarding against.
   it("slate.updated directly invalidates the list and the named slate's board", () => {
     emit("slate.updated", { slug: "kb", seq: 66, kind: "found" });
-    expect(keys()).toEqual([["slates"], ["slate", "kb"]]);
+    expect(keys()).toEqual([["slates"], ["slate", "kb"], ["changes"]]);
   });
 
   // ["slate", slug, "history"] is a strict EXTENSION of ["slate", slug], so
@@ -265,23 +265,37 @@ describe("SSE → TanStack invalidation bridge (invariant #23)", () => {
 
   it("slate.deleted invalidates the list and the purged slate", () => {
     emit("slate.deleted", { slug: "kb" });
-    expect(keys()).toEqual([["slates"], ["slate", "kb"]]);
+    expect(keys()).toEqual([["slates"], ["slate", "kb"], ["changes"]]);
   });
 
   it("a slate event with no slug falls back to the whole slate prefix", () => {
     emit("slate.updated", {});
-    expect(keys()).toEqual([["slates"], ["slate"]]);
+    expect(keys()).toEqual([["slates"], ["slate"], ["changes"]]);
   });
 
   it("slate.updated is NOT burst-gated — two appends invalidate twice", () => {
     emit("slate.updated", { slug: "kb", seq: 1 });
     emit("slate.updated", { slug: "kb", seq: 2 });
+    // The slates/slate pair fires on both appends; ["changes"] rides its own
+    // burst gate, so only the leading edge shows inside the cooldown.
     expect(keys()).toEqual([
       ["slates"],
       ["slate", "kb"],
+      ["changes"],
       ["slates"],
       ["slate", "kb"],
     ]);
+  });
+
+  // OL IDEA5 — the "since you left" strip's ["changes", since] entries.
+  it("session.captured, slate.updated and slate.deleted invalidate [\"changes\"]", () => {
+    for (const type of ["session.captured", "slate.updated", "slate.deleted"]) {
+      spy.mockClear();
+      teardown();
+      teardown = startSseInvalidationBridge();
+      emit(type, { kb: "demo", slug: "kb" });
+      expect(keys(), type).toContainEqual(["changes"]);
+    }
   });
 
   it("a gap/resync invalidates the whole cache with no key filter", () => {

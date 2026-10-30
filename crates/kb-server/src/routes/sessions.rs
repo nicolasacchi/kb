@@ -27,7 +27,10 @@ use axum::{
 };
 // LSC-2 — the two-axis live-session vocabulary (LSC-1, reused verbatim: the
 // beat route/registry never re-derive state logic).
-use kb_core::sessions::live::{derive_state, Holder, LivePolicy, LiveState, StateSource};
+use kb_core::sessions::live::{
+    derive_state, is_tool_label, tool_evidence_visible, tool_label, Holder, LivePolicy, LiveState,
+    StateSource,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -196,6 +199,138 @@ pub struct SessionOut {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-export", ts(optional))]
     pub segment_count: Option<u32>,
+    /// OL IDEA3 -- the session evidence card: was the code checked after its
+    /// last edit. DERIVED at read time from the persisted
+    /// `sessions.evidence_json` (V0046) by `kb_core::sessions::checks`; always
+    /// `Some` from `from_row` (a NULL or unreadable column reads as
+    /// `not_extracted`). SURFACED, never scored: no route sorts, filters or
+    /// ranks on it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub evidence: Option<SessionEvidenceOut>,
+    /// The full parsed evidence, for the detail route's per-check list. Never
+    /// serialised.
+    #[serde(skip)]
+    #[cfg_attr(feature = "ts-export", ts(skip))]
+    pub evidence_full: Option<kb_core::sessions::checks::SessionEvidence>,
+}
+
+/// OL IDEA3 -- one check run, as the wire and every presenter show it. The
+/// `text` is the server's own sentence (`checks::check_text`): the CLI and the
+/// SPA print it, they do not re-derive it.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionCheckOut {
+    pub label: String,
+    pub cmd: String,
+    pub runners: Vec<String>,
+    pub outcome: kb_core::sessions::checks::Outcome,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub basis: Option<kb_core::sessions::checks::Basis>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub why: Option<kb_core::sessions::checks::Why>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub exit_code: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub at: Option<i64>,
+    /// Did this run happen after the session's last counted edit (a
+    /// gh-checks-only run also needs a push in between).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub after_last_edit: Option<bool>,
+    pub text: String,
+}
+
+/// OL IDEA3 -- the derived verdict over a capture's evidence.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionEvidenceOut {
+    pub verdict: kb_core::sessions::checks::Verdict,
+    /// The ONE sentence for the verdict (absent for `no_edits` and
+    /// `not_extracted`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub phrase: Option<String>,
+    /// The check the verdict rests on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub deciding: Option<SessionCheckOut>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub last_edit_at: Option<i64>,
+    /// Checks the capture kept (the newest 16) are listed on the detail; this
+    /// is the all-time count.
+    pub checks_total: u32,
+    pub checks_after_edit: u32,
+    /// Edits to agent bookkeeping or scratch files that were not counted.
+    pub edits_ignored: u32,
+    /// Files were edited and no commit was detected in this session.
+    pub uncommitted: bool,
+}
+
+fn check_out(
+    ev: &kb_core::sessions::checks::SessionEvidence,
+    c: &kb_core::sessions::checks::SessionCheck,
+) -> SessionCheckOut {
+    SessionCheckOut {
+        label: c.label.clone(),
+        cmd: c.cmd.clone(),
+        runners: c.runners.clone(),
+        outcome: c.outcome,
+        basis: c.basis,
+        why: c.why,
+        exit_code: c.exit_code,
+        at: c.at,
+        after_last_edit: Some(kb_core::sessions::checks::is_after_last_edit(ev, c)),
+        text: kb_core::sessions::checks::check_text(c),
+    }
+}
+
+/// Derive the wire evidence from a persisted column. A NULL, unparseable or
+/// future-versioned column is `not_extracted`, never a guessed verdict.
+fn evidence_out(
+    evidence_json: Option<&str>,
+    files_edited_count: u32,
+    commit_count: u32,
+) -> (
+    SessionEvidenceOut,
+    Option<kb_core::sessions::checks::SessionEvidence>,
+) {
+    use kb_core::sessions::checks;
+    let uncommitted = files_edited_count > 0 && commit_count == 0;
+    match evidence_json.and_then(checks::parse_evidence) {
+        Some(ev) => {
+            let s = checks::summarize(&ev);
+            let out = SessionEvidenceOut {
+                verdict: s.verdict,
+                phrase: s.phrase,
+                deciding: s.deciding.as_ref().map(|c| check_out(&ev, c)),
+                last_edit_at: ev.last_edit_at,
+                checks_total: ev.checks_total,
+                checks_after_edit: s.checks_after_edit,
+                edits_ignored: ev.edits_ignored,
+                uncommitted,
+            };
+            (out, Some(ev))
+        }
+        None => (
+            SessionEvidenceOut {
+                verdict: checks::Verdict::NotExtracted,
+                phrase: None,
+                deciding: None,
+                last_edit_at: None,
+                checks_total: 0,
+                checks_after_edit: 0,
+                edits_ignored: 0,
+                uncommitted,
+            },
+            None,
+        ),
+    }
 }
 
 /// V0045/seg1 — the session ids a session-keyed MEMORY read (the `memories`
@@ -336,7 +471,7 @@ pub fn segment_links(
 /// `first_user_prompt` → short session id, all trim-checked for emptiness but
 /// returned untrimmed. Shared by [`SessionOut::from_row`] and the W0.6
 /// `by_commit` match resolver so every surface agrees. Never empty.
-fn display_name_of(
+pub(crate) fn display_name_of(
     title: Option<&str>,
     first_user_prompt: Option<&str>,
     session_id: &str,
@@ -373,6 +508,11 @@ impl SessionOut {
         let outcome = row.last_assistant_text.as_deref().map(|t| {
             kb_core::sessions::truncate_chars_ellipsis(t, kb_core::sessions::OUTCOME_WIRE_MAX_CHARS)
         });
+        let (evidence, evidence_full) = evidence_out(
+            row.evidence_json.as_deref(),
+            row.files_edited_count,
+            row.commit_count,
+        );
         SessionOut {
             id: row.session_id.clone(),
             kb: kb.to_string(),
@@ -411,6 +551,8 @@ impl SessionOut {
             segment_of: row.segment_of,
             segment_idx: row.segment_idx,
             segment_count: None,
+            evidence: Some(evidence),
+            evidence_full,
         }
     }
 
@@ -681,6 +823,22 @@ pub struct SessionDetailResponse {
     /// walks it.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub segment_chain: Vec<String>,
+    /// OL IDEA3 -- the newest 16 checks the capture's main transcript ran,
+    /// oldest first, each flagged before or after the last edit. Absent when
+    /// the capture has none (or is `not_extracted`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<SessionCheckOut>,
+    /// OL IDEA3 -- basenames of counted edits the closing text never names
+    /// (capped at 12; absent when none).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unnamed_edits: Vec<String>,
+    /// OL IDEA3 -- the uncapped count behind `unnamed_edits`.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub unnamed_edits_total: u32,
+}
+
+fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
 }
 
 #[cfg_attr(
@@ -1512,6 +1670,51 @@ struct ProjectAcc {
     harness_mix: std::collections::BTreeMap<String, i64>,
 }
 
+/// The identity a `COALESCE(project_key, cwd)` key resolves to: the id
+/// `?project=` accepts back, a display label and where the identity came
+/// from. ONE definition shared by the projects facet below and by
+/// `GET /api/changes`, so a changes group id always equals a facet card id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProjectIdentity {
+    pub id: String,
+    pub label: String,
+    /// `"registry" | "derived"`.
+    pub source: &'static str,
+}
+
+/// Resolve a key to its identity. `resolved` is the registry lookup the
+/// caller already made from the key's `repo_root`/`cwd` (injected so tests
+/// never touch the process-global registry); `None` builds the auto-project:
+/// `id = key`, `label = basename(repo_root, else cwd, else key)`.
+pub(crate) fn project_identity(
+    key: &str,
+    repo_root: Option<&str>,
+    cwd: Option<&str>,
+    resolved: Option<&kb_core::sessions::ResolvedProject>,
+) -> ProjectIdentity {
+    match resolved {
+        Some(rp) => ProjectIdentity {
+            id: rp.id.clone(),
+            label: rp.label.clone(),
+            source: rp.source,
+        },
+        None => {
+            let basis = repo_root.or(cwd).unwrap_or(key);
+            let label = basis
+                .trim_end_matches('/')
+                .rsplit('/')
+                .next()
+                .unwrap_or(basis)
+                .to_string();
+            ProjectIdentity {
+                id: key.to_string(),
+                label,
+                source: "derived",
+            }
+        }
+    }
+}
+
 /// `GET /api/sessions/projects` (P4/P6) — one card per project: a declared
 /// `[projects.*]` registry entry (merging every raw `COALESCE(project_key,
 /// cwd)` key whose `repo_root`/`cwd` falls under one of its roots) or, for
@@ -1566,26 +1769,21 @@ pub async fn projects(State(state): State<Arc<KbHandles>>) -> impl IntoResponse 
             row.repo_root.as_deref(),
             row.cwd_sample.as_deref(),
         );
-        let (id, label, source, kb, code_url, roots) = match resolved {
-            Some(rp) => {
-                let roots = kb_core::sessions::registry_entry(&rp.id).map(|d| d.roots);
-                (rp.id, rp.label, rp.source, rp.kb, rp.code_url, roots)
-            }
-            None => {
-                let basis = row
-                    .repo_root
-                    .as_deref()
-                    .or(row.cwd_sample.as_deref())
-                    .unwrap_or(&row.key);
-                let label = basis
-                    .trim_end_matches('/')
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(basis)
-                    .to_string();
-                (row.key.clone(), label, "derived", None, None, None)
-            }
+        let ident = project_identity(
+            &row.key,
+            row.repo_root.as_deref(),
+            row.cwd_sample.as_deref(),
+            resolved.as_ref(),
+        );
+        let (kb, code_url, roots) = match &resolved {
+            Some(rp) => (
+                rp.kb.clone(),
+                rp.code_url.clone(),
+                kb_core::sessions::registry_entry(&rp.id).map(|d| d.roots),
+            ),
+            None => (None, None, None),
         };
+        let ProjectIdentity { id, label, source } = ident;
         key_to_id.insert(row.key.clone(), id.clone());
         let acc = by_id.entry(id).or_insert_with(|| ProjectAcc {
             label: label.clone(),
@@ -5120,10 +5318,21 @@ pub async fn get(
         .collect();
     memory_ids.sort();
     memory_ids.dedup();
+    let (checks, unnamed_edits, unnamed_edits_total) = match session.evidence_full.as_ref() {
+        Some(ev) => (
+            ev.checks.iter().map(|c| check_out(ev, c)).collect(),
+            ev.unnamed_edits.clone(),
+            ev.unnamed_edits_total,
+        ),
+        None => (Vec::new(), Vec::new(), 0),
+    };
     Json(SessionDetailResponse {
         session,
         memory_ids,
         segment_chain,
+        checks,
+        unnamed_edits,
+        unnamed_edits_total,
     })
     .into_response()
 }
@@ -7473,10 +7682,17 @@ pub struct BeatBody {
 pub struct BeatDetail {
     #[serde(default)]
     pub reason: Option<String>,
-    /// The write tool's name (`Edit`/`Write`/`MultiEdit`/`NotebookEdit`) on
-    /// an `event == "tool"` beat; stored with each touch.
+    /// The tool a beat names. On an `event == "tool"` write-tool beat
+    /// (`Edit`/`Write`/`MultiEdit`/`NotebookEdit`) it is stored with each
+    /// touch; on a `phase == "start"` tool beat it is the started tool
+    /// (OL IDEA4, reduced to a `tool_label`); on a `blocked` beat it is
+    /// the tool the permission prompt names.
     #[serde(default)]
     pub tool: Option<String>,
+    /// OL IDEA4 — `"start"` marks a tool-START beat (Claude `PreToolUse`).
+    /// Any other value, or none, is an ordinary beat.
+    #[serde(default)]
+    pub phase: Option<String>,
     /// OL PRES1 — absolute paths a write-tool beat touched. Only honoured
     /// on `event == "tool"`; see [`sanitize_touches`].
     /// Deliberately `Value`s: a non-string entry is dropped by
@@ -7490,6 +7706,12 @@ pub struct BeatDetail {
     /// The session's project label (basename of the MAIN checkout).
     #[serde(default)]
     pub project: Option<String>,
+    /// OL PRES2 — basename of the root's directory when the session runs in
+    /// a LINKED worktree (absent for the main checkout). A label, never a
+    /// path; an invalid one drops the beat's touches rather than letting a
+    /// worktree edit read as an edit to the main checkout.
+    #[serde(default)]
+    pub worktree: Option<String>,
 }
 
 /// Longest path/root/project string a beat may carry (bytes).
@@ -7551,6 +7773,11 @@ fn sanitize_touches(
     if !beat_str_ok(project) || project.len() > 128 || project.contains('/') {
         return Vec::new();
     }
+    let worktree = match d.worktree.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(w) if beat_str_ok(w) && w.len() <= 128 && !w.contains('/') => Some(w.to_string()),
+        Some(_) => return Vec::new(),
+    };
     let tool = d
         .tool
         .as_deref()
@@ -7572,6 +7799,7 @@ fn sanitize_touches(
             }
             Some(crate::live_registry::Touch {
                 project: project.to_string(),
+                worktree: worktree.clone(),
                 rel: comps[root.len()..].join("/"),
                 at_unix: now_unix,
                 tool: tool.to_string(),
@@ -7608,6 +7836,107 @@ fn map_event(event: &str) -> Option<(Holder, bool)> {
         "end" => Some((Holder::Ended, false)),
         _ => None,
     }
+}
+
+/// OL IDEA4 — what a beat does to the row's remembered last-started tool.
+/// `start|prompt|turn_end|end` clear it (a turn boundary); a `tool` beat
+/// with `detail.phase == "start"` starts it, the name reduced through
+/// [`tool_label`] and the instant capped at `now`; everything else (a
+/// heartbeat or write-tool `tool` beat, `blocked`, `unblocked`) keeps it.
+fn tool_update_for(
+    event: &str,
+    detail: Option<&BeatDetail>,
+    at_unix: i64,
+    now_unix: i64,
+) -> crate::live_registry::ToolUpdate {
+    use crate::live_registry::{LastTool, ToolUpdate};
+    match event {
+        "start" | "prompt" | "turn_end" | "end" => ToolUpdate::Clear { at_unix },
+        "tool" => match detail {
+            Some(d) if d.phase.as_deref() == Some("start") => ToolUpdate::Started(LastTool {
+                name: tool_label(d.tool.as_deref().unwrap_or("")),
+                at_unix: at_unix.min(now_unix),
+            }),
+            _ => ToolUpdate::Keep,
+        },
+        _ => ToolUpdate::Keep,
+    }
+}
+
+/// Longest blocked-reason text kept (chars). The reason is Claude's own UI
+/// text, never transcript bytes; the forced scrub re-caps it to the same
+/// bound for non-loopback callers.
+const BLOCKED_REASON_MAX_CHARS: usize = 120;
+
+/// What a beat does to the sticky blocked flag: `blocked` sets, a `tool`
+/// heartbeat keeps, every other event clears.
+pub(crate) fn block_effect(event: &str) -> crate::live_registry::BlockEffect {
+    use crate::live_registry::BlockEffect;
+    match event {
+        "blocked" => BlockEffect::Set,
+        "tool" => BlockEffect::Keep,
+        _ => BlockEffect::Clear,
+    }
+}
+
+/// A tool name safe to broadcast and render: 1..=128 chars of
+/// `[A-Za-z0-9_.:-]`.
+fn valid_tool_name(t: &str) -> bool {
+    (1..=128).contains(&t.len())
+        && t.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
+}
+
+/// The `(detail_reason, blocked_tool)` a beat stores: on a `blocked` event
+/// only, the trimmed reason capped at [`BLOCKED_REASON_MAX_CHARS`] and the
+/// tool iff [`valid_tool_name`]; on every other event both are `None`. An
+/// invalid tool never rejects the beat.
+fn blocked_detail(event: &str, detail: Option<&BeatDetail>) -> (Option<String>, Option<String>) {
+    if event != "blocked" {
+        return (None, None);
+    }
+    let Some(d) = detail else { return (None, None) };
+    let reason = d
+        .reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| kb_core::sessions::truncate_chars_ellipsis(s, BLOCKED_REASON_MAX_CHARS));
+    let tool = d
+        .tool
+        .as_deref()
+        .filter(|t| valid_tool_name(t))
+        .map(str::to_string);
+    (reason, tool)
+}
+
+/// The `session.state` SSE payload for one beat, or `None` when the derived
+/// view `(state, blocked)` did not change. Never carries free text
+/// (`detail_reason`, `title`, `last_line`, `cwd`); `blocked_tool` is a
+/// validated token and appears only on a blocked row.
+pub(crate) fn session_state_payload(
+    outcome: &crate::live_registry::RecordOutcome,
+) -> Option<serde_json::Value> {
+    if (outcome.previous_state, outcome.previous_blocked)
+        == (Some(outcome.state), Some(outcome.row.blocked))
+    {
+        return None;
+    }
+    let mut v = serde_json::json!({
+        "session_id": outcome.row.session_id,
+        "harness": outcome.row.harness,
+        "state": outcome.state,
+        "holder": outcome.row.holder,
+        "project": derive_project(outcome.row.cwd.as_deref()),
+        "since_unix": outcome.row.last_activity_unix,
+        "blocked": outcome.row.blocked,
+    });
+    if outcome.row.blocked {
+        if let Some(t) = &outcome.row.blocked_tool {
+            v["blocked_tool"] = serde_json::Value::String(t.clone());
+        }
+    }
+    Some(v)
 }
 
 /// Parse the beat's `at` field: RFC 3339 (`kb-beat.sh` emits `date -u
@@ -7695,10 +8024,9 @@ pub async fn beat(State(state): State<Arc<KbHandles>>, Json(body): Json<BeatBody
     });
     let touches: std::collections::VecDeque<_> =
         sanitize_touches(&body.event, body.detail.as_ref(), now_unix).into();
-    let detail_reason = body
-        .detail
-        .and_then(|d| d.reason)
-        .filter(|s| !s.trim().is_empty());
+    let (detail_reason, blocked_tool) = blocked_detail(&body.event, body.detail.as_ref());
+    let effect = block_effect(&body.event);
+    let tool_update = tool_update_for(&body.event, body.detail.as_ref(), at_unix, now_unix);
 
     let row = crate::live_registry::LiveRow {
         session_id: body.session_id,
@@ -7714,24 +8042,20 @@ pub async fn beat(State(state): State<Arc<KbHandles>>, Json(body): Json<BeatBody
         last_line,
         blocked,
         detail_reason,
+        blocked_tool,
+        blocked_since_unix: None,
         touched_unix: now_unix,
         touches,
+        tool_update,
+        last_tool: None,
     };
 
-    let outcome = state.live_registry.record_beat(row, now_unix);
+    let outcome = state
+        .live_registry
+        .record_beat_effect(row, now_unix, effect);
 
-    if outcome.previous_state != Some(outcome.state) {
-        state.bus.emit(
-            "session.state",
-            serde_json::json!({
-                "session_id": outcome.row.session_id,
-                "harness": outcome.row.harness,
-                "state": outcome.state,
-                "holder": outcome.row.holder,
-                "project": derive_project(outcome.row.cwd.as_deref()),
-                "since_unix": outcome.row.last_activity_unix,
-            }),
-        );
+    if let Some(payload) = session_state_payload(&outcome) {
+        state.bus.emit("session.state", payload);
     }
 
     Json(serde_json::json!({
@@ -7788,13 +8112,33 @@ pub struct LiveStatusRow {
     #[cfg_attr(feature = "ts-export", ts(optional))]
     pub artifact_id: Option<String>,
     /// [`map_event`]'s holder mapping keeps `blocked` a flag on
-    /// `Holder::Agent` rather than a new `LiveState` variant — a presenter
-    /// may render this + `detail_reason` as a distinct sub-label inside the
-    /// working/stalled lane.
+    /// `Holder::Agent` rather than a new `LiveState` variant. It feeds the
+    /// "Needs you" lane: a sticky flag on a working/stalled agent row, set
+    /// by a `blocked` beat, kept by `tool` beats and cleared by any other
+    /// event (OL IDEA1). Tier-0 rows are never blocked.
     pub blocked: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-export", ts(optional))]
     pub detail_reason: Option<String>,
+    /// The tool the pending permission prompt names, when the hook parsed
+    /// one (a validated `[A-Za-z0-9_.:-]` token). Blocked rows only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub blocked_tool: Option<String>,
+    /// Unix seconds of the beat that raised the block. Blocked rows only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub blocked_since_unix: Option<i64>,
+    /// The most recent tool this session STARTED that kb heard about (a
+    /// name-only label, never arguments). Started is not running. Quiet
+    /// agent-held hook rows only (OL IDEA4).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub last_tool: Option<String>,
+    /// Unix seconds that tool was started. Present exactly when `last_tool` is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub last_tool_at: Option<i64>,
 }
 
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
@@ -7814,6 +8158,21 @@ pub struct LiveStatusQuery {
     pub project: Option<String>,
     /// Caps EACH lane independently — see [`order_and_cap_live_status_rows`].
     pub limit: Option<usize>,
+    /// `1|true|on` — only rows blocked on the operator (and still inside
+    /// the presumed-ended horizon). Skips the Tier-0 fan-out entirely: a
+    /// capture-derived row can never be blocked, so this read is in-memory.
+    pub blocked: Option<String>,
+}
+
+/// Whether the Tier-0 (capture-derived) fan-out is worth running for `q`.
+fn tier0_wanted(q: &LiveStatusQuery) -> bool {
+    !wants_raw_flag(&q.blocked)
+}
+
+/// `?blocked=1` keeps a row only while its claim is live: blocked AND not
+/// yet `presumed_ended` (eight hours of silence ends the claim).
+fn blocked_claim_live(blocked: bool, state: LiveState) -> bool {
+    blocked && state != LiveState::PresumedEnded
 }
 
 /// csv over the six-state wire vocabulary. Unknown tokens are DROPPED
@@ -7898,6 +8257,18 @@ fn redact_for_non_loopback(row: &mut LiveStatusRow) {
             &ll,
             kb_core::sessions::OUTCOME_WIRE_MAX_CHARS,
         ));
+    }
+    if let Some(reason) = row.detail_reason.take() {
+        row.detail_reason = Some(kb_core::sessions::truncate_chars_ellipsis(
+            &reason,
+            BLOCKED_REASON_MAX_CHARS,
+        ));
+    }
+    // OL IDEA4 — defence in depth: the label grammar was applied at intake,
+    // but a tool name that fails it must never leave this floor.
+    if row.last_tool.as_deref().is_some_and(|t| !is_tool_label(t)) {
+        row.last_tool = None;
+        row.last_tool_at = None;
     }
 }
 
@@ -8003,25 +8374,40 @@ pub async fn live_status(
         .live_registry
         .snapshot(now_unix)
         .into_iter()
-        .map(|(r, live_state, confidence)| LiveStatusRow {
-            resume: resume_command(&r.harness, &r.session_id),
-            session_id: r.session_id,
-            harness: r.harness,
-            holder: r.holder,
-            state: live_state,
-            source: StateSource::Hook,
-            confidence,
-            since_unix: r.last_activity_unix,
-            since_secs: (now_unix - r.last_activity_unix).max(0),
-            project: derive_project(r.cwd.as_deref()),
-            cwd: r.cwd,
-            model: r.model,
-            title: r.title,
-            last_line: r.last_line,
-            kb: None,
-            artifact_id: None,
-            blocked: r.blocked,
-            detail_reason: r.detail_reason,
+        .map(|(r, live_state, confidence)| {
+            let since_secs = (now_unix - r.last_activity_unix).max(0);
+            let evidence = r
+                .last_tool
+                .as_ref()
+                .filter(|_| tool_evidence_visible(live_state, since_secs));
+            let (last_tool, last_tool_at) = match evidence {
+                Some(t) => (Some(t.name.clone()), Some(t.at_unix)),
+                None => (None, None),
+            };
+            LiveStatusRow {
+                resume: resume_command(&r.harness, &r.session_id),
+                session_id: r.session_id,
+                harness: r.harness,
+                holder: r.holder,
+                state: live_state,
+                source: StateSource::Hook,
+                confidence,
+                since_unix: r.last_activity_unix,
+                since_secs,
+                project: derive_project(r.cwd.as_deref()),
+                cwd: r.cwd,
+                model: r.model,
+                title: r.title,
+                last_line: r.last_line,
+                kb: None,
+                artifact_id: None,
+                blocked: r.blocked,
+                detail_reason: r.detail_reason,
+                blocked_tool: r.blocked_tool,
+                blocked_since_unix: r.blocked_since_unix,
+                last_tool,
+                last_tool_at,
+            }
         })
         .collect();
 
@@ -8032,7 +8418,7 @@ pub async fn live_status(
     // MAX(started_at) query.
     let known_ids = &known_ids;
     let mut tier0_futs: Vec<super::CorpusFut<'_, Vec<LiveStatusRow>>> = Vec::new();
-    for (kb_name, ctx) in state.kbs.iter() {
+    for (kb_name, ctx) in state.kbs.iter().filter(|_| tier0_wanted(&q)) {
         tier0_futs.push(Box::pin(async move {
             let list = match ctx
                 .storage
@@ -8105,6 +8491,11 @@ pub async fn live_status(
                         artifact_id: Some(row.artifact_id),
                         blocked: false,
                         detail_reason: None,
+                        blocked_tool: None,
+                        blocked_since_unix: None,
+                        // A capture is not live evidence.
+                        last_tool: None,
+                        last_tool_at: None,
                     }
                 })
                 .collect()
@@ -8119,6 +8510,10 @@ pub async fn live_status(
         .collect();
     rows.extend(tier0);
 
+    if wants_raw_flag(&q.blocked) {
+        // Eight hours of silence ends the claim, as for any agent row.
+        rows.retain(|r| blocked_claim_live(r.blocked, r.state));
+    }
     if !wanted_states.is_empty() {
         rows.retain(|r| wanted_states.contains(&r.state));
     }
@@ -8154,6 +8549,10 @@ pub async fn live_status(
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LiveTouchRow {
     pub project: String,
+    /// Basename of the linked worktree the edit happened in; the key is
+    /// absent for the main checkout (so a pre-PRES2 payload is unchanged).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<String>,
     pub rel: String,
     pub session_id: String,
     pub harness: String,
@@ -8202,6 +8601,7 @@ fn build_live_touches(
             }
             rows.push(LiveTouchRow {
                 project: t.project,
+                worktree: t.worktree,
                 rel: t.rel,
                 session_id: s.session_id.clone(),
                 harness: s.harness.clone(),
@@ -8212,9 +8612,10 @@ fn build_live_touches(
         }
     }
     rows.sort_by(|a, b| {
-        (a.age_secs, &a.project, &a.rel, &a.session_id).cmp(&(
+        (a.age_secs, &a.project, &a.worktree, &a.rel, &a.session_id).cmp(&(
             b.age_secs,
             &b.project,
+            &b.worktree,
             &b.rel,
             &b.session_id,
         ))
@@ -8326,7 +8727,141 @@ mod lsc2_tests {
             artifact_id: None,
             blocked: false,
             detail_reason: None,
+            blocked_tool: None,
+            blocked_since_unix: None,
+            last_tool: None,
+            last_tool_at: None,
         }
+    }
+
+    fn bd(tool: Option<&str>, phase: Option<&str>) -> BeatDetail {
+        BeatDetail {
+            tool: tool.map(str::to_string),
+            phase: phase.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn tool_update_for_covers_the_closed_event_vocabulary() {
+        use crate::live_registry::{LastTool, ToolUpdate};
+        let started = bd(Some("Bash"), Some("start"));
+        // Turn boundaries clear, whatever the detail.
+        for ev in ["start", "prompt", "turn_end", "end"] {
+            assert_eq!(
+                tool_update_for(ev, Some(&started), 90, 100),
+                ToolUpdate::Clear { at_unix: 90 },
+                "{ev}"
+            );
+            assert_eq!(
+                tool_update_for(ev, None, 90, 100),
+                ToolUpdate::Clear { at_unix: 90 },
+                "{ev}"
+            );
+        }
+        // A start-phase tool beat starts; `at` is capped at now.
+        assert_eq!(
+            tool_update_for("tool", Some(&started), 90, 100),
+            ToolUpdate::Started(LastTool {
+                name: "Bash".into(),
+                at_unix: 90
+            })
+        );
+        assert_eq!(
+            tool_update_for("tool", Some(&started), 500, 100),
+            ToolUpdate::Started(LastTool {
+                name: "Bash".into(),
+                at_unix: 100
+            })
+        );
+        // The name goes through the label grammar.
+        for (raw, want) in [("/etc/passwd leak-marker", "unknown"), ("mcp__x__y", "mcp")] {
+            let d = bd(Some(raw), Some("start"));
+            assert_eq!(
+                tool_update_for("tool", Some(&d), 1, 2),
+                ToolUpdate::Started(LastTool {
+                    name: want.into(),
+                    at_unix: 1
+                })
+            );
+        }
+        assert_eq!(
+            tool_update_for("tool", Some(&bd(None, Some("start"))), 1, 2),
+            ToolUpdate::Started(LastTool {
+                name: "unknown".into(),
+                at_unix: 1
+            })
+        );
+        // Heartbeats, write-tool beats, blocked and unblocked keep.
+        assert_eq!(tool_update_for("tool", None, 1, 2), ToolUpdate::Keep);
+        assert_eq!(
+            tool_update_for("tool", Some(&bd(Some("Edit"), None)), 1, 2),
+            ToolUpdate::Keep
+        );
+        for ev in ["blocked", "unblocked"] {
+            assert_eq!(
+                tool_update_for(ev, Some(&started), 1, 2),
+                ToolUpdate::Keep,
+                "{ev}"
+            );
+        }
+    }
+
+    #[test]
+    fn beat_body_accepts_a_pretool_beat_shape() {
+        use crate::live_registry::ToolUpdate;
+        let b: BeatBody = serde_json::from_value(serde_json::json!({
+            "v": 1, "session_id": "s", "harness": "claude", "event": "tool",
+            "at": "2026-08-21T20:41:02Z",
+            "detail": {"tool": "Bash", "phase": "start"},
+        }))
+        .unwrap();
+        let d = b.detail.as_ref().unwrap();
+        assert_eq!(d.tool.as_deref(), Some("Bash"));
+        assert_eq!(d.phase.as_deref(), Some("start"));
+        assert!(matches!(
+            tool_update_for(&b.event, b.detail.as_ref(), 10, 20),
+            ToolUpdate::Started(_)
+        ));
+        // An unknown phase is an ordinary beat.
+        let odd: BeatBody = serde_json::from_value(serde_json::json!({
+            "session_id": "s", "harness": "claude", "event": "tool",
+            "at": "2026-08-21T20:41:02Z",
+            "detail": {"tool": "Bash", "phase": "end"},
+        }))
+        .unwrap();
+        assert_eq!(
+            tool_update_for(&odd.event, odd.detail.as_ref(), 10, 20),
+            ToolUpdate::Keep
+        );
+    }
+
+    #[test]
+    fn live_status_row_omits_last_tool_when_absent() {
+        let r = row(LiveState::Stalled, 3000, "a");
+        let v = serde_json::to_value(&r).unwrap();
+        assert!(v.get("last_tool").is_none() && v.get("last_tool_at").is_none());
+        let mut r2 = r.clone();
+        r2.last_tool = Some("Bash".to_string());
+        r2.last_tool_at = Some(42);
+        let v2 = serde_json::to_value(&r2).unwrap();
+        assert_eq!(v2["last_tool"], serde_json::json!("Bash"));
+        assert_eq!(v2["last_tool_at"], serde_json::json!(42));
+    }
+
+    #[test]
+    fn redact_for_non_loopback_drops_a_last_tool_that_fails_the_label_grammar() {
+        let mut bad = row(LiveState::Stalled, 3000, "a");
+        bad.last_tool = Some("/etc/passwd leak".to_string());
+        bad.last_tool_at = Some(1);
+        redact_for_non_loopback(&mut bad);
+        assert!(bad.last_tool.is_none() && bad.last_tool_at.is_none());
+        let mut ok = row(LiveState::Stalled, 3000, "b");
+        ok.last_tool = Some("Bash".to_string());
+        ok.last_tool_at = Some(1);
+        redact_for_non_loopback(&mut ok);
+        assert_eq!(ok.last_tool.as_deref(), Some("Bash"));
+        assert_eq!(ok.last_tool_at, Some(1));
     }
 
     #[test]
@@ -8452,6 +8987,228 @@ mod lsc2_tests {
         // OMITTED (skip_serializing_if), not emitted as null.
         assert!(v.get("kb").is_none());
         assert!(v.get("artifact_id").is_none());
+        // OL IDEA1: the two blocked fields are omitted when None.
+        assert!(v.get("blocked_tool").is_none());
+        assert!(v.get("blocked_since_unix").is_none());
+        let mut b = r.clone();
+        b.blocked = true;
+        b.blocked_tool = Some("Bash".to_string());
+        b.blocked_since_unix = Some(42);
+        let v = serde_json::to_value(&b).unwrap();
+        assert_eq!(v["blocked_tool"], serde_json::json!("Bash"));
+        assert_eq!(v["blocked_since_unix"], serde_json::json!(42));
+    }
+
+    #[test]
+    fn block_effect_covers_all_seven_events() {
+        use crate::live_registry::BlockEffect::{Clear, Keep, Set};
+        for (ev, want) in [
+            ("blocked", Set),
+            ("tool", Keep),
+            ("start", Clear),
+            ("prompt", Clear),
+            ("unblocked", Clear),
+            ("turn_end", Clear),
+            ("end", Clear),
+        ] {
+            assert_eq!(block_effect(ev), want, "{ev}");
+        }
+    }
+
+    #[test]
+    fn valid_tool_name_accepts_tokens_and_rejects_everything_else() {
+        for ok in ["Bash", "mcp__github__create_issue", "plugin:x.y-z"] {
+            assert!(valid_tool_name(ok), "{ok}");
+        }
+        let long = "a".repeat(129);
+        for bad in [
+            "",
+            " ",
+            "a b",
+            "a/b",
+            "a;b",
+            "a\u{7}b",
+            "caf\u{e9}",
+            long.as_str(),
+        ] {
+            assert!(!valid_tool_name(bad), "{bad:?}");
+        }
+        assert!(valid_tool_name(&"a".repeat(128)));
+    }
+
+    #[test]
+    fn blocked_detail_caps_the_reason_and_ignores_non_blocked_events() {
+        let d = BeatDetail {
+            reason: Some(format!("  {}  ", "x".repeat(300))),
+            tool: Some("Bash".to_string()),
+            ..Default::default()
+        };
+        let (reason, tool) = blocked_detail("blocked", Some(&d));
+        assert_eq!(reason.unwrap().chars().count(), BLOCKED_REASON_MAX_CHARS);
+        assert_eq!(tool.as_deref(), Some("Bash"));
+        for ev in ["tool", "prompt", "turn_end", "unblocked", "start", "end"] {
+            assert_eq!(blocked_detail(ev, Some(&d)), (None, None), "{ev}");
+        }
+        let bad = BeatDetail {
+            reason: Some("r".to_string()),
+            tool: Some("Bash; rm".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            blocked_detail("blocked", Some(&bad)),
+            (Some("r".to_string()), None)
+        );
+        assert_eq!(blocked_detail("blocked", None), (None, None));
+    }
+
+    /// Drive one beat through the real registry + payload builder.
+    fn drive(
+        reg: &crate::live_registry::LiveRegistry,
+        event: &str,
+        tool: Option<&str>,
+        at: i64,
+    ) -> Option<serde_json::Value> {
+        let (holder, blocked) = map_event(event).unwrap();
+        let d = BeatDetail {
+            reason: blocked.then(|| "Claude needs your permission to use Bash".to_string()),
+            tool: tool.map(str::to_string),
+            ..Default::default()
+        };
+        let (detail_reason, blocked_tool) = blocked_detail(event, Some(&d));
+        let row = crate::live_registry::LiveRow {
+            session_id: "s".to_string(),
+            harness: "claude".to_string(),
+            holder,
+            last_activity_unix: at,
+            lease_secs: 900,
+            host: None,
+            pid: None,
+            cwd: Some("/w/proj".to_string()),
+            model: None,
+            title: Some("secret title".to_string()),
+            last_line: Some("secret line".to_string()),
+            blocked,
+            detail_reason,
+            blocked_tool,
+            blocked_since_unix: None,
+            touched_unix: at,
+            touches: Default::default(),
+            tool_update: Default::default(),
+            last_tool: None,
+        };
+        let out = reg.record_beat_effect(row, at, block_effect(event));
+        session_state_payload(&out)
+    }
+
+    #[test]
+    fn session_state_fires_on_a_change_of_state_or_blocked_never_per_beat() {
+        let reg = crate::live_registry::LiveRegistry::new();
+        let first = drive(&reg, "start", None, 1_000).expect("first beat fires");
+        assert_eq!(first["blocked"], serde_json::json!(false));
+        assert!(first.get("blocked_tool").is_none());
+        // prompt: same (working, not blocked) -> no frame.
+        assert!(drive(&reg, "prompt", None, 1_001).is_none());
+        // blocked edge: state unchanged (working), blocked flips.
+        let b = drive(&reg, "blocked", Some("Bash"), 1_002).expect("blocked edge fires");
+        assert_eq!(b["blocked"], serde_json::json!(true));
+        assert_eq!(b["blocked_tool"], serde_json::json!("Bash"));
+        assert_eq!(b["state"], serde_json::json!("working"));
+        // tool keeps the flag: no frame.
+        assert!(drive(&reg, "tool", None, 1_003).is_none());
+        // a second blocked beat while blocked: no frame.
+        assert!(drive(&reg, "blocked", Some("Bash"), 1_004).is_none());
+        // unblocked clears: frame.
+        let u = drive(&reg, "unblocked", None, 1_005).expect("unblock edge fires");
+        assert_eq!(u["blocked"], serde_json::json!(false));
+        assert!(u.get("blocked_tool").is_none());
+        // blocked then turn_end: exactly one frame (state AND flag change together).
+        drive(&reg, "blocked", Some("Bash"), 1_006).expect("blocked again");
+        let te = drive(&reg, "turn_end", None, 1_007).expect("turn_end fires once");
+        assert_eq!(te["state"], serde_json::json!("waiting"));
+        assert_eq!(te["blocked"], serde_json::json!(false));
+        assert!(drive(&reg, "turn_end", None, 1_008).is_none());
+    }
+
+    #[test]
+    fn session_state_payload_never_carries_free_text() {
+        let reg = crate::live_registry::LiveRegistry::new();
+        drive(&reg, "start", None, 1_000);
+        let b = drive(&reg, "blocked", Some("Bash"), 1_001).unwrap();
+        let text = b.to_string();
+        for banned in [
+            "detail_reason",
+            "title",
+            "last_line",
+            "cwd",
+            "needs your permission",
+            "secret",
+        ] {
+            assert!(!text.contains(banned), "{banned} leaked into {text}");
+        }
+    }
+
+    #[test]
+    fn session_state_payload_keys_match_the_schema() {
+        let reg = crate::live_registry::LiveRegistry::new();
+        drive(&reg, "start", None, 1_000);
+        let blocked = drive(&reg, "blocked", Some("Bash"), 1_001).unwrap();
+        let plain = drive(&reg, "unblocked", None, 1_002).unwrap();
+        let mut declared_all: Vec<String> = super::super::schema::SESSION_STATE_KEYS
+            .iter()
+            .map(|k| k.trim_end_matches('?').to_string())
+            .collect();
+        let mut declared_required: Vec<String> = super::super::schema::SESSION_STATE_KEYS
+            .iter()
+            .filter(|k| !k.ends_with('?'))
+            .map(|k| k.to_string())
+            .collect();
+        let keys = |v: &serde_json::Value| {
+            let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+            k.sort();
+            k
+        };
+        declared_all.sort();
+        declared_required.sort();
+        assert_eq!(keys(&blocked), declared_all);
+        assert_eq!(keys(&plain), declared_required);
+    }
+
+    #[test]
+    fn blocked_read_drops_presumed_ended_rows() {
+        assert!(blocked_claim_live(true, LiveState::Working));
+        assert!(blocked_claim_live(true, LiveState::Waiting));
+        assert!(!blocked_claim_live(true, LiveState::PresumedEnded));
+        assert!(!blocked_claim_live(false, LiveState::Working));
+    }
+
+    #[test]
+    fn tier0_is_skipped_only_for_the_blocked_read() {
+        let q = LiveStatusQuery::default();
+        assert!(tier0_wanted(&q));
+        for on in ["1", "true", "on"] {
+            let q = LiveStatusQuery {
+                blocked: Some(on.to_string()),
+                ..Default::default()
+            };
+            assert!(!tier0_wanted(&q), "{on}");
+        }
+        let q = LiveStatusQuery {
+            blocked: Some("0".to_string()),
+            ..Default::default()
+        };
+        assert!(tier0_wanted(&q));
+    }
+
+    #[test]
+    fn redact_for_non_loopback_recaps_the_blocked_reason() {
+        let mut r = row(LiveState::Working, 10, "a");
+        r.blocked = true;
+        r.detail_reason = Some("y".repeat(400));
+        redact_for_non_loopback(&mut r);
+        assert_eq!(
+            r.detail_reason.unwrap().chars().count(),
+            BLOCKED_REASON_MAX_CHARS
+        );
     }
 
     #[test]
@@ -8499,6 +9256,8 @@ mod lsc2_tests {
             paths: paths.iter().map(|s| serde_json::json!(s)).collect(),
             root: root.map(str::to_string),
             project: project.map(str::to_string),
+            worktree: None,
+            phase: None,
         }
     }
 
@@ -8590,6 +9349,33 @@ mod lsc2_tests {
     }
 
     #[test]
+    fn worktree_label_is_carried_and_a_bad_one_drops_the_touches() {
+        let mut d = detail(&["/w/x/src/a.rs"], Some("/w/x"), Some("repo"));
+        assert_eq!(sanitize_touches("tool", Some(&d), 1)[0].worktree, None);
+        d.worktree = Some("x".to_string());
+        let t = sanitize_touches("tool", Some(&d), 1);
+        assert_eq!(t[0].worktree.as_deref(), Some("x"));
+        assert_eq!(t[0].rel, "src/a.rs");
+        d.worktree = Some("  ".to_string());
+        assert_eq!(sanitize_touches("tool", Some(&d), 1)[0].worktree, None);
+        // A path-shaped, control-char or over-long label must not degrade to
+        // "main checkout": the touches are dropped instead.
+        for bad in ["a/b", "/abs", "a\u{1}b", &"w".repeat(129)] {
+            d.worktree = Some(bad.to_string());
+            assert!(sanitize_touches("tool", Some(&d), 1).is_empty(), "{bad:?}");
+        }
+        let body: BeatBody = serde_json::from_value(serde_json::json!({
+            "session_id": "s", "harness": "claude", "event": "tool",
+            "at": "2026-08-21T20:41:02Z",
+            "detail": {"tool": "Edit", "paths": ["/w/x/a"], "root": "/w/x",
+                       "project": "repo", "worktree": "x"},
+        }))
+        .unwrap();
+        let t = sanitize_touches("tool", body.detail.as_ref(), 1);
+        assert_eq!(t[0].worktree.as_deref(), Some("x"));
+    }
+
+    #[test]
     fn derive_state_is_identical_with_and_without_paths() {
         // map_event/derive_state never see the detail; the same event maps
         // to the same holder either way.
@@ -8621,8 +9407,12 @@ mod lsc2_tests {
             last_line: None,
             blocked: false,
             detail_reason: None,
+            blocked_tool: None,
+            blocked_since_unix: None,
             touched_unix: 500,
             touches: ts.into(),
+            tool_update: Default::default(),
+            last_tool: None,
         };
         let a = reg.record_beat(
             mk("a", sanitize_touches("tool", with.detail.as_ref(), 500)),
@@ -8645,12 +9435,47 @@ mod lsc2_tests {
                 .into_iter()
                 .map(|(p, r, at)| crate::live_registry::Touch {
                     project: p.to_string(),
+                    worktree: None,
                     rel: r.to_string(),
                     at_unix: at,
                     tool: "Edit".to_string(),
                 })
                 .collect(),
         }
+    }
+
+    fn wt_snap(
+        sid: &str,
+        worktree: Option<&str>,
+        rel: &str,
+        at: i64,
+    ) -> crate::live_registry::TouchSnapshot {
+        let mut s = snap(sid, "claude", vec![("demo", rel, at)]);
+        s.touches[0].worktree = worktree.map(str::to_string);
+        s
+    }
+
+    #[test]
+    fn live_touches_worktree_is_a_separate_row_and_a_basename_only() {
+        let now = 10_000;
+        let r = build_live_touches(
+            vec![
+                wt_snap("s1", None, "src/a.rs", now - 5),
+                wt_snap("s2", Some("v80-x"), "src/a.rs", now - 5),
+            ],
+            &[],
+            &[],
+            900,
+            now,
+        );
+        assert_eq!(r.touches.len(), 2, "same rel, main vs worktree: two rows");
+        let v = serde_json::to_value(&r).unwrap();
+        let rows = v["touches"].as_array().unwrap();
+        let main = rows.iter().find(|t| t["session_id"] == "s1").unwrap();
+        let wt = rows.iter().find(|t| t["session_id"] == "s2").unwrap();
+        assert!(main.get("worktree").is_none(), "main checkout: key absent");
+        assert_eq!(wt["worktree"], "v80-x");
+        assert!(!wt["worktree"].as_str().unwrap().contains('/'));
     }
 
     #[test]
@@ -8764,6 +9589,12 @@ mod lsc2_tests {
                     "22222222-aaaa-4bbb-8ccc-000000000002",
                     "claude",
                     vec![("demo", "src/lib.rs", now - 30)],
+                ),
+                wt_snap(
+                    "33333333-aaaa-4bbb-8ccc-000000000003",
+                    Some("demo-feature"),
+                    "src/lib.rs",
+                    now - 60,
                 ),
             ],
             &[],
@@ -9860,5 +10691,163 @@ mod seg1_tests {
         assert_eq!(widen_artifact_ids("a-x", "x", &[]), ["a-x"]);
         // A STALE capture's artifact (not the newest of the head) never widens.
         assert_eq!(widen_artifact_ids("a-old", "raw", &c), ["a-old"]);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// OL IDEA3 -- the session evidence card on the wire.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod evidence_wire_tests {
+    use super::*;
+    use kb_core::sessions::checks::{
+        Basis, Outcome, SessionCheck, SessionEvidence, Verdict, EVIDENCE_VERSION,
+    };
+    use kb_core::storage::sqlite::SessionRow;
+
+    fn check(seq: u32, label: &str, outcome: Outcome) -> SessionCheck {
+        SessionCheck {
+            seq,
+            at: Some(1_700_000_000 + i64::from(seq)),
+            runners: vec!["cargo-test".into()],
+            label: label.into(),
+            cmd: format!("{label} -p widget"),
+            outcome,
+            basis: Some(Basis::Exit),
+            why: None,
+            exit_code: Some(0),
+        }
+    }
+
+    fn evidence(last_edit: u32, checks: Vec<SessionCheck>) -> SessionEvidence {
+        SessionEvidence {
+            v: EVIDENCE_VERSION,
+            checks_total: checks.len() as u32,
+            checks,
+            edit_count: 2,
+            edits_ignored: 3,
+            last_edit_seq: Some(last_edit),
+            last_edit_at: Some(1_700_000_002),
+            first_push_after_edit_seq: None,
+            unnamed_edits: vec!["render.rs".into()],
+            unnamed_edits_total: 1,
+        }
+    }
+
+    fn row(json: Option<String>, edited: u32, commits: u32) -> SessionRow {
+        SessionRow {
+            session_id: "sid-ev".into(),
+            artifact_id: "art-ev".into(),
+            harness: "claude".into(),
+            files_edited_count: edited,
+            commit_count: commits,
+            evidence_json: json,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn from_row_maps_summary_and_phrase() {
+        let ev = evidence(
+            3,
+            vec![
+                check(2, "cargo test", Outcome::Pass),
+                check(4, "cargo clippy", Outcome::Pass),
+            ],
+        );
+        let out = SessionOut::from_row("k", row(Some(serde_json::to_string(&ev).unwrap()), 2, 0));
+        let e = out.evidence.as_ref().expect("always Some from from_row");
+        assert_eq!(e.verdict, Verdict::Verified);
+        assert_eq!(
+            e.phrase.as_deref(),
+            Some("cargo clippy passed after the last edit")
+        );
+        let d = e.deciding.as_ref().expect("a deciding check");
+        assert_eq!(d.cmd, "cargo clippy -p widget");
+        assert_eq!(d.text, "passed");
+        assert_eq!(d.after_last_edit, Some(true));
+        assert_eq!(
+            (
+                e.last_edit_at,
+                e.checks_total,
+                e.checks_after_edit,
+                e.edits_ignored
+            ),
+            (Some(1_700_000_002), 2, 1, 3)
+        );
+        assert!(e.uncommitted, "edited files and no commit detected");
+        assert!(out.evidence_full.is_some());
+
+        // A commit clears `uncommitted`; no edited files never sets it.
+        let committed =
+            SessionOut::from_row("k", row(Some(serde_json::to_string(&ev).unwrap()), 2, 1));
+        assert!(!committed.evidence.unwrap().uncommitted);
+        let read_only = SessionOut::from_row("k", row(None, 0, 0));
+        assert!(!read_only.evidence.unwrap().uncommitted);
+
+        // The wire carries the summary; the full evidence is never serialised.
+        let v = serde_json::to_value(&out).unwrap();
+        assert_eq!(v["evidence"]["verdict"], "verified");
+        assert_eq!(v["evidence"]["deciding"]["after_last_edit"], true);
+        assert!(v.get("evidence_full").is_none());
+    }
+
+    #[test]
+    fn null_column_is_not_extracted() {
+        let out = SessionOut::from_row("k", row(None, 1, 0));
+        let e = out.evidence.as_ref().expect("always Some");
+        assert_eq!(e.verdict, Verdict::NotExtracted);
+        assert!(e.phrase.is_none() && e.deciding.is_none());
+        assert_eq!((e.checks_total, e.checks_after_edit), (0, 0));
+        assert!(out.evidence_full.is_none());
+        let v = serde_json::to_value(&out).unwrap();
+        assert_eq!(v["evidence"]["verdict"], "not_extracted");
+    }
+
+    #[test]
+    fn garbage_or_future_version_is_not_extracted() {
+        let future = serde_json::to_string(&SessionEvidence {
+            v: EVIDENCE_VERSION + 1,
+            ..evidence(3, vec![check(4, "cargo test", Outcome::Pass)])
+        })
+        .unwrap();
+        for bad in ["not json", "{}", "{\"v\":1}", "", future.as_str()] {
+            let out = SessionOut::from_row("k", row(Some(bad.to_string()), 1, 0));
+            assert_eq!(
+                out.evidence.as_ref().unwrap().verdict,
+                Verdict::NotExtracted,
+                "column {bad:?} must read as not_extracted, never a guessed verdict"
+            );
+            assert!(out.evidence_full.is_none());
+        }
+    }
+
+    // invariant:11 the server's ranking routes never read session evidence
+    #[test]
+    fn no_ranking_route_reads_session_evidence() {
+        const RANKERS: &[(&str, &str)] = &[
+            ("routes/search.rs", include_str!("search.rs")),
+            ("routes/inbox.rs", include_str!("inbox.rs")),
+            ("routes/resurface.rs", include_str!("resurface.rs")),
+            ("routes/desk.rs", include_str!("desk.rs")),
+            ("routes/context.rs", include_str!("context.rs")),
+            ("routes/memory.rs", include_str!("memory.rs")),
+        ];
+        for (name, src) in RANKERS {
+            for needle in [
+                "checks::",
+                "evidence_json",
+                "EvidenceSummary",
+                "SessionEvidenceOut",
+            ] {
+                assert!(
+                    !src.contains(needle),
+                    "{name} names `{needle}` -- session evidence is SURFACED, NEVER SCORED: \
+                     it may be rendered beside a session row, never folded into a rank, \
+                     a sort key or a filter"
+                );
+            }
+        }
     }
 }

@@ -989,6 +989,8 @@ Segment keys are untrusted transcript content: `segmentOf`/`segmentIdx` are hono
 migrated volume (`refuse_if_volume_ahead`, the same guard that made the
 13.5 h kbc outage loud) — see docs/self-host.md "Rolling back across V0045".
 
+*Evidence amendment (OL IDEA3, 2026-10-30):* `sessions.evidence_json` (V0046) holds the closed-grammar checks a capture ran: which test/lint/build commands the MAIN transcript's Bash calls made (`kb_core::sessions::checks`, no in-daemon LLM; a CLOSED runner table, wrapper strip and shell splitter, an unmatched command is simply not a check), in what order relative to its counted edits (Edit/Write/MultiEdit/NotebookEdit tool calls; edits to agent bookkeeping or scratch paths are counted as ignored, edits made through Bash or by subagents are not seen), and how they ended. An outcome is `pass`/`fail` only when the exit status speaks for the check (a pipe, `||`, `;` or `&` hides it), a harness exit tier exists (claude and codex; the other four fall to the output grammar), a background run was settled by its `<task-notification>`, or a per-runner output marker decides; everything else is `unknown` with a stated `why`, never `passed`. The verdict (`verified`/`failing`/`unconfirmed`/`stale`/`unchecked`/`no_edits`, plus `not_extracted` for a NULL or unreadable column) and its one sentence are DERIVED at read time by `checks::summarize` and are SURFACED, NEVER SCORED: never the R1 digest, the `code` lane, a sort key, a filter, or a recall/recollect/inbox term (pinned by `checks::tests::no_ranking_module_reads_session_evidence`, `sessions_list_order_ignores_evidence` and `digest_ignores_check_tracking`). The column rides the `sessions` row, so the artifact-id lifecycle registries already move and delete it and the newest-capture rule needs no extra scoping. A gh-checks run counts as after the last edit only if a push came between (CI checks the pushed head). *Rollback:* V0046 bumps the refinery epoch — see docs/self-host.md "Rolling back across V0046".
+
 **Episodic-memory retrieval (R0–R5).** Sessions are an *episodic* memory the
 agent PULLS on demand — distinct from the curated *semantic* memory (`kb
 remember`/`recall`), which it pushes every turn. Load-bearing constraints:
@@ -1561,7 +1563,8 @@ live_adapters/{codex,grok,kimi,opencode}.rs` — the four sibling adapters +
   elsewhere (e.g. `last_assistant_text`), not raw unscrubbed transcript
   bytes. The forced-scrub floor is real, not aspirational:
   `routes::sessions::redact_for_non_loopback` collapses `cwd` to its
-  basename and re-caps `last_line` (`OUTCOME_WIRE_MAX_CHARS`) for any
+  basename and re-caps `last_line` (`OUTCOME_WIRE_MAX_CHARS`) and the
+  blocked `detail_reason` (`BLOCKED_REASON_MAX_CHARS`, 120) for any
   non-loopback caller, applied AFTER ordering/capping so it never skips a
   row. `ConnectInfo` is read as an axum extractor on `live_status` (the
   house pattern for a route HANDLER; invariant #3's "read from
@@ -1575,17 +1578,33 @@ live_adapters/{codex,grok,kimi,opencode}.rs` — the four sibling adapters +
   appear in the response and the caller supplies no roots, so there is nothing
   for a loopback-only gate to protect; a tokenless non-loopback request gets
   the ordinary 401.
-- **`session.state` fires ONLY on a derived-state CHANGE, per invariant
-  #24.** `routes::sessions::beat` compares `RecordOutcome::previous_state`
-  (the state `derive_state` would have reported for this session
+- **`session.state` fires ONLY on a CHANGE of the derived view `(state,
+  blocked)`, per invariant #24.** `routes::sessions::beat` builds the frame
+  with `session_state_payload`, which compares `RecordOutcome::previous_state`
+  and `previous_blocked` (what `derive_state` and the row would have reported
   immediately before this beat, against the SAME `now_unix`) to the
-  freshly-derived state and emits iff they differ — never once per beat,
-  or a busy fleet would flood every browser. Registered in
-  `routes/schema.rs`'s `V0_0_1_TYPES` + `per_type` in the same commit, as
-  the drift test requires; payload is `{session_id, harness, state,
-  holder, project, since_unix}` — deliberately NOT `title`/`last_line`
-  (content leaks in only through the request/response bodies above, never
-  the SSE broadcast).
+  freshly-derived pair and emits iff they differ — never once per beat, or a
+  busy fleet would flood every browser. `blocked` is a sticky flag on an
+  agent-held row, not a new `LiveState` (OL IDEA1): a `blocked` beat sets it,
+  a `tool` beat keeps it (the registry carries it forward under the same lock
+  as the touch ring), and `start|prompt|unblocked|turn_end|end` clear it
+  (`block_effect`). Registered in `routes/schema.rs`'s `V0_0_1_TYPES` +
+  `per_type` (`SESSION_STATE_KEYS`, tied to the builder by a test); payload
+  is `{session_id, harness, state, holder, project, since_unix, blocked,
+  blocked_tool?}` — `blocked_tool` is a validated tool-name token, and the
+  payload is deliberately NOT `title`/`last_line`/`detail_reason` (free text
+  leaks in only through the request/response bodies above, never the SSE
+  broadcast).
+- **Tool-start evidence is a sub-label on a quiet agent-held row, never an
+  axis (OL IDEA4).** Claude's `PreToolUse` sends a deduped `tool` beat with
+  `detail.{tool,phase:"start"}`; the registry keeps the newest started tool in
+  memory only (monotonic by beat `at`, cleared by `start|prompt|turn_end|end`)
+  and `live-status` shows it only on `stalled`/`presumed_ended` rows or a
+  `working` row silent >= 5 min. It is never a `derive_state` input (pinned by
+  `tool_evidence_never_changes_the_derived_state`), never in the `session.state`
+  payload, and passes one closed label grammar (`kb_core::sessions::live::
+  tool_label`) at intake and again in the non-loopback scrub floor. `last:`
+  means started, not running.
 - **Push wiring is uneven across harnesses by design, and `--local` and
   daemon mode see different subsets as a result.** LSC-3 wires
   `kb-beat.sh` into Claude Code's full lifecycle (`SessionStart`/
@@ -2592,7 +2611,7 @@ focus-keyed rather than pane-local:
     sessionStorage (like the scroll-restoration tier, not the registers tier)
     and browser-local ⇒ same **recorded CLI-parity exemption** as registers.
 
-*SIBL1 (v0.50):* the shared Spine gained an optional `crossing` slot (not hidden at <=860px) that kb-code's TopBar fills with a Cited-by chip reusing the rail strip's `useDocRefs` query; it is chrome beside the single inspector rail, not a second home for an action, and adds no key binding.
+*SIBL1 (v0.50):* the shared Spine gained an optional `crossing` slot (not hidden at <=860px) that kb-code's TopBar fills with a Cited-by chip reusing the rail strip's `useDocRefs` query; it is chrome beside the single inspector rail, not a second home for an action, and adds no key binding. *READ2 (v0.50):* reading mode - ContextBar More-menu row (first) + bare `r`, per-pane, per-kb local-pref default, live `kb:read` toggle (server-owned /_kb/reading.css, enums-only payload); orthogonal to `?view=`; never rewrites artifact text or body nodes; an artifact's own `prefers-color-scheme` follows the OS, not the SPA theme (e2e-pinned spike), so only the reading sheet follows the theme.
 
 ### 31. Scroll restoration keys on the full URL; the in-app back must replay it (X1)
 

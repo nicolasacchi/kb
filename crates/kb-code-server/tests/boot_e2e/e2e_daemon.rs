@@ -54,6 +54,7 @@ async fn boot_with_repo(
         repos: vec![RepoEntry {
             name: repo_name.to_string(),
             path: std::fs::canonicalize(repo_path).unwrap(),
+            projects: Vec::new(),
         }],
         ..KbCodeConfig::default()
     };

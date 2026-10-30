@@ -94,6 +94,7 @@ async fn the_bundle_carries_the_routes_own_compositions_and_never_a_denylisted_b
     let (_tmp, base) = boot(vec![RepoEntry {
         name: "r".to_string(),
         path: std::fs::canonicalize(repo_tmp.path()).unwrap(),
+        projects: Vec::new(),
     }])
     .await;
     let client = reqwest::Client::new();
@@ -224,6 +225,7 @@ async fn a_small_budget_cuts_a_leading_part_and_names_every_cut() {
     let (_tmp, base) = boot(vec![RepoEntry {
         name: "r".to_string(),
         path: std::fs::canonicalize(repo_tmp.path()).unwrap(),
+        projects: Vec::new(),
     }])
     .await;
     let client = reqwest::Client::new();
@@ -306,6 +308,7 @@ async fn other_reviews_disputes_and_waives_on_the_same_paths_are_carried() {
     let (_tmp, base) = boot(vec![RepoEntry {
         name: "r".to_string(),
         path: std::fs::canonicalize(d).unwrap(),
+        projects: Vec::new(),
     }])
     .await;
     let client = reqwest::Client::new();
@@ -371,6 +374,7 @@ async fn since_appears_once_a_verdict_sits_on_an_earlier_patchset() {
     let (_tmp, base) = boot(vec![RepoEntry {
         name: "r".to_string(),
         path: std::fs::canonicalize(d).unwrap(),
+        projects: Vec::new(),
     }])
     .await;
     let client = reqwest::Client::new();
@@ -429,6 +433,7 @@ async fn explain_base_reports_what_was_recorded_and_why_each_patchset_exists() {
     let (_tmp, base) = boot(vec![RepoEntry {
         name: "r".to_string(),
         path: std::fs::canonicalize(repo_tmp.path()).unwrap(),
+        projects: Vec::new(),
     }])
     .await;
     let client = reqwest::Client::new();

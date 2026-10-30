@@ -302,6 +302,7 @@ mod tests {
             repos: vec![RepoEntry {
                 name: "r".to_string(),
                 path: std::fs::canonicalize(repo_dir).unwrap(),
+                projects: Vec::new(),
             }],
             ..extra
         };

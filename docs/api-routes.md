@@ -12,6 +12,7 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | GET | `/api/anchors` | `routes::anchors::list` |
 | GET | `/api/anchors/stale` | `routes::anchors::list_stale` |
 | GET | `/api/artifacts/{kb}/{artifact_id}/sessions` | `routes::sessions::artifact_sessions` |
+| GET | `/api/changes` | `routes::changes::get` |
 | GET | `/api/config` | `routes::config::get` |
 | PUT | `/api/config` | `routes::config::put` |
 | GET | `/api/context` | `routes::context::get` |

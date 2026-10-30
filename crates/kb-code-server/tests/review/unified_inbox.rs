@@ -182,6 +182,7 @@ async fn unified_inbox_composes_reviews_and_annotations_lanes_and_filters_intent
         vec![RepoEntry {
             name: "r".to_string(),
             path: dir,
+            projects: Vec::new(),
         }],
         disabled_kb_daemon(),
     )
@@ -262,6 +263,7 @@ async fn unified_inbox_annotations_lane_is_newest_updated_at_first() {
         vec![RepoEntry {
             name: "r".to_string(),
             path: dir,
+            projects: Vec::new(),
         }],
         disabled_kb_daemon(),
     )
@@ -306,6 +308,7 @@ async fn unified_inbox_kb_lane_reports_disabled_and_other_lanes_still_render() {
         vec![RepoEntry {
             name: "r".to_string(),
             path: dir,
+            projects: Vec::new(),
         }],
         disabled_kb_daemon(),
     )
@@ -338,6 +341,7 @@ async fn unified_inbox_kb_lane_reports_unreachable_when_the_kb_daemon_is_down() 
         vec![RepoEntry {
             name: "r".to_string(),
             path: dir,
+            projects: Vec::new(),
         }],
         KbDaemonSection {
             enabled: true,
@@ -390,6 +394,7 @@ async fn unified_inbox_kb_lane_reports_sibling_mismatch() {
         vec![RepoEntry {
             name: "r".to_string(),
             path: dir,
+            projects: Vec::new(),
         }],
         KbDaemonSection {
             enabled: true,
@@ -481,6 +486,7 @@ async fn unified_inbox_kb_lane_relays_and_truncates_at_fifty() {
         vec![RepoEntry {
             name: "r".to_string(),
             path: dir,
+            projects: Vec::new(),
         }],
         KbDaemonSection {
             enabled: true,

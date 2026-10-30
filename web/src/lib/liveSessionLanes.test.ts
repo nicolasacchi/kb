@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   FINISHED_LANE_CAP,
+  blockedCount,
+  blockedLabel,
+  blockedSince,
   bucketLiveSessions,
   isLongWait,
   isPresumedEnded,
   isStalled,
+  LAST_TOOL_TITLE,
+  lastToolLabel,
   liveHonestyKind,
   liveHonestyLabel,
   liveHonestyTitle,
@@ -183,5 +188,91 @@ describe("state-decoration helpers", () => {
     expect(isLongWait(row({ session_id: "a", state: "waiting" }))).toBe(false);
     expect(isPresumedEnded(row({ session_id: "a", state: "presumed_ended" }))).toBe(true);
     expect(isPresumedEnded(row({ session_id: "a", state: "finished" }))).toBe(false);
+  });
+});
+
+describe("OL IDEA1 - the blocked lane", () => {
+  it("a blocked working/stalled row goes ONLY to blocked, not inProgress", () => {
+    const lanes = bucketLiveSessions([
+      row({ session_id: "a", state: "working", blocked: true }),
+      row({ session_id: "b", state: "stalled", blocked: true }),
+      row({ session_id: "c", state: "working" }),
+    ]);
+    expect(lanes.blocked.map((r) => r.session_id).sort()).toEqual(["a", "b"]);
+    expect(lanes.inProgress.map((r) => r.session_id)).toEqual(["c"]);
+  });
+
+  it("sorts longest-blocked first by blocked_since_unix, falling back to since_unix", () => {
+    const lanes = bucketLiveSessions([
+      row({ session_id: "new", blocked: true, blocked_since_unix: NOW - 10, since_unix: NOW }),
+      row({ session_id: "old", blocked: true, blocked_since_unix: NOW - 900, since_unix: NOW }),
+      row({ session_id: "legacy", blocked: true, since_unix: NOW - 300 }),
+    ]);
+    expect(lanes.blocked.map((r) => r.session_id)).toEqual(["old", "legacy", "new"]);
+  });
+
+  it("a blocked presumed_ended row stays in finished", () => {
+    const lanes = bucketLiveSessions([
+      row({ session_id: "x", state: "presumed_ended", holder: "none", blocked: true }),
+    ]);
+    expect(lanes.blocked).toEqual([]);
+    expect(lanes.finished.map((r) => r.session_id)).toEqual(["x"]);
+  });
+
+  it("blockedCount counts the lane and leaves waitingCount alone", () => {
+    const rows = [
+      row({ session_id: "a", blocked: true }),
+      row({ session_id: "b", state: "waiting", holder: "human" }),
+    ];
+    expect(blockedCount(rows)).toBe(1);
+    expect(waitingCount(rows)).toBe(1);
+  });
+
+  it("blockedSince and blockedLabel", () => {
+    expect(blockedSince({ blocked_since_unix: 5, since_unix: 9 })).toBe(5);
+    expect(blockedSince({ since_unix: 9 })).toBe(9);
+    expect(blockedLabel({ blocked_tool: "Bash", detail_reason: "x" })).toBe("permission: Bash");
+    expect(blockedLabel({ detail_reason: "  Claude Code needs your input " })).toBe(
+      "Claude Code needs your input",
+    );
+    expect(blockedLabel({})).toBe("needs you");
+    expect(blockedLabel({ detail_reason: "   " })).toBe("needs you");
+  });
+});
+
+describe("OL IDEA4 - last-tool evidence", () => {
+  const NOW_MS = NOW * 1000;
+
+  it("lastToolLabel formats name and age, and is null when either field is missing", () => {
+    expect(lastToolLabel({ last_tool: "Bash", last_tool_at: NOW - 38 * 60 }, NOW_MS)).toBe(
+      "last: Bash · 38m",
+    );
+    expect(lastToolLabel({ last_tool: "Bash" }, NOW_MS)).toBeNull();
+    expect(lastToolLabel({ last_tool_at: NOW }, NOW_MS)).toBeNull();
+    expect(lastToolLabel({}, NOW_MS)).toBeNull();
+    expect(lastToolLabel({ last_tool: "", last_tool_at: NOW }, NOW_MS)).toBeNull();
+  });
+
+  it("the tooltip says started is not running", () => {
+    expect(LAST_TOOL_TITLE).toContain("may have died");
+  });
+
+  it("bucketing and ordering are identical with and without the fields", () => {
+    const plain = [
+      row({ session_id: "a", state: "stalled", since_unix: NOW - 3000 }),
+      row({ session_id: "b", state: "working", since_unix: NOW - 10 }),
+      row({ session_id: "c", state: "waiting", since_unix: NOW - 500, holder: "human" }),
+      row({ session_id: "d", state: "presumed_ended", since_unix: NOW - 40000 }),
+      row({ session_id: "e", state: "stalled", since_unix: NOW - 3000, blocked: true }),
+    ];
+    const withTool = plain.map((r) => ({ ...r, last_tool: "Bash", last_tool_at: r.since_unix }));
+    const ids = (rs: ReturnType<typeof bucketLiveSessions>) => ({
+      blocked: rs.blocked.map((r) => r.session_id),
+      inProgress: rs.inProgress.map((r) => r.session_id),
+      waiting: rs.waiting.map((r) => r.session_id),
+      finished: rs.finished.map((r) => r.session_id),
+      total: rs.finishedTotal,
+    });
+    expect(ids(bucketLiveSessions(withTool))).toEqual(ids(bucketLiveSessions(plain)));
   });
 });

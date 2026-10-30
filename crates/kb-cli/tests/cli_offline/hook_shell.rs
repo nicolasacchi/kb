@@ -43,6 +43,13 @@ fn recall_hook_shell_tests() {
     }
 }
 
+/// OL IDEA4 - the live-beat hooks (kb-beat.sh, the PreToolUse tool-start gate,
+/// hooks.json wiring); test-beat.sh was not run by any CI lane before.
+#[test]
+fn beat_hook_shell_tests() {
+    run("test-beat.sh");
+}
+
 #[test]
 fn wake_hook_shell_tests() {
     run("test-wake-slate.sh");

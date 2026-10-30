@@ -73,6 +73,7 @@ fn repo_entry(name: &str, path: &Path) -> RepoEntry {
     RepoEntry {
         name: name.to_string(),
         path: path.to_path_buf(),
+        projects: Vec::new(),
     }
 }
 

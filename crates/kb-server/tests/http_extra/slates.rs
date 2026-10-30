@@ -23,13 +23,13 @@ use std::time::Duration;
 /// A token so the non-loopback tests (`X-Forwarded-For` + `Authorization`)
 /// are admitted and can then be judged on the SCRUB floor rather than on
 /// auth — the `end_to_end.rs::boot_with_token` shape.
-const FIXTURE_TOKEN: &str = "test-token-slate-fixture";
+pub(crate) const FIXTURE_TOKEN: &str = "test-token-slate-fixture";
 
 /// The daemon plus the `KbPaths` its slates live under — a couple of
 /// tests reach into `<state>/slates/` directly to age a lease or to break
 /// a ledger, which is the only way to exercise a clock the pure engine
 /// takes as an ARGUMENT.
-async fn boot() -> (tempfile::TempDir, std::net::SocketAddr, KbPaths) {
+pub(crate) async fn boot() -> (tempfile::TempDir, std::net::SocketAddr, KbPaths) {
     let tmp = tempfile::tempdir().unwrap();
     let source = tmp.path().join("corpus");
     std::fs::create_dir_all(&source).unwrap();
@@ -120,7 +120,7 @@ fn age_ledger(paths: &KbPaths, slug: &str, secs: i64) {
     std::fs::write(&file, aged).unwrap();
 }
 
-fn url(addr: std::net::SocketAddr, path: &str) -> String {
+pub(crate) fn url(addr: std::net::SocketAddr, path: &str) -> String {
     format!("http://{addr}{path}")
 }
 
@@ -133,7 +133,7 @@ fn prov(session: Option<&str>) -> Value {
     }
 }
 
-fn body(kind: &str, line: &str, session: Option<&str>) -> Value {
+pub(crate) fn body(kind: &str, line: &str, session: Option<&str>) -> Value {
     json!({"kind": kind, "line": line, "prov": prov(session)})
 }
 
@@ -144,7 +144,7 @@ fn with_ref(mut b: Value) -> Value {
     b
 }
 
-async fn post(
+pub(crate) async fn post(
     client: &reqwest::Client,
     addr: std::net::SocketAddr,
     slug: &str,
@@ -161,7 +161,11 @@ async fn post(
     (status, v)
 }
 
-async fn get_json(client: &reqwest::Client, addr: std::net::SocketAddr, path: &str) -> Value {
+pub(crate) async fn get_json(
+    client: &reqwest::Client,
+    addr: std::net::SocketAddr,
+    path: &str,
+) -> Value {
     client
         .get(url(addr, path))
         .send()

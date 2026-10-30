@@ -39,6 +39,7 @@ async fn boot_with_repo(name: &str, path: &Path) -> (tempfile::TempDir, String) 
         repos: vec![RepoEntry {
             name: name.to_string(),
             path: std::fs::canonicalize(path).unwrap(),
+            projects: Vec::new(),
         }],
         kb_daemon: disabled_kb_daemon(),
         ..KbCodeConfig::default()
