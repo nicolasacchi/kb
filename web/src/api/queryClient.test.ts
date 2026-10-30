@@ -218,11 +218,12 @@ describe("SSE → TanStack invalidation bridge (invariant #23)", () => {
   // OL IDEA2 — a new OPEN moves read-faceted Library shelves; nothing else.
   it("history.recorded kind=open also invalidates read-faceted docs queries only", () => {
     emit("history.recorded", { kb: "demo", kind: "open" });
-    const docsCall = spy.mock.calls
-      .map((c: unknown[]) => c[0] as {
-        queryKey: unknown[];
-        predicate?: (q: { queryKey: unknown[] }) => boolean;
-      })
+    type Call = {
+      queryKey: unknown[];
+      predicate?: (q: { queryKey: unknown[] }) => boolean;
+    };
+    const docsCall = (spy.mock.calls as unknown as [Call][])
+      .map((c) => c[0])
       .find((c) => c.queryKey[0] === "docs");
     expect(docsCall?.queryKey).toEqual(["docs", "demo"]);
     const pred = docsCall!.predicate!;
