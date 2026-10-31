@@ -20,7 +20,7 @@ import {
 import { sse } from "../api/sse";
 import { features } from "../config/features";
 import ContextBar from "../components/chrome/ContextBar";
-import DeskChangedBanner from "../components/chrome/DeskChangedBanner";
+import SinceVisitBanner from "../components/chrome/SinceVisitBanner";
 
 import QueueBar from "../components/lists/QueueBar";
 import PreviewInspector, {
@@ -1091,6 +1091,16 @@ export default function Detail() {
   // Its origin guard is EXACT (`isOriginOfArtifact`), which is what makes a
   // second pane's beacons unable to land in this artifact's visit row.)
 
+  // OL IDEA2 — state for the since-visit banner's "View changes" (see
+  // `openVersionsFor`). Declared above the early returns: a hook after them
+  // changes the hook count between the loading and loaded renders.
+  const [versionsFrom, setVersionsFrom] = useState<{
+    kb: string;
+    id: string;
+    ref: string;
+    nonce: number;
+  } | null>(null);
+
   // Vim-style Esc: drop one layer at a time. Drafting → cancel draft;
   // pencil-on → turn pencil off (panel stays open, mirrors
   // handleToggleAnnotate's off-path). Declared before the early returns
@@ -1234,6 +1244,30 @@ export default function Detail() {
       setAnnotateMode(false);
     }
   };
+  // OL IDEA2 — the since-visit banner's "View changes" / History: open the
+  // versions dock exactly as `handleToggleVersions` opens it (comments
+  // closed, annotate off), on the pane the banner belongs to, with `ref`
+  // preselected as the diff's `from` (`null` ⇒ the dock's own default).
+  // In-app state, not a URL param. The nonce re-applies a repeat click.
+  const openVersionsFor = (
+    pane: 1 | 2,
+    bannerKb: string,
+    bannerId: string,
+    ref: string | null,
+  ) => {
+    setFocusedPane(pane);
+    setVersionsFrom((prev) =>
+      ref ? { kb: bannerKb, id: bannerId, ref, nonce: (prev?.nonce ?? 0) + 1 } : null,
+    );
+    setVersionsOpen(true);
+    setPanelOpen(false);
+    setAnnotateMode(false);
+    setInspectorOpen(true); // raises the phone sheet (v0.23); inert on desktop
+  };
+  const initialFromFor = (vkb: string, vid: string) =>
+    versionsFrom && versionsFrom.kb === vkb && versionsFrom.id === vid
+      ? { ref: versionsFrom.ref, nonce: versionsFrom.nonce }
+      : null;
   // W2.13 — errata-slip toggle. Purely a display-mode flip; it never touches
   // panelOpen/versionsOpen (the sheet is independent of which dock is open).
   const handleToggleErrata = () => setErrataMode((v) => !v);
@@ -1420,7 +1454,14 @@ export default function Detail() {
               }
             />
           )}
-          {doc && <DeskChangedBanner kb={kb} id={id} />}
+          {doc && (
+            <SinceVisitBanner
+              kb={kb}
+              id={id}
+              asOf={searchParams.has("at")}
+              onViewChanges={(ref) => openVersionsFor(1, kb, id, ref)}
+            />
+          )}
 
           {searchParams.get("list") && (
             <QueueBar
@@ -1495,7 +1536,13 @@ export default function Detail() {
               onVersions={handleToggleVersions}
               panelSlot={
                 showVersions ? (
-                  <VersionsPanel kb={kb} id={id} at={atUnix} onOpenAsOf={setAt} />
+                  <VersionsPanel
+                    kb={kb}
+                    id={id}
+                    at={atUnix}
+                    onOpenAsOf={setAt}
+                    initialFrom={initialFromFor(kb, id)}
+                  />
                 ) : showPanel ? (
                   review.file ? (
                     <CommentsPanel
@@ -1552,6 +1599,7 @@ export default function Detail() {
       focused={primaryFocused}
       onFocus={() => setFocusedPane(1)}
       isPrimary
+      onViewChanges={(ref) => openVersionsFor(1, kb, id, ref)}
       doc={doc}
       id={id}
       error={error}
@@ -1687,6 +1735,7 @@ export default function Detail() {
           focused={focusedPane === 2}
           onFocus={() => setFocusedPane(2)}
           isPrimary={false}
+          onViewChanges={(ref) => openVersionsFor(2, pane2Loc.kb, pane2Id, ref)}
           doc={pane2Doc}
           id={pane2Id}
           error={pane2Error}
@@ -1886,6 +1935,7 @@ export default function Detail() {
                   // per-pane exactness rule).
                   at={primaryFocused ? atUnix : null}
                   onOpenAsOf={primaryFocused ? setAt : undefined}
+                  initialFrom={initialFromFor(focusedKb, focusedDoc.id)}
                 />
               ) : showPanel ? (
                 focusedReview.file ? (

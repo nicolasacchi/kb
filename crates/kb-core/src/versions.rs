@@ -94,13 +94,7 @@ impl VersionCtx<'_> {
         let mut out = Vec::new();
 
         // Working tree — the live file, always the newest entry.
-        if let Ok(meta) = tokio::fs::metadata(self.abs_path).await {
-            let ts = meta
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
+        if let Some(ts) = working_ts(self.abs_path).await {
             out.push(Version {
                 r#ref: WORKING_REF.to_string(),
                 source: "working",
@@ -480,6 +474,206 @@ mod resolve_as_of_tests {
     }
 }
 
+/// The working-tree file's mtime in unix seconds (`0` when the platform
+/// cannot report one), or `None` when the file cannot be stat'ed. The ONE
+/// source of the working entry's timestamp: [`VersionCtx::list`] and the
+/// since-visit route both read it here so the timeline and the route can
+/// never disagree about when the document last changed.
+pub async fn working_ts(abs: &Path) -> Option<i64> {
+    let meta = tokio::fs::metadata(abs).await.ok()?;
+    Some(
+        meta.modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0),
+    )
+}
+
+pub use crate::parser::ProseSection;
+
+/// [`prose_from_source`]'s text plus the h1–h3 sections of that same text.
+/// `text` is byte-identical to `prose_from_source(path, raw)` (same
+/// rendering, same walker); `sections` carry the runtime's DOM heading ids
+/// as SCROLL TARGETS only — never joined against `reading_sections` (#19).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SectionedProse {
+    pub text: String,
+    pub sections: Vec<ProseSection>,
+}
+
+/// Prose for diffing, with its section map. Non-HTML/Markdown sources have no
+/// headings the runtime would name, so they carry no sections.
+pub fn sectioned_prose(path: &Path, raw: &str) -> SectionedProse {
+    if crate::indexer::is_markdown(path) {
+        let (_fields, wrapped) = crate::parser::extract_markdown(raw);
+        let (text, sections) = crate::parser::text_blocks_sectioned(&wrapped);
+        SectionedProse { text, sections }
+    } else if is_html(path) {
+        let (text, sections) = crate::parser::text_blocks_sectioned(raw);
+        SectionedProse { text, sections }
+    } else {
+        SectionedProse {
+            text: raw.to_string(),
+            sections: Vec::new(),
+        }
+    }
+}
+
+/// How one section differs between two versions.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SectionChange {
+    Changed,
+    Added,
+    Removed,
+}
+
+/// One bucket of a since-visit diff. `id`/`title`/`level` are absent for the
+/// preamble (lines before the first heading). Counts are diff LINES (prose
+/// blocks), not words.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ChangedSection {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub level: Option<u8>,
+    pub change: SectionChange,
+    pub added: u32,
+    pub removed: u32,
+}
+
+/// Index of the section containing 0-based prose line `line0`, or `None` for
+/// the preamble. Sections are in document order (`start_line` ascending).
+fn section_index(sections: &[ProseSection], line0: usize) -> Option<usize> {
+    sections
+        .partition_point(|s| s.start_line <= line0)
+        .checked_sub(1)
+}
+
+/// Rank of section `i` among sections sharing its id (0 for the first).
+fn id_rank(sections: &[ProseSection], i: usize) -> usize {
+    sections[..i]
+        .iter()
+        .filter(|s| s.id == sections[i].id)
+        .count()
+}
+
+/// Bucket a prose diff's changed lines into the new document's h1–h3
+/// sections (pure).
+///
+/// An Insert line belongs to the new section containing its `new_lineno`. A
+/// Delete line belongs to its old section, mapped to the new document by
+/// (heading id, occurrence rank among sections with that id); with no
+/// counterpart it becomes a `Removed` bucket carrying the old id/title. A new
+/// section with no old counterpart is `Added`. Lines before the first heading
+/// form one preamble bucket with no id. Output: new-doc order (preamble
+/// first), then removed buckets in old-doc order. Only buckets with at least
+/// one changed line are emitted.
+pub fn bucket_changes(
+    old: &SectionedProse,
+    new: &SectionedProse,
+    hunks: &[vcs::DiffHunk],
+) -> Vec<ChangedSection> {
+    // Per new section (index + 1; 0 = preamble): (added, removed).
+    let mut new_counts = vec![(0u32, 0u32); new.sections.len() + 1];
+    // Per old section with NO counterpart: (added=0, removed).
+    let mut gone: Vec<u32> = vec![0; old.sections.len()];
+
+    // old section index -> new section index, by (id, rank).
+    let counterpart = |oi: usize| -> Option<usize> {
+        let rank = id_rank(&old.sections, oi);
+        let id = &old.sections[oi].id;
+        new.sections
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| &s.id == id)
+            .nth(rank)
+            .map(|(ni, _)| ni)
+    };
+
+    for hunk in hunks {
+        for line in &hunk.lines {
+            match line.tag {
+                vcs::DiffTag::Equal => {}
+                vcs::DiffTag::Insert => {
+                    let l0 = line.new_lineno.unwrap_or(1).saturating_sub(1);
+                    let slot = section_index(&new.sections, l0).map_or(0, |i| i + 1);
+                    new_counts[slot].0 += 1;
+                }
+                vcs::DiffTag::Delete => {
+                    let l0 = line.old_lineno.unwrap_or(1).saturating_sub(1);
+                    match section_index(&old.sections, l0) {
+                        None => new_counts[0].1 += 1,
+                        Some(oi) => match counterpart(oi) {
+                            Some(ni) => new_counts[ni + 1].1 += 1,
+                            None => gone[oi] += 1,
+                        },
+                    }
+                }
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    let (a, r) = new_counts[0];
+    if a + r > 0 {
+        out.push(ChangedSection {
+            id: None,
+            title: None,
+            level: None,
+            change: SectionChange::Changed,
+            added: a,
+            removed: r,
+        });
+    }
+    for (ni, sec) in new.sections.iter().enumerate() {
+        let (a, r) = new_counts[ni + 1];
+        if a + r == 0 {
+            continue;
+        }
+        let has_old = old
+            .sections
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| o.id == sec.id)
+            .count()
+            > id_rank(&new.sections, ni);
+        out.push(ChangedSection {
+            id: Some(sec.id.clone()),
+            title: Some(sec.title.clone()),
+            level: Some(sec.level),
+            change: if has_old {
+                SectionChange::Changed
+            } else {
+                SectionChange::Added
+            },
+            added: a,
+            removed: r,
+        });
+    }
+    for (oi, sec) in old.sections.iter().enumerate() {
+        if gone[oi] > 0 {
+            out.push(ChangedSection {
+                id: Some(sec.id.clone()),
+                title: Some(sec.title.clone()),
+                level: Some(sec.level),
+                change: SectionChange::Removed,
+                added: 0,
+                removed: gone[oi],
+            });
+        }
+    }
+    out
+}
+
 /// Reduce a source file's text to block-structured prose for diffing, by file
 /// type. Markdown → rendered HTML → [`crate::parser::text_blocks`]; HTML →
 /// `text_blocks`; anything else → the raw text (already prose-like). Keeping
@@ -541,5 +735,233 @@ mod tests {
         assert!(is_html(Path::new("a.HTM")));
         assert!(!is_html(Path::new("a.md")));
         assert!(!is_html(Path::new("a")));
+    }
+}
+
+#[cfg(test)]
+mod since_visit_tests {
+    use super::*;
+    use crate::vcs::diff_lines;
+
+    fn canon_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/canon")
+    }
+
+    fn canon_html() -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for e in std::fs::read_dir(canon_dir()).expect("canon dir") {
+            let p = e.unwrap().path();
+            if p.extension().and_then(|x| x.to_str()) == Some("html") {
+                let raw = std::fs::read_to_string(&p).expect("canon fixture");
+                out.push((p.file_name().unwrap().to_string_lossy().into_owned(), raw));
+            }
+        }
+        out.sort();
+        assert!(!out.is_empty(), "canon fixtures present");
+        out
+    }
+
+    const MD: &str = "# Plan\n\nIntro line.\n\n## Status\n\nAll good.\n\n## Risks\n\nSome **risk**.\n\n### Detail\n\nDeep.\n";
+
+    // invariant:14 the sectioned prose is the SAME prose the diff reads
+    #[test]
+    fn sectioned_prose_text_equals_prose_from_source() {
+        for (name, raw) in canon_html() {
+            let p = Path::new(&name);
+            assert_eq!(
+                sectioned_prose(p, &raw).text,
+                prose_from_source(p, &raw),
+                "{name}"
+            );
+        }
+        let md = Path::new("note.md");
+        assert_eq!(sectioned_prose(md, MD).text, prose_from_source(md, MD));
+        let txt = Path::new("n.txt");
+        let t = "one\ntwo\n";
+        assert_eq!(sectioned_prose(txt, t).text, prose_from_source(txt, t));
+        assert!(sectioned_prose(txt, t).sections.is_empty());
+    }
+
+    fn ids(sp: &SectionedProse) -> Vec<String> {
+        sp.sections.iter().map(|s| s.id.clone()).collect()
+    }
+
+    /// `headings::heading_anchors` ids. That string scanner decodes only the
+    /// BASIC HTML entities, while the DOM (and the parser-based walker the
+    /// since-visit sections use) decodes every named one: `Don&rsquo;t` is
+    /// `kb-h-don-t` in the browser but `kb-h-don-rsquo-t` here. Our ids follow
+    /// the DOM, so the known gap is normalised away before comparing.
+    fn anchor_ids(html: &str) -> Vec<String> {
+        crate::headings::heading_anchors(html)
+            .into_iter()
+            .map(|(_, id)| id.replace("-rsquo-", "-"))
+            .collect()
+    }
+
+    // invariant:19 section ids are the headings twin (scroll targets only)
+    #[test]
+    fn sectioned_prose_heading_ids_match_heading_anchors() {
+        for (name, raw) in canon_html() {
+            let sp = sectioned_prose(Path::new(&name), &raw);
+            assert_eq!(ids(&sp), anchor_ids(&raw), "{name}");
+        }
+        let synthetic = [
+            r#"<body><h2 id="custom">Has Id</h2><h2>Other</h2></body>"#,
+            "<body><h2>Setup</h2><p>a</p><h2>Setup</h2><p>b</p></body>",
+            "<body><h2>  </h2><h2>***</h2><h2>Next</h2><h2>!!</h2></body>",
+            "<body><h2>a<em>b</em></h2></body>",
+            "<body><template><h2>Hidden</h2></template><h1>Shown</h1></body>",
+            "<body><h3>***</h3></body>",
+            "<body><h4>Not a section</h4><h1>Top</h1><h5>Nor this</h5></body>",
+        ];
+        for html in synthetic {
+            let sp = sectioned_prose(Path::new("x.html"), html);
+            assert_eq!(ids(&sp), anchor_ids(html), "{html}");
+        }
+        let sp = sectioned_prose(Path::new("x.html"), "<body><h2>a<em>b</em></h2></body>");
+        assert_eq!(ids(&sp), vec!["kb-h-ab"]);
+        let sp = sectioned_prose(Path::new("x.html"), "<body><h2>  </h2><h2>***</h2></body>");
+        assert_eq!(
+            ids(&sp),
+            vec!["kb-h-h0"],
+            "blank skipped without an ordinal"
+        );
+        let sp = sectioned_prose(
+            Path::new("x.html"),
+            "<body><h2>Setup</h2><h2>Setup</h2></body>",
+        );
+        assert_eq!(ids(&sp), vec!["kb-h-setup", "kb-h-setup"]);
+        // Rendered Markdown: ids come from the rendered HTML.
+        let (_f, wrapped) = crate::parser::extract_markdown(MD);
+        let sp = sectioned_prose(Path::new("note.md"), MD);
+        assert_eq!(ids(&sp), anchor_ids(&wrapped));
+        assert_eq!(sp.sections.len(), 4);
+        assert_eq!(sp.sections[3].level, 3);
+    }
+
+    #[test]
+    fn sectioned_prose_start_lines_index_the_heading_text() {
+        let html = "<body><p>pre</p><h2>One</h2><p>a</p><h4>sub</h4><p>b</p><h2>Two</h2></body>";
+        let sp = sectioned_prose(Path::new("x.html"), html);
+        let lines: Vec<&str> = sp.text.lines().collect();
+        for s in &sp.sections {
+            assert_eq!(lines[s.start_line], s.title);
+        }
+        assert_eq!(sp.sections.len(), 2, "h4 is not a section");
+    }
+
+    fn html(body: &str) -> SectionedProse {
+        sectioned_prose(Path::new("d.html"), &format!("<body>{body}</body>"))
+    }
+
+    fn bucket(old: &SectionedProse, new: &SectionedProse) -> Vec<ChangedSection> {
+        bucket_changes(old, new, &diff_lines(&old.text, &new.text))
+    }
+
+    #[test]
+    fn bucket_changes_insert_lands_in_its_section() {
+        let old = html("<h2>Status</h2><p>ok</p><h2>Risks</h2><p>low</p>");
+        let new = html("<h2>Status</h2><p>ok</p><h2>Risks</h2><p>low</p><p>high</p>");
+        let b = bucket(&old, &new);
+        assert_eq!(b.len(), 1);
+        assert_eq!(b[0].id.as_deref(), Some("kb-h-risks"));
+        assert_eq!(b[0].change, SectionChange::Changed);
+        assert_eq!((b[0].added, b[0].removed), (1, 0));
+    }
+
+    #[test]
+    fn bucket_changes_delete_maps_by_id_to_new_section() {
+        let old = html("<h2>Status</h2><p>ok</p><p>extra</p><h2>Risks</h2><p>low</p>");
+        let new = html("<h2>Status</h2><p>ok</p><h2>Risks</h2><p>low</p>");
+        let b = bucket(&old, &new);
+        assert_eq!(b.len(), 1);
+        assert_eq!(b[0].id.as_deref(), Some("kb-h-status"));
+        assert_eq!(b[0].change, SectionChange::Changed);
+        assert_eq!((b[0].added, b[0].removed), (0, 1));
+    }
+
+    #[test]
+    fn bucket_changes_renamed_heading_is_removed_plus_added() {
+        let old = html("<h2>Status</h2><p>ok</p><h2>Risks</h2><p>low</p>");
+        let new = html("<h2>Status</h2><p>ok</p><h2>Hazards</h2><p>low</p>");
+        let b = bucket(&old, &new);
+        let kinds: Vec<_> = b
+            .iter()
+            .map(|c| (c.id.clone().unwrap(), c.change))
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                ("kb-h-hazards".to_string(), SectionChange::Added),
+                ("kb-h-risks".to_string(), SectionChange::Removed),
+            ]
+        );
+        assert_eq!(b[1].title.as_deref(), Some("Risks"));
+        assert_eq!(b[1].level, Some(2));
+    }
+
+    #[test]
+    fn bucket_changes_preamble_has_no_id() {
+        let old = html("<p>intro</p><h2>Status</h2><p>ok</p>");
+        let new = html("<p>intro edited</p><h2>Status</h2><p>ok</p>");
+        let b = bucket(&old, &new);
+        assert_eq!(b.len(), 1);
+        assert_eq!(
+            (b[0].id.clone(), b[0].title.clone(), b[0].level),
+            (None, None, None)
+        );
+        assert_eq!(b[0].change, SectionChange::Changed);
+        assert_eq!((b[0].added, b[0].removed), (1, 1));
+    }
+
+    #[test]
+    fn bucket_changes_duplicate_titles_stay_separate() {
+        let old = html("<h2>Setup</h2><p>one</p><h2>Setup</h2><p>two</p>");
+        let new = html("<h2>Setup</h2><p>one</p><h2>Setup</h2><p>two edited</p>");
+        let b = bucket(&old, &new);
+        assert_eq!(b.len(), 1, "only the second Setup changed");
+        assert_eq!(b[0].id.as_deref(), Some("kb-h-setup"));
+        assert_eq!((b[0].added, b[0].removed), (1, 1));
+        // Deleting a line of the FIRST Setup must not land on the second.
+        let old = html("<h2>Setup</h2><p>one</p><p>gone</p><h2>Setup</h2><p>two</p>");
+        let new = html("<h2>Setup</h2><p>one</p><h2>Setup</h2><p>two</p>");
+        let b = bucket(&old, &new);
+        assert_eq!(b.len(), 1);
+        assert_eq!((b[0].added, b[0].removed), (0, 1));
+    }
+
+    #[test]
+    fn bucket_changes_order_new_then_removed() {
+        let old = html("<h2>A</h2><p>a</p><h2>Gone1</h2><p>x</p><h2>Gone2</h2><p>y</p>");
+        let new = html("<h2>A</h2><p>a2</p><h2>Fresh</h2><p>z</p>");
+        let b = bucket(&old, &new);
+        let order: Vec<_> = b
+            .iter()
+            .map(|c| (c.id.clone().unwrap(), c.change))
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                ("kb-h-a".to_string(), SectionChange::Changed),
+                ("kb-h-fresh".to_string(), SectionChange::Added),
+                ("kb-h-gone1".to_string(), SectionChange::Removed),
+                ("kb-h-gone2".to_string(), SectionChange::Removed),
+            ]
+        );
+    }
+
+    #[test]
+    fn bucket_changes_counts_added_and_removed_lines() {
+        let old = html("<h2>S</h2><p>a</p><p>b</p><p>c</p>");
+        let new = html("<h2>S</h2><p>a</p><p>B</p><p>B2</p><p>B3</p>");
+        let b = bucket(&old, &new);
+        assert_eq!(b.len(), 1);
+        assert_eq!((b[0].added, b[0].removed), (3, 2));
+    }
+
+    #[test]
+    fn bucket_changes_identical_is_empty() {
+        let a = html("<h2>S</h2><p>a</p>");
+        assert!(bucket(&a, &a).is_empty());
     }
 }

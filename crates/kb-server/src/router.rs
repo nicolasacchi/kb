@@ -134,6 +134,12 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
             get(routes::versions::list),
         )
         .route("/kb/{kb}/artifacts/{id}/diff", get(routes::versions::diff))
+        // OL IDEA2 — what changed since the caller's last WEB visit (#14
+        // façade, #19 visit-not-read). Read-only, same posture as `diff`.
+        .route(
+            "/kb/{kb}/artifacts/{id}/since-visit",
+            get(routes::since_visit::since_visit),
+        )
         // RP-track — per-artifact reading summary (read; `?lite=true` =
         // whole-page numbers only). Shares the api tree's auth, no rate-limit.
         .route(

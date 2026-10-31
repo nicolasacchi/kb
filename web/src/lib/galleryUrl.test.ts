@@ -43,6 +43,8 @@ describe("galleryUrl", () => {
       "/?kb=kb&read=never-opened%2Cin_progress",
     );
     expect(galleryUrl("kb", { read: [] })).toBe("/?kb=kb");
+    // OL IDEA2 — the Library-only `changed` token.
+    expect(galleryUrl("kb", { read: ["changed"] })).toBe("/?kb=kb&read=changed");
   });
 
   // invariant:35

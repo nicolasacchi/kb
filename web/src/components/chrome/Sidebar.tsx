@@ -48,6 +48,8 @@ const READING_LIST: { value: string; label: string }[] = [
   { value: "never-opened", label: "never opened" },
   { value: "in_progress", label: "in progress" },
   { value: "read", label: "read" },
+  // OL IDEA2 — modified after your last visit in the reader (web opens only).
+  { value: "changed", label: "changed since visit" },
 ];
 
 function hueFromSeed(seed: number): number {
@@ -262,7 +264,9 @@ export default function Sidebar() {
             title={
               r.value === "never-opened"
                 ? "your research reserve — not opened yet"
-                : undefined
+                : r.value === "changed"
+                  ? "modified after your last visit in the reader (agent reads don't count)"
+                  : undefined
             }
           >
             {r.label}

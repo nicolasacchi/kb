@@ -33,6 +33,7 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | PATCH | `/api/kb/{kb}/artifacts/{id}/meta` | `routes::artifacts::patch_meta` |
 | GET | `/api/kb/{kb}/artifacts/{id}/prompt` | `routes::prompt::get` |
 | GET | `/api/kb/{kb}/artifacts/{id}/reading` | `routes::history::get_reading` |
+| GET | `/api/kb/{kb}/artifacts/{id}/since-visit` | `routes::since_visit::since_visit` |
 | GET | `/api/kb/{kb}/artifacts/{id}/versions` | `routes::versions::list` |
 | GET | `/api/kb/{kb}/atlas/field` | `routes::atlas_field::get_field` |
 | PUT | `/api/kb/{kb}/atlas/field` | `routes::atlas_field::put_field` |
@@ -244,4 +245,4 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | GET | `/api/users` | `routes::users::list` |
 | GET | `/api/why` | `routes::sessions::why` |
 
-_234 routes._
+_235 routes._

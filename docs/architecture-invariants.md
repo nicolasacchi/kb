@@ -565,6 +565,8 @@ flag in `OpenResult` gates the emit; don't push that decision into the route
 handler. `history_list` sorts `(started_at DESC, id DESC)` for deterministic
 same-second order (tests rely on it).
 
+*IDEA2 (OL):* a WEB open (`source` omitted or `web`) resumes only a web-class row while a `cli` open still resumes the newest row of any source, so `kb read` (cli row, then the browser) can no longer hide the operator's real visit inside a cli-labelled row that since-visit measures from.
+
 ### 9. `kb share` engine lives in kb-core + takes explicit inputs
 
 - The static-export engine (`kb_core::share`) runs INSIDE the daemon (CLI and SPA
@@ -1728,6 +1730,8 @@ lock-step, the same way #29's wikilink grammar is kept.
 
 **OL TIME1/TIME2 (v0.50).** a batch per-artifact memento read, `GET /api/kb/{kb}/docs/as-of?at=&ids=`, and the reader's `?at=` BODY both resolve through this same façade and ONE resolver (`memento_for`), never a second one: every batch item is the per-artifact `memento_for` answer (pinned by `asof_item_equals_per_artifact_memento`), and `?at=<unix>` on an artifact's own origin serves the nearest-prior version's verbatim source (`VersionCtx::raw_at`) through TODAY'S outbound pipeline (kb-prompt strip on non-loopback, runtime injection), a working-tree hit serves today's file unchanged, and an instant older than the oldest version is a 404 naming the floor. A historical render is not a read (no history row, no reading progress) and never carries the annotator. Any instant is answered (the working tree wins at `t >= mtime`; clients clamp). Still no corpus timeline: `/docs` stays as-of-blind (it ignores `at`), and ranking/search are never as-of.
 
+*IDEA2 (OL):* since-visit (`GET …/artifacts/{id}/since-visit`, `kb diff --since-visit`) is a fourth surface over the ONE resolver (`memento_for`); its `memento` equals `…/versions?at=`'s (pinned), and a baseline below the floor is `changed_no_delta/no_version` naming the floor, never a diff against the oldest version.
+
 ### 15. Gallery row-set memo keys on a storage-actor index generation
 
 `GET /docs` shares ONE `list_docs(u32::MAX)` scan + `edge_counts()` GROUP BY per
@@ -1889,6 +1893,8 @@ no-ops 204. **touched ≠ read**: `/touches` is what the agent referenced in a
 transcript; a reading is what the human scrolled. The classifier separates read /
 skim / unseen by dwell vs the section's expected reading time (words ÷ ~200 wpm),
 NOT raw scroll.
+
+*IDEA2 (OL):* since-visit and `read=changed` read WEB opens only (`history_web_visits`, `reading_last_web_open`; a visit, never a read); the legacy rollup and the desk's `changed_since_read` are unchanged and still count cli opens; the section ids since-visit returns are `headings`-twin scroll targets, never joined with `reading_sections`.
 
 ### 20. Iframe back-button = `location.replace`, not push
 
@@ -2829,6 +2835,8 @@ selection) is a client concern that ends in `ids=`; only a genuinely new
 together, with goldens.
 
 **OL TIME1/TIME2 (v0.50).** `at` is NOT an atom of this grammar — `/docs` ignores it (pinned by `docs_ignores_at_param_byte_identical`); `?at=` is reader view state (the artifact's own body as it stood), and the batch per-artifact memento read rides the separate route `GET …/docs/as-of?at=&ids=` (ids capped at 100, 400 over the cap, never truncation).
+
+*IDEA2 (OL):* `read=` on `/docs` gains `changed` (web-opened AND `mtime_unix` newer than the newest web open) — Library only; `/search`'s `read=` drops it as unknown.
 
 ## Where to find things
 

@@ -54,7 +54,7 @@ GET  /api/kb/{kb}/sources                   sources in a kb
 GET  /api/kb/{kb}/docs[?offset=N&limit=N&projection=slim|default|atlas
    &folder=PATH&folder_exact=1&tags=CSV&caps=CSV&since=7d|30d|all&index=1
    &category=KB-CATEGORY&from=UNIX&to=UNIX
-   &read=never-opened|unread|in_progress|read (csv any-of)
+   &read=never-opened|unread|in_progress|read|changed (csv any-of)
    &sort=recent|indexed|created|title|words|residue&dir=asc|desc&group=folder]
                                             list/filter artifacts. Bare array
                                             by default; pass offset= (or
@@ -199,6 +199,49 @@ GET  /api/kb/{kb}/artifacts/{id}/diff[?from=&to=&mode=text|raw]
                                             hunks:[{old_start, new_start,
                                             lines:[{tag, old_lineno,
                                             new_lineno, text}]}]}.
+GET  /api/kb/{kb}/artifacts/{id}/since-visit
+                                            OL IDEA2: what changed in this
+                                            artifact since the CALLER'S last
+                                            web VISIT (a visit, never a
+                                            "read": agent `kb cat/get/read`
+                                            opens don't count). Returns
+                                            {state, mode, reason?, baseline?,
+                                            last_visit_unix?, working_ts_unix?,
+                                            modified?, memento?, sections?,
+                                            added_lines?, removed_lines?}.
+                                            state: no_visit | unchanged |
+                                            changed | changed_no_delta |
+                                            unavailable. Baseline = a visit's
+                                            START: the caller's newest web
+                                            visit if finished (no open for
+                                            30 min), else the visit in
+                                            progress when the doc changed
+                                            after it began (baseline:
+                                            current_visit), else the visit
+                                            before it (previous_visit). The
+                                            instant resolves through the SAME
+                                            nearest-prior resolver as
+                                            `versions?at=` (its `memento` is
+                                            identical); below the oldest kept
+                                            version it is changed_no_delta/
+                                            no_version naming the floor,
+                                            never a diff against the oldest.
+                                            reason: no_version | mode_off
+                                            (changed_no_delta); transcript |
+                                            error (unavailable). unchanged
+                                            with modified:true = the file
+                                            moved but its prose did not.
+                                            sections[] = {id?, title?, level?,
+                                            change: changed|added|removed,
+                                            added, removed} in prose space
+                                            (id = the runtime's heading DOM
+                                            id, a scroll target only). Same
+                                            exposure as `…/diff` headings and
+                                            counts, never prose bodies. 404
+                                            for an unknown kb/id; any later
+                                            failure is 200 unavailable/error.
+                                            Read-only: writes no history row,
+                                            emits no event.
 GET  /api/kb/{kb}/lookup?q=<id|path|file>   resolve a 12-hex id, path, or
                                             unique filename; returns {kind:
                                             exact|unique_suffix|ambiguous|
@@ -305,6 +348,13 @@ POST /api/kb/{kb}/history/open              register an artifact-view visit.
                                             rule: re-opening within the window
                                             bumps the same row + returns its
                                             scroll for the runtime to resume.
+                                            A web open (source omitted or
+                                            "web") only ever resumes a web
+                                            row: it never folds into a "cli"
+                                            visit (`kb cat/get/read`), so the
+                                            browser visit stays its own row.
+                                            A "cli" open still resumes the
+                                            newest row of any source.
 POST /api/kb/{kb}/history/scroll            UPDATE scroll on an open visit.
                                             body: {visit_id, scroll_y,
                                             scroll_max}; 204 No Content, or
