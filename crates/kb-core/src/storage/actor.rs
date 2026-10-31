@@ -785,6 +785,20 @@ pub enum StorageMsg {
         reply:
             oneshot::Sender<Result<std::collections::HashMap<String, crate::reading::ReadRollup>>>,
     },
+    /// IDEA2 — the caller's web-class visits to one artifact, newest first
+    /// (READ lane; input to `reading::since_visit_baseline`).
+    HistoryWebVisits {
+        artifact_id: String,
+        user: String,
+        limit: u32,
+        reply: oneshot::Sender<Result<Vec<crate::reading::WebVisit>>>,
+    },
+    /// IDEA2 — per artifact, the newest web-class open's `started_at` for
+    /// `user` (READ lane; backs `?read=changed`).
+    ReadingLastWebOpen {
+        user: String,
+        reply: oneshot::Sender<Result<std::collections::HashMap<String, i64>>>,
+    },
     /// v0.33 X2 — INSERT OR IGNORE first-indexed timestamp for one artifact.
     FirstSeenInsertIgnore {
         artifact_id: String,
@@ -1602,6 +1616,8 @@ fn is_read_lane(msg: &StorageMsg) -> bool {
             | StorageMsg::ReadingLatestForIds { .. }
             | StorageMsg::ReadingRollup { .. }
             | StorageMsg::ReadingRollupForIds { .. }
+            | StorageMsg::HistoryWebVisits { .. }
+            | StorageMsg::ReadingLastWebOpen { .. }
             | StorageMsg::FirstSeenForIds { .. }
             | StorageMsg::FirstSeenIsEmpty { .. }
             | StorageMsg::EmbeddingModelGet { .. }
@@ -3111,6 +3127,17 @@ impl StorageActor {
             }
             StorageMsg::ReadingRollup { user, reply } => {
                 let _ = reply.send(self.db.reading_rollup(&user));
+            }
+            StorageMsg::HistoryWebVisits {
+                artifact_id,
+                user,
+                limit,
+                reply,
+            } => {
+                let _ = reply.send(self.db.history_web_visits(&artifact_id, &user, limit));
+            }
+            StorageMsg::ReadingLastWebOpen { user, reply } => {
+                let _ = reply.send(self.db.reading_last_web_open(&user));
             }
             StorageMsg::ReadingRollupForIds { ids, user, reply } => {
                 let _ = reply.send(self.db.reading_rollup_for_ids(&ids, &user));
@@ -4857,6 +4884,33 @@ impl StorageHandle {
         user: String,
     ) -> Result<std::collections::HashMap<String, crate::reading::ReadRollup>> {
         self.send_and_await(|reply| StorageMsg::ReadingRollup { user, reply })
+            .await
+    }
+
+    /// IDEA2 — the caller's web-class visits to one artifact, newest first
+    /// by `(started_at, id)`, at most `limit`. READ lane, no generation bump.
+    pub async fn history_web_visits(
+        &self,
+        artifact_id: String,
+        user: String,
+        limit: u32,
+    ) -> Result<Vec<crate::reading::WebVisit>> {
+        self.send_and_await(|reply| StorageMsg::HistoryWebVisits {
+            artifact_id,
+            user,
+            limit,
+            reply,
+        })
+        .await
+    }
+
+    /// IDEA2 — per artifact, the newest web-class open's `started_at` for
+    /// `user`. READ lane, no generation bump.
+    pub async fn reading_last_web_open(
+        &self,
+        user: String,
+    ) -> Result<std::collections::HashMap<String, i64>> {
+        self.send_and_await(|reply| StorageMsg::ReadingLastWebOpen { user, reply })
             .await
     }
 
@@ -7049,6 +7103,17 @@ mod tests {
         // A reading READ that from_msg's History arm does NOT list (it falls to
         // StorageKind::Read) — must still be read-class here.
         assert!(lane(|reply| StorageMsg::ReadingRollup {
+            user: "operator".into(),
+            reply
+        }));
+        // IDEA2 — the since-visit reads are read-class too.
+        assert!(lane(|reply| StorageMsg::HistoryWebVisits {
+            artifact_id: "a".into(),
+            user: "operator".into(),
+            limit: 2,
+            reply
+        }));
+        assert!(lane(|reply| StorageMsg::ReadingLastWebOpen {
             user: "operator".into(),
             reply
         }));

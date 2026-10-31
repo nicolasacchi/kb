@@ -14,6 +14,9 @@ import type { DiffTag } from "./generated/DiffTag";
 import type { DiffLine } from "./generated/DiffLine";
 import type { DiffHunk } from "./generated/DiffHunk";
 import type { DiffResponse } from "./generated/DiffResponse";
+import type { SinceVisitResponse } from "./generated/SinceVisitResponse";
+import type { ChangedSection } from "./generated/ChangedSection";
+import type { MementoOut } from "./generated/MementoOut";
 
 export type {
   Version,
@@ -22,6 +25,9 @@ export type {
   DiffLine,
   DiffHunk,
   DiffResponse,
+  SinceVisitResponse,
+  ChangedSection,
+  MementoOut,
 };
 export type VersionSource = Version["source"];
 
@@ -65,4 +71,20 @@ export async function fetchDiff(
     { headers: { Accept: "application/json" }, signal },
   );
   return jsonOrThrow<DiffResponse>(r);
+}
+
+/// OL IDEA2 — what changed in this artifact since the caller's last WEB
+/// visit (`GET …/since-visit`). Visit, never "read": agent CLI opens do not
+/// count (#19). Always 200 once the artifact exists; failures inside the
+/// route come back as `state: "unavailable"`.
+export async function fetchSinceVisit(
+  kb: string,
+  id: string,
+  signal?: AbortSignal,
+): Promise<SinceVisitResponse> {
+  const r = await fetch(
+    `${currentDaemonBase()}/api/kb/${encodeURIComponent(kb)}/artifacts/${encodeURIComponent(id)}/since-visit`,
+    { headers: { Accept: "application/json" }, signal },
+  );
+  return jsonOrThrow<SinceVisitResponse>(r);
 }

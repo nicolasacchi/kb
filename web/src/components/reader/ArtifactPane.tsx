@@ -21,7 +21,7 @@ import {
 import type { ReadingSummary } from "../../api/reading";
 import ContextBar from "../chrome/ContextBar";
 import QueueBar from "../lists/QueueBar";
-import DeskChangedBanner from "../chrome/DeskChangedBanner";
+import SinceVisitBanner from "../chrome/SinceVisitBanner";
 
 import TocSpy from "../TocSpy";
 import { FolioHeader, FolioColophon } from "../FolioChrome";
@@ -176,6 +176,11 @@ export type ArtifactPaneProps = {
   /// (`?p=` page switches, the trail params) and renders the route-level
   /// QueueBar. A secondary pane must not rewrite the address bar.
   isPrimary: boolean;
+  /// OL IDEA2 — the since-visit banner's "View changes" / History action:
+  /// open the versions dock with `ref` preselected (`null` ⇒ its default).
+  /// Route-owned (the dock is route state); absent ⇒ the banner shows no
+  /// action.
+  onViewChanges?: (ref: string | null) => void;
 
   // ── the resolved artifact (route-owned; one doc query, see #23) ───────
   doc: DocSummary | null;
@@ -490,6 +495,7 @@ export default function ArtifactPane({
   focused,
   onFocus,
   isPrimary,
+  onViewChanges,
   doc,
   id,
   error,
@@ -1788,7 +1794,29 @@ export default function ArtifactPane({
             flow={flow}
           />
         )}
-        {doc && !historical && <DeskChangedBanner kb={kb} id={id} />}
+        {doc && !historical && (
+          <SinceVisitBanner
+            kb={kb}
+            id={id}
+            // A historical `?at=` render names ONE instant on the primary
+            // artifact; "changed since your last visit" would contradict it.
+            asOf={isPrimary && searchParams.has("at")}
+            onJumpSection={(sectionId) => {
+              const frame = iframeRef.current?.contentWindow;
+              if (!frame) return;
+              try {
+                // Same message + exact-origin discipline as the `sec` effect.
+                frame.postMessage(
+                  { kind: "kb:scroll-to-id", id: sectionId, flash: true },
+                  artifactOrigin(id, kb, hostSuffix),
+                );
+              } catch {
+                // iframe not ready — nothing to scroll yet.
+              }
+            }}
+            onViewChanges={onViewChanges}
+          />
+        )}
         {doc && historical && at !== null && (
           <AsOfBar
             kb={kb}

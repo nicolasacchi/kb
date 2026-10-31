@@ -1488,7 +1488,9 @@ impl Db {
     /// `source` (GC-B5) is only stamped on a brand-new row — a bump of an
     /// existing visit within the 30-min gap leaves the original opener's
     /// `source` untouched (append-only, invariant #8: a resume doesn't
-    /// retroactively relabel who started the visit).
+    /// retroactively relabel who started the visit). A web-class open never
+    /// resumes a `cli` row (it starts its own visit); a `cli` open still
+    /// resumes the newest row of any source.
     pub fn history_record_open(
         &mut self,
         artifact_id: &str,
@@ -1496,18 +1498,29 @@ impl Db {
         source: Option<&str>,
         user: &str,
     ) -> Result<OpenResult> {
-        const VISIT_GAP_SECS: i64 = 30 * 60;
+        use crate::reading::VISIT_GAP_SECS;
         // Visit-gap dedup is per (artifact_id, user) — two users within
-        // 30 min get SEPARATE rows (v0.34 X1).
+        // 30 min get SEPARATE rows (v0.34 X1). A web-class open (`None` or
+        // `"web"`) only ever resumes a web-class row: a `kb read`/`cat` cli
+        // row must not swallow the operator's real browser visit into a
+        // cli-labelled row (that visit is what since-visit measures from).
+        // A cli open keeps the old lookup (newest row of any source).
+        let web_class = matches!(source, None | Some("web"));
+        let resume_sql = if web_class {
+            "SELECT id, scroll_y, updated_at FROM history
+             WHERE kind = 'open' AND artifact_id = ?1 AND \"user\" = ?2
+               AND (source IS NULL OR source = 'web')
+             ORDER BY started_at DESC, id DESC LIMIT 1"
+        } else {
+            "SELECT id, scroll_y, updated_at FROM history
+             WHERE kind = 'open' AND artifact_id = ?1 AND \"user\" = ?2
+             ORDER BY started_at DESC LIMIT 1"
+        };
         let existing: Option<(i64, i64, i64)> = self
             .conn
-            .query_row(
-                "SELECT id, scroll_y, updated_at FROM history
-                 WHERE kind = 'open' AND artifact_id = ?1 AND \"user\" = ?2
-                 ORDER BY started_at DESC LIMIT 1",
-                params![artifact_id, user],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
+            .query_row(resume_sql, params![artifact_id, user], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
             .optional()?;
         if let Some((id, scroll_y, updated_at)) = existing {
             if now_unix - updated_at < VISIT_GAP_SECS {
@@ -2199,6 +2212,63 @@ impl Db {
         user: &str,
     ) -> Result<std::collections::HashMap<String, crate::reading::ReadRollup>> {
         self.reading_rollup_inner(Some(ids), user)
+    }
+
+    /// The caller's web visits to one artifact, newest first by
+    /// `(started_at DESC, id DESC)`, capped at `limit`. Web-class only:
+    /// `source IS NULL OR source = 'web'` (V0022: NULL means web), so agent
+    /// CLI opens (`kb cat`/`get`/`read`) never appear. Per user (V0034).
+    /// Pure read — no generation bump (#15). Input to
+    /// [`crate::reading::since_visit_baseline`].
+    pub fn history_web_visits(
+        &self,
+        artifact_id: &str,
+        user: &str,
+        limit: u32,
+    ) -> Result<Vec<crate::reading::WebVisit>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, started_at, updated_at FROM history
+             WHERE kind = 'open' AND artifact_id = ?1 AND \"user\" = ?2
+               AND (source IS NULL OR source = 'web')
+             ORDER BY started_at DESC, id DESC LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![artifact_id, user, limit], |row| {
+            Ok(crate::reading::WebVisit {
+                id: row.get(0)?,
+                started_at: row.get(1)?,
+                updated_at: row.get(2)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// Per artifact, the newest web visit's `started_at` for `user` (the
+    /// `?read=changed` Library filter's input). Web-class only — the legacy
+    /// [`Self::reading_rollup`] still counts cli opens and is deliberately
+    /// untouched (#19). Pure read — no generation bump (#15).
+    pub fn reading_last_web_open(
+        &self,
+        user: &str,
+    ) -> Result<std::collections::HashMap<String, i64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT artifact_id, MAX(started_at) FROM history
+             WHERE kind = 'open' AND artifact_id IS NOT NULL AND \"user\" = ?1
+               AND (source IS NULL OR source = 'web')
+             GROUP BY artifact_id",
+        )?;
+        let rows = stmt.query_map(params![user], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        let mut out = std::collections::HashMap::new();
+        for r in rows {
+            let (id, ts) = r?;
+            out.insert(id, ts);
+        }
+        Ok(out)
     }
 
     /// Shared body for [`Self::reading_rollup`] (`ids = None`, whole table) and
@@ -9628,17 +9698,37 @@ mod tests {
         );
     }
 
+    // invariant:8 a web open never resumes a cli visit
     #[test]
-    fn history_record_open_bump_does_not_overwrite_source() {
+    fn web_open_never_resumes_a_cli_visit() {
         let mut db = db();
         let r1 = db
             .history_record_open("art", 1_700_000_000, Some("cli"), "operator")
             .unwrap();
-        // 10 minutes later, resumed via the SPA — still the same visit
-        // row (append-only bump), so the ORIGINAL opener's source must
-        // survive even though this call passes a different source.
+        // 10 minutes later the operator opens it in the browser: that is
+        // THEIR visit, not a continuation of the agent's `kb read`.
         let r2 = db
             .history_record_open("art", 1_700_000_600, Some("web"), "operator")
+            .unwrap();
+        assert_ne!(r2.id, r1.id, "web open starts its own row");
+        assert!(r2.is_new_visit);
+
+        let mut rows = db.history_list(10, None, Some("open"), None).unwrap();
+        rows.sort_by_key(|r| r.id);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].source.as_deref(), Some("cli"));
+        assert_eq!(rows[1].source.as_deref(), Some("web"));
+    }
+
+    // invariant:8 a bump must not relabel who started the visit
+    #[test]
+    fn cli_open_resumes_a_recent_web_visit_without_relabel() {
+        let mut db = db();
+        let r1 = db
+            .history_record_open("art", 1_700_000_000, Some("web"), "operator")
+            .unwrap();
+        let r2 = db
+            .history_record_open("art", 1_700_000_600, Some("cli"), "operator")
             .unwrap();
         assert_eq!(r2.id, r1.id, "same visit → same row id");
         assert!(!r2.is_new_visit);
@@ -9647,9 +9737,64 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(
             rows[0].source.as_deref(),
-            Some("cli"),
+            Some("web"),
             "bump must not relabel who started the visit"
         );
+    }
+
+    // invariant:19 since-visit reads web opens only
+    #[test]
+    fn history_web_visits_excludes_cli_and_other_users_newest_first() {
+        let mut db = db();
+        let a = db
+            .history_record_open("art", 1_000, None, "operator")
+            .unwrap();
+        db.history_record_open("art", 10_000, Some("cli"), "operator")
+            .unwrap();
+        let b = db
+            .history_record_open("art", 20_000, Some("web"), "operator")
+            .unwrap();
+        db.history_record_open("art", 30_000, Some("web"), "alice")
+            .unwrap();
+        db.history_record_open("other", 40_000, None, "operator")
+            .unwrap();
+
+        let v = db.history_web_visits("art", "operator", 10).unwrap();
+        assert_eq!(v.iter().map(|x| x.id).collect::<Vec<_>>(), vec![b.id, a.id]);
+        assert_eq!(v[0].started_at, 20_000);
+        assert_eq!(v[1].started_at, 1_000);
+        let one = db.history_web_visits("art", "operator", 1).unwrap();
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].id, b.id);
+    }
+
+    // invariant:19 the shelf must not count agent reads
+    #[test]
+    fn reading_last_web_open_ignores_cli_opens() {
+        let mut db = db();
+        db.history_record_open("webbed", 1_000, None, "operator")
+            .unwrap();
+        db.history_record_open("webbed", 9_000, Some("web"), "operator")
+            .unwrap();
+        db.history_record_open("webbed", 50_000, Some("cli"), "operator")
+            .unwrap();
+        db.history_record_open("agent-only", 5_000, Some("cli"), "operator")
+            .unwrap();
+        db.history_record_open("theirs", 7_000, None, "alice")
+            .unwrap();
+        let m = db.reading_last_web_open("operator").unwrap();
+        assert_eq!(m.len(), 1);
+        assert_eq!(m.get("webbed"), Some(&9_000));
+    }
+
+    // invariant:19 the legacy rollup is untouched in this unit
+    #[test]
+    fn legacy_reading_rollup_still_counts_cli_opens() {
+        let mut db = db();
+        db.history_record_open("agent-only", 5_000, Some("cli"), "operator")
+            .unwrap();
+        let m = db.reading_rollup("operator").unwrap();
+        assert_eq!(m.get("agent-only").unwrap().last_opened_unix, Some(5_000));
     }
 
     #[test]

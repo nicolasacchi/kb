@@ -30,7 +30,12 @@ export type GallerySort = "recent" | "indexed" | "created" | "title" | "words";
 /// never opened AND carries no list read-override (id absent from the
 /// reading rollup); the other three are `kb_core::lists::ReadState`
 /// equality on a row that IS present in the rollup.
-export type ReadFacet = "never-opened" | "unread" | "in_progress" | "read";
+export type ReadFacet =
+  | "never-opened"
+  | "unread"
+  | "in_progress"
+  | "read"
+  | "changed";
 
 export type GalleryFilters = {
   tags?: string[];

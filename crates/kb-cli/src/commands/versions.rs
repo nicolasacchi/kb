@@ -360,6 +360,159 @@ async fn diff_with_refs(
     Ok(())
 }
 
+/// `kb diff <target> --since-visit [--json]` (OL IDEA2) — what changed since
+/// the operator's last WEB visit. `--json` prints the route body verbatim; the
+/// human form is [`render_since_visit`], followed by the hunks (from the
+/// resolved version to WORKING) when the state is `changed`.
+pub async fn since_visit(
+    target: &str,
+    kb: Option<&str>,
+    json_out: bool,
+    daemon: Option<&str>,
+    bearer: Option<&str>,
+) -> Result<()> {
+    let (resolved_kb, id) = resolve_target(kb, target, daemon, bearer).await?;
+    let url = format!(
+        "{}/api/kb/{}/artifacts/{}/since-visit",
+        base_url(daemon),
+        encode_path_segment(&resolved_kb),
+        encode_path_segment(&id),
+    );
+    let client = client_with_timeout_and_bearer(20, bearer)?;
+    let body: Value = client
+        .get(&url)
+        .send()
+        .await
+        .context("GET since-visit")?
+        .error_for_status()?
+        .json()
+        .await
+        .context("parse since-visit")?;
+    if json_out {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    println!("{}", render_since_visit(&body));
+    if body.get("state").and_then(|v| v.as_str()) == Some("changed") {
+        if let Some(from_ref) = body
+            .pointer("/memento/version/ref")
+            .and_then(|v| v.as_str())
+        {
+            println!();
+            diff_with_refs(
+                &resolved_kb,
+                &id,
+                Some(from_ref),
+                Some("WORKING"),
+                false,
+                false,
+                daemon,
+                bearer,
+                None,
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+/// Pure human rendering of a `since-visit` body: state, baseline date, the
+/// resolved version (always nearest-prior), the changed sections with +/-
+/// counts, and the floor on a miss. No I/O.
+pub fn render_since_visit(body: &Value) -> String {
+    let state = body.get("state").and_then(|v| v.as_str()).unwrap_or("?");
+    let ts = |key: &str| body.get(key).and_then(|v| v.as_i64()).map(fmt_ts);
+    let baseline_line = || -> String {
+        let when = ts("last_visit_unix").unwrap_or_default();
+        match body.get("baseline").and_then(|v| v.as_str()) {
+            Some("current_visit") => format!("baseline: the visit in progress, opened {when} UTC"),
+            _ => format!("baseline: your last visit, {when} UTC"),
+        }
+    };
+    let mut out: Vec<String> = Vec::new();
+    match state {
+        "no_visit" => {
+            out.push("no_visit: no web visit by this identity to measure from".into());
+            out.push("(agent reads — kb cat/get/read — are not visits)".into());
+        }
+        "unavailable" => {
+            let reason = body
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("error");
+            out.push(format!("unavailable ({reason})"));
+        }
+        "unchanged" => {
+            out.push("unchanged since your last visit".into());
+            out.push(baseline_line());
+            if body.get("modified").and_then(|v| v.as_bool()) == Some(true) {
+                out.push(
+                    "(the file was modified, but its prose is identical — markup only)".into(),
+                );
+            }
+        }
+        "changed_no_delta" => {
+            out.push("changed since your last visit, but no delta is available".into());
+            out.push(baseline_line());
+            match body.get("reason").and_then(|v| v.as_str()) {
+                Some("mode_off") => out.push("this kb keeps no version history".into()),
+                _ => {
+                    let floor = body
+                        .pointer("/memento/oldest_ts_unix")
+                        .and_then(|v| v.as_i64())
+                        .map(fmt_ts)
+                        .unwrap_or_default();
+                    out.push(format!(
+                        "the version you saw is no longer kept (oldest kept {floor} UTC)"
+                    ));
+                }
+            }
+        }
+        _ => {
+            // changed
+            out.push("changed since your last visit".into());
+            out.push(baseline_line());
+            if let Some(v) = body.pointer("/memento/version") {
+                let r = v.get("short").and_then(|x| x.as_str()).unwrap_or("?");
+                let src = v.get("source").and_then(|x| x.as_str()).unwrap_or("?");
+                let at = v
+                    .get("ts_unix")
+                    .and_then(|x| x.as_i64())
+                    .map(fmt_ts)
+                    .unwrap_or_default();
+                out.push(format!(
+                    "compared with: {src} {r} ({at} UTC) — the nearest version at or before the baseline"
+                ));
+            }
+            let a = body
+                .get("added_lines")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let r = body
+                .get("removed_lines")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            out.push(format!("+{a} -{r} lines"));
+            if let Some(secs) = body.get("sections").and_then(|v| v.as_array()) {
+                for s in secs {
+                    let title = s
+                        .get("title")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("(opening)");
+                    let change = s
+                        .get("change")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("changed");
+                    let a = s.get("added").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let r = s.get("removed").and_then(|v| v.as_u64()).unwrap_or(0);
+                    out.push(format!("  {change:<8} {title}  (+{a} -{r})"));
+                }
+            }
+        }
+    }
+    out.join("\n")
+}
+
 /// Parse the daemon's `GET …/versions` wire array back into
 /// `kb_core::versions::Version` — can't `derive(Deserialize)` on `Version`
 /// itself (its `source` field is `&'static str`, which can't satisfy the
@@ -653,6 +806,73 @@ mod tests {
     fn hunk_header_format() {
         assert_eq!(hunk_header(3, 5, false), "@@ -3 +5 @@");
         assert_eq!(hunk_header(3, 5, true), "\x1b[36m@@ -3 +5 @@\x1b[0m");
+    }
+
+    // ---- OL IDEA2 — render_since_visit ---------------------------------
+
+    #[test]
+    fn render_since_visit_no_visit() {
+        let out = render_since_visit(&serde_json::json!({"state": "no_visit", "mode": "auto"}));
+        assert!(out.starts_with("no_visit"), "{out}");
+        assert!(out.contains("not visits"));
+    }
+
+    #[test]
+    fn render_since_visit_unchanged_and_modified() {
+        let out = render_since_visit(&serde_json::json!({
+            "state": "unchanged", "mode": "auto", "baseline": "previous_visit",
+            "last_visit_unix": 1_700_000_000, "modified": true
+        }));
+        assert!(out.contains("unchanged"));
+        assert!(
+            out.contains("your last visit, 2023-11-14 22:13 UTC"),
+            "{out}"
+        );
+        assert!(out.contains("markup only"));
+    }
+
+    #[test]
+    fn render_since_visit_changed_lists_sections_and_nearest_prior() {
+        let out = render_since_visit(&serde_json::json!({
+            "state": "changed", "mode": "index", "baseline": "current_visit",
+            "last_visit_unix": 1_700_000_000, "added_lines": 3, "removed_lines": 1,
+            "memento": {"version": {"source": "index", "short": "#4", "ts_unix": 1_699_999_000}},
+            "sections": [
+                {"id": "kb-h-risks", "title": "Risks", "level": 2, "change": "changed", "added": 2, "removed": 1},
+                {"change": "changed", "added": 1, "removed": 0}
+            ]
+        }));
+        assert!(out.contains("the visit in progress"), "{out}");
+        assert!(out.contains("nearest version at or before"));
+        assert!(out.contains("+3 -1 lines"));
+        assert!(out.contains("changed  Risks  (+2 -1)"), "{out}");
+        assert!(out.contains("(opening)"));
+    }
+
+    #[test]
+    fn render_since_visit_changed_no_delta_names_floor_or_mode() {
+        let miss = render_since_visit(&serde_json::json!({
+            "state": "changed_no_delta", "reason": "no_version", "baseline": "previous_visit",
+            "last_visit_unix": 1_700_000_000,
+            "memento": {"found": false, "oldest_ts_unix": 1_700_100_000}
+        }));
+        assert!(
+            miss.contains("no longer kept (oldest kept 2023-11-16 02:00 UTC)"),
+            "{miss}"
+        );
+        let off = render_since_visit(&serde_json::json!({
+            "state": "changed_no_delta", "reason": "mode_off", "baseline": "previous_visit",
+            "last_visit_unix": 1_700_000_000
+        }));
+        assert!(off.contains("keeps no version history"));
+    }
+
+    #[test]
+    fn render_since_visit_unavailable() {
+        let out = render_since_visit(
+            &serde_json::json!({"state": "unavailable", "reason": "transcript"}),
+        );
+        assert_eq!(out, "unavailable (transcript)");
     }
 
     #[test]

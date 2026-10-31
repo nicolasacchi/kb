@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { MemoryRouter, useLocation } from "react-router-dom";
 
 vi.mock("../../api/client", () => ({
   isAbortError: () => false,
@@ -41,5 +41,34 @@ describe("Sidebar facet rows", () => {
       "note",
       "report",
     ]);
+  });
+});
+
+// OL IDEA2 — the Library's "changed since visit" Reading chip.
+function Where() {
+  const loc = useLocation();
+  return <output data-testid="where">{loc.search}</output>;
+}
+
+describe("Sidebar Reading filter: changed since visit", () => {
+  it("the chip sets read=changed, is pressed when active, and explains agent reads don't count", async () => {
+    const { getByText, getByTestId } = render(
+      <MemoryRouter initialEntries={["/?kb=canon"]}>
+        <Sidebar />
+        <Where />
+      </MemoryRouter>,
+    );
+    const chip = getByText("changed since visit") as HTMLButtonElement;
+    expect(chip.getAttribute("aria-pressed")).toBe("false");
+    expect(chip.title).toContain("agent reads don't count");
+    fireEvent.click(chip);
+    await waitFor(() => {
+      expect(new URLSearchParams(getByTestId("where").textContent ?? "").get("read")).toBe(
+        "changed",
+      );
+    });
+    expect(
+      (getByText("changed since visit") as HTMLButtonElement).getAttribute("aria-pressed"),
+    ).toBe("true");
   });
 });

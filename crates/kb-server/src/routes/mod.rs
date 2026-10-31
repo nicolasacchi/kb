@@ -190,6 +190,7 @@ pub mod sessions;
 pub mod settings;
 pub mod share;
 pub mod shutdown;
+pub mod since_visit;
 pub mod slates;
 pub mod slo;
 pub mod sources;

@@ -1063,11 +1063,11 @@ enum Cmd {
         target: String,
         /// Older side: a git sha, `index:<id>`, or `WORKING`. Defaults to
         /// the version just before `--to`. Conflicts with `--between`.
-        #[arg(long, conflicts_with = "between")]
+        #[arg(long, conflicts_with_all = ["between", "since_visit"])]
         from: Option<String>,
         /// Newer side. Defaults to the working tree (current file).
         /// Conflicts with `--between`.
-        #[arg(long, conflicts_with = "between")]
+        #[arg(long, conflicts_with_all = ["between", "since_visit"])]
         to: Option<String>,
         /// Resolve BOTH sides
         /// from calendar dates / RFC 3339 instants instead of explicit
@@ -1079,8 +1079,16 @@ enum Cmd {
         /// older than the oldest known version is a hard error naming the
         /// oldest version's own date — never a silent empty diff.
         // Provenance: MI-W2.4b (2026-07 temporal-query design)
-        #[arg(long, num_args = 2, value_names = ["FROM_DATE", "TO_DATE"])]
+        #[arg(long, num_args = 2, value_names = ["FROM_DATE", "TO_DATE"], conflicts_with = "since_visit")]
         between: Option<Vec<String>>,
+        /// What changed since the operator's last WEB visit to this
+        /// artifact (`GET …/since-visit`): the state, the changed
+        /// sections with +/- line counts, then the hunks. Agent reads
+        /// (`kb cat`/`get`/`read`) never count as a visit. Answers for the
+        /// identity the request resolves to (on loopback, the operator).
+        // Provenance: OL IDEA2
+        #[arg(long = "since-visit", conflicts_with = "raw")]
+        since_visit: bool,
         /// Diff the raw source bytes instead of rendered prose.
         #[arg(long)]
         raw: bool,
@@ -5977,12 +5985,23 @@ async fn main() -> Result<()> {
             from,
             to,
             between,
+            since_visit,
             raw,
             kb,
             json,
             daemon,
         } => {
             let bearer = read_bearer();
+            if since_visit {
+                return commands::versions::since_visit(
+                    &target,
+                    kb.as_deref(),
+                    json,
+                    daemon.as_deref(),
+                    bearer.as_deref(),
+                )
+                .await;
+            }
             match between {
                 Some(dates) => {
                     // clap's `num_args = 2` guarantees exactly two.
@@ -8000,6 +8019,29 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("cannot be used with"), "{err}");
+    }
+
+    /// OL IDEA2 — `kb diff --since-visit` conflicts with the explicit-side flags.
+    #[test]
+    fn diff_since_visit_conflicts_with_from_to_between_raw() {
+        match Cli::try_parse_from(["kb", "diff", "plan.html", "--since-visit"])
+            .unwrap()
+            .cmd
+        {
+            Cmd::Diff { since_visit, .. } => assert!(since_visit),
+            other => panic!("expected diff, got {other:?}"),
+        }
+        for extra in [
+            vec!["--from", "WORKING"],
+            vec!["--to", "WORKING"],
+            vec!["--between", "2026-01-01", "2026-02-01"],
+            vec!["--raw"],
+        ] {
+            let mut args = vec!["kb", "diff", "plan.html", "--since-visit"];
+            args.extend(extra.iter().copied());
+            let err = Cli::try_parse_from(args).unwrap_err().to_string();
+            assert!(err.contains("cannot be used with"), "{extra:?}: {err}");
+        }
     }
 
     /// `Cli::try_parse_from` cases pinning `kb capture`'s clap wiring
