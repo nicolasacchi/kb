@@ -1700,3 +1700,104 @@ leftover: the Desk's `MAIN_MIN_HEIGHT_PX` was lowered 580 to 550 by derivation,
 not measurement. The rail badge fill that did not render through P3 was fixed by
 P6 (#125, finding 12). The sort test's intermittent order mismatch remains
 unexplained (finding 8).
+
+## v0.51 / kb-code v9.1 — "Crossings": the two apps cross into each other (OL)
+
+**What shipped.** kb and kb-code reference each other's data (cited code opens
+kb-code, Cited by reads kb's live refs, agent file edits show in the code tree),
+kb answers "what changed since I was here" at three scales (project, artifact,
+date), and agent sessions gain two honest live states (blocked on you, last tool
+started) and a checks verdict. No kb-code migration; one kb migration (V0046, a
+nullable `sessions.evidence_json`, no backfill; `kb reindex <kb>` fills old
+captures).
+
+| Track | Units (PR) |
+|---|---|
+| Time | TIME1 batch as-of route (#152), TIME2 the reader's time machine (#167), IDEA2 since your last visit (#170) |
+| Reading | READ1 live reading layer and `/_kb/reading.css` (#151), READ1b house voice for voice-less pages (#166), READ2 reading mode in the reader (#175) |
+| Ranking | RANK1 relevance-aware all-corpora search (#150), RANK2 federated bench case (#148) |
+| Sibling | SIBL1 sibling bar and Cited-by chip (#153), SIBL2 the Code chip (#164), SIBL3 Cited by reads kb live (#165), IDEA6 the citation is the door (#174) |
+| Presence | PRES1 write-tool beats and live-touches (#156), PRES2 relay, worktrees, repo aliases (#173), PRES3 files glow with honest attribution (#177) |
+| Sessions | IDEA1 blocked on you (#172), IDEA3 session checks verdict (#169), IDEA4 last tool started (#176), IDEA5 since you left (#168) |
+| Touch | TOUCH2 no card buttons on touch, Download in More (#158) |
+| Maintenance | MAIN1 advisories and audited zstd ignores (#142), DEP1b cargo group (#163), DEP3 comrak (#145), DEP4 plugin-react 6 (#144), DEP5b katex override dropped (#171), DEP6 `@types/node` majors wait (#155), Dependabot merges (#137 #138 #139 #63 #64 #75), LINT1 css-vars lint (#147), ERR1 stale ingest errors (#146) |
+
+**The Fable design review and what it changed.**
+
+- The Library time scrubber (TIME1's first intent) was replaced by the reader
+  time machine. A scrubber over a whole corpus implied a corpus timeline that
+  invariant #14 refuses; the as-of question is per artifact. TIME1 kept only the
+  batch per-artifact route, and TIME2 serves `?at=` on the artifact's own origin.
+- Touch cards were replaced: TOUCH1 (a More button per card, #149) was closed for
+  TOUCH2, which removes card chrome on touch and moves Download into the reader's
+  More menu.
+- The reading voice moved to serve time: pages with no styling of their own get
+  one daemon-injected style block (READ1b) instead of a client-side guess, and
+  `r` toggles it.
+- Presence attribution: the code tree never lights a file from a guess. PRES3
+  attributes each touch once, at the first snapshot, in kb-code's own trust
+  words (exact, probable, unknown) and freezes it, so a later session cannot
+  relabel it.
+
+**The maintenance round.**
+
+- Advisories: MAIN1 cleared the webpki and dompurify advisories. Four zstd
+  advisories (RUSTSEC-2026-0391, -0398, -0403, -0410) were new and have no
+  patched line on arrow 58 or lance 11; they are ignored in `deny.toml` with a
+  reachability review, an owner and a review-by date of 2027-01-31 (or when a
+  lance release supports arrow 60). `supply-chain` and `ci-gate` were red on main
+  until that exception landed.
+- Dependabot backlog: the older cargo-group PR conflicted on `Cargo.lock`;
+  Dependabot's fresh PR #161 was closed and the same 20 updates landed through #163;
+  `@types/node` majors are now ignored until the runtime moves; mermaid 12 made
+  the katex override unnecessary. #160 (GitHub Actions bumps) is open and not part
+  of this release.
+- Stale ingest errors: a file vanishing during ingest is a delete, and reconcile
+  dismisses open errors whose path is gone.
+- css-vars lint: LINT1 rejects an undeclared token even with a fallback, and its
+  first version was quadratic on real files (see finding 4).
+
+**Findings worth keeping.**
+
+1. *A builder returned "blocked" when its prerequisite branch did not exist yet.*
+   A unit briefed to branch from another unit's branch found no such branch and
+   stopped. Briefs for dependent units should say which merged PR or sha to use;
+   the brief's own example of a remedy is to dispatch such units only after the prerequisite has merged.
+2. *Route-table footer counts drift.* `docs/api-routes.md` states a route total;
+   every unit that added a route changed it, so parallel PRs conflicted or
+   quietly disagreed. The count is regenerated after merging main, never
+   hand-merged.
+3. *Dependabot lockfile conflicts are resolved by taking Dependabot's own
+   regenerated lock.* Without a local cargo or npm a lock cannot be hand-merged
+   reliably, so the fix is a fresh Dependabot PR and a port of the reviewed
+   config (the `rand_core` skip) rather than a conflict edit.
+4. *A lint regex that was quadratic only on real files.* The css-vars lint passed
+   on its fixtures, then its TypeScript declaration matcher rescanned backwards
+   from every quote on `web/`'s real source: over 60 s locally, and CI cancelled
+   the `web` job at 20 min. Starting at the quote with one bounded backward walk
+   made it linear (0.13 s). Lints need one test on a realistic input.
+5. *Ids collide across corpora, so relevance labels are `kb:id`.* A bare id in a
+   `scope=all` bench case matched the wrong corpus's hit; RANK2's labels carry the
+   kb and split on the last colon.
+6. *The time machine needs git history.* `?at=` answers from the same façade as
+   the versions panel, so a corpus mounted without `.git` offers only
+   index-snapshot and working-tree versions, and an instant older than the oldest
+   version is a 404 naming the floor.
+7. *RANK1 and RANK2 shipped without a measured before-and-after on a real bench.*
+   The federated case now exists; running it on the operator's corpora is
+   outstanding.
+8. *A unit may reverse a pin on purpose.* IDEA2 made a web open stop resuming a
+   CLI visit, which deliberately rewrote the test
+   `history_record_open_bump_does_not_overwrite_source`; the PR named the
+   reversal instead of weakening the test quietly.
+9. *A Dependabot group can split a lockstep set.* The cargo group bumped
+   `arrow-schema` to 58.4.1 on its own, which breaks invariant #1 (arrow, lance,
+   lancedb and datafusion move only as a set), and a tree-sitter-md bump left the
+   kb-code symbol and highlight salts and the syntax golden stale. Review caught
+   both; #163 pins `arrow-schema` back to `=58.4.0` and bumps the salts.
+
+**Not built / open.** A Library time strip (refused, see the design review);
+"Open as of..." in the reader's More menu (versions panel only); moving the
+legacy read rollup and the desk's `changed_since_read` to web-only (needs an
+operator decision); bash and read file activity and non-Claude harnesses in the
+presence beat.
