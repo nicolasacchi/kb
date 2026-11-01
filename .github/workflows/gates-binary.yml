@@ -44,7 +44,7 @@ jobs:
       - name: Cache cargo + target
         # Read-only restore of the kb-code family ci.yml's code-test writes;
         # this workflow never saves (save-if false) so it cannot evict it.
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
           shared-key: code
           save-if: "false"
@@ -53,7 +53,7 @@ jobs:
       - name: Build kb-code-server + kb-code (fast profile)
         run: cargo build --locked --profile fast -p kb-code-server -p kb-code-cli
       - name: Upload binaries
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: kb-code-gates-${{ github.sha }}
           path: |
