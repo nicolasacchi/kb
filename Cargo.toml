@@ -67,10 +67,12 @@ arrow = "=58.4.0"
 arrow-array = "=58.4.0"
 arrow-schema = "=58.4.0"
 rusqlite = { version = "0.40", features = ["bundled"] }
-# refinery 0.9 (V76-R4e): refinery-core 0.9.2 moved to toml 1.1, collapsing
-# the old toml 0.8/toml_edit 0.22/winnow 0.7 chain refinery 0.8 dragged in.
-# kb's surface (embed_migrations!, Runner, refinery_schema_history,
-# rusqlite 0.40 = its ceiling) is untouched by the 0.9 breaking set.
+# refinery 0.10: refinery-core 0.10 accepts rusqlite <=0.40, so 0.40 is the
+# ceiling. rusqlite 0.41 needs a refinery release that raises that bound
+# (hold the Dependabot bump until then; two rusqlite/libsqlite3-sys lines
+# cannot coexist, links = "sqlite3"). Since refinery 0.9 (V76-R4e) it also
+# uses toml 1.1. kb's surface (embed_migrations!, Runner,
+# refinery_schema_history) is untouched.
 refinery = { version = "0.10", features = ["rusqlite"] }
 
 # Embeddings — fastembed with a statically-bundled ONNX Runtime (per topic 02
