@@ -14,16 +14,20 @@
 #   SessionEnd        kb-capture-kimi.sh        final capture on exit/archive
 #   SessionEnd        kb-beat.sh kimi end       LSC-3 live-session beat (finished)
 #   PreCompact        kb-capture-kimi.sh        fresh capture before compact
+#   PostToolUse       kb-beat-throttle.sh kimi  OL PRES4 heartbeat + the file an
+#                                               Edit/Write touched (detail.paths)
+#   PermissionRequest kb-beat.sh kimi blocked   OL PRES4 "blocked on you"
+#   PermissionResult  kb-beat.sh kimi unblocked OL PRES4 (granted OR denied)
 #
 # The three kb-beat.sh entries are the LSC-3 push-collection layer (design:
 # docs/research/kb-live-sessions-cockpit-2026-08.html): fire-and-forget,
 # hard-timeout, unconditional-exit-0 POSTs to the daemon's live-sessions
 # beat route — never load-bearing, never blocking a hook chain. No
 # SessionStart entry: kb-beat.sh doesn't need one that isn't already
-# proven to fire for kimi (only UserPromptSubmit/Stop/SessionEnd/
-# PreCompact are used above), and no kimi Notification-equivalent is
-# verified either, so "blocked" stays unwired here (same honest gap
-# Claude Code's own Notification wiring calls out as best-effort-only).
+# proven to fire for kimi. Blocked-on-you (OL PRES4) uses kimi's own
+# PermissionRequest / PermissionResult events (both are in kimi's hook event
+# list; PermissionResult fires when the prompt is answered, granted or
+# denied), so no unblock is inferred for kimi.
 #
 # Usage:
 #   install-kimi-hooks.sh [--sessions-dir DIR] [--config PATH] [--uninstall]
@@ -42,7 +46,7 @@ while [ "$#" -gt 0 ]; do
     --sessions-dir) SESSIONS_DIR="$2"; shift 2 ;;
     --config)       CONFIG="$2"; shift 2 ;;
     --uninstall)    UNINSTALL=1; shift ;;
-    -h|--help)      sed -n '2,20p' "$0"; exit 0 ;;
+    -h|--help)      sed -n '2,30p' "$0"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -64,7 +68,7 @@ awk -v begin="$BEGIN" -v end="$END" '
 ' "$CONFIG" > "$tmp"
 
 if [ "$UNINSTALL" -eq 0 ]; then
-  for s in kb-wake-kimi.sh kb-recall.sh kb-capture-kimi.sh kb-distill-nudge-kimi.sh kb-beat.sh; do
+  for s in kb-wake-kimi.sh kb-recall.sh kb-capture-kimi.sh kb-distill-nudge-kimi.sh kb-beat.sh kb-beat-throttle.sh; do
     [ -x "$HOOKS_DIR/$s" ] || { echo "missing executable: $HOOKS_DIR/$s" >&2; rm -f "$tmp"; exit 1; }
   done
   cat >> "$tmp" <<EOF
@@ -114,6 +118,21 @@ timeout = 5
 event = "PreCompact"
 command = "env KB_SESSIONS_DIR=$SESSIONS_DIR $HOOKS_DIR/kb-capture-kimi.sh"
 timeout = 120
+
+[[hooks]]
+event = "PostToolUse"
+command = "env KB_SESSIONS_DIR=$SESSIONS_DIR $HOOKS_DIR/kb-beat-throttle.sh kimi"
+timeout = 5
+
+[[hooks]]
+event = "PermissionRequest"
+command = "env KB_SESSIONS_DIR=$SESSIONS_DIR $HOOKS_DIR/kb-beat.sh kimi blocked"
+timeout = 5
+
+[[hooks]]
+event = "PermissionResult"
+command = "env KB_SESSIONS_DIR=$SESSIONS_DIR $HOOKS_DIR/kb-beat.sh kimi unblocked"
+timeout = 5
 $END
 EOF
 fi
