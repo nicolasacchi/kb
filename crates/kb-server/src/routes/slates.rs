@@ -166,6 +166,9 @@ pub struct BoardResponse {
     pub head_seq: u64,
     pub topics: Vec<String>,
     pub sections: BoardSections,
+    // SLATE2: aged found/idea posts left out of `sections.found_idea`
+    // (`?all=1` lists them). 0 when nothing folded.
+    pub folded_found_idea: usize,
 }
 
 /// `GET …/delta` — the per-prompt lane. No echo line (rules matrix "Echo
@@ -577,6 +580,8 @@ fn read_opts(
         slug: slug.to_string(),
         header_context: header_context(posts),
         cursors,
+        // Membership/delta callers never fold; `get` opts in below.
+        fold_aged: false,
     }
 }
 
@@ -762,7 +767,7 @@ pub async fn get(
     });
     // The board scrolls, so it is NEVER budget-truncated (§9).
     let all = board || flag(q.all.as_ref());
-    let opts = read_opts(
+    let mut opts = read_opts(
         &slug,
         &loaded.posts,
         if board { Mode::Full } else { mode },
@@ -773,6 +778,10 @@ pub async fn get(
         q.since,
         loaded.meta.cursors.clone(),
     );
+    // SLATE2: aged found/idea posts fold into a count line unless the caller
+    // asked for `?all=1` (the board always projects `all`, so the fold keys
+    // on the explicit flag alone).
+    opts.fold_aged = !flag(q.all.as_ref());
     let digest = slate::project(&loaded.posts, now_unix, &policy, &presence, &opts);
 
     if board {
@@ -783,6 +792,7 @@ pub async fn get(
                 head_seq: digest.head_seq,
                 topics: topics_of(&loaded.posts),
                 sections: board_sections(&digest, &loaded.posts),
+                folded_found_idea: digest.found_idea_folded,
             },
         );
     }
@@ -1582,7 +1592,10 @@ fn append_locked(
         .session_id
         .clone()
         .unwrap_or_else(|| format!("anon:{}", body.prov.harness));
-    if !registry.allow_post(slug.as_str(), &rate_key, now_unix) {
+    // Tidy verbs (`drop`, `done`, `mark`) neither count against the window nor
+    // are refused by it (SLATE2): they REMOVE board content, so throttling
+    // them punished exactly the hygiene the rate cap exists to encourage.
+    if !is_tidy_kind(body.kind) && !registry.allow_post(slug.as_str(), &rate_key, now_unix) {
         return Err(SlateError::new(
             codes::SLATE_RATE,
             429,
@@ -1596,6 +1609,12 @@ fn append_locked(
     Ok(commit_post(
         paths, slug, &mut meta, posts, body, now_unix, &policy, presence,
     )?)
+}
+
+/// Kinds that tidy the board instead of adding to it — exempt from the
+/// per-session post rate window (SLATE2).
+pub(crate) fn is_tidy_kind(kind: Kind) -> bool {
+    matches!(kind, Kind::Drop | Kind::Done | Kind::Mark)
 }
 
 /// Stamp the provenance the DAEMON owns onto a post body (rules matrix
