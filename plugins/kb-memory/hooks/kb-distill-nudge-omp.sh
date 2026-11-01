@@ -17,11 +17,9 @@
 # `omp <sid> <epoch>` to the shared $XDG_CACHE_HOME/kb/distill-pending ledger,
 # so the next interactive session's wake (any harness) surfaces it too —
 # same relay grok uses for its headless sessions.
-# A hit also posts one slate ask, `Distill session <sid> (omp)?`, via
-# `kb slate ask` with the session cwd when this hook has one (payload
-# `.cwd`, else the session header). Best-effort: a missing `kb`, a daemon
-# error, or a hang must not block the notify line or the ledger append.
-# A suppressed run posts nothing.
+# SLATE2 — a firing nudge posts NOTHING to the slate: the ask lane holds
+# questions only, and distill debt is already carried by the pending ledger
+# above and `kb sessions --undistilled`.
 #
 # Modes:
 #   hook mode : stdin carries {session_file, session_id, cwd}   (from kb-omp.ts)
@@ -29,12 +27,8 @@
 #               sid read from the file's own session header)
 set -u
 
-# Call only after the commit-without-remember check. Slate stdout is
-# discarded so it cannot corrupt the notify line. Never blocks.
-. "$(dirname "$0")/kb-hook-lib.sh" 2>/dev/null || {
-  # Standalone copy without the shared lib: fail open (no distill ask).
-  post_distill_ask() { return 0; }
-}
+# Shared helpers; a standalone copy without the lib runs without them.
+. "$(dirname "$0")/kb-hook-lib.sh" 2>/dev/null || true
 [ -n "${KB_SESSIONS_DIR:-}" ] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 
@@ -71,14 +65,6 @@ check_one() {
 
   # Shared cross-harness relay: next interactive wake surfaces + consumes.
   printf 'omp %s %s\n' "$sid" "$(date +%s)" >>"$ledger" 2>/dev/null || true
-  # Payload cwd wins; CLI mode and a cwd-less payload fall back to the
-  # session header this hook already reads for the sid.
-  if [ -z "$cwd" ]; then
-    cwd="$(head -c 262144 "$tpath" 2>/dev/null \
-      | jq -r 'select(.type == "session") | .cwd // empty' 2>/dev/null \
-      | head -1)"
-  fi
-  post_distill_ask "$sid" omp "$cwd"
   return 0
 }
 

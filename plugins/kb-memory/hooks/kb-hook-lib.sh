@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # kb-hook-lib.sh — helpers every kb-memory hook shares (v0.44 F6, closing the
-# H1 carry-over: five divergent copies of post_distill_ask and per-call caps
-# that did not add up against the hooks.json timeouts).
+# H1 carry-over: divergent copies of the distill-nudge helpers and per-call
+# caps that did not add up against the hooks.json timeouts).
 #
 # SOURCED, never executed. Every consumer sources it fail-open:
 #
 #   . "$(dirname "$0")/kb-hook-lib.sh" 2>/dev/null || { <inline no-op stubs>; }
 #
 # so a standalone copy of one hook (README "Mode 1") that lacks this file
-# degrades to unbounded calls / no distill ask instead of breaking the turn.
+# degrades to unbounded calls instead of breaking the turn.
 #
 # One deadline model, two knobs:
 #   KB_HOOK_BUDGET_SECS  total wall budget for the hook (default 13, which is
@@ -77,35 +77,6 @@ run_to() {
   else
     "$@"
   fi
-}
-
-# Post the "distill this session?" slate ask. Call only after the
-# commit-without-remember check. Slate stdout is discarded so it cannot
-# corrupt the caller's own output. Never blocks (4s cap, loopback must not
-# ride HTTP(S)_PROXY — same reason as kb-wake-kimi.sh).
-post_distill_ask() {
-  local sid="$1" harness="$2" cwd="${3:-}"
-  command -v kb >/dev/null 2>&1 || return 0
-  local args=(
-    slate ask "Distill session ${sid} (${harness})?"
-    --harness "$harness"
-    --session-id "$sid"
-    --ref "session:${sid}"
-  )
-  [ -n "$cwd" ] && args+=(--cwd "$cwd")
-  (
-    # v0.44 X4 — the ask is attributed to the session it is about even when
-    # the CLI is not handed the flags (subshell: nothing leaks to the hook).
-    export KB_SESSION_ID="$sid" KB_HARNESS="$harness"
-    export NO_PROXY="127.0.0.1,localhost${NO_PROXY:+,$NO_PROXY}"
-    export no_proxy="127.0.0.1,localhost${no_proxy:+,$no_proxy}"
-    unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy
-    if command -v timeout >/dev/null 2>&1; then
-      timeout 4 kb "${args[@]}" >/dev/null 2>&1 || true
-    else
-      kb "${args[@]}" >/dev/null 2>&1 || true
-    fi
-  )
 }
 
 # Export the session identity every `kb` CLI write resolves first

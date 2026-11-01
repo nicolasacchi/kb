@@ -109,8 +109,9 @@ ever answered:
 kb slate done <ask-seq> "no longer relevant — asker's session ended"
 ```
 
-**Exempt: distill asks.** An ask whose text starts `Distill session ` (ref
-`session:<sid>`) is posted by the Stop hook AS the session it is about, so
+**Exempt: legacy distill asks.** The Stop hook no longer posts them (SLATE2),
+but a ledger may still carry one: an ask whose text starts `Distill session `
+(ref `session:<sid>`) was posted by the hook AS the session it is about, so
 `author_ended` is true for it the moment that session ends — which is exactly
 when it is meant to be replayed to a FUTURE session. Never close one as
 "asker's session ended". It is closed only by `/kb-distill` (its Step 9) once

@@ -102,8 +102,8 @@ fn wake_kimi_hook_appends_the_chores_line() {
     run("test-wake-kimi-chores.sh");
 }
 
-/// The four distill nudges share `post_distill_ask` from `kb-hook-lib.sh`
-/// (previously four hand-copied definitions); these run each end to end.
+/// The four distill nudges (which since SLATE2 post nothing to the slate);
+/// these run each end to end.
 #[test]
 fn distill_nudge_hook_shell_tests() {
     for s in [

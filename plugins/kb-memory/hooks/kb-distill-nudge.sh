@@ -35,19 +35,16 @@
 # it. Deduped by session id, same as queue_distill_pending. Best-effort:
 # a ledger failure must not block the nudge, and a nudge must never block.
 #
-# Item 15 — a firing nudge also posts one slate ask,
-# `Distill session <sid> (claude)?`, via `kb slate ask` (and `--cwd` when
-# the Stop payload has a session cwd). Best-effort: a missing `kb`, a
-# daemon error, or a hang must not block the systemMessage or the ledger
-# append. A suppressed run posts nothing.
+# SLATE2 — a firing nudge posts NOTHING to the slate: the ask lane holds
+# questions only, and distill debt is already carried by the pending ledger
+# above and `kb sessions --undistilled`.
 #
 # Gated like kb-capture.sh on KB_SESSIONS_DIR (no sessions corpus → nothing
 # to distill from) and on `kb` being installed (the skill needs it).
 [ -n "${KB_SESSIONS_DIR:-}" ] || exit 0
 command -v kb >/dev/null 2>&1 || exit 0
 
-# Call only after the commit-without-remember check. Slate stdout is
-# discarded so it cannot corrupt the systemMessage. Never blocks.
+# Shared helpers (hook_sid_key, hook_marker_seen).
 . "$(dirname "$0")/kb-hook-lib.sh" 2>/dev/null || {
   # No shared lib => no unified session key: fail open (nothing to do).
   exit 0
@@ -56,7 +53,6 @@ command -v kb >/dev/null 2>&1 || exit 0
 input="$(cat)"
 tpath="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)"
 sid="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)"
-cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)"
 [ -n "$tpath" ] && [ -f "$tpath" ] && [ -n "$sid" ] || exit 0
 
 marker_dir="${XDG_CACHE_HOME:-$HOME/.cache}/kb"
@@ -88,9 +84,8 @@ if [ -f "$ledger" ] && grep -qF "claude $sid " "$ledger" 2>/dev/null; then
 else
   printf 'claude %s %s\n' "$sid" "$(date +%s)" >>"$ledger" 2>/dev/null || true
 fi
-post_distill_ask "$sid" claude "${cwd:-}"
 jq -n --arg sid "$sid" '{systemMessage:
   ("kb: this session has commits but no curated memory — run /kb-distill "
    + $sid + " to keep what was decided/shipped (--dry-run to preview). "
-   + "This ask will be replayed at the next session start.")}' \
+   + "This will be replayed at the next session start.")}' \
   2>/dev/null || exit 0

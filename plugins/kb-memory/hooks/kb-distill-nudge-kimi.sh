@@ -27,10 +27,8 @@
 #      relay as kb-capture-grok.sh's queue_distill_pending, with the same
 #      dedup-by-session-id), so the nudge survives even if the Stop-time
 #      stdout is never read;
-#   3. posts one slate ask, `Distill session <sid> (kimi)?`, via
-#      `kb slate ask --cwd <session cwd>` when `kb` is on PATH. A slate
-#      failure must not block the stdout nudge or the ledger append. A
-#      suppressed run posts nothing.
+#   (SLATE2: it posts nothing to the slate — the ask lane holds questions
+#   only; distill debt rides the ledger above and `kb sessions --undistilled`.)
 #
 # A marker file (its own "-kimi-" namespace, distinct from the Claude and
 # codex nudges' markers) caps this at once per session. Every failure
@@ -79,6 +77,5 @@ else
   printf 'kimi %s %s\n' "$sid" "$(date +%s)" >>"$ledger" 2>/dev/null
 fi
 
-post_distill_ask "$sid" kimi "$cwd"
 printf 'kb: this session has commits but no curated memory — run /kb-distill %s or ask the agent to distill.\n' "$sid"
 exit 0
