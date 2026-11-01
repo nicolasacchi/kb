@@ -83,6 +83,10 @@ kb slate found "<merged, clearer line>" --supersedes <older-seq> \
   --ref <ref1> --ref <ref2> ...
 ```
 
+Dropping a merged post hides the post it superseded too (a drop is
+whole-post: the whole supersede chain goes), so drop the merge only when
+you mean to hide the whole line of thought.
+
 `--supersedes` requires the SAME kind on both sides (a `found` can only
 supersede a `found`) and the daemon 400s a kind mismatch. If a second
 near-duplicate exists and it is yours (or its author has ended), drop it
