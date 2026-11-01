@@ -2200,9 +2200,8 @@ be asked), and "No pinned document cites this file" (live lookup off).
 
 Every crossing spec above mocks one side: kb's specs stub kb-code with
 `page.route()` fixtures, and kb-code's doc-lens spec runs against a mock kb. A
-wire mismatch between the two (a field name, the `[doclens] origins`
-allowlist, the `?sec=` grammar, the `by_target` path form) would pass all of
-them. `web-code/e2e/roundtrip.spec.ts` closes that gap inside the `code-e2e`
+wire mismatch between the two (a field name, the `?sec=` grammar, the
+`by_target` path form) would pass all of them. `web-code/e2e/roundtrip.spec.ts` closes that gap inside the `code-e2e`
 lane: it boots its own real `kb-server` and real `kb-code-server` (own ports,
 temp dirs and config files, `[kb_daemon]` and `[doclens]` pointing at each
 other), seeds a fixture git repo and one kb artifact whose `<h2 id>` section
@@ -2210,8 +2209,11 @@ cites a file line in a `<code>`, then walks the loop: the reader's citation
 door opens kb-code at that file and line in a new tab; kb-code's Cited by lists
 the artifact as an unpinned `kb-live` claim; the single-document crossing chip
 opens kb's reader at `?sec=<the h2 id>` and the artifact frame is scrolled to
-that section. It prints one `ROUNDTRIP-WITNESS` line (kb build, door URL, door
-class, Cited-by source, return URL) to the job log. The lane builds
+that section. The door is asserted to be class `exact`. It prints one
+`ROUNDTRIP-WITNESS` line (door URL, door class, Cited-by source, return URL) to
+the job log. It does NOT exercise the `[doclens] origins` allowlist: both
+daemons run on loopback, which is always allowed, so that list is left out of
+the spec's config. The lane builds
 `kb-server` and `web/dist` for it, and its path filter already covers both
 sides' crates, `web/` and `ui/`.
 

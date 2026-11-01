@@ -46,7 +46,6 @@ const BINARIES_PRESENT = [KB_BIN, KBC_BIN, join(KB_DIST, "index.html"), join(KBC
 
 const procs: ChildProcess[] = [];
 let tmpDir = "";
-let kbSha = "";
 
 async function waitUntil(predicate: () => Promise<boolean>, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
@@ -161,9 +160,10 @@ code_url = "${KBC_ORIGIN}"
     );
     start(KB_BIN, kbToml, { ...dirs("kb"), KB_SPA_DIST: KB_DIST });
 
-    // kb-code: the repo, [kb_daemon] -> the real kb, [doclens] allowing that kb
-    // and kb's SPA origin (loopback is always allowed; named anyway so the
-    // config is the one an operator would write).
+    // kb-code: the repo, [kb_daemon] -> the real kb, [doclens] naming that kb.
+    // NOT exercised: the [doclens] origins allowlist. Both daemons are on
+    // 127.0.0.1 and loopback origins are always allowed, so listing kb's origin
+    // would be a no-op here; the spec deliberately leaves it out.
     const kbcToml = join(tmpDir, "kb-code.toml");
     writeFileSync(
       kbcToml,
@@ -182,7 +182,6 @@ public_url = "${KB_ORIGIN}"
 
 [doclens]
 kbs = ["${KB_NAME}"]
-origins = ["${KB_ORIGIN}"]
 
 [transcripts]
 enabled = false
@@ -195,7 +194,6 @@ enabled = false
     expect(kbUp, "kb-server reachable").toBe(true);
     const kbcUp = await waitUntil(async () => (await fetch(`${KBC_ORIGIN}/api/repos`)).ok, 60_000);
     expect(kbcUp, "kb-code-server reachable").toBe(true);
-    kbSha = ((await (await fetch(`${KB_ORIGIN}/api/identity`)).json()) as { build_sha?: string }).build_sha ?? "?";
 
     // kb has indexed the artifact AND extracted its citation; kb-code has walked the repo.
     const docId = await (async () => {
@@ -226,15 +224,35 @@ enabled = false
     ).toBe(true);
   });
 
-  test.afterAll(() => {
-    for (const p of procs) {
-      try {
-        p.kill("SIGTERM");
-      } catch {
-        // already gone
-      }
-    }
-    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+  test.afterAll(async () => {
+    // Wait for each daemon to exit (SIGKILL after 10 s) before deleting the
+    // dirs they may still be flushing sqlite/lance files into.
+    await Promise.all(
+      procs.map(
+        (p) =>
+          new Promise<void>((done) => {
+            if (p.exitCode !== null || p.signalCode !== null) return done();
+            const t = setTimeout(() => {
+              try {
+                p.kill("SIGKILL");
+              } catch {
+                // already gone
+              }
+            }, 10_000);
+            p.once("exit", () => {
+              clearTimeout(t);
+              done();
+            });
+            try {
+              p.kill("SIGTERM");
+            } catch {
+              clearTimeout(t);
+              done();
+            }
+          }),
+      ),
+    );
+    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   });
 
   test("the citation opens kb-code, Cited by lists the artifact live, and the chip returns to its section", async ({
@@ -247,8 +265,9 @@ enabled = false
     await page.goto(`${KB_ORIGIN}/a/${KB_NAME}/${DOC}?repo=${REPO}`);
     const door = frame(page).locator("[data-kb-coderef]");
     await expect(door).toHaveCount(1, { timeout: 30_000 });
-    // kb-code answered the lens: the door left the unverified `hint` class.
-    await expect(door).not.toHaveAttribute("data-kb-coderef-cls", "hint", { timeout: 30_000 });
+    // kb-code answered the lens and confirmed line 42 against the file: `exact`.
+    // A drop to likely/candidate/hint is a regression this must catch.
+    await expect(door).toHaveAttribute("data-kb-coderef-cls", "exact", { timeout: 30_000 });
     const doorCls = (await door.getAttribute("data-kb-coderef-cls")) ?? "?";
 
     // b. the click opens kb-code at the file and line, in a new tab.
@@ -287,7 +306,7 @@ enabled = false
     await expect.poll(() => frame(backTab).locator("body").evaluate(() => window.scrollY)).toBeGreaterThan(500);
 
     console.log(
-      `ROUNDTRIP-WITNESS kb=${kbSha} door=${doorHref} class=${doorCls} citedby=${citedbySource} back=${backTab.url()}`,
+      `ROUNDTRIP-WITNESS door=${doorHref} class=${doorCls} citedby=${citedbySource} back=${backTab.url()}`,
     );
   });
 });
