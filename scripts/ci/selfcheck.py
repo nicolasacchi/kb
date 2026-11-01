@@ -209,7 +209,7 @@ def check_dependabot_lockstep(root, errs):
         return
     # ignore entries: `- dependency-name: "X"` plus its (more-indented) continuation lines
     entries = {}
-    for m in re.finditer(r'(?m)^      - dependency-name: "([^"]+)"[ \t]*\n((?:        [^\n]*\n)*)', cargo):
+    for m in re.finditer(r'''(?m)^      - dependency-name: ["']?([^"'\s]+)["']?[ \t]*\n((?:        [^\n]*\n)*)''', cargo):
         entries[m.group(1)] = m.group(2)
     for name in LOCKSTEP_MEMBERS:
         if name not in entries:

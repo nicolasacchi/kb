@@ -1,9 +1,9 @@
 # Dependabot — automated dependency PRs for every ecosystem in the repo.
 # Minor/patch bumps are grouped into one PR per ecosystem to limit noise;
 # majors come as individual PRs (they may need code changes) EXCEPT the
-# lockstep sets (ignored entirely) and the deliberately-pinned bases below. github-actions
-# is included so the SHA-pinned actions in .github/workflows stay current
-# (Dependabot bumps the SHA and its `# vX` comment together).
+# lockstep sets (ignored entirely) and the deliberately-pinned bases below.
+# github-actions is included so the SHA-pinned actions in .github/workflows
+# stay current (Dependabot bumps the SHA and its `# vX` comment together).
 version: 2
 updates:
   - package-ecosystem: cargo
@@ -28,10 +28,16 @@ updates:
       # So the set is ignored ENTIRELY (no update-types = every version, so
       # minor and patch as well as major) and a set move is a deliberate,
       # hand-made unit that bumps all members and the lockfile together.
-      # `ignore` is applied to the dependency before any grouping, so it does
-      # not depend on group order or on how a group resolves; the previous
-      # `arrow-lance-lockstep` / `scraper-lockstep` groups relied on
-      # first-match group assignment, which did not hold for #185.
+      # Why not keep the groups: the docs say a dependency matching several
+      # groups goes to the first one in file order, and that `ignore` filters
+      # dependencies out of the update set, yet #185 still landed in
+      # `cargo-minor-patch` despite the lockstep group above it. The cause
+      # is unconfirmed (the docs do not explain it), so this config does not
+      # rely on group behaviour at all: `ignore` removes the dependency from
+      # version updates entirely, independent of any group.
+      # scraper and ego-tree are ignored wholesale for simplicity, not
+      # because of exact pins (scraper is only caret-pinned): they must move
+      # together, and a set move is a hand-made unit anyway.
       # scripts/ci/selfcheck.py fails if a member loses its ignore.
       - dependency-name: "lance"
       - dependency-name: "lance-*"
