@@ -44,7 +44,9 @@ done
 for h in kb-beat.sh kb-beat-throttle.sh; do
   cat >"$TMPROOT/hooks/$h" <<'STUB'
 #!/usr/bin/env bash
-{ printf 'CALL %s %s ' "$(basename "$0")" "$*"; cat | tr -d '\n'; printf '\n'; } >>"$KB_BEAT_CALLS"
+# one atomic append: two stubs run concurrently and piecewise writes interleave
+body="$(cat | tr -d '\n')"
+printf 'CALL %s %s %s\n' "$(basename "$0")" "$*" "$body" >>"$KB_BEAT_CALLS"
 exit 0
 STUB
   chmod +x "$TMPROOT/hooks/$h"
