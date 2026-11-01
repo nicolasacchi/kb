@@ -20,6 +20,11 @@ without running. Every check reads committed text; nothing builds.
      workflow carries an unquoted `name:` scalar containing `: ` (invalid
      YAML: GitHub rejects the whole file, so the lane never runs).
 
+  8. every lockstep-set member (arrow/lance/lancedb/datafusion families,
+     scraper + ego-tree; invariant #1) is ignored ENTIRELY in the cargo block
+     of .github/dependabot.yml (an `ignore` entry with no `update-types` or
+     `versions` narrowing), so Dependabot can never move one member alone.
+
 Usage: selfcheck.py [--today YYYY-MM-DD] [--root DIR]
 """
 import argparse
@@ -188,6 +193,31 @@ def check_yaml_names(root, errs):
                 errs.append(f"{os.path.relpath(path, root)}:{i}: unquoted `name:` scalar contains `: ` (invalid YAML): {line.strip()[:90]}")
 
 
+LOCKSTEP_MEMBERS = ["lance", "lance-*", "lancedb", "arrow", "arrow-*", "datafusion", "datafusion-*", "scraper", "ego-tree"]
+
+
+def check_dependabot_lockstep(root, errs):
+    path = os.path.join(root, ".github/dependabot.yml")
+    if not os.path.exists(path):
+        return
+    text = open(path, encoding="utf-8").read()
+    # the cargo update block: from its package-ecosystem line to the next one
+    blocks = re.split(r"(?m)^  - (?=package-ecosystem:)", text)
+    cargo = next((b for b in blocks if re.match(r"package-ecosystem:\s*cargo\b", b)), None)
+    if cargo is None:
+        errs.append(".github/dependabot.yml: no cargo update block")
+        return
+    # ignore entries: `- dependency-name: "X"` plus its (more-indented) continuation lines
+    entries = {}
+    for m in re.finditer(r'(?m)^      - dependency-name: "([^"]+)"[ \t]*\n((?:        [^\n]*\n)*)', cargo):
+        entries[m.group(1)] = m.group(2)
+    for name in LOCKSTEP_MEMBERS:
+        if name not in entries:
+            errs.append(f".github/dependabot.yml: lockstep member `{name}` has no cargo `ignore` entry (invariant #1)")
+        elif re.search(r"update-types|versions", entries[name]):
+            errs.append(f".github/dependabot.yml: lockstep member `{name}` ignore is narrowed by update-types/versions; the set must be ignored entirely")
+
+
 def run(root, today):
     errs = []
     check_workflows(root, errs)
@@ -198,6 +228,7 @@ def run(root, today):
     check_deny_review_by(root, today, errs)
     check_ci_code_recipe(root, errs)
     check_yaml_names(root, errs)
+    check_dependabot_lockstep(root, errs)
     return errs
 
 
@@ -212,7 +243,7 @@ def main(argv=None):
         print(f"SELFCHECK FAIL: {e}", file=sys.stderr)
     if errs:
         return 1
-    print("ci-selfcheck: workflows, code-* filter, witness floors, checkout pins, deny review-by, ci-code recipe, yaml names: ok")
+    print("ci-selfcheck: workflows, code-* filter, witness floors, checkout pins, deny review-by, ci-code recipe, yaml names, dependabot lockstep: ok")
     return 0
 
 

@@ -1,7 +1,7 @@
 # Dependabot — automated dependency PRs for every ecosystem in the repo.
 # Minor/patch bumps are grouped into one PR per ecosystem to limit noise;
 # majors come as individual PRs (they may need code changes) EXCEPT the
-# lockstep sets and the deliberately-pinned bases documented inline below. github-actions
+# lockstep sets (ignored entirely) and the deliberately-pinned bases below. github-actions
 # is included so the SHA-pinned actions in .github/workflows stay current
 # (Dependabot bumps the SHA and its `# vX` comment together).
 version: 2
@@ -12,44 +12,36 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
     groups:
+      cargo-minor-patch:
+        update-types: ["minor", "patch"]
+    ignore:
       # LOCKSTEP SETS. Operator ruling (kb dependency majors, 2026-09):
       # lance + lancedb + arrow + datafusion move ONLY as a set, and
       # scraper <-> ego-tree move together. Invariant #1 says why: lance and
       # arrow must share ONE arrow version or RecordBatch types stop
-      # unifying, so a PR that bumps any one of them alone can only ever be
-      # red (on 2026-10-03 Dependabot opened lance 12 (#199), lancedb 0.39
-      # (#200) and arrow-array 60 (#201) as three separate PRs, none of which
-      # could build).
+      # unifying, and Cargo.toml pins the arrow family with `=` exact
+      # versions, so a PR that bumps any one member alone can only ever be
+      # red (2026-10-03: lance 12, lancedb 0.39 and arrow-array 60 arrived as
+      # three separate PRs; 2026-11-01: arrow-schema 58.4.0 -> 58.4.1 landed
+      # in `cargo-minor-patch` as #185 although a lockstep group existed).
       #
-      # Dependabot assigns a dependency to the FIRST group whose patterns
-      # match it, in file order -- so these two groups MUST stay above
-      # `cargo-minor-patch`, or the generic group would swallow the members
-      # and split the set again. Within the set, minor/patch updates arrive
-      # as ONE PR; MAJORS are ignored below and taken by a deliberate
-      # migration unit that bumps the whole set by hand.
-      arrow-lance-lockstep:
-        patterns: ["lance", "lance-*", "lancedb", "arrow", "arrow-*", "datafusion", "datafusion-*"]
-      scraper-lockstep:
-        patterns: ["scraper", "ego-tree"]
-      cargo-minor-patch:
-        update-types: ["minor", "patch"]
-    ignore:
+      # So the set is ignored ENTIRELY (no update-types = every version, so
+      # minor and patch as well as major) and a set move is a deliberate,
+      # hand-made unit that bumps all members and the lockfile together.
+      # `ignore` is applied to the dependency before any grouping, so it does
+      # not depend on group order or on how a group resolves; the previous
+      # `arrow-lance-lockstep` / `scraper-lockstep` groups relied on
+      # first-match group assignment, which did not hold for #185.
+      # scripts/ci/selfcheck.py fails if a member loses its ignore.
       - dependency-name: "lance"
-        update-types: ["version-update:semver-major"]
       - dependency-name: "lance-*"
-        update-types: ["version-update:semver-major"]
-      # lancedb is 0.x: a MINOR bump is a breaking release (0.38 -> 0.39
-      # moves the lance pin), so minor is ignored as well as major.
       - dependency-name: "lancedb"
-        update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: "arrow"
-        update-types: ["version-update:semver-major"]
       - dependency-name: "arrow-*"
-        update-types: ["version-update:semver-major"]
       - dependency-name: "datafusion"
-        update-types: ["version-update:semver-major"]
       - dependency-name: "datafusion-*"
-        update-types: ["version-update:semver-major"]
+      - dependency-name: "scraper"
+      - dependency-name: "ego-tree"
       # fastembed 5 -> 7 (#198) re-pins ort and the model-loading surface that
       # kb-embedder links statically; it is its own migration unit, not a
       # dependency bump.
