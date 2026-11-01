@@ -9,18 +9,18 @@ binaries and the full text of each license that governs them.
 
 ## Overview
 
-- MIT License: 525
+- MIT License: 524
 - Apache License 2.0: 94
 - ISC License: 24
 - Unicode License v3: 23
-- Mozilla Public License 2.0: 11
 - BSD 3-Clause &quot;New&quot; or &quot;Revised&quot; License: 10
+- Mozilla Public License 2.0: 10
 - BSD 2-Clause &quot;Simplified&quot; License: 3
 - zlib License: 3
 - Boost Software License 1.0: 1
-- MIT No Attribution: 1
 - Creative Commons Zero v1.0 Universal: 1
 - Community Data License Agreement Permissive 2.0: 1
+- MIT No Attribution: 1
 - Unicode License Agreement - Data Files and Software (2016): 1
 
 ---
@@ -1424,9 +1424,9 @@ Used by:
 Used by:
 
 - [esaxx-rs 0.1.10](https://github.com/Narsil/esaxx-rs)
-- [fastembed 5.13.4](https://github.com/Anush008/fastembed-rs)
+- [fastembed 5.17.4](https://github.com/Anush008/fastembed-rs)
 - [jsonb 0.5.6](https://github.com/databendlabs/jsonb)
-- [safetensors 0.7.0](https://github.com/huggingface/safetensors)
+- [safetensors 0.8.0](https://github.com/huggingface/safetensors)
 - [scip 0.10.0](https://github.com/scip-code/scip)
 - [spm_precompiled 0.1.4](https://github.com/huggingface/spm_precompiled)
 - [tokenizers 0.22.2](https://github.com/huggingface/tokenizers)
@@ -1645,7 +1645,7 @@ Used by:
 - [prost-types 0.14.3](https://github.com/tokio-rs/prost)
 - [prost 0.14.3](https://github.com/tokio-rs/prost)
 - [ring 0.17.14](https://github.com/briansmith/ring)
-- [similar 3.2.0](https://github.com/mitsuhiko/similar)
+- [similar 3.2.1](https://github.com/mitsuhiko/similar)
 - [sqlparser 0.62.0](https://github.com/apache/datafusion-sqlparser-rs)
 - [sqlparser_derive 0.5.0](https://github.com/sqlparser-rs/sqlparser-rs)
 
@@ -2375,7 +2375,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 Used by:
 
-- [lol_html 3.0.1](https://github.com/cloudflare/lol-html)
+- [lol_html 3.0.3](https://github.com/cloudflare/lol-html)
 
 ```
 Copyright (C) 2019, Cloudflare, Inc.
@@ -2621,7 +2621,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- [notify 8.2.0](https://github.com/notify-rs/notify.git)
+- [notify 8.2.1](https://github.com/notify-rs/notify.git)
 
 ```
 Creative Commons CC0 1.0 Universal
@@ -2671,7 +2671,7 @@ For these and/or other purposes and motivations, and without any expectation of 
 
 Used by:
 
-- [webpki-roots 1.0.7](https://github.com/rustls/webpki-roots)
+- [webpki-roots 1.0.10](https://github.com/rustls/webpki-roots)
 
 ```
 # Community Data License Agreement - Permissive - Version 2.0
@@ -3362,7 +3362,7 @@ CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 Used by:
 
-- [scraper 0.27.0](https://github.com/rust-scraper/scraper)
+- [scraper 0.29.0](https://github.com/rust-scraper/scraper)
 
 ```
 Copyright © 2016, June McEnroe &lt;june@causal.agency&gt;
@@ -3387,7 +3387,7 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 Used by:
 
-- [ego-tree 0.11.0](https://github.com/rust-scraper/ego-tree)
+- [ego-tree 0.11.1](https://github.com/rust-scraper/ego-tree)
 
 ```
 Copyright © 2016, June McEnroe &lt;june@causal.agency&gt;
@@ -3411,7 +3411,7 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 Used by:
 
-- [rustls-webpki 0.103.15](https://github.com/rustls/webpki)
+- [rustls-webpki 0.103.16](https://github.com/rustls/webpki)
 
 ```
 Except as otherwise noted, this project is licensed under the following
@@ -3570,7 +3570,7 @@ under the original license.
 
 Used by:
 
-- [schemars 1.2.2](https://github.com/GREsau/schemars)
+- [schemars 1.2.3](https://github.com/GREsau/schemars)
 
 ```
 #![allow(clippy::all)]
@@ -3765,7 +3765,6 @@ DEALINGS IN THE SOFTWARE.
 Used by:
 
 - [string_cache 0.11.0](https://github.com/servo/string-cache)
-- [string_cache 0.9.0](https://github.com/servo/string-cache)
 
 ```
 Copyright (c) 2012-2013 Mozilla Foundation
@@ -4151,11 +4150,8 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- [html5ever 0.39.0](https://github.com/servo/html5ever)
 - [html5ever 0.40.1](https://github.com/servo/html5ever)
-- [markup5ever 0.39.0](https://github.com/servo/html5ever)
 - [markup5ever 0.40.0](https://github.com/servo/html5ever)
-- [web_atoms 0.2.5](https://github.com/servo/html5ever)
 - [web_atoms 0.3.0](https://github.com/servo/html5ever)
 
 ```
@@ -4287,7 +4283,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- [hyper 1.11.1](https://github.com/hyperium/hyper)
+- [hyper 1.12.0](https://github.com/hyperium/hyper)
 
 ```
 Copyright (c) 2014-2026 Sean McArthur
@@ -4728,44 +4724,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- [fearless_simd 1.1.0](https://github.com/linebender/fearless_simd)
-- [fearless_simd_macros 0.1.0](https://github.com/linebender/fearless_simd)
-- [memchr-n 0.1.9](https://github.com/kivikakk/memchr-n)
-
-```
-Copyright (c) 2015-2018 Jake Goulding
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the &quot;Software&quot;), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-
-```
-
-## MIT License (`MIT`)
-
-Used by:
-
-- [ammonia 4.2.3](https://github.com/rust-ammonia/ammonia)
+- [ammonia 4.2.4](https://github.com/rust-ammonia/ammonia)
 
 ```
 Copyright (c) 2015-2022 The ammonia Developers
@@ -5379,7 +5338,7 @@ Used by:
 
 - [md-5 0.11.0](https://github.com/RustCrypto/hashes)
 - [sha1 0.11.0](https://github.com/RustCrypto/hashes)
-- [sha2 0.11.0](https://github.com/RustCrypto/hashes)
+- [sha2 0.11.1](https://github.com/RustCrypto/hashes)
 
 ```
 Copyright (c) 2016-2026 The RustCrypto Project Developers
@@ -6003,6 +5962,41 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
+- [fearless_simd 1.1.0](https://github.com/linebender/fearless_simd)
+
+```
+Copyright (c) 2018 Raph Levien
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the &quot;Software&quot;), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+```
+
+## MIT License (`MIT`)
+
+Used by:
+
 - [smallvec 1.15.1](https://github.com/servo/rust-smallvec)
 
 ```
@@ -6102,7 +6096,7 @@ SOFTWARE.
 
 Used by:
 
-- [want 0.3.1](https://github.com/seanmonstar/want)
+- [want 0.3.2](https://github.com/seanmonstar/want)
 
 ```
 Copyright (c) 2018-2019 Sean McArthur
@@ -6335,7 +6329,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- [zeroize 1.9.0](https://github.com/RustCrypto/utils)
+- [zeroize 1.9.1](https://github.com/RustCrypto/utils)
 
 ```
 Copyright (c) 2018-2026 The RustCrypto Project Developers
@@ -7491,6 +7485,41 @@ SOFTWARE.
 
 Used by:
 
+- [fearless_simd_macros 0.1.0](https://github.com/linebender/fearless_simd)
+
+```
+Copyright (c) 2026 The Fearless SIMD authors
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the &quot;Software&quot;), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+```
+
+## MIT License (`MIT`)
+
+Used by:
+
 - [anstream 1.0.0](https://github.com/rust-cli/anstyle.git)
 - [anstyle-parse 1.0.0](https://github.com/rust-cli/anstyle.git)
 - [anstyle-query 1.1.5](https://github.com/rust-cli/anstyle.git)
@@ -7594,7 +7623,7 @@ SOFTWARE.
 
 Used by:
 
-- [libc 0.2.189](https://github.com/rust-lang/libc)
+- [libc 0.2.191](https://github.com/rust-lang/libc)
 
 ```
 Copyright (c) The Rust Project Developers
@@ -7941,6 +7970,34 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+```
+
+## MIT License (`MIT`)
+
+Used by:
+
+- [boon 0.6.1](https://github.com/santhosh-tekuri/boon)
+
+```
+Copyright 2023 Santhosh Kumar Tekuri
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the “Software”), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ```
 
@@ -8501,8 +8558,8 @@ SOFTWARE.
 
 Used by:
 
-- [schemars 1.2.2](https://github.com/GREsau/schemars)
-- [schemars_derive 1.2.2](https://github.com/GREsau/schemars)
+- [schemars 1.2.3](https://github.com/GREsau/schemars)
+- [schemars_derive 1.2.3](https://github.com/GREsau/schemars)
 
 ```
 MIT License
@@ -9036,7 +9093,7 @@ SOFTWARE.
 
 Used by:
 
-- [mdns-sd 0.21.4](https://github.com/keepsimple1/mdns-sd)
+- [mdns-sd 0.21.6](https://github.com/keepsimple1/mdns-sd)
 
 ```
 MIT License
@@ -9192,8 +9249,8 @@ SOFTWARE.
 
 Used by:
 
-- [ort-sys 2.0.0-rc.12](https://github.com/pykeio/ort)
-- [ort 2.0.0-rc.12](https://github.com/pykeio/ort)
+- [ort-sys 2.0.0-rc.13](https://github.com/pykeio/ort)
+- [ort 2.0.0-rc.13](https://github.com/pykeio/ort)
 
 ```
 MIT License
@@ -9256,12 +9313,73 @@ SOFTWARE.
 
 Used by:
 
+- [fluent-uri 0.3.2](https://github.com/yescallop/fluent-uri-rs)
+
+```
+MIT License
+
+Copyright (c) 2024 Scallop Ye
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## MIT License (`MIT`)
+
+Used by:
+
 - [socket-pktinfo 0.4.1](https://github.com/pixsper/socket-pktinfo)
 
 ```
 MIT License
 
 Copyright (c) 2025 Pixsper
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+```
+
+## MIT License (`MIT`)
+
+Used by:
+
+- [memchr-n 0.1.9](https://github.com/Dr-Emann/memchr_n)
+
+```
+MIT License
+
+Copyright (c) 2026 Zachary Dremann
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the &quot;Software&quot;), to deal
@@ -9304,12 +9422,12 @@ Used by:
 - [lindera-dictionary 3.0.7](https://github.com/lindera/lindera)
 - [lindera 3.0.7](https://github.com/lindera/lindera)
 - [object_store 0.13.2](https://github.com/apache/arrow-rs-object-store)
-- [refinery-core 0.9.2](https://github.com/rust-db/refinery)
-- [refinery-macros 0.9.2](https://github.com/rust-db/refinery)
-- [refinery 0.9.2](https://github.com/rust-db/refinery)
+- [refinery-core 0.10.0](https://github.com/rust-db/refinery)
+- [refinery-macros 0.10.0](https://github.com/rust-db/refinery)
+- [refinery 0.10.0](https://github.com/rust-db/refinery)
 - [siphasher 1.0.3](https://github.com/jedisct1/rust-siphash)
 - [tree-sitter-json 0.24.8](https://github.com/tree-sitter/tree-sitter-json)
-- [tree-sitter-md 0.5.3](https://github.com/tree-sitter-grammars/tree-sitter-markdown)
+- [tree-sitter-md 0.5.4](https://github.com/tree-sitter-grammars/tree-sitter-markdown)
 - [tree-sitter-ruby 0.23.1](https://github.com/tree-sitter/tree-sitter-ruby)
 - [tree-sitter-scss 1.0.0](https://github.com/tree-sitter-grammars/tree-sitter-scss)
 - [tree-sitter-toml-ng 0.7.0](https://github.com/tree-sitter-grammars/tree-sitter-toml)
@@ -9342,8 +9460,8 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 Used by:
 
 - [tokio-stream 0.1.19](https://github.com/tokio-rs/tokio)
-- [tokio-util 0.7.19](https://github.com/tokio-rs/tokio)
-- [tokio 1.53.1](https://github.com/tokio-rs/tokio)
+- [tokio-util 0.7.20](https://github.com/tokio-rs/tokio)
+- [tokio 1.54.1](https://github.com/tokio-rs/tokio)
 
 ```
 MIT License
@@ -9580,6 +9698,37 @@ THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRES
 
 Used by:
 
+- [appendlist 1.4.0](https://github.com/danieldulaney/appendlist)
+
+```
+MIT License
+
+Copyright (c) 2019 Daniel Dulaney
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+```
+
+## MIT License (`MIT`)
+
+Used by:
+
 - [async-recursion 1.1.1](https://github.com/dcchut/async-recursion)
 - [flume 0.12.0](https://github.com/zesterer/flume)
 - [rkyv_derive 0.8.18](https://github.com/rkyv/rkyv)
@@ -9662,16 +9811,18 @@ Used by:
 - [serde_core 1.0.229](https://github.com/serde-rs/serde)
 - [serde_derive 1.0.229](https://github.com/serde-rs/serde)
 - [serde_derive_internals 0.30.0](https://github.com/serde-rs/serde)
-- [serde_json 1.0.151](https://github.com/serde-rs/json)
+- [serde_json 1.0.154](https://github.com/serde-rs/json)
 - [serde_path_to_error 0.1.20](https://github.com/dtolnay/path-to-error)
 - [serde_repr 0.1.20](https://github.com/dtolnay/serde-repr)
 - [servo_arc 0.4.3](https://github.com/servo/stylo)
+- [servo_arc 0.5.0](https://github.com/servo/stylo)
 - [syn 2.0.117](https://github.com/dtolnay/syn)
 - [syn 3.0.5](https://github.com/dtolnay/syn)
 - [thiserror-impl 1.0.69](https://github.com/dtolnay/thiserror)
 - [thiserror-impl 2.0.21](https://github.com/dtolnay/thiserror)
 - [thiserror 1.0.69](https://github.com/dtolnay/thiserror)
 - [thiserror 2.0.21](https://github.com/dtolnay/thiserror)
+- [typed-path 0.13.0](https://github.com/chipsenkbeil/typed-path)
 - [unicode-ident 1.0.24](https://github.com/dtolnay/unicode-ident)
 - [unsafe-libyaml 0.2.11](https://github.com/dtolnay/unsafe-libyaml)
 - [utf8-zero 0.8.1](https://github.com/algesten/utf8-zero)
@@ -9889,6 +10040,7 @@ SOFTWARE.
 Used by:
 
 - [tracing-core 0.1.36](https://github.com/tokio-rs/tracing)
+- [zip 9.1.3](https://github.com/zip-rs/zip2)
 
 ```
 The MIT License (MIT)
@@ -9913,39 +10065,6 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-```
-
-## MIT License (`MIT`)
-
-Used by:
-
-- [zip 9.0.3](https://github.com/zip-rs/zip2)
-
-```
-The MIT License (MIT)
-
-Copyright (c) 2014 Mathijs van de Nes
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the &quot;Software&quot;), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-Some files in the &quot;tests/data&quot; subdirectory of this repository are under other
-licences; see files named LICENSE.*.txt for details.
 ```
 
 ## MIT License (`MIT`)
@@ -9978,38 +10097,6 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-```
-
-## MIT License (`MIT`)
-
-Used by:
-
-- [typed-path 0.12.3](https://github.com/chipsenkbeil/typed-path)
-
-```
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the &quot;Software&quot;), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
 ```
 
 ## MIT License (`MIT`)
@@ -10052,7 +10139,9 @@ Used by:
 - [phf 0.14.0](https://github.com/rust-phf/rust-phf)
 - [phf_codegen 0.13.1](https://github.com/rust-phf/rust-phf)
 - [phf_generator 0.13.1](https://github.com/rust-phf/rust-phf)
+- [phf_generator 0.14.0](https://github.com/rust-phf/rust-phf)
 - [phf_macros 0.13.1](https://github.com/rust-phf/rust-phf)
+- [phf_macros 0.14.0](https://github.com/rust-phf/rust-phf)
 - [phf_shared 0.12.1](https://github.com/rust-phf/rust-phf)
 - [phf_shared 0.13.1](https://github.com/rust-phf/rust-phf)
 - [phf_shared 0.14.0](https://github.com/rust-phf/rust-phf)
@@ -10575,8 +10664,8 @@ Used by:
 
 - [tree-sitter-css 0.25.0](https://github.com/tree-sitter/tree-sitter-css)
 - [tree-sitter-embedded-template 0.25.0](https://github.com/tree-sitter/tree-sitter-embedded-template)
-- [tree-sitter-language 0.1.8](https://github.com/tree-sitter/tree-sitter)
-- [tree-sitter 0.27.0](https://github.com/tree-sitter/tree-sitter)
+- [tree-sitter-language 0.1.9](https://github.com/tree-sitter/tree-sitter)
+- [tree-sitter 0.27.1](https://github.com/tree-sitter/tree-sitter)
 
 ```
 The MIT License (MIT)
@@ -11046,6 +11135,33 @@ THE SOFTWARE.
 
 ```
 
+## MIT No Attribution (`MIT-0`)
+
+Used by:
+
+- [borrow-or-share 0.2.4](https://github.com/yescallop/borrow-or-share)
+
+```
+MIT No Attribution
+
+Copyright 2024 Scallop Ye
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ## Mozilla Public License 2.0 (`MPL-2.0`)
 
 Used by:
@@ -11438,7 +11554,6 @@ Used by:
 - [cssparser-macros 0.6.1](https://github.com/servo/rust-cssparser)
 - [cssparser-macros 0.7.0](https://github.com/servo/rust-cssparser)
 - [cssparser 0.36.0](https://github.com/servo/rust-cssparser)
-- [cssparser 0.37.0](https://github.com/servo/rust-cssparser)
 - [cssparser 0.38.0](https://github.com/servo/rust-cssparser)
 
 ```
@@ -11818,127 +11933,13 @@ Exhibit B - &quot;Incompatible With Secondary Licenses&quot; Notice
 
 ```
 
-## MIT License (`MIT`)
-
-Used by:
-
-- [appendlist 1.4.0](https://github.com/danieldulaney/appendlist)
-
-```
-MIT License
-
-Copyright (c) 2019 Daniel Dulaney
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the &quot;Software&quot;), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-
-## MIT License (`MIT`)
-
-Used by:
-
-- [boon 0.6.1](https://github.com/santhosh-tekuri/boon)
-
-```
-Copyright 2023 Santhosh Kumar Tekuri
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of
-this software and associated documentation files (the “Software”), to deal in
-the Software without restriction, including without limitation the rights to
-use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software is furnished to do so,
-subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
-FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
-COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
-IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-```
-
-## MIT License (`MIT`)
-
-Used by:
-
-- [fluent-uri 0.3.2](https://github.com/yescallop/fluent-uri-rs)
-
-```
-MIT License
-
-Copyright (c) 2024 Scallop Ye
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the &quot;Software&quot;), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-
-## MIT No Attribution (`MIT-0`)
-
-Used by:
-
-- [borrow-or-share 0.2.4](https://github.com/yescallop/borrow-or-share)
-
-```
-MIT No Attribution
-
-Copyright 2024 Scallop Ye
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the &quot;Software&quot;), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so.
-
-THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-
 ## Mozilla Public License 2.0 (`MPL-2.0`)
 
 Used by:
 
 - [option-ext 0.2.0](https://github.com/soc/option-ext.git)
 - [selectors 0.37.0](https://github.com/servo/stylo)
-- [selectors 0.38.0](https://github.com/servo/stylo)
+- [selectors 0.41.0](https://github.com/servo/stylo)
 
 ```
 Mozilla Public License Version 2.0
