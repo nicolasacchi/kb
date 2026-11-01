@@ -557,9 +557,9 @@ opencode's plugin docs):
 | Harness | Write/edit event with the file path | Permission event | Turn boundaries | What kb sends |
 |---|---|---|---|---|
 | Claude Code | `PostToolUse` for `Edit`/`Write`/`MultiEdit`/`NotebookEdit`, `tool_input.file_path` | `Notification` (`permission_prompt`, `elicitation_*`); no resolution event | `UserPromptSubmit`, `Stop`, `SessionStart`, `SessionEnd` | paths; blocked; unblocked inferred from the next `PostToolUse` |
-| codex | `PostToolUse` for `apply_patch`; `tool_input.command` is the patch text, the `*** Add/Update/Delete File:` and `*** Move to:` headers name the files | `PermissionRequest` hook (`tool_name`, `tool_input`); no resolution event | `UserPromptSubmit`, `Stop`, `SessionStart` (`SessionEnd` is named in the binary, not wired or verified here) | paths; blocked; unblocked inferred from the next `PostToolUse` |
-| Kimi Code | `PostToolUse` for `Write`/`Edit`; `tool_input.path` | `PermissionRequest` and `PermissionResult` (fires when the prompt is answered, granted or denied) | `UserPromptSubmit`, `Stop`, `SessionEnd` (not under `kimi -p`) | paths; blocked; unblocked (explicit) |
-| omp | `tool_call` extension event for `edit`/`write`; the call's `input.path`. The hashline and apply_patch edit modes carry their paths inside a text `input`, which is **not read**: those calls beat without a path | `tool_approval_requested` / `tool_approval_resolved` | `before_agent_start`, `session_stop`, `session_start`, `session_shutdown` | paths (replace/patch modes); blocked; unblocked (explicit) |
+| codex | `PostToolUse` for `apply_patch`; `tool_input.command` is the patch text (from the codex docs, **not observed live**), the `*** Add/Update/Delete File:` and `*** Move to:` headers name the files | `PermissionRequest` hook (`tool_name`, `tool_input`); no resolution event | `UserPromptSubmit`, `Stop`, `SessionStart` (`SessionEnd` is named in the binary, not wired or verified here) | paths; blocked; unblocked inferred from the next `PostToolUse` |
+| Kimi Code | `PostToolUse` for `Write`/`Edit`; `tool_input.path` | `PermissionRequest` and `PermissionResult` (fires when the prompt is answered, granted or denied: from the bundled source, **not observed live**; if it does not fire on a denial the row stays blocked until the next prompt or turn end) | `UserPromptSubmit`, `Stop`, `SessionEnd` (not under `kimi -p`) | paths; blocked; unblocked (explicit) |
+| omp | `tool_call` extension event for `edit`/`write`; the call's `input.path` (from omp's `types.ts`, **not observed live**; the event fires before the tool runs, so a path beat is pre-execution intent and can name an edit that is then refused or fails). The hashline and apply_patch edit modes carry their paths inside a text `input`, which is **not read**: those calls beat without a path | `tool_approval_requested` / `tool_approval_resolved` | `before_agent_start`, `session_stop`, `session_start`, `session_shutdown` | paths (replace/patch modes); blocked; unblocked (explicit) |
 | opencode | `tool.execute.before`/`after` plugin hooks name the tool; the path key of `edit`/`write` args is **not documented** and `filePath` is what `kb-beat.sh` reads, so this half is plugin-side and unverified against a live opencode | `permission.asked` / `permission.replied` events | `session.status` busy/idle | blocked; unblocked (explicit); paths only if the operator's plugin applies the snippet below |
 | grok | `PostToolUse` fires for every tool with `toolName`/`toolInput` (camelCase), but grok's edit tool (`search_replace`) has **undocumented input keys**: **unknown, no path is sent** | `Notification` with `notificationType: permission_prompt`; `PermissionDenied` for a denial; no grant event | `UserPromptSubmit`, `Stop`, `StopFailure`, `StopCancelled`, `SessionStart`, `SessionEnd` | blocked; unblocked inferred from the next `PostToolUse` |
 
@@ -576,6 +576,15 @@ the first `PostToolUse` after it, through `kb-beat-throttle.sh`; kimi, omp and
 opencode send an explicit `unblocked`). `kb-beat.sh` reads both spellings of
 the payload keys (`session_id`/`sessionId`, `tool_name`/`toolName`,
 `tool_input`/`toolInput`) so grok's camelCase payload works unchanged.
+A blocked beat's `reason` is the tool name only for codex and kimi
+(`permission request: <tool>`; their free-text action/command fields are never
+forwarded) and is capped at 120 characters for every other harness. For codex
+the unblock marker is keyed by the rollout's `session_meta` id, in both
+`kb-beat.sh` and `kb-beat-throttle.sh`, so a payload `session_id` that differs
+from it still unblocks.
+opencode is a deliberate partial: only the optional snippet above, no in-repo
+plugin change, so `opencode:edit`/`write` in `hook_write_tool` are unexercised
+here.
 Tests: `tests/test-beat.sh` (section PRES4) and `tests/test-omp-beats.sh`.
 
 ## Codex CLI registration

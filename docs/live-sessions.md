@@ -165,9 +165,9 @@ response cannot contain an absolute path and the caller supplies no roots.
 | Harness | File presence | Notes |
 |---|---|---|
 | Claude Code | yes | `Edit`/`Write`/`MultiEdit`/`NotebookEdit`, through `kb-beat-throttle.sh` on `PostToolUse`. |
-| codex | yes | `apply_patch` only; the file names come from the patch headers (`PostToolUse`, `kb-beat-throttle.sh codex`). The patch text itself is never sent. |
+| codex | yes | `apply_patch` only (the patch-in-`command` shape is from the codex docs, not observed live); the file names come from the patch headers (`PostToolUse`, `kb-beat-throttle.sh codex`). The patch text itself is never sent. |
 | Kimi | yes | `Write`/`Edit`, `tool_input.path` (`PostToolUse`; the installer registers it). |
-| omp | yes, in part | `edit`/`write` with a `path` input. omp's hashline and apply_patch edit modes keep their paths in a text input, which is not read: those calls report no file. |
+| omp | yes, in part | `edit`/`write` with a `path` input (sent from `tool_call`, which fires before the tool runs: a path beat is pre-execution intent and can name an edit that is then refused or fails; the omp shape is from `types.ts`, not observed live). omp's hashline and apply_patch edit modes keep their paths in a text input, which is not read: those calls report no file. |
 | opencode | only with a plugin edit | No in-repo opencode plugin; the README snippet forwards `edit`/`write`, and its `filePath` key is unverified against a live opencode. |
 | grok | no | Its edit tool's input keys are not documented, so none are guessed. |
 
@@ -300,7 +300,7 @@ gate and `KB_BEAT_HEARTBEAT=0` (it is a lifecycle beat), once per block.
 | omp | Explicit `tool_approval_requested` / `tool_approval_resolved` events, unchanged. |
 | opencode | Only if its README plugin snippet is applied. |
 | codex | `PermissionRequest` hook raises it; cleared by the inferred `unblocked` (the next `PostToolUse`), a prompt, or turn end. Needs the hook entries in `~/.codex/hooks.json` (README). |
-| Kimi | `PermissionRequest` raises it, `PermissionResult` (granted or denied) clears it. The installer registers both. |
+| Kimi | `PermissionRequest` raises it, `PermissionResult` (granted or denied; from the bundled source, not observed live) clears it. The reason is `permission request: <tool>` only; the action text is never sent. The installer registers both. |
 | Grok | A `permission_prompt` Notification raises it; cleared like Claude. Needs a hook file the operator adds (README); grok has no grant event. |
 
 **Honest gaps.**

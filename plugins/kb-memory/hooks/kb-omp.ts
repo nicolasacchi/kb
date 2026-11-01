@@ -1723,6 +1723,7 @@ export default function kbMemoryOmp(pi: {
     };
   });
 
+  // tool_call fires BEFORE the tool runs: a path beat is pre-execution intent.
   pi.on("tool_call", async (event, ctx) => {
     if (!HOOKS || kbOff()) return;
     try {

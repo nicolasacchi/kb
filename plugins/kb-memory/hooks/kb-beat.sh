@@ -192,8 +192,8 @@ case "$harness" in
     # own event shape to this same {session_id, cwd, ...} contract before
     # piping stdin here — see the hooks README's opencode registration
     # note), and grok (best-effort — no live-verified push-hook payload
-    # shape exists yet; dormant until a future phase wires an actual
-    # registration) all carry .session_id directly.
+    # shape is live-verified; the README documents the grok hook file)
+    # all carry .session_id directly.
     # grok's hook payload is camelCase (`sessionId`, `toolName`, `toolInput`),
     # carrying Claude's `hook_event_name` beside its own; accept both spellings.
     session_id="$(jq_field '.session_id // .sessionId // empty' "$input")"
@@ -213,7 +213,8 @@ if [ "$harness" = "claude" ] && [ "$event" = "turn_end" ] \
   last_line="${last_line:0:240}"
 fi
 
-# Blocked-marker helper (claude only). hook_sid_key comes from the shared lib;
+# Blocked-marker helper (claude, codex and grok: the harnesses where
+# hook_inferred_unblock holds). hook_sid_key comes from the shared lib;
 # sourced fail-open: without it the marker logic is skipped silently and the
 # daemon flag still sets (it just clears at the next prompt / turn end).
 beat_marker=""
@@ -244,7 +245,7 @@ fi
 # canonical "Claude needs your permission to use <Tool>" text, when the
 # captured token is a plain tool name.
 #
-# Claude only: which Notifications are blocks is decided HERE (the harness
+# Claude's branch below: which Notifications are blocks is decided HERE (the harness
 # vocabulary lives in the caller). notification_type permission_prompt |
 # elicitation_dialog | elicitation_url_dialog block; every other type,
 # including unknown future ones (idle_prompt, auth_success, ...), sends no
@@ -254,7 +255,16 @@ fi
 detail_reason=""
 blocked_tool=""
 if [ "$event" = "blocked" ]; then
-  detail_reason="$(jq_field '.message // .matcher // .action // empty' "$input")"
+  # codex and kimi payloads carry free text that can describe the pending
+  # operation (kimi's `action`, codex's tool_input): never forwarded; their
+  # reason is built from the validated tool-name token below.
+  if [ "$harness" = "codex" ] || [ "$harness" = "kimi" ]; then
+    detail_reason=""
+  else
+    detail_reason="$(jq_field '.message // .matcher // .action // empty' "$input")"
+    # every harness's reason is capped at 120 chars (claude, grok, omp, opencode)
+    detail_reason="${detail_reason:0:120}"
+  fi
   # OL PRES4: codex PermissionRequest and kimi PermissionRequest name the tool
   # (`tool_name`; grok's Notification carries none) and no message; the tool is
   # the reason's subject. Only a plain tool-name token is forwarded.
@@ -262,7 +272,7 @@ if [ "$event" = "blocked" ]; then
     ptool="$(jq_field '(.tool_name // .toolName // empty) | if type == "string" then . else empty end' "$input")"
     if [[ "$ptool" =~ ^[A-Za-z0-9_.:-]{1,128}$ ]]; then
       blocked_tool="$ptool"
-      [ -n "$detail_reason" ] || detail_reason="permission request: $ptool"
+      detail_reason="permission request: $ptool"
     fi
   fi
   if [ "$harness" = "grok" ]; then

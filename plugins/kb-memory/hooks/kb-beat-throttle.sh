@@ -88,7 +88,19 @@ if [ ! -f "$marker" ]; then
   [ "$legacy" != "$marker" ] && [ -f "$legacy" ] && gate="$legacy"
 fi
 
-blocked_marker="$marker_dir/beat-blocked-$safe_sid"
+# kb-beat.sh writes the blocked marker under the id it resolved; for codex that
+# is the rollout's session_meta.payload.id, which may differ from the hook
+# payload's own session_id. Resolve it the same way here.
+blocked_sid="$sid"
+if [ "$harness" = "codex" ]; then
+  _tpath="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)"
+  if [ -n "$_tpath" ] && [ -f "$_tpath" ]; then
+    _meta_id="$(head -1 "$_tpath" 2>/dev/null \
+      | jq -r 'select(.type == "session_meta") | .payload.id // empty' 2>/dev/null)"
+    [ -z "$_meta_id" ] || blocked_sid="$_meta_id"
+  fi
+fi
+blocked_marker="$marker_dir/beat-blocked-$(hook_sid_key "$blocked_sid")"
 if hook_inferred_unblock "$harness" && [ -f "$blocked_marker" ]; then
   marker_agent="$(cat "$blocked_marker" 2>/dev/null)" || marker_agent=""
   this_agent="$(printf '%s' "$input" | jq -r '.agent_id // empty' 2>/dev/null)"

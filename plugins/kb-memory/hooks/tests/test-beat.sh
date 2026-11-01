@@ -874,13 +874,33 @@ fi
 o="$(cpt codex p4-codex-b Bash)"
 if ! printf '%s' "$o" | grep -q '"unblocked"'; then ok "codex: the unblock is once per block"; else bad "codex double unblock (got: $o)"; fi
 
+# --- 44b. codex: the throttle finds the marker under the rollout's session_meta id ---
+ROLL="$(mktemp -d)/rollout.jsonl"
+printf '%s\n' '{"type":"session_meta","payload":{"id":"p4-codex-meta"}}' > "$ROLL"
+mp="$(marker_path p4-codex-meta)"
+rm -f "$mp"
+o="$(beat_dryrun codex blocked "$(jq -nc --arg cwd "$CWD4" --arg t "$ROLL" '{session_id:"p4-codex-payload",transcript_path:$t,cwd:$cwd,hook_event_name:"PermissionRequest",tool_name:"Bash"}')")"
+if [ -f "$mp" ] && [ "$(jget "$o" '.session_id')" = "p4-codex-meta" ]; then
+  ok "codex blocked: marker is written under the rollout's session_meta id"
+else
+  bad "codex blocked with differing ids (got: $o)"
+fi
+o="$(jq -nc --arg cwd "$CWD4" --arg t "$ROLL" '{session_id:"p4-codex-payload",transcript_path:$t,tool_name:"Bash",cwd:$cwd}' \
+  | env KB_BEAT_DRYRUN=1 KB_BEAT_HEARTBEAT_MIN_INTERVAL_SECS=180 "$BEAT_THROTTLE" codex 2>/dev/null)"
+if [ "$(printf '%s' "$o" | jq -r '.event' | head -1)" = "unblocked" ] && [ ! -e "$mp" ]; then
+  ok "codex: the throttle unblocks although payload session_id differs from the rollout id"
+else
+  bad "codex unblock with differing ids (got: $o)"
+fi
+
 # --- 45. kimi: explicit PermissionRequest / PermissionResult, no marker ------
 mp="$(marker_path p4-kimi-b)"
 rm -f "$mp"
 o="$(beat_dryrun kimi blocked "$(jq -nc --arg cwd "$CWD4" '{session_id:"p4-kimi-b",cwd:$cwd,hook_event_name:"PermissionRequest",tool_name:"Write",action:"Write to a.rs",tool_input:{path:"a.rs"}}')")"
 if [ "$(jget "$o" '.event')" = "blocked" ] && [ "$(jget "$o" '.detail.tool')" = "Write" ] \
-   && [ "$(jget "$o" '.detail.reason')" = "Write to a.rs" ] && [ ! -e "$mp" ]; then
-  ok "kimi PermissionRequest -> blocked (tool + action), no inferred-unblock marker"
+   && [ "$(jget "$o" '.detail.reason')" = "permission request: Write" ] && [ ! -e "$mp" ] \
+   && ! printf '%s' "$o" | grep -q 'a.rs'; then
+  ok "kimi PermissionRequest -> blocked (tool name only, action text dropped), no inferred-unblock marker"
 else
   bad "kimi blocked (got: $o)"
 fi
