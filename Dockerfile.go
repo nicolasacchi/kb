@@ -45,7 +45,7 @@ COPY . .
 RUN cargo build --release -p kb-lip
 
 # --- Builder 2: compile gopls --------------------------------------------
-FROM golang:1.25-trixie AS gopls-builder
+FROM golang:1.27-trixie AS gopls-builder
 
 RUN go install golang.org/x/tools/gopls@latest
 
