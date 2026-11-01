@@ -528,8 +528,7 @@ pub const UNSTAMPED_VERSION: &str = "0.0.0-dev";
 /// Fallback `build_sha` when unstamped (`GET /api/identity`).
 pub const UNSTAMPED_BUILD_SHA: &str = "dev";
 
-static BUILD_STAMP: std::sync::OnceLock<(&'static str, &'static str)> =
-    std::sync::OnceLock::new();
+static BUILD_STAMP: std::sync::OnceLock<(&'static str, &'static str)> = std::sync::OnceLock::new();
 
 /// Install the process-wide build stamp (`version`, `build_sha`), injected by
 /// the launching BIN (PF-B1: the lib must not link the per-commit
