@@ -281,7 +281,7 @@ enabled = false
     await backTab.waitForURL((u) => u.origin === KB_ORIGIN, { timeout: 20_000 });
     const back = new URL(backTab.url());
     expect(back.pathname).toBe(`/a/${KB_NAME}/${DOC}`);
-    expect(back.searchParams.get("sec")).toBe(SECTION);
+    expect(back.searchParams.get("secs")).toBe(SECTION);
     // The section is what the artifact frame scrolled to.
     await expect(frame(backTab).locator(`#${SECTION}`)).toBeInViewport({ timeout: 20_000 });
     await expect.poll(() => frame(backTab).locator("body").evaluate(() => window.scrollY)).toBeGreaterThan(500);
