@@ -92,6 +92,7 @@ export type SlateBoardResult = {
 export function useSlateBoard(
   slug: string,
   topic?: string,
+  all = false,
 ): SlateBoardResult {
   const q = useQuery({
     // The ?topic= variant gets its own SEGMENT rather than sitting directly
@@ -99,8 +100,15 @@ export function useSlateBoard(
     // with ["slate", slug, "history"] for a slate whose topic is literally
     // named "history". Both still ride the ["slate", slug] prefix the bridge
     // invalidates.
-    queryKey: topic ? [...slateKey(slug), "topic", topic] : slateKey(slug),
-    queryFn: ({ signal }) => fetchSlateBoard(slug, { topic }, signal),
+    queryKey:
+      topic || all
+        ? [
+            ...slateKey(slug),
+            ...(topic ? ["topic", topic] : []),
+            ...(all ? ["all"] : []),
+          ]
+        : slateKey(slug),
+    queryFn: ({ signal }) => fetchSlateBoard(slug, { topic, all }, signal),
     staleTime: Infinity,
     enabled: !!slug,
   });

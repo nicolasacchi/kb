@@ -61,6 +61,8 @@ export default function SlateBoardRoute() {
   const [params, setParams] = useSearchParams();
   const topic = params.get("topic");
   const historyOpen = params.get("history") === "1";
+  // SLATE2: `?older=1` lists the aged found/idea posts the board folds.
+  const older = params.get("older") === "1";
   const isMobile = useIsMobile();
   const confirm = useConfirm();
   // D29 — a slate is per-PROJECT, not per-kb, so "the current kb" is the
@@ -81,7 +83,11 @@ export default function SlateBoardRoute() {
   // boundary, matching every other age surface in the SPA.
   useNowTick(30_000);
 
-  const { board, loading, error } = useSlateBoard(slug, topic ?? undefined);
+  const { board, loading, error } = useSlateBoard(
+    slug,
+    topic ?? undefined,
+    older,
+  );
   const history = useSlateHistory(slug, historyOpen);
 
   // `pin` is a UI convenience shown when the identity IS the operator; the
@@ -390,6 +396,23 @@ export default function SlateBoardRoute() {
             />
           ))}
         </div>
+      )}
+
+      {!error && !loading && ((board?.folded_found_idea ?? 0) > 0 || older) && (
+        <p className="slate-board__folded">
+          {older
+            ? "Showing older found posts. "
+            : `${board?.folded_found_idea} older found ${
+                board?.folded_found_idea === 1 ? "post" : "posts"
+              } folded. `}
+          <button
+            type="button"
+            className="slate-board__folded-btn"
+            onClick={() => setParam("older", older ? null : "1")}
+          >
+            {older ? "Fold them again" : "Show them"}
+          </button>
+        </p>
       )}
 
       {!error && !loading && swimlanes && (

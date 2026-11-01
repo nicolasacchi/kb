@@ -129,11 +129,13 @@ export const fetchSlates = (signal?: AbortSignal): Promise<SlateSummary[]> =>
 /// here; they live in `/history`.
 export const fetchSlateBoard = (
   slug: string,
-  opts: { topic?: string } = {},
+  opts: { topic?: string; all?: boolean } = {},
   signal?: AbortSignal,
 ): Promise<SlateBoardResponse> => {
   const p = new URLSearchParams({ view: "board" });
   if (opts.topic) p.set("topic", opts.topic);
+  // `all=1` lists the aged found/idea posts the board folds by default.
+  if (opts.all) p.set("all", "1");
   return slateGet<SlateBoardResponse>(`${slugPath(slug)}?${p}`, signal);
 };
 

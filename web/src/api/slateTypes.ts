@@ -307,6 +307,8 @@ export type SlateDigestResponse = {
   take_total: number;
   found_idea_total: number;
   tried_total: number;
+  /// Aged found/idea posts folded out of the section (0 under `?all=1`).
+  found_idea_folded: number;
   hand_truncated: boolean;
   ask_truncated: boolean;
   take_truncated: boolean;
@@ -368,6 +370,9 @@ export type SlateBoardResponse = {
   head_seq: number;
   topics: string[];
   sections: SlateBoardSections;
+  /// Aged found/idea posts left out of `sections.found_idea`; `?all=1`
+  /// lists them. SLATE2.
+  folded_found_idea: number;
 };
 
 // ── errors ───────────────────────────────────────────────────────────────
