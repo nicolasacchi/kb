@@ -130,8 +130,11 @@ fn index_file_symbols_only(store: &Store, repo_id: i64, path: &str, bytes: &[u8]
 
 fn occurrences_row_count(db_path: &Path) -> u64 {
     let conn = rusqlite::Connection::open(db_path).unwrap();
-    conn.query_row("SELECT COUNT(*) FROM occurrences", [], |r| r.get(0))
-        .unwrap()
+    // rusqlite 0.40 dropped `FromSql for u64`; COUNT(*) is never negative.
+    let n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM occurrences", [], |r| r.get(0))
+        .unwrap();
+    n as u64
 }
 
 #[test]
