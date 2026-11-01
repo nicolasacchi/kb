@@ -51,11 +51,11 @@ slate keys on a **project**, and a project maps to several kbs or none.
 
 | Family | Verbs | Rule |
 |---|---|---|
-| status | `now "…"` · `warn "…"` | `now` is the pinned status line per topic (by convention, written by the session driving the milestone); `warn` is a standing rule that never expires. |
+| status | `now "…"` · `warn "…"` | `now` is the pinned status line per topic (by convention, written by the session driving the milestone); `warn` is a standing rule that never expires. The plan file owns status: write `now "…" --ref plan:<file>#<anchor>` — one line plus a pointer, which the digest renders as `→ plan <file>#<anchor>`. |
 | work | `take <subject> "…"` · `done #n "…"` · `hand <subject> "…"` | `take` leases a subject; `done` closes a take/ask/hand with its outcome; `hand` is an explicit handoff, unacknowledged until someone `take`s it. |
 | questions | `ask "…?"` · `answer #n "…"` | `ask` must end in `?`; `answer` attaches under its ask, never top-level in the digest. |
 | knowledge | `found "…" --ref …` · `idea "…"` · `tried "…" --failed "…"` | `found` needs at least one ref (post a guess as `idea` instead); `tried` is a dead end WITH its reason — the one category no memory system captures on its own. |
-| housekeeping | `drop #n "…"` · `mark #n [--pin\|--unpin]` | `drop` is an attributed tombstone; `mark` is a plus-one, idempotent per (session, target), never a self-mark. |
+| housekeeping | `drop #n "…"` · `mark #n [--pin\|--unpin]` | `drop` is an attributed tombstone of the WHOLE post: dropping any version of an edit chain hides every version (history keeps them all; to undo an edit, `edit` back instead). `mark` is a plus-one, idempotent per (session, target), never a self-mark. `drop`, `done` and `mark` are never counted by the per-session post rate limit. |
 
 Three CLI sugars expand to one of the twelve before reaching the wire:
 `edit #n "…"` (a same-kind post with `supersedes: n`, copying topic/
@@ -114,7 +114,16 @@ three → per-section "…N more, not shown" → the **echo line** (every NOW
 line repeated verbatim, without author or age, as the LAST line(s) of
 the block — so the single most action-changing fact sits at both edges
 of the injected text). Answers, done'd items, and dropped/superseded
-posts never appear outside `--all` and `history`.
+posts never appear outside `--all` and `history`. A `found`/`idea` older than
+14 days (the chain root's age, so an edit does not rejuvenate it) that is
+neither pinned nor marked folds into one line under FOUND —
+`N older found posts folded — kb slate open --all` — derived at read time,
+nothing written; `--all` and `history` still list it.
+
+The Stop-hook distill nudges post nothing to the slate: the ASK lane holds
+questions only. Distill debt lives in `kb sessions --undistilled` (and the
+once-a-day `kb chores --line`); `kb sessions distilled <sid>` still closes a
+`Distill session …?` ask a pre-SLATE2 ledger may carry, and a no-op otherwise.
 
 **Tiers.** A line is *whole* (own line, kind word in capitals) when it
 is a NOW, a WARN, an unacknowledged HAND, pinned, has two or more marks,
