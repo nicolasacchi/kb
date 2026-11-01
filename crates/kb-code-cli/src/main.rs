@@ -209,7 +209,7 @@ mod review_since;
 #[derive(Parser, Debug)]
 #[command(
     name = "kb-code",
-    version = env!("CARGO_PKG_VERSION"),
+    version = kb_buildstamp::VERSION,
     about = "kb-code — read-oriented code-browsing CLI"
 )]
 struct Cli {

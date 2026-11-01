@@ -317,7 +317,17 @@ jobs:
       # runner image. This mirrors ci.yml's `code` job, whose only apt step is
       # that same protoc pair.
       - name: Build kb-code-server
-        run: cargo build --release --locked -p kb-code-server --bin kb-code-server
+        # kb-code-server is lib+bin so it cannot link the per-commit
+        # kb-buildstamp crate (the `kb-code` CLI below does); its bin reads
+        # these compile-time env vars instead (VS1). Without them a release
+        # binary would report `0.0.0-dev`.
+        env:
+          KB_BUILD_VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          KB_BUILD_SHA="$(git rev-parse --short=12 HEAD)"
+          export KB_BUILD_SHA
+          cargo build --release --locked -p kb-code-server --bin kb-code-server
 
       - name: Build kb-code (CLI)
         run: cargo build --release --locked -p kb-code-cli --bin kb-code

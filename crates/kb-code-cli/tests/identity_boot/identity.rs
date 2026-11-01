@@ -17,6 +17,23 @@ fn version_flag_exits_zero() {
         .success();
 }
 
+/// VS1 — `--version` carries the kb-buildstamp git-describe stamp, never the
+/// workspace's frozen `0.0.0` Cargo version.
+#[test]
+fn version_flag_reports_the_build_stamp_not_cargo_zero() {
+    let out = Command::cargo_bin("kb-code")
+        .unwrap()
+        .arg("--version")
+        .output()
+        .unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    let ver = text.trim().strip_prefix("kb-code ").unwrap_or_else(|| {
+        panic!("unexpected --version output: {text:?}");
+    });
+    assert!(!ver.is_empty(), "empty version");
+    assert_ne!(ver, "0.0.0", "reported the frozen Cargo version");
+}
+
 /// V71-X1 — this used to configure the repo as `std::env::current_dir()`,
 /// which under `cargo test` IS THE WHOLE kb CHECKOUT: `bind_and_spawn`'s
 /// background index then walked and hashed every file in this repo on
