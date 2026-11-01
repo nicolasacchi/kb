@@ -164,8 +164,12 @@ response cannot contain an absolute path and the caller supplies no roots.
 
 | Harness | File presence | Notes |
 |---|---|---|
-| Claude Code | yes | Write tools only, through `kb-beat-throttle.sh` on `PostToolUse`. |
-| codex, Kimi, opencode, grok, omp | no | Their beats carry no paths. |
+| Claude Code | yes | `Edit`/`Write`/`MultiEdit`/`NotebookEdit`, through `kb-beat-throttle.sh` on `PostToolUse`. |
+| codex | yes | `apply_patch` only; the file names come from the patch headers (`PostToolUse`, `kb-beat-throttle.sh codex`). The patch text itself is never sent. |
+| Kimi | yes | `Write`/`Edit`, `tool_input.path` (`PostToolUse`; the installer registers it). |
+| omp | yes, in part | `edit`/`write` with a `path` input. omp's hashline and apply_patch edit modes keep their paths in a text input, which is not read: those calls report no file. |
+| opencode | only with a plugin edit | No in-repo opencode plugin; the README snippet forwards `edit`/`write`, and its `filePath` key is unverified against a live opencode. |
+| grok | no | Its edit tool's input keys are not documented, so none are guessed. |
 
 Known gaps: files changed through `Bash` (a `sed -i`, a formatter, a `git
 checkout`) and files only read are invisible; a path reached through a symlink
@@ -223,7 +227,8 @@ Codex and Kimi Code registration are one-time edits to files outside this
 repo (`~/.codex/hooks.json`, `${KIMI_CODE_HOME:-~/.kimi-code}/config.toml`
 — Kimi's installer, `install-kimi-hooks.sh`, wires it automatically). The
 exact snippets — including the caveat that codex has no verified
-`SessionEnd` yet, so `start`/`blocked`/`end` stay unwired for it — live
+`SessionEnd` yet, so `start`/`end` stay unwired for it (its `PermissionRequest`
+and `PostToolUse` entries carry blocked and file presence) — live
 in [`plugins/kb-memory/hooks/README.md`](../plugins/kb-memory/hooks/README.md#codex-cli-registration)
 and its ["Kimi Code registration"](../plugins/kb-memory/hooks/README.md#kimi-code-registration)
 section; don't duplicate them here, they'll drift.
@@ -294,7 +299,9 @@ gate and `KB_BEAT_HEARTBEAT=0` (it is a lifecycle beat), once per block.
 | Claude Code | `Notification` (table above); cleared by the inferred `unblocked`, a prompt, or turn end. |
 | omp | Explicit `tool_approval_requested` / `tool_approval_resolved` events, unchanged. |
 | opencode | Only if its README plugin snippet is applied. |
-| codex, Kimi, Grok | No Notification analogue: their rows are never blocked. |
+| codex | `PermissionRequest` hook raises it; cleared by the inferred `unblocked` (the next `PostToolUse`), a prompt, or turn end. Needs the hook entries in `~/.codex/hooks.json` (README). |
+| Kimi | `PermissionRequest` raises it, `PermissionResult` (granted or denied) clears it. The installer registers both. |
+| Grok | A `permission_prompt` Notification raises it; cleared like Claude. Needs a hook file the operator adds (README); grok has no grant event. |
 
 **Honest gaps.**
 
@@ -304,6 +311,10 @@ gate and `KB_BEAT_HEARTBEAT=0` (it is a lifecycle beat), once per block.
   pending: the inferred unblock fires on the first PostToolUse from that
   agent, even if another tool is still waiting on its prompt.
 - A denied prompt clears at your next prompt or at turn end.
+- The "honest gaps" above describe the harnesses that infer the unblock
+  (Claude Code, codex, Grok). Kimi, omp and opencode report the answer
+  explicitly, so a denied prompt clears at once there. Files changed through a
+  shell command are invisible on every harness.
 - A prompt you answer within about 6 seconds never notifies, so it never
   blocks.
 - A subagent prompt whose Notification carries no `agent_id` clears only when

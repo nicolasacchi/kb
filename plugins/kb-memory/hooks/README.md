@@ -545,6 +545,39 @@ nothing new needs registering where `kb-memory` is already wired:
   widening for this — only confirm `shell.env`/`KB_SESSIONS_DIR` still
   reach the child process, exactly as capture already requires.
 
+## Presence and blocked beats by harness (OL PRES4)
+
+Two live-session facts need a hook that can observe them: which **file** a
+session is editing (`detail.paths`, drawn as the glow in kb-code) and that a
+session is **blocked on a permission prompt**. What each harness's hook surface
+can observe, from its own documentation or shipped sources (checked
+2026-11-01 against codex-cli 0.149.0, Kimi Code 0.42.0, grok 1.0.46, omp 18.13.3,
+opencode's plugin docs):
+
+| Harness | Write/edit event with the file path | Permission event | Turn boundaries | What kb sends |
+|---|---|---|---|---|
+| Claude Code | `PostToolUse` for `Edit`/`Write`/`MultiEdit`/`NotebookEdit`, `tool_input.file_path` | `Notification` (`permission_prompt`, `elicitation_*`); no resolution event | `UserPromptSubmit`, `Stop`, `SessionStart`, `SessionEnd` | paths; blocked; unblocked inferred from the next `PostToolUse` |
+| codex | `PostToolUse` for `apply_patch`; `tool_input.command` is the patch text, the `*** Add/Update/Delete File:` and `*** Move to:` headers name the files | `PermissionRequest` hook (`tool_name`, `tool_input`); no resolution event | `UserPromptSubmit`, `Stop`, `SessionStart` (`SessionEnd` is named in the binary, not wired or verified here) | paths; blocked; unblocked inferred from the next `PostToolUse` |
+| Kimi Code | `PostToolUse` for `Write`/`Edit`; `tool_input.path` | `PermissionRequest` and `PermissionResult` (fires when the prompt is answered, granted or denied) | `UserPromptSubmit`, `Stop`, `SessionEnd` (not under `kimi -p`) | paths; blocked; unblocked (explicit) |
+| omp | `tool_call` extension event for `edit`/`write`; the call's `input.path`. The hashline and apply_patch edit modes carry their paths inside a text `input`, which is **not read**: those calls beat without a path | `tool_approval_requested` / `tool_approval_resolved` | `before_agent_start`, `session_stop`, `session_start`, `session_shutdown` | paths (replace/patch modes); blocked; unblocked (explicit) |
+| opencode | `tool.execute.before`/`after` plugin hooks name the tool; the path key of `edit`/`write` args is **not documented** and `filePath` is what `kb-beat.sh` reads, so this half is plugin-side and unverified against a live opencode | `permission.asked` / `permission.replied` events | `session.status` busy/idle | blocked; unblocked (explicit); paths only if the operator's plugin applies the snippet below |
+| grok | `PostToolUse` fires for every tool with `toolName`/`toolInput` (camelCase), but grok's edit tool (`search_replace`) has **undocumented input keys**: **unknown, no path is sent** | `Notification` with `notificationType: permission_prompt`; `PermissionDenied` for a denial; no grant event | `UserPromptSubmit`, `Stop`, `StopFailure`, `StopCancelled`, `SessionStart`, `SessionEnd` | blocked; unblocked inferred from the next `PostToolUse` |
+
+Not covered by any harness: files changed by a shell command (`sed -i`, a
+formatter, `git checkout`) and files only read. Nothing here polls, and nothing
+reads a transcript live; a harness with no hook for a fact simply does not
+report it. `KB_BEAT_PATHS=0` removes `detail.tool`/`paths`/`root`/`project` for
+every harness.
+
+How it is wired: `kb-hook-lib.sh` owns two tables, `hook_write_tool <harness>
+<tool>` (which tool names are write tools, each harness's own name) and
+`hook_inferred_unblock <harness>` (claude, codex, grok: the block is resolved by
+the first `PostToolUse` after it, through `kb-beat-throttle.sh`; kimi, omp and
+opencode send an explicit `unblocked`). `kb-beat.sh` reads both spellings of
+the payload keys (`session_id`/`sessionId`, `tool_name`/`toolName`,
+`tool_input`/`toolInput`) so grok's camelCase payload works unchanged.
+Tests: `tests/test-beat.sh` (section PRES4) and `tests/test-omp-beats.sh`.
+
 ## Codex CLI registration
 
 `~/.codex/hooks.json` (codex ≥0.124; hooks need one-time trust via `/hooks`
@@ -560,6 +593,16 @@ in the codex TUI before they fire):
             "timeout": 30 },
           { "type": "command",
             "command": "env KB_SESSIONS_DIR=$HOME/kb/sessions /path/to/kb/plugins/kb-memory/hooks/kb-beat.sh codex prompt",
+            "timeout": 5 } ] } ],
+    "PermissionRequest": [
+      { "hooks": [
+          { "type": "command",
+            "command": "env KB_SESSIONS_DIR=$HOME/kb/sessions /path/to/kb/plugins/kb-memory/hooks/kb-beat.sh codex blocked",
+            "timeout": 5 } ] } ],
+    "PostToolUse": [
+      { "hooks": [
+          { "type": "command",
+            "command": "env KB_SESSIONS_DIR=$HOME/kb/sessions /path/to/kb/plugins/kb-memory/hooks/kb-beat-throttle.sh codex",
             "timeout": 5 } ] } ],
     "Stop": [
       { "hooks": [
@@ -581,15 +624,21 @@ in the codex TUI before they fire):
 SAME `Stop` group **after** the capture entry so it reads the rollout the
 capture entry already wrote for this Stop.
 
-The two `kb-beat.sh codex …` entries (**LSC-3**) are the push side of the
+The `kb-beat.sh codex …` entries (**LSC-3**) are the push side of the
 live-sessions cockpit — see `kb-beat.sh`'s own table row above. They're
 additive: `KB_SESSIONS_DIR` needs to be set for them to do anything, and
 every failure (no daemon, no route yet, a `session_id` codex's own hook
 payload doesn't carry) degrades to a silent no-op. Codex has no verified
-`SessionEnd`/`Notification`-equivalent hook yet, so `start`/`blocked`/`end`
-stay unwired for codex in this phase — `turn_end` (`Stop`) is still the
-strongest signal it offers, matching the "Finished" ambiguity §4 already
-calls out for this harness.
+`SessionEnd` hook wired here, so `start`/`end` stay unwired for codex —
+`turn_end` (`Stop`) is still the strongest signal it offers, matching the
+"Finished" ambiguity §4 already calls out for this harness.
+
+**OL PRES4:** the `PermissionRequest` entry makes a codex row show as blocked,
+and the `PostToolUse` entry (`kb-beat-throttle.sh codex`) both resolves that
+block on the next tool call (codex has no "granted" event) and reports the
+files an `apply_patch` touched (`detail.paths`, parsed from the patch headers;
+only the file names are sent, never the patch). Existing `hooks.json` files need
+the two new groups added by hand, then `/hooks` trust again.
 
 Agent-initiated `kb` calls (search/why/recollect/remember) additionally need
 loopback network inside codex's sandbox — `[sandbox_workspace_write]
@@ -657,6 +706,11 @@ event = "PreCompact"
 command = "env KB_SESSIONS_DIR=$HOME/kb/sessions /path/to/kb/plugins/kb-memory/hooks/kb-capture-kimi.sh"
 timeout = 120
 ```
+
+**OL PRES4:** the installer also registers `PostToolUse`
+(`kb-beat-throttle.sh kimi`: heartbeat + the file a `Write`/`Edit` touched),
+`PermissionRequest` (`kb-beat.sh kimi blocked`) and `PermissionResult`
+(`kb-beat.sh kimi unblocked`). Re-run the installer to pick them up.
 
 The three `kb-beat.sh kimi …` entries (**LSC-3**) push live-session beats
 the same way the Claude Code registration does — see `kb-beat.sh`'s table
@@ -743,6 +797,63 @@ Notes for whoever applies this:
   existing `kbEnv()` helper already does this for `kb-capture-opencode.sh`
   and needs no change) or kb-beat.sh's opt-out gate no-ops every beat.
 
+**OL PRES4, file presence (optional, operator-applied):** add a
+`tool.execute.before` hook to the same plugin that normalises the tool call into
+the contract `kb-beat-throttle.sh opencode` reads (`session_id`, `cwd`,
+`tool_name`, `tool_input`). Only `edit` and `write` are write tools, and only
+the path is forwarded:
+
+```ts
+"tool.execute.before": async (input, output) => {
+  if (input.tool !== "edit" && input.tool !== "write") return
+  const filePath = output?.args?.filePath
+  if (typeof filePath !== "string") return
+  await run(join(HOOKS, "kb-beat-throttle.sh"), ["opencode"], {
+    input: JSON.stringify({
+      session_id: input.sessionID,
+      cwd: directory,
+      tool_name: input.tool,
+      tool_input: { filePath },
+    }),
+    timeoutMs: 3_000,
+  })
+},
+```
+
+The `edit`/`write` argument key `filePath` is not in opencode's published plugin
+docs and this snippet has not been run against a live opencode; if it differs,
+no path is reported (the beat still lands, without `detail.paths`).
+
+## Grok Build registration (interactive hooks, OL PRES4)
+
+Grok's capture is the `grokclaude` post-run adapter (above); it has no
+live-session wiring unless the operator adds grok hooks. Grok reads
+`~/.grok/hooks/*.json`; its stdin payload is camelCase (`sessionId`, `toolName`,
+`toolInput`, `notificationType`), which `kb-beat.sh` accepts. A hook file that
+reports blocked-on-you (a `permission_prompt` Notification; grok has no grant
+event, so the next `PostToolUse` resolves it):
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command",
+      "command": "env KB_SESSIONS_DIR=$HOME/kb/sessions /path/to/kb/plugins/kb-memory/hooks/kb-beat.sh grok prompt", "timeout": 5 }] }],
+    "Stop": [{ "hooks": [{ "type": "command",
+      "command": "env KB_SESSIONS_DIR=$HOME/kb/sessions /path/to/kb/plugins/kb-memory/hooks/kb-beat.sh grok turn_end", "timeout": 5 }] }],
+    "Notification": [{ "matcher": "permission_prompt", "hooks": [{ "type": "command",
+      "command": "env KB_SESSIONS_DIR=$HOME/kb/sessions /path/to/kb/plugins/kb-memory/hooks/kb-beat.sh grok blocked", "timeout": 5 }] }],
+    "PostToolUse": [{ "hooks": [{ "type": "command",
+      "command": "env KB_SESSIONS_DIR=$HOME/kb/sessions /path/to/kb/plugins/kb-memory/hooks/kb-beat-throttle.sh grok", "timeout": 5 }] }]
+  }
+}
+```
+
+Grok reports **no file paths**: its edit tool (`search_replace`) has no
+documented input keys, so nothing is guessed. Unverified: that an interactive
+grok hook's `sessionId` equals the `grok_session_id` the capture adapter
+resolves; until checked, treat a grok live row and its landed capture as
+possibly distinct ids.
+
 ## omp (Oh My Pi) registration
 
 omp extensions are TypeScript modules with a default factory that registers
@@ -760,7 +871,7 @@ the wiring here is one in-repo module plus an installer:
   | `session.compacting` | `PreCompact` | freshness capture, plus the recalled-memories block AND the slate hybrid block spliced into the summarization prompt as `context` lines ("the slate surface" below) |
   | `session_shutdown` | `SessionEnd` | final capture + `kb-beat.sh omp end` + the slate push child is killed |
   | `session_start` | `SessionStart` | `kb-beat.sh omp start` + the slate push child is started (D26) |
-  | `tool_call` | `PostToolUse` | throttled tool heartbeat via `kb-beat-throttle.sh omp` |
+  | `tool_call` | `PostToolUse` | throttled tool heartbeat via `kb-beat-throttle.sh omp`; since OL PRES4 the call's tool name and `input.path` (never the edit body) ride along so an `edit`/`write` reports its file |
 
 - **`install-omp-hooks.sh`** — symlinks `kb-omp.ts` into
   `${PI_CODING_AGENT_DIR:-${OMP_AGENT_DIR:-~/.omp/agent}}/extensions/kb-memory.ts`,
