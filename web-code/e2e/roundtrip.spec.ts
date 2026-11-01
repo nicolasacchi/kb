@@ -81,9 +81,10 @@ function seedRepo(dir: string) {
 
 function seedCorpus(dir: string) {
   mkdirSync(dir, { recursive: true });
-  // The prose names `roundtrip_handler`, the identifier on the cited line: kb-code
-  // confirms a line only from a context token found there, and an unconfirmed line
-  // gives a door with no `?line=`.
+  // A second <code> names `roundtrip_handler`, the identifier on the cited line:
+  // kb extracts context tokens from <code> elements only, kb-code confirms a line
+  // only from a token found there, and an unconfirmed line gives a door with no
+  // `?line=`.
   // A tall spacer puts the cited section below the fold, so "the section is the
   // scroll target" is a real assertion rather than a first-paint accident.
   writeFileSync(
@@ -92,7 +93,7 @@ function seedCorpus(dir: string) {
 <h1>Round trip demo</h1>
 <div style="height:2400px"></div>
 <h2 id="${SECTION}">Where the handler lives</h2>
-<p>The roundtrip_handler function is declared at <code>${SRC}:${LINE}</code> and nowhere else.</p>
+<p>The <code>roundtrip_handler</code> function is declared at <code>${SRC}:${LINE}</code> and nowhere else.</p>
 <div style="height:1200px"></div>
 </body></html>`,
     "utf-8",
