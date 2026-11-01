@@ -53,10 +53,11 @@ updates:
       # parking_lot 0.12 -> 0.13 (#187) cannot unify. deny.toml sets
       # multiple-versions=deny, and parking_lot 0.12.5 stays in the graph
       # through crates kb does not control: datafusion 54 (the datafusion-*
-      # crates), object_store 0.13, tokio 1.54, moka 0.12, quick_cache 0.6,
-      # crates), dashmap 6.2 (parking_lot_core), object_store 0.13, tokio 1.54, moka 0.12, quick_cache 0.6,
-      # gix-tempfile/gix-worktree-stream/prodash. Only kb-code-server uses
-      # parking_lot directly, so bumping it alone puts two lock
+      # crates), dashmap 6.2 (parking_lot_core), object_store 0.13, tokio 1.54,
+      # moka 0.12, quick_cache 0.6, nucleo 0.5, string_cache, and gix-features/
+      # gix-hashtable/gix-odb/gix-tempfile/gix-worktree-stream/prodash. Only
+      # kb-code-server uses parking_lot
+      # directly, so bumping it alone puts two lock
       # implementations (and lock_api, parking_lot_core, redox_syscall twice)
       # in one process; a cargo-deny skip would hide exactly that. 0.x minors
       # are breaking, so ignore minor+major and let patches flow. Drop this
