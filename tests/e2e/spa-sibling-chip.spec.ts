@@ -11,8 +11,8 @@ import { BASE } from "./helpers";
 // on. The inspector rail is collapsed in every test (the chip is hidden while
 // the rail shows the Code section - one home).
 //
-// Not covered here: the kb -> kb-code -> Cited-by -> kb round trip (needs both
-// SPAs in one harness; SIBL1's Cited-by href is pinned in kb-code's own tests).
+// Not covered here: the kb -> kb-code -> Cited-by -> kb round trip; it runs
+// against both real daemons in web-code/e2e/roundtrip.spec.ts (OL HK1).
 
 const CODE_URL = "http://127.0.0.1:4747";
 

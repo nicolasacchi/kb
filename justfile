@@ -318,8 +318,13 @@ ci-code-spa:
 # runs first so the daemon's SPA fallback has a dist/ to serve.
 # `--profile fast` (not `--release`): e2e is a functional smoke; shipping
 # stays `just redeploy` / `build-embedder` / the image.
-ci-code-e2e: ci-code-spa
-    cargo build --profile fast -p kb-code-server
+ci-code-e2e: ci-code-spa ci-spa
+    # HK1: roundtrip.spec.ts boots a REAL kb-server beside the real
+    # kb-code-server (kb -> kb-code -> Cited by -> kb), so this lane also
+    # needs kb-server's fast binary and web/dist (`ci-spa`). One cargo
+    # invocation: both share kb-core, and a single feature resolution
+    # compiles it once.
+    cargo build --profile fast -p kb-code-server -p kb-server
     cd web-code/e2e && npm ci
     # --with-deps shells out to the distro package manager (apt); a host
     # without apt-get (a local Arch dev box) falls back to the browser-only
