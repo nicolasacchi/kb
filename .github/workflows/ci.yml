@@ -1469,6 +1469,8 @@ jobs:
           # OL PRES1 - the write-tool beat path matrix, KB_BEAT_PATHS=0 and
           # repo-identity caching (git + jq are preinstalled on the runner).
           bash plugins/kb-memory/hooks/tests/test-beat.sh
+          # OL PRES4 - kb-omp.ts's tool_call path hand-off and blocked/unblocked beats.
+          bash plugins/kb-memory/hooks/tests/test-omp-beats.sh
 
   supply-chain:
     permissions:
