@@ -468,6 +468,10 @@ async fn docs_read_changed_lists_web_visited_then_modified_only() {
     .await;
     assert_eq!(
         both,
-        vec!["a.html".to_string(), "c.html".to_string(), "d.html".to_string()]
+        vec![
+            "a.html".to_string(),
+            "c.html".to_string(),
+            "d.html".to_string()
+        ]
     );
 }
