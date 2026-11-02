@@ -118,6 +118,27 @@ class SelfCheck(unittest.TestCase):
         d = self.tree()
         self.assertEqual(self.errs(selfcheck.check_yaml_names, d), [])
 
+    def test_dependabot_lockstep_members_must_be_fully_ignored(self):
+        good = "version: 2\nupdates:\n  - package-ecosystem: cargo\n    ignore:\n" + "".join(
+            f'      - dependency-name: "{n}"\n' for n in selfcheck.LOCKSTEP_MEMBERS
+        ) + "  - package-ecosystem: npm\n    ignore:\n      - dependency-name: \"x\"\n"
+        d = self.tree()
+        os.makedirs(os.path.join(d, ".github"), exist_ok=True)
+        path = os.path.join(d, ".github/dependabot.yml")
+
+        def errs_for(text):
+            with open(path, "w") as fh:
+                fh.write(text)
+            return self.errs(selfcheck.check_dependabot_lockstep, d)
+
+        self.assertEqual(errs_for(good), [])
+        self.assertTrue(any("`arrow-*`" in x for x in errs_for(good.replace('      - dependency-name: "arrow-*"\n', ""))))
+        narrowed = good.replace('"ego-tree"\n', '"ego-tree"\n        update-types: ["version-update:semver-major"]\n')
+        self.assertTrue(any("`ego-tree`" in x and "narrowed" in x for x in errs_for(narrowed)))
+        # an entry that exists only in a non-cargo block does not count
+        only_npm = good.replace('      - dependency-name: "scraper"\n', "") + '      - dependency-name: "scraper"\n'
+        self.assertTrue(any("`scraper`" in x for x in errs_for(only_npm)))
+
     def test_the_real_tree_passes(self):
         root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
         self.assertEqual(selfcheck.run(root, datetime.date.today()), [])

@@ -33,12 +33,12 @@
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-markdown": "^9.1.0",
-    "react-router-dom": "^7.18.4",
+    "react-router-dom": "^7.18.5",
     "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
-    "@babel/parser": "^7.29.9",
+    "@babel/parser": "^8.0.8",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",
     "@types/react": "^19.3.0",
