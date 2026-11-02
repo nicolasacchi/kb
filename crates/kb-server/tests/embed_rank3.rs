@@ -96,6 +96,8 @@ async fn hybrid_scope_all_weights_by_score_despite_empty_keyword_corpus() {
         code_url: None,
         decay_policy: None,
         versions: None,
+        git_dir: None,
+        git_prefix: None,
         reading_progress: None,
         search: Default::default(),
         indexable_extensions: None,
