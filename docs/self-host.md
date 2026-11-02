@@ -710,6 +710,42 @@ the file's bytes still match (an artifact edited before the upgrade
 already had its review orphaned under the old scheme). No `kb reset` or
 manual step is needed — just start the v0.7.1 daemon.
 
+## Git history for a bind-mounted subdirectory
+
+The reader time machine (`?at=`), "since your last visit" and the Versions panel
+use git history when the corpus sits in a repo. kb finds the repo by walking up
+from the corpus path, so a corpus that is a bind-mounted **subdirectory** of a
+repo (the container sees no `.git` above it) only gets index snapshots. Do not
+mount the repo root instead: that changes every stored path and source slug
+(invariant #27). Bind the repo's `.git` read-only somewhere outside every corpus
+path and tell kb where the corpus sits in it:
+
+```yaml
+# docker-compose.yml, kb service
+volumes:
+  - /path/to/repo/docs/research:/srv/notes            # the corpus (unchanged)
+  - /path/to/repo/.git:/srv/_git/notes/.git:ro        # the repo's history, read-only
+```
+
+```toml
+[kb.notes]
+path       = "/srv/notes"
+git_dir    = "/srv/_git/notes"   # the directory that holds .git
+git_prefix = "docs/research"     # where the corpus lives inside the repo
+```
+
+Ids, stored paths and source slugs are untouched. Check with
+`kb versions --kb notes` (git rows appear beside the snapshots) and
+`git -C /srv/_git/notes log --oneline -1` inside the container. If git refuses
+with "dubious ownership", the container user does not own the mounted `.git`;
+make it readable by that user or add the directory to `safe.directory` in the
+image.
+
+The container can then read the **whole** repo history, including blobs outside
+the corpus and anything ever committed. Routes only expose `git show
+<sha>:<path>` for validated hex shas, but the process itself has the access, so
+bind only repos you would be willing to serve.
+
 ## Rolling back across V0045 (segmented capture, v0.46)
 
 V0045 adds two nullable columns and one partial index to `sessions`

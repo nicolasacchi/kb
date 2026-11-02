@@ -160,6 +160,8 @@ async fn dead_query_embedder_is_named_in_degraded_for_search_and_recall() {
         code_url: None,
         decay_policy: None,
         versions: None,
+        git_dir: None,
+        git_prefix: None,
         reading_progress: None,
         search: Default::default(),
         indexable_extensions: None,
