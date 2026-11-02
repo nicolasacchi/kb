@@ -103,7 +103,7 @@ ammonia = "4"
 # comrak 0.56 the bare `syntect` feature no longer selects a regex backend
 # (syntect fails to compile), so the backend is explicit; onig is the one
 # used through 0.52, which keeps highlight output unchanged.
-comrak = { version = "0.56", default-features = false, features = ["syntect-onig"] }
+comrak = { version = "0.59", default-features = false, features = ["syntect-onig"] }
 
 # Archive (folder download → .zip; deflate backend reuses flate2, already
 # in the graph). default-features off to skip bzip2/zstd/aes codecs we
