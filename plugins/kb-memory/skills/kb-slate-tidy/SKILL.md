@@ -83,6 +83,10 @@ kb slate found "<merged, clearer line>" --supersedes <older-seq> \
   --ref <ref1> --ref <ref2> ...
 ```
 
+Dropping a merged post hides the post it superseded too (a drop is
+whole-post: the whole supersede chain goes), so drop the merge only when
+you mean to hide the whole line of thought.
+
 `--supersedes` requires the SAME kind on both sides (a `found` can only
 supersede a `found`) and the daemon 400s a kind mismatch. If a second
 near-duplicate exists and it is yours (or its author has ended), drop it
@@ -109,8 +113,9 @@ ever answered:
 kb slate done <ask-seq> "no longer relevant — asker's session ended"
 ```
 
-**Exempt: distill asks.** An ask whose text starts `Distill session ` (ref
-`session:<sid>`) is posted by the Stop hook AS the session it is about, so
+**Exempt: legacy distill asks.** The Stop hook no longer posts them (SLATE2),
+but a ledger may still carry one: an ask whose text starts `Distill session `
+(ref `session:<sid>`) was posted by the hook AS the session it is about, so
 `author_ended` is true for it the moment that session ends — which is exactly
 when it is meant to be replayed to a FUTURE session. Never close one as
 "asker's session ended". It is closed only by `/kb-distill` (its Step 9) once

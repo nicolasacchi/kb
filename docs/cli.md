@@ -962,7 +962,13 @@ kb slate open [--topic T] [--budget N] [--all|--hybrid] [--json]
                                     after /compact. Budgets are CHARACTERS
                                     (6000 default, 2000 `--hybrid`), never
                                     tokens. Prints the daemon's rendered
-                                    text verbatim.
+                                    text verbatim. SLATE2: without `--all`
+                                    a found/idea older than 14 days that is
+                                    unpinned and unmarked folds into one
+                                    "N older found posts folded" line (read
+                                    time only; `--all` lists them), and a
+                                    `now` carrying `--ref plan:<file>#<a>`
+                                    renders `→ plan <file>#<a>`.
 kb slate show #n | delta [--since SEQ] [--limit N] [--kinds a,b]
    | history [--since SEQ] | cursor [--seq N]
                                     unfold one post + its thread · what
@@ -992,7 +998,15 @@ kb slate take <subject|#n> "…" [--anyway|--over #n]
 kb slate done #n "…" [--abandoned "…"] | hand <subject> "…" [--to H]
 kb slate drop #n "…" [--anyway] | edit #n "…" [--body -|MD] [--anyway]
 kb slate mark #n [--pin|--unpin] | pin #n | unpin #n
-                                    The twelve kinds. A refused `take`
+                                    The twelve kinds. `drop` removes the
+                                    WHOLE post: every version of an edit
+                                    chain goes (history keeps them); undo
+                                    an edit with `edit` back. `drop`,
+                                    `done` and `mark` are exempt from the
+                                    per-session post rate limit. The
+                                    Stop-hook distill nudge posts no ask;
+                                    `kb sessions distilled` closes only
+                                    pre-existing ones. A refused `take`
                                     means a live session holds an
                                     overlapping subject: read their line,
                                     ask, or `--anyway` to contest. Every

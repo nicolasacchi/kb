@@ -14,7 +14,7 @@ export type DigestResponse = { generation: number, closed: boolean, slug: string
  * calling [`render`] on itself, and `render(&digest) == digest.text`
  * is a pinned test.
  */
-text: string, header: Header, sections: Sections, now_total: number, warn_total: number, hand_total: number, ask_total: number, take_total: number, found_idea_total: number, tried_total: number, hand_truncated: boolean, ask_truncated: boolean, take_truncated: boolean, found_idea_truncated: boolean, tried_truncated: boolean, dropped: DroppedCounts, budget_exceeded: boolean, 
+text: string, header: Header, sections: Sections, now_total: number, warn_total: number, hand_total: number, ask_total: number, take_total: number, found_idea_total: number, tried_total: number, found_idea_folded: number, hand_truncated: boolean, ask_truncated: boolean, take_truncated: boolean, found_idea_truncated: boolean, tried_truncated: boolean, dropped: DroppedCounts, budget_exceeded: boolean, 
 /**
  * The NOW lines repeated verbatim, without author or age — the last
  * line(s) of every non-empty digest (§5 "the echo line").

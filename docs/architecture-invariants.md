@@ -339,7 +339,12 @@ scrub CAN strip it on non-loopback (opt-in per kb via
   the lock and is the revision token; take-lease and age state are derived
   at read time from timestamps plus the #11 live registry, never written by
   a clock (the desk refusal), and `slate.updated` fires once per append,
-  never per read (#24).
+  never per read (#24). *SLATE2 (2026-11):* the same rule covers the hygiene
+  round: an aged `found`/`idea` (14 days, `FOUND_FOLD_AGE_SECS`, chain-root
+  age; pinned or marked never) folds into a count line at read time and
+  `--all` shows it, a `drop` tombstones the whole edit chain (every version
+  stays in the ledger and in `history`), and the tidy kinds (`drop`, `done`,
+  `mark`) are exempt from the per-session post rate window.
 - **NOTES amendment (v0.40 TN1/TN2) — a `private` comment is a NOTE: a comment
   no agent may ever see. The hide rule is STRUCTURAL, not a flag; the tags axis
   rides the same document.** An amendment to #6, not a new slot (same reason

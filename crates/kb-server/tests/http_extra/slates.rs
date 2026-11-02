@@ -661,6 +661,69 @@ async fn the_seventh_post_in_a_minute_is_429_slate_rate() {
     );
 }
 
+/// SLATE2: the tidy verbs (`drop`, `done`, `mark`) are not throttled and do
+/// not spend the window — a session at the cap can still clean up after
+/// itself, while a kind that adds board content is still refused.
+#[tokio::test]
+async fn tidy_verbs_are_not_counted_or_refused_by_the_rate_window() {
+    let (_tmp, addr, _paths) = boot().await;
+    let client = reqwest::Client::new();
+    // Another session's idea, so sess-a has something to mark.
+    assert_eq!(
+        post(
+            &client,
+            addr,
+            "orchard",
+            body("idea", "someone else's idea", Some("sess-b"))
+        )
+        .await
+        .0,
+        201
+    );
+    for i in 0..6 {
+        let (status, v) = post(
+            &client,
+            addr,
+            "orchard",
+            body("tried", &format!("attempt {i}"), Some("sess-a")),
+        )
+        .await;
+        assert_eq!(status, 201, "post {i}: {v}");
+    }
+    // The window is full: a content post is refused...
+    let (status, v) = post(
+        &client,
+        addr,
+        "orchard",
+        body("tried", "one too many", Some("sess-a")),
+    )
+    .await;
+    assert_eq!(status, 429, "{v}");
+    // ...but the three tidy verbs all pass, however many times.
+    let mut mark = body("mark", "+1", Some("sess-a"));
+    mark["re"] = json!(1);
+    assert_eq!(post(&client, addr, "orchard", mark).await.0, 201);
+    for target in 2..=4 {
+        let mut drop = body("drop", "obsolete", Some("sess-a"));
+        drop["re"] = json!(target);
+        let (status, v) = post(&client, addr, "orchard", drop).await;
+        assert_eq!(status, 201, "drop #{target}: {v}");
+    }
+    let mut done = body("done", "finished", Some("sess-a"));
+    done["re"] = json!(5);
+    let (status, v) = post(&client, addr, "orchard", done).await;
+    assert_eq!(status, 201, "{v}");
+    // Tidying spent nothing and freed nothing: content is still refused.
+    let (status, v) = post(
+        &client,
+        addr,
+        "orchard",
+        body("tried", "still too many", Some("sess-a")),
+    )
+    .await;
+    assert_eq!(status, 429, "{v}");
+}
+
 /// The scrub floor (§8, rules matrix "Scrub floor"): off loopback `cwd`
 /// collapses to its basename and NOTHING else changes. A 240-char re-cap
 /// would truncate every body and every sketch at kb.example.com, so lines and

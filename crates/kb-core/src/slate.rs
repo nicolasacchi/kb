@@ -61,6 +61,11 @@ pub const NUDGE_THRESHOLD: usize = 8;
 pub const DISPLACED_CAP: usize = 5;
 /// `TRIED` shows `min(TRIED_MAX_SHOWN, what its share fits)` (§5).
 pub const TRIED_MAX_SHOWN: usize = 3;
+/// SLATE2: a `found`/`idea` post whose age (the chain root's, so an edit
+/// does not rejuvenate it) reaches this folds into a count line in the
+/// default digest and board. Derived at read time, never written; pinned and
+/// marked posts never fold; `--all` shows everything.
+pub const FOUND_FOLD_AGE_SECS: i64 = 14 * 86_400;
 /// Marks needed to earn the *whole* tier without a pin (§4 affordance map).
 pub const WHOLE_TIER_MARKS: usize = 2;
 
@@ -1307,6 +1312,10 @@ struct Derived<'a> {
     drop_by: HashMap<u64, u64>,
     /// target → newest UNDROPPED superseder (newest wins).
     superseded_by: HashMap<u64, u64>,
+    /// target → newest DROPPED superseder. A drop tombstones the whole
+    /// logical post (SLATE2), so a version whose superseder was dropped
+    /// stays hidden instead of resurfacing as "the previous edit".
+    dropped_superseded_by: HashMap<u64, u64>,
     /// superseder → the post it replaces.
     supersedes_of: HashMap<u64, u64>,
     /// target → distinct marker session keys (idempotent per session).
@@ -1332,6 +1341,7 @@ impl<'a> Derived<'a> {
         let mut by_seq = HashMap::with_capacity(posts.len());
         let mut drop_by = HashMap::new();
         let mut superseded_by: HashMap<u64, u64> = HashMap::new();
+        let mut dropped_superseded_by: HashMap<u64, u64> = HashMap::new();
         let mut supersedes_of = HashMap::new();
         let mut marks: HashMap<u64, BTreeSet<String>> = HashMap::new();
         let mut pin_state = HashMap::new();
@@ -1350,6 +1360,8 @@ impl<'a> Derived<'a> {
                 supersedes_of.insert(p.seq, t);
                 if live_post {
                     superseded_by.insert(t, p.seq);
+                } else {
+                    dropped_superseded_by.insert(t, p.seq);
                 }
             }
             match p.kind {
@@ -1402,6 +1414,7 @@ impl<'a> Derived<'a> {
             dropped,
             drop_by,
             superseded_by,
+            dropped_superseded_by,
             supersedes_of,
             marks,
             pin_state,
@@ -1460,6 +1473,12 @@ impl Derived<'_> {
         }
         if let Some(&by) = self.done_by.get(&seq) {
             return Some((HideReason::Done, by));
+        }
+        // Whole-post drop (SLATE2): a version whose newer edit was dropped
+        // is part of the same logical post, so it goes with it. Reverting an
+        // edit is `edit` back to the old text, never `drop`.
+        if let Some(&sup) = self.dropped_superseded_by.get(&seq) {
+            return Some((HideReason::Dropped, *self.drop_by.get(&sup).unwrap_or(&sup)));
         }
         if let Some(anc) = self.dropped_ancestor(seq) {
             return Some((HideReason::Dropped, *self.drop_by.get(&anc).unwrap_or(&anc)));
@@ -1933,6 +1952,15 @@ pub struct Projected {
 }
 
 impl Projected {
+    /// SLATE2: an aged, unpinned, unmarked `found`/`idea` — the one
+    /// predicate the digest fold and the board route share.
+    pub fn folds_as_aged(&self) -> bool {
+        matches!(self.kind, Kind::Found | Kind::Idea)
+            && self.age_secs >= FOUND_FOLD_AGE_SECS
+            && !self.pinned
+            && self.marks == 0
+    }
+
     /// The never-truncated, never-displaced set as ONE predicate (rules
     /// matrix "Budget arithmetic"): NOW, WARN, an unacknowledged HAND, and
     /// anything pinned.
@@ -2067,6 +2095,12 @@ pub struct ProjectOpts {
     /// never scores, never hides. Empty (the default) leaves every
     /// rendered line byte-identical to v0.41.
     pub cursors: BTreeMap<String, CursorRow>,
+    /// SLATE2 — fold aged `found`/`idea` posts ([`FOUND_FOLD_AGE_SECS`])
+    /// into [`SlateDigest::found_idea_folded`] instead of listing them.
+    /// Independent of `all` (the board is never BUDGET-truncated yet still
+    /// folds), and off by default so membership projections (deltas, facts)
+    /// never lose a post to the clock.
+    pub fold_aged: bool,
 }
 
 impl Default for ProjectOpts {
@@ -2082,6 +2116,7 @@ impl Default for ProjectOpts {
             header_context: None,
             who: None,
             cursors: BTreeMap::new(),
+            fold_aged: false,
         }
     }
 }
@@ -2108,6 +2143,12 @@ pub struct SlateDigest {
     pub take_total: usize,
     pub found_idea_total: usize,
     pub tried_total: usize,
+    // SLATE2 — how many aged `found`/`idea` posts `ProjectOpts::fold_aged`
+    // folded out of `sections.found_idea` (and out of `found_idea_total`).
+    // Always 0 when the fold is off. (Plain comment: keeps the ts-rs output
+    // a single line.)
+    #[serde(default)]
+    pub found_idea_folded: usize,
     pub hand_truncated: bool,
     pub ask_truncated: bool,
     pub take_truncated: bool,
@@ -2292,6 +2333,12 @@ pub fn project(
     sort_section(&mut hand);
     sort_asks(&mut ask, opts.session_id.as_deref());
     sort_section(&mut take);
+    let mut found_idea_folded = 0usize;
+    if opts.fold_aged {
+        let before = found_idea.len();
+        found_idea.retain(|p| !p.folds_as_aged());
+        found_idea_folded = before - found_idea.len();
+    }
     sort_section(&mut found_idea);
     sort_section(&mut tried);
 
@@ -2339,6 +2386,7 @@ pub fn project(
         take_total: totals.4,
         found_idea_total: totals.5,
         tried_total: totals.6,
+        found_idea_folded,
         hand_truncated: false,
         ask_truncated: false,
         take_truncated: false,
@@ -2644,6 +2692,13 @@ fn item_text(p: &Projected) -> String {
     // the first newline into `body`); normalise defensively so a stray one
     // can never break the block into two.
     s.push_str(&p.line.trim().replace(['\n', '\r', '\t'], " "));
+    // SLATE2: the plan file owns status; a `now` that carries a `plan:` ref
+    // renders it as a compact pointer (file basename + anchor).
+    if p.kind == Kind::Now {
+        if let Some(ptr) = plan_pointer(&p.refs) {
+            s.push_str(&format!("  → {ptr}"));
+        }
+    }
     if let Some(n) = p.answers.filter(|n| *n > 0) {
         let noun = if n == 1 { "answer" } else { "answers" };
         s.push_str(&format!(
@@ -2652,6 +2707,15 @@ fn item_text(p: &Projected) -> String {
         ));
     }
     s
+}
+
+/// `plan:/some/dir/status.md#Anchor` → `plan status.md#Anchor`: the first
+/// `plan:` ref, as a pointer short enough to ride a one-line `now`.
+fn plan_pointer(refs: &[RefDisplay]) -> Option<String> {
+    let rest = refs.iter().find_map(|r| r.raw.strip_prefix("plan:"))?;
+    let (file, anchor) = rest.split_once('#')?;
+    let base = file.rsplit('/').next().filter(|b| !b.is_empty())?;
+    Some(format!("plan {base}#{anchor}"))
 }
 
 /// Widest topic label in the NOW section, floored at four so `v7` and
@@ -2816,6 +2880,7 @@ pub fn render(d: &SlateDigest) -> String {
         || !s.tried.is_empty()
         || d.found_idea_truncated
         || d.tried_truncated
+        || d.found_idea_folded > 0
     {
         out.push(String::new());
         if !s.found_idea.is_empty() || d.found_idea_truncated {
@@ -2833,6 +2898,9 @@ pub fn render(d: &SlateDigest) -> String {
                 s.found_idea.len(),
             );
         }
+        if d.found_idea_folded > 0 {
+            out.push(folded_line(d.found_idea_folded));
+        }
         if !s.tried.is_empty() || d.tried_truncated {
             render_counted_section("TRIED", &s.tried, d.tried_total, d.dropped.tried, &mut out);
             push_more(&mut out, d.tried_truncated, d.tried_total, s.tried.len());
@@ -2847,6 +2915,13 @@ pub fn render(d: &SlateDigest) -> String {
     let mut text = out.join("\n");
     text.push('\n');
     text
+}
+
+/// SLATE2: the one line that stands for the aged `found`/`idea` posts the
+/// default digest folded away. Names the verb that shows them.
+fn folded_line(n: usize) -> String {
+    let noun = if n == 1 { "post" } else { "posts" };
+    format!("{n} older found {noun} folded — kb slate open --all")
 }
 
 fn push_more(out: &mut Vec<String>, truncated: bool, total: usize, shown: usize) {
@@ -3009,6 +3084,7 @@ impl ProjectState {
         let opts_all = ProjectOpts {
             all: true,
             mode: Mode::Full,
+            fold_aged: false,
             ..opts.clone()
         };
         Self {
@@ -4303,6 +4379,334 @@ mod tests {
             d.sections.found_idea
         );
         assert_eq!(d.hidden[&2].reason, HideReason::Dropped);
+    }
+
+    // --- SLATE2: whole-post drop ------------------------------------------
+
+    fn found_with(seq: u64, supersedes: Option<u64>, line: &str, ago: i64) -> Post {
+        Post {
+            refs: vec!["path:src/a.rs".into()],
+            supersedes,
+            ..stored(
+                seq,
+                Kind::Found,
+                line,
+                ago,
+                prov("codex", Some("bbbb2222"), Origin::Agent),
+            )
+        }
+    }
+
+    fn drop_of(seq: u64, re: u64) -> Post {
+        Post {
+            re: Some(re),
+            ..stored(
+                seq,
+                Kind::Drop,
+                "no longer true",
+                10,
+                prov("codex", Some("bbbb2222"), Origin::Agent),
+            )
+        }
+    }
+
+    /// #14 superseding #7 superseding #1: one drop of the head used to
+    /// resurrect #7, so clearing a logical post took three drops.
+    #[test]
+    fn dropping_the_head_of_a_three_link_chain_hides_every_version() {
+        let ledger = [
+            found_with(1, None, "first reading", 3000),
+            found_with(2, Some(1), "second reading", 2000),
+            found_with(3, Some(2), "third reading", 1000),
+            drop_of(4, 3),
+        ];
+        let d = project_now(&ledger);
+        assert!(
+            d.sections.found_idea.is_empty(),
+            "no version may resurface: {:#?}",
+            d.sections.found_idea
+        );
+        assert_eq!(d.hidden[&3].reason, HideReason::Dropped);
+        assert_eq!(d.hidden[&2].reason, HideReason::Dropped);
+        assert_eq!(d.hidden[&1].reason, HideReason::Superseded);
+        // History keeps every version: the ledger itself is untouched.
+        assert_eq!(ledger.len(), 4);
+    }
+
+    #[test]
+    fn dropping_the_middle_of_a_chain_hides_both_neighbours() {
+        let ledger = [
+            found_with(1, None, "first reading", 3000),
+            found_with(2, Some(1), "second reading", 2000),
+            found_with(3, Some(2), "third reading", 1000),
+            drop_of(4, 2),
+        ];
+        let d = project_now(&ledger);
+        assert!(
+            d.sections.found_idea.is_empty(),
+            "{:#?}",
+            d.sections.found_idea
+        );
+        assert_eq!(d.hidden[&1].reason, HideReason::Dropped);
+        assert_eq!(d.hidden[&3].reason, HideReason::Dropped);
+    }
+
+    /// The deliberate "revert this edit" is `edit` back, never `drop`.
+    #[test]
+    fn reverting_an_edit_is_an_edit_back_and_the_chain_stays_one_post() {
+        let ledger = [
+            found_with(1, None, "first reading", 3000),
+            found_with(2, Some(1), "second reading", 2000),
+            found_with(3, Some(2), "first reading", 1000),
+        ];
+        let d = project_now(&ledger);
+        assert_eq!(d.sections.found_idea.len(), 1);
+        assert_eq!(d.sections.found_idea[0].seq, 3);
+        assert_eq!(d.sections.found_idea[0].line, "first reading");
+    }
+
+    /// The delta fold agrees with a full projection: dropping the head of a
+    /// chain reports exactly the head's hide (the older versions were never
+    /// shown), and the final shown sets match.
+    #[test]
+    fn a_whole_post_drop_folds_identically_through_the_delta() {
+        let ledger = [
+            found_with(1, None, "first reading", 3000),
+            found_with(2, Some(1), "second reading", 2000),
+            found_with(3, Some(2), "third reading", 1000),
+            drop_of(4, 3),
+        ];
+        let o = ProjectOpts {
+            all: true,
+            ..opts()
+        };
+        let mut st = ProjectState::new(NOW, &LivePolicy::default(), &[], &o);
+        let mut hides = Vec::new();
+        for p in &ledger {
+            hides.extend(project_append(&mut st, std::slice::from_ref(p)).hides);
+        }
+        assert!(hides
+            .iter()
+            .any(|h| h.hide == 3 && h.reason == HideReason::Dropped));
+        let whole = project(&ledger, NOW, &LivePolicy::default(), &[], &o);
+        assert!(whole.shown_seqs().is_empty());
+        assert!(project_finish(st).shown_seqs().is_empty());
+    }
+
+    // --- SLATE2: ageing found posts -----------------------------------------
+
+    fn fold_opts() -> ProjectOpts {
+        ProjectOpts {
+            fold_aged: true,
+            ..opts()
+        }
+    }
+
+    fn aged_board() -> Vec<Post> {
+        let old = FOUND_FOLD_AGE_SECS + 60;
+        vec![
+            found_with(1, None, "an old finding", old),
+            Post {
+                kind: Kind::Idea,
+                refs: Vec::new(),
+                ..found_with(2, None, "an old idea", old)
+            },
+            found_with(3, None, "an old finding someone marked", old),
+            Post {
+                re: Some(3),
+                ..stored(
+                    4,
+                    Kind::Mark,
+                    "+1",
+                    100,
+                    prov("claude", Some("cccc3333"), Origin::Agent),
+                )
+            },
+            found_with(5, None, "a fresh finding", 600),
+            found_with(
+                6,
+                None,
+                "just inside the threshold",
+                FOUND_FOLD_AGE_SECS - 1,
+            ),
+            Post {
+                kind: Kind::Tried,
+                refs: Vec::new(),
+                failed: Some("it did not work".into()),
+                ..found_with(7, None, "a dead end", 500)
+            },
+        ]
+    }
+
+    #[test]
+    fn aged_found_and_idea_posts_fold_into_a_count_line() {
+        let d = project(
+            &aged_board(),
+            NOW,
+            &LivePolicy::default(),
+            &[],
+            &fold_opts(),
+        );
+        let seqs: Vec<u64> = d.sections.found_idea.iter().map(|p| p.seq).collect();
+        assert!(!seqs.contains(&1) && !seqs.contains(&2), "{seqs:?}");
+        assert!(seqs.contains(&3), "a marked post never folds: {seqs:?}");
+        assert!(seqs.contains(&5) && seqs.contains(&6), "{seqs:?}");
+        assert_eq!(d.found_idea_folded, 2);
+        assert_eq!(d.found_idea_total, 3, "the total counts what is listed");
+        let lines: Vec<&str> = d.text.lines().collect();
+        let folded = lines
+            .iter()
+            .position(|l| *l == "2 older found posts folded — kb slate open --all")
+            .unwrap_or_else(|| panic!("{}", d.text));
+        let found = lines.iter().position(|l| l.starts_with("FOUND (")).unwrap();
+        let tried = lines.iter().position(|l| l.starts_with("TRIED (")).unwrap();
+        assert!(found < folded && folded < tried, "{}", d.text);
+        assert!(!d.text.contains("an old finding\n"), "{}", d.text);
+        assert!(!d.text.contains("an old idea"), "{}", d.text);
+    }
+
+    #[test]
+    fn the_fold_is_off_for_all_and_for_membership_projections() {
+        // Off by default: the line never appears and nothing is hidden.
+        let d = project_now(&aged_board());
+        assert_eq!(d.found_idea_folded, 0);
+        assert_eq!(d.sections.found_idea.len(), 5);
+        assert!(!d.text.contains("older found"), "{}", d.text);
+        // A delta's membership projection ignores the caller's fold flag.
+        let mut st = ProjectState::new(NOW, &LivePolicy::default(), &[], &fold_opts());
+        let batch = project_append(&mut st, &aged_board());
+        assert!(batch.posts.iter().any(|p| p.seq == 1), "{:#?}", batch.posts);
+    }
+
+    #[test]
+    fn a_pinned_aged_post_never_folds_and_one_folded_post_reads_singular() {
+        let old = FOUND_FOLD_AGE_SECS + 60;
+        let ledger = [
+            found_with(1, None, "an old pinned finding", old),
+            Post {
+                re: Some(1),
+                pin: Some(true),
+                ..stored(
+                    2,
+                    Kind::Mark,
+                    "keep",
+                    100,
+                    prov("claude", None, Origin::Human),
+                )
+            },
+            found_with(3, None, "an old unpinned finding", old),
+        ];
+        let d = project(&ledger, NOW, &LivePolicy::default(), &[], &fold_opts());
+        assert_eq!(d.sections.found_idea.len(), 1);
+        assert_eq!(d.sections.found_idea[0].seq, 1);
+        assert_eq!(d.found_idea_folded, 1);
+        assert!(
+            d.text
+                .contains("\n1 older found post folded — kb slate open --all\n"),
+            "{}",
+            d.text
+        );
+    }
+
+    #[test]
+    fn an_edit_does_not_rejuvenate_an_aged_post() {
+        let old = FOUND_FOLD_AGE_SECS + 60;
+        let ledger = [
+            found_with(1, None, "the first reading", old),
+            found_with(2, Some(1), "the corrected reading", 60),
+        ];
+        let d = project(&ledger, NOW, &LivePolicy::default(), &[], &fold_opts());
+        assert!(d.sections.found_idea.is_empty());
+        assert_eq!(d.found_idea_folded, 1, "the chain root's age governs");
+    }
+
+    // --- SLATE2: `now` points at the plan -----------------------------------
+
+    #[test]
+    fn a_now_with_a_plan_ref_renders_a_compact_pointer() {
+        let ledger = [Post {
+            refs: vec!["plan:docs/plans/sprout.md#status".into()],
+            ..stored(
+                1,
+                Kind::Now,
+                "sprout: see the plan",
+                600,
+                prov("claude", None, Origin::Human),
+            )
+        }];
+        let d = project_now(&ledger);
+        assert!(
+            d.text
+                .contains("sprout: see the plan  → plan sprout.md#status"),
+            "{}",
+            d.text
+        );
+        // The echo repeats the line verbatim, with no pointer.
+        assert_eq!(d.echo.len(), 1);
+        assert!(!d.echo[0].contains("plan sprout.md"), "{:?}", d.echo);
+    }
+
+    #[test]
+    fn only_a_now_carries_the_plan_pointer() {
+        let ledger = [
+            found_with(1, None, "a finding", 600),
+            Post {
+                refs: vec!["plan:docs/plans/sprout.md#status".into()],
+                ..found_with(2, None, "a finding with a plan ref", 600)
+            },
+            stored(
+                3,
+                Kind::Now,
+                "no plan ref here",
+                600,
+                prov("claude", None, Origin::Human),
+            ),
+        ];
+        let d = project_now(&ledger);
+        assert!(!d.text.contains("→ plan"), "{}", d.text);
+    }
+
+    // --- SLATE2: omp short ids ----------------------------------------------
+
+    #[test]
+    fn omp_sessions_sharing_a_uuid_v7_prefix_get_distinct_tags_everywhere() {
+        let a = "01a025fd-51eb-7cd3-86f2-95261769cb14";
+        let b = "01a025fd-6a00-7e11-9d0a-0123456789ab";
+        let ledger = [
+            Post {
+                subject: Some("crates/kb-server".into()),
+                ..stored(
+                    1,
+                    Kind::Take,
+                    "bearer graduation",
+                    300,
+                    prov("omp", Some(a), Origin::Agent),
+                )
+            },
+            stored(
+                2,
+                Kind::Idea,
+                "another thought",
+                200,
+                prov("omp", Some(b), Origin::Agent),
+            ),
+        ];
+        // Digest author tags.
+        assert_eq!(author_tag(&ledger[0]), "omp/cb14");
+        assert_eq!(author_tag(&ledger[1]), "omp/89ab");
+        let d = project_now(&ledger);
+        assert!(d.text.contains("[omp/cb14 "), "{}", d.text);
+        assert!(d.text.contains("[omp/89ab "), "{}", d.text);
+        assert!(!d.text.contains("omp/01a0"), "{}", d.text);
+        // The take-holder line a second omp session is refused with.
+        let mine = PostBody {
+            subject: Some("crates/kb-server/src/x.rs".into()),
+            prov: prov("omp", Some(b), Origin::Agent),
+            ..body(Kind::Take, "the gate")
+        };
+        let err = check_take(&mine, &ledger, NOW, &LivePolicy::default(), &[]).unwrap_err();
+        assert!(err.detail.contains("omp/cb14"), "{}", err.detail);
+        assert!(!err.detail.contains("omp/01a0"), "{}", err.detail);
     }
 
     // --- budget arithmetic ------------------------------------------------

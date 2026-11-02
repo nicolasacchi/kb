@@ -8,7 +8,7 @@
 #     agent's later Bash tool calls);
 #   * kb-wake.sh (the real SessionStart hook) does so for a real payload, and
 #     the `kb` it spawns sees the exported identity;
-#   * post_distill_ask runs `kb slate ask` with the session's identity.
+#   * (post_distill_ask is gone: SLATE2 — the nudges post nothing to the slate.)
 #
 # Fake `kb` on PATH records its environment; `jq` is real.
 #
@@ -98,15 +98,6 @@ if ! grep -q 'KB_HARNESS' "$envfile4" 2>/dev/null; then
   ok "kb-wake.sh does not guess claude outside Claude Code"
 else
   bad "kb-wake.sh does not guess claude outside Claude Code ($(cat "$envfile4" 2>/dev/null))"
-fi
-
-echo "== post_distill_ask =="
-: >"$KB_ENV_SPY"
-( unset KB_SESSION_ID KB_HARNESS; . "$HOOKS_DIR/kb-hook-lib.sh"; post_distill_ask ask-sid kimi /tmp/x )
-if grep -q '^slate|sid=ask-sid|harness=kimi$' "$KB_ENV_SPY"; then
-  ok "the distill ask carries the session's identity in its environment"
-else
-  bad "the distill ask carries the session's identity ($(cat "$KB_ENV_SPY"))"
 fi
 
 echo

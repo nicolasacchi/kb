@@ -19,8 +19,10 @@ cleanup() { rm -rf "$TMPROOT"; }
 trap cleanup EXIT
 
 mkdir -p "$TMPROOT/bin"
+export KB_CALL_SPY="$TMPROOT/kb-calls.log"
 cat >"$TMPROOT/bin/kb" <<'EOF'
 #!/usr/bin/env bash
+printf '%s\n' "$*" >>"${KB_CALL_SPY:-/dev/null}"
 exit 0
 EOF
 chmod +x "$TMPROOT/bin/kb"
@@ -120,6 +122,14 @@ if [ -z "$out2" ]; then
   ok "marker caps the nudge at once per session"
 else
   bad "marker caps the nudge at once per session (got: $out2)"
+fi
+
+# SLATE2: a firing nudge posts nothing to the slate (the ask lane holds
+# questions only) — the fake `kb` must never have been called with `slate`.
+if grep -q '^slate' "$KB_CALL_SPY" 2>/dev/null; then
+  bad "the nudge never posts a slate ask (kb calls: $(cat "$KB_CALL_SPY"))"
+else
+  ok "the nudge never posts a slate ask"
 fi
 
 echo

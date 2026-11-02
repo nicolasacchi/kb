@@ -144,6 +144,19 @@
   color: var(--ink-mute);
   font-size: var(--fs-sm);
 }
+.slate-board__folded {
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
+}
+.slate-board__folded-btn {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
 .slate-board__cols {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));

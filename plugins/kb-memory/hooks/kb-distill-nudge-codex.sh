@@ -30,11 +30,9 @@
 # at once per session. Every failure path exits 0 — a nudge must never
 # block.
 #
-# Item 15 — a firing nudge also posts one slate ask,
-# `Distill session <sid> (codex)?`, via `kb slate ask`. Session cwd is the
-# hook payload's `.cwd` when present, else the rollout session_meta cwd.
-# Best-effort: a daemon error or a hang must not block the systemMessage.
-# A suppressed run posts nothing.
+# SLATE2 — a firing nudge posts NOTHING to the slate: the ask lane holds
+# questions only, and distill debt is already carried by the pending ledger
+# above and `kb sessions --undistilled`.
 #
 # Gated like kb-capture-codex.sh on KB_SESSIONS_DIR (no sessions corpus ->
 # nothing to distill from) and on `kb` being installed (the skill needs it).
@@ -66,11 +64,6 @@ grep -E '"name":"(exec_command|shell|local_shell)"' "$tpath" 2>/dev/null \
 grep -qE 'remembered [0-9a-f]{12}' "$tpath" 2>/dev/null && exit 0
 
 mkdir -p "$marker_dir" 2>/dev/null && : >"$marker" 2>/dev/null
-cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)"
-if [ -z "$cwd" ]; then
-  cwd="$(jq -r '.cwd // empty' <<<"$meta" 2>/dev/null)"
-fi
-post_distill_ask "$sid" codex "$cwd"
 jq -n --arg sid "$sid" '{systemMessage:
   ("kb: this session has commits but no curated memory — run /kb-distill "
    + $sid + " to keep what was decided/shipped (--dry-run to preview).")}' \

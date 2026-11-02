@@ -236,13 +236,15 @@ oracle's. Report counts:
 written · superseded · NOOPed · skipped(+why) · deferred-to-reflect. State
 explicitly that a re-run over the same input now reports **zero writes**.
 
-## Step 9 — close the session's distill ask
+## Step 9 — close a legacy distill ask
 
-The Stop-hook nudge posts a slate ask `Distill session <sid> (<harness>)?`
-(ref `session:<sid>`) and queues the session in the distill-pending ledger.
-Once a session you were asked to distill has been handled (memories written,
-or every candidate NOOPed/skipped on purpose), answer that ask so it stops
-sitting in every digest's ASK section:
+The Stop-hook nudge no longer posts a slate ask (SLATE2: the ask lane holds
+questions only); it queues the session in the distill-pending ledger, and
+`kb sessions --undistilled` is the debt list. Older ledgers may still carry
+a `Distill session <sid> (<harness>)?` ask (ref `session:<sid>`) posted by a
+previous nudge. Once a session you were asked to distill has been handled
+(memories written, or every candidate NOOPed/skipped on purpose), answer any
+such leftover so it stops sitting in the digest's ASK section:
 
 ```bash
 kb sessions distilled <session-id> --note "distilled: <memory ids, or 'nothing durable'>"

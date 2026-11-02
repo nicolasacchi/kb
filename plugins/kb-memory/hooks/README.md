@@ -1120,8 +1120,9 @@ KB_TURN=1 and the legacy path inject identical bytes. Test:
 
 `kb-hook-lib.sh` holds what the hooks used to copy: `run_to <cap> cmd…` (each
 call runs under `min(cap, what is left of KB_HOOK_BUDGET_SECS, default 13)` on
-a millisecond clock; nothing left means skipped, rc 124) and
-`post_distill_ask`. Every hook sources it fail-open, so a standalone copy
+a millisecond clock; nothing left means skipped, rc 124) and the session-key
+helpers. The distill nudges no longer post a slate ask (SLATE2: the ask lane
+holds questions only). Every hook sources it fail-open, so a standalone copy
 without the file runs unbounded as before. `tests/test-hook-deadlines.sh`
 asserts the worst case (every lane hung) against that budget.
 
