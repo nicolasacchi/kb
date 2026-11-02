@@ -69,7 +69,7 @@ refinery = { workspace = true }
 # live: /api/identity >90s while each sink message was ~11s). parking_lot's
 # eventual-fairness handoff bounds a reader's wait to roughly one sink
 # message, not one burst. Already in the dep graph transitively (0.12.x).
-parking_lot = "0.12"
+parking_lot = "0.13"
 # W1.4 — live-mirror watcher: notify-debouncer-full arms the two watch
 # domains (working tree + git internals); blake3 backs the reconcile
 # module's racy-git stat-then-hash dirty check (already in the dep graph
