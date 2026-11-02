@@ -178,6 +178,27 @@ async fn versions(addr: std::net::SocketAddr, query: &str) -> Value {
     r.json().await.unwrap()
 }
 
+/// `(id, path relative to the corpus root)` for every listed doc, sorted.
+async fn listing(addr: std::net::SocketAddr, fx: &Fixture) -> Vec<(String, String)> {
+    let docs: Vec<Value> = reqwest::get(format!("http://{addr}/api/kb/smoke/docs?limit=200"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let root = std::fs::canonicalize(&fx.corpus).unwrap();
+    let mut out: Vec<(String, String)> = docs
+        .iter()
+        .map(|d| {
+            let p = std::path::PathBuf::from(d["path"].as_str().unwrap());
+            let rel = p.strip_prefix(&root).unwrap_or(&p).display().to_string();
+            (d["id"].as_str().unwrap().to_string(), rel)
+        })
+        .collect();
+    out.sort();
+    out
+}
+
 fn git_rows(v: &Value) -> Vec<&Value> {
     v["versions"]
         .as_array()
@@ -194,6 +215,8 @@ async fn unbound_corpus_has_no_git_versions() {
     // Without the keys: the corpus mount has no `.git` above it -> no git rows.
     let plain = boot(&fx, None, None).await;
     let before = versions(plain, "").await;
+    let unbound = listing(plain, &fx).await;
+    assert_eq!(unbound, vec![(doc_id(), "doc.html".to_string())]);
     assert!(
         git_rows(&before).is_empty(),
         "no binding, no .git above the corpus: {before}"
@@ -212,17 +235,16 @@ async fn binding_yields_git_rows_with_unchanged_ids() {
     assert_eq!(git[0]["label"], "second", "newest first");
     assert_eq!(git[1]["label"], "first");
 
-    // The stored path is still the corpus path, not the repo path.
-    let id = doc_id();
-    let docs: Value = reqwest::get(format!("http://{addr}/api/kb/smoke/docs"))
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert!(
-        docs.to_string().contains(&id),
-        "listing carries the unchanged id {id}: {docs}"
+    // Ids and stored paths are exactly what an UNBOUND boot of the same
+    // fixture yields (the binding only changes where git looks).
+    let bound = listing(addr, &fx).await;
+    assert_eq!(bound, vec![(doc_id(), "doc.html".to_string())]);
+    let fx_plain = fixture();
+    let plain = boot(&fx_plain, None, None).await;
+    assert_eq!(
+        bound,
+        listing(plain, &fx_plain).await,
+        "ids + paths unchanged"
     );
 }
 

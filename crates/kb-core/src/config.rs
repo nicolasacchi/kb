@@ -2314,16 +2314,27 @@ impl KbConfig {
                     ));
                 }
             }
-            if kb.git_dir.is_some() || kb.git_prefix.is_some() {
-                if let Some(prefix) = kb.git_prefix.as_deref() {
-                    if let Err(e) = crate::vcs::normalize_git_prefix(prefix) {
-                        issues.push(ValidationIssue::hard(format!("/kb/{name}/git_prefix"), e));
-                    } else if kb.git_dir.is_none() {
-                        issues.push(ValidationIssue::hard(
-                            format!("/kb/{name}/git_prefix"),
-                            "git_prefix is set without git_dir".to_string(),
-                        ));
-                    }
+            if let Some(prefix) = kb.git_prefix.as_deref() {
+                if let Err(e) = crate::vcs::normalize_git_prefix(prefix) {
+                    issues.push(ValidationIssue::hard(format!("/kb/{name}/git_prefix"), e));
+                } else if kb.git_dir.is_none() {
+                    issues.push(ValidationIssue::hard(
+                        format!("/kb/{name}/git_prefix"),
+                        "git_prefix is set without git_dir".to_string(),
+                    ));
+                }
+            }
+            // Soft: the daemon boots without git for this kb (never a hard
+            // error: the operator may mount the `.git` after validating).
+            if let Some(dir) = kb.git_dir.as_deref() {
+                if !dir.join(".git").exists() {
+                    issues.push(ValidationIssue::warn(
+                        format!("/kb/{name}/git_dir"),
+                        format!(
+                            "{} has no `.git` (missing directory or unmounted repo); this kb will have no git history",
+                            dir.display()
+                        ),
+                    ));
                 }
             }
             if let Some(ob) = &kb.outbound {
@@ -4141,6 +4152,24 @@ mod tests {
         assert!(!issue(Some("/g"), Some("docs/research")));
         assert!(!issue(Some("/g"), None));
         assert!(!issue(None, None));
+    }
+
+    #[test]
+    fn validate_warns_on_git_dir_without_dot_git() {
+        let warns = |dir: &std::path::Path| {
+            let mut c = KbConfig::default();
+            let mut kb = kb_section_with_model(None);
+            kb.git_dir = Some(dir.to_path_buf());
+            c.kb.insert(KbName::new("canon").unwrap(), kb);
+            c.validate()
+                .iter()
+                .any(|i| i.pointer == "/kb/canon/git_dir" && !i.is_hard())
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(warns(&tmp.path().join("nonexistent")), "missing dir warns");
+        assert!(warns(tmp.path()), "dir without .git warns");
+        std::fs::create_dir(tmp.path().join(".git")).unwrap();
+        assert!(!warns(tmp.path()), "dir with .git is quiet");
     }
 
     #[test]
