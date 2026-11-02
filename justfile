@@ -37,6 +37,7 @@ ci-all: ci-workspace ci-invariants api-docs-check types-check gen-ts-code-check 
 # missing bun FAILS here (KB_REQUIRE_BUN=1) instead of skipping.
 test-hook-omp:
     KB_REQUIRE_BUN=1 bash plugins/kb-memory/hooks/tests/test-omp-slate.sh
+    KB_REQUIRE_BUN=1 bash plugins/kb-memory/hooks/tests/test-omp-beats.sh
 
 # Invariant-to-test coverage table (GC-C2). A step of ci.yml's
 # workspace-lint job, not of `just ci`. Always exits 0 — a signal, not a gate.

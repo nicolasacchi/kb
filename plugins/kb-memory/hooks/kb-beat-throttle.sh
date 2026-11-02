@@ -31,7 +31,7 @@
 # kb-beat.sh) and KB_BEAT_HEARTBEAT=0 (kills only this mid-turn
 # heartbeat, keeping lifecycle beats).
 #
-# Blocked-on-you resolution (claude): the harness has no "permission granted"
+# Blocked-on-you resolution (claude, codex, grok): the harness has no "permission granted"
 # hook, so the FIRST PostToolUse from the same agent that raised a blocked beat
 # (kb-beat.sh leaves beat-blocked-<sid> holding that agent_id, empty for the
 # main thread) emits an `unblocked` lifecycle beat. It bypasses the interval
@@ -64,7 +64,7 @@ input="$(cat 2>/dev/null)" || input=""
 
 # One jq for both fields: line 1 = session id, line 2 = tool name.
 { IFS= read -r sid; IFS= read -r tool_name; } < <(
-  printf '%s' "$input" | jq -r '(.session_id // ""), (.tool_name // "")' 2>/dev/null
+  printf '%s' "$input" | jq -r '(.session_id // .sessionId // ""), (.tool_name // .toolName // "")' 2>/dev/null
 ) || true
 
 [ -n "$sid" ] || {
@@ -88,8 +88,20 @@ if [ ! -f "$marker" ]; then
   [ "$legacy" != "$marker" ] && [ -f "$legacy" ] && gate="$legacy"
 fi
 
-blocked_marker="$marker_dir/beat-blocked-$safe_sid"
-if [ "$harness" = "claude" ] && [ -f "$blocked_marker" ]; then
+# kb-beat.sh writes the blocked marker under the id it resolved; for codex that
+# is the rollout's session_meta.payload.id, which may differ from the hook
+# payload's own session_id. Resolve it the same way here.
+blocked_sid="$sid"
+if [ "$harness" = "codex" ]; then
+  _tpath="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)"
+  if [ -n "$_tpath" ] && [ -f "$_tpath" ]; then
+    _meta_id="$(head -1 "$_tpath" 2>/dev/null \
+      | jq -r 'select(.type == "session_meta") | .payload.id // empty' 2>/dev/null)"
+    [ -z "$_meta_id" ] || blocked_sid="$_meta_id"
+  fi
+fi
+blocked_marker="$marker_dir/beat-blocked-$(hook_sid_key "$blocked_sid")"
+if hook_inferred_unblock "$harness" && [ -f "$blocked_marker" ]; then
   marker_agent="$(cat "$blocked_marker" 2>/dev/null)" || marker_agent=""
   this_agent="$(printf '%s' "$input" | jq -r '.agent_id // empty' 2>/dev/null)"
   if [ "$marker_agent" = "$this_agent" ]; then
@@ -100,21 +112,19 @@ if [ "$harness" = "claude" ] && [ -f "$blocked_marker" ]; then
   fi
 fi
 
-# OL PRES2 — a Claude write-tool call (Edit/Write/MultiEdit/NotebookEdit)
+# OL PRES2 (generalised by PRES4 to every harness `hook_write_tool` names) —
+# a write-tool call (Claude Edit/Write/MultiEdit/NotebookEdit, kimi Edit/Write,
+# codex apply_patch, omp/opencode edit/write)
 # is a file-presence beat, not a heartbeat: it bypasses the min-interval
 # gate (and KB_BEAT_HEARTBEAT=0; it runs AFTER the blocked-on-you resolution,
 # so an edit by the blocked agent still emits `unblocked` first) and goes straight to kb-beat.sh, so one
 # hook process tree serves each edit instead of a second PostToolUse
 # group. KB_BEAT_PATHS=0 removes the paths from the beat, so there is
 # nothing to report and such a call stays an ordinary throttled tool call.
-if [ "$harness" = "claude" ] && [ "${KB_BEAT_PATHS:-}" != "0" ]; then
-  case "$tool_name" in
-    Edit | Write | MultiEdit | NotebookEdit)
-      printf '%s' "$input" | "$BEAT_SH" "$harness" tool
-      touch "$marker" 2>/dev/null || true
-      exit 0
-      ;;
-  esac
+if [ "${KB_BEAT_PATHS:-}" != "0" ] && hook_write_tool "$harness" "$tool_name"; then
+  printf '%s' "$input" | "$BEAT_SH" "$harness" tool
+  touch "$marker" 2>/dev/null || true
+  exit 0
 fi
 
 case "${KB_BEAT_HEARTBEAT:-}" in

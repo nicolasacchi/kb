@@ -192,9 +192,11 @@ case "$harness" in
     # own event shape to this same {session_id, cwd, ...} contract before
     # piping stdin here — see the hooks README's opencode registration
     # note), and grok (best-effort — no live-verified push-hook payload
-    # shape exists yet; dormant until a future phase wires an actual
-    # registration) all carry .session_id directly.
-    session_id="$(jq_field '.session_id // empty' "$input")"
+    # shape is live-verified; the README documents the grok hook file)
+    # all carry .session_id directly.
+    # grok's hook payload is camelCase (`sessionId`, `toolName`, `toolInput`),
+    # carrying Claude's `hook_event_name` beside its own; accept both spellings.
+    session_id="$(jq_field '.session_id // .sessionId // empty' "$input")"
     ;;
 esac
 [ -n "$session_id" ] || exit 0
@@ -211,15 +213,22 @@ if [ "$harness" = "claude" ] && [ "$event" = "turn_end" ] \
   last_line="${last_line:0:240}"
 fi
 
-# Blocked-marker helper (claude only). hook_sid_key comes from the shared lib;
+# Blocked-marker helper (claude, codex and grok: the harnesses where
+# hook_inferred_unblock holds). hook_sid_key comes from the shared lib;
 # sourced fail-open: without it the marker logic is skipped silently and the
 # daemon flag still sets (it just clears at the next prompt / turn end).
 beat_marker=""
-if [ "$harness" = "claude" ]; then
-  _beat_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || _beat_dir=""
-  if [ -n "$_beat_dir" ] && [ -r "$_beat_dir/kb-hook-lib.sh" ]; then
-    . "$_beat_dir/kb-hook-lib.sh" 2>/dev/null || true
-  fi
+_beat_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || _beat_dir=""
+if [ -n "$_beat_dir" ] && [ -r "$_beat_dir/kb-hook-lib.sh" ]; then
+  . "$_beat_dir/kb-hook-lib.sh" 2>/dev/null || true
+fi
+# hook_inferred_unblock (claude, codex, grok): a harness with a permission-
+# request hook but no resolution hook; the throttle resolves the block.
+_beat_inferred=0
+if command -v hook_inferred_unblock >/dev/null 2>&1 && hook_inferred_unblock "$harness"; then
+  _beat_inferred=1
+fi
+if [ "$_beat_inferred" -eq 1 ]; then
   if command -v hook_sid_key >/dev/null 2>&1; then
     beat_marker="${XDG_CACHE_HOME:-$HOME/.cache}/kb/beat-blocked-$(hook_sid_key "$session_id")"
   fi
@@ -236,7 +245,7 @@ fi
 # canonical "Claude needs your permission to use <Tool>" text, when the
 # captured token is a plain tool name.
 #
-# Claude only: which Notifications are blocks is decided HERE (the harness
+# Claude's branch below: which Notifications are blocks is decided HERE (the harness
 # vocabulary lives in the caller). notification_type permission_prompt |
 # elicitation_dialog | elicitation_url_dialog block; every other type,
 # including unknown future ones (idle_prompt, auth_success, ...), sends no
@@ -246,7 +255,33 @@ fi
 detail_reason=""
 blocked_tool=""
 if [ "$event" = "blocked" ]; then
-  detail_reason="$(jq_field '.message // .matcher // empty' "$input")"
+  # codex and kimi payloads carry free text that can describe the pending
+  # operation (kimi's `action`, codex's tool_input): never forwarded; their
+  # reason is built from the validated tool-name token below.
+  if [ "$harness" = "codex" ] || [ "$harness" = "kimi" ]; then
+    detail_reason=""
+  else
+    detail_reason="$(jq_field '.message // .matcher // .action // empty' "$input")"
+    # every harness's reason is capped at 120 chars (claude, grok, omp, opencode)
+    detail_reason="${detail_reason:0:120}"
+  fi
+  # OL PRES4: codex PermissionRequest and kimi PermissionRequest name the tool
+  # (`tool_name`; grok's Notification carries none) and no message; the tool is
+  # the reason's subject. Only a plain tool-name token is forwarded.
+  if [ "$harness" = "codex" ] || [ "$harness" = "kimi" ]; then
+    ptool="$(jq_field '(.tool_name // .toolName // empty) | if type == "string" then . else empty end' "$input")"
+    if [[ "$ptool" =~ ^[A-Za-z0-9_.:-]{1,128}$ ]]; then
+      blocked_tool="$ptool"
+      detail_reason="permission request: $ptool"
+    fi
+  fi
+  if [ "$harness" = "grok" ]; then
+    # grok's Notification covers idle_prompt, task_complete, ...; only the
+    # permission_prompt type is a block (documented key: notificationType).
+    gtype="$(jq_field '.notificationType // .notification_type // empty' "$input")"
+    [ "$gtype" = "permission_prompt" ] || exit 0
+    detail_reason="${detail_reason:0:120}"
+  fi
   if [ "$harness" = "claude" ]; then
     detail_reason="${detail_reason:0:120}"
     ntype="$(jq_field '.notification_type // empty' "$input")"
@@ -267,9 +302,10 @@ if [ "$event" = "blocked" ]; then
   fi
 fi
 
-# detail.tool / detail.paths / detail.root / detail.project / detail.worktree — a Claude
-# write-tool PostToolUse beat ONLY (event=tool, tool_name in the write-tool
-# set), opt-out via KB_BEAT_PATHS=0. Paths are normalised lexically (NO git
+# detail.tool / detail.paths / detail.root / detail.project / detail.worktree — a
+# write-tool beat ONLY (event=tool, tool_name in the harness's write-tool set,
+# kb-hook-lib.sh `hook_write_tool`: claude, kimi, codex, omp, opencode),
+# opt-out via KB_BEAT_PATHS=0. Paths are normalised lexically (NO git
 # realpath, no filesystem access): a relative path is joined onto cwd, "."
 # and ".." segments are resolved, and anything non-absolute, over 1024
 # bytes, carrying a control character, or whose ".." climbs out of its
@@ -281,11 +317,10 @@ detail_paths='[]'
 detail_root=""
 detail_project=""
 detail_worktree=""
-if [ "$harness" = "claude" ] && [ "$event" = "tool" ] && [ "$phase_arg" != "start" ] \
-   && [ "${KB_BEAT_PATHS:-}" != "0" ]; then
-  tool_name="$(jq_field '.tool_name // empty' "$input")"
-  case "$tool_name" in
-    Edit | Write | MultiEdit | NotebookEdit)
+if [ "$event" = "tool" ] && [ "$phase_arg" != "start" ] \
+   && [ "${KB_BEAT_PATHS:-}" != "0" ] && command -v hook_write_tool >/dev/null 2>&1; then
+  tool_name="$(jq_field '.tool_name // .toolName // empty' "$input")"
+  if hook_write_tool "$harness" "$tool_name"; then
       detail_tool="$tool_name"
       detail_paths="$(printf '%s' "$input" | jq -c --arg cwd "$cwd" '
         def norm: reduce (split("/")[]) as $p ([];
@@ -305,9 +340,19 @@ if [ "$harness" = "claude" ] && [ "$event" = "tool" ] && [ "$phase_arg" != "star
             | if $c == null or $n == null then empty
               else "/" + (($c + $n) | join("/")) end
           end;
-        [ (.tool_input // {}) as $ti
+        # codex apply_patch carries ONE patch string in tool_input.command; its
+        # file headers are the paths. omp and opencode may carry a URI-like
+        # target (`scheme://...`), which is not a file and is dropped.
+        def patch_paths: if type == "string" then
+            split("\n")[]
+            | capture("^\\*\\*\\* (?:Add File|Update File|Delete File|Move to): (?<p>.+)$")?
+            | .p | rtrimstr("\r")
+          else empty end;
+        [ ((.tool_input // .toolInput // {}) | if type == "object" then . else {} end) as $ti
           | ($ti.file_path, $ti.notebook_path, $ti.filePath, $ti.path,
-             ($ti.edits // [] | if type == "array" then .[] | .file_path? else empty end))
+             ($ti.edits // [] | if type == "array" then .[] | .file_path? else empty end),
+             ($ti.command | patch_paths))
+          | select(type == "string" and (test("^[A-Za-z][A-Za-z0-9+.-]*://") | not))
           | absolute | select(utf8bytelength <= 1024) ]
         | reduce .[] as $x ([]; if index([$x]) then . else . + [$x] end)
         | .[:8]' 2>/dev/null)" || detail_paths='[]'
@@ -315,8 +360,7 @@ if [ "$harness" = "claude" ] && [ "$event" = "tool" ] && [ "$phase_arg" != "star
       if [ "$detail_paths" != "[]" ] && [ -n "$cwd" ]; then
         beat_repo_identity
       fi
-      ;;
-  esac
+  fi
 fi
 
 # detail.tool / detail.phase — a tool-START beat only (event=tool, third
@@ -380,7 +424,7 @@ body="$(jq -n \
 # Blocked marker: records which agent (empty = main thread) owns the pending
 # prompt, so kb-beat-throttle.sh can emit `unblocked` on that agent's next
 # PostToolUse. Written even in DRYRUN so the harness can test it.
-if [ "$harness" = "claude" ] && [ "$event" = "blocked" ] && [ -n "$beat_marker" ]; then
+if [ "$_beat_inferred" -eq 1 ] && [ "$event" = "blocked" ] && [ -n "$beat_marker" ]; then
   if mkdir -p "$(dirname "$beat_marker")" 2>/dev/null; then
     printf '%s' "$(jq_field '.agent_id // empty' "$input")" >"$beat_marker" 2>/dev/null || true
   fi

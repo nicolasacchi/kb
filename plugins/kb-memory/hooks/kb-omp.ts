@@ -35,7 +35,8 @@
 //   session_start                  ≈ SessionStart — start beat + the slate
 //                                    push child (`kb slate watch --json`).
 //   tool_call                      ≈ PostToolUse — throttled tool heartbeat
-//                                    (kb-beat-throttle.sh).
+//                                    (kb-beat-throttle.sh); an edit/write also
+//                                    reports its `input.path` (OL PRES4).
 //   tool_approval_requested        ≈ Notification — blocked beat.
 //   tool_approval_resolved         ≈ (no Claude analogue) — unblocked beat.
 //
@@ -1722,14 +1723,28 @@ export default function kbMemoryOmp(pi: {
     };
   });
 
-  pi.on("tool_call", async (_event, ctx) => {
+  // tool_call fires BEFORE the tool runs: a path beat is pre-execution intent.
+  pi.on("tool_call", async (event, ctx) => {
     if (!HOOKS || kbOff()) return;
     try {
       const info = await sessionInfo(ctx);
       if (!info.sid) return;
-      // Throttle gate lives in the script (per-session mtime marker).
+      // Throttle gate lives in the script (per-session mtime marker). OL PRES4:
+      // the tool name rides along, plus ONLY the `path` of the call's input
+      // (never the edit body), so kb-beat.sh can report which file an `edit`
+      // or `write` touches. omp's hashline / apply_patch edit modes carry the
+      // paths inside a text `input`, which is not read: those calls beat
+      // without a path.
+      const toolName = typeof event?.toolName === "string" ? event.toolName : "";
+      const rawPath = (event?.input as Record<string, unknown> | undefined)?.path;
       void run(join(HOOKS, "kb-beat-throttle.sh"), ["omp"], {
-        input: { session_id: info.sid, cwd: info.cwd, model: info.model },
+        input: {
+          session_id: info.sid,
+          cwd: info.cwd,
+          model: info.model,
+          ...(toolName ? { tool_name: toolName } : {}),
+          ...(typeof rawPath === "string" ? { tool_input: { path: rawPath } } : {}),
+        },
         timeoutMs: 5_000,
       }).catch(() => {});
     } catch {}

@@ -163,6 +163,31 @@ hook_spool_key() {
 # share an 80-char prefix, to ONE name) is no longer used for per-session state.
 hook_sid_key() { hook_spool_key "$1"; }
 
+# hook_write_tool <harness> <tool_name> - exit 0 when the tool is one whose
+# call names a file it edits (OL PRES4). The names are each harness's own,
+# not translated: claude Edit|Write|MultiEdit|NotebookEdit, kimi Edit|Write,
+# codex apply_patch, omp and opencode edit|write. Grok's edit tool
+# (`search_replace`) is deliberately absent: its argument keys are not in
+# grok's hook documentation, so no path is read for it.
+hook_write_tool() {
+  case "$1:$2" in
+    claude:Edit | claude:Write | claude:MultiEdit | claude:NotebookEdit) return 0 ;;
+    kimi:Edit | kimi:Write) return 0 ;;
+    codex:apply_patch) return 0 ;;
+    omp:edit | omp:write | opencode:edit | opencode:write) return 0 ;;
+  esac
+  return 1
+}
+
+# hook_inferred_unblock <harness> - exit 0 for a harness whose hook surface
+# has a permission-request event but NO resolution event, so the unblock is
+# inferred from the first PostToolUse after the block (claude, codex, grok).
+# kimi, omp and opencode report the resolution explicitly.
+hook_inferred_unblock() {
+  case "$1" in claude | codex | grok) return 0 ;; esac
+  return 1
+}
+
 # hook_sid_key_lossy <raw-session-id>
 # The pre-v0.44 lossy key. Kept ONLY so a cleanup can recognise legacy files.
 hook_sid_key_lossy() { printf '%s' "$1" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80; }
