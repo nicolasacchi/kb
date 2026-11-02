@@ -2028,6 +2028,7 @@ impl Db {
                         active_ms, last_section
                  FROM history WHERE kind = 'open' AND artifact_id IN ({placeholders})
                    AND \"user\" = ?
+                   AND (source IS NULL OR source = 'web')
                  ORDER BY artifact_id, started_at"
             )
         } else {
@@ -2035,6 +2036,7 @@ impl Db {
                 "SELECT artifact_id, id, started_at, updated_at, scroll_y_max, scroll_max,
                         active_ms, last_section
                  FROM history WHERE kind = 'open' AND artifact_id IN ({placeholders})
+                   AND (source IS NULL OR source = 'web')
                  ORDER BY artifact_id, started_at"
             )
         };
@@ -2099,6 +2101,7 @@ impl Db {
             .query_row(
                 "SELECT scroll_y_max, scroll_max, last_section, updated_at FROM history
                  WHERE kind = 'open' AND artifact_id = ?1 AND \"user\" = ?2
+                   AND (source IS NULL OR source = 'web')
                  ORDER BY started_at DESC, id DESC LIMIT 1",
                 params![artifact_id, user],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
@@ -2247,9 +2250,8 @@ impl Db {
     }
 
     /// Per artifact, the newest web visit's `started_at` for `user` (the
-    /// `?read=changed` Library filter's input). Web-class only — the legacy
-    /// [`Self::reading_rollup`] still counts cli opens and is deliberately
-    /// untouched (#19). Pure read — no generation bump (#15).
+    /// `?read=changed` Library filter's input). Web-class only, like
+    /// [`Self::reading_rollup`] (READ3: agent opens never count as a read). Pure read — no generation bump (#15).
     pub fn reading_last_web_open(
         &self,
         user: &str,
@@ -2323,7 +2325,8 @@ impl Db {
                             ORDER BY started_at DESC, id DESC) AS rn
                  FROM history
                  WHERE kind = 'open' AND artifact_id IS NOT NULL
-                   AND \"user\" = ?{hist_in}
+                   AND \"user\" = ?
+                   AND (source IS NULL OR source = 'web'){hist_in}
              ) WHERE rn = 1"
         ))?;
         let mut binds: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(1 + scoped.len());
@@ -9787,14 +9790,35 @@ mod tests {
         assert_eq!(m.get("webbed"), Some(&9_000));
     }
 
-    // invariant:19 the legacy rollup is untouched in this unit
+    // READ3: agent (cli) opens are not a read, on every rollup-class derivation
     #[test]
-    fn legacy_reading_rollup_still_counts_cli_opens() {
+    fn reading_rollup_and_latest_ignore_cli_opens() {
         let mut db = db();
         db.history_record_open("agent-only", 5_000, Some("cli"), "operator")
             .unwrap();
+        assert!(db
+            .reading_rollup("operator")
+            .unwrap()
+            .get("agent-only")
+            .is_none());
+        assert!(db
+            .reading_rollup_for_ids(&["agent-only".to_string()], "operator")
+            .unwrap()
+            .is_empty());
+        assert!(db
+            .reading_latest_for_artifact("agent-only", "operator")
+            .unwrap()
+            .is_none());
+        // A web open then flips it.
+        db.history_record_open("agent-only", 9_000, Some("web"), "operator")
+            .unwrap();
         let m = db.reading_rollup("operator").unwrap();
-        assert_eq!(m.get("agent-only").unwrap().last_opened_unix, Some(5_000));
+        assert_eq!(m.get("agent-only").unwrap().last_opened_unix, Some(9_000));
+        // A later cli open does not move the web baseline.
+        db.history_record_open("agent-only", 90_000, Some("cli"), "operator")
+            .unwrap();
+        let m = db.reading_rollup("operator").unwrap();
+        assert_eq!(m.get("agent-only").unwrap().last_opened_unix, Some(9_000));
     }
 
     #[test]

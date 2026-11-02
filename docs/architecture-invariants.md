@@ -1899,7 +1899,7 @@ transcript; a reading is what the human scrolled. The classifier separates read 
 skim / unseen by dwell vs the section's expected reading time (words ÷ ~200 wpm),
 NOT raw scroll.
 
-*IDEA2 (OL):* since-visit and `read=changed` read WEB opens only (`history_web_visits`, `reading_last_web_open`; a visit, never a read); the legacy rollup and the desk's `changed_since_read` are unchanged and still count cli opens; the section ids since-visit returns are `headings`-twin scroll targets, never joined with `reading_sections`.
+*IDEA2 (OL):* since-visit and `read=changed` read WEB opens only (`history_web_visits`, `reading_last_web_open`; a visit, never a read); READ3 (2026-11-02, operator ruling) made web-only the rule everywhere: the reading rollup (`?read=` states, reading badges, desk `read_state`/`changed_since_read`, resurface, recall enrichment) derives from web opens only, so `kb cat`/`get`/`read` never mark anything opened or read (their history rows stay, append-only #8, and remain visible as agent activity); the section ids since-visit returns are `headings`-twin scroll targets, never joined with `reading_sections`.
 
 ### 20. Iframe back-button = `location.replace`, not push
 
