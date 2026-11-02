@@ -194,10 +194,11 @@ Filter via the left rail and arrange via the Library's ViewBar:
   **index-only** toggle.
 - **Reading** — all / never opened / in progress / read / **changed since
   visit** (`?read=changed`): artifacts you opened in the reader and that
-  were modified after your newest such visit. Library only; agent reads
-  never count as your visit, and the other Reading tokens (and search)
-  are unchanged. The same index-snapshot caveats as the reader's
-  since-visit banner apply.
+  were modified after your newest such visit. Library only. Every
+  Reading token, the reading badges, search's read filter and the desk's
+  never-opened / changed-since-read state count your browser visits only:
+  an agent `kb cat`/`get`/`read` leaves an artifact never opened. The same
+  index-snapshot caveats as the reader's since-visit banner apply.
 - **Sort** by recent / indexed / title / words, with a direction toggle.
 - **Group** flat or by folder.
 - **Search** — open the command palette (the magnifying glass or

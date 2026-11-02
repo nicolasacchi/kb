@@ -23830,6 +23830,112 @@ async fn desk_aggregate_attention_arithmetic() {
     );
 }
 
+/// READ3 (operator ruling 2026-11-02): an artifact opened only by the agent
+/// (`source: "cli"`, i.e. `kb cat`/`get`/`read`) is never-opened and
+/// unchanged-for-you on EVERY surface -- desk, Library `?read=` filter and the
+/// per-row read state; a browser open then flips it.
+#[tokio::test]
+async fn read3_agent_open_is_not_a_read_on_any_surface() {
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let offered = desk_offer_text(&client, addr, "read3-agent", "# agent only").await;
+    let id = offered["id"].as_str().unwrap().to_string();
+    let rel = offered["source_relative"].as_str().unwrap().to_string();
+    let _ = wait_desk_aggregate(&client, addr, &rel).await;
+
+    let open = |source: Option<&'static str>| {
+        let client = client.clone();
+        let id = id.clone();
+        async move {
+            let mut body = serde_json::json!({ "artifact_id": id });
+            if let Some(s) = source {
+                body["source"] = serde_json::json!(s);
+            }
+            let resp = client
+                .post(url(addr, "/api/kb/smoke/history/open"))
+                .json(&body)
+                .send()
+                .await
+                .unwrap();
+            assert!(resp.status().is_success(), "{:?}", resp.text().await);
+        }
+    };
+    let desk_item = || {
+        let client = client.clone();
+        let rel = rel.clone();
+        async move {
+            let body: serde_json::Value = client
+                .get(url(addr, "/api/desk"))
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            body["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|i| i["source_relative"] == rel.as_str())
+                .cloned()
+                .expect("desk item")
+        }
+    };
+    let library_row = |read: &'static str| {
+        let client = client.clone();
+        let id = id.clone();
+        async move {
+            let body: serde_json::Value = client
+                .get(url(
+                    addr,
+                    &format!("/api/kb/smoke/docs?read={read}&limit=500"),
+                ))
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            let rows = body.as_array().cloned().unwrap_or_else(|| {
+                body["docs"]
+                    .as_array()
+                    .cloned()
+                    .expect("docs array or envelope")
+            });
+            rows.into_iter().find(|r| r["id"] == id.as_str())
+        }
+    };
+
+    open(Some("cli")).await;
+    let item = desk_item().await;
+    assert_eq!(item["read_state"], "never-opened", "{item}");
+    assert_eq!(item["changed_since_read"], false, "{item}");
+    assert!(item["last_opened_unix"].is_null(), "{item}");
+    let row = library_row("never-opened")
+        .await
+        .expect("listed as never-opened");
+    // The row-level default for an absent rollup entry is "unread" with no
+    // last_opened_unix (the `never-opened` FILTER token is absence itself).
+    assert_eq!(row["read_state"], "unread", "{row}");
+    assert!(row["last_opened_unix"].is_null(), "{row}");
+    for tok in ["unread", "in_progress", "read", "changed"] {
+        assert!(
+            library_row(tok).await.is_none(),
+            "agent-only open must not match read={tok}"
+        );
+    }
+
+    open(None).await;
+    let item = desk_item().await;
+    assert_ne!(item["read_state"], "never-opened", "{item}");
+    assert!(item["last_opened_unix"].is_i64(), "{item}");
+    assert!(library_row("never-opened").await.is_none());
+    let row = library_row("in_progress")
+        .await
+        .expect("web open flips the row");
+    assert!(row["last_opened_unix"].is_i64(), "{row}");
+}
+
 #[tokio::test]
 async fn desk_aggregate_401_without_token_non_loopback() {
     let (_tmp, addr) = boot_with_token().await;

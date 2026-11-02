@@ -72,6 +72,10 @@ GET  /api/kb/{kb}/docs[?offset=N&limit=N&projection=slim|default|atlas
                                             memoized — #15); read= filters on it
                                             (never-opened = absent from the
                                             rollup; the antilibrary facet).
+                                            READ3: the rollup counts the
+                                            caller's BROWSER visits only; an
+                                            agent `kb cat`/`get`/`read` leaves
+                                            the artifact never-opened.
                                             CT-F4: default rows also carry
                                             session_residue — how many OTHER
                                             memories were born in this doc's own
@@ -2489,6 +2493,10 @@ GET    /api/desk[?kb=]                      federated handoff aggregate: every
                                             changed_since_read + expires_at?/
                                             session_id?; attention = never-
                                             opened + changed-since-read count.
+                                            READ3: read_state/last_opened_unix/
+                                            changed_since_read use browser
+                                            visits only (agent reads never
+                                            count).
                                             Backs the SPA desk pill + the
                                             changed-since-read reader banner.
 

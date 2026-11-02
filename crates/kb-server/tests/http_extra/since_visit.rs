@@ -438,7 +438,7 @@ impl Rig {
     }
 }
 
-// invariant:35 read=changed is web-opened AND modified since; invariant:19 cli opens never count
+// invariant:35 read=changed is web-opened AND modified since; invariant:19 cli opens never count (READ3: on every token)
 #[tokio::test]
 async fn docs_read_changed_lists_web_visited_then_modified_only() {
     let files: Vec<(&str, String)> = ["a.html", "b.html", "c.html", "d.html"]
@@ -459,12 +459,19 @@ async fn docs_read_changed_lists_web_visited_then_modified_only() {
     })
     .await;
     assert_eq!(got, vec!["a.html".to_string()]);
-    // OR semantics with a legacy token: d.html is never-opened (the legacy
-    // rollup counts c.html's cli open, so c.html is NOT never-opened).
+    // OR semantics with a legacy token: READ3 -- the rollup counts web opens
+    // only, so c.html (cli-opened) is never-opened exactly like d.html.
     let both = common::poll_until("read=changed,never-opened", || async {
         let rels = r.docs_read("changed,never-opened").await;
         (rels.contains(&"d.html".to_string())).then_some(rels)
     })
     .await;
-    assert_eq!(both, vec!["a.html".to_string(), "d.html".to_string()]);
+    assert_eq!(
+        both,
+        vec![
+            "a.html".to_string(),
+            "c.html".to_string(),
+            "d.html".to_string()
+        ]
+    );
 }
