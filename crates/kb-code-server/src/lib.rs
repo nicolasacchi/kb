@@ -519,9 +519,58 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tree_sitter::Language;
 
-/// Crate version (from `Cargo.toml`, workspace-pinned).
+/// Fallback reported when no build stamp was installed (dev builds, tests,
+/// embedded consumers). Deliberately NOT `0.0.0`: the workspace Cargo version
+/// is pinned at `0.0.0` forever (versions live in git tags), so reporting it
+/// would read as a real release. The `-dev` suffix names the unstamped state.
+pub const UNSTAMPED_VERSION: &str = "0.0.0-dev";
+
+/// Fallback `build_sha` when unstamped (`GET /api/identity`).
+pub const UNSTAMPED_BUILD_SHA: &str = "dev";
+
+static BUILD_STAMP: std::sync::OnceLock<(&'static str, &'static str)> = std::sync::OnceLock::new();
+
+/// Install the process-wide build stamp (`version`, `build_sha`), injected by
+/// the launching BIN (PF-B1: the lib must not link the per-commit
+/// `kb-buildstamp` crate, and cargo cannot scope a dependency to one target of
+/// a package — so the stamp arrives at runtime, like
+/// `kb_server::set_build_stamp`). First caller wins.
+pub fn set_build_stamp(version: &'static str, build_sha: &'static str) {
+    let _ = BUILD_STAMP.set((version, build_sha));
+}
+
+/// Normalise a raw `KB_BUILD_VERSION` (a release tag such as `v0.51`) into the
+/// reported version: one leading `v` is stripped, and anything that does not
+/// then start with a digit (a branch name such as `main` from a manual
+/// workflow run, or an empty string) is not a version, so it falls back to
+/// [`UNSTAMPED_VERSION`] rather than being reported as one.
+pub fn normalize_stamp_version(raw: &str) -> &str {
+    let v = raw.strip_prefix('v').unwrap_or(raw);
+    if v.starts_with(|c: char| c.is_ascii_digit()) {
+        v
+    } else {
+        UNSTAMPED_VERSION
+    }
+}
+
+/// The version this binary reports: the installed stamp, else
+/// [`UNSTAMPED_VERSION`]. Release/Docker builds inject the release tag
+/// (`KB_BUILD_VERSION`, the same value that names the kb-code tarball).
 pub fn version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
+    BUILD_STAMP
+        .get()
+        .map(|s| s.0)
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or(UNSTAMPED_VERSION)
+}
+
+/// The commit this binary was built from, else [`UNSTAMPED_BUILD_SHA`].
+pub fn build_sha() -> &'static str {
+    BUILD_STAMP
+        .get()
+        .map(|s| s.1)
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or(UNSTAMPED_BUILD_SHA)
 }
 
 /// The linked language set: one `(id, tree_sitter::Language)` pair per
@@ -1966,5 +2015,22 @@ mod tests {
             booted_with_store_root(None).await,
             "a boot with a usable store root must publish read gate = true"
         );
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::*;
+
+    #[test]
+    fn normalize_strips_v_and_rejects_non_versions() {
+        assert_eq!(normalize_stamp_version("v0.51"), "0.51");
+        assert_eq!(
+            normalize_stamp_version("0.50-35-g5613b8f"),
+            "0.50-35-g5613b8f"
+        );
+        assert_eq!(normalize_stamp_version("main"), UNSTAMPED_VERSION);
+        assert_eq!(normalize_stamp_version(""), UNSTAMPED_VERSION);
+        assert_eq!(normalize_stamp_version("v"), UNSTAMPED_VERSION);
     }
 }

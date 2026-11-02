@@ -17,6 +17,10 @@ path = "src/main.rs"
 # embed-IPC plumbing rather than reimplementing it — not yet wired in
 # W1.1 (scaffold only), lands starting W1.2.
 kb-core = { path = "../kb-core" }
+# PF-B1 — the per-commit stamp crate; kb-code-cli is a pure bin package, so
+# it may link it (clap `version` = git describe, the way `kb` does). The
+# kb-code-server package is lib+bin and so must NOT (see its main.rs).
+kb-buildstamp = { path = "../kb-buildstamp" }
 clap = { workspace = true }
 tokio = { workspace = true }
 # W1.2 — `kb-code identity` is a real HTTP client against a running

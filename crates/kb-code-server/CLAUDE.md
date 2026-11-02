@@ -32,6 +32,17 @@ migrated-ahead volume refuses to boot under an older binary rather than
 silently regressing a safety feature, the 13.5h kbc rollback lesson root
 invariant #2 records).
 
+**Version stamp (VS1).** The workspace Cargo version is frozen at `0.0.0`; what
+`kb-code-server --version`, `kb-code --version` and `GET /api/identity`'s
+`version` report is the kb release stamp (the same value that names the
+release tarball), never the Cargo version. The CLI takes it from
+`kb-buildstamp`; this lib/bin pair cannot link that crate (PF-B1), so
+`main.rs` reads `KB_BUILD_VERSION`/`KB_BUILD_SHA` at compile time and installs
+them with `set_build_stamp` (`normalize_stamp_version` strips a leading `v` and
+refuses a non-version ref such as a branch name). An unstamped build reports
+`0.0.0-dev` / `dev` (`UNSTAMPED_VERSION`/`UNSTAMPED_BUILD_SHA`) so it names
+itself as unstamped instead of passing for a release.
+
 ## Architecture invariants
 
 1. **Security guards on `/api` are three crate-wide middlewares, chained

@@ -100,10 +100,9 @@ pub struct IdentityResponse {
     /// spirit as `remote_mutations` below.
     pub kb_daemon_enabled: bool,
     /// kb-sibling/1 Hello — the commit this binary was built from.
-    /// kb-code-server has no `build.rs` of its own (kb-server bakes
-    /// `KB_GIT_SHA` in one), so this reads the deploy-time
-    /// `KB_BUILD_SHA` env stamp and falls back to `"dev"` for a local
-    /// build — an honest "unstamped", never a fabricated sha.
+    /// kb-code-server has no `build.rs` of its own; the bin installs the
+    /// deploy-time `KB_BUILD_SHA` env stamp via `set_build_stamp` and this
+    /// falls back to `"dev"` for a local build — an honest "unstamped", never a fabricated sha.
     pub build_sha: &'static str,
     /// kb-sibling/1 Hello — the contract name
     /// (`kb_core::sibling::SIBLING_PROTOCOL`), mirroring kb-server's own
@@ -228,7 +227,7 @@ pub async fn identity(
         version: state.version,
         kb_public_url: state.kb_daemon.public_base().to_string(),
         kb_daemon_enabled: state.kb_daemon.enabled,
-        build_sha: option_env!("KB_BUILD_SHA").unwrap_or("dev"),
+        build_sha: crate::build_sha(),
         sibling_protocol: kb_core::sibling::SIBLING_PROTOCOL,
         sibling_major: kb_core::sibling::SIBLING_MAJOR,
         schema_epoch: crate::store::schema_epoch(),

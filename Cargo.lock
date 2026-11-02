@@ -4530,6 +4530,7 @@ dependencies = [
  "chrono",
  "clap",
  "futures",
+ "kb-buildstamp",
  "kb-code-server",
  "kb-core",
  "predicates",
