@@ -9796,11 +9796,10 @@ mod tests {
         let mut db = db();
         db.history_record_open("agent-only", 5_000, Some("cli"), "operator")
             .unwrap();
-        assert!(db
+        assert!(!db
             .reading_rollup("operator")
             .unwrap()
-            .get("agent-only")
-            .is_none());
+            .contains_key("agent-only"));
         assert!(db
             .reading_rollup_for_ids(&["agent-only".to_string()], "operator")
             .unwrap()

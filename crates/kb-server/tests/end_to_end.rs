@@ -23914,7 +23914,10 @@ async fn read3_agent_open_is_not_a_read_on_any_surface() {
     let row = library_row("never-opened")
         .await
         .expect("listed as never-opened");
-    assert_eq!(row["read_state"], "never-opened", "{row}");
+    // The row-level default for an absent rollup entry is "unread" with no
+    // last_opened_unix (the `never-opened` FILTER token is absence itself).
+    assert_eq!(row["read_state"], "unread", "{row}");
+    assert!(row["last_opened_unix"].is_null(), "{row}");
     for tok in ["unread", "in_progress", "read", "changed"] {
         assert!(
             library_row(tok).await.is_none(),
@@ -23927,6 +23930,10 @@ async fn read3_agent_open_is_not_a_read_on_any_surface() {
     assert_ne!(item["read_state"], "never-opened", "{item}");
     assert!(item["last_opened_unix"].is_i64(), "{item}");
     assert!(library_row("never-opened").await.is_none());
+    let row = library_row("in_progress")
+        .await
+        .expect("web open flips the row");
+    assert!(row["last_opened_unix"].is_i64(), "{row}");
 }
 
 #[tokio::test]
