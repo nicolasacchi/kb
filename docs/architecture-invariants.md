@@ -2353,16 +2353,19 @@ never counts; decided by `fed_scores_comparable(mode, ..)`): in `hybrid`, any
 contributing corpus that fell back to plain BM25 (no embedder, failed/late
 embed); in `semantic`, that, or more than one embedding model among them.
 Embedding models do NOT matter for `hybrid` (RANK3): its arm score is the
-per-corpus RRF of ranks, not a raw cosine. **What is modulated is a bounded heuristic, and which score
-it is depends on the mode.** `keyword` arms carry raw BM25, but IDF is
-corpus-local, so cross-corpus magnitudes are only roughly comparable.
-`semantic` arms carry raw vector similarity, only comparable on one model. The default `hybrid` arm carries an
-already rank-based RRF value (1/60 per arm, plus title and graph boost), so
-there the factor measures within-corpus arm agreement and boosts, not an
-absolute relevance magnitude. The bound (`w = 0.25`, within-arm order
+per-corpus RRF of ranks, not a raw cosine.
+
+**What is modulated is a bounded heuristic, and which score it is depends on
+the mode.** `keyword` arms carry raw BM25, but IDF is corpus-local, so
+cross-corpus magnitudes are only roughly comparable. `semantic` arms carry raw
+vector similarity, only comparable on one model. The default `hybrid` arm
+carries an already rank-based RRF value (1/60 per arm, plus title and graph
+boost), so there the factor measures within-corpus arm agreement and boosts,
+not an absolute relevance magnitude. The bound (`w = 0.25`, within-arm order
 inviolate) caps the influence in every mode; this is not a claim of calibrated
-cross-corpus relevance. Ordering is `total_cmp` on the fused score (NaN last), then
-first-appearance across arms, so `BTreeMap` order is the final tie-break only.
+cross-corpus relevance. Ordering is `total_cmp` on the fused score (NaN last),
+then first-appearance across arms, so `BTreeMap` order is the final tie-break
+only.
 Pins: `fusion.rs` `scored_fuse_*` tests and `end_to_end.rs`
 `federated_search_scope_all_orders_by_relevance_across_kbs`,
 `federated_search_mixed_score_kinds_fall_back_to_rank_only`,
