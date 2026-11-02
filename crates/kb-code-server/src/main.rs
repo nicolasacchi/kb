@@ -21,7 +21,7 @@ async fn main() -> Result<()> {
     let stamp_version =
         option_env!("KB_BUILD_VERSION").unwrap_or(kb_code_server::UNSTAMPED_VERSION);
     kb_code_server::set_build_stamp(
-        stamp_version.strip_prefix('v').unwrap_or(stamp_version),
+        kb_code_server::normalize_stamp_version(stamp_version),
         option_env!("KB_BUILD_SHA").unwrap_or(kb_code_server::UNSTAMPED_BUILD_SHA),
     );
 

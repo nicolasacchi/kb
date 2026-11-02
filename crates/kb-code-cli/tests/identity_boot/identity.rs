@@ -32,6 +32,12 @@ fn version_flag_reports_the_build_stamp_not_cargo_zero() {
     });
     assert!(!ver.is_empty(), "empty version");
     assert_ne!(ver, "0.0.0", "reported the frozen Cargo version");
+    // Either the documented dev fallback or a describe-shaped stamp
+    // (`0.51`, `0.50-35-g5613b8f`): starts with a digit.
+    assert!(
+        ver == "0.0.0-dev" || ver.starts_with(|c: char| c.is_ascii_digit()),
+        "neither the dev fallback nor a describe stamp: {ver:?}"
+    );
 }
 
 /// V71-X1 — this used to configure the repo as `std::env::current_dir()`,

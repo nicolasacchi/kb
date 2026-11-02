@@ -2084,6 +2084,15 @@ ad-hoc strings. There is one banner landmark per page.
 **Documents lane and the theme caption** are described under Sibling lanes
 below.
 
+## Version reporting
+
+`kb-code --version`, `kb-code-server --version` and `GET /api/identity`'s
+`version` report the kb release stamp (for example `0.51`, or a git-describe
+string on a non-tag build), the same value that names the release tarball, not
+the workspace Cargo version (frozen at `0.0.0`). A build with no stamp reports
+`0.0.0-dev` (`build_sha` `dev`), so it names itself as unstamped; the Settings
+page shows it verbatim as `kb-code 0.0.0-dev`.
+
 ## Sibling lanes
 
 kb and kb-code are one fleet, so each app can show the other's side. The only

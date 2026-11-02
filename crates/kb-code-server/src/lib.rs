@@ -539,6 +539,20 @@ pub fn set_build_stamp(version: &'static str, build_sha: &'static str) {
     let _ = BUILD_STAMP.set((version, build_sha));
 }
 
+/// Normalise a raw `KB_BUILD_VERSION` (a release tag such as `v0.51`) into the
+/// reported version: one leading `v` is stripped, and anything that does not
+/// then start with a digit (a branch name such as `main` from a manual
+/// workflow run, or an empty string) is not a version, so it falls back to
+/// [`UNSTAMPED_VERSION`] rather than being reported as one.
+pub fn normalize_stamp_version(raw: &str) -> &str {
+    let v = raw.strip_prefix('v').unwrap_or(raw);
+    if v.starts_with(|c: char| c.is_ascii_digit()) {
+        v
+    } else {
+        UNSTAMPED_VERSION
+    }
+}
+
 /// The version this binary reports: the installed stamp, else
 /// [`UNSTAMPED_VERSION`]. Release/Docker builds inject the release tag
 /// (`KB_BUILD_VERSION`, the same value that names the kb-code tarball).
@@ -2001,5 +2015,22 @@ mod tests {
             booted_with_store_root(None).await,
             "a boot with a usable store root must publish read gate = true"
         );
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::*;
+
+    #[test]
+    fn normalize_strips_v_and_rejects_non_versions() {
+        assert_eq!(normalize_stamp_version("v0.51"), "0.51");
+        assert_eq!(
+            normalize_stamp_version("0.50-35-g5613b8f"),
+            "0.50-35-g5613b8f"
+        );
+        assert_eq!(normalize_stamp_version("main"), UNSTAMPED_VERSION);
+        assert_eq!(normalize_stamp_version(""), UNSTAMPED_VERSION);
+        assert_eq!(normalize_stamp_version("v"), UNSTAMPED_VERSION);
     }
 }
