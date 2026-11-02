@@ -28,7 +28,7 @@
     "@lezer/highlight": "^1.2.4",
     "@lezer/markdown": "^1.8.1",
     "@tanstack/react-query": "^5.105.0",
-    "@tanstack/react-virtual": "^3.14.23",
+    "@tanstack/react-virtual": "^3.14.24",
     "mermaid": "^12.2.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
@@ -38,7 +38,7 @@
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
-    "@babel/parser": "^8.0.8",
+    "@babel/parser": "^8.0.10",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",
     "@types/react": "^19.3.0",
