@@ -1350,24 +1350,34 @@ pub async fn get(
     .into_response()
 }
 
-/// RANK1 — may the federated fuse weight by raw per-corpus scores?
+/// RANK1/RANK3 — may the federated fuse weight by raw per-corpus scores?
 ///
-/// Score kinds per mode: `keyword` arms carry raw BM25 (IDF is corpus-local,
-/// so only a bounded heuristic across corpora); `hybrid` arms carry an
-/// already rank-based RRF value (1/60 per arm + title/graph boost), so the
-/// modulation reflects within-corpus arm agreement and boosts, not an
-/// absolute relevance magnitude; `semantic` arms carry vector similarity.
-/// Whatever the kind, mixing kinds is meaningless, so weighting is allowed
-/// only when no vector lane is wanted, or when EVERY contributing arm ran
-/// its vector lane on ONE embedding model. Derived from the arms that
-/// actually returned hits, never from the configured corpus set.
+/// What an arm's `DocSummary::score` actually is, per mode:
+/// * `keyword` — raw BM25 (corpus-local IDF: a bounded heuristic across
+///   corpora, but one kind).
+/// * `hybrid` — the per-corpus `rrf_fuse` of the vector and BM25 rankings
+///   (`1/(K+rank)` per lane) plus title/graph boost. It is derived from RANKS,
+///   never from a raw cosine, so the embedding model that produced the vector
+///   ranking does not change its scale: arms on different models are
+///   comparable. Only an arm that fell back to plain BM25 (no embedder,
+///   failed/late embed) carries a different kind.
+/// * `semantic` — the raw vector similarity itself, which is only comparable
+///   between arms on ONE model.
+///
+/// `contributing` / `vector_arms` / `distinct_models` are derived from arms
+/// that returned at least one hit: an empty or skipped arm has no score and
+/// must not affect comparability.
 fn fed_scores_comparable(
-    wants_vector: bool,
+    mode: &str,
     contributing: usize,
     vector_arms: usize,
     distinct_models: usize,
 ) -> bool {
-    !wants_vector || (contributing > 0 && vector_arms == contributing && distinct_models == 1)
+    match mode {
+        "hybrid" => contributing > 0 && vector_arms == contributing,
+        "semantic" => contributing > 0 && vector_arms == contributing && distinct_models == 1,
+        _ => true,
+    }
 }
 
 /// SQ3 — federated search across every kb on the daemon (`scope=all`).
@@ -2046,11 +2056,16 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
                 .into_iter()
                 .map(|(id, r)| (hit_key(&kb, &id), r)),
         );
+        // RANK3 — an arm with no hits has no score kind: it must not count as
+        // contributing (an empty corpus or a sessions corpus whose transcripts
+        // R0 excluded used to zero the weight for the whole fleet).
         if let Some(hits) = arm.hits {
-            contributing += 1;
-            if let Some(m) = arm.vector_model {
-                vector_arms += 1;
-                vector_models.insert(m);
+            if !hits.is_empty() {
+                contributing += 1;
+                if let Some(m) = arm.vector_model {
+                    vector_arms += 1;
+                    vector_models.insert(m);
+                }
             }
             arms.push((kb, hits));
         }
@@ -2067,17 +2082,20 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
     } else {
         limit as usize
     };
-    // RANK1 — score-weighted only when the CONTRIBUTING arms' scores are one
-    // kind. Derived from the arms that actually returned hits (not from every
-    // configured corpus): in a vector-bearing mode every contributing arm must
-    // have run its vector lane and all on one embedding model; a corpus that
-    // fell back to keyword (no embedder, failed/late embed) or a deployment
-    // mixing models yields rank-only (weight 0). A skipped corpus
-    // (`hits: None`) or an embedder-less corpus that returned nothing no
-    // longer disables weighting. Conservative: SQ5-chunked vs unchunked
-    // corpora on one model are not distinguished.
-    let rel_ok =
-        fed_scores_comparable(wants_vector, contributing, vector_arms, vector_models.len());
+    // RANK1/RANK3 — score-weighted only when the CONTRIBUTING arms' scores are
+    // one kind (see `fed_scores_comparable`). Contributing = returned at least
+    // one hit, so skipped, errored, empty and R0-emptied corpora never disable
+    // weighting. `hybrid` scores are rank-derived, so mixed embedding models
+    // are fine there; a corpus that fell back to keyword (no embedder,
+    // failed/late embed) or `semantic` across several models is rank-only
+    // (weight 0). Conservative: SQ5-chunked vs unchunked corpora are not
+    // distinguished.
+    let rel_ok = fed_scores_comparable(
+        params.mode.as_str(),
+        contributing,
+        vector_arms,
+        vector_models.len(),
+    );
     let mut fused: Vec<(String, kb_core::storage::lance::DocSummary)> =
         kb_core::fusion::rrf_fuse_keyed_scored(
             arms,
@@ -2345,18 +2363,19 @@ mod tests {
     #[test]
     fn fed_scores_comparable_pins_every_branch() {
         // keyword: always comparable (one score kind).
-        assert!(fed_scores_comparable(false, 3, 0, 0));
-        // vector mode, all arms ran vector on one model.
-        assert!(fed_scores_comparable(true, 2, 2, 1));
-        // one contributing arm fell back to keyword (embedder-less / failed embed).
-        assert!(!fed_scores_comparable(true, 2, 1, 1));
-        // multiple embedding models.
-        assert!(!fed_scores_comparable(true, 2, 2, 2));
-        // nothing contributed.
-        assert!(!fed_scores_comparable(true, 0, 0, 0));
-        // an embedder-less corpus that returned NO hits does not disable
-        // weighting: it is simply not a contributing arm.
-        assert!(fed_scores_comparable(true, 2, 2, 1));
+        assert!(fed_scores_comparable("keyword", 3, 0, 0));
+        // hybrid: rank-derived RRF, so models do not matter ...
+        assert!(fed_scores_comparable("hybrid", 2, 2, 1));
+        assert!(fed_scores_comparable("hybrid", 3, 3, 2));
+        // ... but an arm that fell back to plain BM25 is a different kind.
+        assert!(!fed_scores_comparable("hybrid", 2, 1, 1));
+        assert!(!fed_scores_comparable("hybrid", 2, 0, 0));
+        assert!(!fed_scores_comparable("hybrid", 0, 0, 0));
+        // semantic: raw similarity, one model only.
+        assert!(fed_scores_comparable("semantic", 2, 2, 1));
+        assert!(!fed_scores_comparable("semantic", 2, 2, 2));
+        assert!(!fed_scores_comparable("semantic", 2, 1, 1));
+        assert!(!fed_scores_comparable("semantic", 0, 0, 0));
     }
 
     fn doc(id: &str, path: &str) -> DocSummary {

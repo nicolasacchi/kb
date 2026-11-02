@@ -2347,15 +2347,16 @@ inviolate: a contribution is clamped to at most the previous one in its arm.
 With fewer than two non-empty arms, no usable `m`, or `w = 0` the modulation
 is skipped entirely and the output is byte-identical to the rank-only fuse
 (`rrf_fuse_keyed` is that `w = 0` call). The merge falls back to rank-only
-(`w = 0`) when the CONTRIBUTING arms' raw scores are not one kind (derived
-from the arms that returned hits, via `fed_scores_comparable`, not from the
-configured corpus set): in a vector-bearing mode, any contributing corpus that
-fell back to keyword (no embedder, failed/late embed) or more than one
-embedding model among them. A skipped or empty embedder-less corpus does not
-disable weighting. **What is modulated is a bounded heuristic, and which score
+(`w = 0`) when the CONTRIBUTING arms' raw scores are not one kind (contributing
+= returned at least one hit, so a skipped, errored, empty or R0-emptied corpus
+never counts; decided by `fed_scores_comparable(mode, ..)`): in `hybrid`, any
+contributing corpus that fell back to plain BM25 (no embedder, failed/late
+embed); in `semantic`, that, or more than one embedding model among them.
+Embedding models do NOT matter for `hybrid` (RANK3): its arm score is the
+per-corpus RRF of ranks, not a raw cosine. **What is modulated is a bounded heuristic, and which score
 it is depends on the mode.** `keyword` arms carry raw BM25, but IDF is
 corpus-local, so cross-corpus magnitudes are only roughly comparable.
-`semantic` arms carry vector similarity. The default `hybrid` arm carries an
+`semantic` arms carry raw vector similarity, only comparable on one model. The default `hybrid` arm carries an
 already rank-based RRF value (1/60 per arm, plus title and graph boost), so
 there the factor measures within-corpus arm agreement and boosts, not an
 absolute relevance magnitude. The bound (`w = 0.25`, within-arm order
@@ -2366,7 +2367,8 @@ Pins: `fusion.rs` `scored_fuse_*` tests and `end_to_end.rs`
 `federated_search_scope_all_orders_by_relevance_across_kbs`,
 `federated_search_mixed_score_kinds_fall_back_to_rank_only`,
 `federated_search_r0_filtered_transcript_does_not_affect_order`, and
-`search.rs` `fed_scores_comparable_pins_every_branch`, with
+`search.rs` `fed_scores_comparable_pins_every_branch`, `embed_rank3.rs`
+`hybrid_scope_all_weights_by_score_despite_empty_keyword_corpus`, with
 `federated_search_scope_all_is_deterministic_and_attributes_kbs` now a true
 score tie. The fused `Hit.score` is comparable only within one response.
 
