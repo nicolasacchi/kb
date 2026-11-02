@@ -39,7 +39,7 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 getrandom = { workspace = true }
 scraper = { workspace = true }
-# Pin ego-tree to scraper 0.27's transitive version so NodeRef<scraper::Node>
+# Pin ego-tree to scraper 0.29's transitive version so NodeRef<scraper::Node>
 # unifies in the dep graph.
 ego-tree = "=0.11.1"
 
