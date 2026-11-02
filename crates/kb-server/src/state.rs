@@ -351,6 +351,9 @@ pub struct KbContext {
     /// under git (deployed container, plain dir) → the version timeline
     /// falls back to index snapshots. Computed once at bring-up.
     pub git_root: Option<PathBuf>,
+    /// GITX — the explicit `[kb.*] git_dir`/`git_prefix` binding, when set
+    /// (`git_root` is then its root). Maps a corpus file to its in-repo path.
+    pub git_binding: Option<kb_core::vcs::GitBinding>,
     /// Track V — resolved `[kb.*] versions` mode (auto|git|index|both|off).
     /// Drives the Versions/Diff route + gates index-snapshot capture.
     pub versions_mode: kb_core::vcs::VersionsMode,

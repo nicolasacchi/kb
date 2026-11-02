@@ -115,6 +115,103 @@ pub fn find_git_root(start: &Path) -> Option<PathBuf> {
     }
 }
 
+/// An explicit per-kb git binding (`[kb.*] git_dir` + `git_prefix`): the repo
+/// root git is run against, plus where the corpus sits inside that repo. It
+/// replaces the ancestor walk of [`find_git_root`] for a corpus whose mount
+/// hides the repo (a bind-mounted subdirectory); stored paths, ids and
+/// source slugs are untouched because only the git-side path is mapped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitBinding {
+    /// Directory containing the repo's `.git`; every git call runs `git -C <root>`.
+    pub root: PathBuf,
+    /// The corpus directory (canonicalised) the prefix stands for.
+    pub corpus: PathBuf,
+    /// The corpus location inside the repo: `""` (repo root) or a clean
+    /// relative path such as `docs/research`, no leading/trailing `/`.
+    pub prefix: String,
+}
+
+impl GitBinding {
+    /// The path of `abs` (a file under the corpus) as git knows it:
+    /// `<prefix>/<abs relative to corpus>`. `None` when `abs` is outside the corpus.
+    pub fn rel(&self, abs: &Path) -> Option<String> {
+        let inner = abs.strip_prefix(&self.corpus).ok()?;
+        let inner = inner.to_string_lossy().replace('\\', "/");
+        if self.prefix.is_empty() {
+            Some(inner)
+        } else {
+            Some(format!("{}/{}", self.prefix, inner))
+        }
+    }
+}
+
+/// Validate a `git_prefix`: relative, no `..`/`.` segments, no NUL, no
+/// leading `/` or `\\`. Returns the normalised form (trailing `/` dropped,
+/// empty segments collapsed; `""` = repo root).
+pub fn normalize_git_prefix(raw: &str) -> Result<String, String> {
+    if raw.contains('\0') {
+        return Err("git_prefix contains a NUL byte".into());
+    }
+    if raw.starts_with('/') || raw.starts_with('\\') {
+        return Err(format!(
+            "git_prefix `{raw}` must be relative (no leading `/`)"
+        ));
+    }
+    if raw.contains('\\') {
+        return Err(format!("git_prefix `{raw}` must use `/` separators"));
+    }
+    let mut segs = Vec::new();
+    for seg in raw.split('/') {
+        match seg {
+            "" => {}
+            ".." | "." => {
+                return Err(format!(
+                    "git_prefix `{raw}` must not contain `{seg}` segments"
+                ))
+            }
+            s => segs.push(s),
+        }
+    }
+    Ok(segs.join("/"))
+}
+
+/// Resolve the `[kb.*] git_dir` / `git_prefix` pair against the corpus path.
+/// `Ok(None)` when neither key is set (caller falls back to
+/// [`find_git_root`], byte-identical to pre-binding behaviour). Errors when
+/// `git_prefix` is invalid, is set without `git_dir`, or `git_dir` holds no
+/// `.git`. No git command runs here and no config string is ever shelled.
+pub fn bind_git(
+    corpus: &Path,
+    git_dir: Option<&Path>,
+    git_prefix: Option<&str>,
+) -> Result<Option<GitBinding>, String> {
+    let prefix = git_prefix.map(normalize_git_prefix).transpose()?;
+    let Some(dir) = git_dir else {
+        return if prefix.is_some() {
+            Err("git_prefix is set without git_dir".into())
+        } else {
+            Ok(None)
+        };
+    };
+    let root = dir
+        .canonicalize()
+        .map_err(|e| format!("git_dir {}: {e}", dir.display()))?;
+    if !root.join(".git").exists() {
+        return Err(format!(
+            "git_dir {} contains no `.git` (mount the repo's .git at <git_dir>/.git)",
+            root.display()
+        ));
+    }
+    let corpus = corpus
+        .canonicalize()
+        .unwrap_or_else(|_| corpus.to_path_buf());
+    Ok(Some(GitBinding {
+        root,
+        corpus,
+        prefix: prefix.unwrap_or_default(),
+    }))
+}
+
 /// `git log --follow` for one file (path relative to `git_root`), parsed into
 /// [`GitCommit`]s newest-first. Returns an empty vec — never an error — when
 /// git is unavailable, the dir isn't a repo, or the file is untracked, so
@@ -573,6 +670,52 @@ mod tests {
         std::fs::create_dir_all(&sub).unwrap();
         assert_eq!(find_git_root(&sub), Some(root.clone()));
         assert_eq!(find_git_root(&root), Some(root));
+    }
+
+    #[test]
+    fn git_prefix_validation() {
+        assert_eq!(
+            normalize_git_prefix("docs/research").unwrap(),
+            "docs/research"
+        );
+        assert_eq!(
+            normalize_git_prefix("docs//research/").unwrap(),
+            "docs/research"
+        );
+        assert_eq!(normalize_git_prefix("").unwrap(), "");
+        for bad in ["/abs", "../up", "a/../b", "a/./b", "a\\b", "a\0b", "."] {
+            assert!(
+                normalize_git_prefix(bad).is_err(),
+                "{bad:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn bind_git_requires_dot_git_and_pairs_keys() {
+        let tmp = tempfile::tempdir().unwrap();
+        let corpus = tmp.path().join("c");
+        std::fs::create_dir_all(&corpus).unwrap();
+        assert_eq!(bind_git(&corpus, None, None).unwrap(), None);
+        assert!(
+            bind_git(&corpus, None, Some("docs")).is_err(),
+            "prefix needs git_dir"
+        );
+        assert!(
+            bind_git(&corpus, Some(tmp.path()), None).is_err(),
+            "no .git inside"
+        );
+        std::fs::create_dir(tmp.path().join(".git")).unwrap();
+        assert!(bind_git(&corpus, Some(tmp.path()), Some("../x")).is_err());
+        let b = bind_git(&corpus, Some(tmp.path()), Some("docs/research/"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(b.prefix, "docs/research");
+        let f = b.corpus.join("sub/a.html");
+        assert_eq!(b.rel(&f).as_deref(), Some("docs/research/sub/a.html"));
+        assert_eq!(b.rel(Path::new("/elsewhere/a.html")), None);
+        let b0 = bind_git(&corpus, Some(tmp.path()), None).unwrap().unwrap();
+        assert_eq!(b0.rel(&f).as_deref(), Some("sub/a.html"));
     }
 
     #[test]

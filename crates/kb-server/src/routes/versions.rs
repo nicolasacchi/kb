@@ -164,6 +164,9 @@ async fn resolve<'a>(
 /// The file's path relative to the git root (a possible ancestor of the
 /// corpus), or `None` when the kb has no git root / the file sits outside it.
 pub(crate) fn rel_to_git(ctx: &KbContext, abs: &FsPath) -> Option<String> {
+    if let Some(binding) = ctx.git_binding.as_ref() {
+        return binding.rel(abs);
+    }
     ctx.git_root.as_ref().and_then(|root| {
         abs.strip_prefix(root)
             .ok()

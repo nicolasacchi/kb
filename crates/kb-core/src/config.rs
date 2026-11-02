@@ -1290,6 +1290,22 @@ pub struct KbSection {
     #[serde(default)]
     pub versions: Option<String>,
 
+    /// GITX — explicit git binding for a corpus whose mount hides its repo
+    /// (a bind-mounted SUBDIRECTORY of a repo has no `.git` above it).
+    /// A directory that CONTAINS the repo's `.git` (mount the repo's `.git`
+    /// read-only at `<git_dir>/.git`, outside every corpus path). When set it
+    /// replaces the ancestor walk; absent = the walk, byte-identical.
+    /// Stored paths, ids and source slugs never change.
+    #[serde(default)]
+    pub git_dir: Option<PathBuf>,
+
+    /// GITX — where the corpus sits inside the `git_dir` repo, e.g.
+    /// `docs/research` (relative, no `..`, no leading `/`). Absent with a
+    /// `git_dir` = the corpus is the repo root. Invalid, or set without
+    /// `git_dir`, is a hard validation error.
+    #[serde(default)]
+    pub git_prefix: Option<String>,
+
     /// RP-track — per-kb reading-progress capture toggle. Default ON
     /// (`None` → true). When false, `POST …/history/reading` no-ops (204)
     /// so nothing per-section is stored; scroll-resume + the TOC mini-spy
@@ -2298,6 +2314,29 @@ impl KbConfig {
                     ));
                 }
             }
+            if let Some(prefix) = kb.git_prefix.as_deref() {
+                if let Err(e) = crate::vcs::normalize_git_prefix(prefix) {
+                    issues.push(ValidationIssue::hard(format!("/kb/{name}/git_prefix"), e));
+                } else if kb.git_dir.is_none() {
+                    issues.push(ValidationIssue::hard(
+                        format!("/kb/{name}/git_prefix"),
+                        "git_prefix is set without git_dir".to_string(),
+                    ));
+                }
+            }
+            // Soft: the daemon boots without git for this kb (never a hard
+            // error: the operator may mount the `.git` after validating).
+            if let Some(dir) = kb.git_dir.as_deref() {
+                if !dir.join(".git").exists() {
+                    issues.push(ValidationIssue::warn(
+                        format!("/kb/{name}/git_dir"),
+                        format!(
+                            "{} has no `.git` (missing directory or unmounted repo); this kb will have no git history",
+                            dir.display()
+                        ),
+                    ));
+                }
+            }
             if let Some(ob) = &kb.outbound {
                 for (i, rule) in ob.redactions.iter().enumerate() {
                     if let Err(e) = regex::Regex::new(&rule.pattern) {
@@ -3151,6 +3190,8 @@ mod tests {
                 code_url: None,
                 decay_policy: None,
                 versions: None,
+                git_dir: None,
+                git_prefix: None,
                 reading_progress: None,
                 search: Default::default(),
                 indexable_extensions: None,
@@ -3481,6 +3522,8 @@ mod tests {
                 code_url: Some("https://kbc.example.com".into()),
                 decay_policy: None,
                 versions: None,
+                git_dir: None,
+                git_prefix: None,
                 reading_progress: None,
                 search: Default::default(),
                 indexable_extensions: None,
@@ -3824,6 +3867,8 @@ mod tests {
             code_url: None,
             decay_policy: None,
             versions: None,
+            git_dir: None,
+            git_prefix: None,
             reading_progress: None,
             search: Default::default(),
             indexable_extensions: None,
@@ -4087,6 +4132,44 @@ mod tests {
         assert!(issues
             .iter()
             .any(|i| i.pointer == "/kb/canon/indexable_extensions/md" && i.is_hard()));
+    }
+
+    #[test]
+    fn validate_git_binding_keys() {
+        let issue = |dir: Option<&str>, prefix: Option<&str>| {
+            let mut c = KbConfig::default();
+            let mut kb = kb_section_with_model(None);
+            kb.git_dir = dir.map(PathBuf::from);
+            kb.git_prefix = prefix.map(str::to_string);
+            c.kb.insert(KbName::new("canon").unwrap(), kb);
+            c.validate()
+                .iter()
+                .any(|i| i.pointer == "/kb/canon/git_prefix" && i.is_hard())
+        };
+        assert!(issue(Some("/g"), Some("../escape")), "`..` is hard");
+        assert!(issue(Some("/g"), Some("/abs")), "leading `/` is hard");
+        assert!(issue(None, Some("docs")), "prefix without git_dir is hard");
+        assert!(!issue(Some("/g"), Some("docs/research")));
+        assert!(!issue(Some("/g"), None));
+        assert!(!issue(None, None));
+    }
+
+    #[test]
+    fn validate_warns_on_git_dir_without_dot_git() {
+        let warns = |dir: &std::path::Path| {
+            let mut c = KbConfig::default();
+            let mut kb = kb_section_with_model(None);
+            kb.git_dir = Some(dir.to_path_buf());
+            c.kb.insert(KbName::new("canon").unwrap(), kb);
+            c.validate()
+                .iter()
+                .any(|i| i.pointer == "/kb/canon/git_dir" && !i.is_hard())
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(warns(&tmp.path().join("nonexistent")), "missing dir warns");
+        assert!(warns(tmp.path()), "dir without .git warns");
+        std::fs::create_dir(tmp.path().join(".git")).unwrap();
+        assert!(!warns(tmp.path()), "dir with .git is quiet");
     }
 
     #[test]
@@ -4960,6 +5043,17 @@ mod docs_coverage_tests {
     #[test]
     fn every_server_key_is_documented() {
         assert_documented("server", &["ServerSection"]);
+    }
+
+    #[test]
+    fn the_git_binding_keys_are_documented() {
+        let doc = include_str!("../../../docs/configuration.md");
+        for k in ["git_dir", "git_prefix"] {
+            assert!(
+                doc.contains(&format!("`{k}`")),
+                "docs/configuration.md lacks `{k}`"
+            );
+        }
     }
 
     #[test]

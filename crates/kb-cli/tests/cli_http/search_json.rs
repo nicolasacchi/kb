@@ -64,6 +64,8 @@ async fn boot() -> (tempfile::TempDir, std::net::SocketAddr) {
             code_url: None,
             decay_policy: None,
             versions: None,
+            git_dir: None,
+            git_prefix: None,
             reading_progress: None,
             search: Default::default(),
             indexable_extensions: None,

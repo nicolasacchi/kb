@@ -2125,7 +2125,26 @@ async fn bring_up_kb(
             m
         })
         .unwrap_or_default();
-    let git_root = kb_core::vcs::find_git_root(&source_path);
+    // GITX — an explicit `git_dir`/`git_prefix` binding wins over the ancestor
+    // walk; a misconfigured binding yields NO git (never a silent fallback to
+    // the walk, which would point git at the wrong repo).
+    let git_binding = match kb_core::vcs::bind_git(
+        &source_path,
+        kb_section.git_dir.as_deref(),
+        kb_section.git_prefix.as_deref(),
+    ) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(kb = %kb_name, error = %e, "ignoring [kb.*] git_dir/git_prefix; no git history for this kb");
+            None
+        }
+    };
+    let git_bound = kb_section.git_dir.is_some() || kb_section.git_prefix.is_some();
+    let git_root = match &git_binding {
+        Some(b) => Some(b.root.clone()),
+        None if git_bound => None,
+        None => kb_core::vcs::find_git_root(&source_path),
+    };
     let now = chrono::Utc::now().timestamp();
     storage
         .upsert_source(source_slug.clone(), source_path.clone(), now)
@@ -2673,6 +2692,7 @@ async fn bring_up_kb(
                 parsed
             }),
             git_root,
+            git_binding,
             versions_mode,
             reading_progress: kb_section.reading_progress_enabled(),
             gallery_cache: Arc::new(std::sync::Mutex::new(None)),

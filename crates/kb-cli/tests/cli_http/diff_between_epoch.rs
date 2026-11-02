@@ -111,6 +111,8 @@ async fn boot_git_kb_with_future_era() -> (tempfile::TempDir, SocketAddr, String
             code_url: None,
             decay_policy: None,
             versions: Some("git".into()),
+            git_dir: None,
+            git_prefix: None,
             reading_progress: None,
             search: Default::default(),
             indexable_extensions: None,

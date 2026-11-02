@@ -75,6 +75,8 @@ pub(crate) async fn boot_with(
             code_url: None,
             decay_policy: None,
             versions: versions.map(str::to_string),
+            git_dir: None,
+            git_prefix: None,
             reading_progress: None,
             search: Default::default(),
             indexable_extensions: None,

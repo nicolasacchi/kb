@@ -13,6 +13,7 @@ mod coderefs;
 mod docs_asof;
 mod events_filters;
 mod exclusions;
+mod git_binding;
 mod links_suggest;
 mod since_visit;
 mod slates;
