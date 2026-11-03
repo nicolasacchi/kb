@@ -725,6 +725,14 @@ path and tell kb where the corpus sits in it:
 volumes:
   - /path/to/repo/docs/research:/srv/notes            # the corpus (unchanged)
   - /path/to/repo/.git:/srv/_git/notes/.git:ro        # the repo's history, read-only
+environment:
+  # Docker creates /srv/_git/notes (the mount point's parent) as root, and git
+  # refuses a repo whose worktree directory another user owns ("dubious
+  # ownership"), even when the container user owns .git itself. Trust exactly
+  # the binding tree (the /* form needs git >= 2.46):
+  - GIT_CONFIG_COUNT=1
+  - GIT_CONFIG_KEY_0=safe.directory
+  - GIT_CONFIG_VALUE_0=/srv/_git/*
 ```
 
 ```toml
@@ -736,10 +744,13 @@ git_prefix = "docs/research"     # where the corpus lives inside the repo
 
 Ids, stored paths and source slugs are untouched. Check with
 `kb versions --kb notes` (git rows appear beside the snapshots) and
-`git -C /srv/_git/notes log --oneline -1` inside the container. If git refuses
-with "dubious ownership", the container user does not own the mounted `.git`;
-make it readable by that user or add the directory to `safe.directory` in the
-image.
+`git -C /srv/_git/notes log --oneline -1` inside the container. If git still
+refuses with "dubious ownership", the `safe.directory` environment above is
+missing or the image's git is older than 2.46 (list each `/srv/_git/<name>`
+instead of the `/*` form: one `GIT_CONFIG_KEY_<n>=safe.directory` /
+`GIT_CONFIG_VALUE_<n>=/srv/_git/<name>` pair per repo, `n` counting from 0, with
+`GIT_CONFIG_COUNT` set to the number of pairs); if it reports a permission
+error, the container user cannot read the mounted `.git`.
 
 The container can then read the **whole** repo history, including blobs outside
 the corpus and anything ever committed. Routes only expose `git show
