@@ -37,7 +37,7 @@
 #
 # SLATE2 — a firing nudge posts NOTHING to the slate: the ask lane holds
 # questions only, and distill debt is already carried by the pending ledger
-# above and `kb sessions --undistilled`.
+# above and `kb sessions list --undistilled`.
 #
 # Gated like kb-capture.sh on KB_SESSIONS_DIR (no sessions corpus → nothing
 # to distill from) and on `kb` being installed (the skill needs it).

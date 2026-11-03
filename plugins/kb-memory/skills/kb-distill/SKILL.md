@@ -240,7 +240,7 @@ explicitly that a re-run over the same input now reports **zero writes**.
 
 The Stop-hook nudge no longer posts a slate ask (SLATE2: the ask lane holds
 questions only); it queues the session in the distill-pending ledger, and
-`kb sessions --undistilled` is the debt list. Older ledgers may still carry
+`kb sessions list --undistilled` is the debt list. Older ledgers may still carry
 a `Distill session <sid> (<harness>)?` ask (ref `session:<sid>`) posted by a
 previous nudge. Once a session you were asked to distill has been handled
 (memories written, or every candidate NOOPed/skipped on purpose), answer any
