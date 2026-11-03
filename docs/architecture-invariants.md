@@ -3114,6 +3114,17 @@ together, with goldens.
   content-hash-deduped emission per file touched in the second a pass runs.
   Not shipped here (it touches the v0.24 SC1 storm fix's hot path and wants
   its own change + bench).
+- **A test must never resolve kb state paths from the developer's real HOME.**
+  It surfaced twice: a hook test that ran the real `kb` replayed and deleted a
+  developer's parked capture spool (a landed capture makes `hook_adapter_land`
+  run `--replay-spool`, the replay deletes what it lands, the test's EXIT trap
+  deletes the landing dir), and the `ce-*-test` / `.plock` leaks into the real
+  state and cache dirs. Shell hook tests call `kb_test_sandbox`
+  (`plugins/kb-memory/hooks/tests/lib-sandbox.sh`); `hook_shell.rs` runs every
+  script through `hook_command` (throwaway HOME/XDG, inherited `KB_*`/`CLAUDE_*`
+  stripped); in-process Rust tests use `KbPaths::rooted_at`.
+  `crates/kb-cli/tests/cli_offline/test_sandbox_lint.rs` enforces all three.
+  Per-child `Command::env`/`env_remove` only, never `std::env::set_var`.
 
 ## Dev-environment tips
 
