@@ -233,8 +233,10 @@ async fn resolve_note_owner(
 /// POST/PATCH/DELETE helper: send, then map a non-2xx into a clear error
 /// carrying the daemon's problem+json `detail` when present. Returns the
 /// parsed JSON body on success (or `Value::Null` for an empty body).
+const COMMENTS_READ_FIRST: &str = "`kb comments show <kb> <artifact_id>`";
+
 async fn send_json(req: reqwest::RequestBuilder, what: &str) -> Result<Value> {
-    let resp = req.send().await.with_context(|| what.to_string())?;
+    let resp = crate::http::send_noting_transport(req, what, Some(COMMENTS_READ_FIRST)).await?;
     let status = resp.status().as_u16();
     let text = resp.text().await.unwrap_or_default();
     if !(200..300).contains(&status) {
@@ -975,12 +977,12 @@ pub async fn apply(
         encode_path_segment(&id),
     );
     let client = client_with_timeout_and_bearer(10, bearer)?;
-    let resp = client
-        .post(&url)
-        .json(&body)
-        .send()
-        .await
-        .with_context(|| format!("POST {url}"))?;
+    let resp = crate::http::send_noting_transport(
+        client.post(&url).json(&body),
+        &format!("POST {url}"),
+        Some(COMMENTS_READ_FIRST),
+    )
+    .await?;
     let status = resp.status().as_u16();
     let text = resp.text().await.unwrap_or_default();
     if !(200..300).contains(&status) {
@@ -2097,6 +2099,19 @@ mod tests {
     use super::*;
     use std::io::{BufRead, Write};
     use std::sync::mpsc::{self, Receiver};
+
+    #[tokio::test]
+    async fn send_json_timeout_names_comments_show() {
+        let c = crate::http::client_with_exact_timeout(std::time::Duration::from_millis(300), None)
+            .unwrap();
+        let url = crate::http::tests::silent_stub();
+        let err = send_json(c.post(url).json(&serde_json::json!({})), "reply")
+            .await
+            .unwrap_err();
+        let s = err.to_string();
+        assert!(s.contains("`kb comments show <kb> <artifact_id>`"), "{s}");
+        assert!(s.contains("may have landed"), "{s}");
+    }
 
     /// A stub daemon that records every request target and answers from
     /// `routes` — first prefix match on the path (query string ignored),

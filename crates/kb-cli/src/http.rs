@@ -341,11 +341,91 @@ pub async fn resolve_artifact_target(
     }
 }
 
+/// What a request that got NO HTTP status at all tells us.
+/// Prevents: a write that timed out client-side after the daemon accepted it
+/// (slow daemon on an IO-bound host) printing only the bare request line, so an
+/// agent retries and duplicates the post/reply. No such duplicate is recorded
+/// yet; this is the wording half of the AH8 review finding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TransportKind {
+    Connect,
+    Timeout,
+    Other,
+}
+
+/// Connect is checked FIRST: an OS-level connect timeout sets both flags, and a
+/// failed connect proves the request was never written.
+pub(crate) fn transport_kind(e: &reqwest::Error) -> TransportKind {
+    if e.is_connect() {
+        TransportKind::Connect
+    } else if e.is_timeout() {
+        TransportKind::Timeout
+    } else {
+        TransportKind::Other
+    }
+}
+
+/// One-line wording for a no-status failure (the omp adapter shows only the
+/// first stderr line). `read_first` names the read to run before re-sending a
+/// write; `None` falls back to a generic pointer.
+pub(crate) fn transport_note(
+    what: &str,
+    kind: TransportKind,
+    mutating: bool,
+    origin: &str,
+    read_first: Option<&str>,
+) -> String {
+    let next = match read_first {
+        Some(r) => format!("run {r} before sending it again"),
+        None => {
+            "check the current state with this verb's own list/show read before sending it again"
+                .to_string()
+        }
+    };
+    match (kind, mutating) {
+        (TransportKind::Connect, _) => format!(
+            "{what}: nothing was sent — daemon not reachable at {origin}; start it with `kb daemon`"
+        ),
+        (TransportKind::Timeout, false) => format!(
+            "{what}: no answer before the client timeout — the daemon may be busy rather than down; this was a read, so retrying is safe"
+        ),
+        (TransportKind::Timeout, true) => format!(
+            "{what}: no answer before the client timeout — the write may have landed (the daemon may still be finishing it); {next}"
+        ),
+        (TransportKind::Other, true) => format!(
+            "{what}: the connection failed after the request may have been sent — the write may have landed; {next}"
+        ),
+        (TransportKind::Other, false) => what.to_string(),
+    }
+}
+
+/// Send a request; on a no-status failure attach `transport_note` as context
+/// while keeping the `reqwest::Error` as the source. Deliberately NOT wrapped
+/// in `outbox::Transient`: only `kb remember` may spool.
+pub(crate) async fn send_noting_transport(
+    req: reqwest::RequestBuilder,
+    what: &str,
+    read_first: Option<&str>,
+) -> Result<reqwest::Response> {
+    let (client, built) = req.build_split();
+    let request = built.with_context(|| what.to_string())?;
+    let m = request.method().clone();
+    let mutating = !(m == reqwest::Method::GET || m == reqwest::Method::HEAD);
+    let origin = request.url().origin().ascii_serialization();
+    match client.execute(request).await {
+        Ok(resp) => Ok(resp),
+        Err(e) => {
+            let note = transport_note(what, transport_kind(&e), mutating, &origin, read_first);
+            Err(anyhow::Error::new(e).context(note))
+        }
+    }
+}
+
 /// Send a built request, mapping non-2xx to a problem+json-aware error
 /// (`detail` surfaced when present). Returns the parsed JSON body
 /// (`Null` for empty 204-style responses).
 pub async fn send_json(req: reqwest::RequestBuilder, what: &str) -> Result<serde_json::Value> {
-    let resp = req.send().await.with_context(|| what.to_string())?;
+    let resp = send_noting_transport(req, what, None).await?;
     let status = resp.status().as_u16();
     let text = resp.text().await.unwrap_or_default();
     if !(200..300).contains(&status) {
@@ -438,5 +518,147 @@ pub(crate) mod tests {
     fn client_builder_rejects_bearer_with_control_bytes() {
         let c = client_with_timeout_and_bearer(5, Some("bad\ntoken"));
         assert!(c.is_err());
+    }
+
+    /// One-shot stub that accepts a connection and never answers.
+    pub(crate) fn silent_stub() -> String {
+        use std::io::Read;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let Ok((mut s, _)) = listener.accept() else {
+                return;
+            };
+            let mut buf = [0u8; 4096];
+            let _ = s.read(&mut buf);
+            std::thread::sleep(std::time::Duration::from_secs(8));
+        });
+        format!("http://{addr}")
+    }
+
+    /// An origin nothing listens on (the listener is dropped).
+    pub(crate) fn dead_origin() -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        format!("http://{addr}")
+    }
+
+    fn short_client() -> reqwest::Client {
+        client_with_exact_timeout(std::time::Duration::from_millis(300), None).unwrap()
+    }
+
+    #[test]
+    fn transport_note_wording_is_pinned() {
+        let o = "http://127.0.0.1:9";
+        let rf = Some("`kb slate delta`");
+        let all = [
+            TransportKind::Connect,
+            TransportKind::Timeout,
+            TransportKind::Other,
+        ];
+        assert_eq!(
+            transport_note("POST x", TransportKind::Connect, true, o, rf),
+            "POST x: nothing was sent — daemon not reachable at http://127.0.0.1:9; start it with `kb daemon`"
+        );
+        assert_eq!(
+            transport_note("POST x", TransportKind::Connect, false, o, rf),
+            "POST x: nothing was sent — daemon not reachable at http://127.0.0.1:9; start it with `kb daemon`"
+        );
+        assert_eq!(
+            transport_note("POST x", TransportKind::Timeout, false, o, rf),
+            "POST x: no answer before the client timeout — the daemon may be busy rather than down; this was a read, so retrying is safe"
+        );
+        assert_eq!(
+            transport_note("POST x", TransportKind::Timeout, true, o, rf),
+            "POST x: no answer before the client timeout — the write may have landed (the daemon may still be finishing it); run `kb slate delta` before sending it again"
+        );
+        assert_eq!(
+            transport_note("POST x", TransportKind::Timeout, true, o, None),
+            "POST x: no answer before the client timeout — the write may have landed (the daemon may still be finishing it); check the current state with this verb's own list/show read before sending it again"
+        );
+        assert_eq!(
+            transport_note("POST x", TransportKind::Other, true, o, rf),
+            "POST x: the connection failed after the request may have been sent — the write may have landed; run `kb slate delta` before sending it again"
+        );
+        assert_eq!(
+            transport_note("POST x", TransportKind::Other, true, o, None),
+            "POST x: the connection failed after the request may have been sent — the write may have landed; check the current state with this verb's own list/show read before sending it again"
+        );
+        assert_eq!(
+            transport_note("POST x", TransportKind::Other, false, o, rf),
+            "POST x"
+        );
+        for k in all {
+            for m in [true, false] {
+                for r in [rf, None] {
+                    let n = transport_note("POST x", k, m, o, r);
+                    assert!(!n.contains('\n'), "{n}");
+                    let landed = n.contains("may have landed");
+                    assert_eq!(landed, m && k != TransportKind::Connect, "{n}");
+                    if k == TransportKind::Connect {
+                        assert!(n.contains("nothing was sent") && n.contains(o));
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn send_json_timeout_on_post_says_write_may_have_landed() {
+        let c = short_client();
+        let err = send_json(
+            c.post(format!("{}/x", silent_stub()))
+                .json(&serde_json::json!({})),
+            "add thing",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            transport_note("add thing", TransportKind::Timeout, true, "", None)
+        );
+    }
+
+    #[tokio::test]
+    async fn send_json_timeout_on_get_says_retry_is_safe() {
+        let c = short_client();
+        let err = send_json(c.get(format!("{}/x", silent_stub())), "read thing")
+            .await
+            .unwrap_err();
+        let s = err.to_string();
+        assert!(s.contains("this was a read, so retrying is safe"), "{s}");
+        assert!(!s.contains("may have landed"), "{s}");
+    }
+
+    #[tokio::test]
+    async fn send_json_connect_refused_says_nothing_was_sent() {
+        let c = short_client();
+        let dead = dead_origin();
+        let err = send_json(
+            c.post(format!("{dead}/x")).json(&serde_json::json!({})),
+            "add thing",
+        )
+        .await
+        .unwrap_err();
+        let s = err.to_string();
+        assert!(s.contains("nothing was sent"), "{s}");
+        assert!(s.contains(&dead), "{s}");
+        assert!(!s.contains("may have landed"), "{s}");
+    }
+
+    #[tokio::test]
+    async fn transport_error_keeps_the_reqwest_cause_and_is_not_transient() {
+        let c = short_client();
+        let err = send_json(
+            c.post(format!("{}/x", silent_stub()))
+                .json(&serde_json::json!({})),
+            "add thing",
+        )
+        .await
+        .unwrap_err();
+        assert!(err.downcast_ref::<reqwest::Error>().is_some());
+        assert!(format!("{err:#}").contains("error sending request"));
+        assert!(!crate::outbox::is_transient(&err));
     }
 }

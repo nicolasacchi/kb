@@ -28,8 +28,10 @@ fn base_url(daemon: Option<&str>) -> String {
 
 /// POST/PATCH/DELETE helper: send, map a non-2xx into a clear error carrying
 /// the daemon's problem+json `detail`. Returns the parsed body (or Null).
+const NOTES_READ_FIRST: &str = "`kb notes show <note>` (or `kb notes list` after `new`)";
+
 async fn send_json(req: reqwest::RequestBuilder, what: &str) -> Result<Value> {
-    let resp = req.send().await.with_context(|| what.to_string())?;
+    let resp = crate::http::send_noting_transport(req, what, Some(NOTES_READ_FIRST)).await?;
     let status = resp.status().as_u16();
     let text = resp.text().await.unwrap_or_default();
     if !(200..300).contains(&status) {
@@ -605,5 +607,23 @@ fn print_backlink_list(backlinks: &[Value]) {
             .unwrap_or("");
         let is_note = b.get("is_note").and_then(|v| v.as_bool()).unwrap_or(false);
         print_ref("←", kbn, rel, title, is_note);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn send_json_timeout_names_notes_show() {
+        let c = crate::http::client_with_exact_timeout(std::time::Duration::from_millis(300), None)
+            .unwrap();
+        let url = crate::http::tests::silent_stub();
+        let err = send_json(c.post(url).json(&serde_json::json!({})), "append")
+            .await
+            .unwrap_err();
+        let s = err.to_string();
+        assert!(s.contains("`kb notes show <note>`"), "{s}");
+        assert!(s.contains("may have landed"), "{s}");
     }
 }

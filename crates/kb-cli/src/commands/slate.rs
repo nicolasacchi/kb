@@ -460,8 +460,10 @@ impl Ctx {
 /// print the refusal and EXIT with §9's code. A refusal is never an
 /// `anyhow` error: the exit status IS the contract, and letting it bubble
 /// through `main` would collapse 2 and 3 into 1.
+const SLATE_READ_FIRST: &str = "`kb slate delta`";
+
 async fn call(ctx: &Ctx, req: reqwest::RequestBuilder, what: &str) -> Result<Value> {
-    let resp = req.send().await.with_context(|| what.to_string())?;
+    let resp = crate::http::send_noting_transport(req, what, Some(SLATE_READ_FIRST)).await?;
     let status = resp.status().as_u16();
     let text = resp.text().await.unwrap_or_default();
     let body: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
@@ -2320,6 +2322,43 @@ pub async fn doctor(ctx: &Ctx) -> Result<()> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn call_timeout_names_slate_delta_and_stays_an_error() {
+        let base = crate::http::tests::silent_stub();
+        let ctx = Ctx {
+            base: base.clone(),
+            bearer: None,
+            slug: "t".into(),
+            cwd: None,
+            session_id: None,
+            harness: "claude".into(),
+            model: None,
+            origin: "agent",
+            job_id: None,
+            post_topic: None,
+            read_topic: None,
+            refs: vec![],
+            re: None,
+            supersedes: None,
+            body: None,
+            json: false,
+            cache: None,
+        };
+        let c = crate::http::client_with_exact_timeout(std::time::Duration::from_millis(300), None)
+            .unwrap();
+        let err = call(
+            &ctx,
+            c.post(format!("{base}/api/slates/t/posts"))
+                .json(&json!({"kind": "now", "line": "x"})),
+            "POST t",
+        )
+        .await
+        .unwrap_err();
+        let s = err.to_string();
+        assert!(s.contains("`kb slate delta`"), "{s}");
+        assert!(s.contains("may have landed"), "{s}");
+    }
 
     #[test]
     fn parse_seq_accepts_both_forms_the_digest_prints() {

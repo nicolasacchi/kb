@@ -454,6 +454,11 @@ kb comments {list,inbox,show,export,resolve,unresolve,add,reply,edit,reanchor,de
                                     [--once] [--timeout S] [--backlog]:
                                     SSE monitor for new `you` comments,
                                     scoped client-side; drives a /loop
+                                    A write with no answer before the client
+                                    timeout exits 1 saying it may have
+                                    landed: check with `show <kb> <id>`
+                                    before sending it again (a connect
+                                    failure says nothing was sent).
 kb atlas recompute --kb NAME        v0.3: PCA + k-means atlas; tails SSE
                                     for atlas.recompute.complete
 kb atlas recluster --kb NAME [--k N] Q5: fast path that re-runs only
@@ -1019,6 +1024,11 @@ kb slate mark #n [--pin|--unpin] | pin #n | unpin #n
                                     found · 3 refused (`slate-taken` or
                                     `slate-live-author`), so a loop caller
                                     branches without parsing stderr.
+                                    A request with no answer before the
+                                    client timeout still exits 1 but says
+                                    the write may have landed: run `kb slate
+                                    delta` before posting it again. A
+                                    connect failure says nothing was sent.
 kb slate promote #n --to memory|note|plan [--plan PATH] [--kb K] [--note N]
 kb slate close ["…"] | reopen | rotate
 kb slate watch [--once] [--timeout S] | stats | ls | doctor
