@@ -23,5 +23,6 @@ mod reindex;
 mod sessions_scrub;
 mod status;
 mod status_watch;
+mod test_sandbox_lint;
 mod token;
 mod version;
