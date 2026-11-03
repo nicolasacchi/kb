@@ -17353,4 +17353,110 @@ mod tests {
             "the chain's last part is gone, so are its raw-id serves"
         );
     }
+
+    mod migration_checksums {
+        use super::*;
+
+        /// The JSON shape of `tests/fixtures/migrations.checksums.json`: one row per
+        /// migration EMBEDDED in this binary. `version` is i32 to match refinery's
+        /// `Migration::version()`.
+        #[derive(Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+        struct MigrationChecksumRow {
+            version: i32,
+            name: String,
+            checksum: String,
+        }
+
+        fn embedded_checksums() -> Vec<MigrationChecksumRow> {
+            let mut rows: Vec<MigrationChecksumRow> = embedded::migrations::runner()
+                .get_migrations()
+                .iter()
+                .map(|m| MigrationChecksumRow {
+                    version: m.version(),
+                    name: m.name().to_string(),
+                    checksum: m.checksum().to_string(),
+                })
+                .collect();
+            rows.sort_by_key(|r| r.version);
+            rows
+        }
+
+        const MIGRATIONS_CHECKSUMS_GOLDEN: &str = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/migrations.checksums.json"
+        ));
+
+        /// Refinery's checksum hashes a migration's name, version and full SQL, and
+        /// with `abort_divergent` at its default an edited applied migration makes
+        /// every volume that applied it refuse to boot. This has happened: kb-core's
+        /// V0035 and V0036 were each edited in place shortly after being added,
+        /// before the public import, and kb-code hit the same class with its V3 in
+        /// the public scrub (V72-B1). This golden pins the (version, name, checksum)
+        /// of every embedded migration, so the edit fails here, in the PR that makes
+        /// it, instead of on a deployed volume. It needs no database.
+        // invariant:2 an applied kb-core migration's bytes never change (refinery abort_divergent)
+        #[test]
+        fn every_embedded_migration_checksum_matches_the_golden() {
+            let actual = serde_json::to_string_pretty(&embedded_checksums()).expect("serialize");
+            assert!(
+                actual.trim_end() == MIGRATIONS_CHECKSUMS_GOLDEN.trim_end(),
+                "kb-core's embedded migrations no longer match \
+                 crates/kb-core/tests/fixtures/migrations.checksums.json.\n\
+                 Either an APPLIED migration's content or name changed, or a migration was \
+                 added without its golden row. A changed EXISTING row means every volume that \
+                 already applied that migration refuses to boot (refinery abort_divergent).\n\
+                 Fix: revert the edit, or if you ADDED a migration append ONLY its new row to \
+                 the fixture; never change an existing row.\n\
+                 --- BEGIN migrations.checksums.json ---\n{actual}\n--- END migrations.checksums.json ---"
+            );
+        }
+
+        /// Versions deliberately abandoned and never to be filled. kb-core has never
+        /// skipped a version, so this is empty. An entry may only be added when a
+        /// slot is deliberately abandoned and documented, never to make room for a
+        /// gap-fill.
+        const PERMANENTLY_SKIPPED_VERSIONS: &[i32] = &[];
+
+        /// No embedded migration may be numbered below the highest one, except for
+        /// the permanently-skipped versions above. A gap is inert; a gap-FILL is
+        /// not: `refinery-core` selects only migrations with `version > current`,
+        /// and with `abort_missing` at its default `true` an embedded migration
+        /// BELOW a volume's applied maximum is a hard `MissingVersion` error, so
+        /// every volume already migrated past that slot refuses to boot (kb-code
+        /// found this while holding a reserved slot, V72-H2b). The test covers the
+        /// EMBEDDED set only (what this binary ships), needs no database, and fails
+        /// in the PR that adds the migration.
+        // invariant:2 no kb-core migration may fill a version gap (refinery abort_missing)
+        #[test]
+        fn embedded_migration_versions_are_contiguous() {
+            let versions: Vec<i32> = embedded_checksums().iter().map(|r| r.version).collect();
+            assert!(!versions.is_empty(), "no embedded migrations at all");
+            // `embedded_checksums` already sorts by version.
+            let (lo, hi) = (versions[0], *versions.last().unwrap());
+            let missing: Vec<i32> = (lo..=hi)
+                .filter(|v| !versions.contains(v))
+                .filter(|v| !PERMANENTLY_SKIPPED_VERSIONS.contains(v))
+                .collect();
+            assert!(
+                missing.is_empty(),
+                "embedded migration versions have gap(s) at {missing:?} (present: {lo}..={hi}) — \
+                 refinery's abort_missing refuses gap-fills: renumber to main's max + 1"
+            );
+            for v in PERMANENTLY_SKIPPED_VERSIONS {
+                assert!(
+                    !versions.contains(v),
+                    "V{v:04} is in PERMANENTLY_SKIPPED_VERSIONS but a migration now claims it — \
+                     refinery's abort_missing refuses gap-fills: renumber to main's max + 1"
+                );
+            }
+            // Belt and braces: no duplicate version can hide behind the range check.
+            let mut dedup = versions.clone();
+            dedup.dedup();
+            assert_eq!(
+                dedup.len(),
+                versions.len(),
+                "two embedded migrations share a version: {versions:?}"
+            );
+        }
+    }
 }

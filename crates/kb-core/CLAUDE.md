@@ -108,6 +108,10 @@ subtly at runtime.
 - A notes-carrying `.review` sidecar is stamped `kb-comments/2`; see root
   invariant #6 before touching `wire_schema_for`.
 
+## Migrations
+
+- Adding a migration = a new `V<max+1>__<name>.sql` (main's max at merge time; renumber if another PR landed one first) AND one appended row in `crates/kb-core/tests/fixtures/migrations.checksums.json`, copied from the failing `every_embedded_migration_checksum_matches_the_golden` output (a renumber changes the checksum too, so regenerate the row). Never edit an applied migration, not even a comment; never fill a version gap.
+
 ## When to update this file
 
 Add an invariant here when it lives entirely inside `kb-core` and a

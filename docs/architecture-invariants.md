@@ -1548,11 +1548,22 @@ live_adapters/{codex,grok,kimi,opencode}.rs` — the four sibling adapters +
   Tier-0 row for the same id (never merged/enriched) — a freshly-restarted
   daemon is honest-but-coarse rather than empty, and the moment a beat
   lands for that session the row sharpens back to `source:"hook"`,
-  `confidence:"observed"`. This is the SAME tie-break invariant #11's W7
-  amendment already established for the live transcript lane ("if the
-  live view and a landed capture ever disagree, the capture wins by
-  definition") — nothing here overrides it, since the registry only ever
-  fills the gap where no capture exists yet.
+  `confidence:"observed"`. This is NOT the tie-break #11's W7 amendment
+  set for the live transcript lane ("if the live view and a landed
+  capture ever disagree, the capture wins by definition"): in the
+  `live_status` merge the registry row wins even over a NEWER landed
+  capture for the same `session_id`, because the Tier-0 row is dropped by
+  id alone, with no timestamp comparison. Known gap, left open on
+  purpose: a lost `turn_end` beat leaves the row agent-held (`working`,
+  then `stalled` after 45 min, then `presumed_ended` after 8h) while a
+  later Stop capture says the human has the turn. Closing it needs to know
+  whether the capture's last turn CLOSED, because an opted-in
+  `KB_CAPTURE_LIVE=1` also captures mid-turn (on `PostToolUse` and
+  `PreCompact`), and such a snapshot must not demote a row that really is
+  working. No lost `turn_end` has been observed (a beat is a
+  fire-and-forget post with a 2 s timeout), so the fix waits for its
+  trigger: a cockpit row stuck `working`/`stalled` beside a newest
+  capture whose last turn closed.
 - **The posture graduation is deliberate and narrow, not a loosening of
   #4/#11's live-lane fail-closed ethos.** `POST /api/sessions/beat` and
   `GET /api/sessions/live-status` ride ordinary `auth_bearer` — they are
@@ -1589,8 +1600,13 @@ live_adapters/{codex,grok,kimi,opencode}.rs` — the four sibling adapters +
   and `previous_blocked` (what `derive_state` and the row would have reported
   immediately before this beat, against the SAME `now_unix`) to the
   freshly-derived pair and emits iff they differ — never once per beat, or a
-  busy fleet would flood every browser. `blocked` is a sticky flag on an
-  agent-held row, not a new `LiveState` (OL IDEA1): a `blocked` beat sets it,
+  busy fleet would flood every browser. It fires only from `beat`, and the
+  new `state` is derived from the beat just recorded (its own `at`, so
+  about 0 s of silence): the payload's `state` is only ever `working`,
+  `waiting` or `finished`. A silence escalation (`stalled`, `cold`,
+  `presumed_ended`) changes what `live-status` derives but emits no event;
+  no timer, sweep or read emits `session.state`. `blocked` is a sticky flag
+  on an agent-held row, not a new `LiveState` (OL IDEA1): a `blocked` beat sets it,
   a `tool` beat keeps it (the registry carries it forward under the same lock
   as the touch ring), and `start|prompt|unblocked|turn_end|end` clear it
   (`block_effect`). Registered in `routes/schema.rs`'s `V0_0_1_TYPES` +
@@ -3114,6 +3130,17 @@ together, with goldens.
   content-hash-deduped emission per file touched in the second a pass runs.
   Not shipped here (it touches the v0.24 SC1 storm fix's hot path and wants
   its own change + bench).
+- **A test must never resolve kb state paths from the developer's real HOME.**
+  It surfaced twice: a hook test that ran the real `kb` replayed and deleted a
+  developer's parked capture spool (a landed capture makes `hook_adapter_land`
+  run `--replay-spool`, the replay deletes what it lands, the test's EXIT trap
+  deletes the landing dir), and the `ce-*-test` / `.plock` leaks into the real
+  state and cache dirs. Shell hook tests call `kb_test_sandbox`
+  (`plugins/kb-memory/hooks/tests/lib-sandbox.sh`); `hook_shell.rs` runs every
+  script through `hook_command` (throwaway HOME/XDG, inherited `KB_*`/`CLAUDE_*`
+  stripped); in-process Rust tests use `KbPaths::rooted_at`.
+  `crates/kb-cli/tests/cli_offline/test_sandbox_lint.rs` enforces all three.
+  Per-child `Command::env`/`env_remove` only, never `std::env::set_var`.
 
 ## Dev-environment tips
 

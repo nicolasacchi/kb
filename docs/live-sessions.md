@@ -47,7 +47,7 @@ trusting a row:
 |---|---|---|
 | `hook` | `observed` | A push beat landed for this session. The freshest, most trustworthy signal. |
 | `transcript` | `inferred` | `--local` mode: read straight from the harness's own on-disk transcript/event file. No daemon involved. |
-| `capture` | `presumed` | Daemon mode's Tier-0 fallback: no beat has ever landed for this session, so the row is aged off the last **landed capture** instead (`kb sessions capture` / the Stop hook). Coarser — only as fresh as the last capture, not truly live. |
+| `capture` | `presumed` | Daemon mode's Tier-0 fallback: no beat has landed for this session since the daemon last started (the registry is in memory only), so the row is aged off the last **landed capture** instead (`kb sessions capture` / the Stop hook). Coarser — only as fresh as the last capture, not truly live. Once a beat lands, the `hook` row replaces it, even when a newer capture lands later. |
 
 **Push wiring is uneven across harnesses on purpose, and it changes which
 column above you're reading:**
@@ -119,7 +119,9 @@ Flags that actually exist (`kb sessions status --help`):
 | `--daemon URL` | Daemon URL override (daemon-backed mode only). |
 
 There is **no `--watch` flag** — it was deliberately not built. For a
-live stream, pipe the event bus instead:
+live stream of beat-driven transitions, pipe the event bus instead (it
+does not carry `stalled`, `cold` or `presumed_ended`, which appear only
+when you read `status`; see the note under Path B below):
 
 ```
 kb events --follow --types session.state --json
@@ -344,7 +346,9 @@ blocked_tool?}` — `blocked_tool` is a validated tool-name token and appears
 only while blocked. There is **no** `title`/`last_line`/`detail_reason`
 (those only ever ride the request/response bodies, never the broadcast). It
 fires on a change of `(state, blocked)`, so becoming blocked or unblocked
-is its own event even though the state stays `working`.
+is its own event even though the state stays `working`. Because it fires
+only when a beat arrives, its `state` is only ever `working`, `waiting` or
+`finished` (see the note under Path B).
 
 This example assumes you already run delivery infrastructure such as ntfy
 (`https://ntfy.example.com`, default access `deny-all` — publishing needs a
@@ -375,6 +379,10 @@ are forwarded too), `timeout_ms`
 (default 5000), `allow_private` (default `false`; loopback + public
 unicast always pass, link-local/metadata/multicast are refused even with
 it on — see `crates/kb-core/src/webhook_url.rs`).
+
+Like the event stream it subscribes to, this bridge only sees beat-driven
+`session.state` events, so it cannot deliver `stalled`, `cold` or
+`presumed_ended` either (see the note under Path B).
 
 **Two real limits to know before you rely on this path:**
 
@@ -437,9 +445,28 @@ deployment's own token-rotation instructions) — never hardcode it in the scrip
 it in the shell/systemd-unit environment that runs this loop. Because
 this path shapes the message itself (via `jq`) and authenticates with a
 real token, it doesn't need ntfy's deny-all loosened at all, and it can
-filter to exactly the transitions worth a buzz (`waiting`, or add
-`or .payload.state == "presumed_ended"` for "an agent session silently
-died").
+filter to exactly the transitions worth a buzz (`waiting`, or a blocked
+prompt, as the script above does).
+
+**This stream cannot tell you that a session silently died.**
+`session.state` fires only when a beat arrives, and its `state` is
+derived from that beat, so it is only ever `working`, `waiting` or
+`finished`. Silence escalation (`stalled` after 45 min, `cold` and
+`presumed_ended` after 8h) is computed when you read
+`GET /api/sessions/live-status` or run `kb sessions status`, and no event
+is emitted when it happens, so a filter on `.payload.state == "presumed_ended"`
+(or `"stalled"`, or `"cold"`) never matches. To hear about a silent death,
+poll the read surface from a timer instead:
+
+```
+kb sessions status --state stalled,presumed_ended --json
+```
+
+It returns the rows in that state right now (a flat JSON array; each row
+has `session_id` and `state`), not transitions, and a `presumed_ended` row
+stays listed for days (until 7 days after its last beat, when the
+registry's TTL drops it, or until the daemon restarts), so remember which `session_id`s you have already been
+told about.
 
 This inherits `kb events --follow`'s own reconnect discipline
 (`Last-Event-ID` resume + exponential backoff) — it survives a daemon

@@ -22,6 +22,9 @@ HOOKS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 TMPROOT="$(mktemp -d "${TMPDIR:-/tmp}/kb-capture-scrub-test.XXXXXX")"
 cleanup() { rm -rf "$TMPROOT"; }
 trap cleanup EXIT
+# AH1: sandbox HOME/XDG/KB_* before anything can reach a kb (see lib-sandbox.sh).
+. "$SCRIPT_DIR/lib-sandbox.sh"
+kb_test_sandbox "$TMPROOT" || exit 1
 
 PASS=0
 FAIL=0

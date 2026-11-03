@@ -1969,7 +1969,8 @@ mod tests {
 
     #[test]
     fn with_config_stores_config_and_path() {
-        let paths = Arc::new(KbPaths::new("ce-builder-test").unwrap());
+        let tmp = tempfile::tempdir().unwrap(); // keep alive to the end of the test
+        let paths = Arc::new(KbPaths::rooted_at(tmp.path(), "ce-builder-test"));
         let mut cfg = KbConfig::default();
         cfg.server.addr = "127.0.0.1:4999".into();
         let path = PathBuf::from("/tmp/explicit-kb.toml");
@@ -1992,7 +1993,8 @@ mod tests {
 
     #[test]
     fn new_defaults_config_path_to_home_local() {
-        let paths = Arc::new(KbPaths::new("ce-default-test").unwrap());
+        let tmp = tempfile::tempdir().unwrap(); // keep alive to the end of the test
+        let paths = Arc::new(KbPaths::rooted_at(tmp.path(), "ce-default-test"));
         let handles = KbHandles::new("ce-default-test".into(), paths.clone(), Utc::now());
         assert_eq!(
             handles.config_path,
