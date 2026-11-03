@@ -380,6 +380,10 @@ are forwarded too), `timeout_ms`
 unicast always pass, link-local/metadata/multicast are refused even with
 it on — see `crates/kb-core/src/webhook_url.rs`).
 
+Like the event stream it subscribes to, this bridge only sees beat-driven
+`session.state` events, so it cannot deliver `stalled`, `cold` or
+`presumed_ended` either (see the note under Path B).
+
 **Two real limits to know before you rely on this path:**
 
 1. **`[webhooks]` has no header/auth field** (`url`/`types`/`timeout_ms`/
@@ -460,8 +464,8 @@ kb sessions status --state stalled,presumed_ended --json
 
 It returns the rows in that state right now (a flat JSON array; each row
 has `session_id` and `state`), not transitions, and a `presumed_ended` row
-stays listed for days (until the registry's 7-day TTL drops it or the
-daemon restarts), so remember which `session_id`s you have already been
+stays listed for days (until 7 days after its last beat, when the
+registry's TTL drops it, or until the daemon restarts), so remember which `session_id`s you have already been
 told about.
 
 This inherits `kb events --follow`'s own reconnect discipline
