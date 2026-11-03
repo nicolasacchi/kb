@@ -105,7 +105,7 @@ itself as unstamped instead of passing for a release.
    separator and illegal inside a component — the exact bypass shape a
    naive "allow `..` in ranges" relaxation would open.
    `tests/security/git_argv_lint.rs` is a source-scan CI gate enforcing
-   three things, and it is a scan with an allowlist, not a dataflow proof —
+   four things, and it is a scan with an allowlist, not a dataflow proof —
    read its own module doc before extending it: (a) the set of files
    allowed to spawn `git` (`Command::new("git")`) is PINNED
    (`GIT_SPAWNING_FILES`) — a new one fails the test with instructions, not
@@ -115,8 +115,20 @@ itself as unstamped instead of passing for a release.
    `for-each-ref` output, which a type cannot validate before it exists);
    (c) every caller-supplied PATHSPEC is preceded by `--` (with one
    documented non-case, `blame/timeline.rs`'s `-L a,b:path`, an option
-   VALUE rather than a pathspec position). Migrate a new call site onto
-   `Revspec`/`RefRange`; do not grow either allowlist to make a lint pass.
+   VALUE rather than a pathspec position); (d) a network-capable git verb
+   (`fetch`, `ls-remote`, `clone`, `push`, `pull`, `remote`, `credential`,
+   `send-pack`, `receive-pack`) may appear as git argv only in the pinned
+   `NETWORK_GIT_FILES`, and there only at a bounded door:
+   `crate::github::run_git_bounded` (the github and reviews modules) or
+   `StoreGit`'s `GitArgs`/`GitCall` (review_store/, review_base/capture.rs).
+   The one documented exception is `checkout::fetch_sha_no_ref`, a local,
+   uncredentialed fetch from the review store's own git dir (pinned by
+   `network_git_verbs_appear_only_in_the_pinned_files` and
+   `network_verbs_in_pinned_files_sit_at_a_bounded_door`). The lint asks for
+   a deadline on network-crossing git only; local git is out of its scope
+   (fan-out is bounded by the `git_fanout` permits, invariant 5). Migrate a
+   new call site onto `Revspec`/`RefRange`; do not grow any allowlist to
+   make a lint pass.
 
 4. **Working-tree reads canonicalise BOTH sides and assert containment; the
    secret denylist is enforced at the FLOOR, unconditionally**

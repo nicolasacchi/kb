@@ -24,13 +24,18 @@
 //!    needs a check a type cannot give it.)
 //! 3. Every git invocation that passes a caller-supplied PATHSPEC puts
 //!    `--` before it.
+//! 4. Network-capable git verbs may appear (argv-shaped) only in
+//!    `NETWORK_GIT_FILES`, and there only at a bounded door
+//!    (`run_git_bounded` or `StoreGit`), with one documented local-path
+//!    exception in `checkout.rs`. Same scan-not-proof caveat: a verb in a
+//!    variable or a `const` slips through, and that is stated, not fixed.
 //!
-//! Failure of any of the three is a real signal; passing all three is not
+//! Failure of any of the four is a real signal; passing all three is not
 //! a proof. That asymmetry is the honest description of what a source-scan
 //! lint buys, and it is written here rather than in a commit message so
 //! the next person to extend it knows what they are extending.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 fn src_root() -> PathBuf {
@@ -532,4 +537,276 @@ fn review_store_bypass_tripwire() {
             "{f} lost its `RS-U4 bypass` marker comment"
         );
     }
+}
+
+// ---------------------------------------------------------------------
+// AH11 - network-capable git verbs and the doors they may pass through.
+// ---------------------------------------------------------------------
+
+/// Git verbs that can cross the network (or hand out credentials).
+const NETWORK_VERBS: &[&str] = &[
+    "fetch",
+    "ls-remote",
+    "clone",
+    "push",
+    "pull",
+    "remote",
+    "credential",
+    "send-pack",
+    "receive-pack",
+];
+
+/// The 1-based original line numbers (and verbs) where `src` spells a
+/// network verb in an argv-shaped position. Comment lines are skipped.
+///
+/// This is deliberately NOT a bare `"v"` substring scan: that would
+/// false-positive on stage labels (`stage: "fetch",` in the review job
+/// module, `set_stage(&job, "fetch")` in the sync module), enum labels
+/// (`Self::Push => "push",` in the review base module) and JSON keys
+/// (`"fetch": {` in the review store routes). The recognised shapes are a
+/// bare `"v",` element of a multi-line arg list, an inline slice `["v"`,
+/// a call opener `("v"`, and `"v".to_string()`.
+///
+/// The `f("v"` / `x["v"` shapes still over-match some non-argv code (for
+/// example a `key("fetch")` helper in the review store git module), which
+/// is harmless only while that file is pinned for real argv. A verb held
+/// in a variable or a `const` is not seen at all.
+fn network_verb_lines(src: &str) -> Vec<(usize, &'static str)> {
+    let mut out = Vec::new();
+    for (i, line) in src.lines().enumerate() {
+        if line.trim_start().starts_with("//") {
+            continue;
+        }
+        for v in NETWORK_VERBS {
+            let q = format!("\"{v}\"");
+            if line.trim() == format!("{q},")
+                || line.contains(&format!("[{q}"))
+                || line.contains(&format!("({q}"))
+                || line.contains(&format!("{q}.to_string()"))
+            {
+                out.push((i + 1, *v));
+            }
+        }
+    }
+    out
+}
+
+/// Every production `.rs` under `src/`, keyed by its source-relative path,
+/// with whole-file test modules excluded and inline test tails truncated
+/// (truncation is at the tail, so line numbers stay the original ones).
+fn production_sources() -> Vec<(String, String)> {
+    let mut files = Vec::new();
+    rust_files(&src_root(), &mut files);
+    files.sort();
+    files
+        .iter()
+        .filter_map(|p| {
+            let r = rel(p);
+            if r == "tests.rs"
+                || r.ends_with("/tests.rs")
+                || r.ends_with("_tests.rs")
+                || r.starts_with("tests/")
+                || r.contains("/tests/")
+            {
+                return None;
+            }
+            let src = std::fs::read_to_string(p).expect("read source file");
+            Some((r, non_test_part(&src).to_string()))
+        })
+        .collect()
+}
+
+/// Files that name a network-capable git verb as argv. v0.44 A6.f3/M3: a
+/// bare `fetch_pr_ref`/start-pr fetch with no deadline held the job and
+/// `repo_guard` for hours. Sorted.
+const NETWORK_GIT_FILES: &[&str] = &[
+    // DOCUMENTED EXCEPTION: fetch_sha_no_ref is a LOCAL, uncredentialed, ref-less fetch from the review store's own git dir (a filesystem path, never a URL); local git, so no deadline
+    "checkout.rs",
+    // run_git_bounded itself + fetch_pr_ref_with
+    "github.rs",
+    // StoreGit: ls-remote of the base remote (LS_REMOTE_TIMEOUT) + a local member-clone fetch (WORK_FETCH_TIMEOUT)
+    "review_base/capture.rs",
+    // StoreGit, the hardened runner itself (env_clear, WRITE_TO_REMOTE refusal, per-call timeout)
+    "review_store/git.rs",
+    // StoreGit local bundle fetch (MAINT_TIMEOUT)
+    "review_store/maint.rs",
+    // StoreGit seed fetches (fetch_stdin, fetch_by_sha), explicit timeouts
+    "review_store/seed.rs",
+    // fetch_remote_base_with, via run_git_bounded ONLY
+    "reviews.rs",
+];
+
+/// A NON-comment line with 1-based index in `[n - back, n]` (clamped to
+/// the file) contains `needle`.
+fn has_within_previous(lines: &[&str], n: usize, back: usize, needle: &str) -> bool {
+    let lo = n.saturating_sub(back).max(1);
+    (lo..=n).any(|i| {
+        lines
+            .get(i - 1)
+            .is_some_and(|l| !l.trim_start().starts_with("//") && l.contains(needle))
+    })
+}
+
+#[test]
+fn network_git_verbs_appear_only_in_the_pinned_files() {
+    let mut found: BTreeMap<String, BTreeSet<&'static str>> = BTreeMap::new();
+    for (r, src) in production_sources() {
+        for (_, v) in network_verb_lines(&src) {
+            found.entry(r.clone()).or_default().insert(v);
+        }
+    }
+    let have: BTreeSet<&str> = found.keys().map(String::as_str).collect();
+    let pinned: BTreeSet<&str> = NETWORK_GIT_FILES.iter().copied().collect();
+    let added: Vec<_> = have.difference(&pinned).copied().collect();
+    let removed: Vec<_> = pinned.difference(&have).copied().collect();
+    assert!(
+        added.is_empty(),
+        "AH11: these files name a network-capable git verb: {added:?} (verbs: {:?}). Route the call through crate::github::run_git_bounded (one-shot, deadline, own process group) or review_store::StoreGit (GitArgs/GitCall, explicit .timeout(..)), map Timeout to the existing 504 / FailureClass::Timeout, then add the file to NETWORK_GIT_FILES. Do NOT wrap spawn_blocking in tokio::time::timeout. If the hit is not git argv at all, reshape that literal instead of listing a non-git file.",
+        added.iter().map(|f| &found[*f]).collect::<Vec<_>>()
+    );
+    assert!(
+        removed.is_empty(),
+        "AH11: these files no longer name a network-capable git verb: {removed:?}. Drop them from NETWORK_GIT_FILES so the list keeps meaning something."
+    );
+}
+
+#[test]
+fn network_verbs_in_pinned_files_sit_at_a_bounded_door() {
+    let read = |f: &str| {
+        let src = std::fs::read_to_string(src_root().join(f)).expect("read pinned file");
+        non_test_part(&src).to_string()
+    };
+    let hint = "the v0.44 A6.f3/M3 bare fetch with no deadline held repo_guard for hours; route it through crate::github::run_git_bounded or StoreGit";
+
+    for f in ["github.rs", "reviews.rs"] {
+        let src = read(f);
+        let lines: Vec<&str> = src.lines().collect();
+        for (n, v) in network_verb_lines(&src) {
+            assert!(
+                has_within_previous(&lines, n, 3, "run_git_bounded("),
+                "{f}:{n}: `{v}` is not at a run_git_bounded( door; {hint}"
+            );
+        }
+    }
+
+    // review_store/git.rs is the StoreGit runner itself and is not
+    // shape-checked here.
+    for f in [
+        "review_base/capture.rs",
+        "review_store/maint.rs",
+        "review_store/seed.rs",
+    ] {
+        let src = read(f);
+        for (n, v) in network_verb_lines(&src) {
+            let line = src.lines().nth(n - 1).unwrap_or("");
+            assert!(
+                line.contains("GitArgs::new(") || line.contains("GitCall::new("),
+                "{f}:{n}: `{v}` is not on a GitArgs::new(/GitCall::new( line; {hint}"
+            );
+        }
+    }
+
+    let src = read("checkout.rs");
+    let lines: Vec<&str> = src.lines().collect();
+    let sig = lines
+        .iter()
+        .position(|l| {
+            l.contains("fn fetch_sha_no_ref(repo_root: &Path, store_git_dir: &Path, sha: &str)")
+        })
+        .map(|i| i + 1)
+        .expect("checkout.rs must still define fetch_sha_no_ref");
+    let end = lines
+        .iter()
+        .enumerate()
+        .skip(sig)
+        .find(|(_, l)| **l == "}")
+        .map(|(i, _)| i + 1)
+        .expect("fetch_sha_no_ref must close");
+    for (n, v) in network_verb_lines(&src) {
+        assert!(
+            sig < n && n < end,
+            "checkout.rs:{n}: `{v}` is outside fetch_sha_no_ref, the one local-path exception; {hint}"
+        );
+    }
+}
+
+#[test]
+fn network_verb_matcher_has_the_shapes_it_claims() {
+    for (line, verb) in [
+        ("            \"fetch\",", "fetch"),
+        (".args([\"fetch\", \"origin\"])", "fetch"),
+        ("let a = GitArgs::new(\"ls-remote\")", "ls-remote"),
+        ("GitCall::new(\"fetch\", args)", "fetch"),
+        ("                \"fetch\".to_string(),", "fetch"),
+    ] {
+        let hits = network_verb_lines(line);
+        assert!(
+            hits.iter().any(|(n, v)| *n == 1 && *v == verb),
+            "{line:?} must match {verb}, got {hits:?}"
+        );
+    }
+    for line in [
+        "stage: \"fetch\",",
+        "crate::review_jobs::set_stage(&job, \"fetch\");",
+        "Self::Push => \"push\",",
+        "\"fetch\": {",
+        "// git fetch",
+        "/// [\"fetch\"]",
+    ] {
+        assert!(
+            network_verb_lines(line).is_empty(),
+            "{line:?} must not match"
+        );
+    }
+
+    let snip = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let check = |s: &[&str], n: usize, back: usize| {
+        let owned = snip(s);
+        let lines: Vec<&str> = owned.iter().map(String::as_str).collect();
+        has_within_previous(&lines, n, back, "run_git_bounded(")
+    };
+    assert!(check(
+        &[
+            "run_git_bounded(",
+            "a,",
+            "b,",
+            "&[\"fetch\", \"origin\", &r],"
+        ],
+        4,
+        3
+    ));
+    assert!(!check(
+        &[
+            "Command::new(\"git\")",
+            ".arg(\"-C\")",
+            ".arg(root)",
+            ".args([\"fetch\", \"origin\"])"
+        ],
+        4,
+        3
+    ));
+    assert!(!check(
+        &["run_git_bounded(", "a,", "b,", "c,", "&[\"fetch\"],"],
+        5,
+        3
+    ));
+    assert!(!check(
+        &["// run_git_bounded(", "a,", "b,", "&[\"fetch\"],"],
+        4,
+        3
+    ));
+
+    let sources = production_sources();
+    assert!(
+        sources.len() > 100,
+        "production_sources saw only {} files; src/ moved?",
+        sources.len()
+    );
+    assert!(sources.iter().any(|(r, _)| r == "github.rs"));
+    assert!(
+        sources
+            .iter()
+            .all(|(r, _)| !r.contains("/tests/") && !r.ends_with("tests.rs")),
+        "test-module files must be excluded"
+    );
 }
