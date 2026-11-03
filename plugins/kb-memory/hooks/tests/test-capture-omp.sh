@@ -19,6 +19,9 @@ FIXTURE="$SCRIPT_DIR/fixtures/omp-session-commit.jsonl"
 TMPROOT="$(mktemp -d "${TMPDIR:-/tmp}/kb-capture-omp-test.XXXXXX")"
 cleanup() { rm -rf "$TMPROOT"; }
 trap cleanup EXIT
+# AH1: sandbox HOME/XDG/KB_* before anything can reach a kb (see lib-sandbox.sh).
+. "$SCRIPT_DIR/lib-sandbox.sh"
+kb_test_sandbox "$TMPROOT" || exit 1
 
 PASS=0
 FAIL=0
@@ -246,6 +249,12 @@ fi
 
 echo
 echo "== OK4: subagent sidecar staging (real kb sessions capture engine) =="
+# AH1 drain path: a capture that lands here makes hook_adapter_land run
+# `kb sessions capture --replay-spool` against the DEFAULT spool, landing (and
+# deleting) every parked item into $REAL_KB_SESSIONS_DIR, which the EXIT trap
+# then removes with TMPROOT. The kb_test_sandbox call near the top of this file
+# is what keeps that default spool inside TMPROOT; it must stay above every
+# real-kb line.
 # The sidecar digest walk is Rust-only (sessions_capture.rs) — the bash
 # fallback the rest of this file forces never sees it, by design (see the
 # header comment) — so this block shells out to the REAL installed kb.

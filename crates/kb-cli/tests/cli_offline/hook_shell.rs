@@ -2,6 +2,11 @@
 //! them. They are plain bash scripts with a fake `kb` on PATH and a real
 //! `jq`; before this module nothing in CI ran any of them, which is how a
 //! hook claim ("6s is under the harness budget") could go unchecked.
+//!
+//! Every script runs in a per-child throwaway HOME/XDG tree with the inherited
+//! `KB_*`/`CLAUDE_*` variables stripped (`hook_command`): a hook test once ran
+//! the real `kb` with a developer's real HOME and its replay deleted their
+//! parked capture spool.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -13,9 +18,49 @@ fn tests_dir() -> PathBuf {
         .unwrap()
 }
 
-fn run(script: &str) {
-    let out = Command::new("bash")
-        .arg(tests_dir().join(script))
+/// The ONE place this file spawns bash. Incident: a hook test that ran the
+/// real `kb` with the developer's HOME replayed and deleted their parked
+/// capture spool. So the child gets a throwaway HOME/XDG tree and loses every
+/// inherited `KB_*`/`CLAUDE_*` variable (callers re-add what they need).
+/// Per-child `Command::env`/`env_remove` only, never `std::env::set_var`
+/// (docs/architecture-invariants.md, the test-env pitfalls). The returned
+/// `TempDir` must outlive the child: bind it to `_sandbox`, never `_`.
+fn hook_command(script: &str) -> (Command, tempfile::TempDir) {
+    let sandbox = tempfile::tempdir().expect("create the hook-test sandbox");
+    let mut cmd = Command::new("bash");
+    cmd.arg(tests_dir().join(script));
+    // Nothing the parent shell says about where kb state lives reaches the
+    // script: KB_SESSIONS_DIR, KB_CAPTURE_SPOOL, KB_HOME, CLAUDE_ENV_FILE, ...
+    for (key, _) in std::env::vars_os() {
+        if key
+            .to_str()
+            .is_some_and(|k| k.starts_with("KB_") || k.starts_with("CLAUDE_"))
+        {
+            cmd.env_remove(&key);
+        }
+    }
+    for (var, dir) in [
+        ("HOME", "home"),
+        ("XDG_CACHE_HOME", "xdg-cache"),
+        ("XDG_CONFIG_HOME", "xdg-config"),
+        ("XDG_DATA_HOME", "xdg-data"),
+        ("XDG_STATE_HOME", "xdg-state"),
+    ] {
+        let path = sandbox.path().join(dir);
+        std::fs::create_dir_all(&path).expect("create a hook-test sandbox dir");
+        cmd.env(var, path);
+    }
+    (cmd, sandbox)
+}
+
+fn run_hook(script: &str, real_kb: bool, env: &[(&str, &str)]) {
+    let (mut cmd, _sandbox) = hook_command(script);
+    if real_kb {
+        let kb = PathBuf::from(env!("CARGO_BIN_EXE_kb"));
+        cmd.env("KB_BIN_DIR", kb.parent().unwrap());
+    }
+    let out = cmd
+        .envs(env.iter().copied())
         .output()
         .expect("bash is required to run the hook shell tests");
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -24,6 +69,10 @@ fn run(script: &str) {
         "{script} failed:\n{stdout}\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+fn run(script: &str) {
+    run_hook(script, false, &[]);
 }
 
 #[test]
@@ -60,27 +109,15 @@ fn wake_hook_shell_tests() {
 /// corpus without it.
 #[test]
 fn codex_and_opencode_adapters_scrub_secrets_and_fail_closed() {
-    let kb = PathBuf::from(env!("CARGO_BIN_EXE_kb"));
-    let out = Command::new("bash")
-        .arg(tests_dir().join("test-capture-scrub.sh"))
-        .env("KB_BIN_DIR", kb.parent().unwrap())
-        .output()
-        .expect("bash is required to run the hook shell tests");
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        out.status.success() && !stdout.contains("not ok"),
-        "test-capture-scrub.sh failed:\n{stdout}\n{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    run_with_real_kb("test-capture-scrub.sh");
 }
 
-/// v0.45 N4 - the kimi and omp adapter matrices (stand-in `kb`, fixtures) were
-/// not run by any CI lane before; both need `jq`, which CI runners ship.
+/// v0.45 N4 - the kimi adapter matrix (stand-in `kb`, fixtures) was not run by
+/// any CI lane before; it needs `jq`, which CI runners ship. omp's matrix runs
+/// in `omp_sidecar_names_disambiguate_only_on_collision_and_spool_with_the_item`.
 #[test]
-fn kimi_and_omp_adapter_shell_tests() {
+fn kimi_adapter_shell_tests() {
     run("test-capture-kimi.sh");
-    // omp's sidecar block drives the real engine: hand it the built `kb`.
-    run_with_real_kb("test-capture-omp.sh");
 }
 
 /// v0.44 F8 — the once-a-day CLI/hook skew notice.
@@ -135,18 +172,7 @@ fn per_session_hook_names_never_collide() {
 /// `--replay-spool` lands it scrubbed. Needs the REAL `kb` binary.
 #[test]
 fn capture_hook_spools_instead_of_embedding_raw_and_replays_scrubbed() {
-    let kb = PathBuf::from(env!("CARGO_BIN_EXE_kb"));
-    let out = Command::new("bash")
-        .arg(tests_dir().join("test-capture-spool.sh"))
-        .env("KB_BIN_DIR", kb.parent().unwrap())
-        .output()
-        .expect("bash is required to run the hook shell tests");
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        out.status.success() && !stdout.contains("not ok"),
-        "test-capture-spool.sh failed:\n{stdout}\n{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    run_with_real_kb("test-capture-spool.sh");
 }
 
 /// v0.45 N10 - omp sidecar agent names stay readable and gain a short hash
@@ -164,19 +190,7 @@ fn run_with_real_kb(script: &str) {
 }
 
 fn run_with_real_kb_env(script: &str, env: &[(&str, &str)]) {
-    let kb = PathBuf::from(env!("CARGO_BIN_EXE_kb"));
-    let out = Command::new("bash")
-        .arg(tests_dir().join(script))
-        .env("KB_BIN_DIR", kb.parent().unwrap())
-        .envs(env.iter().copied())
-        .output()
-        .expect("bash is required to run the hook shell tests");
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        out.status.success() && !stdout.contains("not ok"),
-        "{script} failed:\n{stdout}\n{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    run_hook(script, true, env);
 }
 
 /// v0.45 N4 - codex/opencode/kimi/omp/grok park their translated transcript
@@ -249,4 +263,11 @@ fn omp_segmented_capture_per_turn_cost_does_not_scale_with_the_session() {
             ("SEG_SCALE_SIDECARS", "300"),
         ],
     );
+}
+
+/// AH1 - the sandbox helper keeps a parked spool item in a (simulated)
+/// developer HOME untouched by a real `--replay-spool`.
+#[test]
+fn sandbox_helper_keeps_a_real_home_spool_untouched() {
+    run_with_real_kb("test-lib-sandbox.sh");
 }

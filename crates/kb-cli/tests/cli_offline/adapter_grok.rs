@@ -103,6 +103,9 @@ fn run_script(args: &[&str], kb_sessions_dir: &Path, grok_root: &Path, path: &st
         )
         .env("HOME", kb_sessions_dir.parent().unwrap())
         .env_remove("KB_BIN_DIR")
+        .env_remove("XDG_CACHE_HOME")
+        .env_remove("KB_CACHE_DIR")
+        .env_remove("KB_CAPTURE_LOCKS")
         .env_remove("GROKCLAUDE_FAKE")
         .output()
         .expect("run kb-capture-grok.sh");
@@ -350,6 +353,10 @@ fn session_dir_mode_spools_when_capture_fails_and_replay_lands_it() {
         .args(["sessions", "capture", "--replay-spool", "--out"])
         .arg(&sessions_out)
         .env("KB_CAPTURE_SPOOL", &spool)
+        .env("HOME", tmp.path())
+        .env_remove("XDG_CACHE_HOME")
+        .env_remove("KB_CACHE_DIR")
+        .env_remove("KB_CAPTURE_LOCKS")
         .status()
         .unwrap();
     assert!(status.success());
@@ -507,6 +514,7 @@ fn grokclaude_fake_env_guard_skips_unconditionally() {
         .env("GROK_SESSIONS_ROOT", &grok_root)
         .env("PATH", path_with_kb())
         .env("GROKCLAUDE_FAKE", "1")
+        .env("HOME", tmp.path())
         .output()
         .unwrap();
     assert!(out.status.success());
