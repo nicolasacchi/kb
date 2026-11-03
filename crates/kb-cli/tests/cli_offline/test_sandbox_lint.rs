@@ -18,7 +18,7 @@
 //! 2. every hook test script that can reach a real `kb` sources
 //!    `lib-sandbox.sh` and calls `kb_test_sandbox` before it does;
 //! 3. kb-cli tests spawn bash only through `hook_shell.rs::hook_command` (and
-//!    the two pinned `adapter_grok.rs` sites).
+//!    the pinned `adapter_grok.rs` and `adapter_opencode.rs` sites).
 //!
 //! This file exempts itself from every scan by path and builds its needles
 //! with `concat!`, so it never matches itself.
@@ -383,6 +383,8 @@ fn kb_cli_bash_spawns_are_pinned() {
     let allowed: &[(&str, usize)] = &[
         ("cli_offline/hook_shell.rs", 1),
         ("cli_offline/adapter_grok.rs", 2),
+        // adapter_opencode.rs: sets its own per-test HOME/KB_CAPTURE_SPOOL.
+        ("cli_offline/adapter_opencode.rs", 1),
     ];
     let mut files = Vec::new();
     rust_files(&root.join("crates/kb-cli/tests"), &mut files);
