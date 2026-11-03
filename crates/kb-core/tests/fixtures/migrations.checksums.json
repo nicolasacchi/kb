@@ -1,0 +1,232 @@
+[
+  {
+    "version": 1,
+    "name": "initial",
+    "checksum": "18141484700582068157"
+  },
+  {
+    "version": 2,
+    "name": "edges_src_index",
+    "checksum": "12488460348272321706"
+  },
+  {
+    "version": 3,
+    "name": "history",
+    "checksum": "4203805573539372868"
+  },
+  {
+    "version": 4,
+    "name": "shares",
+    "checksum": "9994863414274149792"
+  },
+  {
+    "version": 5,
+    "name": "corkboard",
+    "checksum": "13178416061251519252"
+  },
+  {
+    "version": 6,
+    "name": "pinned_memories",
+    "checksum": "7862081974271361299"
+  },
+  {
+    "version": 7,
+    "name": "history_scroll_y_max",
+    "checksum": "12518781180880616918"
+  },
+  {
+    "version": 8,
+    "name": "sessions",
+    "checksum": "14105475005660859100"
+  },
+  {
+    "version": 9,
+    "name": "bookmarks",
+    "checksum": "17412746712208464892"
+  },
+  {
+    "version": 10,
+    "name": "memory_links",
+    "checksum": "2213212744502927687"
+  },
+  {
+    "version": 11,
+    "name": "memory_links_seeded",
+    "checksum": "3798388782710153"
+  },
+  {
+    "version": 12,
+    "name": "perf_indexes",
+    "checksum": "12572781803780011970"
+  },
+  {
+    "version": 13,
+    "name": "artifact_snapshots",
+    "checksum": "17591103189013593178"
+  },
+  {
+    "version": 14,
+    "name": "reading_sections",
+    "checksum": "12390754069560134279"
+  },
+  {
+    "version": 15,
+    "name": "lists",
+    "checksum": "17239447302303210736"
+  },
+  {
+    "version": 16,
+    "name": "drop_bookmarks",
+    "checksum": "560390731276509444"
+  },
+  {
+    "version": 17,
+    "name": "session_identity_and_files",
+    "checksum": "12390137414778610041"
+  },
+  {
+    "version": 18,
+    "name": "session_decisions_and_effort",
+    "checksum": "5136941031473645787"
+  },
+  {
+    "version": 19,
+    "name": "session_commits",
+    "checksum": "15128615808275234454"
+  },
+  {
+    "version": 20,
+    "name": "session_research",
+    "checksum": "4589892387142751343"
+  },
+  {
+    "version": 21,
+    "name": "session_files_basename_index",
+    "checksum": "2161337985973440697"
+  },
+  {
+    "version": 22,
+    "name": "history_source",
+    "checksum": "15042828632555981358"
+  },
+  {
+    "version": 23,
+    "name": "excluded_files",
+    "checksum": "16244139932945536733"
+  },
+  {
+    "version": 24,
+    "name": "session_subagent_stats",
+    "checksum": "1089262420270163702"
+  },
+  {
+    "version": 25,
+    "name": "session_commits_resolution",
+    "checksum": "15406342049917515860"
+  },
+  {
+    "version": 26,
+    "name": "session_files_via_subagent",
+    "checksum": "14471229080212857206"
+  },
+  {
+    "version": 27,
+    "name": "atlas_labels",
+    "checksum": "467158093211243796"
+  },
+  {
+    "version": 28,
+    "name": "atlas_snapshots",
+    "checksum": "11373330695679780968"
+  },
+  {
+    "version": 29,
+    "name": "session_project_and_outcome",
+    "checksum": "5289149229622346322"
+  },
+  {
+    "version": 30,
+    "name": "session_research_grok_job",
+    "checksum": "9547783552006555433"
+  },
+  {
+    "version": 31,
+    "name": "session_commits_research_indexes",
+    "checksum": "3385836506542722713"
+  },
+  {
+    "version": 32,
+    "name": "moves",
+    "checksum": "9770265403276992067"
+  },
+  {
+    "version": 33,
+    "name": "doc_first_seen",
+    "checksum": "16584090374855991049"
+  },
+  {
+    "version": 34,
+    "name": "history_user",
+    "checksum": "14538641296007073408"
+  },
+  {
+    "version": 35,
+    "name": "memory_recalls",
+    "checksum": "11204113005565217937"
+  },
+  {
+    "version": 36,
+    "name": "code_refs",
+    "checksum": "15392031222016075399"
+  },
+  {
+    "version": 37,
+    "name": "memory_recalls_used",
+    "checksum": "5734291800661105261"
+  },
+  {
+    "version": 38,
+    "name": "memory_commits",
+    "checksum": "17550584071783905160"
+  },
+  {
+    "version": 39,
+    "name": "slo",
+    "checksum": "5741932406841087436"
+  },
+  {
+    "version": 40,
+    "name": "sessions_is_newest",
+    "checksum": "11350456920245827815"
+  },
+  {
+    "version": 41,
+    "name": "memory_recalls_pos",
+    "checksum": "13254178606313308802"
+  },
+  {
+    "version": 42,
+    "name": "memory_recalls_served",
+    "checksum": "6171051139142384574"
+  },
+  {
+    "version": 43,
+    "name": "memory_recalls_artifact_idx",
+    "checksum": "12802670994853030643"
+  },
+  {
+    "version": 44,
+    "name": "doc_embedding_model",
+    "checksum": "2904088043570848530"
+  },
+  {
+    "version": 45,
+    "name": "sessions_segment",
+    "checksum": "16485965067612076850"
+  },
+  {
+    "version": 46,
+    "name": "session_evidence",
+    "checksum": "4528596177643526326"
+  }
+]
