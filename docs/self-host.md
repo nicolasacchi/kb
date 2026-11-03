@@ -747,8 +747,10 @@ Ids, stored paths and source slugs are untouched. Check with
 `git -C /srv/_git/notes log --oneline -1` inside the container. If git still
 refuses with "dubious ownership", the `safe.directory` environment above is
 missing or the image's git is older than 2.46 (list each `/srv/_git/<name>`
-instead of the `/*` form); if it reports a permission error, the container user
-cannot read the mounted `.git`.
+instead of the `/*` form: one `GIT_CONFIG_KEY_<n>=safe.directory` /
+`GIT_CONFIG_VALUE_<n>=/srv/_git/<name>` pair per repo, `n` counting from 0, with
+`GIT_CONFIG_COUNT` set to the number of pairs); if it reports a permission
+error, the container user cannot read the mounted `.git`.
 
 The container can then read the **whole** repo history, including blobs outside
 the corpus and anything ever committed. Routes only expose `git show
