@@ -26,10 +26,10 @@ fn base_url(daemon: Option<&str>) -> String {
         .to_string()
 }
 
-/// POST/PATCH/DELETE helper: send, map a non-2xx into a clear error carrying
-/// the daemon's problem+json `detail`. Returns the parsed body (or Null).
 const NOTES_READ_FIRST: &str = "`kb notes show <note>` (or `kb notes list` after `new`)";
 
+/// POST/PATCH/DELETE helper: send, map a non-2xx into a clear error carrying
+/// the daemon's problem+json `detail`. Returns the parsed body (or Null).
 async fn send_json(req: reqwest::RequestBuilder, what: &str) -> Result<Value> {
     let resp = crate::http::send_noting_transport(req, what, Some(NOTES_READ_FIRST)).await?;
     let status = resp.status().as_u16();

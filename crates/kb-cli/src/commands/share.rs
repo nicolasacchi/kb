@@ -27,10 +27,10 @@ fn base_url(daemon: Option<&str>) -> String {
         .to_string()
 }
 
-/// POST/GET/DELETE helper mirroring `comments::send_json`: surface the
-/// daemon's problem+json `detail` on a non-2xx.
 const SHARE_READ_FIRST: &str = "`kb share list`";
 
+/// POST/GET/DELETE helper mirroring `comments::send_json`: surface the
+/// daemon's problem+json `detail` on a non-2xx.
 async fn send_json(req: reqwest::RequestBuilder, what: &str) -> Result<Value> {
     let resp = crate::http::send_noting_transport(req, what, Some(SHARE_READ_FIRST)).await?;
     let status = resp.status().as_u16();

@@ -230,11 +230,11 @@ async fn resolve_note_owner(
     }
 }
 
+const COMMENTS_READ_FIRST: &str = "`kb comments show <kb> <artifact_id>`";
+
 /// POST/PATCH/DELETE helper: send, then map a non-2xx into a clear error
 /// carrying the daemon's problem+json `detail` when present. Returns the
 /// parsed JSON body on success (or `Value::Null` for an empty body).
-const COMMENTS_READ_FIRST: &str = "`kb comments show <kb> <artifact_id>`";
-
 async fn send_json(req: reqwest::RequestBuilder, what: &str) -> Result<Value> {
     let resp = crate::http::send_noting_transport(req, what, Some(COMMENTS_READ_FIRST)).await?;
     let status = resp.status().as_u16();

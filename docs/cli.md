@@ -454,7 +454,7 @@ kb comments {list,inbox,show,export,resolve,unresolve,add,reply,edit,reanchor,de
                                     [--once] [--timeout S] [--backlog]:
                                     SSE monitor for new `you` comments,
                                     scoped client-side; drives a /loop
-                                    A write with no answer before the client
+                                    note: a write with no answer before the client
                                     timeout exits 1 saying it may have
                                     landed: check with `show <kb> <id>`
                                     before sending it again (a connect

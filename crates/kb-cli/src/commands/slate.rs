@@ -456,12 +456,12 @@ impl Ctx {
 // HTTP: one call helper, one refusal path (§9's code/holder contract)
 // ---------------------------------------------------------------------------
 
+const SLATE_READ_FIRST: &str = "`kb slate delta`";
+
 /// Send a request; return the parsed body on 2xx, and on anything else
 /// print the refusal and EXIT with §9's code. A refusal is never an
 /// `anyhow` error: the exit status IS the contract, and letting it bubble
 /// through `main` would collapse 2 and 3 into 1.
-const SLATE_READ_FIRST: &str = "`kb slate delta`";
-
 async fn call(ctx: &Ctx, req: reqwest::RequestBuilder, what: &str) -> Result<Value> {
     let resp = crate::http::send_noting_transport(req, what, Some(SLATE_READ_FIRST)).await?;
     let status = resp.status().as_u16();
