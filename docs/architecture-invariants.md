@@ -2201,6 +2201,8 @@ it's non-exhaustive with the feature off; (d) `kb model download` shells out to
 from a CDN at build — for offline builds set `ORT_LIB_PATH=<dir>`
 (`ORT_LIB_LOCATION` is the deprecated alias; `ORT_STRATEGY` does not exist in ort-sys 2.x) to link a local ONNX Runtime instead.
 
+*Pin (AH9):* `scripts/ci/ort-isolated.sh` (ci.yml `supply-chain` job, self-tested by `scripts/ci/ort-isolated-selftest.sh`) fails when a workspace member other than kb-embedder can reach ORT or when a cargo command line would unify `local-embedder` as consequence (b) describes; see docs/invariant-test-map.md.
+
 ### 27. Stored `Doc.path` is canonical; artifact IDs are source-relative
 
 The indexer's `prepare_doc` (formerly `index_file` — GC-B7 split it into

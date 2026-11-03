@@ -26,7 +26,8 @@ under nextest, expects them to FAIL, and restores the tree. The nightly
 `canaries` workflow (and any PR touching the canary files) reports each as
 `caught`, `ESCAPED` (the pin is decorative) or `BROKEN` (the canary rotted: its
 anchor stopped matching exactly once, or the tree stopped compiling). Compile-
-time-only invariants (#1) get no canary and stay UNPINNED with their reason.
+time-only invariants (#1, #26) get no canary; each is pinned by a compile-free
+gate under `scripts/ci` that has its own self-test.
 
 | Canary | Invariant | Breaks | Pins that must FAIL |
 |---|---|---|---|
@@ -40,9 +41,8 @@ EITHER `CASCADE_STEPS` or `SWEEP_TABLES`, and `memory_recalls` is in both, so
 that test does NOT see this removal — it is deliberately not listed as a pin
 for it. The golden list and the behavioural sweep test are.
 
-**Coverage at time of writing: 32/35 pinned, 3 UNPINNED, 0 slots retired** (see
-the "Unpinned" section at the bottom for the detailed rationale on each of the
-3). #23 and #31 were pinned in SC6 (web-only: a vitest SSE-invalidation-bridge
+**Coverage at time of writing: 34/35 pinned, 1 UNPINNED, 0 slots retired** (see
+the "Unpinned" section at the bottom for the rationale on #21). #23 and #31 were pinned in SC6 (web-only: a vitest SSE-invalidation-bridge
 test + a Playwright scroll-restoration spec); the #32 `ErrorBoundary`
 `resetKey`-not-`key` residual was closed in the same pass.
 
@@ -73,7 +73,7 @@ test + a Playwright scroll-restoration spec); the #32 `ErrorBoundary`
 | 23 | SPA server state lives in the TanStack Query cache; SSE invalidates it (`staleTime: Infinity`) | `web/src/api/queryClient.test.ts` (full suite) | `vi.mock`s the `./sse` facade with an in-memory fake, fires each documented event kind, and asserts the EXACT `invalidateQueries` key set — including the v0.24 X3/X4 additions (`artifact.excluded`/`included` → the docs-churn gate PLUS `["exclusions", kb]`) and the dual-purpose `artifact.removed` (docs churn AND the memories gate). A gap/resync fires a bare `invalidateQueries()` (no key filter). |
 | 24 | One SSE connection per daemon per browser via a SharedWorker; kill-switch direct fallback | `web/src/sse/core.test.ts` — "clears the cursor and emits resync on a gap frame"; `tests/e2e/sse-shared.spec.ts` — both specs (shared-worker dedup + kill-switch) | The e2e pair is the most direct evidence: it counts live SSE consumers via the daemon's gauge and proves the worker dies with its last page, plus the `?sse=direct` escape hatch. |
 | 25 | Reading lists: derived read-state, `review::Anchor` reuse, no generation bumps, kb-list/1 grammar golden-pinned in both languages | `kb-core/src/lists.rs::golden_markdown_export_is_stable`, `::golden_markdown_parses_back`; `kb-cli/src/commands/list.rs::doc_peeks_extract_title_id_and_count`; `kb-server/tests/end_to_end.rs::list_read_state_derives_from_reading_progress_and_override_wins`, `::list_import_skips_unknown_artifacts_and_reports` | The kb-core/kb-cli pair is the "golden-pinned in BOTH" lock-step the invariant demands. |
-| 26 | ONNX Runtime isolated to kb-embedder; daemon drives embed+rerank over IPC | *Structural, not test-asserted* — `.github/workflows/ci.yml` (the `--exclude kb-embedder` job split) + `justfile` `ci`/`ci-embedder` recipes | **UNPINNED at the runtime-test level.** The isolation is enforced by the CI job structure (a `cargo test --workspace --exclude kb-embedder` job that never links ORT, plus a separate `ci-embedder` job for the ORT surface), not by a Rust test asserting "this binary contains zero onnxruntime symbols". `kb-core/src/embed_ipc.rs`'s protocol tests (`rerank_request_serializes_with_kind_tag` etc.) prove the IPC wire format works but don't prove kb-server itself is ORT-free. A true pin would need a build-time check (e.g. `nm`/`ldd` on the release `kb-server` binary in CI) — recorded here as a gap rather than annotated inline, since it isn't a single test fn. |
+| 26 | ONNX Runtime isolated to kb-embedder; daemon drives embed+rerank over IPC | `scripts/ci/ort-isolated.sh` (supply-chain job step `ort-isolated`), self-tested by `scripts/ci/ort-isolated-selftest.sh` | AH9. Reachability: per-member `cargo tree` over every member read from `cargo metadata`, at default features and then all features (kb-core at default only), with normal+build+dev edges; no member other than kb-embedder may reach `ort`/`ort-sys`/`fastembed`, with a positive control that kb-embedder still does. Topology: every cargo command in the Dockerfiles, workflows, justfile and scripts is linted for consequence (b) — kb-embedder sharing an invocation; `--workspace` or a bare root command without `--exclude kb-embedder`; `local-embedder` or `--all-features` outside `-p kb-core`/`-p kb-embedder`. The `--exclude kb-embedder` job split and the `ci-embedder` lane remain the structural layer. Does NOT prove symbol absence in a linked binary (LTO and link behaviour) or arguments that come from shell variables. `kb-core/src/embed_ipc.rs`'s protocol tests (`rerank_request_serializes_with_kind_tag` etc.) prove the IPC wire format works. |
 | 27 | Stored `Doc.path` is canonical; artifact IDs are source-relative (symlinked source roots) | `kb-core/src/indexer.rs::reconcile_emits_delete_through_a_symlinked_source_root`; `kb-core/src/paths.rs::doc_rel_path_from_canonical_handles_symlinked_root` | Named identically to the invariant text's own "Regression:" callout. |
 | 28 | Federated multi-**kb** read handlers fan out concurrently in submission order (BTreeMap order, `buffered` not `buffer_unordered`; not multi-daemon) | `kb-server/src/routes/mod.rs::buffered_join_preserves_submission_order_not_completion_order`, `::buffered_join_fold_drops_failing_corpora`; `kb-server/tests/end_to_end.rs::federated_search_scope_all_is_deterministic_and_attributes_kbs` | The unit test literally proves completion-order would differ from submission-order without the `buffered` combinator; the e2e test proves the full search fan-out is deterministic. |
 | 29 | Wikilinks/backlinks ride the edge graph; resolution is pure, corpus-local, and grammar-locked between Rust and TS | `kb-core/src/links.rs::resolve_title_ambiguous`, `::resolve_bare_basename_ambiguous_across_folders`; `web/src/lib/wikilink.test.ts` — "a SECOND pipe → null (matches comrak; stays literal, lock-step #29)"; `kb-server/tests/end_to_end.rs::note_wikilinks_resolve_edges_and_backlinks` | The TS test's own title already cites "#29" — the dual-language grammar lock-step the invariant requires is directly evidenced by this pair. |
@@ -86,12 +86,10 @@ test + a Playwright scroll-restoration spec); the #32 `ErrorBoundary`
 
 ## Unpinned — summary
 
-Three invariants have no runtime test pin, for two distinct reasons:
+One invariant has no pin. #1 (arrow pinning) and #26 (ONNX isolation) were
+listed here as not test-shaped and are now pinned by compile-free CI gates
+(rows 1 and 26).
 
-- **Compile-time / structural, not test-shaped** (#1 arrow pinning, #26 ONNX
-  isolation): both are enforced by `Cargo.toml`/CI job structure rather than a
-  test assertion. Writing a "test" for either would just re-implement what the
-  build or CI topology already guarantees.
 - **Environment-fragile** (#21 IPv6 loopback companion): the behavior is
   itself best-effort (falls back silently when IPv6 is unavailable), which
   makes a CI-safe pin awkward — the natural test would be flaky on
@@ -103,7 +101,7 @@ their rows above) — #31's pin covers two of its three claims, with the third
 (persist-on-navigate-away) now a documented, filed defect rather than a gap.
 
 One further **residual gap** lives inside an otherwise-pinned row (so it
-doesn't count toward the three):
+doesn't count toward the one):
 
 - **#6 — `review_lock` multi-kb concurrency.** The
   `comments_concurrent_adds_no_lost_updates` e2e test hammers ONE kb, so it
