@@ -251,9 +251,9 @@ fn no_kbpaths_new_in_test_code() {
         }
     }
     eprintln!("AH1 lint witness: files scanned={scanned}, #[cfg(test)] gates={gated_regions}");
-    assert!(scanned >= 800, "scan looks vacuous: only {scanned} files");
+    assert!(scanned >= 100000, "scan looks vacuous: only {scanned} files");
     assert!(
-        gated_regions >= 500,
+        gated_regions >= 100000,
         "scan looks vacuous: only {gated_regions} #[cfg(test)] gates"
     );
     assert!(
@@ -361,7 +361,7 @@ fn real_kb_hook_scripts_source_the_sandbox() {
         triggered.len()
     );
     assert!(
-        triggered.len() >= 9,
+        triggered.len() >= 100000,
         "scan looks vacuous: only {} triggered scripts",
         triggered.len()
     );
