@@ -30,7 +30,7 @@
 //!    exception in `checkout.rs`. Same scan-not-proof caveat: a verb in a
 //!    variable or a `const` slips through, and that is stated, not fixed.
 //!
-//! Failure of any of the four is a real signal; passing all three is not
+//! Failure of any of the four is a real signal; passing all four is not
 //! a proof. That asymmetry is the honest description of what a source-scan
 //! lint buys, and it is written here rather than in a commit message so
 //! the next person to extend it knows what they are extending.
@@ -620,7 +620,9 @@ fn production_sources() -> Vec<(String, String)> {
 /// bare `fetch_pr_ref`/start-pr fetch with no deadline held the job and
 /// `repo_guard` for hours. Sorted.
 const NETWORK_GIT_FILES: &[&str] = &[
-    // DOCUMENTED EXCEPTION: fetch_sha_no_ref is a LOCAL, uncredentialed, ref-less fetch from the review store's own git dir (a filesystem path, never a URL); local git, so no deadline
+    // DOCUMENTED EXCEPTION: fetch_sha_no_ref is a LOCAL, uncredentialed,
+    // ref-less fetch from the review store's own git dir (a filesystem path,
+    // never a URL); local git, so no deadline
     "checkout.rs",
     // run_git_bounded itself + fetch_pr_ref_with
     "github.rs",
