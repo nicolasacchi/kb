@@ -26,37 +26,10 @@ use kb_core::timeparse::parse_compact_utc;
 
 use super::import::{expand_tilde, meta_session, sanitize_sid};
 
-/// W4/R13/O4 — the harness-aware resume hint: `claude -r`/`codex resume`/
-/// `grok -r … --cwd …` (cli-grok.md's exact spelling)/`omp -r …` for a
-/// harness kb knows a resume command for, else an honest "not resumable
-/// from this machine" (never a fabricated command). `harness` is derived
-/// from the transcript's own adapter-meta line — see
-/// `first_transcript_field(jsonl, "harness")` at each call site; absent →
-/// [`HARNESS_DEFAULT`] ("claude").
+/// The harness-aware resume hint. The table lives in one place:
+/// [`kb_core::sessions::resume_command`] (AH3).
 pub(crate) fn resume_hint(harness: &str, session_id: &str, cwd: Option<&str>) -> String {
-    match harness {
-        "claude" => format!("claude -r {session_id}"),
-        // `codex resume <uuid>` — the verb exists (`codex --help`); see
-        // docs/research/cross-harness-memory-exchange-ideas-2026-07.html.
-        "codex" => format!("codex resume {session_id}"),
-        "grok" => match cwd {
-            Some(c) if !c.is_empty() => format!("grok -r {session_id} --cwd {c}"),
-            _ => format!("grok -r {session_id}"),
-        },
-        // OK1 — verified against `oh-my-pi/docs/cli-reference.md`'s launch
-        // flags table: `--resume [id]`, `-r`, `--session [id]` resumes by
-        // session id prefix or path. No `--cwd` needed: per
-        // `oh-my-pi/docs/session-switching-and-recent-listing.md`,
-        // `--resume <value>` searches the current-cwd bucket first, then
-        // ALL sessions globally (unless a custom `--session-dir` disables
-        // that fallback) — unlike grok's resume, which needs an explicit
-        // `--cwd` to find a session recorded under a different directory.
-        "omp" => format!("omp -r {session_id}"),
-        other => format!(
-            "{other} — not resumable from this machine (no known {other} resume command; \
-             session id: {session_id})"
-        ),
-    }
+    kb_core::sessions::resume_command(harness, session_id, cwd)
 }
 
 /// Detect the harness a transcript came from: the SAME rung-1 rule
@@ -720,8 +693,13 @@ mod tests {
         assert_eq!(resume_hint("omp", "sid1", None), "omp -r sid1");
         // `omp` ignores `cwd` (global resume fallback, unlike grok).
         assert_eq!(resume_hint("omp", "sid1", Some("/w/x")), "omp -r sid1");
-        let fallback = resume_hint("kimi", "sid1", None);
-        assert!(fallback.contains("kimi"), "got: {fallback}");
+        assert_eq!(resume_hint("kimi", "sid1", None), "kimi -S sid1");
+        assert_eq!(
+            resume_hint("opencode", "sid1", None),
+            "opencode --session sid1"
+        );
+        let fallback = resume_hint("aider", "sid1", None);
+        assert!(fallback.contains("aider"), "got: {fallback}");
         assert!(
             fallback.contains("not resumable"),
             "unknown-resume-command harnesses get an honest fallback, got: {fallback}"

@@ -514,8 +514,9 @@
   border-color: var(--accent, #b9a6ff);
 }
 
-/* The `claude -r <id>` resume command — a copyable terminal command, distinct
- * from the LLM-free resume-context summary. */
+/* The per-harness resume command (server-computed `SessionRow.resume`) — a
+ * copyable terminal command, distinct from the LLM-free resume-context
+ * summary. */
 .kb-ses__resume-cmd {
   display: flex;
   align-items: center;

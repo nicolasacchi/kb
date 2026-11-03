@@ -512,10 +512,10 @@ test.describe("W3.D/S2 — mobile sessions bottom sheet", () => {
     await expect(page).toHaveURL(new RegExp(`focus=${sid}`));
     const sheet = page.locator(".kb-ses__inspector--sheet");
     await expect(sheet).toBeVisible({ timeout: 10_000 });
-    // ResumeCommand always renders `claude -r <sid>` — the most reliable
-    // "this is the right session's sheet" signal (title/outcome placement
-    // inside the sheet isn't pinned by this spec).
-    await expect(sheet).toContainText(sid);
+    // The inspector shows the server's `resume` for this Claude capture — the
+    // most reliable "this is the right session's sheet" signal (title/outcome
+    // placement inside the sheet isn't pinned by this spec).
+    await expect(sheet).toContainText(`claude -r ${sid}`);
     const scrim = page.locator(".kb-pinsp-scrim.is-open");
     await expect(scrim).toBeVisible();
 

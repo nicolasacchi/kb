@@ -1693,16 +1693,14 @@ function buildResume(
   return lines.join("\n");
 }
 
-// The literal terminal command to resume this Claude Code session. Distinct
-// from the LLM-free "resume context" summary above — this hands the exact
-// session id to `claude -r` so you continue the real conversation. The id is
-// the transcript's authoritative `sessionId` (recovered full, not the truncated
-// capture-meta).
-function ResumeCommand({ sessionId }: { sessionId: string }) {
+// The literal terminal command to resume this session. It is server-computed
+// per harness (`SessionRow.resume`, from `kb_core::sessions::resume_command`);
+// the SPA never builds it. Distinct from the LLM-free "resume context" summary
+// above.
+export function ResumeCommand({ sessionId, resume }: { sessionId: string; resume: string }) {
   const [copied, setCopied] = useState(false);
-  const cmd = `claude -r ${sessionId}`;
   const copy = () => {
-    void navigator.clipboard?.writeText(cmd).then(
+    void navigator.clipboard?.writeText(resume).then(
       () => {
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
@@ -1712,16 +1710,20 @@ function ResumeCommand({ sessionId }: { sessionId: string }) {
   };
   return (
     <div className="kb-ses__resume-cmd" title="resume this session in your terminal">
-      <span className="kb-ses__resume-cmd-prompt">$</span>
-      <code className="kb-ses__resume-cmd-text">{cmd}</code>
-      <button
-        type="button"
-        className="kb-ses__resume-copy"
-        onClick={copy}
-        data-testid="session-resume-cmd-copy"
-      >
-        {copied ? "copied" : "copy"}
-      </button>
+      {resume ? (
+        <>
+          <span className="kb-ses__resume-cmd-prompt">$</span>
+          <code className="kb-ses__resume-cmd-text">{resume}</code>
+          <button
+            type="button"
+            className="kb-ses__resume-copy"
+            onClick={copy}
+            data-testid="session-resume-cmd-copy"
+          >
+            {copied ? "copied" : "copy"}
+          </button>
+        </>
+      ) : null}
       <button
         type="button"
         className="kb-ses__resume-copy"
@@ -1869,8 +1871,8 @@ function SessionInspector(props: {
         )}
       </div>
 
-      {/* The exact `claude -r <id>` command to resume this conversation. */}
-      <ResumeCommand sessionId={row.session_id} />
+      {/* The per-harness resume command (server-computed `resume`). */}
+      <ResumeCommand sessionId={row.session_id} resume={row.resume} />
 
       {/* W3.C/S1/S2 — the outcome block: the session's CLOSURE (the S3
           SessionContextCard's peer). Deviation from S2's literal

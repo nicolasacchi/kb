@@ -218,7 +218,7 @@ pub fn classify_kimi_session(
         .map(|n| n.to_string_lossy().into_owned());
 
     Some(LiveSession {
-        resume: format!("kimi -S {session_id}"),
+        resume: crate::sessions::resume_command(HARNESS, &session_id, cwd.as_deref()),
         session_id,
         harness: HARNESS.to_string(),
         holder,
