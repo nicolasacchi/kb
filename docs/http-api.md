@@ -834,6 +834,14 @@ GET  /api/sessions[?cursor=<unix>&limit=N   Cross-kb list of captured Claude
                                             are ABSENT for an ordinary
                                             session, so an unsegmented corpus
                                             serialises byte-identically.
+                                            Every row (and the detail route,
+                                            which flattens it) carries `resume`:
+                                            the copy-only command for its
+                                            harness from the same table as
+                                            `live-status` and `kb sessions
+                                            resume`. A segment part uses its
+                                            raw id. When none is known it is an
+                                            honest not-resumable sentence.
                                             `collapse=logical` (opt-in; the
                                             default and `none` show every part
                                             so nothing is hidden silently;
@@ -1219,7 +1227,8 @@ GET  /api/sessions/live-status              LSC-2 — the merged cockpit read:
                                             forced-scrub floor (`cwd`
                                             collapsed to its basename,
                                             `last_line` and `detail_reason`
-                                            re-capped) rather than a 403.
+                                            re-capped, and `resume` rebuilt
+                                            without `--cwd`) rather than a 403.
                                             A blocked row also carries
                                             `blocked_tool?` and
                                             `blocked_since_unix?`. OL IDEA4:

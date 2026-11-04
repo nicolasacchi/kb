@@ -13,14 +13,10 @@
 // lightweight component coverage without mounting the whole route.
 //
 // The row action is "copy the resume command" — ONE primary action (design
-// §7). It reuses the row's OWN precomputed `resume` string (LSC-2's wire
-// contract: `claude -r <sid>` for Claude, the harness-correct equivalent for
-// codex/grok/kimi/opencode) rather than sessions.tsx's `ResumeCommand`
-// component, which hardcodes `claude -r ${sessionId}` — reusing it
-// unmodified here would silently emit a WRONG resume command for every
-// non-Claude row. This is the harness-correctness reason the wire schema
-// carries a precomputed string in the first place (design §5); rebuilding
-// it client-side would be the actual reimplementation to avoid.
+// §7). It copies the row's OWN precomputed `resume` string, which comes from
+// `kb_core::sessions::resume_command`, the one per-harness table the CLI,
+// live-status and the sessions inspector share (AH3). The SPA never builds it,
+// and a non-loopback reader gets it without `--cwd`.
 
 import { useState } from "react";
 import { Icon } from "@kb/ui/icons";

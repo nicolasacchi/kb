@@ -199,7 +199,7 @@ pub fn classify_codex_session(
     // project slug — falling back to it would be an honest-looking lie.
 
     Some(LiveSession {
-        resume: format!("codex resume {session_id}"),
+        resume: crate::sessions::resume_command(HARNESS, &session_id, cwd.as_deref()),
         session_id,
         harness: HARNESS.to_string(),
         holder,

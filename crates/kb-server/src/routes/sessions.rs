@@ -25,6 +25,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use kb_core::sessions::resume_command;
 // LSC-2 — the two-axis live-session vocabulary (LSC-1, reused verbatim: the
 // beat route/registry never re-derive state logic).
 use kb_core::sessions::live::{
@@ -156,6 +157,11 @@ pub struct SessionOut {
     /// (`kb_core::sessions::HARNESSES`'s closed set). Never empty — the
     /// column is `NOT NULL DEFAULT 'claude'`.
     pub harness: String,
+    /// AH3 — the copy-only terminal command that resumes this session in its
+    /// own harness, from `kb_core::sessions::resume_command` (the one table
+    /// the CLI and live-status share; a segment part uses its raw id). An
+    /// honest not-resumable sentence when no command is known. Never empty.
+    pub resume: String,
     /// V0029/P1 — the derived project key (`claude_project_slug(root)`).
     /// `None` when the derivation ladder found neither a resolved commit's
     /// repo root nor a cwd.
@@ -493,6 +499,15 @@ impl SessionOut {
     /// the cross-kb fan-out; `title` comes from the persisted column (no
     /// lance read).
     pub fn from_row(kb: &str, row: kb_core::storage::sqlite::SessionRow) -> Self {
+        let resume = kb_core::sessions::resume_command(
+            if row.harness.is_empty() {
+                kb_core::sessions::HARNESS_DEFAULT
+            } else {
+                &row.harness
+            },
+            row.segment_of.as_deref().unwrap_or(&row.session_id),
+            row.cwd.as_deref(),
+        );
         let display_name = display_name_of(
             row.title.as_deref(),
             row.first_user_prompt.as_deref(),
@@ -543,6 +558,7 @@ impl SessionOut {
             subagent_launched_unstatted: row.subagent_launched_unstatted,
             outcome,
             harness: row.harness,
+            resume,
             project_key: row.project_key,
             substance: row.substance,
             active_secs: row.active_secs,
@@ -7964,19 +7980,6 @@ fn derive_project(cwd: Option<&str>) -> Option<String> {
     })
 }
 
-/// Best-effort `resume` string. `claude -r <sid>` is the ONLY verified
-/// convention (mirrors `classify_claude_transcript`'s exact format, LSC-1);
-/// LSC-3 only wires Claude Code beats today (`hooks.json`), so every other
-/// harness's resume UX is genuinely unknown at this phase — `<harness>
-/// resume <sid>` is a readable placeholder, not a verified command.
-fn resume_command(harness: &str, session_id: &str) -> String {
-    if harness == "claude" {
-        format!("claude -r {session_id}")
-    } else {
-        format!("{harness} resume {session_id}")
-    }
-}
-
 /// `POST /api/sessions/beat` — LSC-2/3's push intake: map one lifecycle
 /// EVENT (never a state — the daemon derives state, design §5's whole
 /// discipline) into `state.live_registry`, then fire `session.state` iff
@@ -8245,6 +8248,10 @@ fn order_and_cap_live_status_rows(
 /// already caps it client-side (defense in depth against a future or
 /// misbehaving adapter). On loopback, both ride in full — see the caller.
 fn redact_for_non_loopback(row: &mut LiveStatusRow) {
+    // AH3 — the resume string must not re-leak what this floor removes: a grok
+    // command carries `--cwd <full path>`, so a non-loopback reader gets it rebuilt
+    // without one (invariant #11 LSC forced-scrub floor).
+    row.resume = resume_command(&row.harness, &row.session_id, None);
     if let Some(cwd) = row.cwd.take() {
         let base = std::path::Path::new(&cwd)
             .file_name()
@@ -8385,7 +8392,7 @@ pub async fn live_status(
                 None => (None, None),
             };
             LiveStatusRow {
-                resume: resume_command(&r.harness, &r.session_id),
+                resume: resume_command(&r.harness, &r.session_id, r.cwd.as_deref()),
                 session_id: r.session_id,
                 harness: r.harness,
                 holder: r.holder,
@@ -8470,7 +8477,7 @@ pub async fn live_status(
                         )
                     });
                     LiveStatusRow {
-                        resume: resume_command(&row.harness, &row.session_id),
+                        resume: resume_command(&row.harness, &row.session_id, row.cwd.as_deref()),
                         session_id: row.session_id,
                         harness: row.harness,
                         holder: Holder::Human,
@@ -8703,6 +8710,18 @@ pub async fn live_touches(
 mod lsc2_tests {
     use super::*;
 
+    #[test]
+    fn redact_for_non_loopback_rebuilds_a_grok_resume_without_the_cwd() {
+        let mut r = row(LiveState::Working, 10, "a");
+        r.harness = "grok".to_string();
+        r.cwd = Some("/w/deep/proj".to_string());
+        r.resume = resume_command("grok", "a", r.cwd.as_deref());
+        assert_eq!(r.resume, "grok -r a --cwd /w/deep/proj");
+        redact_for_non_loopback(&mut r);
+        assert_eq!(r.cwd.as_deref(), Some("proj"));
+        assert_eq!(r.resume, "grok -r a");
+    }
+
     fn row(state: LiveState, since_secs: i64, session_id: &str) -> LiveStatusRow {
         LiveStatusRow {
             session_id: session_id.to_string(),
@@ -8903,12 +8922,6 @@ mod lsc2_tests {
             Some("kb".to_string())
         );
         assert_eq!(derive_project(None), None);
-    }
-
-    #[test]
-    fn resume_command_uses_the_verified_claude_form_and_a_placeholder_otherwise() {
-        assert_eq!(resume_command("claude", "sid-1"), "claude -r sid-1");
-        assert_eq!(resume_command("codex", "sid-1"), "codex resume sid-1");
     }
 
     #[test]
@@ -10581,6 +10594,55 @@ mod seg1_tests {
             harness: "omp".into(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn session_row_resume_is_the_shared_table_for_every_harness() {
+        for h in kb_core::sessions::HARNESSES {
+            let out = SessionOut::from_row(
+                "k",
+                SessionRow {
+                    session_id: "sid-1".into(),
+                    harness: h.into(),
+                    cwd: Some("/w/x".into()),
+                    ..Default::default()
+                },
+            );
+            assert_eq!(out.resume, resume_command(h, "sid-1", Some("/w/x")));
+            assert!(!out.resume.contains("not resumable"), "{h}: {}", out.resume);
+            if h == "grok" {
+                assert_eq!(out.resume, "grok -r sid-1 --cwd /w/x");
+            }
+            if h == "omp" {
+                assert_eq!(out.resume, "omp -r sid-1");
+            }
+        }
+        let d = SessionOut::from_row(
+            "k",
+            SessionRow {
+                session_id: "sid-1".into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(d.resume, "claude -r sid-1");
+    }
+
+    #[test]
+    fn session_row_resume_of_a_segment_part_uses_the_raw_id_tier0_reports() {
+        let part = SessionRow {
+            session_id: "raw-p02".into(),
+            segment_of: Some("raw".into()),
+            segment_idx: Some(2),
+            harness: "omp".into(),
+            ..Default::default()
+        };
+        let out = SessionOut::from_row("k", part.clone());
+        assert_eq!(out.resume, "omp -r raw");
+        let t0 = group_tier0_rows(vec![part]);
+        assert_eq!(
+            out.resume,
+            resume_command(&t0[0].harness, &t0[0].session_id, t0[0].cwd.as_deref())
+        );
     }
 
     /// The live-status Tier-0 rebuild groups a chain's parts into ONE row under
