@@ -29,8 +29,10 @@
 #                 A tripwire fails the run when too few commands were linted.
 #
 # NOT proven here: symbols in a linked binary (LTO / link behaviour), cargo
-# arguments that come from shell variables, cargo commands outside the scanned
-# files.
+# arguments that come from shell variables (a '$' anywhere in a command also
+# skips the bare-selection half of rule (b)), cargo global flags placed before
+# the subcommand (`cargo --locked build` is not recognised, so never linted),
+# cargo commands outside the scanned files.
 #
 # Usage: ort-isolated.sh [--manifest-path <Cargo.toml>] [--root <dir>]
 #                        [--only reachability|topology]
