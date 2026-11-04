@@ -120,8 +120,12 @@ describe("useCloseRequest", () => {
     document.body.appendChild(iframe);
     iframe.focus();
     expect(document.activeElement).toBe(iframe);
+    // Spy rather than assert activeElement: the real focus move is pinned by the
+    // browser e2e (a focused cross-origin frame), jsdom's frame focus model is not
+    // faithful enough to be the witness.
+    const blur = vi.spyOn(iframe, "blur");
     render({ active: true, onClose: vi.fn() });
-    expect(document.activeElement).not.toBe(iframe);
+    expect(blur).toHaveBeenCalledTimes(1);
   });
 
   it("leaves non-iframe focus alone", () => {
