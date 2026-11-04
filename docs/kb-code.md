@@ -1741,7 +1741,7 @@ table was NOT adopted; these are envelope.rs's".
 | 2 | usage | a clap parse error, a malformed `<id>`/`pr:<N>`/`<id>/ps<n>` address, an ambiguous `pr:<N>`, or a daemon 400 (any verb) |
 | 3 | conflict | HTTP 409, HTTP 503 (including a store still seeding), a `verify` that FAILS, and a `lint` ERROR — the request was fine, the state refuses it |
 | 4 | refused | an UNAMBIGUOUS 401/403 bearer-auth failure, including the secret denylist; or `needs-daemon-host` — a loopback-only route's bodiless 404 when `/api/identity` says the caller is not loopback |
-| 5 | unreachable | the daemon could not be reached at all — connection refused, DNS failure, timeout; never got as far as an HTTP status |
+| 5 | unreachable | the daemon could not be reached at all — connection refused, DNS failure, timeout; never got as far as an HTTP status. A timeout on a MUTATING verb is the exception to "never got as far": the daemon may already have accepted the work, so read its state first (`kb-code review status` for a review verb) before re-running. Only `review retrack` gives a timeout its own envelope code (`timeout`); on every other verb exit 5 alone cannot tell a timeout from a refused connection. |
 | 6 | upstream | an upstream the daemon depends on failed: a forge fetch/API call that is offline, unauthenticated or vanished (`store sync`, a `sync` job whose forge leg failed) |
 | 7 | partial | the verb partly succeeded — `sync --open` synced some PRs and failed others, `store sync` fetched some members and not all. The envelope carries `degraded: true` |
 | 8 | not found | EVERY HTTP 404 — the status alone decides it, never the body (any verb) |

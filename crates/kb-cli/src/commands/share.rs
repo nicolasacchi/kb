@@ -27,10 +27,12 @@ fn base_url(daemon: Option<&str>) -> String {
         .to_string()
 }
 
+const SHARE_READ_FIRST: &str = "`kb share list`";
+
 /// POST/GET/DELETE helper mirroring `comments::send_json`: surface the
 /// daemon's problem+json `detail` on a non-2xx.
 async fn send_json(req: reqwest::RequestBuilder, what: &str) -> Result<Value> {
-    let resp = req.send().await.with_context(|| what.to_string())?;
+    let resp = crate::http::send_noting_transport(req, what, Some(SHARE_READ_FIRST)).await?;
     let status = resp.status().as_u16();
     let text = resp.text().await.unwrap_or_default();
     if !(200..300).contains(&status) {
@@ -539,6 +541,19 @@ mod tests {
     use super::*;
     use std::io::Write;
     use zip::write::{SimpleFileOptions, ZipWriter};
+
+    #[tokio::test]
+    async fn send_json_timeout_names_share_list() {
+        let c = crate::http::client_with_exact_timeout(std::time::Duration::from_millis(300), None)
+            .unwrap();
+        let url = crate::http::tests::silent_stub();
+        let err = send_json(c.post(url).json(&serde_json::json!({})), "deploy")
+            .await
+            .unwrap_err();
+        let s = err.to_string();
+        assert!(s.contains("`kb share list`"), "{s}");
+        assert!(s.contains("may have landed"), "{s}");
+    }
 
     /// Build an in-memory zip. Each `(name, len)` entry is `len` STORED
     /// (uncompressed) zero bytes, so an entry's on-disk `size()` equals `len`
