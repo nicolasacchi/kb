@@ -159,7 +159,7 @@ fn classify_with_conn(
         .map(|n| n.to_string_lossy().into_owned());
 
     Some(LiveSession {
-        resume: format!("opencode --session {session_id}"),
+        resume: crate::sessions::resume_command(HARNESS, session_id, session.directory.as_deref()),
         session_id: session_id.to_string(),
         harness: HARNESS.to_string(),
         holder,
