@@ -28,7 +28,7 @@
 #      dedup-by-session-id), so the nudge survives even if the Stop-time
 #      stdout is never read;
 #   (SLATE2: it posts nothing to the slate — the ask lane holds questions
-#   only; distill debt rides the ledger above and `kb sessions --undistilled`.)
+#   only; distill debt rides the ledger above and `kb sessions list --undistilled`.)
 #
 # A marker file (its own "-kimi-" namespace, distinct from the Claude and
 # codex nudges' markers) caps this at once per session. Every failure

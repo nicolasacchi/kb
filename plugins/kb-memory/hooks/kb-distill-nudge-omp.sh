@@ -19,7 +19,7 @@
 # same relay grok uses for its headless sessions.
 # SLATE2 — a firing nudge posts NOTHING to the slate: the ask lane holds
 # questions only, and distill debt is already carried by the pending ledger
-# above and `kb sessions --undistilled`.
+# above and `kb sessions list --undistilled`.
 #
 # Modes:
 #   hook mode : stdin carries {session_file, session_id, cwd}   (from kb-omp.ts)
