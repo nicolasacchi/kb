@@ -77,6 +77,7 @@ ci-selfcheck:
     scripts/ci/public-gate-selftest.sh
     scripts/ci/wire-gates-selftest.sh
     scripts/ci/no-cloud-stack-selftest.sh
+    scripts/ci/ort-isolated-selftest.sh
     scripts/ci/run-canaries.sh --check-anchors
     scripts/check-doc-anchors.sh --self-test
     scripts/check-pinned-by.sh --self-test

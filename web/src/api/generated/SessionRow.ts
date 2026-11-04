@@ -91,6 +91,13 @@ outcome?: string,
  */
 harness: string, 
 /**
+ * AH3 — the copy-only terminal command that resumes this session in its
+ * own harness, from `kb_core::sessions::resume_command` (the one table
+ * the CLI and live-status share; a segment part uses its raw id). An
+ * honest not-resumable sentence when no command is known. Never empty.
+ */
+resume: string, 
+/**
  * V0029/P1 — the derived project key (`claude_project_slug(root)`).
  * `None` when the derivation ladder found neither a resolved commit's
  * repo root nor a cwd.
