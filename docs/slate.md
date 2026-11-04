@@ -121,7 +121,7 @@ neither pinned nor marked folds into one line under FOUND —
 nothing written; `--all` and `history` still list it.
 
 The Stop-hook distill nudges post nothing to the slate: the ASK lane holds
-questions only. Distill debt lives in `kb sessions --undistilled` (and the
+questions only. Distill debt lives in `kb sessions list --undistilled` (and the
 once-a-day `kb chores --line`); `kb sessions distilled <sid>` still closes a
 `Distill session …?` ask a pre-SLATE2 ledger may carry, and a no-op otherwise.
 

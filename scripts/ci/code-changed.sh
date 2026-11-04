@@ -32,6 +32,8 @@ PREFIXES=(
   "crates/kb-server/"
   "crates/kb-lip/"
   "plugins/kb-code/"
+  # code-test parses every kb-code command this skill cites (AH5)
+  "plugins/kb-memory/skills/kb-verify/"
   "web-code/"
   "web/"
   "ui/"

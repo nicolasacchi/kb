@@ -248,22 +248,742 @@ mod tests {
     use super::*;
     use clap::CommandFactory;
 
-    /// Every example for the upkeep verbs must name a real verb path with
-    /// real flags: a doc line that does not parse is a lie the manifest
-    /// would hand a model.
+    /// Plugin-markdown command scanner shared (by copy; the two crates cannot
+    /// share code) with the sibling CLI's tests. kb-distill SKILL.md:243
+    /// shipped `kb sessions --undistilled`, a clap usage error, and nothing
+    /// noticed (AH5): this module is what notices.
+    mod plugin_scan {
+        use std::path::{Path, PathBuf};
+
+        #[derive(Debug, Clone)]
+        pub(super) struct Tok {
+            pub text: String,
+            pub quoted: bool,
+        }
+
+        #[derive(Debug, PartialEq, Eq)]
+        pub(super) enum Walked {
+            Skipped,
+            Checked,
+        }
+
+        pub(super) struct Found {
+            pub line: usize,
+            pub text: String,
+        }
+
+        pub(super) struct Report {
+            pub files: usize,
+            pub fenced: usize,
+            pub inline: usize,
+            pub per_file: Vec<(String, usize)>,
+            pub failures: Vec<String>,
+        }
+
+        pub(super) fn repo_root() -> PathBuf {
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+        }
+
+        pub(super) fn rel_path(f: &Path) -> String {
+            f.strip_prefix(repo_root())
+                .unwrap_or(f)
+                .to_string_lossy()
+                .replace('\\', "/")
+        }
+
+        /// `plugins/*/skills/*/SKILL.md` + `plugins/*/commands/*.md`, sorted.
+        /// Never docs/research, READMEs, plugin.json or hooks.
+        pub(super) fn plugin_md_files() -> Vec<PathBuf> {
+            let plugins = repo_root().join("plugins");
+            let mut out = Vec::new();
+            for p in std::fs::read_dir(&plugins).expect("plugins dir") {
+                let p = p.expect("dir entry").path();
+                if !p.is_dir() {
+                    continue;
+                }
+                if let Ok(rd) = std::fs::read_dir(p.join("skills")) {
+                    for s in rd {
+                        let f = s.expect("dir entry").path().join("SKILL.md");
+                        if f.is_file() {
+                            out.push(f);
+                        }
+                    }
+                }
+                if let Ok(rd) = std::fs::read_dir(p.join("commands")) {
+                    for c in rd {
+                        let f = c.expect("dir entry").path();
+                        if f.extension().is_some_and(|e| e == "md") {
+                            out.push(f);
+                        }
+                    }
+                }
+            }
+            out.sort();
+            out
+        }
+
+        fn dummy_angles(s: &str) -> String {
+            let chars: Vec<char> = s.chars().collect();
+            let mut out = String::new();
+            let mut i = 0;
+            while i < chars.len() {
+                if chars[i] == '<' {
+                    let mut j = i + 1;
+                    while j < chars.len() && chars[j] != '<' && chars[j] != '>' {
+                        j += 1;
+                    }
+                    if j < chars.len() && chars[j] == '>' {
+                        out.push('x');
+                        i = j + 1;
+                        continue;
+                    }
+                }
+                out.push(chars[i]);
+                i += 1;
+            }
+            out
+        }
+
+        fn flush(toks: &mut Vec<Tok>, cur: &mut String, quoted: &mut bool) {
+            if !cur.is_empty() || *quoted {
+                toks.push(Tok {
+                    text: std::mem::take(cur),
+                    quoted: *quoted,
+                });
+            }
+            *quoted = false;
+        }
+
+        /// Quote-aware tokenizer for one shell-ish command. With
+        /// `keep_optional == false` every `[...]` group vanishes; with `true`
+        /// brackets are separators and `|` inside them separates alternatives.
+        pub(super) fn scan(cmd: &str, keep_optional: bool) -> Vec<Tok> {
+            let chars: Vec<char> = dummy_angles(cmd).chars().collect();
+            let mut toks: Vec<Tok> = Vec::new();
+            let mut cur = String::new();
+            let mut quoted = false;
+            let mut inq: Option<char> = None;
+            let mut depth = 0usize;
+            let mut i = 0;
+            while i < chars.len() {
+                let c = chars[i];
+                let dropped = !keep_optional && depth > 0;
+                if let Some(q) = inq {
+                    if c == q {
+                        inq = None;
+                    } else if !dropped {
+                        cur.push(c);
+                    }
+                    i += 1;
+                    continue;
+                }
+                match c {
+                    '[' => {
+                        flush(&mut toks, &mut cur, &mut quoted);
+                        depth += 1;
+                    }
+                    ']' => {
+                        flush(&mut toks, &mut cur, &mut quoted);
+                        depth = depth.saturating_sub(1);
+                    }
+                    '\'' | '"' => {
+                        inq = Some(c);
+                        if !dropped && cur.is_empty() {
+                            quoted = true;
+                        }
+                    }
+                    _ if dropped => {}
+                    _ if c.is_whitespace() => flush(&mut toks, &mut cur, &mut quoted),
+                    '#' if cur.is_empty() => break,
+                    '|' if depth > 0 => flush(&mut toks, &mut cur, &mut quoted),
+                    '|' | ';' | '&' | '`' => break,
+                    '>' => {
+                        if cur.len() == 1 && cur.chars().all(|d| d.is_ascii_digit()) {
+                            cur.clear();
+                        }
+                        break;
+                    }
+                    '$' if chars.get(i + 1) == Some(&'(') => break,
+                    _ => cur.push(c),
+                }
+                i += 1;
+            }
+            flush(&mut toks, &mut cur, &mut quoted);
+            toks.into_iter()
+                .filter(|t| t.quoted || t.text != "...")
+                .map(|mut t| {
+                    if !t.quoted {
+                        if let Some(s) = t.text.strip_suffix("...") {
+                            t.text = s.to_string();
+                        }
+                    }
+                    t
+                })
+                .filter(|t| t.quoted || !t.text.is_empty())
+                .collect()
+        }
+
+        fn is_word(s: &str) -> bool {
+            let mut it = s.chars();
+            it.next().is_some_and(|c| c.is_ascii_lowercase())
+                && it.all(|c| c.is_ascii_lowercase() || c == '-')
+        }
+
+        fn find_sub<'a>(cmd: &'a clap::Command, name: &str) -> Option<&'a clap::Command> {
+            cmd.get_subcommands()
+                .find(|c| c.get_name() == name || c.get_all_aliases().any(|a| a == name))
+        }
+
+        /// Resolve the verb path, then check every unquoted `--flag` against
+        /// the leaf (long name or alias), a GLOBAL arg on an ancestor, or
+        /// help/version. `toks` excludes the root word.
+        pub(super) fn walk(cli: &clap::Command, toks: &[Tok]) -> Result<Walked, String> {
+            let Some(first) = toks.first() else {
+                return Ok(Walked::Skipped);
+            };
+            if first.quoted {
+                return Ok(Walked::Skipped);
+            }
+            if first.text.contains('/') {
+                let parts: Vec<&str> = first.text.split('/').collect();
+                if parts.iter().all(|p| is_word(p)) {
+                    for p in parts {
+                        if find_sub(cli, p).is_none() {
+                            return Err(format!("no such verb `{p}`"));
+                        }
+                    }
+                    return Ok(Walked::Checked);
+                }
+                return Ok(Walked::Skipped);
+            }
+            if !is_word(&first.text) {
+                return Ok(Walked::Skipped);
+            }
+            let mut path: Vec<&clap::Command> = vec![cli];
+            let mut i = 0;
+            while i < toks.len() {
+                let t = &toks[i];
+                if t.quoted || !is_word(&t.text) {
+                    break;
+                }
+                let cur = *path.last().expect("non-empty path");
+                match find_sub(cur, &t.text) {
+                    Some(sub) => {
+                        path.push(sub);
+                        i += 1;
+                    }
+                    None => {
+                        let strict = cur.has_subcommands()
+                            && (path.len() == 1
+                                || (cur.is_subcommand_required_set()
+                                    && !cur.is_allow_external_subcommands_set()));
+                        if strict {
+                            return Err(format!(
+                                "no such verb `{}` under `{}`",
+                                t.text,
+                                cur.get_name()
+                            ));
+                        }
+                        break;
+                    }
+                }
+            }
+            let leaf = *path.last().expect("non-empty path");
+            for t in &toks[i..] {
+                if t.quoted {
+                    continue;
+                }
+                let Some(rest) = t.text.strip_prefix("--") else {
+                    continue;
+                };
+                if !rest
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_alphanumeric())
+                {
+                    continue;
+                }
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
+                    .collect();
+                let has = |c: &clap::Command, global_only: bool| {
+                    c.get_arguments().any(|a| {
+                        (!global_only || a.is_global_set())
+                            && (a.get_long() == Some(name.as_str())
+                                || a.get_all_aliases()
+                                    .is_some_and(|v| v.iter().any(|x| *x == name)))
+                    })
+                };
+                let ok = name == "help"
+                    || name == "version"
+                    || has(leaf, false)
+                    || path[..path.len() - 1].iter().any(|c| has(c, true));
+                if !ok {
+                    let verbs: Vec<&str> = path.iter().skip(1).map(|c| c.get_name()).collect();
+                    return Err(format!("`{}` has no --{name}", verbs.join(" ")));
+                }
+            }
+            Ok(Walked::Checked)
+        }
+
+        /// Strict clap parse (dummy values) plus the flag walk.
+        pub(super) fn check_line(cli: &clap::Command, root: &str, cmd: &str) -> Result<(), String> {
+            use clap::error::ErrorKind as K;
+            let strict: Vec<String> = scan(cmd, false).into_iter().map(|t| t.text).collect();
+            if strict.first().map(String::as_str) != Some(root) {
+                return Err(format!("does not start with `{root}`"));
+            }
+            if let Err(e) = cli.clone().try_get_matches_from(strict) {
+                let benign = matches!(
+                    e.kind(),
+                    K::MissingRequiredArgument
+                        | K::InvalidValue
+                        | K::ValueValidation
+                        | K::WrongNumberOfValues
+                        | K::TooFewValues
+                        | K::DisplayHelp
+                        | K::DisplayVersion
+                );
+                if !benign {
+                    let msg = e.to_string();
+                    return Err(format!("clap: {}", msg.lines().next().unwrap_or("")));
+                }
+            }
+            let keep = scan(cmd, true);
+            if keep.len() > 1 {
+                walk(cli, &keep[1..])?;
+            }
+            Ok(())
+        }
+
+        /// Flag walk only, for an inline span piece (`text` starts with the root).
+        pub(super) fn check_inline(
+            cli: &clap::Command,
+            root: &str,
+            text: &str,
+        ) -> Result<Walked, String> {
+            let rest = text.strip_prefix(root).unwrap_or(text);
+            walk(cli, &scan(rest, true))
+        }
+
+        fn inline_pieces(span: &str, root: &str) -> Vec<String> {
+            let pat = format!("{root} ");
+            let mut starts = Vec::new();
+            let mut from = 0;
+            while let Some(off) = span[from..].find(&pat) {
+                let p = from + off;
+                let ok = p == 0
+                    || span[..p]
+                        .chars()
+                        .next_back()
+                        .is_some_and(|c| c.is_whitespace() || "(|;".contains(c));
+                if ok {
+                    starts.push(p);
+                }
+                from = p + pat.len();
+            }
+            let mut out = Vec::new();
+            for (k, p) in starts.iter().enumerate() {
+                let end = starts.get(k + 1).copied().unwrap_or(span.len());
+                out.push(format!("{root} {}", span[p + pat.len()..end].trim()));
+            }
+            out
+        }
+
+        /// (fenced commands, inline commands) of one markdown file for `root`.
+        pub(super) fn extract(md: &str, root: &str) -> (Vec<Found>, Vec<Found>) {
+            let prefix = format!("{root} ");
+            let mut fenced = Vec::new();
+            let mut inline = Vec::new();
+            let mut in_fence = false;
+            let mut fence_ok = false;
+            let mut pending: Option<(usize, String)> = None;
+            let mut span: Option<(usize, String)> = None;
+            for (n, raw) in md.lines().enumerate() {
+                let line_no = n + 1;
+                let t = raw.trim_start();
+                if t.starts_with("```") {
+                    if in_fence {
+                        in_fence = false;
+                        if let Some((ln, acc)) = pending.take() {
+                            if acc.starts_with(&prefix) {
+                                fenced.push(Found {
+                                    line: ln,
+                                    text: acc,
+                                });
+                            }
+                        }
+                    } else {
+                        in_fence = true;
+                        let info = t.trim_start_matches('`').trim();
+                        fence_ok = matches!(info, "" | "bash" | "sh" | "shell" | "console" | "zsh");
+                        span = None;
+                    }
+                    continue;
+                }
+                if in_fence {
+                    if !fence_ok {
+                        continue;
+                    }
+                    let mut l = raw.trim();
+                    if pending.is_none() {
+                        l = l.strip_prefix("$ ").unwrap_or(l);
+                    }
+                    let (body, cont) = match l.strip_suffix('\\') {
+                        Some(b) => (b.trim_end(), true),
+                        None => (l, false),
+                    };
+                    let (ln, mut acc) = pending.take().unwrap_or((line_no, String::new()));
+                    if !acc.is_empty() {
+                        acc.push(' ');
+                    }
+                    acc.push_str(body);
+                    if cont {
+                        pending = Some((ln, acc));
+                    } else if acc.starts_with(&prefix) {
+                        fenced.push(Found {
+                            line: ln,
+                            text: acc,
+                        });
+                    }
+                    continue;
+                }
+                if raw.trim().is_empty() {
+                    span = None;
+                    continue;
+                }
+                for ch in raw.chars() {
+                    if ch == '`' {
+                        match span.take() {
+                            Some((ln, s)) => {
+                                for text in inline_pieces(&s, root) {
+                                    inline.push(Found { line: ln, text });
+                                }
+                            }
+                            None => span = Some((line_no, String::new())),
+                        }
+                    } else if let Some((_, s)) = span.as_mut() {
+                        s.push(ch);
+                    }
+                }
+                if let Some((_, s)) = span.as_mut() {
+                    s.push(' ');
+                }
+            }
+            (fenced, inline)
+        }
+
+        /// Walk every plugin markdown file for `root` commands. Pairs in
+        /// `allowed` are `(file path suffix, exact command text)`.
+        pub(super) fn scan_plugins(
+            cli: &clap::Command,
+            root: &str,
+            allowed: &[(&str, &str)],
+        ) -> Report {
+            let mut r = Report {
+                files: 0,
+                fenced: 0,
+                inline: 0,
+                per_file: Vec::new(),
+                failures: Vec::new(),
+            };
+            for f in plugin_md_files() {
+                r.files += 1;
+                let rel = rel_path(&f);
+                let md = std::fs::read_to_string(&f).expect("read plugin md");
+                let (fenced, inline) = extract(&md, root);
+                let mut n = 0;
+                for (is_fenced, list) in [(true, &fenced), (false, &inline)] {
+                    for it in list {
+                        n += 1;
+                        if is_fenced {
+                            r.fenced += 1;
+                        } else {
+                            r.inline += 1;
+                        }
+                        if allowed
+                            .iter()
+                            .any(|(s, t)| rel.ends_with(s) && it.text == *t)
+                        {
+                            continue;
+                        }
+                        let res = if is_fenced {
+                            check_line(cli, root, &it.text)
+                        } else {
+                            check_inline(cli, root, &it.text).map(|_| ())
+                        };
+                        if let Err(e) = res {
+                            r.failures
+                                .push(format!("{rel}:{}: {}: {e}", it.line, it.text));
+                        }
+                    }
+                }
+                r.per_file.push((rel, n));
+            }
+            r
+        }
+    }
+
+    /// Negative examples the plugin-command guard deliberately tolerates:
+    /// `(file path suffix, exact command text)`. SHRINK-ONLY: kb-distill
+    /// SKILL.md:243 shipped `kb sessions --undistilled`, a clap usage error,
+    /// and nothing noticed (AH5). Every new entry needs a reviewer-visible
+    /// reason beside it, and `allowlist_entries_are_still_needed` fails a
+    /// stale one.
+    const ALLOWED_NEGATIVE: &[(&str, &str)] = &[
+        // a hypothetical verb the skill explicitly says does not exist
+        ("kb-distill/SKILL.md", "kb workflows"),
+        // prose: "There is no ... verb"
+        ("kb-slate-tidy/SKILL.md", "kb slate tidy-report"),
+    ];
+
+    /// Every `kb` command a plugin skill or command file tells an agent to
+    /// type must parse against the real clap tree (kb-distill SKILL.md:243
+    /// shipped `kb sessions --undistilled` and nothing noticed, AH5). This
+    /// catches renamed or misspelled verbs and flags, NOT a sentence that
+    /// parses but is now false.
     #[test]
-    fn upkeep_examples_parse_against_the_real_cli() {
-        for name in ["chores", "outbox", "rescrub"] {
-            let ex = example_for(name).unwrap_or_else(|| panic!("no example for {name}"));
+    fn plugin_skill_kb_commands_parse_against_the_real_cli() {
+        let cli = crate::Cli::command();
+        let r = plugin_scan::scan_plugins(&cli, "kb", ALLOWED_NEGATIVE);
+        let counts = format!("files={} fenced={} inline={}", r.files, r.fenced, r.inline);
+        assert!(
+            r.failures.is_empty(),
+            "{counts}\n{} plugin command(s) do not parse:\n{}",
+            r.failures.len(),
+            r.failures.join("\n")
+        );
+        assert!(r.files >= 14, "witness floor: {counts}");
+        assert!(r.fenced >= 40, "witness floor: {counts}");
+        assert!(r.inline >= 90, "witness floor: {counts}");
+    }
+
+    /// Proves the guard is not vacuous, independent of the plugin files
+    /// (kb-distill SKILL.md:243 shipped `kb sessions --undistilled`, AH5).
+    #[test]
+    fn kb_line_checker_rejects_the_distill_regression() {
+        let cli = crate::Cli::command();
+        for bad in [
+            "kb sessions --undistilled",
+            "kb sessions nope",
+            "kb sessions ledger --days <N> --jsn",
+            "kb sessions list [--folderx <name>]",
+            "kb queries list --zero-hit",
+        ] {
+            assert!(
+                plugin_scan::check_line(&cli, "kb", bad).is_err(),
+                "should reject: {bad}"
+            );
+        }
+        for ok in [
+            "kb sessions list --undistilled",
+            "kb sessions list --since 7d --undistilled",
+            "kb sessions list --undistilled --json [--since <7d|YYYY-MM-DD>]  # comment",
+            "kb search 'borrow checker' --kb canon --json",
+            "kb slate drop <seq> \"merged into #<new-seq>\"",
+            "kb remember \"verified on $(date -u +%F)\" --title t",
+            "kb comments add --kb <kb> --artifact-id <id> --body \"[kb-drift] a; b\"",
+            "kb slate open --ref x",
+            "kb sessions list --config x",
+        ] {
+            if let Err(e) = plugin_scan::check_line(&cli, "kb", ok) {
+                panic!("should accept: {ok}: {e}");
+            }
+        }
+        // Where clap itself decides, the real parser agrees.
+        for bad in [
+            "kb sessions --undistilled",
+            "kb sessions nope",
+            "kb queries list --zero-hit",
+        ] {
+            let argv: Vec<&str> = bad.split_whitespace().collect();
+            assert!(cli.clone().try_get_matches_from(argv).is_err(), "{bad}");
+        }
+        let argv: Vec<&str> = "kb sessions list --undistilled"
+            .split_whitespace()
+            .collect();
+        assert!(cli.clone().try_get_matches_from(argv).is_ok());
+    }
+
+    /// A stale allow-list entry hides nothing and invites rot (AH5).
+    #[test]
+    fn allowlist_entries_are_still_needed() {
+        let cli = crate::Cli::command();
+        let files = plugin_scan::plugin_md_files();
+        for (suffix, text) in ALLOWED_NEGATIVE {
+            let f = files
+                .iter()
+                .find(|f| plugin_scan::rel_path(f).ends_with(suffix))
+                .unwrap_or_else(|| panic!("{suffix}: file gone; remove it from ALLOWED_NEGATIVE"));
+            let md = std::fs::read_to_string(f).unwrap();
+            assert!(
+                md.contains(text),
+                "{suffix} no longer contains `{text}`; remove it from ALLOWED_NEGATIVE"
+            );
+            assert!(
+                plugin_scan::check_inline(&cli, "kb", text).is_err(),
+                "`{text}` now parses; remove it from ALLOWED_NEGATIVE"
+            );
+        }
+    }
+
+    fn collect_example_names(cmd: &clap::Command, out: &mut std::collections::BTreeSet<String>) {
+        if example_for(cmd.get_name()).is_some() {
+            out.insert(cmd.get_name().to_string());
+        }
+        for sub in cmd.get_subcommands() {
+            collect_example_names(sub, out);
+        }
+    }
+
+    /// Every `example_for` entry (what `kb tools` prints) must parse; a doc
+    /// line that does not parse is a lie the manifest hands a model. Replaces
+    /// the three-verb upkeep test after kb sessions --undistilled slipped
+    /// through (AH5).
+    #[test]
+    fn example_for_table_parses_against_the_real_cli() {
+        let cli = crate::Cli::command();
+        let mut names = std::collections::BTreeSet::new();
+        collect_example_names(&cli, &mut names);
+        let mut commands = 0usize;
+        let mut failures = Vec::new();
+        for name in &names {
+            let ex = example_for(name).expect("collected with Some");
+            let mut pending = String::new();
             for line in ex.lines() {
-                let cmd = line.split('#').next().unwrap().trim();
-                let argv: Vec<&str> = cmd.split_whitespace().collect();
-                assert_eq!(argv[0], "kb", "{line}");
-                if let Err(e) = crate::Cli::command().try_get_matches_from(argv) {
-                    panic!("`{cmd}` does not parse: {e}");
+                let l = line.trim();
+                let (body, cont) = match l.strip_suffix('\\') {
+                    Some(b) => (b.trim_end(), true),
+                    None => (l, false),
+                };
+                if !pending.is_empty() {
+                    pending.push(' ');
+                }
+                pending.push_str(body);
+                if cont {
+                    continue;
+                }
+                let cmd = std::mem::take(&mut pending);
+                if !cmd.starts_with("kb ") {
+                    continue;
+                }
+                commands += 1;
+                if let Err(e) = plugin_scan::check_line(&cli, "kb", &cmd) {
+                    failures.push(format!("{name}: {cmd}: {e}"));
                 }
             }
         }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+        assert!(names.len() >= 20, "witness floor: {} names", names.len());
+        assert!(commands >= 40, "witness floor: {commands} commands");
+    }
+
+    /// docs/cli.md calls itself the complete verb surface; nine verbs had no
+    /// synopsis (AH5). Top-level names only, both ways, never flags.
+    #[test]
+    fn docs_cli_names_every_top_level_verb_both_ways() {
+        use std::collections::BTreeSet;
+        let md = std::fs::read_to_string(plugin_scan::repo_root().join("docs/cli.md")).unwrap();
+        let mut documented = BTreeSet::new();
+        let mut in_fence = false;
+        for line in md.lines() {
+            if line.trim_start().starts_with("```") {
+                in_fence = !in_fence;
+                continue;
+            }
+            if !in_fence || !line.starts_with("kb ") {
+                continue;
+            }
+            if let Some(tok) = line.split_whitespace().nth(1) {
+                if !tok.starts_with('-') {
+                    documented.insert(tok.to_string());
+                }
+            }
+        }
+        let cli = crate::Cli::command();
+        let mut real = BTreeSet::new();
+        for c in cli.get_subcommands() {
+            if c.is_hide_set() || c.get_name() == "help" {
+                continue;
+            }
+            real.insert(c.get_name().to_string());
+            for a in c.get_all_aliases() {
+                real.insert(a.to_string());
+            }
+        }
+        let missing: Vec<&String> = real.difference(&documented).collect();
+        let extra: Vec<&String> = documented.difference(&real).collect();
+        assert!(
+            missing.is_empty(),
+            "docs/cli.md lacks a synopsis for: {missing:?}"
+        );
+        assert!(
+            extra.is_empty(),
+            "docs/cli.md names a verb clap does not have: {extra:?}"
+        );
+        assert!(
+            documented.len() >= 70,
+            "witness floor: {}",
+            documented.len()
+        );
+        assert!(real.len() >= 70, "witness floor: {}", real.len());
+    }
+
+    /// A skill-only edit skipped code-test, the only lane that parses its
+    /// kb-code commands (AH5): every plugin file citing a kb-code command
+    /// must be covered by scripts/ci/code-changed.sh.
+    #[test]
+    fn code_lane_filter_covers_every_plugin_file_citing_kb_code() {
+        let sh =
+            std::fs::read_to_string(plugin_scan::repo_root().join("scripts/ci/code-changed.sh"))
+                .unwrap();
+        let array = |name: &str| -> Vec<String> {
+            let mut out = Vec::new();
+            let mut on = false;
+            for line in sh.lines() {
+                let t = line.trim();
+                if t == format!("{name}=(") {
+                    on = true;
+                    continue;
+                }
+                if on && t == ")" {
+                    break;
+                }
+                if on && !t.starts_with('#') {
+                    if let Some(rest) = t.strip_prefix('"') {
+                        if let Some(end) = rest.find('"') {
+                            out.push(rest[..end].to_string());
+                        }
+                    }
+                }
+            }
+            out
+        };
+        let prefixes = array("PREFIXES");
+        let exact = array("EXACT");
+        assert!(!prefixes.is_empty() && !exact.is_empty());
+        let mut citing = 0usize;
+        let mut uncovered = Vec::new();
+        for f in plugin_scan::plugin_md_files() {
+            let rel = plugin_scan::rel_path(&f);
+            let md = std::fs::read_to_string(&f).unwrap();
+            let (fenced, inline) = plugin_scan::extract(&md, "kb-code");
+            if fenced.is_empty() && inline.is_empty() {
+                continue;
+            }
+            citing += 1;
+            let covered =
+                prefixes.iter().any(|p| rel.starts_with(p.as_str())) || exact.contains(&rel);
+            if !covered {
+                uncovered.push(rel);
+            }
+        }
+        assert!(
+            uncovered.is_empty(),
+            "add these to PREFIXES in scripts/ci/code-changed.sh: {uncovered:?}"
+        );
+        assert!(citing >= 3, "witness floor: {citing} files");
     }
 
     /// Exercises the EMITTED text (not just the clap tree): each upkeep verb

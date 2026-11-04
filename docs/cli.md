@@ -25,6 +25,12 @@ kb daemon log-level [FILTER]        read (no arg) or set the daemon's FILE
                                     no restart, stderr/RUST_LOG untouched.
                                     FILTER = EnvFilter directives, e.g.
                                     debug or info,kb_core=debug
+kb config {show,validate,edit}      inspect / validate / edit the resolved
+                                    kb.toml on disk (bare = show).
+                                    validate exits non-zero on hard
+                                    errors; edit opens $VISUAL/$EDITOR,
+                                    then validates. File-direct: applies
+                                    after a daemon restart
 kb version [--contract] [--json]    this binary's build stamp (`kb 0.43-1-gabc
                                     build <sha> hook-contract 1`; a binary
                                     with no stamp says "stamp missing").
@@ -118,6 +124,16 @@ kb slo snapshot [--kb NAME]         append one reading to the per-kb
 kb slo log [--kb NAME] [--limit N]  read that log back, newest first
    [--json] [--daemon URL]          (server clamps N to 1..=1000)
 kb add <path>                       add a source folder to the active kb
+kb capture [FILE...|-] [--kb NAME] [--title T] [--tags a,b]
+   [--url URL] [--text TXT] [--name STEM] [--sanitize]
+   [--output json] [--daemon URL]
+                                    stage file(s) into a kb's capture/
+                                    folder, provenance-stamped (POST
+                                    /api/kb/{kb}/capture). `-` reads one
+                                    document from stdin (written as .md).
+                                    With no FILE, --url/--text write a
+                                    url-stub .md; the daemon never
+                                    fetches the URL
 kb status [--json]                  show daemon health + kb summaries
 kb metrics [--daemon URL] [--json]  print the daemon's request + pipeline
                                     timing tables (GET /api/metrics). Detailed
@@ -494,6 +510,14 @@ kb push [--filter EVENTKIND] [--daemon URL]
                                     prompt-formatted blocks. Reconnects
                                     with Last-Event-ID + exponential
                                     backoff. Pipe to `claude code -- ...`.
+kb pull --from URL --kb NAME --into DIR
+   [--oidc-token-url URL --oidc-client-id ID] [--scope S]
+                                    one-shot fetch of every artifact a
+                                    remote kb has that DIR lacks, written
+                                    as <id>.html for the local watcher.
+                                    Behind an OIDC gate: the two --oidc-*
+                                    flags + KB_OIDC_CLIENT_SECRET in the
+                                    env; otherwise the local kb token
 kb events --follow [--types GLOB]…  v0.24 T1: operator tail of /api/events,
    [--kb NAME] [--artifact ID]      one line per event (NDJSON with --json).
    [--json] [--daemon URL]          Same reconnect loop as kb push; --types/
@@ -537,10 +561,20 @@ kb get <id> --kb NAME [--format json|md|html] [--daemon URL]
                                     v0.4 D2: single-artifact lookup;
                                     --format html via /api/kb/{kb}/artifact/{id}
 kb cat <id> [--kb NAME]             dump artifact HTML to stdout
+kb prompt <id> [--kb NAME] [--raw | --json] [--daemon URL]
+                                    an artifact's stored generation prompt
+                                    (its kb-prompt template bundle,
+                                    8 KiB-capped at index time). --raw
+                                    prints only the text; a remote daemon
+                                    whose kb strips it says `stripped`
 kb read <id> [--kb NAME]            open the artifact in $BROWSER
 kb related <id> --kb NAME [--depth N] [--json] [--daemon URL]
                                     v0.4 D2: cross-artifact link graph
                                     (uses v0.3 F2 graph endpoint)
+kb similar <id> [--kb NAME] [--limit N] [--json] [--daemon URL]
+                                    embedding-space nearest neighbours
+                                    (default 8, max 24), unlike kb
+                                    related's link graph
 kb new --template <path|name> --title T [--out PATH] [--var k=v ...] [--kb NAME]
                                     scaffold an HTML artifact from a
                                     template; substitutes {{title}} {{date}}
@@ -565,6 +599,10 @@ kb reindex [--kb NAME] [--daemon URL] [--json] [--re-embed]
                                     but keeps the old vectors. After such a
                                     change run with --re-embed (sends
                                     re_embed=true; costs one embed per doc)
+kb compact [--kb NAME] [--json] [--daemon URL]
+                                    lance maintenance: merge small
+                                    fragments, rebuild indices, prune old
+                                    manifest versions. Synchronous
 kb exclude <target> [--kb NAME] [--rm] [--list] [--note TEXT] [--json]
                                     v0.24 X3: per-file index exclusion.
                                     Excluded = dropped from the index but
@@ -1114,6 +1152,13 @@ kb daycard [--kb NAME]
                                     (--html wins over --json). No streak, no
                                     goal, no --watch. GET
                                     /api/kb/{kb}/daycard.
+kb timeline [--kb NAME] [--from D] [--to D]
+   [--tracks created,read,session,comment] [--ids] [--json] [--daemon URL]
+                                    four day-bucketed lanes on one UTC
+                                    axis. --from/--to: YYYY-MM-DD or unix
+                                    seconds (default: last 365 days); --ids
+                                    prints the resolved artifact ids. No
+                                    streak, no goal, no --follow
 kb reading <id|path>                RP-track: reading-progress for an artifact —
   [--kb N] [--json] [--lite]        how far it was read, per-section read vs
                                     skimmed vs unseen, where the reader stopped,
@@ -1134,6 +1179,13 @@ kb list {create,ls,show,add,rm,     RL-track (v0.18): reading lists — named,
                                     the portable kb-list/1 document — one
                                     heredoc materializes a curated list.
                                     See docs/reading-lists.md.
+kb board <list> [--kb NAME] [--json] [--daemon URL]
+kb board set <list> --file <path|-> [--kb NAME] [--daemon URL]
+                                    a reading list's JSON Canvas geometry
+                                    sidecar. Bare prints it; set replaces
+                                    it wholesale. Never touches list
+                                    membership; kb list import/export
+                                    never touch it
 kb notes {list,show,new,edit,       N-track: free-standing notes / todo-lists
           check,uncheck,append,     attached to a kb or a folder within it. A
           done,archive,rm,links}    note is a Markdown artifact (`kb-category=
@@ -1152,6 +1204,11 @@ kb notes {list,show,new,edit,       N-track: free-standing notes / todo-lists
 kb backlinks <target>               What references this artifact — notes that
                                     `[[wikilink]]` it (or artifacts that link
                                     it). Works on any artifact; `--json`.
+kb graph <kb> [--top N] [--json] [--daemon URL]
+                                    corpus graph report: hubs by
+                                    in-degree, orphans (never linked AND
+                                    never opened), dead edges, dangling or
+                                    ambiguous wikilinks. --top default 10
 kb links {suggest,apply}            CT-F3 unlinked mentions: the graph you
                                     wrote is half the graph you meant.
                                     `suggest [--kb K] [--limit N] [--json]`
