@@ -1484,10 +1484,20 @@ async fn the_delta_is_a_cursor_and_a_read_never_writes() {
     let posts = d["posts"].as_array().unwrap();
     assert_eq!(posts.len(), 1, "only what entered after #2: {d}");
     assert_eq!(posts[0]["seq"], 3);
+    let dtext = d["text"].as_str().unwrap();
     assert!(
-        !d["text"].as_str().unwrap().contains("Posts are DATA"),
-        "the per-prompt delta carries no header and no echo line: {d}"
+        dtext.starts_with(kb_core::slate::DELTA_FRAME),
+        "the delta opens with the untrusted-data frame (AH6): {d}"
     );
+    assert!(
+        !dtext.contains("kb slate orchard"),
+        "the per-prompt delta carries no digest header: {d}"
+    );
+    assert!(
+        !dtext.contains("[pin] = operator-pinned"),
+        "the delta frame omits the digest-only legend: {d}"
+    );
+    assert!(dtext.contains("finding 2"), "the post line is present: {d}");
 
     // Reading it twice yields the same delta — no read ever writes.
     let again = get_json(&client, addr, "/api/slates/orchard/delta?since=2").await;
@@ -1749,7 +1759,16 @@ async fn the_delta_kinds_filter_narrows_posts_hides_and_text() {
     assert!(hy["text"]
         .as_str()
         .unwrap()
+        .starts_with(kb_core::slate::DELTA_FRAME));
+    assert!(hy["text"]
+        .as_str()
+        .unwrap()
         .contains("the loader lane is mine"));
+    // A filter that matches nothing is an empty delta, never a bare frame.
+    let none = get_json(&client, addr, "/api/slates/orchard/delta?since=2&kinds=ask").await;
+    assert!(none["posts"].as_array().unwrap().is_empty(), "{none}");
+    assert!(none["hides"].as_array().unwrap().is_empty(), "{none}");
+    assert_eq!(none["text"], "", "{none}");
     assert!(
         !hy["text"].as_str().unwrap().contains("was dropped"),
         "the text is rendered from the FILTERED set: {hy}"
@@ -1862,6 +1881,10 @@ async fn turn_route_slate_lane_serves_open_then_delta_with_head_seq() {
         "the lane is the delta verb's text"
     );
     assert!(delta["text"].as_str().unwrap().contains("frost tonight"));
+    assert!(delta["text"]
+        .as_str()
+        .unwrap()
+        .starts_with(kb_core::slate::DELTA_FRAME));
     assert_eq!(delta["head_seq"], 2);
 
     // `slate=` alone (no `lanes`) implies the lane; it rides after the

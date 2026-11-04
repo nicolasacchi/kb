@@ -135,7 +135,7 @@ then newest.
 tokenizer, Claude's is proprietary, and the same bytes tokenize
 differently on every harness. `open` defaults to 6,000 characters, the
 session-start hybrid injection to 2,000, the per-prompt delta to 1,500
-(only when non-empty). Sections split the remaining budget fixed-share
+(only when non-empty; its two-line untrusted-data frame counted inside). Sections split the remaining budget fixed-share
 (HAND 20% · ASK 20% · TAKE 20% · FOUND/IDEA 25% · TRIED 15%, unused
 share flowing down); truncation drops the OLDEST in a section, never a
 NOW, WARN, or unacknowledged HAND. `--json` carries
@@ -157,7 +157,7 @@ blackboard:
 A drop or edit that touches a live other session's coordination post is
 **friction, not an ACL**: the record always says who did it, and the
 affected session sees it in its own next delta —
-`your #13 (warn) was dropped by claude/9c01: "<why>"`. `kb slate
+`#13 (warn) was dropped by claude/9c01: "<why>"`. `kb slate
 history` lists every removal permanently; nothing is purged except the
 whole slate (`DELETE …?purge=true`, loopback-only).
 
@@ -223,7 +223,7 @@ Injection wiring (Claude Code): `kb-wake.sh`/`kb-wake-kimi.sh` append the
 HYBRID block (NOW/WARN/unacknowledged HAND in full, counts for the rest,
 ≤2 KB) after the memory index at session start and on `/compact`;
 `kb-recall.sh` appends the per-prompt DELTA (≤1.5 KB, only when the
-cursor is behind) on every `UserPromptSubmit`, and advances the cursor
+cursor is behind, opened by the untrusted-data frame) on every `UserPromptSubmit`, and advances the cursor
 to the response's `head_seq` whether or not it had anything to show.
 Both lanes are fail-open: a `timeout`-wrapped `kb slate …` call that
 fails or returns malformed JSON leaves the hook's output byte-identical

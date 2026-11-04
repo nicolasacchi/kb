@@ -293,6 +293,10 @@ async fn cursor_is_seeded_by_open_advanced_by_delta_and_untouched_by_explicit_si
     f.ok(&["idea", "worth trying the pool", "--session-id", "sess-a"]);
     let text = f.ok(&["delta", "--session-id", "sess-c"]);
     assert!(text.contains("worth trying the pool"), "{text}");
+    assert!(
+        text.starts_with(kb_core::slate::DELTA_FRAME),
+        "the printed delta opens with the untrusted-data frame (AH6): {text}"
+    );
     assert_eq!(std::fs::read_to_string(&marker).unwrap().trim(), "2");
 
     // An explicit --since is the caller's own bookkeeping: the file stays.
@@ -396,6 +400,10 @@ async fn hook_json_carries_text_and_head_seq_for_open_and_delta() {
     assert!(delta["text"]
         .as_str()
         .is_some_and(|t| t.contains("worth trying the pool")));
+    assert!(delta["text"]
+        .as_str()
+        .unwrap()
+        .starts_with(kb_core::slate::DELTA_FRAME));
     assert_eq!(delta["head_seq"], 2);
     assert_eq!(delta["truncated"], false);
 }
