@@ -1629,11 +1629,12 @@ enum Cmd {
 
 #[derive(Subcommand, Debug, Clone)]
 enum DaemonAction {
-    /// Stop a running daemon via the pid file at
-    /// `<XDG_STATE_HOME>/kb/<daemon-name>/kb-daemon.pid`. Sends
-    /// SIGTERM and waits up to 10 s for the process to exit. Exits
-    /// non-zero if no pid file is found, the pid is stale, or the
-    /// daemon doesn't exit in time.
+    /// Stop the daemon that holds the lock on
+    /// `<XDG_STATE_HOME>/kb/<daemon-name>/kb-daemon.pid`: sends SIGTERM
+    /// to the pid recorded there and waits up to 10 s for the lock to
+    /// free. Exits non-zero if there is no pid file, no daemon holds the
+    /// lock (stale: nothing is signalled), or the daemon doesn't exit in
+    /// time.
     Stop,
     /// Pokes the daemon's HTTP API and prints a green/yellow/red
     /// health report. Checks identity reachability, kb configuration,

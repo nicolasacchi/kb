@@ -1,22 +1,163 @@
 //! `kb daemon [stop]` — start the HTTP+SSE server in this process,
-//! or stop a running one via the pid file.
+//! or stop a running one via the lock on its pid file.
 //!
-//! Pid-file lifecycle (deep-review LOW: kb daemon lifecycle):
-//! - On `kb daemon` start, write `getpid()` into
-//!   `<state>/kb-daemon.pid` after the listener is bound (so a failed
-//!   bind doesn't leave a stale pid file). Refuse to start if the
-//!   existing pid file points at a still-running process.
-//! - On clean exit (graceful shutdown signal from kb-server), remove
-//!   the pid file. Crashes leave a stale file; the next start does a
-//!   liveness check via `kill -0 <pid>` and prunes if dead.
-//! - `kb daemon stop` reads the pid, sends SIGTERM, and polls for
-//!   exit. Times out after 10 s.
+//! Lock lifecycle:
+//! - `kb daemon` takes an exclusive `flock` on `<state>/kb-daemon.pid`
+//!   BEFORE the server binds its listener (this closes the double-start
+//!   race; a failed bind just exits, leaving a free lock and a stale
+//!   hint) and holds it for the whole process lifetime. The kernel
+//!   releases it when the process dies for any reason, SIGKILL included.
+//! - The file's content (our pid) is only a hint for `kb daemon stop`;
+//!   the lock is the liveness truth. A lock-holding daemon NEVER unlinks
+//!   the file, not on clean exit and not in a panic hook.
+//! - `kb daemon stop` probes the lock: held means SIGTERM the recorded
+//!   pid and wait for the lock to free (up to 10 s); free means the file
+//!   is stale and nothing is signalled.
+//! - A state dir on a filesystem without `flock` (some NFS/9p mounts)
+//!   falls back, loudly, to the older pid-file + `kill -0` logic.
 
 use super::{load_config_or_default, resolve_config_path};
 use anyhow::{anyhow, Context, Result};
 use kb_core::paths::KbPaths;
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+/// Exclusive flock on `<state>/kb-daemon.pid`. Dropping it, or the process
+/// dying for ANY reason (SIGKILL included), releases the lock.
+///
+/// It prevents three failures of the old pid heuristic: pid reuse after an
+/// unclean exit (start refusing, and `stop` SIGTERMing an unrelated
+/// process), the read-check-write double-start race, and one daemon
+/// deleting a survivor's pid file. Same shape as kb-code's
+/// `StoreLock::try_acquire` in
+/// crates/kb-code-server/src/review_store/manifest.rs.
+struct DaemonLock {
+    #[cfg_attr(not(unix), allow(dead_code))]
+    file: std::fs::File,
+}
+
+impl DaemonLock {
+    /// set_len(0), seek to 0, write "{pid}\n" through the locked descriptor.
+    fn record_pid(&self, pid: u32) -> std::io::Result<()> {
+        use std::io::Seek;
+        let mut f = &self.file;
+        f.set_len(0)?;
+        f.rewind()?;
+        f.write_all(format!("{pid}\n").as_bytes())?;
+        f.flush()
+    }
+}
+
+enum LockOutcome {
+    Acquired(DaemonLock),
+    Held,
+    Unsupported(std::io::Error),
+}
+
+#[cfg(unix)]
+fn try_lock(path: &Path) -> std::io::Result<LockOutcome> {
+    use std::os::fd::AsRawFd;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    // std's open sets O_CLOEXEC, which is load-bearing: kb-embedder, git or
+    // any other child never inherits the descriptor, so none of them can
+    // keep a dead daemon's lock alive.
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)?;
+    // SAFETY: `file` owns a valid open descriptor for the duration of the call.
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if rc == 0 {
+        return Ok(LockOutcome::Acquired(DaemonLock { file }));
+    }
+    let err = std::io::Error::last_os_error();
+    match err.raw_os_error() {
+        Some(libc::EWOULDBLOCK) => Ok(LockOutcome::Held),
+        Some(code) if [libc::ENOLCK, libc::EOPNOTSUPP, libc::ENOTSUP].contains(&code) => {
+            Ok(LockOutcome::Unsupported(err))
+        }
+        _ => Err(err),
+    }
+}
+
+#[cfg(not(unix))]
+fn try_lock(_path: &Path) -> std::io::Result<LockOutcome> {
+    Ok(LockOutcome::Unsupported(std::io::Error::from(
+        std::io::ErrorKind::Unsupported,
+    )))
+}
+
+enum StartGuard {
+    Locked(DaemonLock),
+    Fallback,
+}
+
+/// Decide whether this process may own the state dir. Never unlinks.
+fn claim_state_dir(pid_path: &Path, our_pid: u32) -> Result<StartGuard> {
+    match try_lock(pid_path).with_context(|| format!("lock {}", pid_path.display()))? {
+        LockOutcome::Held => {
+            let holder = read_pid(pid_path)
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            Err(anyhow!(
+                "another kb daemon is already running (pid {holder}, file: {})\n\
+                 use `kb daemon stop` to terminate it first",
+                pid_path.display()
+            ))
+        }
+        LockOutcome::Acquired(lock) => {
+            if let Some(p) = read_pid(pid_path) {
+                if p != our_pid && pid_is_alive(p) {
+                    tracing::warn!(
+                        "kb-daemon.pid named live pid {p} but no process held the lock: \
+                         treating it as stale (pid reuse after an unclean exit, or a daemon \
+                         started by an older kb release: stop that one first if so)"
+                    );
+                }
+            }
+            lock.record_pid(our_pid)
+                .with_context(|| format!("write pid file {}", pid_path.display()))?;
+            Ok(StartGuard::Locked(lock))
+        }
+        LockOutcome::Unsupported(e) => {
+            tracing::warn!(
+                "state dir {} does not support flock ({e}); falling back to pid-file \
+                 liveness (kill -0)",
+                pid_path.parent().unwrap_or(pid_path).display()
+            );
+            // Container caveat (fallback path only): if the recorded pid is
+            // OUR OWN pid the file is stale by definition. A kb daemon that
+            // runs as PID 1 and was SIGKILLed leaves `1` behind; the next
+            // container boot is also PID 1 and `kill -0 1` succeeds. Under
+            // the lock a PID-1 restart simply finds the lock free.
+            if let Some(existing) = read_pid(pid_path) {
+                if existing != our_pid && pid_is_alive(existing) {
+                    return Err(anyhow!(
+                        "another kb daemon is already running (pid {existing}, file: {})\n\
+                         use `kb daemon stop` to terminate it first",
+                        pid_path.display()
+                    ));
+                }
+                let _ = std::fs::remove_file(pid_path);
+            }
+            write_pid(pid_path, our_pid)?;
+            Ok(StartGuard::Fallback)
+        }
+    }
+}
+
+/// Process-wide home of the daemon lock. A static, not a local: tokio's
+/// `Runtime` drop waits indefinitely for blocking tasks, so the process can
+/// outlive `run`. Only process exit may release the lock, otherwise
+/// `kb daemon stop` would report "exited cleanly" while the old process is
+/// still alive and a new daemon could start beside it. Statics are never
+/// dropped; the kernel closes the descriptor at exit.
+static DAEMON_LOCK: std::sync::OnceLock<DaemonLock> = std::sync::OnceLock::new();
 
 pub async fn run(config_path: Option<&PathBuf>) -> Result<()> {
     let cfg_path = resolve_config_path(config_path)?;
@@ -28,19 +169,6 @@ pub async fn run(config_path: Option<&PathBuf>) -> Result<()> {
         );
     }
 
-    // LOW (deep-review): double-start check via pid file. If the file
-    // exists AND its pid is still alive, refuse. Stale pid files
-    // (process gone, file left over from a crash) get cleaned up.
-    //
-    // Container caveat (R7+ fix): if the recorded pid is OUR OWN pid,
-    // the file is stale by definition — a freshly-started process
-    // can't already have its own pid persisted. This happens routinely
-    // inside Docker where the kb daemon runs as PID 1: a non-graceful
-    // shutdown (SIGKILL after compose timeout, OOM-killer, host
-    // reboot) leaves the pid file with `1` in it; the next container
-    // boot is ALSO PID 1, and `kill -0 1` succeeds (we're checking
-    // ourselves). Pre-fix this looked like a live daemon and refused
-    // forever. The own-pid check turns that into a stale-file cleanup.
     let paths = KbPaths::new(cfg.daemon.name.as_deref().unwrap_or("default"))?;
     paths.ensure_dirs()?;
 
@@ -54,30 +182,34 @@ pub async fn run(config_path: Option<&PathBuf>) -> Result<()> {
         .context("init tracing (file logging)")?;
 
     let pid_path = paths.daemon_pid_file();
-    let our_pid = std::process::id();
-    if let Some(existing) = read_pid(&pid_path) {
-        if existing != our_pid && pid_is_alive(existing) {
-            return Err(anyhow!(
-                "another kb daemon is already running (pid {existing}, file: {})\n\
-                 use `kb daemon stop` to terminate it first",
-                pid_path.display()
-            ));
+    let fallback = match claim_state_dir(&pid_path, std::process::id())? {
+        StartGuard::Locked(lock) => {
+            // The static outlives `serve_loop` and every in-process restart
+            // it performs (invariant #13); `[daemon] name` cannot change at
+            // runtime, so the path is stable.
+            //
+            // No panic hook and no unlink after `serve_loop`: removing a path
+            // while some process holds the lock on the old inode lets a third
+            // process create and lock a fresh inode at the same path, which
+            // defeats mutual exclusion. The content is only a hint for
+            // `stop`; the lock is the truth.
+            DAEMON_LOCK
+                .set(lock)
+                .map_err(|_| anyhow!("kb daemon lock taken twice in one process"))?;
+            false
         }
-        // Stale: either process gone (`!pid_is_alive`) or the file
-        // recorded our own pid (impossible-without-prior-crash → also
-        // stale). Drop it before continuing.
-        let _ = std::fs::remove_file(&pid_path);
-    }
-    write_pid(&pid_path, std::process::id())?;
-    // Best-effort cleanup on panic — kb_server's graceful_shutdown
-    // returns Ok which lets the unconditional remove below run, but
-    // panics would leak the pid file otherwise.
-    let pid_path_for_panic = pid_path.clone();
-    let prev_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        let _ = std::fs::remove_file(&pid_path_for_panic);
-        prev_hook(info);
-    }));
+        StartGuard::Fallback => {
+            // Best-effort cleanup on panic: the flock-less fallback has no
+            // lock to release, so a leaked file would read as a live daemon.
+            let pid_path_for_panic = pid_path.clone();
+            let prev_hook = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                let _ = std::fs::remove_file(&pid_path_for_panic);
+                prev_hook(info);
+            }));
+            true
+        }
+    };
 
     // PF-B1 — inject the real git-probed build stamp (kb-buildstamp leaf
     // crate) so `/api/identity` carries the true sha/version. Only BINS
@@ -88,13 +220,45 @@ pub async fn run(config_path: Option<&PathBuf>) -> Result<()> {
     // CE — serve_loop owns the config-path + reload cycle (it re-reads
     // `cfg_path` on each in-process restart triggered by PUT /api/config,
     // rolling back to last-good on a failed boot). `paths` is pinned for
-    // the daemon's lifetime; the pid file above stays valid (no re-fork).
+    // the daemon's lifetime; the lock above stays valid (no re-fork).
     let result = kb_server::serve_loop(cfg_path, paths).await;
 
-    // Clean exit: remove the pid file. Errors here are non-fatal —
-    // the next start will treat the file as stale and clean up.
-    let _ = std::fs::remove_file(&pid_path);
+    if fallback {
+        // Fallback clean exit only: remove the pid file. Errors are
+        // non-fatal; the next start treats the file as stale.
+        let _ = std::fs::remove_file(&pid_path);
+    }
     result
+}
+
+#[derive(Debug)]
+enum StopDecision {
+    NoFile,
+    Stale { pid: Option<u32> },
+    Signal { pid: u32 },
+    PidUnknown,
+    Fallback(std::io::Error),
+}
+
+/// Probe the lock to decide what `stop` should do. Never signals, never
+/// unlinks, and never creates the file.
+fn stop_decision(pid_path: &Path) -> std::io::Result<StopDecision> {
+    if !pid_path.exists() {
+        return Ok(StopDecision::NoFile);
+    }
+    Ok(match try_lock(pid_path)? {
+        LockOutcome::Acquired(probe) => {
+            drop(probe);
+            StopDecision::Stale {
+                pid: read_pid(pid_path),
+            }
+        }
+        LockOutcome::Held => match read_pid(pid_path) {
+            Some(pid) => StopDecision::Signal { pid },
+            None => StopDecision::PidUnknown,
+        },
+        LockOutcome::Unsupported(e) => StopDecision::Fallback(e),
+    })
 }
 
 pub async fn stop(config_path: Option<&PathBuf>) -> Result<()> {
@@ -103,14 +267,93 @@ pub async fn stop(config_path: Option<&PathBuf>) -> Result<()> {
     let paths = KbPaths::new(cfg.daemon.name.as_deref().unwrap_or("default"))?;
     let pid_path = paths.daemon_pid_file();
 
-    let pid = read_pid(&pid_path).ok_or_else(|| {
+    let decision = stop_decision(&pid_path)
+        .with_context(|| format!("probe lock on {}", pid_path.display()))?;
+    match decision {
+        StopDecision::NoFile => Err(anyhow!(
+            "no kb-daemon.pid at {}\n  (daemon not running, or pid file missing)",
+            pid_path.display()
+        )),
+        StopDecision::Stale { pid } => {
+            let shown = pid
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| "unknown".into());
+            let mut msg = format!(
+                "no kb daemon holds the lock on {}; the pid {shown} recorded there is stale, \
+                 nothing was signalled",
+                pid_path.display()
+            );
+            if let Some(p) = pid.filter(|p| pid_is_alive(*p)) {
+                msg.push_str(&format!(
+                    "\n  (pid {p} is alive but holds no lock: either an unrelated process that \
+                     reused the pid, or a kb daemon started by an older kb release. Check \
+                     `ps -p {p}` before signalling it yourself.)"
+                ));
+            }
+            Err(anyhow!(msg))
+        }
+        StopDecision::PidUnknown => Err(anyhow!(
+            "a kb daemon holds the lock on {} but has not recorded its pid yet; retry in a moment",
+            pid_path.display()
+        )),
+        StopDecision::Fallback(e) => {
+            eprintln!(
+                "warning: state dir does not support flock ({e}); falling back to pid-file \
+                 liveness (kill -0)"
+            );
+            stop_legacy(&pid_path).await
+        }
+        StopDecision::Signal { pid } => {
+            send_sigterm(pid).with_context(|| format!("send SIGTERM to pid {pid}"))?;
+            eprintln!("sent SIGTERM to kb daemon pid {pid}; waiting for exit …");
+
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                match stop_decision(&pid_path)? {
+                    StopDecision::Stale { .. } => {
+                        eprintln!("kb daemon pid {pid} exited cleanly");
+                        return Ok(());
+                    }
+                    StopDecision::Signal { pid: other } if other != pid => {
+                        // Only a lock holder writes the file in lock mode, so
+                        // a changed pid under a held lock is a successor.
+                        eprintln!(
+                            "kb daemon pid {pid} exited; pid {other} now holds the state dir"
+                        );
+                        return Ok(());
+                    }
+                    StopDecision::NoFile => {
+                        return Err(anyhow!(
+                            "pid file {} disappeared while waiting for pid {pid} to exit",
+                            pid_path.display()
+                        ));
+                    }
+                    StopDecision::Fallback(e) => return Err(e.into()),
+                    StopDecision::Signal { .. } | StopDecision::PidUnknown => {}
+                }
+                if std::time::Instant::now() >= deadline {
+                    return Err(anyhow!(
+                        "kb daemon pid {pid} did not exit within 10 s — still alive after SIGTERM. \
+                         Investigate (the daemon's graceful-shutdown drain may be stuck on inflight \
+                         requests) or send SIGKILL manually: `kill -9 {pid}`"
+                    ));
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+    }
+}
+
+/// The pre-flock stop logic, kept for state dirs without `flock` support.
+async fn stop_legacy(pid_path: &Path) -> Result<()> {
+    let pid = read_pid(pid_path).ok_or_else(|| {
         anyhow!(
             "no kb-daemon.pid at {}\n  (daemon not running, or pid file missing)",
             pid_path.display()
         )
     })?;
     if !pid_is_alive(pid) {
-        let _ = std::fs::remove_file(&pid_path);
+        let _ = std::fs::remove_file(pid_path);
         return Err(anyhow!(
             "pid {pid} in {} is dead; removed the stale file",
             pid_path.display()
@@ -123,9 +366,7 @@ pub async fn stop(config_path: Option<&PathBuf>) -> Result<()> {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
         if !pid_is_alive(pid) {
-            // Process is gone; the daemon's clean-exit path removed
-            // the pid file already. Defensive cleanup just in case.
-            let _ = std::fs::remove_file(&pid_path);
+            let _ = std::fs::remove_file(pid_path);
             eprintln!("kb daemon pid {pid} exited cleanly");
             return Ok(());
         }
@@ -140,12 +381,12 @@ pub async fn stop(config_path: Option<&PathBuf>) -> Result<()> {
     }
 }
 
-fn read_pid(path: &std::path::Path) -> Option<u32> {
+fn read_pid(path: &Path) -> Option<u32> {
     let s = std::fs::read_to_string(path).ok()?;
     s.trim().parse::<u32>().ok()
 }
 
-fn write_pid(path: &std::path::Path, pid: u32) -> Result<()> {
+fn write_pid(path: &Path, pid: u32) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -843,7 +1084,7 @@ mod tests {
         assert_eq!(read_pid(&path), None);
     }
 
-    /// Container-restart regression: when the running process's own
+    /// FALLBACK-path rule (flock-less state dirs): when the running process's own
     /// PID matches the persisted pid file, the file is by definition
     /// stale. PID 1 inside Docker is the canonical case — every
     /// restart of the container reuses PID 1 because that's how
@@ -889,5 +1130,124 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
+    }
+
+    /// Kill-and-wait-on-drop helper child.
+    #[cfg(unix)]
+    struct Sleeper(std::process::Child);
+    #[cfg(unix)]
+    impl Sleeper {
+        fn new() -> Self {
+            Sleeper(
+                Command::new("sleep")
+                    .arg("60")
+                    .spawn()
+                    .expect("spawn sleep"),
+            )
+        }
+        fn running(&mut self) -> bool {
+            self.0.try_wait().unwrap().is_none()
+        }
+    }
+    #[cfg(unix)]
+    impl Drop for Sleeper {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn second_claim_on_a_held_state_dir_refuses() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("kb-daemon.pid");
+        let me = std::process::id();
+        let Ok(StartGuard::Locked(a)) = claim_state_dir(&p, me) else {
+            panic!("first claim must lock");
+        };
+        let err = match claim_state_dir(&p, me) {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("second claim must refuse"),
+        };
+        assert!(
+            err.contains("another kb daemon is already running"),
+            "{err}"
+        );
+        assert!(err.contains(&format!("pid {me}")), "{err}");
+        drop(a);
+        assert!(matches!(claim_state_dir(&p, me), Ok(StartGuard::Locked(_))));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn claim_proceeds_past_a_pid_file_naming_a_live_unrelated_process() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("kb-daemon.pid");
+        let mut child = Sleeper::new();
+        std::fs::write(&p, format!("{}\n", child.0.id())).unwrap();
+        let me = std::process::id();
+        let guard = claim_state_dir(&p, me);
+        assert!(matches!(guard, Ok(StartGuard::Locked(_))));
+        assert_eq!(read_pid(&p), Some(me));
+        assert!(child.running());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn stop_decision_on_a_free_lock_is_stale_and_signals_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("kb-daemon.pid");
+        let mut child = Sleeper::new();
+        let cpid = child.0.id();
+        std::fs::write(&p, format!("{cpid}\n")).unwrap();
+        match stop_decision(&p).unwrap() {
+            StopDecision::Stale { pid } => assert_eq!(pid, Some(cpid)),
+            other => panic!("expected Stale, got {other:?}"),
+        }
+        assert!(p.exists());
+        assert!(child.running());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn stop_decision_on_a_held_lock_names_the_recorded_pid() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("kb-daemon.pid");
+        let Ok(LockOutcome::Acquired(_a)) = try_lock(&p) else {
+            panic!("lock must be acquired");
+        };
+        std::fs::write(&p, "4242\n").unwrap();
+        assert!(matches!(
+            stop_decision(&p).unwrap(),
+            StopDecision::Signal { pid: 4242 }
+        ));
+        std::fs::write(&p, "").unwrap();
+        assert!(matches!(
+            stop_decision(&p).unwrap(),
+            StopDecision::PidUnknown
+        ));
+        let missing = tmp.path().join("absent.pid");
+        assert!(matches!(
+            stop_decision(&missing).unwrap(),
+            StopDecision::NoFile
+        ));
+        assert!(!missing.exists(), "the probe must not create the file");
+    }
+
+    /// O_CLOEXEC guard: a child spawned while the lock is held must not
+    /// keep it alive after the holder drops it.
+    #[test]
+    #[cfg(unix)]
+    fn daemon_lock_is_not_inherited_by_children() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("kb-daemon.pid");
+        let Ok(LockOutcome::Acquired(a)) = try_lock(&p) else {
+            panic!("lock must be acquired");
+        };
+        let mut child = Sleeper::new();
+        drop(a);
+        assert!(child.running());
+        assert!(matches!(try_lock(&p), Ok(LockOutcome::Acquired(_))));
     }
 }

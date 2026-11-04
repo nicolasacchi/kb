@@ -6,5 +6,6 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod daemon_lock;
 mod daemon_log_level;
 mod daemon_logging;

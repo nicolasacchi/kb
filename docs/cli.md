@@ -15,8 +15,8 @@ Related: [HTTP API](http-api.md) · [kb-code](kb-code.md) ·
 
 ```
 kb daemon [--config kb.toml]        run an axum daemon (foreground)
-kb daemon stop                      SIGTERM a running daemon via its pid
-                                    file; waits up to 10s for clean exit
+kb daemon stop                      SIGTERM the daemon holding the state-dir
+                                    lock; waits up to 10s for it to exit
 kb daemon doctor [--endpoint URL]   green/yellow/red health report
    [--json] [--watch SECS]          (identity, kbs, errors, stats,
                                     embedder/semantic probe, bus)
