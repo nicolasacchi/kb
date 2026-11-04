@@ -134,7 +134,9 @@ with kb-code), plus a per-view control row. It replaced the old 52px header,
   title size and the coverage below it; ViewBars take at most two rows with 44px
   controls. On any touch device (`pointer: coarse`, whatever the width) cards and
   Index rows carry no action buttons; Download and Exclude live in the reader's
-  More menu, one tap deeper.
+  More menu, one tap deeper. On Chrome for Android 126+, system Back or
+  swipe-back closes an open sheet or drawer first; Safari and iOS keep the
+  close button, scrim and Esc.
   The reader strip at 430px and narrower hides the position label and breadcrumb
   and keeps More visible; from 431px to 860px the breadcrumb returns, ellipsized.
 - **Keys teach themselves.** After a chord prefix (`g`, `w`, marks, registers) a

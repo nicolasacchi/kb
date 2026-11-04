@@ -352,3 +352,131 @@ test.describe("Review diff coarse-pointer pill", () => {
     await expect(page.locator("[data-kbc-review-composer]")).toBeVisible();
   });
 });
+
+// AH4 — mobile sheets and drawers answer the platform close request (Android
+// Back / swipe-back) with no history entry. Playwright cannot press the real
+// system Back, so a CloseWatcher stub with the platform's semantics stands in
+// (`requestClose` fires a cancelable `cancel`, then `close`).
+async function installCloseWatcherStub(page: Page) {
+  await page.addInitScript(() => {
+    type W = { alive: boolean; oncancel: ((e: Event) => void) | null; onclose: ((e: Event) => void) | null };
+    const cw = {
+      made: 0,
+      instances: [] as (W & { requestClose(): void })[],
+      get live() {
+        return this.instances.filter((w) => w.alive).length;
+      },
+    };
+    class Stub implements W {
+      alive = true;
+      oncancel: ((e: Event) => void) | null = null;
+      onclose: ((e: Event) => void) | null = null;
+      constructor() {
+        cw.made += 1;
+        cw.instances.push(this);
+      }
+      requestClose() {
+        if (!this.alive) return;
+        const ev = new Event("cancel", { cancelable: true });
+        this.oncancel?.(ev);
+        if (ev.defaultPrevented) return;
+        this.close();
+      }
+      close() {
+        if (!this.alive) return;
+        this.onclose?.(new Event("close"));
+        this.destroy();
+      }
+      destroy() {
+        this.alive = false;
+      }
+    }
+    (window as unknown as { CloseWatcher: unknown }).CloseWatcher = Stub;
+    (window as unknown as { __cw: unknown }).__cw = cw;
+  });
+}
+const cwMade = (page: Page) =>
+  page.evaluate(() => (window as unknown as { __cw: { made: number } }).__cw.made);
+const cwLive = (page: Page) =>
+  page.evaluate(() => (window as unknown as { __cw: { live: number } }).__cw.live);
+const cwRequestClose = (page: Page) =>
+  page.evaluate(() => {
+    const c = (window as unknown as {
+      __cw: { instances: { alive: boolean; requestClose(): void }[] };
+    }).__cw;
+    c.instances.filter((w) => w.alive).at(-1)!.requestClose();
+  });
+
+test.describe("Close request (AH4)", () => {
+  test.use({ viewport: MOBILE_VIEWPORT });
+
+  test("reader inspector sheet and tree drawer close on the platform request", async ({ page }) => {
+    await installCloseWatcherStub(page);
+    await page.goto(`${BASE}/r/${REPO_NAME}/${KNOWN_FILE}`);
+    await expect(page.locator(".kbc-codeview")).toContainText(KNOWN_SYMBOL, { timeout: 10_000 });
+    expect(await cwMade(page)).toBe(0);
+    const len = await page.evaluate(() => history.length);
+
+    await page.locator("[data-kbc-inspector-toggle]").click();
+    await expect(page.locator(".kbc-reader--sheet-open")).toHaveCount(1);
+    expect(await cwLive(page)).toBe(1);
+    await cwRequestClose(page);
+    await expect(page.locator(".kbc-reader--sheet-open")).toHaveCount(0);
+    await expect(page.locator("#kbc-reader-sheet")).toBeHidden();
+    expect(await cwLive(page)).toBe(0);
+    expect(await page.evaluate(() => history.length)).toBe(len);
+
+    await page.locator("[data-kbc-burger]").click();
+    await expect(page.locator("[data-kbc-drawer]")).toBeVisible();
+    expect(await cwLive(page)).toBe(1);
+    await cwRequestClose(page);
+    await expect(page.locator("[data-kbc-drawer]")).toHaveCount(0);
+    expect(await cwLive(page)).toBe(0);
+  });
+
+  test("nav sheet and its theme picker close one layer per request", async ({ page }) => {
+    await installCloseWatcherStub(page);
+    await page.goto(`${BASE}/r/${REPO_NAME}/${KNOWN_FILE}`);
+    await expect(page.locator(".kbc-codeview")).toContainText(KNOWN_SYMBOL, { timeout: 10_000 });
+    await page.locator("[data-kb-spine-menu]").click();
+    await expect(page.locator("[data-kbc-navsheet]")).toBeVisible();
+    expect(await cwLive(page)).toBe(1);
+
+    await page.locator("[data-kbc-nav-theme-picker]").click();
+    await expect(page.locator(".kbc-themepicker--sheet")).toBeVisible();
+    expect(await cwLive(page)).toBe(2);
+
+    await cwRequestClose(page);
+    await expect(page.locator(".kbc-themepicker--sheet")).toHaveCount(0);
+    await expect(page.locator("[data-kbc-navsheet]")).toBeVisible();
+    expect(await cwLive(page)).toBe(1);
+
+    await cwRequestClose(page);
+    await expect(page.locator("[data-kbc-navsheet]")).toHaveCount(0);
+  });
+
+  test("the Room findings sheet closes on the platform request", async ({ page, request }) => {
+    test.skip(!REPO_DIR, "KB_CODE_E2E_REPO_DIR not set — global-setup didn't run");
+    await installCloseWatcherStub(page);
+    const reviewId = await createReview(request, "e2e close request sheet");
+    await page.goto(`${BASE}/r/${REPO_NAME}/~reviews/${reviewId}`);
+    await expect(page.locator("[data-kbc-review-title]")).toContainText("e2e close request sheet");
+    await page.locator("[data-kbc-review-sheet-toggle]").click();
+    await expect(page.locator("#kbc-review-sheet")).toBeVisible();
+    expect(await cwLive(page)).toBe(1);
+    await cwRequestClose(page);
+    await expect(page.locator("#kbc-review-sheet")).toBeHidden();
+    expect(await cwLive(page)).toBe(0);
+  });
+});
+
+test.describe("Close request desktop parity (AH4)", () => {
+  test.use({ viewport: DESKTOP_VIEWPORT });
+
+  test("no watcher is ever created on desktop", async ({ page }) => {
+    await installCloseWatcherStub(page);
+    await page.goto(`${BASE}/r/${REPO_NAME}/${KNOWN_FILE}`);
+    await expect(page.locator(".kbc-codeview")).toContainText(KNOWN_SYMBOL, { timeout: 10_000 });
+    expect(await cwMade(page)).toBe(0);
+  });
+});

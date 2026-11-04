@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Icon } from "@kb/ui/icons";
+import { useCloseRequest } from "@kb/ui/useCloseRequest";
 import { glyphForKind } from "../../lib/slateGlyphs";
 import { relativeAge } from "../../lib/time";
 import type { SlateHistoryRow } from "../../api/slateTypes";
@@ -47,6 +48,9 @@ export default function HistoryDrawer({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
+
+  // Android Back closes the mobile sheet.
+  useCloseRequest(mobile && open, onClose);
 
   useEffect(() => {
     if (open && flashSeq != null) {

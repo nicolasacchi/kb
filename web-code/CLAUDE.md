@@ -320,7 +320,9 @@ stop; above 48 stops a slider replaces the ticks.
 `nav/history.ts` provides the two router adapters (Navigation API where
 present — Chrome/Edge 102+, Firefox 145+ — falling back to the History API)
 behind one interface: **in-app Back IS the browser's Back.** There is no
-second stack that could disagree with it; `nav.back` (`u`), the pane arrows,
+second stack that could disagree with it (mobile sheets and drawers answer
+the platform close request through `useCloseRequest` and add no history entry,
+so `nav.back` and the jumplist are untouched); `nav.back` (`u`), the pane arrows,
 mouse buttons 4/5 and the browser chrome all end up calling the same
 `adapter.back()`. The adapter NEVER intercepts a push or a replace (only
 traversals) — intercepting a push would make React Router's own

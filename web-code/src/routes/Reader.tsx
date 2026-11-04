@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import { StateCard } from "@kb/ui/StateCard";
+import { useCloseRequest } from "@kb/ui/useCloseRequest";
 import { flushSync } from "react-dom";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
@@ -3765,6 +3766,12 @@ export default function Reader() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [inspectorOpen]);
+  // Android Back / swipe-back closes the reader-tools sheet (no history entry,
+  // so `nav.back` and the jumplist are untouched). Same guard as the Esc effect.
+  useCloseRequest(isMobile && inspectorOpen, () => setInspectorOpen(false), {
+    ignoreEscape: (e) =>
+      e.metaKey || e.ctrlKey || e.altKey || isEditableTarget(e.target) || isInsideBuffer(e.target),
+  });
 
 
   // ── V71-E2 — the three POINTER doors to the action menu ───────────────

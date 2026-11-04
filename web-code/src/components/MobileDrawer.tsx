@@ -6,6 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import { Icon } from "./iconSet";
+import { useCloseRequest } from "@kb/ui/useCloseRequest";
 
 // F5 — accessible off-canvas drawer for the mobile shell (≤860px), ported
 // from kb's own `web/src/components/chrome/MobileDrawer.tsx` (root
@@ -68,6 +69,9 @@ export default function MobileDrawer({
       document.body.style.overflow = prevOverflow;
     };
   }, [render, onClose]);
+
+  // Android Back closes it too (`open`, not `render`: the exit transition holds no watcher).
+  useCloseRequest(open, onClose);
 
   // Move focus into the panel once it has slid in.
   useEffect(() => {

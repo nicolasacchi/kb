@@ -65,6 +65,7 @@ import { loadDensity, setThemePrefs } from "../lib/prefs";
 import { RESIZE_SUBMODE_HINT } from "../desk/resizeSubmode";
 import { toast } from "../lib/toast";
 import { StateCard } from "@kb/ui/StateCard";
+import { useCloseRequest } from "@kb/ui/useCloseRequest";
 import "../styles/reviews.css";
 import "../styles/review-room.css";
 import "../styles/recipes.css";
@@ -312,6 +313,19 @@ export default function ReviewDetail() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [sheetOpen]);
+  // Android Back / swipe-back closes the Room findings sheet (no history entry,
+  // so `nav.back` and the jumplist are untouched).
+  useCloseRequest(isMobile && sheetOpen, () => setSheetOpen(false), {
+    ignoreEscape: (e) => {
+      const t = e.target as HTMLElement | null;
+      return (
+        e.metaKey ||
+        e.ctrlKey ||
+        e.altKey ||
+        (!!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable))
+      );
+    },
+  });
 
   // ── V76-R2a — the findings rail as a RESIZABLE DOCK ─────────────────────
   //

@@ -6,6 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import { Icon } from "@kb/ui/icons";
+import { useCloseRequest } from "@kb/ui/useCloseRequest";
 import { useBodyScrollLock } from "../../hooks/useBodyScrollLock";
 
 // Accessible off-canvas drawer for the mobile shell (≤860px). Powers the
@@ -68,6 +69,9 @@ export default function MobileDrawer({
       document.removeEventListener("keydown", onKey);
     };
   }, [render, onClose]);
+
+  // Android Back closes it too (`open`, not `render`: the exit transition holds no watcher).
+  useCloseRequest(open, onClose);
 
   // Move focus into the panel once it has slid in.
   useEffect(() => {

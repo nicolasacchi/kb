@@ -122,6 +122,43 @@ describe("Sheet", () => {
     expect(document.querySelector("[data-kb-sheet]")).toBeNull();
   });
 
+  it("registers a close watcher only while open as a sheet", () => {
+    const instances: { live: boolean; onclose: (() => void) | null }[] = [];
+    class Fake {
+      live = true;
+      oncancel = null;
+      onclose: (() => void) | null = null;
+      constructor() {
+        instances.push(this);
+      }
+      close() {
+        this.onclose?.();
+        this.live = false;
+      }
+      destroy() {
+        this.live = false;
+      }
+    }
+    (window as unknown as { CloseWatcher?: unknown }).CloseWatcher = Fake;
+    try {
+      const p = mount();
+      expect(instances.filter((w) => w.live).length).toBe(1);
+      (instances[0] as unknown as Fake).close();
+      expect(p.onClose).toHaveBeenCalledTimes(1);
+      act(() => root!.unmount());
+      host!.remove();
+      instances.length = 0;
+      mount({ asSheet: false });
+      expect(instances.length).toBe(0);
+      act(() => root!.unmount());
+      host!.remove();
+      mount({ open: false });
+      expect(instances.length).toBe(0);
+    } finally {
+      delete (window as unknown as { CloseWatcher?: unknown }).CloseWatcher;
+    }
+  });
+
   it("renders to string under the importing React major", () => {
     const html = renderToString(
       createElement(Sheet, {

@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { writeFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { PORT } from "./helpers";
+import { PORT, installCloseWatcherStub } from "./helpers";
 
 // v0.14 T6 — /sessions view round-trip.
 //
@@ -536,6 +536,59 @@ test.describe("W3.D/S2 — mobile sessions bottom sheet", () => {
     await page.keyboard.press("Escape");
     await expect(sheet).toHaveCount(0);
     await expect(page).not.toHaveURL(/focus=/);
+  });
+
+  test("the platform close request dismisses the sheet with no history entry (AH4)", async ({
+    page,
+  }) => {
+    await installCloseWatcherStub(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+    const base = `http://127.0.0.1:${PORT}`;
+    const sid = "spec-mobsheet-ah4";
+    await seedClosedSession(page, base, sid, {
+      prompt: "close request sheet",
+      closing: "Done.",
+    });
+    const deadline = Date.now() + 15_000;
+    let surfaced = false;
+    while (Date.now() < deadline) {
+      const r = await page.request.get(`${base}/api/sessions`);
+      if (r.ok()) {
+        const b = (await r.json()) as { sessions: { session_id: string }[] };
+        if (b.sessions.some((s) => s.session_id === sid)) {
+          surfaced = true;
+          break;
+        }
+      }
+      await new Promise((rs) => setTimeout(rs, 200));
+    }
+    expect(surfaced, "seeded session must surface in /api/sessions").toBeTruthy();
+
+    await page.goto(`${base}/sessions`);
+    const row = page.locator(`[data-session-id="${sid}"]`);
+    await expect(row).toBeVisible({ timeout: 10_000 });
+    const made = () =>
+      page.evaluate(() => (window as unknown as { __cw: { made: number } }).__cw.made);
+    const liveCount = () =>
+      page.evaluate(() => (window as unknown as { __cw: { live: number } }).__cw.live);
+    expect(await made()).toBe(0);
+    const len = await page.evaluate(() => history.length);
+
+    await row.locator(".kb-ses__row-btn").click();
+    await expect(page).toHaveURL(new RegExp(`focus=${sid}`));
+    const sheet = page.locator(".kb-ses__inspector--sheet");
+    await expect(sheet).toBeVisible({ timeout: 10_000 });
+    expect(await liveCount()).toBe(1);
+
+    await page.evaluate(() =>
+      (
+        window as unknown as { __cw: { instances: { requestClose(): void }[] } }
+      ).__cw.instances.at(-1)!.requestClose(),
+    );
+    await expect(sheet).toHaveCount(0);
+    await expect(page).not.toHaveURL(/focus=/);
+    expect(await liveCount()).toBe(0);
+    expect(await page.evaluate(() => history.length)).toBe(len);
   });
 
   test("a shared /sessions?focus= link opens straight into the sheet", async ({

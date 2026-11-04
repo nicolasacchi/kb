@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Icon } from "./icons";
+import { useCloseRequest } from "./useCloseRequest";
 import { KBC_THEME_FAMILIES, KBC_THEMES } from "./themes/registry.gen";
 import {
   prefersLight,
@@ -136,6 +137,12 @@ export default function ThemePicker({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [inline, families, staged, stage, commit, controller, close]);
+
+  // Android Back dismisses the sheet picker like its Esc does: revert, then close.
+  useCloseRequest(asSheet && !inline, () => {
+    controller.revert();
+    close();
+  });
 
   // Unmount safety. Every dismissal path (Escape, the close button, an outside
   // click, a route change) lands here, so a staged-but-uncommitted preview can

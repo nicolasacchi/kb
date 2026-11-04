@@ -7,6 +7,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
+import { useCloseRequest } from "./useCloseRequest";
 import { detentHeight, next, type Detent, type DetentEvent } from "./sheet/detents";
 import "./sheet.css";
 
@@ -69,6 +70,9 @@ export function Sheet({
       document.body.style.overflow = prev;
     };
   }, [active]);
+
+  // Android Back / swipe-back dismisses the sheet (never a history entry).
+  useCloseRequest(active, onClose);
 
   // Focus into the sheet on open, back to the opener on close.
   useEffect(() => {

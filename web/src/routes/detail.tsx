@@ -1,3 +1,4 @@
+import { useCloseRequest } from "@kb/ui/useCloseRequest";
 import {
   useCallback,
   useEffect,
@@ -361,6 +362,19 @@ export default function Detail() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [inspectorOpen]);
+  // Android Back / swipe-back closes the reader-tools sheet (no history entry;
+  // a focused artifact iframe is blurred so the request reaches this document).
+  useCloseRequest(isMobile && inspectorOpen, () => setInspectorOpen(false), {
+    ignoreEscape: (e) => {
+      const t = e.target as HTMLElement | null;
+      return (
+        e.metaKey ||
+        e.ctrlKey ||
+        e.altKey ||
+        (!!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable))
+      );
+    },
+  });
   // G5 — per-artifact reading-progress map (built from history). Used
   // to enrich descendants below; the PreviewInspector's Folder section
   // renders a per-row ReadingChip from each entry's `progress`.

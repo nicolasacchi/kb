@@ -22,6 +22,7 @@
 //    honours it), and this footer row states it.
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useCloseRequest } from "@kb/ui/useCloseRequest";
 import type { ActionRow, ActionsOut } from "../../api/types";
 import { filterGroups, menuAccessibleName, menuOrder } from "../../lib/actionOps";
 
@@ -69,6 +70,9 @@ export default function ActionMenu({
   useEffect(() => {
     rootRef.current?.focus();
   }, []);
+
+  // Android Back closes the mobile sheet (mounted only while open).
+  useCloseRequest(asSheet, onClose);
 
   useEffect(() => {
     function onDocMouseDown(e: MouseEvent) {
