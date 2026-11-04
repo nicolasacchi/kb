@@ -39,6 +39,10 @@ pub mod tail;
 /// `kb_core::sessions::HARNESS_DEFAULT`, never a literal.
 pub mod constants;
 
+/// AH3 — the one verified per-harness resume-command table.
+pub mod resume;
+pub use resume::resume_command;
+
 /// LSC-1 (`docs/research/kb-live-sessions-cockpit-2026-08.html`) — the
 /// two-axis live-state model (who holds the ball × how long since it
 /// moved) plus the Claude Code transcript adapter, `classify_claude_

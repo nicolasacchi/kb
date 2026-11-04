@@ -1631,9 +1631,7 @@ pub async fn resume(
         .await?;
 
     if json {
-        let harness = detail["harness"].as_str().unwrap_or("claude");
-        let resume_command =
-            super::session_bundle::resume_hint(harness, session_id, detail["cwd"].as_str());
+        let resume_command = resume_command_for_detail(&detail, session_id);
         let combined = serde_json::json!({
             "session": detail,
             "files": files["files"],
@@ -1718,13 +1716,25 @@ pub async fn resume(
     // rides the wire (V0029) for every online read, so `resume` never has to
     // guess or re-parse the transcript the way the offline export/rehydrate
     // verbs do.
-    let harness = detail["harness"].as_str().unwrap_or("claude");
-    let cwd = detail["cwd"].as_str();
     println!(
         "\nResume: {}",
-        super::session_bundle::resume_hint(harness, session_id, cwd)
+        resume_command_for_detail(&detail, session_id)
     );
     Ok(())
+}
+
+/// AH3 — the resume command for a daemon session detail. A segment part
+/// resumes under the chain's raw id (`segment_of`), the only id its harness
+/// knows; the same rule `SessionOut.resume` and live-status use.
+fn resume_command_for_detail(detail: &serde_json::Value, session_id: &str) -> String {
+    let harness = detail["harness"]
+        .as_str()
+        .unwrap_or(kb_core::sessions::HARNESS_DEFAULT);
+    let id = detail["segment_of"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(session_id);
+    super::session_bundle::resume_hint(harness, id, detail["cwd"].as_str())
 }
 
 /// `kb why <file>` (R2) — the past sessions that touched a file and the
@@ -2853,6 +2863,23 @@ fn backfill_project_key_offline(config: Option<&PathBuf>, apply: bool) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resume_command_for_detail_uses_the_raw_id_of_a_segment_part() {
+        use serde_json::json;
+        assert_eq!(
+            resume_command_for_detail(
+                &json!({"harness":"omp","session_id":"raw-p02","segment_of":"raw"}),
+                "raw-p02"
+            ),
+            "omp -r raw"
+        );
+        assert_eq!(
+            resume_command_for_detail(&json!({"harness":"grok","cwd":"/w/x"}), "s1"),
+            "grok -r s1 --cwd /w/x"
+        );
+        assert_eq!(resume_command_for_detail(&json!({}), "s1"), "claude -r s1");
+    }
 
     /// v044-X3 (A4.f6): the CLI no longer writes `index.db` behind a running
     /// daemon's back — it names the route, the dry-run default is explicit

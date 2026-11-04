@@ -224,7 +224,7 @@ pub fn classify_grok_session(
     // gives the honest answer when present.
 
     Some(LiveSession {
-        resume: format!("grok --resume {session_id}"),
+        resume: crate::sessions::resume_command(HARNESS, &session_id, cwd.as_deref()),
         session_id,
         harness: HARNESS.to_string(),
         holder,
@@ -317,6 +317,25 @@ mod tests {
         let dir = root.join(cwd_enc).join(sid);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn grok_adapter_resume_carries_the_summary_cwd() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = make_session_dir(tmp.path(), "%2Fw%2Fproj", "sid-r");
+        write_file(&dir, "events.jsonl", "{\"type\":\"turn_started\"}\n");
+        write_file(
+            &dir,
+            "summary.json",
+            r#"{"info":{"id":"sid-r","cwd":"/w/proj"}}"#,
+        );
+        let got = classify_grok_session(&dir, 100_000_000, &LivePolicy::default()).unwrap();
+        assert_eq!(got.resume, "grok -r sid-r --cwd /w/proj");
+
+        let dir2 = make_session_dir(tmp.path(), "%2Fw%2Fproj", "sid-s");
+        write_file(&dir2, "events.jsonl", "{\"type\":\"turn_started\"}\n");
+        let got2 = classify_grok_session(&dir2, 100_000_000, &LivePolicy::default()).unwrap();
+        assert_eq!(got2.resume, "grok -r sid-s");
     }
 
     #[test]

@@ -649,7 +649,7 @@ pub fn classify_claude_transcript(
     let title = title.or_else(|| last_prompt.map(|p| p.chars().take(70).collect::<String>()));
 
     Some(LiveSession {
-        resume: format!("claude -r {session_id}"),
+        resume: crate::sessions::resume_command(HARNESS_DEFAULT, &session_id, cwd.as_deref()),
         session_id,
         harness: HARNESS_DEFAULT.to_string(),
         holder,

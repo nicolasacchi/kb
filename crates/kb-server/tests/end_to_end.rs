@@ -25544,6 +25544,61 @@ async fn live_status_names_the_last_started_tool_scrubbed_for_bearer_peers() {
     );
 }
 
+#[tokio::test]
+async fn live_status_grok_resume_carries_cwd_on_loopback_and_drops_it_for_bearer_peers() {
+    let (_tmp, addr) = boot_with_token().await;
+    let client = reqwest::Client::new();
+    let at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let resp = client
+        .post(url(addr, "/api/sessions/beat"))
+        .header("Origin", ORIGIN)
+        .json(&serde_json::json!({
+            "v": 1, "session_id": "sid-grok-1", "harness": "grok", "event": "prompt",
+            "at": at, "cwd": "/w/deep/proj",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+
+    let find = |body: &serde_json::Value| {
+        body["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["session_id"] == "sid-grok-1")
+            .unwrap_or_else(|| panic!("no row: {body}"))
+            .clone()
+    };
+
+    let resp = client
+        .get(url(addr, "/api/sessions/live-status"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        find(&body)["resume"],
+        "grok -r sid-grok-1 --cwd /w/deep/proj"
+    );
+
+    let resp = client
+        .get(url(addr, "/api/sessions/live-status"))
+        .header("X-Forwarded-For", "8.8.8.8")
+        .header("Authorization", format!("Bearer {FIXTURE_TOKEN}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let text = resp.text().await.unwrap();
+    assert!(!text.contains("/w/deep"), "{text}");
+    let body: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let row = find(&body);
+    assert_eq!(row["resume"], "grok -r sid-grok-1", "{row}");
+    assert_eq!(row["cwd"], "proj", "{row}");
+}
+
 /// A flood of tool-START beats on an already-working session must put
 /// nothing on the bus beyond the first transition, and the SSE payload
 /// never carries the tool.
