@@ -1030,11 +1030,20 @@ jobs:
 
       - name: Free disk space (drop preinstalled SDKs)
         if: steps.changes.outputs.run == 'true'
-        # Same reclaim as the `workspace-lint` job — see its comment.
+        # Same reclaim as the `workspace-lint` job — see its comment —
+        # plus more SDKs this job never uses (2026-11-04): with kb-core
+        # changed, the warm cache plus the rebuilt kb-code test binaries
+        # filled the remaining ~41 GB ("No space left on device" while
+        # linking, twice in a row on PR #208). Rust, nextest and protoc are
+        # installed by later steps; witness.py uses the system python3.
         run: |
           for d in /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                   /opt/hostedtoolcache/CodeQL /usr/local/.ghcup \
-                   /usr/local/share/boost; do
+                   /opt/hostedtoolcache /usr/local/.ghcup \
+                   /usr/local/share/boost /usr/share/swift /usr/lib/jvm \
+                   /opt/microsoft /usr/local/share/powershell /opt/az \
+                   /usr/share/miniconda /usr/local/julia* \
+                   /usr/local/lib/node_modules /opt/google/chrome \
+                   /usr/local/share/chromium; do
             ( sudo rm -rf "$d" || true ) &
           done
           wait
