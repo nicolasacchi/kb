@@ -455,6 +455,26 @@ test.describe("Close request (AH4)", () => {
     await expect(page.locator("[data-kbc-navsheet]")).toHaveCount(0);
   });
 
+  test("the action menu sheet closes on the platform request", async ({ page }) => {
+    await installCloseWatcherStub(page);
+    await page.goto(`${BASE}/r/${REPO_NAME}/${KNOWN_FILE}`);
+    await expect(page.locator(".kbc-codeview")).toContainText(KNOWN_SYMBOL, { timeout: 10_000 });
+    expect(await cwMade(page)).toBe(0);
+    // The pointer door (a context menu inside the buffer) opens the ONE menu,
+    // which is the bottom sheet at this width.
+    await page
+      .locator(".kbc-codeview .cm-content")
+      .getByText(KNOWN_SYMBOL)
+      .first()
+      .click({ button: "right" });
+    const menu = page.locator("[data-kbc-action-menu]");
+    await expect(menu).toHaveClass(/kbc-actions--sheet/, { timeout: 15_000 });
+    expect(await cwLive(page)).toBe(1);
+    await cwRequestClose(page);
+    await expect(menu).toHaveCount(0);
+    expect(await cwLive(page)).toBe(0);
+  });
+
   test("the Room findings sheet closes on the platform request", async ({ page, request }) => {
     test.skip(!REPO_DIR, "KB_CODE_E2E_REPO_DIR not set — global-setup didn't run");
     await installCloseWatcherStub(page);

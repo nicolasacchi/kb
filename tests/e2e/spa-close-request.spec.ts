@@ -106,6 +106,46 @@ test.describe("close request: reader sheet and nav sheets (390x844)", () => {
     await expect(drawer).toHaveCount(0);
     expect(await live(page)).toBe(0);
   });
+
+  test("slate composer and history sheets answer the close request", async ({ page, request }) => {
+    await installCloseWatcherStub(page);
+    const tag = Date.now().toString(36);
+    const slug = `e2e-close-request-${tag}`;
+    // One post through the slate's one write route, so the board renders.
+    const r = await request.post(`${BASE}/api/slates/${slug}/posts`, {
+      data: {
+        prov: { harness: "codex", origin: "agent", session_id: `e2e-close-request-${tag}` },
+        kind: "now",
+        line: "close request probe",
+      },
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(r.status(), await r.text()).toBeLessThan(300);
+    await page.goto(`${BASE}/slates/${slug}`);
+    await expect(page.getByRole("status", { name: /now and warnings/i })).toBeVisible({
+      timeout: 15_000,
+    });
+    expect((await cw(page)).made).toBe(0);
+    const len = await page.evaluate(() => history.length);
+
+    await page.locator('[data-act="compose"]').click();
+    const composer = page.locator("#slate-composer");
+    await expect(composer).toBeVisible();
+    expect(await live(page)).toBe(1);
+    await requestClose(page);
+    await expect(composer).toBeHidden();
+    expect(await live(page)).toBe(0);
+
+    await page.locator('[data-act="history"]').click();
+    const hist = page.locator("#slate-history");
+    await expect(hist).toBeVisible();
+    expect(await live(page)).toBe(1);
+    await requestClose(page);
+    await expect(hist).toBeHidden();
+    await expect(page).not.toHaveURL(/history=1/);
+    expect(await live(page)).toBe(0);
+    expect(await page.evaluate(() => history.length)).toBe(len);
+  });
 });
 
 test.describe("close request: desktop parity (1280x720)", () => {
