@@ -39,10 +39,14 @@ fn free_port() -> u16 {
         .port()
 }
 
+/// An unrelated live process to plant in the pid file. Its lifetime is far
+/// past the lifecycle test's worst-case budget (two 120 s readiness waits,
+/// a 60 s refusal wait, the 10 s stop window and a 15 s exit wait), so a
+/// slow runner never sees it exit on its own; the guard kills it on drop.
 fn sleeper() -> Proc {
     Proc {
         child: Command::new("sleep")
-            .arg("60")
+            .arg("600")
             .spawn()
             .expect("spawn sleep"),
         stderr_path: None,
