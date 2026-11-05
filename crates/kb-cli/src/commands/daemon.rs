@@ -32,8 +32,10 @@ use std::time::Duration;
 /// deleting a survivor's pid file. Same shape as kb-code's
 /// `StoreLock::try_acquire` in
 /// crates/kb-code-server/src/review_store/manifest.rs.
+///
+/// Off unix `try_lock` never acquires, so the lock is never constructed.
+#[cfg_attr(not(unix), allow(dead_code))]
 struct DaemonLock {
-    #[cfg_attr(not(unix), allow(dead_code))]
     file: std::fs::File,
 }
 
@@ -49,6 +51,7 @@ impl DaemonLock {
     }
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
 enum LockOutcome {
     Acquired(DaemonLock),
     Held,

@@ -39,9 +39,9 @@ sha2 = { workspace = true }
 zip = { workspace = true }
 
 # `kb daemon` lifecycle (flock on the pid file + SIGTERM stop) uses
-# libc::flock and libc::kill on unix. Cfg-gated in src/commands/daemon.rs so non-unix builds still
-# compile (degraded behaviour: stop is unsupported, double-start check
-# is conservative).
+# libc::flock and libc::kill on unix. Cfg-gated in
+# src/commands/daemon.rs so non-unix builds still compile (degraded
+# behaviour: stop is unsupported, double-start check is conservative).
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 

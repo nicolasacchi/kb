@@ -1,6 +1,7 @@
-//! Child-process `kb daemon` tracing/log-level tests.
+//! Child-process `kb daemon` tracing/log-level and state-dir lock tests.
 //!
 //! Filter example: `cargo test -p kb-cli --test cli_spawn daemon_logging::`
+//! (or `daemon_lock::`).
 
 #[allow(unused)]
 #[path = "../common/mod.rs"]
