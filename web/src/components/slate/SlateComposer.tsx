@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import LazyMarkdownEditor from "../LazyMarkdownEditor";
 import { Icon } from "@kb/ui/icons";
+import { useCloseRequest } from "@kb/ui/useCloseRequest";
 import { glyphForKind } from "../../lib/slateGlyphs";
 import type { SlateKind, SlatePostBody } from "../../api/slateTypes";
 import { SPA_PROV } from "../../hooks/useSlates";
@@ -114,6 +115,9 @@ export default function SlateComposer({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
+
+  // Android Back closes the mobile sheet.
+  useCloseRequest(mobile && open, onClose);
 
   const refs = useMemo(
     () => refsText.split(/\s+/).map((s) => s.trim()).filter(Boolean),

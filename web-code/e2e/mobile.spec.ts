@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import {
   CALLER_FILE,
   FEATURE_BRANCH,
@@ -350,5 +350,292 @@ test.describe("Review diff coarse-pointer pill", () => {
     await expect(line).toHaveClass(/is-picked/);
     await pill.locator('[data-kbc-diff-pill-side="new"]').click();
     await expect(page.locator("[data-kbc-review-composer]")).toBeVisible();
+  });
+});
+
+// AH4 — mobile sheets and drawers answer the platform close request (Android
+// Back / swipe-back) with no history entry. Playwright cannot press the real
+// system Back, so a CloseWatcher stub with the platform's semantics stands in
+// (`requestClose` fires a cancelable `cancel`, then `close`).
+async function installCloseWatcherStub(page: Page) {
+  await page.addInitScript(() => {
+    type W = { alive: boolean; oncancel: ((e: Event) => void) | null; onclose: ((e: Event) => void) | null };
+    const cw = {
+      made: 0,
+      instances: [] as (W & { requestClose(): void })[],
+      get live() {
+        return this.instances.filter((w) => w.alive).length;
+      },
+    };
+    class Stub implements W {
+      alive = true;
+      oncancel: ((e: Event) => void) | null = null;
+      onclose: ((e: Event) => void) | null = null;
+      constructor() {
+        cw.made += 1;
+        cw.instances.push(this);
+      }
+      requestClose() {
+        if (!this.alive) return;
+        const ev = new Event("cancel", { cancelable: true });
+        this.oncancel?.(ev);
+        if (ev.defaultPrevented) return;
+        this.close();
+      }
+      close() {
+        if (!this.alive) return;
+        this.onclose?.(new Event("close"));
+        this.destroy();
+      }
+      destroy() {
+        this.alive = false;
+      }
+    }
+    (window as unknown as { CloseWatcher: unknown }).CloseWatcher = Stub;
+    (window as unknown as { __cw: unknown }).__cw = cw;
+  });
+}
+const cwMade = (page: Page) =>
+  page.evaluate(() => (window as unknown as { __cw: { made: number } }).__cw.made);
+const cwLive = (page: Page) =>
+  page.evaluate(() => (window as unknown as { __cw: { live: number } }).__cw.live);
+const cwRequestClose = (page: Page) =>
+  page.evaluate(() => {
+    const c = (window as unknown as {
+      __cw: { instances: { alive: boolean; requestClose(): void }[] };
+    }).__cw;
+    c.instances.filter((w) => w.alive).at(-1)!.requestClose();
+  });
+
+test.describe("Close request (AH4)", () => {
+  test.use({ viewport: MOBILE_VIEWPORT });
+
+  test("reader inspector sheet and tree drawer close on the platform request", async ({ page }) => {
+    await installCloseWatcherStub(page);
+    await page.goto(`${BASE}/r/${REPO_NAME}/${KNOWN_FILE}`);
+    await expect(page.locator(".kbc-codeview")).toContainText(KNOWN_SYMBOL, { timeout: 10_000 });
+    expect(await cwMade(page)).toBe(0);
+    const len = await page.evaluate(() => history.length);
+
+    await page.locator("[data-kbc-inspector-toggle]").click();
+    await expect(page.locator(".kbc-reader--sheet-open")).toHaveCount(1);
+    expect(await cwLive(page)).toBe(1);
+    await cwRequestClose(page);
+    await expect(page.locator(".kbc-reader--sheet-open")).toHaveCount(0);
+    await expect(page.locator("#kbc-reader-sheet")).toBeHidden();
+    expect(await cwLive(page)).toBe(0);
+    expect(await page.evaluate(() => history.length)).toBe(len);
+
+    await page.locator("[data-kbc-burger]").click();
+    await expect(page.locator("[data-kbc-drawer]")).toBeVisible();
+    expect(await cwLive(page)).toBe(1);
+    await cwRequestClose(page);
+    await expect(page.locator("[data-kbc-drawer]")).toHaveCount(0);
+    expect(await cwLive(page)).toBe(0);
+  });
+
+  test("nav sheet and its theme picker close one layer per request", async ({ page }) => {
+    await installCloseWatcherStub(page);
+    await page.goto(`${BASE}/r/${REPO_NAME}/${KNOWN_FILE}`);
+    await expect(page.locator(".kbc-codeview")).toContainText(KNOWN_SYMBOL, { timeout: 10_000 });
+    await page.locator("[data-kb-spine-menu]").click();
+    await expect(page.locator("[data-kbc-navsheet]")).toBeVisible();
+    expect(await cwLive(page)).toBe(1);
+
+    await page.locator("[data-kbc-nav-theme-picker]").click();
+    await expect(page.locator(".kbc-themepicker--sheet")).toBeVisible();
+    expect(await cwLive(page)).toBe(2);
+
+    await cwRequestClose(page);
+    await expect(page.locator(".kbc-themepicker--sheet")).toHaveCount(0);
+    await expect(page.locator("[data-kbc-navsheet]")).toBeVisible();
+    expect(await cwLive(page)).toBe(1);
+
+    await cwRequestClose(page);
+    await expect(page.locator("[data-kbc-navsheet]")).toHaveCount(0);
+  });
+
+  test("the action menu sheet closes on the platform request", async ({ page }) => {
+    await installCloseWatcherStub(page);
+    await page.goto(`${BASE}/r/${REPO_NAME}/${KNOWN_FILE}`);
+    await expect(page.locator(".kbc-codeview")).toContainText(KNOWN_SYMBOL, { timeout: 10_000 });
+    expect(await cwMade(page)).toBe(0);
+    // The pointer door (a context menu inside the buffer) opens the ONE menu,
+    // which is the bottom sheet at this width.
+    await page
+      .locator(".kbc-codeview .cm-content")
+      .getByText(KNOWN_SYMBOL)
+      .first()
+      .click({ button: "right" });
+    const menu = page.locator("[data-kbc-action-menu]");
+    await expect(menu).toHaveClass(/kbc-actions--sheet/, { timeout: 15_000 });
+    expect(await cwLive(page)).toBe(1);
+    await cwRequestClose(page);
+    await expect(menu).toHaveCount(0);
+    expect(await cwLive(page)).toBe(0);
+  });
+
+  test("the Room findings sheet closes on the platform request", async ({ page, request }) => {
+    test.skip(!REPO_DIR, "KB_CODE_E2E_REPO_DIR not set — global-setup didn't run");
+    await installCloseWatcherStub(page);
+    const reviewId = await createReview(request, "e2e close request sheet");
+    await page.goto(`${BASE}/r/${REPO_NAME}/~reviews/${reviewId}`);
+    await expect(page.locator("[data-kbc-review-title]")).toContainText("e2e close request sheet");
+    await page.locator("[data-kbc-review-sheet-toggle]").click();
+    await expect(page.locator("#kbc-review-sheet")).toBeVisible();
+    expect(await cwLive(page)).toBe(1);
+    await cwRequestClose(page);
+    await expect(page.locator("#kbc-review-sheet")).toBeHidden();
+    expect(await cwLive(page)).toBe(0);
+  });
+});
+
+// AH4 spec item 2 on the REAL close-request path, no stub. Playwright's
+// Chromium ships `CloseWatcher`, and an Escape keydown that no handler
+// prevented IS a close request there, so a typed Esc in an open sheet reaches
+// the sheet's watcher and only the call site's `ignoreEscape` keeps the sheet
+// open. `armTypingProbe` appends one INPUT, one TEXTAREA and one
+// contentEditable DIV (`data-ah4-typing`) plus one plain BUTTON
+// (`data-ah4-plain`) into the open sheet: appended targets carry no handler of
+// their own, so no editor's Esc handling can stand in for the guard. A
+// bubble-phase window listener records whether a handler prevented each Esc.
+const hasRealCloseWatcher = (page: Page) =>
+  page.evaluate(() => typeof (window as unknown as { CloseWatcher?: unknown }).CloseWatcher === "function");
+
+async function armTypingProbe(page: Page, host: string) {
+  await page.evaluate((sel) => {
+    const w = window as unknown as { __ah4Esc?: boolean[] };
+    if (!w.__ah4Esc) {
+      const log: boolean[] = [];
+      w.__ah4Esc = log;
+      window.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") log.push(e.defaultPrevented);
+      });
+    }
+    const root = document.querySelector(sel);
+    if (!root) throw new Error(`armTypingProbe: no ${sel}`);
+    const input = document.createElement("input");
+    input.setAttribute("data-ah4-typing", "input");
+    const textarea = document.createElement("textarea");
+    textarea.setAttribute("data-ah4-typing", "textarea");
+    const editable = document.createElement("div");
+    editable.contentEditable = "true";
+    editable.textContent = "probe";
+    editable.setAttribute("data-ah4-typing", "editable");
+    const plain = document.createElement("button");
+    plain.type = "button";
+    plain.textContent = "probe";
+    plain.setAttribute("data-ah4-plain", "");
+    root.append(input, textarea, editable, plain);
+  }, host);
+}
+
+/// Focus `target`, press Escape, and give React long enough to commit any
+/// close it caused (the platform's `close` event runs outside React). Returns
+/// whether a handler prevented the keydown; `false` = the platform ran a
+/// close request for it.
+async function escapeIn(page: Page, target: string | Locator): Promise<boolean> {
+  await page.evaluate(() => {
+    (window as unknown as { __ah4Esc: boolean[] }).__ah4Esc.length = 0;
+  });
+  await (typeof target === "string" ? page.locator(target) : target).focus();
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(250);
+  return page.evaluate(() => {
+    const log = (window as unknown as { __ah4Esc: boolean[] }).__ah4Esc;
+    if (log.length !== 1) throw new Error(`escapeIn: saw ${log.length} Escape keydowns at window`);
+    return log[0];
+  });
+}
+
+test.describe("Close request typing guards on the real CloseWatcher (AH4)", () => {
+  test.use({ viewport: MOBILE_VIEWPORT });
+
+  test("a typed Esc in the reader sheet never closes it; a bare Esc does", async ({ page }) => {
+    await page.goto(`${BASE}/r/${REPO_NAME}/${KNOWN_FILE}`);
+    await expect(page.locator(".kbc-codeview")).toContainText(KNOWN_SYMBOL, { timeout: 10_000 });
+    expect(await hasRealCloseWatcher(page), "Playwright Chromium ships CloseWatcher").toBe(true);
+    await page.locator("[data-kbc-inspector-toggle]").click();
+    const open = page.locator(".kbc-reader--sheet-open");
+    await expect(open).toHaveCount(1);
+    await armTypingProbe(page, "#kbc-reader-sheet");
+
+    // The vim buffer first. Its Esc never closes the sheet either; today the
+    // vim layer prevents that keydown itself, so no close request runs for it
+    // (`isInsideBuffer` in the call site's guard is the second line).
+    await escapeIn(page, page.locator(".kbc-codeview .cm-content").first());
+    await expect(open, "buffer: the sheet stays open").toHaveCount(1);
+
+    // A typing target in the rail: the keydown reaches the close request, and
+    // only `isEditableTarget` in the call site's guard keeps the sheet open.
+    for (const kind of ["input", "textarea", "editable"]) {
+      const prevented = await escapeIn(page, `[data-ah4-typing="${kind}"]`);
+      expect(prevented, `${kind}: the Esc reached the close request`).toBe(false);
+      await expect(open, `${kind}: the sheet stays open`).toHaveCount(1);
+    }
+
+    // A bare Esc on a non-typing target still dismisses (the existing Esc effect).
+    await escapeIn(page, "[data-ah4-plain]");
+    await expect(open).toHaveCount(0);
+    await expect(page.locator("#kbc-reader-sheet")).toBeHidden();
+  });
+
+  test("a typed Esc in the Room findings sheet never closes it; a bare Esc does", async ({
+    page,
+    request,
+  }) => {
+    test.skip(!REPO_DIR, "KB_CODE_E2E_REPO_DIR not set — global-setup didn't run");
+    const reviewId = await createReview(request, "e2e close request typing");
+    await page.goto(`${BASE}/r/${REPO_NAME}/~reviews/${reviewId}`);
+    await expect(page.locator("[data-kbc-review-title]")).toContainText("e2e close request typing");
+    expect(await hasRealCloseWatcher(page), "Playwright Chromium ships CloseWatcher").toBe(true);
+    await page.locator("[data-kbc-review-sheet-toggle]").click();
+    const sheet = page.locator("#kbc-review-sheet");
+    await expect(sheet).toBeVisible();
+    await armTypingProbe(page, "#kbc-review-sheet");
+
+    for (const kind of ["input", "textarea", "editable"]) {
+      const prevented = await escapeIn(page, `[data-ah4-typing="${kind}"]`);
+      expect(prevented, `${kind}: the Esc reached the close request`).toBe(false);
+      await expect(sheet, `${kind}: the sheet stays open`).toBeVisible();
+    }
+
+    await escapeIn(page, "[data-ah4-plain]");
+    await expect(sheet).toBeHidden();
+  });
+});
+
+test.describe("Close request desktop parity (AH4)", () => {
+  test.use({ viewport: DESKTOP_VIEWPORT });
+
+  // The mobile toggles are mounted (CSS-hidden) at this width, and their click
+  // handlers set `inspectorOpen` / `sheetOpen` with no viewport check, so a
+  // dispatched click opens the state for real. Only the call sites'
+  // `isMobile &&` gate keeps a watcher from being created.
+  test("no watcher is ever created on desktop, even with the reader-tools state open", async ({
+    page,
+  }) => {
+    await installCloseWatcherStub(page);
+    await page.goto(`${BASE}/r/${REPO_NAME}/${KNOWN_FILE}`);
+    await expect(page.locator(".kbc-codeview")).toContainText(KNOWN_SYMBOL, { timeout: 10_000 });
+    expect(await cwMade(page)).toBe(0);
+    const toggle = page.locator("[data-kbc-inspector-toggle]");
+    await toggle.dispatchEvent("click");
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await page.waitForTimeout(250);
+    expect(await cwMade(page)).toBe(0);
+  });
+
+  test("the Room's sheet state opened on desktop creates no watcher", async ({ page, request }) => {
+    test.skip(!REPO_DIR, "KB_CODE_E2E_REPO_DIR not set — global-setup didn't run");
+    await installCloseWatcherStub(page);
+    const reviewId = await createReview(request, "e2e close request desktop");
+    await page.goto(`${BASE}/r/${REPO_NAME}/~reviews/${reviewId}`);
+    await expect(page.locator("[data-kbc-review-title]")).toContainText("e2e close request desktop");
+    const toggle = page.locator("[data-kbc-review-sheet-toggle]");
+    await toggle.dispatchEvent("click");
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await page.waitForTimeout(250);
+    expect(await cwMade(page)).toBe(0);
   });
 });

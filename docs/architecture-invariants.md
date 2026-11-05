@@ -2608,7 +2608,10 @@ Every reader-chrome feature has exactly ONE home, by altitude:
     `.detail--inspector-open`.
   - **Dismiss** = the labelled ✕ in `.kb-pinsp__sheet-head` (now shown in every
     mode, with a decorative `.kb-pinsp__grab` pill) + scrim tap + Esc (guarded
-    against typing, disjoint from the immersive Esc effect). `role=dialog` /
+    against typing, disjoint from the immersive Esc effect) + the platform
+    close request (CloseWatcher via `ui/src/useCloseRequest.ts`; Android Back on
+    Chrome 126+; never a history entry; a focused artifact iframe is blurred so
+    the request reaches the reader) (AH4). `role=dialog` /
     `aria-modal` / `id="kb-reader-sheet"` are gated to mobile via the new
     `asSheet` prop so the desktop docked `<aside>` semantics + e2e are untouched.
   - **Deferred:** multi-detent drag/snap gestures and any auto-open-to-comments
