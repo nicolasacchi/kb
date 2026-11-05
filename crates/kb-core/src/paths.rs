@@ -280,13 +280,14 @@ impl KbPaths {
             .join(format!("ledger.{generation}.jsonl"))
     }
 
-    /// `<state>/kb-daemon.pid` — pid file written by `kb daemon` on
-    /// successful bind, removed on clean exit. `kb daemon stop` reads
-    /// it to know which process to signal. Deep-review LOW (kb daemon
-    /// lifecycle).
+    /// `<state>/kb-daemon.pid`: `kb daemon` holds an exclusive `flock` on
+    /// it for its whole process lifetime and records its pid in it. The
+    /// lock is the liveness truth; the content is the hint `kb daemon
+    /// stop` signals. Not unlinked by a lock-holding daemon (only the
+    /// flock-less fallback removes it on clean exit).
     ///
     /// Located in `state` (not `runs`) so it sits alongside the lance
-    /// dataset + sqlite — natural for `kb reset` to clean up too.
+    /// dataset + sqlite.
     pub fn daemon_pid_file(&self) -> PathBuf {
         self.state.join("kb-daemon.pid")
     }
