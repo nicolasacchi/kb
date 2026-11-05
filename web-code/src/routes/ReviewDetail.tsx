@@ -315,17 +315,7 @@ export default function ReviewDetail() {
   }, [sheetOpen]);
   // Android Back / swipe-back closes the Room findings sheet (no history entry,
   // so `nav.back` and the jumplist are untouched).
-  useCloseRequest(isMobile && sheetOpen, () => setSheetOpen(false), {
-    ignoreEscape: (e) => {
-      const t = e.target as HTMLElement | null;
-      return (
-        e.metaKey ||
-        e.ctrlKey ||
-        e.altKey ||
-        (!!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable))
-      );
-    },
-  });
+  useCloseRequest(sheetOpen, () => setSheetOpen(false));
 
   // ── V76-R2a — the findings rail as a RESIZABLE DOCK ─────────────────────
   //

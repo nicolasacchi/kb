@@ -356,21 +356,7 @@ export default function SessionsRoute() {
 
   // Android Back / swipe-back dismisses the sheet (a replace navigation, never
   // a history entry). Same typing guard as the Esc effect above.
-  useCloseRequest(
-    isMobile && !!selected,
-    () => select(null),
-    {
-      ignoreEscape: (e) => {
-        const t = e.target as HTMLElement | null;
-        return (
-          e.metaKey ||
-          e.ctrlKey ||
-          e.altKey ||
-          (!!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable))
-        );
-      },
-    },
-  );
+  useCloseRequest(isMobile && !!selected, () => select(null));
 
   // SH.B2 — lock body scroll while the mobile session-details sheet is up.
   // Gated on `selected` (not just `focused`) to match the sheet's own
