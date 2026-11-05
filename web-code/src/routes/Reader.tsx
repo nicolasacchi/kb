@@ -3769,8 +3769,7 @@ export default function Reader() {
   // Android Back / swipe-back closes the reader-tools sheet (no history entry,
   // so `nav.back` and the jumplist are untouched). Same guard as the Esc effect.
   useCloseRequest(isMobile && inspectorOpen, () => setInspectorOpen(false), {
-    ignoreEscape: (e) =>
-      e.metaKey || e.ctrlKey || e.altKey || isEditableTarget(e.target) || isInsideBuffer(e.target),
+    ignoreEscape: () => false,
   });
 
 

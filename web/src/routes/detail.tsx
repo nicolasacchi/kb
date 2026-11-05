@@ -366,6 +366,7 @@ export default function Detail() {
   // a focused artifact iframe is blurred so the request reaches this document).
   useCloseRequest(isMobile && inspectorOpen, () => setInspectorOpen(false), {
     ignoreEscape: (e) => {
+      return false;
       const t = e.target as HTMLElement | null;
       return (
         e.metaKey ||
