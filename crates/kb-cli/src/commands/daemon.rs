@@ -60,7 +60,6 @@ enum LockOutcome {
 
 #[cfg(unix)]
 fn try_lock(path: &Path) -> std::io::Result<LockOutcome> {
-    use std::os::fd::AsRawFd;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -73,6 +72,31 @@ fn try_lock(path: &Path) -> std::io::Result<LockOutcome> {
         .read(true)
         .write(true)
         .open(path)?;
+    flock_nonblocking(file)
+}
+
+/// `kb daemon stop`'s probe: `try_lock` without `create` (and without
+/// creating the directory). A missing file is `Ok(None)`, so a file
+/// unlinked between any earlier check and this open is never re-created
+/// empty. Same O_CLOEXEC std open as `try_lock`; write access is kept
+/// because NFS emulates `flock` with byte-range locks, and an exclusive
+/// one needs a descriptor open for writing (flock(2), NOTES).
+#[cfg(unix)]
+fn probe_lock(path: &Path) -> std::io::Result<Option<LockOutcome>> {
+    match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+    {
+        Ok(file) => flock_nonblocking(file).map(Some),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+#[cfg(unix)]
+fn flock_nonblocking(file: std::fs::File) -> std::io::Result<LockOutcome> {
+    use std::os::fd::AsRawFd;
     // SAFETY: `file` owns a valid open descriptor for the duration of the call.
     let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
     if rc == 0 {
@@ -95,6 +119,14 @@ fn try_lock(_path: &Path) -> std::io::Result<LockOutcome> {
     )))
 }
 
+#[cfg(not(unix))]
+fn probe_lock(path: &Path) -> std::io::Result<Option<LockOutcome>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    try_lock(path).map(Some)
+}
+
 enum StartGuard {
     Locked(DaemonLock),
     Fallback,
@@ -114,17 +146,21 @@ fn claim_state_dir(pid_path: &Path, our_pid: u32) -> Result<StartGuard> {
             ))
         }
         LockOutcome::Acquired(lock) => {
-            if let Some(p) = read_pid(pid_path) {
-                if p != our_pid && pid_is_alive(p) {
-                    tracing::warn!(
-                        "kb-daemon.pid named live pid {p} but no process held the lock: \
-                         treating it as stale (pid reuse after an unclean exit, or a daemon \
-                         started by an older kb release: stop that one first if so)"
-                    );
-                }
-            }
+            // Until `record_pid` runs, the file still names the previous
+            // holder. A `kb daemon stop` probing in that gap sees a held
+            // lock plus the old pid and would signal it, so the pid is
+            // recorded straight after the flock (only the read of the old
+            // content comes first) and the warning is logged afterwards.
+            let prev = read_pid(pid_path);
             lock.record_pid(our_pid)
                 .with_context(|| format!("write pid file {}", pid_path.display()))?;
+            if let Some(p) = prev.filter(|&p| p != our_pid && pid_is_alive(p)) {
+                tracing::warn!(
+                    "kb-daemon.pid named live pid {p} but no process held the lock: \
+                     treating it as stale (pid reuse after an unclean exit, or a daemon \
+                     started by an older kb release: stop that one first if so)"
+                );
+            }
             Ok(StartGuard::Locked(lock))
         }
         LockOutcome::Unsupported(e) => {
@@ -244,12 +280,13 @@ enum StopDecision {
 }
 
 /// Probe the lock to decide what `stop` should do. Never signals, never
-/// unlinks, and never creates the file.
+/// unlinks, and never creates the file: `probe_lock` opens without
+/// `create` and a missing file is `NoFile`.
 fn stop_decision(pid_path: &Path) -> std::io::Result<StopDecision> {
-    if !pid_path.exists() {
+    let Some(outcome) = probe_lock(pid_path)? else {
         return Ok(StopDecision::NoFile);
-    }
-    Ok(match try_lock(pid_path)? {
+    };
+    Ok(match outcome {
         LockOutcome::Acquired(probe) => {
             drop(probe);
             StopDecision::Stale {
@@ -307,6 +344,10 @@ pub async fn stop(config_path: Option<&PathBuf>) -> Result<()> {
             stop_legacy(&pid_path).await
         }
         StopDecision::Signal { pid } => {
+            // `pid` is what the lock holder recorded. For the instant
+            // between a new holder's flock and its `record_pid` the file
+            // can still name the previous holder; `claim_state_dir` keeps
+            // that gap to one read of the old content.
             send_sigterm(pid).with_context(|| format!("send SIGTERM to pid {pid}"))?;
             eprintln!("sent SIGTERM to kb daemon pid {pid}; waiting for exit …");
 
@@ -1236,6 +1277,21 @@ mod tests {
             StopDecision::NoFile
         ));
         assert!(!missing.exists(), "the probe must not create the file");
+    }
+
+    /// The stop probe opens without `create`: a missing pid file (or a
+    /// missing state dir) is `None`, and neither is created.
+    #[test]
+    #[cfg(unix)]
+    fn stop_probe_never_creates_a_missing_pid_file_or_its_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("absent.pid");
+        assert!(matches!(probe_lock(&missing), Ok(None)));
+        assert!(!missing.exists(), "the probe must not create the file");
+        let dir = tmp.path().join("no-state-dir");
+        let nested = dir.join("kb-daemon.pid");
+        assert!(matches!(probe_lock(&nested), Ok(None)));
+        assert!(!dir.exists(), "the probe must not create the state dir");
     }
 
     /// O_CLOEXEC guard: a child spawned while the lock is held must not
