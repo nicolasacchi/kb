@@ -38,10 +38,11 @@ sha2 = { workspace = true }
 # Extract the `.zip` bundle `kb share --local` fetches from the daemon.
 zip = { workspace = true }
 
-# `kb daemon` lifecycle (pid file + SIGTERM stop) uses libc::kill on
-# unix. Cfg-gated in src/commands/daemon.rs so non-unix builds still
-# compile (degraded behaviour: stop is unsupported, double-start check
-# is conservative).
+# `kb daemon` lifecycle (flock on the pid file + SIGTERM stop) uses
+# libc::flock and libc::kill on unix. Cfg-gated in
+# src/commands/daemon.rs so non-unix builds still compile (degraded
+# behaviour off unix: stop cannot signal anything, and there is no
+# double-start check).
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
