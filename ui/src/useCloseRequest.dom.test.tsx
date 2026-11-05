@@ -109,10 +109,20 @@ describe("useCloseRequest", () => {
     const iframe = document.createElement("iframe");
     document.body.appendChild(iframe);
     iframe.focus();
+    // jsdom keeps an iframe as activeElement even after blur(), so the spy is
+    // the witness for "no focus change", and the listener spy for "no listener".
+    const blur = vi.spyOn(iframe, "blur");
+    const add = vi.spyOn(window, "addEventListener");
     const onClose = vi.fn();
-    expect(() => render({ active: true, onClose })).not.toThrow();
-    expect(onClose).not.toHaveBeenCalled();
-    expect(document.activeElement).toBe(iframe);
+    try {
+      expect(() => render({ active: true, onClose })).not.toThrow();
+      expect(onClose).not.toHaveBeenCalled();
+      expect(blur).not.toHaveBeenCalled();
+      expect(add.mock.calls.filter(([type]) => type === "keydown")).toEqual([]);
+      expect(document.activeElement).toBe(iframe);
+    } finally {
+      add.mockRestore();
+    }
   });
 
   it("blurs a focused iframe on activation", () => {
