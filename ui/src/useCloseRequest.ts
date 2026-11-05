@@ -1,5 +1,26 @@
 import { useEffect, useRef } from "react";
 
+export type CloseRequestOptions = {
+  /** Return true for an Escape keydown that must NOT dismiss (typing targets, vim buffers, modifier chords).
+   *  Receives the keydown itself so callers can copy their existing guard exactly. */
+  ignoreEscape?: (e: KeyboardEvent) => boolean;
+};
+
+interface CloseWatcherLike {
+  oncancel: ((e: Event) => void) | null;
+  onclose: ((e: Event) => void) | null;
+  requestClose(): void;
+  close(): void;
+  destroy(): void;
+}
+type CloseWatcherCtor = new () => CloseWatcherLike;
+
+function closeWatcherCtor(): CloseWatcherCtor | null {
+  if (typeof window === "undefined") return null;
+  const c = (window as unknown as { CloseWatcher?: unknown }).CloseWatcher;
+  return typeof c === "function" ? (c as CloseWatcherCtor) : null;
+}
+
 /**
  * Answer the platform close request (Android system Back / swipe-back, and Esc)
  * for a modal surface that is open.
@@ -24,27 +45,6 @@ import { useEffect, useRef } from "react";
  * capture-phase keydown listener only observes; it never prevents or stops a
  * keydown, so Esc reaches its owners (editors, vim layers) untouched.
  */
-export type CloseRequestOptions = {
-  /** Return true for an Escape keydown that must NOT dismiss (typing targets, vim buffers, modifier chords).
-   *  Receives the keydown itself so callers can copy their existing guard exactly. */
-  ignoreEscape?: (e: KeyboardEvent) => boolean;
-};
-
-interface CloseWatcherLike {
-  oncancel: ((e: Event) => void) | null;
-  onclose: ((e: Event) => void) | null;
-  requestClose(): void;
-  close(): void;
-  destroy(): void;
-}
-type CloseWatcherCtor = new () => CloseWatcherLike;
-
-function closeWatcherCtor(): CloseWatcherCtor | null {
-  if (typeof window === "undefined") return null;
-  const c = (window as unknown as { CloseWatcher?: unknown }).CloseWatcher;
-  return typeof c === "function" ? (c as CloseWatcherCtor) : null;
-}
-
 export function useCloseRequest(
   active: boolean,
   onClose: () => void,
