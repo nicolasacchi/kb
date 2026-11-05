@@ -1,5 +1,11 @@
 import { test, expect, type Page } from "@playwright/test";
-import { BASE, installCloseWatcherStub } from "./helpers";
+import {
+  BASE,
+  armTypingProbe,
+  escapeIn,
+  hasRealCloseWatcher,
+  installCloseWatcherStub,
+} from "./helpers";
 
 // AH4 — mobile sheets and drawers answer the platform close request
 // (Android Back / swipe-back) through `useCloseRequest`, with no history
@@ -148,6 +154,36 @@ test.describe("close request: reader sheet and nav sheets (390x844)", () => {
   });
 });
 
+test.describe("close request: typing guards on the REAL CloseWatcher (390x844)", () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+
+  // Spec item 2, the call site's `ignoreEscape`: no stub here. An Esc typed in
+  // an INPUT, TEXTAREA or contentEditable inside the open reader sheet reaches
+  // the platform close request (the keydown arrives at window un-prevented),
+  // and only the guard keeps the sheet open. Fails if detail.tsx drops it.
+  // invariant:30
+  test("a typed Esc inside the open reader sheet never closes it; a bare Esc still does", async ({
+    page,
+  }) => {
+    await page.goto(`${BASE}${ARTIFACT}`);
+    expect(await hasRealCloseWatcher(page), "Playwright Chromium ships CloseWatcher").toBe(true);
+    const detail = page.locator(".detail");
+    await page.locator('[data-kb-act="inspect"]').click();
+    await expect(detail).toHaveClass(/detail--inspector-open/);
+    await armTypingProbe(page, ".kb-pinsp");
+
+    for (const kind of ["textarea", "input", "editable"]) {
+      const prevented = await escapeIn(page, `[data-ah4-typing="${kind}"]`);
+      expect(prevented, `${kind}: the Esc reached the close request`).toBe(false);
+      await expect(detail, `${kind}: the sheet stays open`).toHaveClass(/detail--inspector-open/);
+    }
+
+    // A bare Esc on a non-typing target still dismisses (the existing Esc effect).
+    await escapeIn(page, "[data-ah4-plain]");
+    await expect(detail).not.toHaveClass(/detail--inspector-open/);
+  });
+});
+
 test.describe("close request: desktop parity (1280x720)", () => {
   test.use({ viewport: { width: 1280, height: 720 } });
 
@@ -156,5 +192,28 @@ test.describe("close request: desktop parity (1280x720)", () => {
     await page.goto(`${BASE}${ARTIFACT}`);
     await page.locator('[data-kb-act="dock-versions"]').click();
     expect((await cw(page)).made).toBe(0);
+  });
+
+  // A marker tap inside the artifact sets `inspectorOpen` on desktop too
+  // (onFocusComment). The `isMobile &&` gate is what keeps it from creating a
+  // watcher and blurring the focused artifact iframe.
+  // invariant:30
+  test("a comment-marker tap inside the artifact creates no watcher and keeps iframe focus", async ({
+    page,
+  }) => {
+    await installCloseWatcherStub(page);
+    await page.goto(`${BASE}${ARTIFACT}`);
+    const frame = page.frameLocator(".detail__frame");
+    await frame.locator("h1").first().click();
+    expect(await page.evaluate(() => document.activeElement?.tagName)).toBe("IFRAME");
+
+    await frame.locator(":root").evaluate(() => {
+      window.parent.postMessage({ type: "cm:focus", commentId: "ah4-probe" }, "*");
+    });
+    // onFocusComment ran: it opens the comments panel in the docked rail.
+    await expect(page.getByRole("complementary", { name: "comments" })).toBeVisible();
+    await page.waitForTimeout(250);
+    expect((await cw(page)).made).toBe(0);
+    expect(await page.evaluate(() => document.activeElement?.tagName)).toBe("IFRAME");
   });
 });

@@ -1,7 +1,13 @@
 import { test, expect } from "@playwright/test";
 import { writeFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { PORT, installCloseWatcherStub } from "./helpers";
+import {
+  PORT,
+  armTypingProbe,
+  escapeIn,
+  hasRealCloseWatcher,
+  installCloseWatcherStub,
+} from "./helpers";
 
 // v0.14 T6 — /sessions view round-trip.
 //
@@ -589,6 +595,59 @@ test.describe("W3.D/S2 — mobile sessions bottom sheet", () => {
     await expect(page).not.toHaveURL(/focus=/);
     expect(await liveCount()).toBe(0);
     expect(await page.evaluate(() => history.length)).toBe(len);
+  });
+
+  // AH4 spec item 2 on the REAL CloseWatcher (no stub): an Esc typed in an
+  // INPUT, TEXTAREA or contentEditable inside the open sheet reaches the
+  // platform close request, and only the call site's `ignoreEscape` keeps the
+  // sheet (and `?focus=`) in place. Fails if sessions.tsx drops it.
+  test("a typed Esc inside the open sheet never dismisses it on the real close request (AH4)", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const base = `http://127.0.0.1:${PORT}`;
+    const sid = "spec-mobsheet-ah4-typing";
+    await seedClosedSession(page, base, sid, {
+      prompt: "typed escape in the sheet",
+      closing: "Done.",
+    });
+    const deadline = Date.now() + 15_000;
+    let surfaced = false;
+    while (Date.now() < deadline) {
+      const r = await page.request.get(`${base}/api/sessions`);
+      if (r.ok()) {
+        const b = (await r.json()) as { sessions: { session_id: string }[] };
+        if (b.sessions.some((s) => s.session_id === sid)) {
+          surfaced = true;
+          break;
+        }
+      }
+      await new Promise((rs) => setTimeout(rs, 200));
+    }
+    expect(surfaced, "seeded session must surface in /api/sessions").toBeTruthy();
+
+    await page.goto(`${base}/sessions`);
+    expect(await hasRealCloseWatcher(page), "Playwright Chromium ships CloseWatcher").toBe(true);
+    const row = page.locator(`[data-session-id="${sid}"]`);
+    await expect(row).toBeVisible({ timeout: 10_000 });
+    await row.locator(".kb-ses__row-btn").click();
+    const sheet = page.locator(".kb-ses__inspector--sheet");
+    await expect(sheet).toBeVisible({ timeout: 10_000 });
+    // The sheet's content has loaded before the probe is appended into it.
+    await expect(sheet).toContainText(`claude -r ${sid}`);
+    await armTypingProbe(page, ".kb-ses__inspector--sheet");
+
+    for (const kind of ["textarea", "input", "editable"]) {
+      const prevented = await escapeIn(page, `[data-ah4-typing="${kind}"]`);
+      expect(prevented, `${kind}: the Esc reached the close request`).toBe(false);
+      await expect(sheet, `${kind}: the sheet stays open`).toBeVisible();
+      await expect(page).toHaveURL(new RegExp(`focus=${sid}`));
+    }
+
+    // A bare Esc on a non-typing target still dismisses (the existing Esc effect).
+    await escapeIn(page, "[data-ah4-plain]");
+    await expect(sheet).toHaveCount(0);
+    await expect(page).not.toHaveURL(/focus=/);
   });
 
   test("a shared /sessions?focus= link opens straight into the sheet", async ({
