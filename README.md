@@ -236,7 +236,11 @@ why. These are rulings, not backlog.
 - **Mobile is a reader with a capture slot, not an editor.** The share sheet
   gets files *into* a corpus as a one-way, provenance-stamped staging drop;
   editing them stays a desktop/CLI job. The desktop app is likewise archived
-  (`archive/kb-desktop`), never primary distribution.
+  (`archive/kb-desktop`), never primary distribution. Narrow carve-out
+  (2026-11, off by default): when the operator enables `[terminal]`, the
+  phone may drive a live agent terminal through the SPA as an operator
+  control surface; corpora stay read-only from mobile, and agents and the
+  `kb` CLI never get a terminal surface.
 - **No MCP server *yet*.** The CLI is the protocol — every harness in real use
   drives `kb` via shell plus an instructions file, and ambient memory (recall
   injection, capture) is hook work MCP cannot carry. Recorded build triggers: a

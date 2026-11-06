@@ -285,6 +285,26 @@ config, `DELETE /api/kb`. Every identity is a full co-operator.
 
 **Canary (v0.44 F1):** `ci/canaries/01-host-guard-capture.sh` deletes the `/capture` `host_guard` `route_layer` and `rebound_host_refused_on_capture_through_real_router` must then FAIL (see docs/invariant-test-map.md "Canaries").
 
+*KT amendment (2026-11): terminal routes and the in-handler gate.* The
+loopback bypass does NOT apply to `/api/terms/*`, because agents run on
+loopback. The gate lives IN THE HANDLER, not in middleware:
+`origin_allowlist` (middleware.rs, `is_state_changing`) only polices
+POST/PUT/PATCH/DELETE and passes an absent Origin, and a WebSocket
+upgrade is a GET, so it gets no Origin check from middleware. The
+terminal routes therefore (a) 404 bodiless when `[terminal] enabled` is
+false, (b) require an `Origin` exactly equal to the configured parent
+origin, and an absent Origin FAILS CLOSED, (c) require an SPA-only
+intent header on every POST (precedent: the `X-Kb-Visibility` marker in
+routes/comments.rs, an intent marker, not an authorization; header name
+fixed in T11), (d) mint a single-use ticket of about 30 s for the WS
+upgrade (binding details fixed in T11) and re-check Origin there. This
+is a convention gate for a single-machine, light-security setup: the
+headers are forgeable by a non-browser local client; the ruling is that
+agents and the CLI never call these routes, and no kb-cli verb exists.
+An optional refusal of bearer/registry-token callers is an open
+decision recorded in T11, not decided here. Everything else about #4
+(identity ladder, fail-closed public bind) is unchanged.
+
 ### 5. `<template id="kb-prompt">` convention
 
 The per-artifact prompt bundle. `kb_core::parser::extract` reads it; the outbound
@@ -1648,6 +1668,22 @@ live_adapters/{codex,grok,kimi,opencode}.rs` — the four sibling adapters +
   `~/.kimi-code`, `~/.local/share/opencode/opencode.db`), independent of
   whether a push hook is wired for it.
 
+*KT amendment (2026-11): the operator-intent terminal tier.* Add a
+named tier next to the LSC postures: `/api/terms/*` (including the
+terminal media route) is an operator-intent tier, distinct from the
+scrubbed-output class and from the loopback-only class. `/presence` and
+`/{id}/live` stay loopback-only HARD, unchanged. The cockpit's
+read-only posture (docs/live-sessions.md) is scoped, not repealed:
+behind `[terminal] enabled`, the SPA only may launch/attach/type/kill;
+state still comes only from beats; nothing is persisted (registry
+in-memory, LF-7); there is no second screen interpreter and no
+kb-cli/agent surface. A beat may carry an optional top-level `term`
+(from `$KB_TERM_ID`) and the in-memory registry may hold a
+term-to-session map derived from beats only; beat wire stays `v:1`
+(additive, unknown keys already ignored). That `term` field is planned
+(T13). Terminal bytes and pictures are unscrubbable, so they never
+leave this tier.
+
 ### 12. Meta edits rewrite the SOURCE
 
 The `PATCH /api/kb/{kb}/artifacts/{id}/meta` route edits tags/category by
@@ -1693,6 +1729,14 @@ in-process restart so every field applies. Four load-bearing shapes:
   omitted defaults aren't materialised. `KbConfig::save` (whole re-render) stays
   for `kb add`. Secrets are never in config — the `[share]` editor edits env-var
   *names*.
+
+*KT amendment (2026-11): terminal relays close with 1012.* A WebSocket
+relay MUST select on the shutdown watch and send Close 1012 (service
+restart) on an in-process restart (`PUT /api/config`) or shutdown,
+exactly as the SSE stream ends via `take_until`, otherwise graceful
+drain waits out `GRACEFUL_DRAIN_SECS`. The terminal holders are
+independent host processes and survive the restart; the SPA
+reconnects with its resume offset.
 
 ### 14. Versions/Diff — three sources behind one façade; the git path base is load-bearing
 
@@ -2087,6 +2131,11 @@ and derive in a module-level memoized `select`, see `useReadingProgress`).
 Beacon/lifecycle flows (scroll + reading POSTs, the visit lifecycle, the SSE
 plumbing itself) are NOT query-shaped and stay custom by design.
 
+*KT amendment (2026-11): terminal bytes never enter TanStack.* The
+terminal byte stream is not query state. A `["terms"]` list query, when
+added, is a documented finite-staleTime exception with `term.*` SSE
+invalidation, like `["sessions","live"]`.
+
 ### 24. One SSE connection per daemon per BROWSER — a SharedWorker owns the streams (SW-track)
 
 The daemon is HTTP/1.1-only, and Firefox caps persistent connections at 6
@@ -2133,6 +2182,12 @@ gauges live consumers as `sse_subscribers` in `metrics.tick` (dedicated
 counter + Drop-guard in `routes/events.rs` — NOT `receiver_count()`,
 which counts internal bus subscribers); e2e:
 `tests/e2e/sse-shared.spec.ts`.
+
+*KT amendment (2026-11): per-panel terminal WebSocket carve-out.* The
+one-SSE-connection-per-browser rule governs `/api/events`. A terminal
+WebSocket is per-view by nature (one per open panel, one ticket each),
+never goes through the SharedWorker, and never carries SSE frames. It
+does not change the connection budget for events.
 
 ### 25. Reading lists — derived read-state, review::Anchor reuse, no generation bumps (RL-track, v0.18)
 
