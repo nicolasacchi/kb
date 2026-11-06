@@ -51,7 +51,7 @@ for (const variant of [...new Set(M.results.map((r) => r.variant))]) {
     for (const k of ks) {
       const e = agg[st][k], ex = examples[st][k];
       let sample = e.sample ?? '';
-      if (!sample && ex) { const first = Object.values(ex.ex).map((o) => o[c] ?? o[c.split(': ').pop()]).flat().filter(Boolean)[0]; if (first) sample = `${ex.stream}@${ex.off} row-from-bottom ${first.rowFromBottom} col ${first.col}: ${JSON.stringify(first.a).slice(0, 110)} vs ${JSON.stringify(first.b).slice(0, 110)}`; }
+      if (!sample && ex) { const first = Object.values(ex.ex).map((o) => o[k] ?? o[k.split(': ').pop()]).flat().filter(Boolean)[0]; if (first) sample = `${ex.stream}@${ex.off} row-from-bottom ${first.rowFromBottom} col ${first.col}: ${JSON.stringify(first.a).slice(0, 110)} vs ${JSON.stringify(first.b).slice(0, 110)}`; }
       P(`| ${k} | ${e.points} | ${e.cells} | ${String(sample).replace(/\|/g, '/').slice(0, 260)} |`);
     }
     P();
