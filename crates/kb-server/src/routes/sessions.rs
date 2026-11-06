@@ -9311,6 +9311,7 @@ mod lsc2_tests {
             project: project.map(str::to_string),
             worktree: None,
             phase: None,
+            background: None,
         }
     }
 
