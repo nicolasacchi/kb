@@ -1186,6 +1186,16 @@ POST /api/sessions/beat                     LSC-2/3 (live-sessions cockpit
                                             an older beat never replaces a
                                             newer one. No event is emitted for
                                             it and the SSE payload never
+                                            AH7 — on `turn_end` ONLY,
+                                            `detail.background` `{agent, shell,
+                                            other}` (unsigned integers <= 99,
+                                            counted by closed bucket; never a task
+                                            id or description) is kept in memory for
+                                            display; anything malformed is dropped
+                                            silently, never a 400. Every other beat
+                                            clears it, it never changes the derived
+                                            state, and it is not in the
+                                            `session.state` payload.
                                             carries it. Response
                                             `{ok, session_id, state, holder,
                                             confidence}`. `auth_bearer` — see
@@ -1244,6 +1254,14 @@ GET  /api/sessions/live-status              LSC-2 — the merged cockpit read:
                                             non-loopback caller's scrub drops
                                             a `last_tool` that fails the
                                             label grammar.
+                                            AH7 — a `waiting` hook row may also
+                                            carry `background?` `{agent, shell,
+                                            other}` (the work the harness reported
+                                            still running at the turn end; a hint,
+                                            never a state); it is absent on every
+                                            other state and on every Tier-0 row. A
+                                            non-loopback scrub drops an out-of-range
+                                            value.
                                             `?blocked=1|true|on` keeps only
                                             rows blocked on the operator
                                             (not `presumed_ended`) and skips

@@ -35,7 +35,7 @@ part of the wire value.
 |---|---|---|
 | `working` | agent | Recently active; the agent owns the turn. |
 | `stalled` (shown `stalled?`) | agent | Silent > 45 min but still agent-held — could be a long tool call, could be dead. Never reclassified as `waiting`: the transcript says the agent has the turn, and silence isn't evidence to the contrary. |
-| `waiting` | human | The agent handed control back; you are the bottleneck. |
+| `waiting` | human | The agent handed control back; you are the bottleneck. May carry `background`: counts by bucket of work the harness reported still running at the turn end; a hint, never a state. |
 | `cold` | human | Waiting > 8h — still resumable, sorted below `waiting`, out of the notification path. |
 | `finished` | none | An explicit end signal fired (`SessionEnd` or equivalent). A **fact**. |
 | `presumed_ended` (shown `presumed_ended?`) | none | Agent-held, silent > 8h, and no end signal ever landed — a dead process that never wrote a close. An **inference**, never rendered as the same claim as `finished`. |
@@ -92,6 +92,40 @@ harnesses carry no field. In daemon mode the fact comes from the
 The evidence is a label on the row, never an input to the state: it cannot
 move a row between lanes, change `stalled`, or appear in a `session.state`
 event.
+
+### Resuming on their own
+
+A Claude session whose model ended its turn while background agents were still
+running used to read as "waiting on you", although the next input would be the
+harness's own task notification. Claude's `Stop` payload lists the in-flight
+background tasks; `kb-beat.sh` turns that into counts on the `turn_end` beat
+(`detail.background`: `agent` for subagents, workflows and teammates, `shell`,
+and `other`), never a task id, description or command. A `waiting` row whose
+`background.agent` is above zero moves out of WAITING ON YOU into its own
+RESUMING ON THEIR OWN lane (the Now band, and `kb sessions status`), reads
+`2 agents running · resumes on its own`, and is not counted by the header
+chip. `cold` rows never resume.
+
+- Only agents earn "resumes on its own". A shell-only (or other-only) row stays
+  in WAITING, captioned `1 background shell`, because a shell may never wake
+  the session.
+- Claude only today. omp needs nothing: it holds its stop signal until its
+  async jobs deliver, so its rows never show this false wait. The other
+  harnesses were not probed and send nothing.
+- `KB_BEAT_BACKGROUND=0` omits the field.
+
+Known limits:
+
+- A background subagent's own tool calls already send `tool` heartbeats, so a
+  busy subagent flips its parent row back to working within a few minutes; this
+  lane covers the gap before the first heartbeat and a subagent sitting inside
+  one long tool call.
+- A background shell may never wake the session, hence the caption only.
+- The `session.state` event does not carry `background`, so a push recipe
+  still fires when a row goes to waiting even if the row then shows as
+  resuming.
+- The counts are a label on the row, never an input to the state: they cannot
+  change `derive_state`, the cold horizon, or a lane other than the split above.
 
 ## `kb sessions status`
 
@@ -215,6 +249,7 @@ POST itself is fire-and-forget: a detached background subshell with
 | `KB_BEAT_PATH` | `/api/sessions/beat` | The beat route path. Left overridable so a future repoint doesn't require touching the script. |
 | `KB_BEAT_CONTENT` | unset | `0` omits `last_line` (Claude's `Stop`-carried `last_assistant_message`, capped 240 chars) even when available. |
 | `KB_BEAT_PATHS` | unset | `0` removes `detail.tool` / `detail.paths` / `detail.root` / `detail.project` from write-tool beats (see [File presence](#file-presence)). |
+| `KB_BEAT_BACKGROUND` | unset | `0` omits `detail.background` (Claude `Stop`'s `background_tasks`, counted by closed bucket; see [Resuming on their own](#resuming-on-their-own)) even when available. |
 | `KB_BEAT_LEASE_SECS` | `900` | `lease_secs` sent with every beat. |
 | `KB_BEAT_DRYRUN` | unset | `1` prints the JSON body to stdout instead of POSTing — no backgrounding, no curl. Used by `tests/test-beat.sh`; also a handy manual sanity check: `echo '{"session_id":"x","cwd":"/tmp"}' | KB_SESSIONS_DIR=/tmp KB_BEAT_DRYRUN=1 plugins/kb-memory/hooks/kb-beat.sh claude start`. |
 
