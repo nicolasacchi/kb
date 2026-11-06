@@ -957,5 +957,72 @@ else
 fi
 
 echo
+echo "== AH7: Stop background_tasks -> detail.background (counts by bucket) =="
+
+BGP='{"session_id":"s-bg-1","cwd":"/tmp/proj-bg","last_assistant_message":"x","background_tasks":[{"id":"SENT-ID","type":"shell","status":"running","description":"SENT-DESC","command":"SENT-CMD"},{"id":"SENT-ID2","type":"subagent","status":"running","description":"SENT-DESC2","agent_type":"SENT-AT"},{"type":"subagent","name":"SENT-NAME"},{"type":"monitor","server":"SENT-SRV","tool":"SENT-TOOL"},{"type":"workflow"}]}'
+
+# --- 49. stop_with_background_tasks_adds_detail_background -------------------
+o="$(beat_dryrun claude turn_end "$BGP")"
+if [ "$(jget "$o" '.detail.background | tostring')" = '{"agent":3,"shell":1,"other":1}' ]; then
+  ok "stop_with_background_tasks_adds_detail_background"
+else
+  bad "stop_with_background_tasks_adds_detail_background (got: $o)"
+fi
+
+# --- 50. background_never_leaks_free_text -------------------------------------
+if printf '%s' "$o" | grep -q 'SENT-'; then
+  bad "background_never_leaks_free_text (got: $o)"
+else
+  ok "background_never_leaks_free_text"
+fi
+
+# --- 51. stop_body_unchanged_without_usable_background ------------------------
+base='{"session_id":"s-bg-2","cwd":"/tmp/proj-bg","last_assistant_message":"x"}'
+ref="$(beat_dryrun claude turn_end "$base" | jq -cS 'del(.at, .pid)')"
+allsame=1
+for v in '' ',"background_tasks":[]' ',"background_tasks":"x"' ',"background_tasks":[1,2]' ',"background_tasks":[{"type":7}]'; do
+  pl="${base%\}}${v}}"
+  got="$(beat_dryrun claude turn_end "$pl")"
+  [ "$(printf '%s' "$got" | jq -cS 'del(.at, .pid)')" = "$ref" ] || { allsame=0; echo "  differs for: $v -> $got"; }
+  [ "$(jget "$got" 'has("detail")')" = "false" ] || { allsame=0; echo "  detail key for: $v"; }
+done
+if [ "$allsame" -eq 1 ]; then
+  ok "stop_body_unchanged_without_usable_background"
+else
+  bad "stop_body_unchanged_without_usable_background"
+fi
+
+# --- 52. background_only_on_claude_turn_end ------------------------------------
+leak=0
+for ev in tool prompt start end; do
+  g="$(beat_dryrun claude "$ev" "$BGP")"
+  [ "$(jget "$g" '.detail.background // "none"')" = "none" ] || { leak=1; echo "  leaked on claude $ev"; }
+done
+g="$(beat_dryrun codex turn_end "$BGP")"
+[ "$(jget "$g" '.detail.background // "none"')" = "none" ] || { leak=1; echo "  leaked on codex turn_end"; }
+if [ "$leak" -eq 0 ]; then
+  ok "background_only_on_claude_turn_end"
+else
+  bad "background_only_on_claude_turn_end"
+fi
+
+# --- 53. background_counts_are_capped_at_99 -------------------------------------
+many="$(jq -cn '{session_id:"s-bg-3",background_tasks:[range(150)|{type:"shell"}]}')"
+g="$(beat_dryrun claude turn_end "$many")"
+if [ "$(jget "$g" '.detail.background.shell')" = "99" ]; then
+  ok "background_counts_are_capped_at_99"
+else
+  bad "background_counts_are_capped_at_99 (got: $g)"
+fi
+
+# --- 54. KB_BEAT_BACKGROUND_0_omits_it ------------------------------------------
+g="$(beat_dryrun claude turn_end "$BGP" KB_BEAT_BACKGROUND=0)"
+if [ "$(jget "$g" '.detail.background // "none"')" = "none" ] && [ "$(jget "$g" '.event')" = "turn_end" ]; then
+  ok "KB_BEAT_BACKGROUND_0_omits_it"
+else
+  bad "KB_BEAT_BACKGROUND_0_omits_it (got: $g)"
+fi
+
+echo
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]
