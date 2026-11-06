@@ -141,6 +141,7 @@ TRANSLATE='
     {bash:"Bash", read:"Read", write:"Write", edit:"Edit", grep:"Grep",
      glob:"Glob", task:"Task", web_search:"WebSearch"}[ascii_downcase]
     // ((.[0:1] | ascii_upcase) + .[1:]);
+  def ju: (($ENV.KB_JOB_ULID // "") | if test("^[A-Za-z0-9_-]{1,64}$") then . else "" end);
   # OK4 — capture the title-slot line'"'"'s value BEFORE it is filtered out
   # below (it is dropped from the body either way, same as before).
   (map(select(.type == "title")) | first // {}) as $tslot |
@@ -180,6 +181,7 @@ TRANSLATE='
   ({sessionId: $sid, type: "adapter-meta", adapter: "kb-capture-omp/1",
     harness: "omp", cwd: $cwd, title: $stitle, session_file: $file,
     timestamp: ($hdr.timestamp // "unknown")}
+   + (if ju != "" then {job_ulid: ju} else {} end)
    + (if $ttitle != "" then {aiTitle: $ttitle} else {} end)),
   ($live[] |
    if .type == "message" then

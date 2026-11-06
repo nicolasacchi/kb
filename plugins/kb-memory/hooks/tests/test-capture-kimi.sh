@@ -94,5 +94,32 @@ else
 fi
 
 echo
+echo "== A1: adapter-meta job_ulid from KB_JOB_ULID =="
+kjob1_out="$TMPROOT/sessions-kjob1"
+kjob2_out="$TMPROOT/sessions-kjob2"
+kjob3_out="$TMPROOT/sessions-kjob3"
+mkdir -p "$kjob1_out" "$kjob2_out" "$kjob3_out"
+KB_SESSIONS_DIR="$kjob1_out" KB_JOB_ULID=01FIXTUREJOBULID0000000A "$CAPTURE" "$SDIR/wire.jsonl" >/dev/null 2>&1
+KB_SESSIONS_DIR="$kjob2_out" env -u KB_JOB_ULID "$CAPTURE" "$SDIR/wire.jsonl" >/dev/null 2>&1
+KB_SESSIONS_DIR="$kjob3_out" KB_JOB_ULID='a b;rm' "$CAPTURE" "$SDIR/wire.jsonl" >/dev/null 2>&1
+kjob1_first="$(awk '/<pre>/{sub(/.*<pre>/,""); print; exit}' "$(find "$kjob1_out" -name "session-*-$SAFE_SID.html" | head -1)" 2>/dev/null)"
+kjob2_first="$(awk '/<pre>/{sub(/.*<pre>/,""); print; exit}' "$(find "$kjob2_out" -name "session-*-$SAFE_SID.html" | head -1)" 2>/dev/null)"
+kjob3_first="$(awk '/<pre>/{sub(/.*<pre>/,""); print; exit}' "$(find "$kjob3_out" -name "session-*-$SAFE_SID.html" | head -1)" 2>/dev/null)"
+if printf '%s' "$kjob1_first" | jq -e '.job_ulid == "01FIXTUREJOBULID0000000A"' >/dev/null 2>&1; then
+  ok "valid KB_JOB_ULID stamps adapter-meta job_ulid"
+else
+  bad "valid KB_JOB_ULID did not stamp job_ulid: $kjob1_first"
+fi
+if printf '%s' "$kjob2_first" | jq -e 'has("job_ulid") == false' >/dev/null 2>&1; then
+  ok "unset KB_JOB_ULID omits job_ulid"
+else
+  bad "unset KB_JOB_ULID still carries job_ulid: $kjob2_first"
+fi
+if printf '%s' "$kjob3_first" | jq -e 'has("job_ulid") == false' >/dev/null 2>&1; then
+  ok "invalid KB_JOB_ULID omits job_ulid"
+else
+  bad "invalid KB_JOB_ULID still carries job_ulid: $kjob3_first"
+fi
+
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -527,7 +527,12 @@ export default function kbMemoryOmp(pi: {
   const DISABLED = "kb disabled by --kb-off";
 
   async function sessionInfo(ctx: any) {
-    const info = { sid: "", cwd: ctx?.cwd || process.cwd(), model: "", file: "" };
+    const info = { sid: "", cwd: ctx?.cwd || process.cwd(), model: "", file: "", isSub: false };
+    let isSub = false;
+    try {
+      isSub = ctx?.agent?.kind === "sub";
+    } catch {}
+    info.isSub = isSub;
     try {
       info.sid = String(ctx.sessionManager.getSessionId() || "");
     } catch {}
@@ -535,8 +540,10 @@ export default function kbMemoryOmp(pi: {
     // a shell `kb remember` / `kb slate ...` the agent runs (omp spawns its
     // bash tool from this process's environment) and every kb child this
     // extension starts is attributed to THIS session and harness. Process-wide
-    // by nature: concurrent omp sessions in one process share the last writer.
-    if (info.sid) {
+    // by nature: ONLY the main agent may write it; subagents (task, eval
+    // `agent()`, `/tan`, advisor) never do, so a concurrent subagent cannot
+    // steal the identity.
+    if (info.sid && !isSub) {
       process.env.KB_SESSION_ID = info.sid;
       process.env.KB_HARNESS = "omp";
     }
@@ -565,6 +572,7 @@ export default function kbMemoryOmp(pi: {
     info: Awaited<ReturnType<typeof sessionInfo>>,
     extra?: Record<string, unknown>,
   ) {
+    if (info.isSub) return;
     if (!HOOKS || !info.sid) return;
     void run(join(HOOKS, "kb-beat.sh"), ["omp", event], {
       input: { session_id: info.sid, cwd: info.cwd, model: info.model, ...(extra ?? {}) },
@@ -1414,9 +1422,9 @@ export default function kbMemoryOmp(pi: {
     } catch {}
   };
 
-  const startPush = (info: { sid: string; cwd: string }) => {
+  const startPush = (info: { sid: string; cwd: string; isSub?: boolean }) => {
     try {
-      if (kbOff() || pushOff() || !info.sid) return;
+      if (kbOff() || pushOff() || !info.sid || info.isSub) return;
       let p = pushers.get(info.sid);
       if (!p) {
         p = {
@@ -1652,6 +1660,7 @@ export default function kbMemoryOmp(pi: {
   pi.on("before_agent_start", async (event, ctx) => {
     if (!HOOKS || !event?.prompt || kbOff()) return;
     const info = await sessionInfo(ctx);
+    if (info.isSub) return; // sub's transcript still lands through the capture lane
     if (!info.sid) return;
 
     beat("prompt", info);
@@ -1728,6 +1737,7 @@ export default function kbMemoryOmp(pi: {
     if (!HOOKS || kbOff()) return;
     try {
       const info = await sessionInfo(ctx);
+      if (info.isSub) return;
       if (!info.sid) return;
       // Throttle gate lives in the script (per-session mtime marker). OL PRES4:
       // the tool name rides along, plus ONLY the `path` of the call's input

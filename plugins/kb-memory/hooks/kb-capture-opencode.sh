@@ -118,10 +118,11 @@ translate_export() {
       elif .tool == "grep" then {pattern: ($in.pattern // ""), path: ($in.path // "")}
       elif .tool == "webfetch" then {url: ($in.url // "")}
       else $in end;
+    def ju: (($ENV.KB_JOB_ULID // "") | if test("^[A-Za-z0-9_-]{1,64}$") then . else "" end);
     # adapter-meta first
-    {sessionId: $sid, type: "adapter-meta", adapter: "kb-capture-opencode/1",
+    ({sessionId: $sid, type: "adapter-meta", adapter: "kb-capture-opencode/1",
      harness: "opencode", export_path: $src, cwd: $cwd, title: $title,
-     timestamp: (now | todateiso8601)},
+     timestamp: (now | todateiso8601)} + (if ju != "" then {job_ulid: ju} else {} end)),
     # then messages. The parentheses matter: `,` binds tighter than `|`,
     # so without them the adapter-meta record above was piped THROUGH the
     # message handler and silently dropped - the harness (enrich ladder rung

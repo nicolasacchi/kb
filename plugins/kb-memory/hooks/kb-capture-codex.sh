@@ -59,12 +59,13 @@ if ! command -v kb >/dev/null 2>&1; then
 fi
 
 TRANSLATE='
+  def ju: (($ENV.KB_JOB_ULID // "") | if test("^[A-Za-z0-9_-]{1,64}$") then . else "" end);
   .timestamp as $ts | .payload as $p |
   if .type == "session_meta" then
     {sessionId: $sid, type: "adapter-meta", adapter: "kb-capture-codex/1",
      harness: "codex", rollout_path: $rollout,
      originator: $p.originator, cli_version: $p.cli_version,
-     cwd: $cwd, timestamp: $ts}
+     cwd: $cwd, timestamp: $ts} + (if ju != "" then {job_ulid: ju} else {} end)
   elif .type == "response_item" and $p.type == "message" and $p.role == "user" then
     ([$p.content[]? | select(.type == "input_text") | .text] | join("\n")) as $t |
     if $t == "" then empty else

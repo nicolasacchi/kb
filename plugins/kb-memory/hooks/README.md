@@ -112,7 +112,7 @@ registering anywhere `kb-memory` is already installed. Design:
   | harness | channel that reaches the agent's shell | otherwise |
   | --- | --- | --- |
   | Claude Code | `$CLAUDE_ENV_FILE` (appended by `kb-wake.sh` on SessionStart) and Claude's own `CLAUDE_CODE_SESSION_ID` | repo marker |
-  | omp | `kb-omp.ts` sets `process.env.KB_SESSION_ID`/`KB_HARNESS` on `session_start` (omp spawns its bash tool from it); covered by `tests/test-omp-slate.sh`, which CI runs under bun | repo marker |
+  | omp | `kb-omp.ts` (and the kb-code omp hooks) set `process.env.KB_SESSION_ID`/`KB_HARNESS` for the MAIN agent only (`ctx.agent.kind === "main"`; subagents never write it, so concurrent task/eval/`/tan` agents cannot steal the identity); omp spawns its bash tool from it; covered by `tests/test-omp-slate.sh` and `tests/test-omp-beats.sh`, which CI runs under bun | repo marker |
   | Grok | `GROK_SESSION_ID` (ladder rung 4), when the harness exports it | repo marker |
   | Codex | none - no env-file or process.env channel | repo marker written by `kb-recall.sh` on every prompt |
   | Kimi Code | none | repo marker written by `kb-recall.sh`/`kb-wake-kimi.sh` |
@@ -123,6 +123,12 @@ registering anywhere `kb-memory` is already installed. Design:
   two concurrent sessions of ONE repo on such a harness can still be
   mis-attributed; the CLI prints the caveat. A script outside any harness can
   pass `--session-id` or export `KB_SESSION_ID`.
+
+  A capture adapter (omp, codex, kimi, opencode) stamps `job_ulid` on its
+  adapter-meta line when `KB_JOB_ULID` is set (shape `^[A-Za-z0-9_-]{1,64}$`
+  only), and `kb sessions by-job <ulid>` then finds the session. Because the
+  env is process-wide, an omp process's subagent captures carry the same
+  stamp, so by-job returns the parent and its children.
 - **A failed capture is spooled, never embedded raw (v0.44 X6)** -
   `kb-capture.sh` has no bash envelope writer any more. When `kb sessions
   capture` fails (or `kb` is missing) the raw transcript is copied to a private

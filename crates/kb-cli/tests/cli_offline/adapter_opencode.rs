@@ -147,3 +147,89 @@ fn opencode_adapter_frame_marker_is_the_delta_frame_first_line() {
         .expect("a single-quoted literal");
     assert_eq!(value, kb_core::slate::DELTA_FRAME.lines().next().unwrap());
 }
+
+#[test]
+fn opencode_adapter_stamps_job_ulid_from_env() {
+    const JOB_ULID: &str = "01FIXTUREJOBULID0000000A";
+    let tmp = tempfile::tempdir().unwrap();
+    let sessions_out = tmp.path().join("sessions");
+    std::fs::create_dir_all(&sessions_out).unwrap();
+    let export = json!({
+        "info": {"id": "ses_oc_job01", "directory": "/tmp/x", "title": "t",
+                 "time": {"created": 1772355600000_i64}},
+        "messages": [
+            msg("user", 1772355600000, vec![text("hello there")]),
+            msg("assistant", 1772355601000, vec![text("hi")]),
+        ]
+    });
+    let export_path = tmp.path().join("export.json");
+    std::fs::write(&export_path, serde_json::to_vec(&export).unwrap()).unwrap();
+    let out = Command::new("bash")
+        .arg(script_path())
+        .arg(&export_path)
+        .env("KB_SESSIONS_DIR", &sessions_out)
+        .env("KB_JOB_ULID", JOB_ULID)
+        .env("PATH", format!("{}:/usr/bin:/bin", kb_bin_dir().display()))
+        .env("KB_CAPTURE_SPOOL", tmp.path().join("spool"))
+        .env("HOME", tmp.path())
+        .env_remove("KB_BIN_DIR")
+        .env_remove("XDG_CACHE_HOME")
+        .env_remove("KB_CACHE_DIR")
+        .env_remove("KB_CAPTURE_LOCKS")
+        .output()
+        .expect("run kb-capture-opencode.sh");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let html = std::fs::read_to_string(only_capture_html(&sessions_out)).unwrap();
+    let jsonl = kb_core::sessions::recover_jsonl_from_capture(&html).expect("a <pre> transcript");
+    let recs: Vec<Value> = jsonl
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(recs[0]["type"], "adapter-meta");
+    assert_eq!(recs[0]["job_ulid"], JOB_ULID, "{jsonl}");
+    let act = kb_core::sessions::parse_session_activity(&jsonl);
+    assert!(
+        act.research
+            .iter()
+            .any(|r| r.kind == "grok_job" && r.query == JOB_ULID),
+        "grok_job research row must carry the ulid: {:?}",
+        act.research
+    );
+    // Absent case: without KB_JOB_ULID the key is omitted entirely.
+    let sessions_out2 = tmp.path().join("sessions2");
+    std::fs::create_dir_all(&sessions_out2).unwrap();
+    let out2 = Command::new("bash")
+        .arg(script_path())
+        .arg(&export_path)
+        .env("KB_SESSIONS_DIR", &sessions_out2)
+        .env("PATH", format!("{}:/usr/bin:/bin", kb_bin_dir().display()))
+        .env("KB_CAPTURE_SPOOL", tmp.path().join("spool2"))
+        .env("HOME", tmp.path())
+        .env_remove("KB_BIN_DIR")
+        .env_remove("KB_JOB_ULID")
+        .env_remove("XDG_CACHE_HOME")
+        .env_remove("KB_CACHE_DIR")
+        .env_remove("KB_CAPTURE_LOCKS")
+        .output()
+        .expect("run kb-capture-opencode.sh without KB_JOB_ULID");
+    assert!(
+        out2.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out2.stderr)
+    );
+    let html2 = std::fs::read_to_string(only_capture_html(&sessions_out2)).unwrap();
+    let jsonl2 = kb_core::sessions::recover_jsonl_from_capture(&html2).expect("a <pre> transcript");
+    let recs2: Vec<Value> = jsonl2
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(recs2[0]["type"], "adapter-meta");
+    assert!(
+        recs2[0].get("job_ulid").is_none(),
+        "job_ulid must be omitted when KB_JOB_ULID is unset: {jsonl2}"
+    );
+}
