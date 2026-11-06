@@ -107,15 +107,18 @@ COPY crates/kb-code-server/Cargo.toml crates/kb-code-server/Cargo.toml
 COPY crates/kb-code-cli/Cargo.toml crates/kb-code-cli/Cargo.toml
 COPY crates/kb-lip/Cargo.toml crates/kb-lip/Cargo.toml
 COPY crates/kb-buildstamp/Cargo.toml crates/kb-buildstamp/Cargo.toml
+COPY crates/kb-term/Cargo.toml crates/kb-term/Cargo.toml
 
 # Stub-out every crate's src so `cargo fetch` + a no-op pre-build
 # warm the dep graph cache. The real sources land in the next layer.
 # kb-code-server/kb-code-cli (the sibling daemon, never built into this
 # image) still need stubs — they're workspace members, so `cargo fetch
 # --locked` refuses to resolve the workspace without their manifests+targets.
+# kb-term (host-side runner, never built into this image) likewise needs
+# manifest + stubs so workspace resolution succeeds; no build step here.
 RUN mkdir -p crates/kb-core/src crates/kb-server/src crates/kb-cli/src crates/kb-embedder/src \
         crates/kb-code-server/src crates/kb-code-cli/src crates/kb-lip/src/bin \
-        crates/kb-buildstamp/src \
+        crates/kb-buildstamp/src crates/kb-term/src/bin \
     && echo '' > crates/kb-buildstamp/src/lib.rs \
     && echo 'fn main() {}' > crates/kb-cli/src/main.rs \
     && echo 'fn main() {}' > crates/kb-server/src/main.rs \
@@ -128,6 +131,9 @@ RUN mkdir -p crates/kb-core/src crates/kb-server/src crates/kb-cli/src crates/kb
     && echo '' > crates/kb-core/src/lib.rs \
     && echo '' > crates/kb-server/src/lib.rs \
     && echo '' > crates/kb-code-server/src/lib.rs \
+    && echo '' > crates/kb-term/src/lib.rs \
+    && echo 'fn main() {}' > crates/kb-term/src/bin/kb-termd.rs \
+    && echo 'fn main() {}' > crates/kb-term/src/bin/kb-term.rs \
     && mkdir -p crates/kb-core/benches \
     && echo 'fn main() {}' > crates/kb-core/benches/perf.rs \
     && cargo fetch --locked
