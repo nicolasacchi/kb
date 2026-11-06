@@ -24,6 +24,8 @@ import { relativeAge } from "../lib/time";
 import { harnessGlyph } from "../lib/sessionChips";
 import type { LiveStatusRow } from "../api/sessions";
 import {
+  backgroundLabel,
+  BACKGROUND_TITLE,
   blockedLabel,
   blockedSince,
   bucketLiveSessions,
@@ -50,6 +52,7 @@ export default function LiveSessionsNowBand({
     lanes.blocked.length === 0 &&
     lanes.inProgress.length === 0 &&
     lanes.waiting.length === 0 &&
+    lanes.resuming.length === 0 &&
     lanes.finished.length === 0;
   // A quiet fleet costs zero visual noise — the whole band collapses.
   if (empty) return null;
@@ -108,6 +111,26 @@ export default function LiveSessionsNowBand({
           </ol>
         </section>
       )}
+      {lanes.resuming.length > 0 && (
+        <section
+          id="kb-now-resuming"
+          className="kb-now__lane kb-now__lane--resuming"
+          data-testid="now-lane-resuming"
+        >
+          <h3 className="kb-now__lane-head">
+            Resuming on their own
+            <span className="kb-now__lane-count">{lanes.resuming.length}</span>
+          </h3>
+          <div className="kb-now__lane-caption" data-testid="now-lane-resuming-caption">
+            Background agents still running; the session wakes itself when they report back
+          </div>
+          <ol className="kb-now__rows">
+            {lanes.resuming.map((r) => (
+              <LiveRow key={r.session_id} row={r} now={now} kind="resuming" />
+            ))}
+          </ol>
+        </section>
+      )}
       {lanes.finished.length > 0 && (
         <section className="kb-now__lane kb-now__lane--finished" data-testid="now-lane-finished">
           <h3 className="kb-now__lane-head">
@@ -138,7 +161,7 @@ function LiveRow({
 }: {
   row: LiveStatusRow;
   now: number;
-  kind: "blocked" | "progress" | "waiting" | "finished";
+  kind: "blocked" | "progress" | "waiting" | "resuming" | "finished";
 }) {
   const honesty = liveHonestyKind(row);
   // Primary identifier: project (the thing the operator actually scans
@@ -154,6 +177,7 @@ function LiveRow({
     kind === "progress" || (kind === "finished" && isPresumedEnded(row))
       ? lastToolLabel(row, now)
       : null;
+  const background = kind === "waiting" || kind === "resuming" ? backgroundLabel(row) : null;
   return (
     <li className="kb-now__row" data-testid="now-row" data-live-state={row.state}>
       <span
@@ -203,6 +227,15 @@ function LiveRow({
               title={LAST_TOOL_TITLE}
             >
               {lastTool}
+            </span>
+          )}
+          {background && (
+            <span
+              className="kb-now__row-background"
+              data-testid="now-row-background"
+              title={BACKGROUND_TITLE}
+            >
+              {background}
             </span>
           )}
           {honesty && (

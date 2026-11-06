@@ -75,6 +75,9 @@
 #                                 write-tool file-presence fields, Claude
 #                                 PostToolUse Edit|Write|MultiEdit|
 #                                 NotebookEdit only) even when available.
+#   KB_BEAT_BACKGROUND=0         omit `detail.background` (Claude Stop's
+#                                 `background_tasks`, counted by closed
+#                                 bucket) even when available.
 #   (blocked, claude) a Notification of type permission_prompt |
 #                                 elicitation_dialog | elicitation_url_dialog
 #                                 beats `blocked`; any other type sends nothing.
@@ -211,6 +214,35 @@ if [ "$harness" = "claude" ] && [ "$event" = "turn_end" ] \
    && [ "${KB_BEAT_CONTENT:-}" != "0" ]; then
   last_line="$(jq_field '.last_assistant_message // empty' "$input")"
   last_line="${last_line:0:240}"
+fi
+
+# detail.background — Claude Stop ONLY (AH7). A Claude session whose turn
+# ended while background agents were still running read as "waiting on you"
+# in the cockpit and the header chip. This is an ATTRIBUTE of the turn_end
+# event, counts by closed bucket only. `description`/`command` are free shell
+# text and `id`/`agent_type`/`server`/`tool`/`name` are never read — the same
+# posture as this file's `tool_input` rule. Claude drops finished tasks from
+# the array, so no status filter is needed. Default is the literal `null`: an
+# empty --argjson would make the body builder fail and drop the whole beat.
+detail_background=null
+if [ "$event" = "turn_end" ] && [ "${KB_BEAT_BACKGROUND:-}" != "0" ]; then
+  case "$harness" in
+    claude)
+      detail_background="$(printf '%s' "$input" | jq -c '
+        def cap: if . > 99 then 99 else . end;
+        (.background_tasks) as $t
+        | if ($t | type) != "array" then null else
+            [ $t[] | select(type == "object") | .type | select(type == "string")
+              | if . == "subagent" or . == "workflow" or . == "teammate" then "agent"
+                elif . == "shell" then "shell" else "other" end ] as $b
+            | { agent: ([$b[] | select(. == "agent")] | length | cap),
+                shell: ([$b[] | select(. == "shell")] | length | cap),
+                other: ([$b[] | select(. == "other")] | length | cap) }
+            | if (.agent + .shell + .other) > 0 then . else null end
+          end' 2>/dev/null)" || detail_background=null
+      [ -n "$detail_background" ] || detail_background=null
+      ;;
+  esac
 fi
 
 # Blocked-marker helper (claude, codex and grok: the harnesses where
@@ -399,6 +431,7 @@ body="$(jq -n \
   --arg detail_reason "$detail_reason" \
   --arg detail_tool "$detail_tool" \
   --argjson detail_paths "$detail_paths" \
+  --argjson detail_background "$detail_background" \
   --arg detail_phase "$detail_phase" \
   --arg detail_root "$detail_root" \
   --arg detail_project "$detail_project" \
@@ -413,6 +446,7 @@ body="$(jq -n \
    + ( ( (if $detail_reason != "" then {reason: $detail_reason} else {} end)
        + (if $detail_tool != "" then {tool: $detail_tool} else {} end)
        + (if $detail_phase != "" then {phase: $detail_phase} else {} end)
+       + (if $detail_background != null then {background: $detail_background} else {} end)
        + (if ($detail_paths | length) > 0
           then {paths: $detail_paths, root: $detail_root, project: $detail_project}
                + (if $detail_worktree != "" then {worktree: $detail_worktree} else {} end)

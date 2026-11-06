@@ -25599,6 +25599,90 @@ async fn live_status_grok_resume_carries_cwd_on_loopback_and_drops_it_for_bearer
     assert_eq!(row["cwd"], "proj", "{row}");
 }
 
+// --- AH7: a waiting hook row may carry background counts ---------------------
+
+#[tokio::test]
+async fn live_status_carries_background_only_on_a_waiting_hook_row() {
+    let (_tmp, addr) = boot_with_token().await;
+    let client = reqwest::Client::new();
+    let now = chrono::Utc::now().timestamp();
+    let none = serde_json::json!({});
+    let bg = serde_json::json!({"background": {"agent": 2}});
+
+    // A: turn_end with background -> waiting row carrying the counts.
+    post_tool_beat(&client, addr, "sid-bg-a", "start", none.clone(), now - 5).await;
+    post_tool_beat(&client, addr, "sid-bg-a", "turn_end", bg.clone(), now).await;
+    // B: the same, then a prompt beat -> working, no background.
+    post_tool_beat(&client, addr, "sid-bg-b", "start", none.clone(), now - 5).await;
+    post_tool_beat(&client, addr, "sid-bg-b", "turn_end", bg.clone(), now - 2).await;
+    post_tool_beat(&client, addr, "sid-bg-b", "prompt", none.clone(), now).await;
+    // C: turn_end 9 hours ago -> cold, no background.
+    post_tool_beat(
+        &client,
+        addr,
+        "sid-bg-c",
+        "turn_end",
+        bg.clone(),
+        now - 9 * 3600,
+    )
+    .await;
+    // D: a malformed attribute never fails the beat and is dropped.
+    post_tool_beat(
+        &client,
+        addr,
+        "sid-bg-d",
+        "turn_end",
+        serde_json::json!({"background": "x"}),
+        now,
+    )
+    .await;
+
+    let find = |body: &serde_json::Value, sid: &str| {
+        body["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["session_id"] == sid)
+            .unwrap_or_else(|| panic!("no row {sid}: {body}"))
+            .clone()
+    };
+    let want = serde_json::json!({"agent": 2, "shell": 0, "other": 0});
+
+    // Loopback.
+    let resp = client
+        .get(url(addr, "/api/sessions/live-status"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let a = find(&body, "sid-bg-a");
+    assert_eq!(a["state"], "waiting", "{a}");
+    assert_eq!(a["background"], want, "{a}");
+    let b = find(&body, "sid-bg-b");
+    assert_eq!(b["state"], "working", "{b}");
+    assert!(b.get("background").is_none(), "{b}");
+    let c = find(&body, "sid-bg-c");
+    assert_eq!(c["state"], "cold", "{c}");
+    assert!(c.get("background").is_none(), "{c}");
+    let d = find(&body, "sid-bg-d");
+    assert_eq!(d["state"], "waiting", "{d}");
+    assert!(d.get("background").is_none(), "{d}");
+
+    // A bearer peer behind a forwarded address sees the same counts.
+    let resp = client
+        .get(url(addr, "/api/sessions/live-status"))
+        .header("X-Forwarded-For", "8.8.8.8")
+        .header("Authorization", format!("Bearer {FIXTURE_TOKEN}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(find(&body, "sid-bg-a")["background"], want);
+    assert!(find(&body, "sid-bg-b").get("background").is_none());
+}
+
 /// A flood of tool-START beats on an already-working session must put
 /// nothing on the bus beyond the first transition, and the SSE payload
 /// never carries the tool.

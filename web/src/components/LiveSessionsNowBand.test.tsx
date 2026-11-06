@@ -369,3 +369,57 @@ describe("OL IDEA4 - the last tool a quiet row started", () => {
     expect(screen.queryByTestId("now-row-last-tool")).toBeNull();
   });
 });
+
+describe("LiveSessionsNowBand — AH7 resuming lane", () => {
+  const waitingRow = (id: string, background?: LiveStatusRow["background"]) =>
+    row({ session_id: id, state: "waiting", holder: "human", background });
+
+  it("renders now-lane-resuming with its count and the background caption", () => {
+    render(
+      <LiveSessionsNowBand
+        rows={[waitingRow("a", { agent: 2, shell: 0, other: 0 }), waitingRow("b")]}
+        now={NOW_MS}
+      />,
+    );
+    const lane = screen.getByTestId("now-lane-resuming");
+    expect(lane.textContent).toContain("Resuming on their own");
+    expect(lane.querySelector(".kb-now__lane-count")?.textContent).toBe("1");
+    expect(lane.querySelector('[data-testid="now-row-background"]')?.textContent).toBe(
+      "2 agents running · resumes on its own",
+    );
+    // The plain waiting row stays in the waiting lane, uncaptioned.
+    const waiting = screen.getByTestId("now-lane-waiting");
+    expect(waiting.querySelector('[data-testid="now-row-background"]')).toBeNull();
+  });
+
+  it("a band whose only row is resuming still renders", () => {
+    render(
+      <LiveSessionsNowBand
+        rows={[waitingRow("a", { agent: 1, shell: 0, other: 0 })]}
+        now={NOW_MS}
+      />,
+    );
+    expect(screen.getByTestId("sessions-now-band")).toBeTruthy();
+    expect(screen.queryByTestId("now-lane-waiting")).toBeNull();
+  });
+
+  it("a shell-only waiting row shows the caption inside the waiting lane", () => {
+    render(
+      <LiveSessionsNowBand
+        rows={[waitingRow("a", { agent: 0, shell: 1, other: 0 })]}
+        now={NOW_MS}
+      />,
+    );
+    const lane = screen.getByTestId("now-lane-waiting");
+    expect(lane.querySelector('[data-testid="now-row-background"]')?.textContent).toBe(
+      "1 background shell",
+    );
+    expect(screen.queryByTestId("now-lane-resuming")).toBeNull();
+  });
+
+  it("is unchanged (no resuming section, no caption) when no row has background", () => {
+    render(<LiveSessionsNowBand rows={[waitingRow("a")]} now={NOW_MS} />);
+    expect(screen.queryByTestId("now-lane-resuming")).toBeNull();
+    expect(screen.queryByTestId("now-row-background")).toBeNull();
+  });
+});

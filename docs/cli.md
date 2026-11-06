@@ -689,7 +689,8 @@ kb sessions status [--local] [--json] [--no-color]
                                     [--limit N] [--root DIR] [--daemon URL]
                                     LSC-1/2/5 — live-sessions cockpit snapshot: who holds the ball,
                                     right now, grouped into IN PROGRESS / WAITING ON YOU /
-                                    FINISHED·COLD. Default = daemon-backed (`GET
+                                    RESUMING ON THEIR OWN (waiting rows whose harness reported
+                                    background agents still running; AH7) / FINISHED·COLD. Default = daemon-backed (`GET
                                     /api/sessions/live-status`); `--local` is the direct-disk twin,
                                     zero daemon, fanned out across every harness
                                     (claude/codex/opencode/grok/kimi — `--root` overrides only the

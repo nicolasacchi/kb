@@ -236,6 +236,7 @@ pub fn classify_kimi_session(
         version: protocol_version,
         last_tool: None,
         last_tool_at: None,
+        background: None,
     })
 }
 

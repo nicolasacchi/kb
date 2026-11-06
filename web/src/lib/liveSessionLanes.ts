@@ -24,6 +24,12 @@
 //                                honest: a session that's sat on the
 //                                operator for 9 hours IS the "you are the
 //                                bottleneck" case, not one to bury.
+//   waiting + background agents -> RESUMING ON THEIR OWN (AH7). Only a
+//                                `waiting` row whose turn_end reported
+//                                background AGENTS still running; the
+//                                session wakes itself when they report
+//                                back. `cold` never resumes, a shell-only
+//                                row stays in WAITING (captioned).
 //   finished, presumed_ended   -> FINISHED. `presumed_ended` is an
 //                                INFERENCE (no end signal fired; the lease
 //                                just expired with nothing landing) and
@@ -45,6 +51,9 @@ export type LiveLanes = {
   blocked: LiveStatusRow[];
   inProgress: LiveStatusRow[];
   waiting: LiveStatusRow[];
+  /// AH7 — waiting rows with background agents still running. In neither
+  /// `waiting` nor the Header chip's count.
+  resuming: LiveStatusRow[];
   /// Capped at `cap` (default `FINISHED_LANE_CAP`) — the day-buckets below
   /// the Now band already list full history; this lane is "what just
   /// happened", not a second history view.
@@ -71,6 +80,7 @@ export function bucketLiveSessions(
   const blocked: LiveStatusRow[] = [];
   const inProgress: LiveStatusRow[] = [];
   const waiting: LiveStatusRow[] = [];
+  const resuming: LiveStatusRow[] = [];
   const finished: LiveStatusRow[] = [];
   for (const r of rows) {
     switch (r.state) {
@@ -83,6 +93,9 @@ export function bucketLiveSessions(
         else inProgress.push(r);
         break;
       case "waiting":
+        if (isResuming(r)) resuming.push(r);
+        else waiting.push(r);
+        break;
       case "cold":
         waiting.push(r);
         break;
@@ -101,15 +114,42 @@ export function bucketLiveSessions(
   // been sitting on this the longest") sorts first. Design §7: "that is the
   // 'you are the bottleneck' signal."
   waiting.sort((a, b) => a.since_unix - b.since_unix);
+  resuming.sort((a, b) => a.since_unix - b.since_unix);
   // Newest-first.
   finished.sort((a, b) => b.since_unix - a.since_unix);
   return {
     blocked,
     inProgress,
     waiting,
+    resuming,
     finished: finished.slice(0, cap),
     finishedTotal: finished.length,
   };
+}
+
+/// AH7 — a `waiting` row whose turn_end reported background AGENTS still
+/// running: the harness will wake the session itself. Shells never count.
+export function isResuming(row: Pick<LiveStatusRow, "state" | "background">): boolean {
+  return row.state === "waiting" && (row.background?.agent ?? 0) > 0;
+}
+
+/// AH7 — tooltip for the background caption.
+export const BACKGROUND_TITLE =
+  "Work the harness reported still running when the turn ended (counts only). A background agent wakes the session when it reports back; a background shell may never do so.";
+
+/// AH7 — `2 agents running · resumes on its own`. `null` when no background
+/// work was reported. Only agents earn "resumes on its own".
+export function backgroundLabel(row: Pick<LiveStatusRow, "background">): string | null {
+  const b = row.background;
+  if (!b) return null;
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  const parts: string[] = [];
+  if (b.agent > 0) parts.push(`${plural(b.agent, "agent", "agents")} running`);
+  if (b.shell > 0) parts.push(plural(b.shell, "background shell", "background shells"));
+  if (b.other > 0) parts.push(plural(b.other, "other background task", "other background tasks"));
+  if (parts.length === 0) return null;
+  if (b.agent > 0) parts.push("resumes on its own");
+  return parts.join(" · ");
 }
 
 /// How many sessions are waiting on the operator right now — the Header
