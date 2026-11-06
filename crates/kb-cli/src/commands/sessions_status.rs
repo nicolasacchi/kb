@@ -36,7 +36,8 @@
 
 use anyhow::{bail, Result};
 use kb_core::sessions::live::{
-    is_tool_label, Confidence, Holder, LivePolicy, LiveSession, LiveState, StateSource,
+    is_tool_label, BackgroundCounts, Confidence, Holder, LivePolicy, LiveSession, LiveState,
+    StateSource,
 };
 use kb_core::sessions::live_adapters::{self, LiveRoots};
 use kb_core::sessions::HARNESSES;
@@ -218,6 +219,9 @@ fn live_session_from_wire(v: &serde_json::Value) -> Option<LiveSession> {
             .filter(|t| is_tool_label(t))
             .map(str::to_string),
         last_tool_at: v["last_tool_at"].as_i64(),
+        // AH7 — the SAME parser the daemon applies at intake: no
+        // hand-written rules here, so a skewed daemon cannot widen them.
+        background: BackgroundCounts::from_wire(&v["background"]),
     })
 }
 
@@ -268,15 +272,21 @@ fn filter_and_render(
         return Ok(());
     }
 
-    let (in_progress, waiting, finished) = group_lanes(&rows, limit);
+    let Lanes {
+        in_progress,
+        waiting,
+        resuming,
+        finished,
+    } = group_lanes(&rows, limit);
 
     if json {
         // The machine surface: one flat array, lane order preserved
-        // (IN PROGRESS, WAITING ON YOU, FINISHED/COLD) so a caller that
+        // (IN PROGRESS, WAITING ON YOU, RESUMING ON THEIR OWN, FINISHED/COLD) so a caller that
         // doesn't care about lanes still gets a stable, sensible order.
         let all: Vec<&LiveSession> = in_progress
             .iter()
             .chain(waiting.iter())
+            .chain(resuming.iter())
             .chain(finished.iter())
             .copied()
             .collect();
@@ -287,6 +297,7 @@ fn filter_and_render(
     let now_unix = chrono::Utc::now().timestamp();
     print_lane("IN PROGRESS", &in_progress, no_color, now_unix);
     print_lane("WAITING ON YOU", &waiting, no_color, now_unix);
+    print_lane("RESUMING ON THEIR OWN", &resuming, no_color, now_unix);
     print_lane("FINISHED / COLD", &finished, no_color, now_unix);
     Ok(())
 }
@@ -330,7 +341,18 @@ fn parse_state_filter(s: &str) -> Result<Vec<LiveState>> {
         .collect()
 }
 
-/// Split `rows` into the three operator-facing lanes and apply the
+/// The four operator-facing lanes `group_lanes` returns.
+struct Lanes<'a> {
+    in_progress: Vec<&'a LiveSession>,
+    waiting: Vec<&'a LiveSession>,
+    /// AH7 — `Waiting` rows whose harness reported background AGENTS still
+    /// running at the turn end: the session wakes itself when they report
+    /// back. A shell-only or other-only row stays in `waiting`.
+    resuming: Vec<&'a LiveSession>,
+    finished: Vec<&'a LiveSession>,
+}
+
+/// Split `rows` into the operator-facing lanes and apply the
 /// design's per-lane ordering (§7 "Ordering per lane"): waiting sorts
 /// longest-wait-first (that's the "you are the bottleneck" signal),
 /// in-progress sorts most-recently-active first, finished sorts
@@ -340,18 +362,15 @@ fn parse_state_filter(s: &str) -> Result<Vec<LiveState>> {
 /// entirely) — this same per-lane cap is what `--json`'s flat array is
 /// built from too, so human and machine output never disagree about which
 /// rows survive a `--limit`.
-fn group_lanes(
-    rows: &[LiveSession],
-    limit: Option<usize>,
-) -> (Vec<&LiveSession>, Vec<&LiveSession>, Vec<&LiveSession>) {
+fn group_lanes(rows: &[LiveSession], limit: Option<usize>) -> Lanes<'_> {
     let mut in_progress: Vec<&LiveSession> = rows
         .iter()
         .filter(|r| matches!(r.state, LiveState::Working | LiveState::Stalled))
         .collect();
-    let mut waiting: Vec<&LiveSession> = rows
+    let (mut resuming, mut waiting): (Vec<&LiveSession>, Vec<&LiveSession>) = rows
         .iter()
         .filter(|r| matches!(r.state, LiveState::Waiting))
-        .collect();
+        .partition(|r| r.background.is_some_and(|b| b.agent > 0));
     let mut finished: Vec<&LiveSession> = rows
         .iter()
         .filter(|r| {
@@ -371,16 +390,23 @@ fn group_lanes(
     in_progress.sort_by_key(|r| (r.since_secs, harness_rank(&r.harness)));
     // Longest-wait first == largest since_secs first; same tie-break.
     waiting.sort_by_key(|r| (std::cmp::Reverse(r.since_secs), harness_rank(&r.harness)));
+    resuming.sort_by_key(|r| (std::cmp::Reverse(r.since_secs), harness_rank(&r.harness)));
     // Newest-first == smallest since_secs first; same tie-break.
     finished.sort_by_key(|r| (r.since_secs, harness_rank(&r.harness)));
 
     if let Some(n) = limit {
         in_progress.truncate(n);
         waiting.truncate(n);
+        resuming.truncate(n);
         finished.truncate(n);
     }
 
-    (in_progress, waiting, finished)
+    Lanes {
+        in_progress,
+        waiting,
+        resuming,
+        finished,
+    }
 }
 
 /// A per-lane debug prefix for states a merged lane doesn't otherwise name
@@ -457,6 +483,36 @@ fn compose_tag(prefix: Option<&str>, evidence: Option<&str>, why: Option<&str>) 
     }
 }
 
+/// AH7 — `bg: 2 agents, 1 shell, 3 other`: the background work a waiting
+/// row's harness reported still running. Singular `1 agent` / `1 shell`,
+/// parts only when > 0, `None` when the total is 0.
+fn background_tag(b: Option<&BackgroundCounts>) -> Option<String> {
+    let b = b?;
+    let mut parts: Vec<String> = Vec::new();
+    if b.agent > 0 {
+        parts.push(format!(
+            "{} {}",
+            b.agent,
+            if b.agent == 1 { "agent" } else { "agents" }
+        ));
+    }
+    if b.shell > 0 {
+        parts.push(format!(
+            "{} {}",
+            b.shell,
+            if b.shell == 1 { "shell" } else { "shells" }
+        ));
+    }
+    if b.other > 0 {
+        parts.push(format!("{} other", b.other));
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(format!("bg: {}", parts.join(", ")))
+    }
+}
+
 fn print_lane(name: &str, rows: &[&LiveSession], no_color: bool, now_unix: i64) {
     if rows.is_empty() {
         return;
@@ -469,7 +525,10 @@ fn print_lane(name: &str, rows: &[&LiveSession], no_color: bool, now_unix: i64) 
         let title = r.title.as_deref().unwrap_or("(no title)");
         let sid8: String = r.session_id.chars().take(8).collect();
         let glyph = harness_glyph(&r.harness);
-        let evidence = evidence_label(r.last_tool.as_deref(), r.last_tool_at, now_unix);
+        // Safe to share the slot: tool evidence is never shown on a Waiting
+        // row (`tool_evidence_visible`), and background only rides one.
+        let evidence = evidence_label(r.last_tool.as_deref(), r.last_tool_at, now_unix)
+            .or_else(|| background_tag(r.background.as_ref()));
         let tag = compose_tag(state_prefix(r.state), evidence.as_deref(), r.why.as_deref());
         let line = format!(
             "  {elapsed:>6}  {glyph} {:<16}  {:<52}  {sid8}  [{tag}]",
@@ -553,7 +612,16 @@ mod tests {
             version: None,
             last_tool: None,
             last_tool_at: None,
+            background: None,
         }
+    }
+
+    fn bg(agent: u8, shell: u8, other: u8) -> Option<BackgroundCounts> {
+        Some(BackgroundCounts {
+            agent,
+            shell,
+            other,
+        })
     }
 
     #[test]
@@ -578,7 +646,7 @@ mod tests {
             row("b", LiveState::Waiting, 3_000, "kb"),
             row("c", LiveState::Waiting, 600, "kb"),
         ];
-        let (_, waiting, _) = group_lanes(&rows, None);
+        let waiting = group_lanes(&rows, None).waiting;
         let ids: Vec<&str> = waiting.iter().map(|r| r.session_id.as_str()).collect();
         assert_eq!(ids, vec!["b", "c", "a"]);
     }
@@ -590,7 +658,7 @@ mod tests {
             row("b", LiveState::Stalled, 3_000, "kb"),
             row("c", LiveState::Working, 30, "kb"),
         ];
-        let (in_progress, _, _) = group_lanes(&rows, None);
+        let in_progress = group_lanes(&rows, None).in_progress;
         let ids: Vec<&str> = in_progress.iter().map(|r| r.session_id.as_str()).collect();
         assert_eq!(ids, vec!["c", "a", "b"]);
     }
@@ -603,7 +671,12 @@ mod tests {
             row("c", LiveState::Cold, 40_000, "kb"),
             row("d", LiveState::Waiting, 100, "kb"),
         ];
-        let (in_progress, waiting, finished) = group_lanes(&rows, None);
+        let Lanes {
+            in_progress,
+            waiting,
+            finished,
+            ..
+        } = group_lanes(&rows, None);
         assert_eq!(in_progress.len(), 2);
         assert_eq!(waiting.len(), 1);
         assert_eq!(finished.len(), 1);
@@ -616,7 +689,11 @@ mod tests {
             row("b", LiveState::Working, 20, "kb"),
             row("c", LiveState::Waiting, 100, "kb"),
         ];
-        let (in_progress, waiting, _) = group_lanes(&rows, Some(1));
+        let Lanes {
+            in_progress,
+            waiting,
+            ..
+        } = group_lanes(&rows, Some(1));
         assert_eq!(in_progress.len(), 1);
         assert_eq!(waiting.len(), 1);
     }
@@ -667,7 +744,7 @@ mod tests {
         let mut c = row("c", LiveState::Working, 100, "kb");
         c.harness = "codex".to_string();
         let rows = [a, b, c];
-        let (in_progress, _, _) = group_lanes(&rows, None);
+        let in_progress = group_lanes(&rows, None).in_progress;
         let ids: Vec<&str> = in_progress.iter().map(|r| r.session_id.as_str()).collect();
         assert_eq!(ids, vec!["b", "c", "a"]);
     }
@@ -782,5 +859,76 @@ mod tests {
         // The --json surface omits the fields when absent.
         let v = serde_json::to_value(&none).unwrap();
         assert!(v.get("last_tool").is_none() && v.get("last_tool_at").is_none());
+    }
+
+    #[test]
+    fn live_session_from_wire_reads_background_with_the_server_rules() {
+        let wire_bg = |bgv: serde_json::Value| {
+            live_session_from_wire(&wire(serde_json::json!({
+                "holder": "human", "state": "waiting", "background": bgv,
+            })))
+            .unwrap()
+        };
+        assert_eq!(
+            wire_bg(serde_json::json!({"agent": 2, "shell": 1})).background,
+            bg(2, 1, 0)
+        );
+        for bad in [
+            serde_json::json!("x"),
+            serde_json::json!({"agent": 100}),
+            serde_json::json!({"agent": "2"}),
+            serde_json::json!({"agent": 0}),
+            serde_json::Value::Null,
+        ] {
+            assert!(wire_bg(bad).background.is_none());
+        }
+        let v = serde_json::to_value(wire_bg(serde_json::Value::Null)).unwrap();
+        assert!(v.get("background").is_none());
+        let v = serde_json::to_value(wire_bg(serde_json::json!({"agent": 1}))).unwrap();
+        assert_eq!(v["background"]["agent"], 1);
+    }
+
+    #[test]
+    fn group_lanes_splits_resuming_from_waiting() {
+        let mut a = row("a", LiveState::Waiting, 100, "kb");
+        a.background = bg(1, 0, 0);
+        let mut b = row("b", LiveState::Waiting, 900, "kb");
+        b.background = bg(2, 1, 0);
+        let mut c = row("c", LiveState::Waiting, 50, "kb");
+        c.background = bg(0, 1, 0);
+        let mut d = row("d", LiveState::Waiting, 60, "kb");
+        d.background = bg(0, 0, 4);
+        let mut e = row("e", LiveState::Cold, 40_000, "kb");
+        e.background = bg(3, 0, 0);
+        let rows = [a, b, c, d, e, row("f", LiveState::Waiting, 10, "kb")];
+        let l = group_lanes(&rows, None);
+        let ids = |v: &[&LiveSession]| -> Vec<String> {
+            v.iter().map(|r| r.session_id.clone()).collect()
+        };
+        assert_eq!(ids(&l.resuming), vec!["b", "a"]);
+        assert_eq!(ids(&l.waiting), vec!["d", "c", "f"]);
+        assert_eq!(ids(&l.finished), vec!["e"]);
+        // --limit caps resuming independently of waiting.
+        let l = group_lanes(&rows, Some(1));
+        assert_eq!(ids(&l.resuming), vec!["b"]);
+        assert_eq!(ids(&l.waiting), vec!["d"]);
+    }
+
+    #[test]
+    fn background_tag_grammar() {
+        assert_eq!(background_tag(None), None);
+        assert_eq!(background_tag(bg(0, 0, 0).as_ref()), None);
+        assert_eq!(
+            background_tag(bg(2, 1, 3).as_ref()).as_deref(),
+            Some("bg: 2 agents, 1 shell, 3 other")
+        );
+        assert_eq!(
+            background_tag(bg(1, 2, 0).as_ref()).as_deref(),
+            Some("bg: 1 agent, 2 shells")
+        );
+        assert_eq!(
+            background_tag(bg(0, 0, 1).as_ref()).as_deref(),
+            Some("bg: 1 other")
+        );
     }
 }
