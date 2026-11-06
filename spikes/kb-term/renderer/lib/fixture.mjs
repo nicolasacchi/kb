@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { chromium } from '@playwright/test';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expectedAt } from './stream.mjs';
@@ -16,9 +17,21 @@ export function record(section, key, value) {
 export const VIEW = { width: 900, height: 620 };
 export const BASE = 'http://127.0.0.1:4173/';
 
+export const ARGS = ['--use-angle=swiftshader', '--use-gl=angle', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--enable-webgl'];
+
+// DPR > 1 with the WebGL renderer: Playwright's emulated deviceScaleFactor does not reach ResizeObserver's
+// devicePixelContentBoxSize, which @xterm/addon-webgl uses to size its canvas (k-diag evidence: canvas stays 800x480
+// at DPR 2). So for webgl at DPR>1 we launch a browser with a REAL device scale factor (--force-device-scale-factor).
 export async function openPage(browser, o = {}) {
   const dpr = o.dpr || 1;
-  const ctx = await browser.newContext({ viewport: VIEW, deviceScaleFactor: dpr });
+  const forced = o.forceDsf ?? ((o.renderer === 'webgl') && dpr > 1);
+  let own = null, ctx;
+  if (forced) {
+    own = await chromium.launch({ args: [...ARGS, `--force-device-scale-factor=${dpr}`, `--window-size=${VIEW.width},${VIEW.height}`] });
+    ctx = await own.newContext({ viewport: null });
+  } else {
+    ctx = await browser.newContext({ viewport: VIEW, deviceScaleFactor: dpr });
+  }
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
@@ -33,7 +46,9 @@ export async function openPage(browser, o = {}) {
   // device pixel size of one cell (xterm rounds it to whole device pixels)
   const devCW = m.device ? m.device.cw : Math.round(m.cw * dpr);
   const devCH = m.device ? m.device.ch : Math.round(m.ch * dpr);
-  return { ctx, page, m, dpr, devCW, devCH, renderer: o.renderer || 'dom', errors, close: () => ctx.close() };
+  const dsfMode = forced ? 'forced(--force-device-scale-factor)' : 'emulated(context deviceScaleFactor)';
+  const inner = await page.evaluate(() => [innerWidth, innerHeight, devicePixelRatio]);
+  return { ctx, page, m, dpr, devCW, devCH, renderer: o.renderer || 'dom', errors, dsfMode, inner, close: async () => { await ctx.close(); if (own) await own.close(); } };
 }
 
 export const feed = (page, buf) => page.evaluate((b) => window.T.feed(b), buf.toString('base64'));
@@ -104,7 +119,7 @@ export const CONFIGS = [];
 for (const renderer of ['dom', 'webgl']) for (const dpr of [1, 2, 3]) CONFIGS.push({ renderer, dpr });
 
 export function guardWebgl(test, o, cfg) {
-  record('env', `${cfg.renderer}-dpr${cfg.dpr}`, { webgl: o.m.webgl, webglError: o.m.webglError, contextLost: o.m.contextLost, canvases: o.m.canvases.length, rowsDisplay: o.m.rowsDisplay, domRowSpans: o.m.domRowSpans, cell: { cssW: o.m.cw, cssH: o.m.ch, devW: o.devCW, devH: o.devCH }, screen: o.m.screen });
+  record('env', `${cfg.renderer}-dpr${cfg.dpr}`, { dsfMode: o.dsfMode, inner: o.inner, webgl: o.m.webgl, webglError: o.m.webglError, contextLost: o.m.contextLost, canvases: o.m.canvases.length, rowsDisplay: o.m.rowsDisplay, domRowSpans: o.m.domRowSpans, cell: { cssW: o.m.cw, cssH: o.m.ch, devW: o.devCW, devH: o.devCH }, screen: o.m.screen });
   if (cfg.renderer === 'webgl' && o.m.webgl !== 'loaded') test.skip(true, 'webgl unavailable: ' + o.m.webglError);
 }
 export const tag = (cfg) => `${cfg.renderer}-dpr${cfg.dpr}`;
