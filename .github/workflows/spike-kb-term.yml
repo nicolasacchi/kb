@@ -1,0 +1,176 @@
+name: spike-kb-term
+
+on:
+  push:
+    branches: ['spike/kb-term-**']
+    paths:
+      - 'spikes/kb-term/**'
+      - '.github/workflows/spike-kb-term.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spike-kb-term-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  strip:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Detect unit
+        id: unit
+        run: |
+          if [ -f spikes/kb-term/strip/ci.sh ]; then echo "skip=false" >> "$GITHUB_OUTPUT"; else echo "skip=true" >> "$GITHUB_OUTPUT"; echo "no spikes/kb-term/strip/ci.sh yet, skipping"; fi
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.unit.outputs.skip != 'true'
+        with:
+          node-version: '22'
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        if: steps.unit.outputs.skip != 'true'
+        with:
+          bun-version: '1.4.4'
+
+      - name: Run unit
+        if: steps.unit.outputs.skip != 'true'
+        run: bash spikes/kb-term/strip/ci.sh
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always() && steps.unit.outputs.skip != 'true'
+        with:
+          name: strip-out
+          path: spikes/kb-term/strip/out/
+          if-no-files-found: ignore
+
+  twin:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Detect unit
+        id: unit
+        run: |
+          if [ -f spikes/kb-term/twin/ci.sh ]; then echo "skip=false" >> "$GITHUB_OUTPUT"; else echo "skip=true" >> "$GITHUB_OUTPUT"; echo "no spikes/kb-term/twin/ci.sh yet, skipping"; fi
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.unit.outputs.skip != 'true'
+        with:
+          node-version: '22'
+
+      - name: npm install
+        if: steps.unit.outputs.skip != 'true'
+        run: cd spikes/kb-term && npm install --no-audit --no-fund
+
+      - name: Run unit
+        if: steps.unit.outputs.skip != 'true'
+        run: bash spikes/kb-term/twin/ci.sh
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always() && steps.unit.outputs.skip != 'true'
+        with:
+          name: twin-out
+          path: spikes/kb-term/twin/out/
+          if-no-files-found: ignore
+
+  renderer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Detect unit
+        id: unit
+        run: |
+          if [ -f spikes/kb-term/renderer/ci.sh ]; then echo "skip=false" >> "$GITHUB_OUTPUT"; else echo "skip=true" >> "$GITHUB_OUTPUT"; echo "no spikes/kb-term/renderer/ci.sh yet, skipping"; fi
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.unit.outputs.skip != 'true'
+        with:
+          node-version: '22'
+
+      - name: npm install
+        if: steps.unit.outputs.skip != 'true'
+        run: cd spikes/kb-term && npm install --no-audit --no-fund
+
+      - name: Playwright browsers
+        if: steps.unit.outputs.skip != 'true'
+        run: cd spikes/kb-term && npx playwright install --with-deps chromium
+
+      - name: Run unit
+        if: steps.unit.outputs.skip != 'true'
+        run: bash spikes/kb-term/renderer/ci.sh
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always() && steps.unit.outputs.skip != 'true'
+        with:
+          name: renderer-out
+          path: spikes/kb-term/renderer/out/
+          if-no-files-found: ignore
+
+  phone:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Detect unit
+        id: unit
+        run: |
+          if [ -f spikes/kb-term/phone/ci.sh ]; then echo "skip=false" >> "$GITHUB_OUTPUT"; else echo "skip=true" >> "$GITHUB_OUTPUT"; echo "no spikes/kb-term/phone/ci.sh yet, skipping"; fi
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.unit.outputs.skip != 'true'
+        with:
+          node-version: '22'
+
+      - name: npm install
+        if: steps.unit.outputs.skip != 'true'
+        run: cd spikes/kb-term && npm install --no-audit --no-fund
+
+      - name: Playwright browsers
+        if: steps.unit.outputs.skip != 'true'
+        run: cd spikes/kb-term && npx playwright install --with-deps chromium webkit
+
+      - name: Run unit
+        if: steps.unit.outputs.skip != 'true'
+        run: bash spikes/kb-term/phone/ci.sh
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always() && steps.unit.outputs.skip != 'true'
+        with:
+          name: phone-out
+          path: spikes/kb-term/phone/out/
+          if-no-files-found: ignore
+
+  t4:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Detect unit
+        id: unit
+        run: |
+          if [ -f spikes/kb-term/t4/ci.sh ]; then echo "skip=false" >> "$GITHUB_OUTPUT"; else echo "skip=true" >> "$GITHUB_OUTPUT"; echo "no spikes/kb-term/t4/ci.sh yet, skipping"; fi
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.unit.outputs.skip != 'true'
+        with:
+          node-version: '22'
+
+      - name: Run unit
+        if: steps.unit.outputs.skip != 'true'
+        run: bash spikes/kb-term/t4/ci.sh
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always() && steps.unit.outputs.skip != 'true'
+        with:
+          name: t4-out
+          path: spikes/kb-term/t4/out/
+          if-no-files-found: ignore
