@@ -14,7 +14,7 @@ command to act yourself. One recorded exception, off by default: when
 the operator sets `[terminal] enabled = true`, the SPA (and only the
 SPA: never `kb`, never an agent) may launch, attach to, type into and
 kill a session through the terminal tier (see the KT amendment in
-architecture-invariants §11; the terminal tier, kb-term, is in
+architecture-invariants #11; the terminal tier, kb-term, is in
 progress and off unless enabled). Even then the state shown here still
 comes only from beats; the terminal feeds nothing into `derive_state`.
 
@@ -542,7 +542,7 @@ case the design set out to satisfy.
   the refusals (no control surface, no persisted state, no per-user
   scoping). Its "no control surface" refusal is amended, not repealed:
   see the paragraph at the top of this page and the KT amendment in
-  architecture-invariants §11.
+  architecture-invariants #11.
 - [`configuration.md` → `[webhooks]`](configuration.md#webhooks) — the
   full field reference and SSRF policy behind Path A.
 - [`plugins/kb-memory/hooks/README.md`](../plugins/kb-memory/hooks/README.md) —

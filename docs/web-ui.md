@@ -470,10 +470,10 @@ It is attribution, never a read receipt, and it is never a rank term.
   drawer as bottom sheets (✕ / scrim tap / Esc). The mobile composer posts
   kind, line and topic only, and the card actions are mark, drop and done —
   edit and pin are desktop-only.
+
 A terminal view for the operator's own sessions (off unless `[terminal]
 enabled`) is a separate, SPA-only surface; see architecture-invariants
 #11, KT amendment.
-
 
 ## Stale-anchors dashboard
 
