@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { openPage, feed, shot, record, guardWebgl, tag } from '../lib/fixture.mjs';
+import { openPage, feed, shot, probe, record, guardWebgl, tag } from '../lib/fixture.mjs';
 import { Scenario, checkerPng } from '../lib/stream.mjs';
 
 const C = 30, R = 8;
@@ -35,11 +35,13 @@ for (const renderer of ['dom', 'webgl']) for (const dpr of [2, 3]) for (const [p
       const sc = new Scenario(ctl).head().textLines(2);
       sc.image({ id: 0x3a7f21, c: C, r: R, indent: 11, pngBuf: r.src });
       await feed(ctl.page, sc.build());
-      const png1 = await shot(ctl.page, null, { save: false });
+      const png1 = await shot(ctl.page, `b-sharp-control-${tag(cfg)}-${pname}`);
       const b1 = { x: Math.round(ctl.m.screen.x + 10 * ctl.m.cw), y: Math.round(ctl.m.screen.y + 2 * ctl.m.ch), w: Math.round(C * ctl.m.cw), h: Math.round(R * ctl.m.ch) };
       const eCtl = await ctl.page.evaluate(([b, rc, f]) => window.T.upscaleEnergy(b, rc, f), [png1.toString('base64'), { x: b1.x + 2, y: b1.y + 2, w: b1.w - 4, h: b1.h - 4 }, r.dpr]);
+      const eCtl1x = await ctl.page.evaluate(([b, rc]) => window.T.energy(b, rc), [png1.toString('base64'), { x: b1.x + 2, y: b1.y + 2, w: b1.w - 4, h: b1.h - 4 }]);
+      const ctlPix = await probe(ctl.page, png1, [0, 1, 2, 3, 4, 5, 6, 7].map((i) => ({ x: b1.x + 20 + i, y: b1.y + 20 })));
       const ratio = eRender / eRef, ctlRatio = eCtl / eRef;
-      record('b-sharpness', `${tag(cfg)}-${pname}`, { boxDevicePx: r.box, sourcePx: [Math.round(2 * C * r.o.devCW), Math.round(2 * R * r.o.devCH)], energyRender: eRender, energyReference: eRef, ratio, controlCssResolutionUpscaled: ctlRatio });
+      record('b-sharpness', `${tag(cfg)}-${pname}`, { controlBoxDpr1: b1, controlEnergyAt1x: eCtl1x, controlEnergyUpscaled: eCtl, controlRowPixels: ctlPix, squareSrcPx: sq, boxDevicePx: r.box, sourcePx: [Math.round(2 * C * r.o.devCW), Math.round(2 * R * r.o.devCH)], energyRender: eRender, energyReference: eRef, ratio, controlCssResolutionUpscaled: ctlRatio });
       expect(eRef).toBeGreaterThan(100); // the pattern really has high-frequency content
       expect(ratio).toBeGreaterThan(0.5);
     } finally { if (ctl) await ctl.close(); await r.o.close(); }
