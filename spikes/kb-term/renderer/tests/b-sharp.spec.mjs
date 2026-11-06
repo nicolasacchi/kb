@@ -37,7 +37,7 @@ for (const renderer of ['dom', 'webgl']) for (const dpr of [2, 3]) for (const [p
       await feed(ctl.page, sc.build());
       const png1 = await shot(ctl.page, `b-sharp-control-${tag(cfg)}-${pname}`);
       const b1 = { x: Math.round(ctl.m.screen.x + 10 * ctl.m.cw), y: Math.round(ctl.m.screen.y + 2 * ctl.m.ch), w: Math.round(C * ctl.m.cw), h: Math.round(R * ctl.m.ch) };
-      const eCtl = await ctl.page.evaluate(([b, rc, f]) => window.T.upscaleEnergy(b, rc, f), [png1.toString('base64'), { x: b1.x + 2, y: b1.y + 2, w: b1.w - 4, h: b1.h - 4 }, r.dpr]);
+      const eCtl = await ctl.page.evaluate(([b, rc, f]) => window.T.upscaleEnergy(b, rc, f), [png1.toString('base64'), { x: b1.x + 2, y: b1.y + 2, w: b1.w - 4, h: b1.h - 4 }, r.o.dpr]);
       const eCtl1x = await ctl.page.evaluate(([b, rc]) => window.T.energy(b, rc), [png1.toString('base64'), { x: b1.x + 2, y: b1.y + 2, w: b1.w - 4, h: b1.h - 4 }]);
       const ctlPix = await probe(ctl.page, png1, [0, 1, 2, 3, 4, 5, 6, 7].map((i) => ({ x: b1.x + 20 + i, y: b1.y + 20 })));
       const ratio = eRender / eRef, ctlRatio = eCtl / eRef;
