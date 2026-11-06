@@ -129,11 +129,12 @@ test.describe('b) pinch to font steps', () => {
       await kt.synthPinch({ cx: 200, cy: 300, d0: 200, d1: 60 });       // x0.3
       await kt.flush();
       const b = kt.stats();
-      return { a, b, transforms: kt.noTransform(), steps: kt.g.pinchSteps };
+      const tr = kt.noTransform();
+      return { a, b, transforms: tr, internalTransforms: kt.noTransform.internal.length, steps: kt.g.pinchSteps };
     });
     // test hook path as well
     const hook = await page.evaluate(async () => { const r = kt.pinchTo(1.2); await kt.flush(); return { r, s: kt.stats() }; });
-    rec('b-pinch', { startFont: s0.fontSize, afterPinchOut: out.a.fontSize, afterPinchIn: out.b.fontSize, hookTarget: hook.r, cols: [s0.cols, out.a.cols, out.b.cols].join('/'), rows: [s0.rows, out.a.rows, out.b.rows].join('/'), cellW: [s0.cellW, out.a.cellW, out.b.cellW].map((x) => +x.toFixed(2)).join('/'), screenW: [s0.screenW, out.a.screenW, out.b.screenW].map((x) => Math.round(x)).join('/'), transformsFound: out.transforms.join(',') || 'none', stepEvents: out.steps });
+    rec('b-pinch', { startFont: s0.fontSize, afterPinchOut: out.a.fontSize, afterPinchIn: out.b.fontSize, hookTarget: hook.r, cols: [s0.cols, out.a.cols, out.b.cols].join('/'), rows: [s0.rows, out.a.rows, out.b.rows].join('/'), cellW: [s0.cellW, out.a.cellW, out.b.cellW].map((x) => +x.toFixed(2)).join('/'), screenW: [s0.screenW, out.a.screenW, out.b.screenW].map((x) => Math.round(x)).join('/'), transformsFound: out.transforms.join(',') || 'none', xtermScrollbarSliderTransforms: out.internalTransforms, stepEvents: out.steps });
     expect(out.a.fontSize).toBeGreaterThan(s0.fontSize);
     expect(out.b.fontSize).toBeLessThan(out.a.fontSize);
     expect(out.a.cols).toBe(s0.cols); expect(out.a.rows).toBe(s0.rows);

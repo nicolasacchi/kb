@@ -328,7 +328,10 @@
       const t = getComputedStyle(el).transform;
       if (t && t !== 'none') bad.push(el.id || el.className || el.tagName);
     }
-    for (const el of termEl.querySelectorAll('*')) { const t = getComputedStyle(el).transform; if (t && t !== 'none') bad.push('inner:' + (el.className || el.tagName)); }
+    // xterm's own scrollbar slider is positioned by transform inside xterm; that is not our fit mechanism, so it is reported separately
+    const xtermInternal = [];
+    for (const el of termEl.querySelectorAll('*')) { const t = getComputedStyle(el).transform; if (t && t !== 'none') (el.closest('.scrollbar') ? xtermInternal : bad).push('inner:' + (el.className || el.tagName)); }
+    noTransform.internal = xtermInternal;
     return bad;
   }
 
