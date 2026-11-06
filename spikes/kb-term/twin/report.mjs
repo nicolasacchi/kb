@@ -58,6 +58,9 @@ for (const variant of [...new Set(M.results.map((r) => r.variant))]) {
   }
 }
 
+P('## Analysis notes (hand-written from CI run 42243861752 artifacts; verify against debug-*.txt when this report is regenerated)\n');
+P('- The serialize() seed does not carry DECSTBM scroll regions, DECSC saved-cursor slot, synchronized-output mode, OSC 8 hyperlinks, curly/dotted underline styles or SGR 58 underline colours (all stage A classes above; identical under unicode11 and graphemes).');
+P('- Stage B cell/row divergences in harness-s2 (debug-*-harness-s2-65105/70514 dumps): after a join inside a scrolled region, the viewer (scroll region lost) pushes region rows into scrollback that the reference never pushes ("region row 0..5" appear as extra scrollback rows), shifting everything above. Root cause = lost scroll region, not width handling. The other stage B cell-chars/wide-char-boundary points (harness-s5, harness-s3) were not individually root-caused; no stage A cell-chars or width class occurs in either variant.\n');
 // ---- widths ----
 P('## Character widths\n');
 const tables = {};
