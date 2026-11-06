@@ -51,8 +51,8 @@ for (const cfg of CONFIGS.filter((c) => c.dpr !== 3)) {
       const rowsTrim = 5, R = 12, C = 30;
       const sc = new Scenario(o).head().textLines(20, 'pre');
       sc.image({ id: 0x6e2f80, c: C, r: R, indent: 11, variant: 2 });
-      const N = 20 + R + 122; // lines written so far + the rest => trimmed = N + 1 - (rows+scrollback) = 25 = 20 + rowsTrim
-      sc.textLines(122, 'post');
+      sc.blank(); // a blank row under the picture keeps the 'outside below' probes off text
+      sc.textLines(121, 'post'); // total 20 + 12 + 1 + 121 = 154 lines => trimmed = 154 + 1 - (30 + 100) = 25 = 20 + rowsTrim
       await feed(o.page, sc.build());
       const bufLen = await o.page.evaluate(() => window.T.bufLen());
       const trimmed = sc.line + 1 - bufLen;

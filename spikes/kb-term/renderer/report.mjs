@@ -44,6 +44,9 @@ p('|---|---|---|---|---|---|');
 for (const r of by('env')) { const v = r.value; p(`| ${r.key} | ${v.webgl}${v.webglError ? ' (' + v.webglError + ')' : ''}${v.contextLost ? ' CONTEXT LOST' : ''} | ${v.canvases} | ${v.rowsDisplay} | ${f(v.cell.cssW)} x ${f(v.cell.cssH)} | ${v.cell.devW} x ${v.cell.devH} |`); }
 p();
 
+p('### WebGL text diagnostic at DPR 2 (headless software GL, per Chromium flag set)'); p();
+for (const r of by('k-diag')) p(`- ${r.key}: ${JSON.stringify(r.value)}`);
+p();
 p('## (a) pictures sit exactly in their placeholder boxes');
 p();
 p('Probes: one device pixel inside each visible corner, a 5x5 grid inside, and one device pixel outside left/right/above/below (must be terminal background). Expected colours come from the scenario truth (known quadrant pattern), not from the renderer.');
