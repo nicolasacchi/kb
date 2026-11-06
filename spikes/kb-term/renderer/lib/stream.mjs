@@ -92,7 +92,7 @@ export class Scenario {
   textLines(n, tag = 'line', start = 0) { for (let i = 0; i < n; i++) { this.raw(text(start + i, tag) + '\r\n'); this.line++; } return this; }
   blank(n = 1) { for (let i = 0; i < n; i++) { this.raw('\r\n'); this.line++; } return this; }
   image({ id, c, r, indent = 11, variant = 0, mode = 'rgb', scale = 1, implicit = false, transmitIt = true, pngBuf = null, wrap = false }) {
-    if (transmitIt) this.raw(transmit(id, pngBuf || quadPng(c * this.devCW * scale, r * this.devCH * scale, variant), { wrap }));
+    if (transmitIt) this.raw(transmit(id, pngBuf || quadPng(Math.round(c * this.devCW * scale), Math.round(r * this.devCH * scale), variant), { wrap }));
     this.raw(place(id, c, r));
     this.truth.push({ id, line0: this.line, col0: indent - 1, c, r, variant });
     this.raw(placeholderRows(id, c, r, indent, mode, { implicit }));

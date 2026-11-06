@@ -16,6 +16,7 @@ const opt = {
   iip: q.get('iip') === '1',
   iipMB: Number(q.get('iipmb') || 128),
   gfx: q.get('gfx') !== '0',
+  halo: q.get('halo') !== '0',
 };
 
 function mkTerm(extra = {}) {
@@ -53,11 +54,16 @@ if (opt.iip) {
   imageAddon = new ImageAddon({ storageLimit: opt.iipMB, showPlaceholder: true });
   term.loadAddon(imageAddon);
 }
-const renderer = opt.gfx ? new PlaceholderRenderer(term, store) : null;
+const renderer = opt.gfx ? new PlaceholderRenderer(term, store, { hideGlyphs: opt.halo }) : null;
 
 const b64ToBytes = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 const raf = () => new Promise((r) => requestAnimationFrame(() => r()));
-const frames = async (n = 2) => { for (let i = 0; i < n; i++) await raf(); };
+const frames = async (n = 2) => {
+  for (let i = 0; i < n; i++) await raf();
+  const imgs = [...document.querySelectorAll('img.kbgfx-img')];
+  await Promise.all(imgs.map((i) => i.decode().catch(() => {})));
+  await raf(); await raf();
+};
 const flush = () => new Promise((r) => term.write('', r));
 
 window.T = {
@@ -157,6 +163,7 @@ window.T = {
     const ov = term.element.querySelector('.kbgfx-overlay');
     return ov ? { children: ov.children.length, missing: ov.querySelectorAll('.kbgfx-missing').length, imgs: ov.querySelectorAll('img.kbgfx-img').length, texts: [...ov.querySelectorAll('.kbgfx-missing')].map((e) => e.textContent) } : null;
   },
+  rstats() { return renderer ? { ...renderer.stats, decoLines: renderer.decos.size } : null; },
   imgSrcVersions() { return renderer ? [...renderer.groups.values()].map((e) => e.ver) : []; },
   widthTable(kind) {
     const t = new Terminal({ cols: 20, rows: 3, allowProposedApi: true });

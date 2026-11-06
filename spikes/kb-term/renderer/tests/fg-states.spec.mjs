@@ -20,7 +20,7 @@ for (const cfg of CONFIGS) {
       const got = await probe(o.page, png, pts);
       const neutral = got.every((p) => p && Math.abs(p[0] - 43) <= 8 && Math.abs(p[1] - 43) <= 8 && Math.abs(p[2] - 48) <= 8);
       // late ImageDef
-      await feed(o.page, Buffer.from(transmit(id, quadPng(c * o.devCW, r * o.devCH, 0))));
+      await feed(o.page, Buffer.from(transmit(id, quadPng(Math.round(c * o.devCW), Math.round(r * o.devCH), 0))));
       const png2 = await shot(o.page, `f-unknown-then-arrives-${tag(cfg)}`);
       const res = await checkPictures(o.page, png2, o, sc.truth, 0);
       const ov2 = await o.page.evaluate(() => window.T.overlayInfo());
@@ -42,7 +42,7 @@ for (const cfg of [{ renderer: 'dom', dpr: 1 }, { renderer: 'dom', dpr: 2 }, { r
     try {
       guardWebgl(test, o, cfg);
       const id = 0x9c5a13, c = 20, r = 5;
-      const w = c * o.devCW, h = r * o.devCH;
+      const w = Math.round(c * o.devCW), h = Math.round(r * o.devCH);
       const A = quadPng(w, h, 0), B = quadPng(w, h, 2);
       const log = {};
       const st = () => o.page.evaluate(() => ({ resets: window.T.store.resets, transmits: window.T.store.transmits, version: window.T.store.defs.get(0x9c5a13)?.version ?? null, imgVers: window.T.imgSrcVersions(), apc: window.T.reasm.stats }));

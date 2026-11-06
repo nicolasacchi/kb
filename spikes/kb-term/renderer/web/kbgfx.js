@@ -29,7 +29,10 @@ export class ImageStore {
     const old = this.defs.get(id);
     if (old && old.url === url) return; // identical retransmit: no change, no version bump
     const { w, h } = pngSize(b64);
-    this.defs.set(id, { id, url, w, h, version: (old ? old.version : 0) + 1 });
+    const def = { id, url, w, h, version: (old ? old.version : 0) + 1 };
+    // preload+decode now (when the ImageDef arrives), so the first paint of a placeholder box is not blank
+    def.img = new Image(); def.img.src = url; def.ready = def.img.decode().then(() => true, () => false);
+    this.defs.set(id, def);
     this._emit();
   }
   setPlace(id, c, r) {
@@ -142,6 +145,9 @@ export class PlaceholderRenderer {
     this.totalMs = 0;
     this.overlay = null;
     this._raf = 0;
+    this.hideGlyphs = opts.hideGlyphs !== false;
+    this.decos = new Map(); // marker -> Map(key -> decoration)
+    this.stats = { imgCreated: 0, imgCompleteAtCreate: 0, decosCreated: 0, decosDisposed: 0 };
     this.attach();
   }
   attach() {
@@ -249,7 +255,11 @@ export class PlaceholderRenderer {
       el.inner.style.top = (boxT - top) + 'px';
       el.inner.style.width = (boxR - boxL) + 'px';
       el.inner.style.height = (boxB - boxT) + 'px';
-      if (kind === 'img' && el.ver !== def.version) { el.inner.src = def.url; el.ver = def.version; }
+      if (kind === 'img' && el.ver !== def.version) {
+        const first = el.ver === -1;
+        el.inner.src = def.url; el.ver = def.version;
+        if (first) { this.stats.imgCreated++; if (el.inner.complete) this.stats.imgCompleteAtCreate++; }
+      }
       if (kind === 'missing') {
         // unavailable box spans the visible rectangle, not the whole virtual box
         el.inner.style.left = '0px'; el.inner.style.top = '0px';
@@ -259,10 +269,46 @@ export class PlaceholderRenderer {
     for (const [key, el] of this.groups) {
       if (el.seen !== this.frames) { el.clip.remove(); this.groups.delete(key); }
     }
+    if (this.hideGlyphs) this.syncDecorations(cells);
     this.lastMs = performance.now() - t0;
     this.totalMs += this.lastMs;
     this.lastGroups = groups.size;
     this.lastCells = cells.length;
+  }
+  // The U+10EEEE glyph (tofu) and its diacritics are painted by xterm in the id colour and can spill ~1px past the cell.
+  // Recolour exactly those cells to the background via the decoration API so nothing is left to spill.
+  syncDecorations(cells) {
+    const buf = this.term.buffer.active;
+    const base = buf.viewportY, rows = this.term.rows;
+    const wanted = new Map(); // abs -> Set(key)
+    const runs = [];
+    for (const c of cells) {
+      const last = runs[runs.length - 1];
+      if (last && last.abs === c.abs && last.x0 + last.n === c.x) last.n++; else runs.push({ abs: c.abs, x0: c.x, n: 1 });
+    }
+    for (const r of runs) { const k = `${r.x0}:${r.n}`; if (!wanted.has(r.abs)) wanted.set(r.abs, new Set()); wanted.get(r.abs).add(k); }
+    for (const [marker, m] of [...this.decos]) {
+      if (marker.isDisposed) { this.decos.delete(marker); continue; }
+      const abs = marker.line;
+      if (abs < base || abs >= base + rows) continue;
+      for (const [k, d] of [...m]) {
+        if (!(wanted.get(abs) && wanted.get(abs).has(k))) { d.dispose(); m.delete(k); this.stats.decosDisposed++; }
+      }
+    }
+    const byLine = new Map();
+    for (const [marker, m] of this.decos) byLine.set(marker.line, m);
+    const curAbs = buf.baseY + buf.cursorY;
+    const bg = this.term.options.theme?.background || '#000000';
+    for (const r of runs) {
+      const k = `${r.x0}:${r.n}`;
+      let m = byLine.get(r.abs);
+      if (m && m.has(k)) continue;
+      const marker = m ? [...this.decos.keys()].find((mk) => mk.line === r.abs) : this.term.registerMarker(r.abs - curAbs);
+      if (!marker) continue;
+      if (!m) { m = new Map(); this.decos.set(marker, m); byLine.set(r.abs, m); }
+      const d = this.term.registerDecoration({ marker, x: r.x0, width: r.n, height: 1, foregroundColor: bg, backgroundColor: bg, layer: 'top' });
+      if (d) { m.set(k, d); this.stats.decosCreated++; }
+    }
   }
   describe() {
     const rect = this.screen.getBoundingClientRect();

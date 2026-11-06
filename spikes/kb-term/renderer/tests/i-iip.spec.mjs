@@ -11,10 +11,10 @@ for (const cfg of [{ renderer: 'dom', dpr: 1 }, { renderer: 'dom', dpr: 2 }, { r
     const o = await openPage(browser, { ...cfg, iip: true, gfx: false });
     try {
       guardWebgl(test, o, cfg);
-      const src = checkerPng(2 * C * o.devCW, 2 * R * o.devCH, 4);
+      const src = checkerPng(Math.round(2 * C * o.devCW), Math.round(2 * R * o.devCH), 4);
       // case 1: told to fill CxR cells (iTerm width/height in cells); case 2: native pixels at CSS resolution (no size hint)
       for (const mode of ['cells', 'native-css-res']) {
-        const pngBuf = mode === 'cells' ? src : checkerPng(C * o.m.cw | 0, R * o.m.ch | 0, 2);
+        const pngBuf = mode === 'cells' ? src : checkerPng(Math.round(C * o.m.cw), Math.round(R * o.m.ch), 2);
         const pre = Buffer.from(`${ESC}[?25l${ESC}[2J${ESC}[3;11H`);
         await o.page.evaluate((s) => window.T.writeRaw(s), `${ESC}[?25l${ESC}[2J${ESC}[3;11H`);
         const seq = iipSeq(pngBuf, mode === 'cells' ? `width=${C};height=${R};preserveAspectRatio=0` : 'preserveAspectRatio=0');
@@ -22,7 +22,7 @@ for (const cfg of [{ renderer: 'dom', dpr: 1 }, { renderer: 'dom', dpr: 2 }, { r
         const png = await shot(o.page, `i-iip-${mode}-${tag(cfg)}`);
         const png64 = png.toString('base64');
         const bb = await o.page.evaluate((b) => window.T.bbox(b), png64);
-        const box = { x: Math.round((o.m.screen.x + 10 * o.m.cw) * o.dpr), y: Math.round((o.m.screen.y + 2 * o.m.ch) * o.dpr), w: C * o.devCW, h: R * o.devCH };
+        const box = { x: Math.round((o.m.screen.x + 10 * o.m.cw) * o.dpr), y: Math.round((o.m.screen.y + 2 * o.m.ch) * o.dpr), w: Math.round(C * o.devCW), h: Math.round(R * o.devCH) };
         const e = await o.page.evaluate(([b, rc]) => window.T.energy(b, rc), [png64, { x: box.x + 1, y: box.y + 1, w: box.w - 2, h: box.h - 2 }]);
         const eRef = await o.page.evaluate(([s, w, h]) => window.T.refEnergy(s, w, h), [src.toString('base64'), box.w, box.h]);
         const canv = await o.page.evaluate(() => { const c = window.T.imageAddon.getImageAtBufferCell(10, 2); return c ? { w: c.width, h: c.height } : null; });

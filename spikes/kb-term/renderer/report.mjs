@@ -51,6 +51,14 @@ p();
 p('| config | ok/total | corners | grid | outside | image elements | render ms (last) |'); p('|---|---|---|---|---|---|---|');
 for (const r of by('a-placement')) { const v = r.value; const k = v.byKind || {}; const g = (x) => (k[x] ? `${k[x].ok}/${k[x].n}` : '-'); p(`| ${r.key} | ${v.ok}/${v.total} | ${g('corner')} | ${g('grid')} | ${g('outside')} | ${v.overlay.imgs} | ${f(v.perf.lastMs, 2)} |`); }
 p();
+p('First paint: `imgCreated` = picture elements created; `imgCompleteAtCreate` = how many were already decoded when created (preloaded when the ImageDef arrived).'); p();
+for (const r of by('a-placement')) p(`- ${r.key}: ${JSON.stringify(r.value.rstats)}`);
+p();
+p('### Glyph halo: does the U+10EEEE glyph leak around the picture?'); p();
+p('Ring of device pixels 3px outside picture A. raw = renderer without the decoration recolour, hidden = with it.'); p();
+p('| config | ring pixels | dirty pixels | per side (L/R/T/B) | max r+g+b | decorations created |'); p('|---|---|---|---|---|---|');
+for (const r of by('j-halo')) { const v = r.value; p(`| ${r.key} | ${v.ringPixels} | ${v.dirtyPixels} | ${v.dirty.left}/${v.dirty.right}/${v.dirty.top}/${v.dirty.bottom} | ${v.maxChannelSum} | ${v.stats ? v.stats.decosCreated : ''} |`); }
+p();
 p('### Colour-id encodings (24-bit, palette 38;5;n, implicit-continuation cells)'); p();
 for (const r of by('a2-encodings')) p(`- ${r.key}: probes ${r.value.ok}/${r.value.total}, decoded ids ${JSON.stringify(r.value.decodedIds)}, placeholder cells ${r.value.cells}`);
 p();

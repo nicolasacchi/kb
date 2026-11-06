@@ -14,7 +14,8 @@ for (const cfg of CONFIGS) {
       const res = await checkPictures(o.page, png, o, sc.truth, 0);
       const overlay = await o.page.evaluate(() => window.T.overlayInfo());
       const perf = await o.page.evaluate(() => ({ lastMs: window.T.renderer.lastMs, frames: window.T.renderer.frames, cells: window.T.renderer.lastCells }));
-      record('a-placement', tag(cfg), { ...res, overlay, perf, errors: o.errors.slice(0, 5) });
+      const rstats = await o.page.evaluate(() => window.T.rstats());
+      record('a-placement', tag(cfg), { ...res, overlay, perf, rstats, errors: o.errors.slice(0, 5) });
       expect(overlay.imgs).toBe(2);
       expect(res.total).toBeGreaterThan(40);
       expect(res.badCount, JSON.stringify(res.bad)).toBe(0);

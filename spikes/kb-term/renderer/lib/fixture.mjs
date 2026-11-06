@@ -25,7 +25,7 @@ export async function openPage(browser, o = {}) {
   page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') errors.push(m.type() + ': ' + m.text()); });
   const qs = new URLSearchParams({
     renderer: o.renderer || 'dom', unicode: o.unicode || '11', cols: String(o.cols || 100), rows: String(o.rows || 30),
-    scrollback: String(o.scrollback ?? 5000), iip: o.iip ? '1' : '0', iipmb: String(o.iipmb || 128), gfx: o.gfx === false ? '0' : '1',
+    scrollback: String(o.scrollback ?? 5000), halo: o.halo === false ? '0' : '1', iip: o.iip ? '1' : '0', iipmb: String(o.iipmb || 128), gfx: o.gfx === false ? '0' : '1',
   });
   await page.goto(BASE + '?' + qs);
   await page.waitForFunction(() => window.__ready === true, null, { timeout: 30000 });
@@ -33,7 +33,7 @@ export async function openPage(browser, o = {}) {
   // device pixel size of one cell (xterm rounds it to whole device pixels)
   const devCW = m.device ? m.device.cw : Math.round(m.cw * dpr);
   const devCH = m.device ? m.device.ch : Math.round(m.ch * dpr);
-  return { ctx, page, m, dpr, devCW, devCH, errors, close: () => ctx.close() };
+  return { ctx, page, m, dpr, devCW, devCH, renderer: o.renderer || 'dom', errors, close: () => ctx.close() };
 }
 
 export const feed = (page, buf) => page.evaluate((b) => window.T.feed(b), buf.toString('base64'));
@@ -56,7 +56,8 @@ export async function checkPictures(page, png, o, truths, vy, { tol = 10, label 
   const { m, dpr } = o;
   const cw = m.cw, ch = m.ch; // css
   const pts = []; const meta = [];
-  const D = 1 / dpr; // one device pixel in css
+  const edgeDev = o.renderer === 'dom' ? 2 : 1; // DOM renderer cells are fractional in device px (8.43 css wide): allow 2 device px
+  const D = edgeDev / dpr;
   for (const t of truths) {
     const top = t.line0 - vy, bottom = t.line0 + t.r - vy; // rows (float) relative to viewport
     const vTop = Math.max(0, top), vBot = Math.min(m.rows, bottom);
