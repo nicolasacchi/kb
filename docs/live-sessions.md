@@ -124,6 +124,9 @@ Known limits:
 - The `session.state` event does not carry `background`, so a push recipe
   still fires when a row goes to waiting even if the row then shows as
   resuming.
+- The label reflects what the harness reported at the turn end. A background
+  agent that crashes or is abandoned without reporting back leaves the row in
+  RESUMING until a tool or prompt beat clears it or the row goes cold (8 h).
 - The counts are a label on the row, never an input to the state: they cannot
   change `derive_state`, the cold horizon, or a lane other than the split above.
 

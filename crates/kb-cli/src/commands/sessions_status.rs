@@ -281,8 +281,8 @@ fn filter_and_render(
 
     if json {
         // The machine surface: one flat array, lane order preserved
-        // (IN PROGRESS, WAITING ON YOU, RESUMING ON THEIR OWN, FINISHED/COLD) so a caller that
-        // doesn't care about lanes still gets a stable, sensible order.
+        // (IN PROGRESS, WAITING ON YOU, RESUMING ON THEIR OWN, FINISHED/COLD)
+        // so a caller that doesn't care about lanes still gets a stable, sensible order.
         let all: Vec<&LiveSession> = in_progress
             .iter()
             .chain(waiting.iter())
