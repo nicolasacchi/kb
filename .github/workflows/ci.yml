@@ -59,7 +59,12 @@ permissions: {}
 #     e2e-fast       e2e              —
 #     code-e2e-fast  code-e2e         —
 #     embedder       embedder-test    embedder-lint
+#     term-int       term-int         —
 #
+# `term-int` as a rust-cache family holds only the small kb-term crate
+# graph; the pinned tmux binary itself is cached via `actions/cache`,
+# never via rust-cache.
+
 # ONE WRITER PER FAMILY is not cosmetic. rust-cache skips its save whenever
 # the restore was an exact hit, so the FIRST job to save after a key change
 # (a Cargo.lock or a rustc bump) freezes that family's content until the next
@@ -1481,6 +1486,138 @@ jobs:
           # OL PRES4 - kb-omp.ts's tool_call path hand-off and blocked/unblocked beats.
           bash plugins/kb-memory/hooks/tests/test-omp-beats.sh
 
+  term-tap:
+    permissions:
+      contents: read
+    name: term-tap (bun tap + fixtures)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # No `needs:` — the bun tap lane (placeholder tests, `bun build
+    # --compile`) plus the stdlib fixture generators. Unix-only needs
+    # nothing from the Rust build. T3-T7 add the real tap tests here.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.4"
+
+      - name: Bun matches the pin
+        run: test "$(bun --version)" = "$(cat crates/kb-term/tap/.bun-version)"
+
+      - name: Fixture generators (stdlib python)
+        run: python3 -I -m unittest discover -s crates/kb-term/fixtures -p 'test_*.py' -v
+
+      - name: Tap smoke tests (bun test, JUnit report)
+        run: |
+          mkdir -p "$RUNNER_TEMP/witness"
+          cd crates/kb-term/tap
+          KB_REQUIRE_BUN_PIN=1 bun test --reporter=junit --reporter-outfile="$RUNNER_TEMP/witness/bun-junit.xml"
+          head -c 1500 "$RUNNER_TEMP/witness/bun-junit.xml" || true
+
+      - name: Compile the tap binary
+        run: |
+          cd crates/kb-term/tap
+          bun build --compile src/main.ts --outfile "$RUNNER_TEMP/kb-tap"
+          test "$("$RUNNER_TEMP/kb-tap")" = "kb-tap placeholder"
+
+      - name: Witness (bun JUnit report -> floor + zero failures)
+        if: ${{ !cancelled() }}
+        run: python3 scripts/ci/witness.py junit "$RUNNER_TEMP/witness/bun-junit.xml" --lane term-tap
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: witness-term-tap
+          path: ${{ runner.temp }}/witness
+
+  term-int:
+    permissions:
+      contents: read
+    name: term-int (tmux 3.7c + integration)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # No `needs:` — build the pinned tmux 3.7c (actions/cache, not
+    # rust-cache) and smoke-test it; the cargo integration tests join
+    # when crates/kb-term exists (T8). The pinned tmux is the only
+    # cross-job dependency of the later kb-term units (T5/T6/T8/T9/T25).
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: build-tmux selftest (refusal, pin, hostile env)
+        run: scripts/ci/build-tmux-selftest.sh
+
+      - name: Runner image id (tmux cache key)
+        id: img
+        run: |
+          echo "key=${ImageOS}-${ImageVersion}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the pinned tmux binary
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/tmux-3.7c
+          # The sha256 pin lives inside scripts/ci/build-tmux.sh, so
+          # hashFiles covers the tarball; the image id covers the runner's
+          # libevent and ncurses. No restore-keys: a stale image entry is
+          # a wrong-lib entry.
+          key: tmux-3.7c-${{ hashFiles('scripts/ci/build-tmux.sh') }}-${{ runner.os }}-${{ steps.img.outputs.key }}
+
+      - name: Build the pinned tmux (or reuse the cache)
+        run: scripts/ci/build-tmux.sh
+
+      - name: tmux 3.7c smoke (JUnit report)
+        run: |
+          mkdir -p "$RUNNER_TEMP/witness"
+          scripts/ci/tmux-smoke.sh "$RUNNER_TEMP/witness/tmux-smoke-junit.xml"
+
+      - name: Witness (tmux JUnit report -> floor + zero failures)
+        if: ${{ !cancelled() }}
+        run: python3 scripts/ci/witness.py junit "$RUNNER_TEMP/witness/tmux-smoke-junit.xml" --lane term-int
+
+      - name: kb-term crate present
+        id: crate
+        run: |
+          if test -f crates/kb-term/Cargo.toml && test -d crates/kb-term/tests/integration; then echo present=true; else echo present=false; fi >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust toolchain
+        if: steps.crate.outputs.present == 'true'
+        uses: ./.github/actions/setup-rust
+
+      - name: Cache cargo + target
+        if: steps.crate.outputs.present == 'true'
+        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        with:
+          # Only main writes the cache — see the CACHING note at the top.
+          shared-key: term-int
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Integration tests
+        if: steps.crate.outputs.present == 'true'
+        # Integration tests live in ONE binary
+        # crates/kb-term/tests/integration/main.rs (PF-C1 precedent); they
+        # find tmux via KB_TMUX_BIN — unset means skip, unless
+        # KB_REQUIRE_TMUX=1, which means fail (same shape as KB_REQUIRE_BUN
+        # for hook-omp).
+        run: KB_TMUX_BIN="$KB_TMUX_BIN" KB_REQUIRE_TMUX=1 cargo test -p kb-term --test integration
+
+      - name: kb-term integration tests not present yet
+        if: steps.crate.outputs.present == 'false'
+        run: echo "::notice::kb-term integration tests not present yet (T1/T8)"
+
+      - name: Collect tmux build info
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/witness"
+          cp "$RUNNER_TEMP/tmux-3.7c/BUILD-INFO" "$RUNNER_TEMP/witness/" || true
+          cp "$RUNNER_TEMP/tmux-3.7c/LINKAGE" "$RUNNER_TEMP/witness/" || true
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: witness-term-int
+          path: ${{ runner.temp }}/witness
+
   supply-chain:
     permissions:
       contents: read
@@ -1711,6 +1848,8 @@ jobs:
       - code-e2e
       - web-unit
       - hook-omp
+      - term-tap
+      - term-int
       - supply-chain
       - spa-image
     runs-on: ubuntu-latest

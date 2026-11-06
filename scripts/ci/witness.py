@@ -18,7 +18,7 @@ run; a repeat name is a real bug).
 Usage:
   witness.py <kind> <report> --lane NAME [--floors ci/test-floors.toml]
              [--only-if true|false|...] [--prev REPORT --fail-repeat-flaky]
-kind: playwright | vitest | nextest-junit
+kind: playwright | vitest | nextest-junit | junit (any JUnit XML, e.g. bun test --reporter=junit)
 
 `--only-if V`: the lane's own path-filter output (steps.changes.outputs.run).
 Anything but "true" means the lane legitimately did not run -> exit 0 and say
@@ -127,7 +127,7 @@ def nextest_junit(path):
     return dict(executed=executed, failed=failed, flaky=sorted(set(flaky)), skipped=skipped)
 
 
-KINDS = {"playwright": playwright, "vitest": vitest, "nextest-junit": nextest_junit}
+KINDS = {"playwright": playwright, "vitest": vitest, "nextest-junit": nextest_junit, "junit": nextest_junit}
 
 
 def main(argv=None):
