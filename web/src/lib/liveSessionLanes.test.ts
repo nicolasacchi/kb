@@ -3,8 +3,10 @@ import {
   FINISHED_LANE_CAP,
   blockedCount,
   blockedLabel,
+  backgroundLabel,
   blockedSince,
   bucketLiveSessions,
+  isResuming,
   isLongWait,
   isPresumedEnded,
   isStalled,
@@ -274,5 +276,96 @@ describe("OL IDEA4 - last-tool evidence", () => {
       total: rs.finishedTotal,
     });
     expect(ids(bucketLiveSessions(withTool))).toEqual(ids(bucketLiveSessions(plain)));
+  });
+});
+
+describe("AH7 — resuming lane", () => {
+  const bgRow = (
+    id: string,
+    state: LiveStatusRow["state"],
+    background: LiveStatusRow["background"],
+    since = NOW,
+  ) => row({ session_id: id, state, holder: "human", background, since_unix: since });
+
+  it("resuming rows leave the waiting lane and the waiting count", () => {
+    const rows = [
+      bgRow("a", "waiting", { agent: 2, shell: 0, other: 0 }),
+      bgRow("b", "waiting", undefined),
+    ];
+    const lanes = bucketLiveSessions(rows);
+    expect(lanes.resuming.map((r) => r.session_id)).toEqual(["a"]);
+    expect(lanes.waiting.map((r) => r.session_id)).toEqual(["b"]);
+    expect(waitingCount(rows)).toBe(1);
+  });
+
+  it("shell-only and other-only rows stay waiting but carry a caption", () => {
+    const shell = bgRow("s", "waiting", { agent: 0, shell: 1, other: 0 });
+    const other = bgRow("o", "waiting", { agent: 0, shell: 0, other: 3 });
+    const lanes = bucketLiveSessions([shell, other]);
+    expect(lanes.resuming).toEqual([]);
+    expect(lanes.waiting).toHaveLength(2);
+    expect(isResuming(shell)).toBe(false);
+    expect(backgroundLabel(shell)).toBe("1 background shell");
+    expect(backgroundLabel(other)).toBe("3 other background tasks");
+  });
+
+  it("cold rows never resume", () => {
+    const cold = bgRow("c", "cold", { agent: 4, shell: 0, other: 0 });
+    const lanes = bucketLiveSessions([cold]);
+    expect(lanes.resuming).toEqual([]);
+    expect(lanes.waiting.map((r) => r.session_id)).toEqual(["c"]);
+    expect(isResuming(cold)).toBe(false);
+  });
+
+  it("blocked precedence unchanged", () => {
+    const b = row({
+      session_id: "b",
+      state: "working",
+      blocked: true,
+      background: { agent: 1, shell: 0, other: 0 },
+    });
+    const lanes = bucketLiveSessions([b]);
+    expect(lanes.blocked.map((r) => r.session_id)).toEqual(["b"]);
+    expect(lanes.resuming).toEqual([]);
+  });
+
+  it("sorts resuming oldest-first", () => {
+    const bg = { agent: 1, shell: 0, other: 0 };
+    const lanes = bucketLiveSessions([
+      bgRow("new", "waiting", bg, NOW),
+      bgRow("old", "waiting", bg, NOW - 500),
+    ]);
+    expect(lanes.resuming.map((r) => r.session_id)).toEqual(["old", "new"]);
+  });
+
+  it("backgroundLabel grammar", () => {
+    const l = (agent: number, shell: number, other: number) =>
+      backgroundLabel({ background: { agent, shell, other } });
+    expect(l(2, 0, 0)).toBe("2 agents running · resumes on its own");
+    expect(l(1, 1, 0)).toBe("1 agent running · 1 background shell · resumes on its own");
+    expect(l(0, 1, 0)).toBe("1 background shell");
+    expect(l(0, 2, 0)).toBe("2 background shells");
+    expect(l(0, 0, 3)).toBe("3 other background tasks");
+    expect(l(0, 0, 1)).toBe("1 other background task");
+    expect(l(0, 0, 0)).toBeNull();
+    expect(backgroundLabel({})).toBeNull();
+  });
+
+  it("rows without background bucket exactly as before", () => {
+    const rows = [
+      row({ session_id: "w", state: "working" }),
+      row({ session_id: "st", state: "stalled" }),
+      row({ session_id: "wa", state: "waiting", holder: "human" }),
+      row({ session_id: "co", state: "cold", holder: "human" }),
+      row({ session_id: "fi", state: "finished", holder: "none" }),
+      row({ session_id: "pe", state: "presumed_ended", holder: "none" }),
+      row({ session_id: "bl", state: "working", blocked: true }),
+    ];
+    const lanes = bucketLiveSessions(rows);
+    expect(lanes.resuming).toEqual([]);
+    expect(lanes.blocked.map((r) => r.session_id)).toEqual(["bl"]);
+    expect(lanes.inProgress.map((r) => r.session_id).sort()).toEqual(["st", "w"]);
+    expect(lanes.waiting.map((r) => r.session_id).sort()).toEqual(["co", "wa"]);
+    expect(lanes.finished.map((r) => r.session_id).sort()).toEqual(["fi", "pe"]);
   });
 });

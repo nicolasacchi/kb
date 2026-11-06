@@ -108,6 +108,9 @@
 .kb-now__lane--waiting .kb-now__lane-head {
   color: var(--warn, #d8a04b);
 }
+.kb-now__lane--resuming .kb-now__lane-head {
+  color: var(--ink-mute);
+}
 .kb-now__lane--finished .kb-now__lane-head {
   color: var(--ink-mute, #8a857d);
 }
@@ -202,6 +205,18 @@
 /* OL IDEA4 — `last: Bash · 38m`, what a quiet agent-held row last started.
    Same quiet-evidence shape as the honesty marker above; tokens only. */
 .kb-now__row-lasttool {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--ink-dim);
+  border: 1px dashed var(--rule);
+  border-radius: 3px;
+  padding: 1px 4px;
+  white-space: nowrap;
+}
+/* AH7 — `2 agents running · resumes on its own`, background work reported
+   at the turn end. Same quiet-evidence shape as the last-tool chip. */
+.kb-now__row-background {
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   font-weight: 500;

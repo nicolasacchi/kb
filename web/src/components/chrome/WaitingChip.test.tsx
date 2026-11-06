@@ -119,3 +119,27 @@ describe("WaitingChip", () => {
     expect(chip.hasAttribute("data-kb-blocked")).toBe(false);
   });
 });
+
+describe("WaitingChip — AH7 resuming rows", () => {
+  const bg = { agent: 2, shell: 0, other: 0 };
+
+  it("chip is hidden when every waiting row is resuming", async () => {
+    vi.mocked(fetchLiveStatus).mockResolvedValueOnce([
+      row({ session_id: "a", state: "waiting", background: bg }),
+    ]);
+    const { container } = renderChip();
+    await waitFor(() => expect(fetchLiveStatus).toHaveBeenCalled());
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("chip count excludes resuming rows", async () => {
+    vi.mocked(fetchLiveStatus).mockResolvedValueOnce([
+      row({ session_id: "a", state: "waiting", background: bg }),
+      row({ session_id: "b", state: "waiting" }),
+      row({ session_id: "c", state: "waiting", background: { agent: 0, shell: 1, other: 0 } }),
+    ]);
+    renderChip();
+    await waitFor(() => expect(screen.getByTestId("header-waiting")).toBeTruthy());
+    expect(screen.getByTestId("header-waiting").textContent).toContain("2");
+  });
+});
