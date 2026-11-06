@@ -3,8 +3,9 @@ import { openPage, feed, shot, record, guardWebgl, tag } from '../lib/fixture.mj
 import { Scenario, checkerPng } from '../lib/stream.mjs';
 
 const C = 30, R = 8;
-// 'aligned' = 4-source-px squares (exact 2:1 downscale to 2 device px at 2x source), 'offgrid' = 3-source-px squares (1.5 device px: forces real resampling)
-const PATTERNS = { aligned: 4, offgrid: 3 };
+// 'aligned' = 4-source-px squares (exact 2:1 downscale to 2 device px at 2x source), 'offgrid' = 3-source-px squares (1.5 device px: forces real resampling),
+// 'coarse' = 4*dpr source px squares = 2 CSS px squares: detail that a DPR-1 (CSS resolution) raster can still hold, so the control is not degenerate.
+const PATTERNS = { aligned: () => 4, offgrid: () => 3, coarse: (dpr) => 4 * dpr };
 
 async function render(browser, cfg, sq) {
   const o = await openPage(browser, cfg);
@@ -20,8 +21,8 @@ async function render(browser, cfg, sq) {
 }
 
 // (b) sharpness at DPR>1: Laplacian energy of the rendered crop vs a canvas-downscaled reference of the same source.
-for (const renderer of ['dom', 'webgl']) for (const dpr of [2, 3]) for (const [pname, sq] of Object.entries(PATTERNS)) {
-  const cfg = { renderer, dpr };
+for (const renderer of ['dom', 'webgl']) for (const dpr of [2, 3]) for (const [pname, sqf] of Object.entries(PATTERNS)) {
+  const cfg = { renderer, dpr }; const sq = sqf(dpr);
   test(`b sharpness ${tag(cfg)} ${pname}`, async ({ browser }) => {
     const r = await render(browser, cfg, sq);
     let ctl = null;

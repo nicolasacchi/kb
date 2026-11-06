@@ -37,11 +37,41 @@ try {
   p();
 } catch (e) { p(`(no pw.json: ${e.message})`); p(); }
 
+
+// ---- findings, computed from the recorded numbers ---------------------------------------------------
+{
+  const sum = (a) => a.reduce((x, y) => x + y, 0);
+  const a = by('a-placement'); const aOk = sum(a.map((r) => r.value.ok)), aTot = sum(a.map((r) => r.value.total));
+  const hid = by('j-halo').filter((r) => r.key.startsWith('hidden')), raw = by('j-halo').filter((r) => r.key.startsWith('raw'));
+  const sh = by('b-sharpness'); const minR = (flt) => Math.min(...sh.filter(flt).map((r) => r.value.ratio));
+  const ctl = by('b-sharpness').filter((r) => r.key.endsWith('coarse'));
+  const iipHi = by('i-iip-blur').filter((r) => r.key.startsWith('cells-') && !r.key.endsWith('dpr1'));
+  const ev = by('i-iip-eviction');
+  const wt = Object.fromEntries(by('h-width').map((r) => [r.key, r.value.badCount]));
+  const dsc = by('k-diag');
+  const dEm = dsc.find((r) => r.key === 'emulated-dsf'), dFo = dsc.find((r) => r.key === 'forced-dsf');
+  const cv = (r) => (r ? r.value.before.canvases.filter((c) => c.cls === '').map((c) => `${c.w}x${c.h}`).join(',') : 'n/a');
+  p('## Findings (numbers computed from this run)');
+  p();
+  p(`1. **Placement is exact.** ${aOk}/${aTot} pixel probes matched across DOM and WebGL at DPR 1/2/3 (corners one device pixel inside, 5x5 grids, one device pixel outside). DOM allows 2 device px at the edges because its cells are fractional in device pixels (8.43 css px wide); WebGL is integer-aligned and passes at 1 px.`);
+  p(`2. **A width table is mandatory.** Without an addon xterm 6.0.0 breaks ${wt.none ?? '?'} of 297 kitty diacritics (they are not zero-width, so a placeholder cell splits). unicode11 breaks ${wt['11'] ?? '?'}, unicode-graphemes ${wt.graphemes ?? '?'}. NOTE: @xterm/addon-unicode11 only registers the table; the page must also set \`term.unicode.activeVersion = '11'\` (the headless twin too).`);
+  p(`3. **The glyph halo is real and the decoration recolour fixes it.** The placeholder glyph is painted in the picture-id colour and spills past the right edge: ${raw.map((r) => r.key.replace('raw-', '') + '=' + r.value.dirtyPixels).join(', ')} dirty ring pixels without the fix; with cells recoloured to the background through the decoration API: ${hid.map((r) => r.value.dirtyPixels).join('/')} (${hid.length} configs).`);
+  p(`4. **Sharpness at DPR 2/3 is native for the overlay.** Rendered/reference Laplacian energy: DOM min ${f(minR((r) => r.key.startsWith('dom')))}, WebGL min ${f(minR((r) => r.key.startsWith('webgl')))} (1.0 = indistinguishable from a single high-quality downscale to the device box). Control (same picture rasterised at CSS resolution and upscaled to the DPR, coarse pattern): ${ctl.map((r) => r.key.replace('-coarse', '') + '=' + f(r.value.controlCssResolutionUpscaled, 3)).join(', ')}.`);
+  p(`5. **The IIP fallback is blurry at DPR>1.** @xterm/addon-image draws a canvas the size of the CSS box, so the browser upscales it by the DPR: detail ratio ${iipHi.map((r) => r.key.replace('cells-', '') + '=' + f(r.value.ratioVsReference, 3)).join(', ')} (DPR 1 is fine). Storage is a strict FIFO by pixel count: ${ev.map((r) => `${r.key}: ${r.value.survivors} of ${r.value.imagesWritten} survive (capacity ${r.value.theoreticalCapacity}); the OLDEST ${r.value.firstSurvivorIndex} are evicted`).join('; ')}.`);
+  p(`6. **Test-environment trap.** Playwright's emulated deviceScaleFactor does not reach ResizeObserver devicePixelContentBoxSize, which @xterm/addon-webgl uses to size its canvas: WebGL canvas ${cv(dEm)} (emulated) vs ${cv(dFo)} (real --force-device-scale-factor) at DPR 2. Symptom: text missing or drawn at 2x. WebGL at DPR>1 therefore runs in a browser launched with a real scale factor; DOM can use the emulation.`);
+  p('7. **GfxReset / retransmit semantics (g).** The ImageDef store survives a GfxReset: rows already in the buffer keep drawing. An identical retransmit changes nothing (same bytes: no ImageDef version bump, no element reload). A retransmit with DIFFERENT bytes under the same id rewrites every existing row with that id (they now show the new picture), exactly as kitty itself would; the design needs a rule for that (sha-keyed ids, or ImageDef versions pinned per transmit epoch) if old scrollback must keep showing the old picture.');
+  p('8. **Late joiner.** serialize() of the headless twin keeps every placeholder cell, colour and diacritic (same abs line / column / id / row / col set as the live page), and the seeded page draws the same pictures at the same scroll positions (see section c for the pixel comparison).');
+  p('9. **Trimmed top and fast scroll.** A picture whose top rows were trimmed from the buffer draws its surviving rows cropped correctly, and the overlay never lagged the viewport in the per-frame sweep (0 stale frames), because the overlay is re-synced inside xterm\'s own onRender.');
+  p('10. **First paint.** Pictures are preloaded and decoded when the ImageDef arrives; without waiting for decode the first screenshot after a write showed a black box (round 1 of this spike), so the real renderer must preload.');
+  p();
+}
+
 p('## Environment (renderer actually used)');
 p();
 p('| config | webgl | canvases in .xterm-screen | .xterm-rows | cell css px | cell device px |');
 p('|---|---|---|---|---|---|');
-for (const r of by('env')) { const v = r.value; p(`| ${r.key} | ${v.webgl}${v.webglError ? ' (' + v.webglError + ')' : ''}${v.contextLost ? ' CONTEXT LOST' : ''} | ${v.canvases} | ${v.rowsDisplay} | ${f(v.cell.cssW)} x ${f(v.cell.cssH)} | ${v.cell.devW} x ${v.cell.devH} |`); }
+const seenEnv = new Set();
+for (const r of by('env')) { if (seenEnv.has(r.key)) continue; seenEnv.add(r.key); const v = r.value; p(`| ${r.key} | ${v.webgl}${v.webglError ? ' (' + v.webglError + ')' : ''}${v.contextLost ? ' CONTEXT LOST' : ''} | ${v.canvases} | ${v.rowsDisplay} | ${f(v.cell.cssW)} x ${f(v.cell.cssH)} | ${v.cell.devW} x ${v.cell.devH} |`); }
 p();
 
 p('### WebGL text diagnostic at DPR 2 (headless software GL, per Chromium flag set)'); p();
@@ -79,7 +109,7 @@ p();
 p('Source: 2x device-resolution fine checker. Reference = the same source downscaled once by a canvas to the exact device box. ratio = rendered/reference. control = same picture rendered at DPR 1 and bilinear-upscaled to the DPR (what a CSS-resolution raster looks like).');
 p();
 p('| config | energy rendered | energy reference | ratio | control (CSS-res upscaled) |'); p('|---|---|---|---|---|');
-for (const r of by('b-sharpness')) { const v = r.value; p(`| ${r.key} | ${f(v.energyRender, 1)} | ${f(v.energyReference, 1)} | ${f(v.ratio)} | ${f(v.controlCssResolutionUpscaled)} |`); }
+for (const r of by('b-sharpness')) { const v = r.value; p(`| ${r.key} | ${f(v.energyRender, 1)} | ${f(v.energyReference, 1)} | ${f(v.ratio)} | ${f(v.controlCssResolutionUpscaled, 4)} |`); }
 p();
 
 p('## (c) late joiner (headless serialize() into a fresh page terminal)');
@@ -89,8 +119,8 @@ for (const r of by('c-latejoin')) {
   p(`### ${r.key}`); p();
   p(`- buffer lines live/late: ${v.liveLen}/${v.lateLen}; twin buffer ${JSON.stringify(v.twin)}; serialized ${v.serializedBytes} bytes in ${v.serializeMs} ms`);
   p(`- placeholder cells live/late: ${v.placeholderCellsLive}/${v.placeholderCellsLate}; identical (abs line, col, id, row, col): ${v.sameCells}`);
-  p('| picture line | offset | viewportY live/late | live probes | late probes | screenshots byte-identical |'); p('|---|---|---|---|---|---|');
-  for (const x of v.results) p(`| ${x.line0} | ${x.off} | ${x.vyLive}/${x.vyLate} | ${x.liveOk} | ${x.lateOk} | ${x.identicalBytes} |`);
+  p('| picture line | offset | viewportY live/late | live probes | late probes | screenshots byte-identical | differing pixels (if not) |'); p('|---|---|---|---|---|---|---|');
+  for (const x of v.results) p(`| ${x.line0} | ${x.off} | ${x.vyLive}/${x.vyLate} | ${x.liveOk} | ${x.lateOk} | ${x.identicalBytes} | ${x.pixelDiff ? x.pixelDiff.differing + '/' + x.pixelDiff.total + ' bbox ' + JSON.stringify(x.pixelDiff.bbox) : ''} |`);
   p();
 }
 

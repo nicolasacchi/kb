@@ -53,7 +53,7 @@ for (const cfg of [{ renderer: 'dom', dpr: 1 }, { renderer: 'webgl', dpr: 2 }]) 
           const b = await shot(late.page, off === -8 ? `c-latejoin-${tag(cfg)}-img${t.variant}` : null);
           const ra = await checkPictures(live.page, a, live, [t], lv, { label: 'live' });
           const rb = await checkPictures(late.page, b, late, [t], sv, { label: 'late' });
-          results.push({ line0: t.line0, off, vyLive: lv, vyLate: sv, liveOk: `${ra.ok}/${ra.total}`, lateOk: `${rb.ok}/${rb.total}`, identicalBytes: a.equals(b), lateBad: rb.bad.slice(0, 2) });
+          results.push({ line0: t.line0, off, vyLive: lv, vyLate: sv, liveOk: `${ra.ok}/${ra.total}`, lateOk: `${rb.ok}/${rb.total}`, identicalBytes: a.equals(b), pixelDiff: a.equals(b) ? null : await live.page.evaluate(([x, y]) => window.T.diffPng(x, y), [a.toString('base64'), b.toString('base64')]), lateBad: rb.bad.slice(0, 2) });
         }
       }
       record('c-latejoin', tag(cfg), { liveLen, lateLen, twin: info, serializedBytes: out.length, serializeMs: serMs, placeholderCellsLive: liveCells.length, placeholderCellsLate: lateCells.length, sameCells, results, errors: late.errors.slice(0, 3) });

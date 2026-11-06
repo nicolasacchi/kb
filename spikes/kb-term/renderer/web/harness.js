@@ -100,6 +100,18 @@ window.T = {
   describe: () => renderer.describe(),
   exportDefs: () => store.exportJSON(),
   importDefs(s) { store.importJSON(s); },
+  async diffPng(aB64, bB64) {
+    const a = await window.T.loadPng(aB64), b = await window.T.loadPng(bB64);
+    if (a.w !== b.w || a.h !== b.h) return { sizeMismatch: [a.w, a.h, b.w, b.h] };
+    const da = a.x.getImageData(0, 0, a.w, a.h).data, db = b.x.getImageData(0, 0, b.w, b.h).data;
+    let n = 0, x0 = a.w, y0 = a.h, x1 = -1, y1 = -1;
+    for (let i = 0; i < da.length; i += 4) {
+      if (Math.abs(da[i] - db[i]) + Math.abs(da[i + 1] - db[i + 1]) + Math.abs(da[i + 2] - db[i + 2]) > 30) {
+        n++; const p = i / 4, xx = p % a.w, yy = (p / a.w) | 0; if (xx < x0) x0 = xx; if (xx > x1) x1 = xx; if (yy < y0) y0 = yy; if (yy > y1) y1 = yy;
+      }
+    }
+    return { differing: n, total: a.w * a.h, bbox: n ? [x0, y0, x1, y1] : null };
+  },
   async bbox(b64, thr = 40) {
     const { x, w, h } = await window.T.loadPng(b64);
     const d = x.getImageData(0, 0, w, h).data; let x0 = w, y0 = h, x1 = -1, y1 = -1;
