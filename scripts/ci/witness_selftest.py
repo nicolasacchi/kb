@@ -123,6 +123,19 @@ class Witness(unittest.TestCase):
         self.assertEqual(self.base("nextest-junit", self.write("j2.xml", None, raw=bad), "nx")[0], 1)
         self.assertEqual(self.base("nextest-junit", self.write("j3.xml", None, raw="<testsuites/>"), "nx")[0], 1)
 
+    def test_junit_alias(self):
+        xml = ('<testsuites><testsuite name="a">'
+               '<testcase classname="tap" name="ok1"/>'
+               '<testcase classname="tap" name="ok2"/>'
+               '<testcase classname="tap" name="ok3"/>'
+               '<testcase classname="tap" name="bad"><failure message="boom"/></testcase></testsuite></testsuites>')
+        res = witness.nextest_junit(self.write("j4.xml", None, raw=xml))
+        self.assertEqual(res["executed"], 3)
+        self.assertEqual(res["failed"], 1)
+        rc, err = self.base("junit", self.write("j5.xml", None, raw=xml), "e2e")
+        self.assertEqual(rc, 1)
+        self.assertIn("floor is 10", err)
+
     def test_committed_floors_are_wellformed(self):
         import tomllib
         here = os.path.dirname(os.path.abspath(__file__))
