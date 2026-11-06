@@ -1,0 +1,387 @@
+{
+ "schema": "kbt-widths/1",
+ "tool": "tmux 3.7c",
+ "method": "printf glyph in a pane; display -p #{cursor_x}; ctx = x after a+glyph+b minus 2",
+ "widths": {
+  "narrow/a": {
+   "alone": 1,
+   "ctx": 1
+  },
+  "narrow/tilde": {
+   "alone": 1,
+   "ctx": 1
+  },
+  "narrow/space": {
+   "alone": 1,
+   "ctx": 1
+  },
+  "narrow/digit": {
+   "alone": 1,
+   "ctx": 1
+  },
+  "narrow/box": {
+   "alone": 1,
+   "ctx": 1
+  },
+  "narrow/block": {
+   "alone": 1,
+   "ctx": 1
+  },
+  "narrow/pm-ambiguous": {
+   "alone": 1,
+   "ctx": 1
+  },
+  "narrow/greek": {
+   "alone": 1,
+   "ctx": 1
+  },
+  "wide/han": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "wide/hiragana": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "wide/hangul": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "wide/fullwidth-A": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "wide/halfwidth-kata": {
+   "alone": 1,
+   "ctx": 1
+  },
+  "wide/ideographic-space": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "wide/cjk-ext-b": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "combining/e-acute-comb": {
+   "alone": 1,
+   "ctx": 1
+  },
+  "combining/a-two-marks": {
+   "alone": 1,
+   "ctx": 1
+  },
+  "combining/lone-combining": {
+   "alone": 0,
+   "ctx": 0
+  },
+  "combining/lone-combining-enclosing": {
+   "alone": 0,
+   "ctx": 0
+  },
+  "combining/devanagari-ksi": {
+   "alone": 3,
+   "ctx": 3
+  },
+  "combining/thai-mai-taikhu": {
+   "alone": 1,
+   "ctx": 1
+  },
+  "combining/arabic-fatha": {
+   "alone": 1,
+   "ctx": 1
+  },
+  "combining/hangul-jamo": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "vs15/heart-vs15": {
+   "alone": 1,
+   "ctx": 1
+  },
+  "vs15/smile-vs15": {
+   "alone": 1,
+   "ctx": 1
+  },
+  "vs15/watch-vs15": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "vs15/sun-vs15": {
+   "alone": 1,
+   "ctx": 1
+  },
+  "vs15/one-vs15": {
+   "alone": 1,
+   "ctx": 1
+  },
+  "vs15/grin-vs15": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "vs16/heart-vs16": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "vs16/smile-vs16": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "vs16/check-vs16": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "vs16/copyright-vs16": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "vs16/keycap-1": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "vs16/heart-bare": {
+   "alone": 1,
+   "ctx": 1
+  },
+  "vs16/smile-bare": {
+   "alone": 1,
+   "ctx": 1
+  },
+  "vs16/arrow-vs16": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "vs16/digit-vs16": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "zwj/family-mfg": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "zwj/family-4": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "zwj/technologist": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "zwj/couple-heart": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "zwj/rainbow-flag": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "zwj/black-cat": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "zwj/lone-zwj": {
+   "alone": 0,
+   "ctx": 0
+  },
+  "zwj/zwj-between-latin": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "skin/thumb-medium": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "skin/wave-dark": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "skin/handshake-2tone": {
+   "alone": 4,
+   "ctx": 4
+  },
+  "skin/lone-modifier": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "skin/people-holding-hands": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "skin/raised-hand-vs16-tone": {
+   "alone": 4,
+   "ctx": 4
+  },
+  "flag/IT": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "flag/JP": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "flag/single-RI": {
+   "alone": 1,
+   "ctx": 1
+  },
+  "flag/three-RI": {
+   "alone": 3,
+   "ctx": 3
+  },
+  "flag/four-RI": {
+   "alone": 4,
+   "ctx": 4
+  },
+  "flag/england-tag": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "flag/pirate-zwj": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "emoji-pre11/grin-u6.1": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "emoji-pre11/rocket-u6.0": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "emoji-post11/partying-u11": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "emoji-post11/ballet-shoes-u12": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "emoji-post11/smiling-tear-u13": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "emoji-post11/melting-u14": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "emoji-post11/hand-heart-u14": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "emoji-post11/wheel-u14": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "emoji-post11/hamsa-u14": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "emoji-post11/disco-ball-u14": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "emoji-post11/shaking-face-u15": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "emoji-post11/pink-heart-u15": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "emoji-post11/wireless-u15": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "emoji-post11/goose-u15": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "emoji-post11/face-bags-u16": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "emoji-post11/fingerprint-u16": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "emoji-post11/trombone-u16": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "emoji-post11/harp-u16": {
+   "alone": 2,
+   "ctx": 2
+  },
+  "placeholder/bare": {
+   "alone": 1,
+   "ctx": 1
+  },
+  "placeholder/row0": {
+   "alone": 1,
+   "ctx": 1
+  },
+  "placeholder/row0col0": {
+   "alone": 1,
+   "ctx": 1
+  },
+  "placeholder/row1col2": {
+   "alone": 1,
+   "ctx": 1
+  },
+  "placeholder/three-in-a-row": {
+   "alone": 3,
+   "ctx": 3
+  },
+  "placeholder/lone-diacritic": {
+   "alone": 0,
+   "ctx": 0
+  },
+  "misc/zwsp": {
+   "alone": 0,
+   "ctx": 0
+  },
+  "misc/soft-hyphen": {
+   "alone": 1,
+   "ctx": 1
+  },
+  "misc/nbsp": {
+   "alone": 1,
+   "ctx": 1
+  },
+  "misc/bom": {
+   "alone": 0,
+   "ctx": 0
+  },
+  "misc/wj": {
+   "alone": 0,
+   "ctx": 0
+  },
+  "misc/bel-free-del": {
+   "alone": 0,
+   "ctx": 0
+  },
+  "misc/tag-letter": {
+   "alone": 0,
+   "ctx": 0
+  },
+  "misc/private-use": {
+   "alone": 1,
+   "ctx": 1
+  },
+  "misc/noncharacter": {
+   "alone": 1,
+   "ctx": 1
+  },
+  "misc/replacement": {
+   "alone": 1,
+   "ctx": 1
+  },
+  "misc/circled-digit-ambig": {
+   "alone": 1,
+   "ctx": 1
+  },
+  "misc/black-star-ambig": {
+   "alone": 1,
+   "ctx": 1
+  }
+ }
+}
