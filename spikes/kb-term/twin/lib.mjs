@@ -38,9 +38,11 @@ const core = (t) => t._core;
 const bufs = (t) => core(t)._bufferService.buffers;
 function safe(f, d) { try { const v = f(); return v === undefined ? d : v; } catch { return d; } }
 
+// xterm has two encodings of 'default underline colour' (0 and the all-ones colour sentinel after SGR 59); treat as equal
+const ulc = (v) => ((v ?? 0) === 0x3FFFFFF ? 0 : (v ?? 0));
 function attrSig(a) {
   if (!a) return null;
-  return safe(() => ({ fg: a.fg >>> 0, bg: a.bg >>> 0, ul: a.extended ? [a.extended.underlineStyle, a.extended.underlineColor, a.extended._urlId ?? a.extended.urlId] : null }), String(a));
+  return safe(() => ({ fg: a.fg >>> 0, bg: a.bg >>> 0, ul: a.extended ? [a.extended.underlineStyle, ulc(a.extended.underlineColor), a.extended._urlId ?? a.extended.urlId] : null }), String(a));
 }
 
 export function stateOf(t) {
@@ -119,7 +121,7 @@ function cellOf(line, x) {
   let ext = null;
   if (w2 & 0x10000000) {
     const e = line._extendedAttrs[x];
-    if (e) ext = { ul: e.underlineStyle, ulc: e.underlineColor, url: e.urlId ?? e._urlId, raw: e._ext };
+    if (e) ext = { ul: e.underlineStyle, ulc: ulc(e.underlineColor), url: e.urlId ?? e._urlId, raw: e._ext };
   }
   return { ch, width, fg: w1 & COLOR, bg: w2 & COLOR, fgA: w1 & 0xFC000000, bgA: (w2 & 0xFC000000) & ~0x10000000, ext };
 }
@@ -138,62 +140,83 @@ function cellDiff(ca, cb, ta, tb, wideNear) {
   }
   if (ca.fg !== cb.fg) reasons.push('fg colour');
   if (ca.bg !== cb.bg) reasons.push('bg colour');
-  if (ca.fgA !== cb.fgA || ca.bgA !== cb.bgA) reasons.push('attributes');
   const ea = ca.ext, eb = cb.ext;
-  const ula = ea ? ea.ul : 0, ulb = eb ? eb.ul : 0;
+  const la0 = linkOf(ta, ea?.url), lb0 = linkOf(tb, eb?.url);
+  const linked = !!(la0 || lb0); // xterm draws linked cells as dashed underline (style 5): that difference is a consequence of the link
+  const UL = 0x10000000;
+  const fgAa = linked ? ca.fgA & ~UL : ca.fgA, fgAb = linked ? cb.fgA & ~UL : cb.fgA;
+  if (fgAa !== fgAb || ca.bgA !== cb.bgA) reasons.push('attributes');
+  const ula = linked ? 0 : (ea ? ea.ul : 0), ulb = linked ? 0 : (eb ? eb.ul : 0);
   const uca = ea ? ea.ulc : 0, ucb = eb ? eb.ulc : 0;
   if ((ula ?? 0) !== (ulb ?? 0)) reasons.push('underline style');
   // underline colour only matters where an underline is drawn (style non-zero or UNDERLINE flag); report always when differing
   if ((uca ?? 0) !== (ucb ?? 0)) reasons.push('SGR 58 underline colour');
-  const la = linkOf(ta, ea?.url), lb = linkOf(tb, eb?.url);
-  if (la !== lb) reasons.push('OSC 8 hyperlink');
+  if (la0 !== lb0) reasons.push('OSC 8 hyperlink');
   return reasons;
 }
 
-/** Compare two raw buffers, bottom-aligned. Returns {lenA,lenB,rowsCompared,rowsDiff,cells:{cls:n},examples:[...]} */
+/** Reasons (list of [col, reason, cellA, cellB]) why two raw lines differ; [] when equal. */
+function rowReasons(ta, tb, la, lb, cols) {
+  const da = la._data, db = lb._data;
+  let fast = true;
+  for (let i = 0; i < cols * 3; i++) if (da[i] !== db[i]) { fast = false; break; }
+  if (fast) {
+    for (const key in la._combined) if (la._combined[key] !== lb._combined[key]) { fast = false; break; }
+    if (fast) for (const key in la._extendedAttrs) {
+      const x = la._extendedAttrs[key], y = lb._extendedAttrs[key];
+      if (!x || !y || x.underlineStyle !== y.underlineStyle || ulc(x.underlineColor) !== ulc(y.underlineColor) || linkOf(ta, x.urlId ?? x._urlId) !== linkOf(tb, y.urlId ?? y._urlId)) { fast = false; break; }
+    }
+  }
+  if (fast) return [];
+  const out = [];
+  for (let x = 0; x < cols; x++) {
+    const ca = cellOf(la, x), cb = cellOf(lb, x);
+    const wideNear = [x - 1, x, x + 1].some((j) => {
+      if (j < 0 || j >= cols) return false;
+      return (la._data[j * 3] >>> 22) !== 1 || (lb._data[j * 3] >>> 22) !== 1;
+    });
+    for (const r of cellDiff(ca, cb, ta, tb, wideNear)) out.push([x, r, ca, cb]);
+  }
+  return out;
+}
+
+/** Compare two raw buffers from the bottom with one-row lookahead resync. A = ta (expected), B = tb (got). */
 export function compareBuffers(ta, tb, which, maxExamples = 3) {
   const A = bufs(ta)[which], B = bufs(tb)[which];
-  const res = { lenA: A.lines.length, lenB: B.lines.length, rowsCompared: 0, rowsDiff: 0, wrapFlagDiff: 0, cells: {}, examples: {} };
-  const n = Math.min(res.lenA, res.lenB), cols = ta.cols;
-  for (let k = 0; k < n; k++) {
-    const la = rawLine(A, res.lenA - 1 - k), lb = rawLine(B, res.lenB - 1 - k);
+  const res = { lenA: A.lines.length, lenB: B.lines.length, rowsCompared: 0, rowsDiff: 0, cells: {}, examples: {} };
+  const cols = ta.cols;
+  const bump = (cls, n = 1) => { res.cells[cls] = (res.cells[cls] ?? 0) + n; };
+  let i = res.lenA - 1, j = res.lenB - 1, extraA = 0, extraB = 0, wrapDiff = 0;
+  while (i >= 0 && j >= 0) {
+    const la = rawLine(A, i), lb = rawLine(B, j);
+    if (!la || !lb) { bump('unreadable line'); i--; j--; continue; }
     res.rowsCompared++;
-    if (!la || !lb) { res.cells['unreadable line'] = (res.cells['unreadable line'] ?? 0) + 1; continue; }
-    let same = la.isWrapped === lb.isWrapped;
-    if (!same) res.wrapFlagDiff++;
-    // fast path: identical raw words and combined/ext maps
-    const da = la._data, db = lb._data;
-    let fast = true;
-    for (let i = 0; i < cols * 3; i++) if (da[i] !== db[i]) { fast = false; break; }
-    if (fast) {
-      for (const key in la._combined) if (la._combined[key] !== lb._combined[key]) { fast = false; break; }
-      if (fast) for (const key in la._extendedAttrs) {
-        const x = la._extendedAttrs[key], y = lb._extendedAttrs[key];
-        if (!x || !y || x.underlineStyle !== y.underlineStyle || x.underlineColor !== y.underlineColor || linkOf(ta, x.urlId ?? x._urlId) !== linkOf(tb, y.urlId ?? y._urlId)) { fast = false; break; }
-      }
+    const r = rowReasons(ta, tb, la, lb, cols);
+    if (!r.length) { if (la.isWrapped !== lb.isWrapped) wrapDiff++; i--; j--; continue; }
+    const la2 = i > 0 ? rawLine(A, i - 1) : null, lb2 = j > 0 ? rawLine(B, j - 1) : null;
+    if (la2 && !rowReasons(ta, tb, la2, lb, cols).length) { extraA++; i--; continue; }
+    if (lb2 && !rowReasons(ta, tb, la, lb2, cols).length) { extraB++; j--; continue; }
+    res.rowsDiff++;
+    for (const [x, cls, ca, cb] of r) {
+      bump(cls);
+      const ex = (res.examples[cls] ??= []);
+      if (ex.length < maxExamples) ex.push({ rowFromBottom: res.lenA - 1 - i, col: x, a: ca, b: cb });
     }
-    if (fast) { if (!same) { /* wrap flag only */ } continue; }
-    let rowBad = false;
-    for (let x = 0; x < cols; x++) {
-      const ca = cellOf(la, x), cb = cellOf(lb, x);
-      const wideNear = [x - 1, x, x + 1].some((j) => {
-        if (j < 0 || j >= cols) return false;
-        const wa = la._data[j * 3] >>> 22, wb = lb._data[j * 3] >>> 22;
-        return wa !== 1 || wb !== 1;
-      });
-      const r = cellDiff(ca, cb, ta, tb, wideNear);
-      for (const cls of r) {
-        rowBad = true;
-        res.cells[cls] = (res.cells[cls] ?? 0) + 1;
-        const ex = (res.examples[cls] ??= []);
-        if (ex.length < maxExamples) ex.push({ rowFromBottom: k, col: x, a: ca, b: cb });
-      }
-    }
-    if (rowBad) res.rowsDiff++;
+    i--; j--;
   }
-  if (res.lenA !== res.lenB) res.cells['scrollback length'] = Math.abs(res.lenA - res.lenB);
-  if (res.wrapFlagDiff) res.cells['wrapped-line flag'] = res.wrapFlagDiff;
+  if (extraA) bump('rows only in expected (lost by seed/viewer)', extraA);
+  if (extraB) bump('rows only in viewer (extra)', extraB);
+  if (i >= 0 && j < 0) bump('rows only in expected (lost by seed/viewer)', i + 1);
+  if (j >= 0 && i < 0) bump('rows only in viewer (extra)', j + 1);
+  if (wrapDiff) bump('wrapped-line flag', wrapDiff);
   return res;
+}
+
+/** Probe: ESC 8 (DECRC) then report cursor + pen, to expose whether the saved-cursor slot differs in effect. */
+export async function probeDecrc(t) {
+  await write(t, '\x1b8');
+  const b = t.buffer.active;
+  return { x: b.cursorX, yAbs: b.baseY + b.cursorY, y: b.cursorY, pen: stateOf(t).pen, charset: stateOf(t)['charset.glevel'] };
 }
 
 export function classifyBufferDiff(cmp, which, altActive) {

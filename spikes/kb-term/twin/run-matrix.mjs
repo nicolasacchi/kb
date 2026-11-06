@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { VARIANTS, makeTerm, write, writeChunked, stateOf, diffState, compareBuffers, classifyBufferDiff } from './lib.mjs';
+import { probeDecrc, VARIANTS, makeTerm, write, writeChunked, stateOf, diffState, compareBuffers, classifyBufferDiff } from './lib.mjs';
 
 const [streamsDir, outDir, joinsArg] = process.argv.slice(2);
 const JOINS = Number(joinsArg ?? 100), INSIDE_TARGET = 15;
@@ -56,13 +56,14 @@ for (const variant of VARIANTS) {
     const rec = { variant, stream: name, cols, rows, bytes: bytes.length, sha256_16: sha, joins: [], error: null };
     results.push(rec);
     try {
-      const ref = makeTerm(cols, rows, variant).t;
-      await writeChunked(ref, bytes, 0, bytes.length);
+      const buildRef = async () => { const r0 = makeTerm(cols, rows, variant).t; await writeChunked(r0, bytes, 0, bytes.length); return r0; };
+      let ref = await buildRef(), refDirty = false;
       const refState = stateOf(ref);
       const twin = makeTerm(cols, rows, variant);
       let pos = 0;
       for (const j of joins) {
         await writeChunked(twin.t, bytes, pos, j.off); pos = j.off;
+        if (refDirty) { ref.dispose(); ref = await buildRef(); refDirty = false; }
         const twinState = stateOf(twin.t);
         const seed = twin.ser.serialize({ scrollback: 50000 });
         const v = makeTerm(cols, rows, variant).t;
@@ -78,11 +79,19 @@ for (const variant of VARIANTS) {
         }
         // stage B: convergence (viewer after the remaining stream vs the reference that saw everything)
         await writeChunked(v, bytes, j.off, bytes.length);
-        const B = { state: diffState(refState, stateOf(v)), cells: {}, examples: {} };
+        const B = { state: diffState(refState, stateOf(v)), cells: {}, examples: {}, probe: null };
         for (const which of ['normal', 'alt']) {
           const c = compareBuffers(ref, v, which);
           Object.assign(B.cells, classifyBufferDiff(c, which, which === 'alt' ? refState.activeBuffer === 'alternate' : true));
           if (Object.keys(c.examples).length) B.examples[which] = c.examples;
+        }
+        // effective DECSC probe: do ref and viewer restore to the same cursor/pen? (probe mutates both, so run last on clones' end state)
+        if (B.state.some((d) => d.cls === 'DECSC saved cursor')) {
+          const pr = await probeDecrc(ref), pv = await probeDecrc(v);
+          B.probe = JSON.stringify({ x: pr.x, y: pr.y }) === JSON.stringify({ x: pv.x, y: pv.y }) && JSON.stringify(pr.pen) === JSON.stringify(pv.pen) ? 'same' : 'DIFFERENT';
+          B.probeDetail = B.probe === 'DIFFERENT' ? { ref: pr, viewer: pv } : undefined;
+          // restore ref to its pre-probe state is not possible; rebuild by marking ref dirty so later joins re-create it
+          refDirty = true;
         }
         rec.joins.push({ off: j.off, inside: j.inside, seedBytes: Buffer.byteLength(seed), twinActive: twinState.activeBuffer, A, B });
         v.dispose();

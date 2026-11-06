@@ -18,7 +18,7 @@ for (const variant of [...new Set(M.results.map((r) => r.variant))]) {
   P(`## Variant: ${variant}\n`);
   P('| stream | size | bytes | joins | inside ?2026 | seed bytes (min/med/max) | clean A | clean B | error |');
   P('|---|---|---|---|---|---|---|---|---|');
-  const agg = { A: {}, B: {} }, V = { joins: 0, inside: 0, cleanA: 0, cleanB: 0, cleanAIn: 0, cleanBIn: 0 };
+  const agg = { A: {}, B: {} }, V = { joins: 0, inside: 0, cleanA: 0, cleanB: 0, cleanAIn: 0, cleanBIn: 0, cleanA_noDecsc: 0, cleanB_noDecsc: 0 };
   const examples = { A: {}, B: {} };
   for (const r of rs) {
     let cA = 0, cB = 0, ins = 0;
@@ -26,11 +26,14 @@ for (const variant of [...new Set(M.results.map((r) => r.variant))]) {
       const a = Object.keys(j.A.cells).length + j.A.state.length, b = Object.keys(j.B.cells).length + j.B.state.length;
       if (!a) cA++; if (!b) cB++; if (j.inside) ins++;
       V.joins++; if (j.inside) V.inside++;
+      if (!Object.keys(j.A.cells).length && !j.A.state.filter((d) => d.cls !== 'DECSC saved cursor').length) V.cleanA_noDecsc++;
+      if (!Object.keys(j.B.cells).length && !j.B.state.filter((d) => d.cls !== 'DECSC saved cursor').length) V.cleanB_noDecsc++;
       if (!a) { V.cleanA++; if (j.inside) V.cleanAIn++; }
       if (!b) { V.cleanB++; if (j.inside) V.cleanBIn++; }
       for (const st of ['A', 'B']) {
         const seen = new Set();
         for (const [c, n] of Object.entries(j[st].cells)) { const e = (agg[st][c] ??= { points: 0, cells: 0 }); e.points++; e.cells += n; seen.add(c); if (!examples[st][c] && j[st].examples) examples[st][c] = { stream: r.stream, off: j.off, ex: j[st].examples }; }
+        if (st === 'B' && j.B.probe) { const e = (agg.B['probe: ESC 8 after remainder is ' + j.B.probe] ??= { points: 0, cells: 0, sample: j.B.probeDetail ? JSON.stringify(j.B.probeDetail).slice(0, 200) : '' }); e.points++; }
         for (const d of j[st].state) { const c = 'state: ' + d.cls; const e = (agg[st][c] ??= { points: 0, cells: 0, sample: `${d.key}: ${JSON.stringify(d.a)} vs ${JSON.stringify(d.b)} (stream ${r.stream} @${j.off})` }); e.points++; }
       }
     }
@@ -38,7 +41,7 @@ for (const variant of [...new Set(M.results.map((r) => r.variant))]) {
     P(`| ${r.stream} | ${r.cols}x${r.rows} | ${r.bytes} | ${r.joins.length} | ${ins} | ${sb[0] ?? 0}/${med(sb)}/${sb[sb.length - 1] ?? 0} | ${cA} | ${cB} | ${r.error ? 'YES' : ''} |`);
   }
   P();
-  P(`Totals: ${V.joins} join points (${V.inside} inside a ?2026 frame). Fully clean seed (A): ${V.cleanA}/${V.joins} (inside-frame: ${V.cleanAIn}/${V.inside}). Fully converged after remainder (B): ${V.cleanB}/${V.joins} (inside-frame: ${V.cleanBIn}/${V.inside}).\n`);
+  P(`Totals: ${V.joins} join points (${V.inside} inside a ?2026 frame). Fully clean seed (A): ${V.cleanA}/${V.joins} (inside-frame: ${V.cleanAIn}/${V.inside}). Fully converged after remainder (B): ${V.cleanB}/${V.joins} (inside-frame: ${V.cleanBIn}/${V.inside}). Ignoring the latent DECSC saved-cursor slot: A ${V.cleanA_noDecsc}/${V.joins}, B ${V.cleanB_noDecsc}/${V.joins}.\n`);
   summary.variants[variant] = { totals: V, classes: agg, errors: rs.filter((r) => r.error).map((r) => ({ stream: r.stream, error: r.error.split('\n')[0] })) };
   for (const st of ['A', 'B']) {
     P(`### ${variant} stage ${st} ${st === 'A' ? '(seed fidelity)' : '(convergence with reference)'}: mismatch classes\n`);
