@@ -1,4 +1,4 @@
-import { test } from '@playwright/test';
+import { test, chromium } from '@playwright/test';
 import { openPage, feed, shot, probe, record } from '../lib/fixture.mjs';
 import { Scenario } from '../lib/stream.mjs';
 
@@ -11,9 +11,9 @@ const VARIANTS = {
 };
 for (const [name, args] of Object.entries(VARIANTS)) {
   test.describe(`diag ${name}`, () => {
-    test.use({ launchOptions: { args } });
-    test(`k webgl text dpr2 ${name}`, async ({ browser }) => {
-      const o = await openPage(browser, { renderer: 'webgl', dpr: 2, gfx: false });
+    test(`k webgl text dpr2 ${name}`, async () => {
+      const br = await chromium.launch({ args });
+      const o = await openPage(br, { renderer: 'webgl', dpr: 2, gfx: false });
       try {
         const info = async () => o.page.evaluate(() => {
           const cs = [...document.querySelectorAll('.xterm-screen canvas')].map((c) => ({ cls: c.className, w: c.width, h: c.height, sw: c.style.width, sh: c.style.height }));
@@ -38,7 +38,7 @@ for (const [name, args] of Object.entries(VARIANTS)) {
         const row3 = await probe(o.page, png3, pts);
         const lit3 = row3.map((c, i) => (c && c[0] + c[1] + c[2] > 120 ? i * 8 : -1)).filter((v) => v >= 0);
         record('k-diag', name, { before, after1, rightmostLitDevicePx: rightmost, expectedRightmostApprox: 56 * 16, afterRefreshRightmost: lit3.length ? Math.max(...lit3) : -1, litBuckets: lit.length });
-      } finally { await o.close(); }
+      } finally { await o.close(); await br.close(); }
     });
   });
 }
