@@ -17,7 +17,7 @@ const HARNESS_SHA256 =
   "f1b05d401f42c65e04932dc324df45e13c8a14356dc05f83d0b39084dbe51f4a";
 
 function harnessBytes(...args: string[]): Buffer {
-  const res = spawnSync("python3", ["-I", HARNESS, ...args]);
+  const res = spawnSync("python3", ["-I", HARNESS, ...args], { timeout: 10_000 });
   if (res.status !== 0) {
     throw new Error(`fake_harness failed: ${res.stderr.toString()}`);
   }

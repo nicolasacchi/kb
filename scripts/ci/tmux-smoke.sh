@@ -18,6 +18,7 @@ OUT_XML="${1:-tmux-smoke-junit.xml}"
 D="$(mktemp -d)"
 SOCK="${D}/s.sock"
 FAILED=0
+FAILURES=0
 NAMES=()
 RESULTS=()
 
@@ -39,6 +40,7 @@ record() {
   else
     RESULTS+=("fail")
     FAILED=1
+    FAILURES=$((FAILURES + 1))
   fi
   NAMES+=("${name}")
 }
@@ -134,7 +136,7 @@ record kill-server-removes-socket case_kill
 
 {
   printf '<?xml version="1.0" encoding="UTF-8"?>\n'
-  printf '<testsuites><testsuite name="tmux-smoke" tests="5" failures="%d">\n' "${FAILED}"
+  printf '<testsuites><testsuite name="tmux-smoke" tests="5" failures="%d">\n' "${FAILURES}"
   for i in 0 1 2 3 4; do
     if [ "${RESULTS[${i}]}" = "pass" ]; then
       printf '  <testcase classname="tmux-smoke" name="%s"/>\n' "${NAMES[${i}]}"
