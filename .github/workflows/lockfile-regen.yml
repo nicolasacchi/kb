@@ -116,17 +116,52 @@ jobs:
           cargo metadata --locked --format-version 1 > /dev/null
           # A line diff is not a reliable "did a version move" test (git
           # re-aligns removed blocks and shows unrelated `+version` lines), so
-          # compare the (name, version) SETS: the pruned lock must be a subset.
+          # compare the (name, version) SETS by name: a retained package NAME
+          # whose version set changed is a move (fail); a package NAME that is
+          # new in the after lock is an addition (notice, allow); a name that
+          # the prune dropped is allowed (pruned).
           python3 - <<'PY'
           import sys, tomllib
           def load(p):
               with open(p, "rb") as f:
                   return {(x["name"], x["version"]) for x in tomllib.load(f)["package"]}
+          def versions_by_name(pairs):
+              by_name = {}
+              for n, v in pairs:
+                  by_name.setdefault(n, set()).add(v)
+              return by_name
+          def classify(before, after):
+              b = versions_by_name(before)
+              a = versions_by_name(after)
+              moved = sorted(n for n in b if n in a and b[n] != a[n])
+              added = sorted(n for n in a if n not in b)
+              pruned = sorted(n for n in b if n not in a)
+              return {"moved": moved, "added": added, "pruned": pruned}
+          def check(cond, msg):
+              if not cond:
+                  print(f"::error::regen-cargo self-check: {msg}")
+                  sys.exit(1)
+          c = classify({("a", "1")}, {("a", "1"), ("b", "2")})
+          check(c["moved"] == [] and c["added"] == ["b"] and c["pruned"] == [],
+                f"pure addition of a new name must pass: {c}")
+          c = classify({("a", "1")}, {("a", "2")})
+          check(c["moved"] == ["a"], f"version move of a retained name must fail: {c}")
+          c = classify({("a", "1")}, {("a", "1"), ("a", "2")})
+          check(c["moved"] == ["a"], f"second version of a retained name must fail: {c}")
+          c = classify({("a", "1"), ("b", "2")}, {("a", "1")})
+          check(c["moved"] == [] and c["added"] == [] and c["pruned"] == ["b"],
+                f"pruned name must pass: {c}")
+          print("regen-cargo self-check: 4/4 cases behave as expected")
           before, after = load("/tmp/Cargo.lock.before"), load("Cargo.lock")
           print(f"packages: {len(before)} -> {len(after)}")
-          added = sorted(after - before)
-          if added:
-              print("::error::cargo update --workspace added/moved packages: " + ", ".join(f"{n} {v}" for n, v in added))
+          result = classify(before, after)
+          print(f"pruned packages: {result['pruned']}")
+          if result["added"]:
+              print("::notice::cargo update --workspace added new packages: "
+                    + ", ".join(result["added"]))
+          if result["moved"]:
+              print("::error::cargo update --workspace moved retained package versions: "
+                    + ", ".join(result["moved"]))
               sys.exit(1)
           PY
 
