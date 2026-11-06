@@ -197,6 +197,10 @@ pub struct LiveSession {
     /// Unix seconds that tool was started (clamped to `<= now`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_tool_at: Option<i64>,
+    /// AH7 — only from the daemon's live-status wire (a waiting hook row);
+    /// `--local` adapters never set it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<BackgroundCounts>,
 }
 
 /// OL IDEA4 — the ONE label grammar for "which tool" evidence, applied at
@@ -237,6 +241,70 @@ pub fn tool_evidence_visible(state: LiveState, silent_secs: i64) -> bool {
         LiveState::Working => silent_secs >= TOOL_EVIDENCE_QUIET_SECS,
         LiveState::Waiting | LiveState::Cold | LiveState::Finished => false,
     }
+}
+
+/// Most any one bucket may report; kb-beat.sh caps to the same value.
+pub const BACKGROUND_COUNT_MAX: u8 = 99;
+
+/// AH7: how many background tasks the harness reported still in flight at a
+/// turn end, by closed bucket. Counts only: never a task id, description or command.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct BackgroundCounts {
+    pub agent: u8,
+    pub shell: u8,
+    pub other: u8,
+}
+
+impl BackgroundCounts {
+    /// Sum of the three buckets.
+    pub fn total(&self) -> u16 {
+        u16::from(self.agent) + u16::from(self.shell) + u16::from(self.other)
+    }
+
+    /// Parse the wire `{agent, shell, other}` object. A malformed count from
+    /// a skewed or foreign client must never 400 a beat nor reach a
+    /// renderer, so ANY bad value drops the whole attribute.
+    ///
+    /// Bucket mapping (applied by the producer, kb-beat.sh): subagent /
+    /// workflow / teammate -> `agent`; shell -> `shell`; everything else ->
+    /// `other`. Here: `v` must be an object; each bucket is absent (0) or an
+    /// unsigned integer `<= 99`, otherwise `None`; unknown keys are ignored;
+    /// an all-zero result is `None`.
+    pub fn from_wire(v: &Value) -> Option<Self> {
+        let o = v.as_object()?;
+        let get = |k: &str| -> Option<u8> {
+            match o.get(k) {
+                None => Some(0),
+                Some(x) => {
+                    let n = x.as_u64()?;
+                    if n <= u64::from(BACKGROUND_COUNT_MAX) {
+                        Some(n as u8)
+                    } else {
+                        None
+                    }
+                }
+            }
+        };
+        let c = Self {
+            agent: get("agent")?,
+            shell: get("shell")?,
+            other: get("other")?,
+        };
+        if c.total() == 0 {
+            None
+        } else {
+            Some(c)
+        }
+    }
+}
+
+/// AH7 — whether a row's background counts may be shown: `Waiting` only.
+/// A display gate only, never an input to [`derive_state`]. `Cold` is
+/// excluded on purpose: an 8-hour-old row is honestly cold, and a crashed
+/// session with the flag set must still cool.
+pub fn background_visible(state: LiveState) -> bool {
+    matches!(state, LiveState::Waiting)
 }
 
 /// THE core pure function (design §3). Two independent axes in, one lane +
@@ -667,6 +735,7 @@ pub fn classify_claude_transcript(
         version,
         last_tool,
         last_tool_at,
+        background: None,
     })
 }
 
@@ -1516,5 +1585,73 @@ mod tests {
         let torn_note = skipped_jsonl_warn(Path::new("sid.jsonl"), torn);
         assert_eq!(torn_note.excerpt, torn);
         assert!(serde_json::from_str::<Value>(&torn_note.excerpt).is_err());
+    }
+
+    #[test]
+    fn background_counts_from_wire_rules() {
+        use serde_json::json;
+        let bc = |a, s, o| {
+            Some(BackgroundCounts {
+                agent: a,
+                shell: s,
+                other: o,
+            })
+        };
+        assert_eq!(
+            BackgroundCounts::from_wire(&json!({"agent": 2})),
+            bc(2, 0, 0)
+        );
+        assert_eq!(
+            BackgroundCounts::from_wire(&json!({"agent": 1, "extra": "x"})),
+            bc(1, 0, 0)
+        );
+        assert_eq!(
+            BackgroundCounts::from_wire(&json!({"agent": 99, "shell": 1, "other": 3})),
+            bc(99, 1, 3)
+        );
+        for bad in [
+            json!("x"),
+            json!([1]),
+            json!({"agent": -1}),
+            json!({"agent": 100}),
+            json!({"agent": 1.5}),
+            json!({"agent": "2"}),
+            json!({"agent": null}),
+            json!({"agent": 0, "shell": 0}),
+            json!({"agent": 2, "shell": 100}),
+            json!(null),
+        ] {
+            assert_eq!(BackgroundCounts::from_wire(&bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn background_visible_is_waiting_only() {
+        for (st, want) in [
+            (LiveState::Working, false),
+            (LiveState::Stalled, false),
+            (LiveState::Waiting, true),
+            (LiveState::Cold, false),
+            (LiveState::Finished, false),
+            (LiveState::PresumedEnded, false),
+        ] {
+            assert_eq!(background_visible(st), want, "{st:?}");
+        }
+    }
+
+    #[test]
+    fn live_session_json_omits_background_when_none() {
+        let t0 = real_now() - 60;
+        let mut got = classify_lines(&[tool_use_line("Read", Some(t0))], 0);
+        got.background = None;
+        let v = serde_json::to_value(&got).unwrap();
+        assert!(v.get("background").is_none());
+        got.background = Some(BackgroundCounts {
+            agent: 1,
+            shell: 0,
+            other: 0,
+        });
+        let v = serde_json::to_value(&got).unwrap();
+        assert_eq!(v["background"]["agent"], 1);
     }
 }

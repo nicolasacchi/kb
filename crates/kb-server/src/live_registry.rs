@@ -22,7 +22,9 @@
 //! the operator sees is computed, and can therefore be recomputed,
 //! explained, and corrected" principle (§5) demands.
 
-use kb_core::sessions::live::{derive_state, Confidence, Holder, LivePolicy, LiveState};
+use kb_core::sessions::live::{
+    derive_state, BackgroundCounts, Confidence, Holder, LivePolicy, LiveState,
+};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 
@@ -162,6 +164,9 @@ pub struct LiveRow {
     /// [`next_last_tool`] under the registry lock. Ignores any value the
     /// caller put here; display evidence only, never a `derive_state` input.
     pub last_tool: Option<LastTool>,
+    /// AH7 — what the turn_end beat that made this row human-held reported;
+    /// display only, never a `derive_state` input.
+    pub background: Option<BackgroundCounts>,
 }
 
 /// The outcome of one [`LiveRegistry::record_beat`] call: the row as
@@ -322,6 +327,14 @@ impl LiveRegistry {
             &std::mem::take(&mut row.tool_update),
         );
 
+        // Background counts (AH7): only a turn_end beat maps to Human
+        // (`map_event`), so this is the turn_end-only rule enforced here too.
+        // There is no carry-forward: every beat replaces the row, unlike
+        // `blocked`/`touches`/`last_tool`.
+        if row.holder != Holder::Human {
+            row.background = None;
+        }
+
         let (state, confidence) = derive_state(
             row.holder,
             row.last_activity_unix,
@@ -432,7 +445,17 @@ mod tests {
             touches: VecDeque::new(),
             tool_update: ToolUpdate::Keep,
             last_tool: None,
+            background: None,
         }
+    }
+
+    fn with_bg(mut r: LiveRow, agent: u8) -> LiveRow {
+        r.background = Some(BackgroundCounts {
+            agent,
+            shell: 0,
+            other: 0,
+        });
+        r
     }
 
     fn lt(name: &str, at: i64) -> LastTool {
@@ -961,5 +984,66 @@ mod tests {
         reg.record_beat(row("new", Holder::Agent, t, t), t);
         assert!(!reg.known_session_ids().contains("s0"));
         assert!(rels(&reg, t).is_empty());
+    }
+
+    #[test]
+    fn a_non_human_row_never_stores_background() {
+        let reg = LiveRegistry::new();
+        let now = 1_000_000;
+        let a = reg.record_beat(with_bg(row("a", Holder::Agent, now, now), 2), now);
+        assert_eq!(a.row.background, None);
+        let e = reg.record_beat(with_bg(row("e", Holder::Ended, now, now), 2), now);
+        assert_eq!(e.row.background, None);
+        let h = reg.record_beat(with_bg(row("h", Holder::Human, now, now), 2), now);
+        assert_eq!(h.row.background.map(|b| b.agent), Some(2));
+        for (r, _, _) in reg.snapshot(now) {
+            assert_eq!(r.background.is_some(), r.session_id == "h");
+        }
+    }
+
+    #[test]
+    fn a_beat_without_background_clears_the_stored_one() {
+        let reg = LiveRegistry::new();
+        let now = 1_000_000;
+        reg.record_beat(with_bg(row("a", Holder::Human, now, now), 1), now);
+        // Another human-held beat without background: no carry-forward.
+        let again = reg.record_beat(row("a", Holder::Human, now + 1, now + 1), now + 1);
+        assert_eq!(again.row.background, None);
+        assert_eq!(stored(&reg, now + 1).background, None);
+    }
+
+    // invariant:11 background counts never change the derived state
+    #[test]
+    fn background_never_changes_the_derived_state() {
+        let with = LiveRegistry::new();
+        let without = LiveRegistry::new();
+        let t = 1_000_000;
+        let seq: Vec<(Holder, i64)> = vec![
+            (Holder::Agent, t),
+            (Holder::Human, t + 10),
+            (Holder::Human, t + 20),
+            (Holder::Agent, t + 3000),
+            (Holder::Human, t + 3010),
+            (Holder::Ended, t + 3020),
+        ];
+        for (holder, at) in seq {
+            let a = with.record_beat(with_bg(row("s", holder, at, at), 3), at);
+            let b = without.record_beat(row("s", holder, at, at), at);
+            assert_eq!(a.state, b.state);
+            assert_eq!(a.confidence, b.confidence);
+            assert_eq!(a.previous_state, b.previous_state);
+            assert_eq!(a.previous_blocked, b.previous_blocked);
+            // 100_000 s is past the cold horizon: Cold either way.
+            for off in [5, 5000, 100_000] {
+                assert_eq!(
+                    with.snapshot(at + off)[0].1,
+                    without.snapshot(at + off)[0].1
+                );
+                assert_eq!(
+                    with.snapshot(at + off)[0].2,
+                    without.snapshot(at + off)[0].2
+                );
+            }
+        }
     }
 }

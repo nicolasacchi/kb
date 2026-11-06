@@ -217,6 +217,7 @@ pub fn classify_codex_session(
         version: None,
         last_tool: None,
         last_tool_at: None,
+        background: None,
     })
 }
 

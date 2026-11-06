@@ -242,6 +242,7 @@ pub fn classify_grok_session(
         version: None,
         last_tool: None,
         last_tool_at: None,
+        background: None,
     })
 }
 

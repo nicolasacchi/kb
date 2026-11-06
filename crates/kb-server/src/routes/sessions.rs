@@ -29,8 +29,8 @@ use kb_core::sessions::resume_command;
 // LSC-2 — the two-axis live-session vocabulary (LSC-1, reused verbatim: the
 // beat route/registry never re-derive state logic).
 use kb_core::sessions::live::{
-    derive_state, is_tool_label, tool_evidence_visible, tool_label, Holder, LivePolicy, LiveState,
-    StateSource,
+    background_visible, derive_state, is_tool_label, tool_evidence_visible, tool_label,
+    BackgroundCounts, Holder, LivePolicy, LiveState, StateSource, BACKGROUND_COUNT_MAX,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -7728,6 +7728,12 @@ pub struct BeatDetail {
     /// worktree edit read as an edit to the main checkout.
     #[serde(default)]
     pub worktree: Option<String>,
+    /// AH7 — background work a `turn_end` beat reported still in flight:
+    /// `{agent, shell, other}` counts. A `Value` for the same reason `paths`
+    /// is: a malformed shape is dropped by [`sanitize_background`], never a
+    /// reason to 400 the beat.
+    #[serde(default)]
+    pub background: Option<serde_json::Value>,
 }
 
 /// Longest path/root/project string a beat may carry (bytes).
@@ -7852,6 +7858,19 @@ fn map_event(event: &str) -> Option<(Holder, bool)> {
         "end" => Some((Holder::Ended, false)),
         _ => None,
     }
+}
+
+/// AH7 — the background counts a beat may carry: `turn_end` only, parsed by
+/// the ONE [`BackgroundCounts::from_wire`]. Anything malformed is a silent
+/// drop; the beat is always accepted.
+fn sanitize_background(event: &str, detail: Option<&BeatDetail>) -> Option<BackgroundCounts> {
+    if event != "turn_end" {
+        return None;
+    }
+    detail?
+        .background
+        .as_ref()
+        .and_then(BackgroundCounts::from_wire)
 }
 
 /// OL IDEA4 — what a beat does to the row's remembered last-started tool.
@@ -8030,6 +8049,7 @@ pub async fn beat(State(state): State<Arc<KbHandles>>, Json(body): Json<BeatBody
     let (detail_reason, blocked_tool) = blocked_detail(&body.event, body.detail.as_ref());
     let effect = block_effect(&body.event);
     let tool_update = tool_update_for(&body.event, body.detail.as_ref(), at_unix, now_unix);
+    let background = sanitize_background(&body.event, body.detail.as_ref());
 
     let row = crate::live_registry::LiveRow {
         session_id: body.session_id,
@@ -8051,6 +8071,7 @@ pub async fn beat(State(state): State<Arc<KbHandles>>, Json(body): Json<BeatBody
         touches,
         tool_update,
         last_tool: None,
+        background,
     };
 
     let outcome = state
@@ -8142,6 +8163,11 @@ pub struct LiveStatusRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-export", ts(optional))]
     pub last_tool_at: Option<i64>,
+    /// AH7: background work the harness reported still in flight at the turn
+    /// end, counts only. Present on a `waiting` hook row only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub background: Option<BackgroundCounts>,
 }
 
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
@@ -8276,6 +8302,16 @@ fn redact_for_non_loopback(row: &mut LiveStatusRow) {
     if row.last_tool.as_deref().is_some_and(|t| !is_tool_label(t)) {
         row.last_tool = None;
         row.last_tool_at = None;
+    }
+    // AH7 — same posture: counts are validated at intake, but an out-of-range
+    // or all-zero value must never leave this floor.
+    if row.background.is_some_and(|b| {
+        b.total() == 0
+            || [b.agent, b.shell, b.other]
+                .iter()
+                .any(|&n| n > BACKGROUND_COUNT_MAX)
+    }) {
+        row.background = None;
     }
 }
 
@@ -8414,6 +8450,7 @@ pub async fn live_status(
                 blocked_since_unix: r.blocked_since_unix,
                 last_tool,
                 last_tool_at,
+                background: r.background.filter(|_| background_visible(live_state)),
             }
         })
         .collect();
@@ -8503,6 +8540,7 @@ pub async fn live_status(
                         // A capture is not live evidence.
                         last_tool: None,
                         last_tool_at: None,
+                        background: None,
                     }
                 })
                 .collect()
@@ -8750,6 +8788,7 @@ mod lsc2_tests {
             blocked_since_unix: None,
             last_tool: None,
             last_tool_at: None,
+            background: None,
         }
     }
 
@@ -9108,6 +9147,7 @@ mod lsc2_tests {
             touches: Default::default(),
             tool_update: Default::default(),
             last_tool: None,
+            background: None,
         };
         let out = reg.record_beat_effect(row, at, block_effect(event));
         session_state_payload(&out)
@@ -9426,6 +9466,7 @@ mod lsc2_tests {
             touches: ts.into(),
             tool_update: Default::default(),
             last_tool: None,
+            background: None,
         };
         let a = reg.record_beat(
             mk("a", sanitize_touches("tool", with.detail.as_ref(), 500)),
@@ -9623,6 +9664,133 @@ mod lsc2_tests {
         }
         let want = std::fs::read_to_string(&path).expect("tests/fixtures/live-touches-v1.json");
         assert_eq!(got, want, "run with KB_UPDATE_FIXTURES=1 to regenerate");
+    }
+
+    // ---- AH7: background counts on the turn_end beat ----------------------
+
+    fn bg_detail(v: serde_json::Value) -> BeatDetail {
+        BeatDetail {
+            background: Some(v),
+            ..Default::default()
+        }
+    }
+
+    /// Drive a beat through `map_event` + `sanitize_background` +
+    /// `record_beat_effect`, like `beat()` does.
+    fn drive_bg(
+        reg: &crate::live_registry::LiveRegistry,
+        event: &str,
+        background: serde_json::Value,
+        at: i64,
+    ) -> crate::live_registry::RecordOutcome {
+        let (holder, blocked) = map_event(event).unwrap();
+        let d = bg_detail(background);
+        let row = crate::live_registry::LiveRow {
+            session_id: "s".to_string(),
+            harness: "claude".to_string(),
+            holder,
+            last_activity_unix: at,
+            lease_secs: 900,
+            host: None,
+            pid: None,
+            cwd: Some("/w/proj".to_string()),
+            model: None,
+            title: None,
+            last_line: None,
+            blocked,
+            detail_reason: None,
+            blocked_tool: None,
+            blocked_since_unix: None,
+            touched_unix: at,
+            touches: Default::default(),
+            tool_update: Default::default(),
+            last_tool: None,
+            background: sanitize_background(event, Some(&d)),
+        };
+        reg.record_beat_effect(row, at, block_effect(event))
+    }
+
+    #[test]
+    fn sanitize_background_only_on_turn_end() {
+        let d = bg_detail(serde_json::json!({"agent": 2}));
+        assert_eq!(
+            sanitize_background("turn_end", Some(&d)),
+            Some(BackgroundCounts {
+                agent: 2,
+                shell: 0,
+                other: 0
+            })
+        );
+        for ev in ["start", "prompt", "tool", "blocked", "unblocked", "end"] {
+            assert_eq!(sanitize_background(ev, Some(&d)), None, "{ev}");
+        }
+        assert_eq!(sanitize_background("turn_end", None), None);
+        assert_eq!(
+            sanitize_background("turn_end", Some(&BeatDetail::default())),
+            None
+        );
+    }
+
+    #[test]
+    fn background_is_set_by_turn_end_and_cleared_by_every_other_beat() {
+        let reg = crate::live_registry::LiveRegistry::new();
+        let bg = serde_json::json!({"agent": 1, "shell": 2});
+        let te = drive_bg(&reg, "turn_end", bg.clone(), 1_000);
+        assert_eq!(te.row.background.map(|b| (b.agent, b.shell)), Some((1, 2)));
+        for (i, ev) in ["tool", "prompt", "blocked", "unblocked", "start"]
+            .iter()
+            .enumerate()
+        {
+            drive_bg(&reg, "turn_end", bg.clone(), 1_100 + i as i64 * 10);
+            // The beat carries background too, but only turn_end may keep it.
+            let out = drive_bg(&reg, ev, bg.clone(), 1_105 + i as i64 * 10);
+            assert_eq!(out.row.background, None, "{ev}");
+        }
+        drive_bg(&reg, "turn_end", bg.clone(), 1_200);
+        let end = drive_bg(&reg, "end", bg, 1_210);
+        assert_eq!(end.row.background, None);
+    }
+
+    #[test]
+    fn a_background_beat_never_changes_a_session_state_frame() {
+        let with = crate::live_registry::LiveRegistry::new();
+        let without = crate::live_registry::LiveRegistry::new();
+        let bg = serde_json::json!({"agent": 2});
+        let none = serde_json::Value::Null;
+        let s1 = session_state_payload(&drive_bg(&with, "start", bg.clone(), 1_000));
+        let s2 = session_state_payload(&drive_bg(&without, "start", none.clone(), 1_000));
+        assert_eq!(s1, s2);
+        let a = session_state_payload(&drive_bg(&with, "turn_end", bg, 1_010)).expect("frame");
+        let b = session_state_payload(&drive_bg(&without, "turn_end", none, 1_010)).expect("frame");
+        assert_eq!(a, b);
+        assert!(a.get("background").is_none());
+        // A second turn_end with different counts while Waiting: no frame.
+        let again = drive_bg(&with, "turn_end", serde_json::json!({"shell": 5}), 1_020);
+        assert!(session_state_payload(&again).is_none());
+    }
+
+    #[test]
+    fn redact_for_non_loopback_drops_an_out_of_range_background() {
+        let mut ok = row(LiveState::Waiting, 5, "a");
+        ok.background = Some(BackgroundCounts {
+            agent: 99,
+            shell: 0,
+            other: 1,
+        });
+        redact_for_non_loopback(&mut ok);
+        assert!(ok.background.is_some());
+        let mut big = row(LiveState::Waiting, 5, "b");
+        big.background = Some(BackgroundCounts {
+            agent: 100,
+            shell: 0,
+            other: 0,
+        });
+        redact_for_non_loopback(&mut big);
+        assert!(big.background.is_none());
+        let mut zero = row(LiveState::Waiting, 5, "c");
+        zero.background = Some(BackgroundCounts::default());
+        redact_for_non_loopback(&mut zero);
+        assert!(zero.background.is_none());
     }
 }
 
