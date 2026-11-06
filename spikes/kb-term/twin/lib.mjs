@@ -193,9 +193,13 @@ export function compareBuffers(ta, tb, which, maxExamples = 3) {
     res.rowsCompared++;
     const r = rowReasons(ta, tb, la, lb, cols);
     if (!r.length) { if (la.isWrapped !== lb.isWrapped) wrapDiff++; i--; j--; continue; }
-    const la2 = i > 0 ? rawLine(A, i - 1) : null, lb2 = j > 0 ? rawLine(B, j - 1) : null;
-    if (la2 && !rowReasons(ta, tb, la2, lb, cols).length) { extraA++; i--; continue; }
-    if (lb2 && !rowReasons(ta, tb, la, lb2, cols).length) { extraB++; j--; continue; }
+    let skipped = false;
+    for (let k = 1; k <= 4 && !skipped; k++) {
+      const a2 = i - k >= 0 ? rawLine(A, i - k) : null, b2 = j - k >= 0 ? rawLine(B, j - k) : null;
+      if (a2 && !rowReasons(ta, tb, a2, lb, cols).length) { extraA += k; i -= k; skipped = true; }
+      else if (b2 && !rowReasons(ta, tb, la, b2, cols).length) { extraB += k; j -= k; skipped = true; }
+    }
+    if (skipped) continue;
     res.rowsDiff++;
     for (const [x, cls, ca, cb] of r) {
       bump(cls);
@@ -225,6 +229,17 @@ export function classifyBufferDiff(cmp, which, altActive) {
   for (const [c, n] of Object.entries(cmp.cells)) {
     const key = which === 'alt' ? (altActive ? 'alt-buffer content (active)' : 'alt-buffer content (inactive, stale)') + ': ' + c : c;
     out[key] = n;
+  }
+  return out;
+}
+
+/** Text of the last n rows of a buffer (bottom-up order reversed to top-down), for debug dumps. */
+export function dumpRows(t, which, n) {
+  const B = bufs(t)[which], out = [];
+  for (let i = Math.max(0, B.lines.length - n); i < B.lines.length; i++) {
+    const l = B.lines.get(i); let str = '';
+    if (l && l._data) for (let x = 0; x < t.cols; x++) { const c = cellOf(l, x); str += c.ch === '' ? (c.width === 0 ? '' : ' ') : c.ch; }
+    out.push(`${String(i).padStart(5)}${l?.isWrapped ? 'w' : ' '}|${JSON.stringify(str.replace(/ +$/, ''))}`);
   }
   return out;
 }

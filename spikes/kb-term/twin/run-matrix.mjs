@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { probeDecrc, VARIANTS, makeTerm, write, writeChunked, stateOf, diffState, compareBuffers, classifyBufferDiff } from './lib.mjs';
+import { dumpRows, probeDecrc, VARIANTS, makeTerm, write, writeChunked, stateOf, diffState, compareBuffers, classifyBufferDiff } from './lib.mjs';
 
 const [streamsDir, outDir, joinsArg] = process.argv.slice(2);
 const JOINS = Number(joinsArg ?? 100), INSIDE_TARGET = 15;
@@ -45,6 +45,7 @@ function pickJoins(buf, name) {
 const files = fs.readdirSync(streamsDir).filter((f) => f.endsWith('.bin')).sort();
 const t0 = Date.now();
 const results = [];
+const dumped = { unicode11: 0, graphemes: 0 };
 for (const variant of VARIANTS) {
   for (const f of files) {
     const m = f.match(/^(.*)\.(\d+)x(\d+)\.bin$/);
@@ -92,6 +93,11 @@ for (const variant of VARIANTS) {
           B.probeDetail = B.probe === 'DIFFERENT' ? { ref: pr, viewer: pv } : undefined;
           // restore ref to its pre-probe state is not possible; rebuild by marking ref dirty so later joins re-create it
           refDirty = true;
+        }
+        if (dumped[variant] < 4 && (B.cells['cell chars'] || B.cells['rows only in viewer (extra)'] || B.cells['rows only in expected (lost by seed/viewer)'] || B.cells['wide-char boundary'])) {
+          dumped[variant]++;
+          const lines = [`variant=${variant} stream=${name} join=${j.off} inside=${j.inside} twinActive=${twinState.activeBuffer} refRows=${ref.buffer.normal.length} viewerRows=${v.buffer.normal.length}`, 'B.cells=' + JSON.stringify(B.cells), '--- reference (last 70 rows) ---', ...dumpRows(ref, 'normal', 70), '--- viewer after remainder (last 70 rows) ---', ...dumpRows(v, 'normal', 70), '--- seed (JSON escaped, first 3000 chars) ---', JSON.stringify(seed).slice(0, 3000)];
+          fs.writeFileSync(path.join(outDir, `debug-${variant}-${name}-${j.off}.txt`), lines.join('\n') + '\n');
         }
         rec.joins.push({ off: j.off, inside: j.inside, seedBytes: Buffer.byteLength(seed), twinActive: twinState.activeBuffer, A, B });
         v.dispose();
