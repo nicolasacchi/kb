@@ -172,39 +172,41 @@ test.describe('c) join cost of a 20,000-line seed', () => {
 });
 
 test.describe('d) ResumeFrom after dropped connections', () => {
-  test('server-side drops: final buffer equals from-start reference', async ({ page, request }) => {
+  const REF = { raw: '/data/stream.bin', strip: '/data/stream-strip.bin' };
+  async function start(page, request, variant, opts) {
     await request.get('/reset');
-    const run = page.evaluate(() => kt.resumeRun({ cols: 100, rows: 30, pace: 3, chunk: 1024 }));
-    const total = (await (await request.get('/stats')).json()).total;
-    let drops = 0;
-    for (const frac of [0.15, 0.4, 0.65, 0.85]) {
-      await page.waitForFunction((t) => kt.progress().offset >= t || kt.progress().done, Math.floor(total * frac), { timeout: 60000 });
-      const p = await page.evaluate(() => kt.progress());
-      if (p.done) break;
-      await request.post('/drop'); drops++;
-    }
-    const r = await run;
-    const cmp = await page.evaluate(() => kt.compareToReference('/data/stream.bin', 100, 30));
-    const stats = await (await request.get('/stats')).json();
-    rec('d-resume-drops', { streamBytes: total, appliedBytes: r.final, drops, reconnects: r.reconnects, connectionsSeen: stats.log.length, resumeOffsets: r.opens.join(','), dupBytes: r.dupBytes, gaps: r.gaps, ...cmp, firstDiffLive: cmp.firstDiffLive, firstDiffRef: cmp.firstDiffRef });
-    expect(r.final).toBe(total);
-    expect(drops).toBeGreaterThanOrEqual(2);
-    expect(r.reconnects).toBeGreaterThanOrEqual(drops);
-    expect(cmp.textEqual).toBe(true);
-    expect(cmp.attrEqual).toBe(true);
-    expect(cmp.liveLen).toBe(cmp.refLen);
-  });
+    const total = (await (await request.get('/stats')).json()).totals[variant];
+    const run = page.evaluate((o) => kt.resumeRun(o), { variant, cols: 100, rows: 30, ...opts });
+    return { total, run };
+  }
+  const waitOffset = (page, t) => page.waitForFunction((x) => kt.progress().offset >= x, t, { timeout: 60000 });
+
+  for (const variant of ['raw', 'strip']) {
+    test(`server-side drops (${variant} stream): final buffer equals from-start reference`, async ({ page, request }) => {
+      const { total, run } = await start(page, request, variant, { pace: 3, chunk: 1024 });
+      let drops = 0;
+      for (const frac of [0.15, 0.4, 0.65, 0.85]) {
+        await waitOffset(page, Math.floor(total * frac));
+        await request.post('/drop'); drops++;
+      }
+      const r = await run;
+      const cmp = await page.evaluate((u) => kt.compareToReference(u, 100, 30), REF[variant]);
+      const stats = await (await request.get('/stats')).json();
+      rec('d-resume-drops', { variant, streamBytes: total, appliedBytes: r.final, drops, reconnects: r.reconnects, connectionsSeen: stats.log.length, resumeOffsets: r.opens.join(','), dupBytes: r.dupBytes, gaps: r.gaps, ...cmp });
+      expect(r.final).toBe(total);
+      expect(r.reconnects).toBeGreaterThanOrEqual(drops);
+      expect(cmp.textEqual).toBe(true);
+      expect(cmp.attrEqual).toBe(true);
+      expect(cmp.liveLen).toBe(cmp.refLen);
+      if (variant === 'strip') expect(cmp.refLen).toBeGreaterThan(1000);   // the comparison must cover real scrollback
+    });
+  }
 
   test('overlapping resume (server rewinds 37 bytes): dedupe by offset header', async ({ page, request }) => {
-    await request.get('/reset');
-    const run = page.evaluate(() => kt.resumeRun({ cols: 100, rows: 30, pace: 3, chunk: 1000, rewind: 37 }));
-    const total = (await (await request.get('/stats')).json()).total;
-    for (const frac of [0.3, 0.7]) {
-      await page.waitForFunction((t) => kt.progress().offset >= t, Math.floor(total * frac), { timeout: 60000 });
-      await request.post('/drop');
-    }
+    const { total, run } = await start(page, request, 'strip', { pace: 3, chunk: 1000, rewind: 37 });
+    for (const frac of [0.3, 0.7]) { await waitOffset(page, Math.floor(total * frac)); await request.post('/drop'); }
     const r = await run;
-    const cmp = await page.evaluate(() => kt.compareToReference('/data/stream.bin', 100, 30));
+    const cmp = await page.evaluate((u) => kt.compareToReference(u, 100, 30), REF.strip);
     rec('d-resume-overlap', { appliedBytes: r.final, reconnects: r.reconnects, dupBytes: r.dupBytes, gaps: r.gaps, textEqual: cmp.textEqual, attrEqual: cmp.attrEqual, liveLen: cmp.liveLen, refLen: cmp.refLen });
     expect(r.final).toBe(total);
     expect(r.dupBytes).toBeGreaterThan(0);
@@ -214,18 +216,16 @@ test.describe('d) ResumeFrom after dropped connections', () => {
 
   test('offline/online (chromium only): resumes from last offset', async ({ page, context, request }) => {
     test.skip(!isChromium(), 'offline emulation of live sockets is Chromium-specific here');
-    await request.get('/reset');
-    const run = page.evaluate(() => kt.resumeRun({ cols: 100, rows: 30, pace: 4, chunk: 1024, watchdogMs: 1000 }));
-    const total = (await (await request.get('/stats')).json()).total;
-    await page.waitForFunction((t) => kt.progress().offset >= t, Math.floor(total * 0.3), { timeout: 60000 });
+    const { total, run } = await start(page, request, 'strip', { pace: 4, chunk: 1024, watchdogMs: 1000 });
+    await waitOffset(page, Math.floor(total * 0.3));
     const before = await page.evaluate(() => kt.progress());
     await context.setOffline(true);
     await page.waitForTimeout(3000);
     const during = await page.evaluate(() => kt.progress());
     await context.setOffline(false);
     const r = await run;
-    const cmp = await page.evaluate(() => kt.compareToReference('/data/stream.bin', 100, 30));
-    rec('d-resume-offline', { offsetAtOffline: before.offset, offsetDuringOffline: during.offset, closesDuringOffline: during.closes - before.closes, watchdogFired: r.watchdogs, reconnects: r.reconnects, resumeOffsets: r.opens.join(','), appliedBytes: r.final, textEqual: cmp.textEqual, attrEqual: cmp.attrEqual });
+    const cmp = await page.evaluate((u) => kt.compareToReference(u, 100, 30), REF.strip);
+    rec('d-resume-offline', { offsetAtOffline: before.offset, offsetDuringOffline: during.offset, closesDuringOffline: during.closes - before.closes, watchdogFired: r.watchdogs, reconnects: r.reconnects, resumeOffsets: r.opens.join(','), appliedBytes: r.final, textEqual: cmp.textEqual, attrEqual: cmp.attrEqual, refLen: cmp.refLen });
     expect(r.final).toBe(total);
     expect(cmp.textEqual).toBe(true);
     expect(cmp.attrEqual).toBe(true);

@@ -30,10 +30,13 @@ def main(outdir):
     # resume stream: 100x30 harness stream, seed 7
     stream = harness(100, 30, 7, 300)
     open(os.path.join(outdir, "stream.bin"), "wb").write(stream)
+    # same stream without ED3 / alt-screen so the comparison covers thousands of scrollback lines, not 41
+    stream_strip = re.sub(rb"\x1b\[\?1049[hl]", b"", re.sub(rb"\x1b\[3J", b"", stream))
+    open(os.path.join(outdir, "stream-strip.bin"), "wb").write(stream_strip)
     # readability: 120 col screen
     wide = harness(120, 30, 5, 40)
     open(os.path.join(outdir, "wide.bin"), "wb").write(wide)
-    for n, b in (("seed", seed), ("stream", stream), ("wide", wide)):
+    for n, b in (("seed", seed), ("stream", stream), ("stream-strip", stream_strip), ("wide", wide)):
         nl = b.count(b"\n")
         print(f"{n}.bin bytes={len(b)} newlines={nl}")
 

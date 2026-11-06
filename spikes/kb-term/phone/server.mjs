@@ -19,9 +19,10 @@ const FILES = {
   '/addon-webgl.js': [path.join(NM, '@xterm/addon-webgl/lib/addon-webgl.js'), 'text/javascript'],
   '/data/seed.bin': [path.join(HERE, 'data/seed.bin'), 'application/octet-stream'],
   '/data/stream.bin': [path.join(HERE, 'data/stream.bin'), 'application/octet-stream'],
+  '/data/stream-strip.bin': [path.join(HERE, 'data/stream-strip.bin'), 'application/octet-stream'],
   '/data/wide.bin': [path.join(HERE, 'data/wide.bin'), 'application/octet-stream'],
 };
-const stream = fs.readFileSync(path.join(HERE, 'data/stream.bin'));
+const streams = { raw: fs.readFileSync(path.join(HERE, 'data/stream.bin')), strip: fs.readFileSync(path.join(HERE, 'data/stream-strip.bin')) };
 const log = [];
 const open = new Set();
 
@@ -34,7 +35,7 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({ dropped: n }));
     return;
   }
-  if (u.pathname === '/stats') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ log, total: stream.length })); return; }
+  if (u.pathname === '/stats') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ log, totals: { raw: streams.raw.length, strip: streams.strip.length } })); return; }
   if (u.pathname === '/reset') { log.length = 0; res.end('ok'); return; }
   const f = FILES[u.pathname];
   if (!f) { res.statusCode = 404; res.end('nf'); return; }
@@ -51,6 +52,7 @@ server.on('upgrade', (req, sock, head) => {
   const u = new URL(req.url, 'http://x');
   if (u.pathname !== '/tap') { sock.destroy(); return; }
   wss.handleUpgrade(req, sock, head, (ws) => {
+    const stream = streams[u.searchParams.get('s') === 'strip' ? 'strip' : 'raw'];
     const from = Math.max(0, Number(u.searchParams.get('from') || 0));
     const pace = Number(u.searchParams.get('pace') || 3);
     const chunk = Number(u.searchParams.get('chunk') || 1024);

@@ -249,7 +249,7 @@
 
   // ---------- ResumeFrom against the fake tap ----------
   const R = { offset: 0, done: false, reconnects: 0, closes: 0, watchdogs: 0, dupBytes: 0, gaps: 0, frames: 0, total: 0, opens: [] };
-  async function resumeRun({ cols = 100, rows = 30, pace = 3, chunk = 1024, rewind = 0, watchdogMs = 1500 }) {
+  async function resumeRun({ variant = 'raw', cols = 100, rows = 30, pace = 3, chunk = 1024, rewind = 0, watchdogMs = 1500 }) {
     Object.assign(R, { offset: 0, done: false, reconnects: 0, closes: 0, watchdogs: 0, dupBytes: 0, gaps: 0, frames: 0, total: 0, opens: [] });
     await init({ cols, rows, fontSize: 10 });
     return new Promise((resolve) => {
@@ -260,7 +260,7 @@
         if (ws) { ws.onclose = ws.onmessage = ws.onerror = ws.onopen = null; try { ws.close(); } catch (_) {} }
         const from = R.offset;
         R.opens.push(from);
-        ws = new WebSocket(`ws://${location.host}/tap?from=${from}&pace=${pace}&chunk=${chunk}&rewind=${rewind}`);
+        ws = new WebSocket(`ws://${location.host}/tap?s=${variant}&from=${from}&pace=${pace}&chunk=${chunk}&rewind=${rewind}`);
         ws.binaryType = 'arraybuffer';
         ws.onmessage = (ev) => {
           arm();
