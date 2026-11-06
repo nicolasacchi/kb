@@ -1,0 +1,353 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>kb-term phone spike</title>
+<link rel="stylesheet" href="/xterm.css">
+<style>
+  html,body{margin:0;background:#101418;height:100%;overflow:hidden;overscroll-behavior:none}
+  #hud{font:11px monospace;color:#8a9;height:14px;padding:0 4px}
+  #wrap{width:100vw;overflow-x:scroll;overflow-y:hidden;scrollbar-width:none;touch-action:none}
+  #wrap::-webkit-scrollbar{display:none}
+  #viewport,#viewport *{touch-action:none !important}
+  #viewport{display:inline-block;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+</style></head>
+<body>
+<div id="hud">kb-term phone spike</div>
+<div id="wrap"><div id="viewport"><div id="term"></div></div></div>
+<script src="/xterm.js"></script>
+<script>
+(() => {
+  const STEPS = [8, 9, 10, 11, 12, 13, 14, 16, 18, 20, 22, 24];
+  const TAU = 325;          // momentum decay time constant, ms
+  const LOCK_PX = 8;        // axis lock distance
+  const XT = window.Terminal || (window.xterm && window.xterm.Terminal);
+  const $ = (id) => document.getElementById(id);
+  const wrap = $('wrap'), vp = $('viewport'), termEl = $('term'), hud = $('hud');
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const raf2 = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+  let term = null;
+  const g = { gestures: [], momentumFrames: 0, pinchSteps: 0, touchEventsStopped: 0 };
+
+  function metrics() {
+    const s = term.element.querySelector('.xterm-screen');
+    const r = s.getBoundingClientRect();
+    return { cellW: r.width / term.cols, cellH: r.height / term.rows, screenW: r.width, screenH: r.height };
+  }
+  function relayoutWrap() {
+    const m = metrics();
+    wrap.style.height = Math.ceil(m.screenH) + 'px';
+  }
+  function stats() {
+    const b = term.buffer.active, m = metrics();
+    return {
+      viewportY: b.viewportY, baseY: b.baseY, length: b.length, cols: term.cols, rows: term.rows,
+      fontSize: term.options.fontSize, scrollLeft: wrap.scrollLeft, scrollWidth: wrap.scrollWidth,
+      clientWidth: wrap.clientWidth, cellW: m.cellW, cellH: m.cellH, screenW: m.screenW, screenH: m.screenH,
+      vw: window.innerWidth, dpr: window.devicePixelRatio, gestures: g.gestures.slice(-5),
+    };
+  }
+
+  async function init({ cols = 120, rows = 30, fontSize = 12, renderer = 'dom', scrollback = 100000 } = {}) {
+    if (g.raf) { cancelAnimationFrame(g.raf); g.raf = 0; }
+    if (term) { term.dispose(); }
+    termEl.innerHTML = '';
+    wrap.scrollLeft = 0;
+    term = new XT({ cols, rows, fontSize, scrollback, allowProposedApi: true, fontFamily: 'monospace', cursorBlink: false });
+    term.open(termEl);
+    let rendererResult = 'dom';
+    if (renderer === 'webgl') {
+      try {
+        if (!window.WebglAddon) {
+          await new Promise((res, rej) => { const s = document.createElement('script'); s.src = '/addon-webgl.js'; s.onload = res; s.onerror = () => rej(new Error('addon-webgl.js load failed')); document.head.appendChild(s); });
+        }
+        const A = window.WebglAddon.WebglAddon || window.WebglAddon;
+        term.loadAddon(new A());
+        rendererResult = 'webgl';
+      } catch (e) { rendererResult = 'webgl-failed: ' + e.message; }
+    }
+    await raf2();
+    relayoutWrap();
+    g.renderer = rendererResult;
+    return { renderer: rendererResult, ...stats() };
+  }
+
+  const flush = () => new Promise((r) => term.write('', () => raf2().then(r)));
+  const writeAsync = (data) => new Promise((r) => term.write(data, r));
+  async function fetchBytes(url) { const r = await fetch(url); return new Uint8Array(await r.arrayBuffer()); }
+
+  function lines(n, prefix = 'line') {
+    let s = '';
+    for (let i = 0; i < n; i++) s += `${prefix} ${String(i).padStart(5, '0')} ` + 'x'.repeat(100) + '\r\n';
+    return s;
+  }
+
+  // ---------- touch gestures (pointer events; touch-action none on #viewport) ----------
+  const ptrs = new Map();
+  let st = null;      // single-pointer drag state
+  let pinch = null;   // pinch state
+  function stopMomentum() { if (g.raf) { cancelAnimationFrame(g.raf); g.raf = 0; } }
+  let acc = 0;
+  function applyDy(dy) {
+    acc += dy;
+    const lh = metrics().cellH;
+    const n = Math.trunc(acc / lh);
+    if (n !== 0) {
+      acc -= n * lh;
+      const before = term.buffer.active.viewportY;
+      term.scrollLines(-n);
+      return term.buffer.active.viewportY !== before;
+    }
+    return true;
+  }
+  function startMomentum(v) {
+    let last = performance.now();
+    const tick = () => {
+      const now = performance.now(), dt = now - last; last = now;
+      v *= Math.exp(-dt / TAU);
+      g.momentumFrames++;
+      const moved = applyDy(v * dt);
+      if (Math.abs(v) > 0.02 && moved) g.raf = requestAnimationFrame(tick); else g.raf = 0;
+    };
+    g.raf = requestAnimationFrame(tick);
+  }
+  function setFont(px) {
+    if (term.options.fontSize === px) return false;
+    term.options.fontSize = px;
+    relayoutWrap();
+    return true;
+  }
+  function nearestStep(px) {
+    let best = STEPS[0];
+    for (const s of STEPS) if (Math.abs(s - px) < Math.abs(best - px)) best = s;
+    return best;
+  }
+  function pinchApply(scale) {
+    const target = nearestStep(pinch.startFont * scale);
+    if (setFont(target)) g.pinchSteps++;
+    return target;
+  }
+  const dist = () => { const [a, b] = [...ptrs.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
+
+  vp.addEventListener('pointerdown', (e) => {
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    try { vp.setPointerCapture(e.pointerId); } catch (_) { /* synthetic events */ }
+    stopMomentum();
+    if (ptrs.size === 1) {
+      st = { x0: e.clientX, y0: e.clientY, lx: e.clientX, ly: e.clientY, axis: null, samples: [{ t: performance.now(), y: e.clientY }], sl0: wrap.scrollLeft, startY: term.buffer.active.viewportY };
+      acc = 0;
+    } else if (ptrs.size === 2) {
+      st = null;
+      pinch = { d0: dist(), startFont: term.options.fontSize };
+    }
+  }, true);
+  vp.addEventListener('pointermove', (e) => {
+    if (!ptrs.has(e.pointerId)) return;
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch && ptrs.size === 2) { pinchApply(dist() / pinch.d0); return; }
+    if (!st) return;
+    const now = performance.now();
+    if (!st.axis) {
+      const dx = e.clientX - st.x0, dy = e.clientY - st.y0;
+      if (Math.hypot(dx, dy) < LOCK_PX) return;
+      st.axis = Math.abs(dx) > Math.abs(dy) ? 'h' : 'v';
+      st.lx = st.x0; st.ly = st.y0;
+      g.gestures.push({ lock: st.axis, at: Math.round(Math.hypot(dx, dy)) });
+    }
+    if (st.axis === 'v') {
+      applyDy(e.clientY - st.ly);
+      st.samples.push({ t: now, y: e.clientY });
+      while (st.samples.length > 2 && now - st.samples[0].t > 100) st.samples.shift();
+    } else {
+      wrap.scrollLeft -= e.clientX - st.lx;
+    }
+    st.lx = e.clientX; st.ly = e.clientY;
+  }, true);
+  const up = (e) => {
+    if (!ptrs.has(e.pointerId)) return;
+    ptrs.delete(e.pointerId);
+    try { vp.releasePointerCapture(e.pointerId); } catch (_) {}
+    if (pinch) { if (ptrs.size < 2) pinch = null; return; }
+    if (st && ptrs.size === 0) {
+      const s = st; st = null;
+      if (s.axis === 'v') {
+        const a = s.samples[0], b = s.samples[s.samples.length - 1];
+        const idle = performance.now() - b.t;
+        const v = b.t > a.t ? (b.y - a.y) / (b.t - a.t) : 0;
+        g.gestures.push({ end: 'v', v: +v.toFixed(3), idle: Math.round(idle) });
+        if (Math.abs(v) > 0.15 && idle < 80) startMomentum(v);
+      } else if (!s.axis) {
+        g.gestures.push({ end: 'tap-or-small' });
+      } else {
+        g.gestures.push({ end: 'h', scrollLeft: wrap.scrollLeft });
+      }
+    }
+  };
+  vp.addEventListener('pointerup', up, true);
+  vp.addEventListener('pointercancel', up, true);
+  // xterm has its own touch handling; real touches must not scroll it a second time.
+  for (const t of ['touchstart', 'touchmove', 'touchend']) {
+    vp.addEventListener(t, (e) => { g.touchEventsStopped++; e.stopPropagation(); if (e.cancelable) e.preventDefault(); }, { capture: true, passive: false });
+  }
+
+  // ---------- synthetic input ----------
+  function fire(type, id, x, y) {
+    vp.dispatchEvent(new PointerEvent(type, { pointerId: id, pointerType: 'touch', isPrimary: id === 1, bubbles: true, cancelable: true, clientX: x, clientY: y, buttons: type === 'pointerup' ? 0 : 1 }));
+  }
+  async function synthDrag({ x0, y0, x1, y1, steps = 10, stepMs = 10, holdMs = 0 }) {
+    fire('pointerdown', 1, x0, y0);
+    for (let i = 1; i <= steps; i++) {
+      await sleep(stepMs);
+      fire('pointermove', 1, x0 + ((x1 - x0) * i) / steps, y0 + ((y1 - y0) * i) / steps);
+    }
+    if (holdMs) await sleep(holdMs);
+    fire('pointerup', 1, x1, y1);
+  }
+  async function synthPinch({ cx, cy, d0, d1, steps = 10, stepMs = 12 }) {
+    fire('pointerdown', 1, cx - d0 / 2, cy); fire('pointerdown', 2, cx + d0 / 2, cy);
+    for (let i = 1; i <= steps; i++) {
+      await sleep(stepMs);
+      const d = d0 + ((d1 - d0) * i) / steps;
+      fire('pointermove', 1, cx - d / 2, cy); fire('pointermove', 2, cx + d / 2, cy);
+    }
+    fire('pointerup', 1, cx - d1 / 2, cy); fire('pointerup', 2, cx + d1 / 2, cy);
+  }
+  async function settle(quietMs = 250, maxMs = 6000) {
+    const t0 = performance.now(); let last = term.buffer.active.viewportY, lastChange = performance.now();
+    while (performance.now() - t0 < maxMs) {
+      await sleep(40);
+      const y = term.buffer.active.viewportY;
+      if (y !== last) { last = y; lastChange = performance.now(); }
+      else if (performance.now() - lastChange > quietMs && !g.raf) break;
+    }
+    return term.buffer.active.viewportY;
+  }
+  function pinchTo(scale) { pinch = { startFont: term.options.fontSize }; const r = pinchApply(scale); pinch = null; return r; }
+
+  // ---------- join cost ----------
+  async function joinCost(url, opts) {
+    const bytes = await fetchBytes(url);
+    const info = await init(opts);
+    const t0 = performance.now();
+    await writeAsync(bytes);
+    const t1 = performance.now();
+    await raf2();
+    const t2 = performance.now();
+    const b = term.buffer.active;
+    const res = { bytes: bytes.length, parseMs: t1 - t0, renderMs: t2 - t1, totalMs: t2 - t0, bufferLines: b.length, baseY: b.baseY, renderer: info.renderer };
+    // jump to the top: forces a render of far-away rows
+    const t3 = performance.now();
+    term.scrollToTop(); await raf2();
+    res.scrollTopMs = performance.now() - t3;
+    // font step with full scrollback loaded
+    const t4 = performance.now();
+    setFont(term.options.fontSize + 2); await raf2();
+    res.fontStepMs = performance.now() - t4;
+    setFont(term.options.fontSize - 2); await raf2();
+    return res;
+  }
+
+  // ---------- ResumeFrom against the fake tap ----------
+  const R = { offset: 0, done: false, reconnects: 0, closes: 0, watchdogs: 0, dupBytes: 0, gaps: 0, frames: 0, total: 0, opens: [] };
+  async function resumeRun({ variant = 'raw', cols = 100, rows = 30, pace = 3, chunk = 1024, rewind = 0, watchdogMs = 1500 }) {
+    Object.assign(R, { offset: 0, done: false, reconnects: 0, closes: 0, watchdogs: 0, dupBytes: 0, gaps: 0, frames: 0, total: 0, opens: [] });
+    await init({ cols, rows, fontSize: 10 });
+    return new Promise((resolve) => {
+      let ws = null, wd = 0, retry = 0;
+      const arm = () => { clearTimeout(wd); wd = setTimeout(() => { if (R.done) return; R.watchdogs++; try { ws.close(); } catch (_) {} connect(); }, watchdogMs); };
+      const connect = () => {
+        clearTimeout(retry);
+        if (ws) { ws.onclose = ws.onmessage = ws.onerror = ws.onopen = null; try { ws.close(); } catch (_) {} }
+        const from = R.offset;
+        R.opens.push(from);
+        ws = new WebSocket(`ws://${location.host}/tap?s=${variant}&from=${from}&pace=${pace}&chunk=${chunk}&rewind=${rewind}`);
+        ws.binaryType = 'arraybuffer';
+        ws.onmessage = (ev) => {
+          arm();
+          if (typeof ev.data === 'string') {
+            const m = JSON.parse(ev.data);
+            if (m.end) { R.done = true; R.total = m.total; clearTimeout(wd); const final = R.offset; term.write('', () => resolve({ ...R, final })); }
+            return;
+          }
+          R.frames++;
+          const dv = new DataView(ev.data);
+          const off = Number(dv.getBigUint64(0));
+          let payload = new Uint8Array(ev.data, 8);
+          if (off > R.offset) { R.gaps++; ws.close(); return; }
+          if (off < R.offset) { const skip = R.offset - off; R.dupBytes += Math.min(skip, payload.length); payload = payload.subarray(Math.min(skip, payload.length)); }
+          if (payload.length) { term.write(payload.slice()); R.offset += payload.length; }
+        };
+        ws.onclose = () => { R.closes++; if (R.done) return; R.reconnects++; clearTimeout(retry); retry = setTimeout(connect, 100); };
+        ws.onerror = () => {};
+        arm();
+      };
+      connect();
+    });
+  }
+  const progress = () => ({ offset: R.offset, done: R.done, reconnects: R.reconnects, closes: R.closes, watchdogs: R.watchdogs });
+
+  function snapshot(t) {
+    const b = t.buffer.active, cell = b.getLine(0).getCell(0);
+    const out = []; let h = 2166136261 >>> 0;
+    for (let i = 0; i < b.length; i++) {
+      const l = b.getLine(i);
+      out.push(l.translateToString(true));
+      for (let x = 0; x < t.cols; x++) {
+        const c = l.getCell(x, cell);
+        h = Math.imul(h ^ ((c.getCode() & 0xffffff) + (c.getWidth() << 24)), 16777619) >>> 0;
+        h = Math.imul(h ^ (c.getFgColor() + c.getFgColorMode() * 7 + 1), 16777619) >>> 0;
+        h = Math.imul(h ^ (c.getBgColor() + c.getBgColorMode() * 11 + 1), 16777619) >>> 0;
+        h = Math.imul(h ^ ((c.isBold() ? 1 : 0) | (c.isItalic() ? 2 : 0) | (c.isUnderline() ? 4 : 0) | (c.isInverse() ? 8 : 0) | (c.isDim() ? 16 : 0)), 16777619) >>> 0;
+      }
+    }
+    return { len: b.length, baseY: b.baseY, cx: b.cursorX, cy: b.cursorY, lines: out, hash: h };
+  }
+  async function compareToReference(url, cols, rows) {
+    const bytes = await fetchBytes(url);
+    const live = snapshot(term);
+    const holder = document.createElement('div'); holder.style.cssText = 'position:absolute;left:-9999px;top:0'; document.body.appendChild(holder);
+    const ref = new XT({ cols, rows, fontSize: 10, scrollback: 100000, allowProposedApi: true });
+    ref.open(holder);
+    await new Promise((r) => ref.write(bytes, r));
+    const rs = snapshot(ref);
+    let firstDiff = -1;
+    for (let i = 0; i < Math.max(live.lines.length, rs.lines.length); i++) if (live.lines[i] !== rs.lines[i]) { firstDiff = i; break; }
+    const res = {
+      refBytes: bytes.length, liveLen: live.len, refLen: rs.len, textEqual: firstDiff === -1, firstDiff,
+      firstDiffLive: firstDiff >= 0 ? live.lines[firstDiff] : null, firstDiffRef: firstDiff >= 0 ? rs.lines[firstDiff] : null,
+      attrHashLive: live.hash, attrHashRef: rs.hash, attrEqual: live.hash === rs.hash,
+      cursorLive: [live.cx, live.cy, live.baseY], cursorRef: [rs.cx, rs.cy, rs.baseY],
+    };
+    ref.dispose(); holder.remove();
+    return res;
+  }
+
+  function noTransform() {
+    const bad = [];
+    for (let el = termEl; el && el !== document.documentElement; el = el.parentElement) {
+      const t = getComputedStyle(el).transform;
+      if (t && t !== 'none') bad.push(el.id || el.className || el.tagName);
+    }
+    // xterm's own scrollbar slider is positioned by transform inside xterm; that is not our fit mechanism, so it is reported separately
+    const xtermInternal = [];
+    for (const el of termEl.querySelectorAll('*')) { const t = getComputedStyle(el).transform; if (t && t !== 'none') (el.closest('.scrollbar') ? xtermInternal : bad).push('inner:' + (el.className || el.tagName)); }
+    noTransform.internal = xtermInternal;
+    return bad;
+  }
+
+  // fit-to-width font size: the largest fontSize whose grid fits the wrap width (no transform; fractional sizes allowed)
+  async function fitFont() {
+    const base = term.options.fontSize, m0 = metrics();
+    const perPx = m0.cellW / base;
+    const px = Math.max(1, Math.floor((wrap.clientWidth / term.cols / perPx) * 10) / 10);
+    term.options.fontSize = px; relayoutWrap(); await raf2();
+    return { fontSize: px, ...stats() };
+  }
+
+  window.kt = {
+    init, stats, flush, writeAsync, fetchBytes, lines, synthDrag, synthPinch, settle, pinchTo, setFont,
+    joinCost, resumeRun, progress, compareToReference, noTransform, fitFont, metrics,
+    get term() { return term; }, g, STEPS, wrap, hud,
+  };
+})();
+</script></body></html>
