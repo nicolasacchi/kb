@@ -210,6 +210,7 @@ impl Runner<SystemdSupervisor> {
             anchors: std::sync::Arc::new(Mutex::new(HashMap::new())),
             locks: Mutex::new(HashMap::new()),
             viewers: std::sync::Arc::new(Mutex::new(HashMap::new())),
+            paste_only: Mutex::new(HashMap::new()),
             buffer_seqs: Mutex::new(HashMap::new()),
             server_uid: unsafe { libc::getuid() },
         }
