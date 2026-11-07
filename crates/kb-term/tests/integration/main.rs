@@ -670,8 +670,8 @@ async fn term_int_grid_is_fixed_until_resized() {
         .arg("kb")
         .env("TERM", "xterm-256color")
         .env("HOME", std::env::var("HOME").unwrap_or_default())
-        .stdin(master.try_clone().unwrap())
-        .stdout(master.try_clone().unwrap())
+        .stdin(master.try_clone_to_owned().unwrap())
+        .stdout(master.try_clone_to_owned().unwrap())
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("spawn raw client");
