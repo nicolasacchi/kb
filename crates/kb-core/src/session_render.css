@@ -802,6 +802,22 @@ body[data-tool-search]        .ses-tool:not([data-search-match]) { display: none
   border-color: var(--accent);
 }
 
+/* ── Picture references (Item::Image: a label only, no media route yet) ── */
+
+.ses-img {
+  margin: 4px 0;
+  padding: 6px 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-mute);
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+}
+.ses-img > figcaption {
+  margin: 0;
+}
+
 /* ── Hook + edit details ──────────────────────────────────────────── */
 
 .ses-hook, .ses-edit {
