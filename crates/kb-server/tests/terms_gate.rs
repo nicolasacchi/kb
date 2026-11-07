@@ -261,7 +261,9 @@ async fn disabled_by_default_returns_bodiless_404_on_every_terms_route() {
             "{m} {path} must be bodiless (no content-type)"
         );
         assert_eq!(
-            resp.headers().get("cache-control").map(|v| v.as_str()),
+            resp.headers()
+                .get("cache-control")
+                .and_then(|v| v.to_str().ok()),
             Some("no-store"),
             "{m} {path} must carry Cache-Control: no-store"
         );
