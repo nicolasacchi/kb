@@ -65,7 +65,7 @@ impl Anchor {
                 .map_err(|e| RunnerError::Internal(e.to_string()))?,
         );
         unsafe {
-            cmd.pre_exec(|| {
+            cmd.pre_exec(move || {
                 if libc::setsid() == -1 {
                     return Err(std::io::Error::last_os_error());
                 }
@@ -75,7 +75,7 @@ impl Anchor {
                 Ok(())
             });
         }
-        let mut child = cmd
+        let child = cmd
             .spawn()
             .map_err(|e| RunnerError::TmuxFailed(format!("spawn anchor: {e}")))?;
         let pid = child.id().unwrap_or(0);

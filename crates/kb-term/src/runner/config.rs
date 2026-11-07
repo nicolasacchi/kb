@@ -67,7 +67,7 @@ struct Cli {
     tmux_bin: String,
     /// The tmux config loaded by every holder.
     #[arg(long, default_value_t = default_conf())]
-    conf: PathBuf,
+    conf: String,
     /// `systemd` or `direct` holder supervision.
     #[arg(long, value_enum, default_value_t = SupervisorKind::Systemd)]
     supervisor: SupervisorKind,
@@ -120,7 +120,7 @@ impl RunnerConfig {
         RunnerConfig {
             run_dir: cli.run_dir,
             tmux_bin: cli.tmux_bin,
-            conf: cli.conf,
+            conf: PathBuf::from(cli.conf),
             supervisor: cli.supervisor,
             tap_bin: cli.tap_bin,
             require_tap: cli.require_tap,

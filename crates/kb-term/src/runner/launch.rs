@@ -349,10 +349,7 @@ async fn launch_locked<S: Supervisor>(
 }
 
 /// Read `#{pane_pid}` once.
-async fn read_pane_pid<T: Tmux, S: Supervisor>(
-    runner: &Runner<S>,
-    sock: &Path,
-) -> Result<u32, RunnerError> {
+async fn read_pane_pid<S: Supervisor>(runner: &Runner<S>, sock: &Path) -> Result<u32, RunnerError> {
     let out = runner
         .tmux
         .run(
@@ -444,10 +441,7 @@ where
 }
 
 /// Does a control-mode client show up in `list-clients`?
-pub async fn control_client_present<T: Tmux, S: Supervisor>(
-    runner: &Runner<S>,
-    sock: &Path,
-) -> bool {
+pub async fn control_client_present<S: Supervisor>(runner: &Runner<S>, sock: &Path) -> bool {
     // `# {client_control_mode}` is the believed-valid 3.7c format; when
     // tmux does not know a format it expands lines to empty, so fall back
     // to `#{client_flags}` containing `control-mode`.
