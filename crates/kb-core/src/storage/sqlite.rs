@@ -6286,6 +6286,7 @@ impl Db {
     /// A3 — the newest-capture CHILDREN of one session, paged by
     /// `(started_at ASC, session_id ASC)`. The caller supplies exactly one
     /// of `root_of` / `parent_of`:
+    ///
     /// - `root_of`: every newest-capture row with `root_session_id =
     ///   root_of` — the whole subagent flood under that tree, any depth;
     /// - `parent_of`: rows with `parent_session_id = parent_of` — a

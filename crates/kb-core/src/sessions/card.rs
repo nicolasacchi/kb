@@ -899,7 +899,8 @@ pub fn render_text(card: &SessionCard) -> String {
     // children, terminal.
     // Unavailable lanes interleaved in lane order: rebuild the status of
     // each lane beside its section body.
-    let lanes: Vec<(&str, bool, &Option<String>, Option<Vec<String>>)> = vec![
+    type LaneEntry<'a> = (&'a str, bool, &'a Option<String>, Option<Vec<String>>);
+    let lanes: Vec<LaneEntry<'_>> = vec![
         (
             "summary",
             card.summary.available,

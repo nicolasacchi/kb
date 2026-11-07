@@ -28,8 +28,11 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+#[cfg(test)]
 type SqliteRow = kb_core::storage::sqlite::SessionRow;
+#[allow(dead_code)]
 type CommitRow = kb_core::storage::sqlite::SessionCommitRow;
+#[allow(dead_code)]
 type FileRow = kb_core::storage::sqlite::SessionFileRow;
 
 const CARD_FILES_CAP: usize = 100;
@@ -198,7 +201,7 @@ fn parse_after(raw: &str) -> Result<(i64, &str), kb_core::Error> {
 }
 
 #[derive(Debug, Deserialize, Default)]
-struct ChildrenQuery {
+pub struct ChildrenQuery {
     after: Option<String>,
     limit: Option<u32>,
 }
