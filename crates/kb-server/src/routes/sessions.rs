@@ -4859,9 +4859,13 @@ pub(crate) fn is_plain_token(s: &str) -> bool {
             .all(|&c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b':' | b'-'))
 }
 
+/// V0047 — backfill-tree items after validation: one `(session_id,
+/// parent, root, project_slug)` tuple per posted item.
+type ValidatedTreeItems = Vec<(String, Option<String>, Option<String>, Option<String>)>;
+
 fn validate_backfill_tree_body(
     body: &BackfillTreeBody,
-) -> Result<Vec<(String, Option<String>, Option<String>, Option<String>)>, kb_core::Error> {
+) -> Result<ValidatedTreeItems, kb_core::Error> {
     if body.items.len() > 500 {
         return Err(kb_core::Error::BadRequest(
             "backfill-tree: at most 500 items per request".into(),
@@ -4888,11 +4892,34 @@ fn validate_backfill_tree_body(
                 }
             }
         };
+        // `project_slug` is the capture slug charset ([a-z0-9._-]{1,64},
+        // same as `meta_project_slug`), not the loose `is_plain_token`.
+        let check_slug = |v: &Option<String>| -> Result<Option<String>, kb_core::Error> {
+            match v {
+                None => Ok(None),
+                Some(s) => {
+                    let valid = !s.is_empty()
+                        && s.len() <= 64
+                        && s.as_bytes().iter().all(|&c| {
+                            c.is_ascii_lowercase()
+                                || c.is_ascii_digit()
+                                || matches!(c, b'.' | b'_' | b'-')
+                        });
+                    if valid {
+                        Ok(Some(s.clone()))
+                    } else {
+                        Err(kb_core::Error::BadRequest(
+                            "backfill-tree: unsafe project_slug".into(),
+                        ))
+                    }
+                }
+            }
+        };
         out.push((
             it.session_id.clone(),
             check(&it.parent_session_id)?,
             check(&it.root_session_id)?,
-            check(&it.project_slug)?,
+            check_slug(&it.project_slug)?,
         ));
     }
     Ok(out)
