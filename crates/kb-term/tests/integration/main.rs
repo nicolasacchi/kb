@@ -121,6 +121,9 @@ fn run_tmux_file_probe(
 }
 
 // 2. exit-empty off keeps the -D server alive with no sessions.
+// (Name mandated by the brief's `term_int_*` examples; the `D` is not
+// snake_case, so the lint is allowed rather than renaming the pinned test.)
+#[allow(non_snake_case)]
 #[tokio::test(flavor = "multi_thread")]
 async fn term_int_exit_empty_off_keeps_the_D_server_alive() {
     let Some(tmux_bin) = require_tmux() else {
@@ -283,7 +286,7 @@ async fn term_int_start_order_tap_then_anchor_then_release() {
         async move {
             probe_out.exists()
                 && std::fs::read_to_string(&probe_out)
-                    .map(|s| s.len() > 0)
+                    .map(|s| !s.is_empty())
                     .unwrap_or(false)
         }
     })
@@ -655,11 +658,7 @@ async fn term_int_kill_reaps_a_stray_that_ignores_hup() {
         }
         Response::Err { code, message } => panic!("kill failed ({code}): {message}"),
     }
-    let gone = poll_until(Duration::from_secs(5), || {
-        let pane_pid = pane_pid;
-        async move { pid_gone(pane_pid) }
-    })
-    .await;
+    let gone = poll_until(Duration::from_secs(5), || async move { pid_gone(pane_pid) }).await;
     assert!(gone, "the stubborn harness pid must be gone");
     // The holder must be gone too (no socket, no server answering).
     assert!(!tr.sock(&id).exists(), "the holder socket must be gone");
