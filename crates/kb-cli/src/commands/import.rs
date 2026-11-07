@@ -591,6 +591,10 @@ pub(crate) fn wrap_envelope_spooled_with_slug(
         tail.push_str(&sidecar_text_block);
         tail.push('\n');
     }
+    // V0047: `slug_meta` is either empty (None/empty — every pre-V0047
+    // caller stays byte-identical to the old hook heredoc) or exactly one
+    // meta line right after the `kb-session` meta. The `{slug_meta}</head>`
+    // join has no extra spaces in either branch.
     let slug_meta = slug
         .filter(|s| !s.is_empty())
         .map(|s| format!("<meta name=\"kb-project-slug\" content=\"{s}\">\n"))
@@ -602,7 +606,7 @@ pub(crate) fn wrap_envelope_spooled_with_slug(
          <meta name=\"kb-category\" content=\"{MEMORY_SESSION_CATEGORY}\">\n\
          <meta name=\"kb-decay\" content=\"fast\">\n\
          <meta name=\"kb-session\" content=\"{sid}\">\n\
-         {slug_meta}         </head><body>\n\
+         {slug_meta}</head><body>\n\
          <h1>Session transcript {ts}</h1>\n\
          <pre>{esc}</pre>\n\
          {tail}\
@@ -2227,6 +2231,69 @@ mod tests {
              <pre>a&lt;b&gt;&amp;c</pre>\n\
              </body></html>\n";
         assert_eq!(got, want);
+    }
+    /// V0047 (step 6) — the slug meta is purely additive: with a slug the
+    /// envelope gains exactly one line after the `kb-session` meta and the
+    /// first `<pre>` payload is byte-identical to the slug-less envelope;
+    /// an empty slug behaves exactly like `None`.
+    #[test]
+    fn envelope_slug_meta_is_additive_and_keeps_first_pre_identical() {
+        let none = wrap_envelope_spooled_with_slug(
+            "20260301T090000Z",
+            "sid-123",
+            "a<b>&c",
+            &[],
+            &[],
+            &[],
+            None,
+        );
+        let some = wrap_envelope_spooled_with_slug(
+            "20260301T090000Z",
+            "sid-123",
+            "a<b>&c",
+            &[],
+            &[],
+            &[],
+            Some("my-proj"),
+        );
+        assert!(!none.contains("kb-project-slug"), "None emits no slug meta");
+        assert!(
+            some.contains("<meta name=\"kb-project-slug\" content=\"my-proj\">\n"),
+            "slug meta present with a slug: {some}"
+        );
+        // Exactly one meta line inserted, right after the kb-session meta.
+        let want = none.replacen(
+            "<meta name=\"kb-session\" content=\"sid-123\">\n</head>",
+            "<meta name=\"kb-session\" content=\"sid-123\">\n\
+             <meta name=\"kb-project-slug\" content=\"my-proj\">\n</head>",
+            1,
+        );
+        assert_eq!(
+            some, want,
+            "slug envelope == plain envelope + one meta line"
+        );
+        // First <pre> payload untouched by the slug.
+        let pre = |h: &str| {
+            h.split("<pre>")
+                .nth(1)
+                .unwrap()
+                .split("</pre>")
+                .next()
+                .unwrap()
+        };
+        assert_eq!(pre(&none), pre(&some));
+        assert_eq!(pre(&none), "a&lt;b&gt;&amp;c");
+        // Empty slug == None byte-for-byte.
+        let empty = wrap_envelope_spooled_with_slug(
+            "20260301T090000Z",
+            "sid-123",
+            "a<b>&c",
+            &[],
+            &[],
+            &[],
+            Some(""),
+        );
+        assert_eq!(empty, none, "empty slug must not emit a meta");
     }
 
     /// W0.4 split contract — the SAME `wrap_envelope` call with commits
