@@ -785,11 +785,11 @@ fn render_chip(label: &str) -> String {
 fn render_image(mime: &str, sha256: Option<&str>, inline_bytes: Option<u32>) -> String {
     let label = image_label(mime, sha256, inline_bytes);
     let sha_attr = sha256
-        .map(|sha| format!(r#" data-kb-image-sha="{}""#, esc(sha)))
+        .map(|sha| format!(r#" data-kb-image-sha="{}""#, esc_attr(sha)))
         .unwrap_or_default();
     format!(
         r#"<figure class="ses-img" data-kb-image-mime="{}"{}><figcaption>{}</figcaption></figure>"#,
-        esc(mime),
+        esc_attr(mime),
         sha_attr,
         esc(&label)
     )
@@ -1194,6 +1194,13 @@ fn esc(s: &str) -> String {
         }
     }
     out
+}
+/// Escape for a double-quoted HTML attribute value. Same as `esc` plus
+/// `"` → `&quot;` so a transcript-controlled value (e.g. an image `mime`
+/// placed in `data-kb-image-mime`) cannot end the attribute early and
+/// inject sibling attributes. Mirrors `push_attr`.
+fn esc_attr(s: &str) -> String {
+    esc(s).replace('"', "&quot;")
 }
 
 fn push_esc(out: &mut String, s: &str) {

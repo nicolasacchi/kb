@@ -547,7 +547,8 @@ pub enum Item {
 /// this helper rather than reinterpreting image blocks themselves.
 pub fn image_label(mime: &str, sha256: Option<&str>, inline_bytes: Option<u32>) -> String {
     if let Some(sha) = sha256 {
-        format!("[image {mime} blob:{}]", &sha[..12.min(sha.len())])
+        let short: String = sha.chars().take(12).collect();
+        format!("[image {mime} blob:{short}]")
     } else if let Some(n) = inline_bytes {
         format!("[image {mime} inline {n} b64 chars]")
     } else {
@@ -2216,17 +2217,20 @@ fn tool_result_raw_view(b: &Value) -> String {
             if !is_b64_image_block(it) {
                 continue;
             }
-            let n = it
+            let data_len = it
                 .get("source")
                 .and_then(|s| s.get("data"))
                 .and_then(|d| d.as_str())
-                .map(|s| s.chars().count())
-                .unwrap_or(0);
-            if let Some(src) = it.get_mut("source").and_then(|s| s.as_object_mut()) {
-                src.insert(
-                    "data".to_string(),
-                    Value::String(format!("[image data omitted: {n} chars]")),
-                );
+                .map(|s| s.chars().count());
+            // Only REPLACE an existing string `source.data` (§4.3); a base64
+            // block without one gains no synthetic key.
+            if let Some(n) = data_len {
+                if let Some(src) = it.get_mut("source").and_then(|s| s.as_object_mut()) {
+                    src.insert(
+                        "data".to_string(),
+                        Value::String(format!("[image data omitted: {n} chars]")),
+                    );
+                }
             }
         }
     }
@@ -4517,7 +4521,7 @@ mod tests {
         }
         // 63-char sha: too short.
         let short = image_of_block(
-            r#"{"type":"image","source":{"type":"blob_ref","media_type":"image/png","sha256":"ababababababababababababababababababababababababababababababababa"}}"#,
+            r#"{"type":"image","source":{"type":"blob_ref","media_type":"image/png","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"#,
         );
         match short {
             Item::Image { sha256: None, .. } => {}
@@ -4525,7 +4529,7 @@ mod tests {
         }
         // Non-hex sha: 'g' is outside [0-9a-f].
         let nonhex = image_of_block(
-            r#"{"type":"image","source":{"type":"blob_ref","media_type":"image/png","sha256":"gbababababababababababababababababababababababababababababababababa"}}"#,
+            r#"{"type":"image","source":{"type":"blob_ref","media_type":"image/png","sha256":"gaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"#,
         );
         match nonhex {
             Item::Image { sha256: None, .. } => {}

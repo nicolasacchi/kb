@@ -710,6 +710,18 @@ fn image_item_renders_a_figure_with_escaped_attrs() {
         rendered.contains("&lt;script&gt;"),
         "escaped form present: {rendered}"
     );
+    // A quote-bearing mime cannot break out of the double-quoted attr.
+    let rendered = render(
+        r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"image","source":{"type":"blob_ref","media_type":"image/x\" onmouseover=\"alert(1)","sha256":"abababababababababababababababababababababababababababababababab"}}]}}"#,
+    );
+    assert!(
+        !rendered.contains(r#"image/x" onmouseover="alert(1)"#),
+        "quote breakout sequence must not appear: {rendered}"
+    );
+    assert!(
+        rendered.contains("&quot;"),
+        "escaped quote present: {rendered}"
+    );
 }
 
 #[test]

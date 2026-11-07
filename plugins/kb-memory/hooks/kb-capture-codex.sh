@@ -69,7 +69,8 @@ TRANSLATE='
   elif .type == "response_item" and $p.type == "message" and $p.role == "user" then
     ([$p.content[]? | select(.type == "input_text") | .text] | join("\n")) as $t |
     ([$p.content[]? | select(.type == "input_image") |
-      ((.image_url // "") | if type == "string" and startswith("data:") and contains(";") then .[5:(index(";") // 5)] else "image/*" end) as $mt |
+      ((.image_url // "") | if type == "string" and startswith("data:") and contains(";") then .[5:(index(";") // 5)] else "image/*" end) as $raw |
+      (if $raw | startswith("image/") then $raw else "image/*" end) as $mt |
       {type: "image", source: {type: "blob_ref", media_type: $mt}}]) as $imgs |
     if $t == "" then empty else
     {sessionId: $sid, timestamp: $ts, cwd: $cwd, type: "user",
