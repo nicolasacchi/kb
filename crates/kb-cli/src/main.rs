@@ -2999,7 +2999,7 @@ enum SessionsAction {
         #[arg(long)]
         daemon: Option<String>,
     },
-    /// Walk the host's omp sessions tree and fill NULL V0047 lineage
+    /// Walk the host's omp sessions tree and fill NULL lineage
     /// columns (`parent_session_id` / `root_session_id` /
     /// `project_slug`) on omp rows through the daemon. Dry-run by
     /// default (prints `would_change=<n> changed=<n> unmatched=<n>`);
