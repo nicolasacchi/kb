@@ -124,17 +124,15 @@ impl TestRunner {
 
     /// Direct tmux call (deadline-bounded) for assertions.
     pub fn tmux(&self, sock: &Path, args: &[&str]) -> (bool, String) {
-        let out = StdCommand::new(&self.tmux_bin)
-            .arg("-S")
-            .arg(sock)
-            .args(args)
-            .output();
+        let mut cmd = StdCommand::new(&self.tmux_bin);
+        cmd.arg("-S").arg(sock).args(args);
+        let out = run_bounded(&mut cmd, Duration::from_secs(10));
         match out {
-            Ok(o) => (
+            Some(o) => (
                 o.status.success(),
                 String::from_utf8_lossy(&o.stdout).trim().to_string(),
             ),
-            Err(_) => (false, String::new()),
+            None => (false, String::new()),
         }
     }
 
@@ -182,12 +180,38 @@ impl Drop for TestRunner {
             for entry in rd.flatten() {
                 let path = entry.path();
                 if path.extension().and_then(|e| e.to_str()) == Some("sock") {
-                    let _ = StdCommand::new(&self.tmux_bin)
-                        .arg("-S")
-                        .arg(&path)
-                        .arg("kill-server")
-                        .output();
+                    let mut cmd = StdCommand::new(&self.tmux_bin);
+                    cmd.arg("-S").arg(&path).arg("kill-server");
+                    let _ = run_bounded(&mut cmd, Duration::from_secs(10));
                 }
+            }
+        }
+    }
+}
+
+/// Run a command with a hard deadline (10-minute-lane protection): a
+/// wedged tmux/test must fail fast, not burn the lane timeout. Returns
+/// `None` on timeout or spawn failure (the child is killed and reaped).
+pub fn run_bounded(cmd: &mut StdCommand, timeout: Duration) -> Option<std::process::Output> {
+    use std::process::Stdio;
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd.spawn().ok()?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().ok(),
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
             }
         }
     }

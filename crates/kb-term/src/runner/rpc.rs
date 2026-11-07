@@ -8,6 +8,13 @@
 //! Ops implemented in T8: list, launch, kill, resize, read, history, ping.
 //! The tap/viewer ops (paste, enter, keys, take_size, media) arrive in
 //! later units and report `bad-request` here.
+//!
+//! Success payloads for launch/kill/read/history are built with `json!`:
+//! launch is `{id, pane_pid, cols, rows}`, kill is `{exit_code, forced}`,
+//! read/history are `{text, truncated}`. Later units should prefer small
+//! typed `Serialize` structs (LaunchData/KillData/ReadData) for these
+//! shapes instead of extending the `json!` pattern; the wire map is kept
+//! stable either way.
 
 use serde_json::{json, Value};
 

@@ -34,10 +34,6 @@ async fn term_int_conf_loads_clean() {
     let dir = tempfile::tempdir().unwrap();
     let sock = dir.path().join("t.sock");
     let conf = common::conf_path();
-    let out = std::process::Command::new("true") // placeholder; real check below
-        .output()
-        .unwrap();
-    assert!(out.status.success());
     // `source-file -n` (no-exec) must exit 0.
     let ok = run_tmux_file_probe(&dir, &sock, &conf);
     assert!(ok, "source-file -n must exit 0 on the shipped conf");
@@ -68,6 +64,15 @@ fn run_tmux_file_probe(
     if !out.status.success() {
         return false;
     }
+    // `source-file -n` (no-exec) must exit 0 on the shipped conf.
+    let mut cmd = Command::new(&tmux_bin);
+    cmd.arg("-S")
+        .arg(sock)
+        .arg("source-file")
+        .arg("-n")
+        .arg(conf);
+    let out = common::run_bounded(&mut cmd, Duration::from_secs(10)).unwrap();
+    assert!(out.status.success(), "source-file -n must exit 0");
     let checks = [
         ("window-size", "manual"),
         ("exit-empty", "off"),
@@ -495,6 +500,13 @@ async fn term_int_runner_restart_keeps_the_session_and_recreates_the_anchor() {
         .expect("anchor pid set at launch");
     // Drop the runner (closes anchor masters; the session survives).
     drop(a);
+    // The dropped runner must not leave a zombie anchor process behind.
+    let reaped = poll_until(
+        Duration::from_secs(10),
+        || async move { pid_gone(old_anchor) },
+    )
+    .await;
+    assert!(reaped, "the old anchor process must be reaped after drop");
     // The old anchor client must disappear from list-clients.
     let tmux = tmux_bin.clone();
     let sock = run_dir.join("s").join(format!("{id}.sock"));
@@ -853,8 +865,8 @@ async fn term_int_runner_rejects_wrong_tmux_version() {
     };
     let dir = tempfile::TempDir::new_in("/tmp").unwrap();
     let run_dir = dir.path().join("run");
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_kb-termd"))
-        .arg("--run-dir")
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_kb-termd"));
+    cmd.arg("--run-dir")
         .arg(&run_dir)
         .arg("--tmux-bin")
         .arg(&tmux_bin)
@@ -865,13 +877,84 @@ async fn term_int_runner_rejects_wrong_tmux_version() {
         .arg("--require-tap")
         .arg("false")
         .arg("--expected-tmux")
-        .arg("9.9")
-        .output()
-        .unwrap();
+        .arg("9.9");
+    let out = common::run_bounded(&mut cmd, Duration::from_secs(15)).unwrap();
     assert!(!out.status.success(), "a wrong version must exit non-zero");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains("tmux-version"),
         "the failure must carry the tmux-version code: {stderr}"
+    );
+}
+
+// 15. Kill after a runner restart still reaps the pane and the server
+//     (the second runner's holders map is empty; stop() must signal from
+//     StopCtx without a held Child).
+#[tokio::test(flavor = "multi_thread")]
+async fn term_int_kill_after_restart_reaps_holder() {
+    let Some(tmux_bin) = require_tmux() else {
+        return;
+    };
+    let dir = tempfile::TempDir::new_in("/tmp").unwrap();
+    let run_dir = dir.path().join("run");
+    std::fs::create_dir_all(run_dir.join("s")).unwrap();
+    std::fs::create_dir_all(run_dir.join("runner")).unwrap();
+    let cwd = dir.path().to_string_lossy().into_owned();
+    let mut cfg = kb_term::runner::RunnerConfig::test_config(
+        run_dir.clone(),
+        tmux_bin.clone(),
+        common::conf_path(),
+    );
+    cfg.tap_bin = Some(fixture("fake_tap.sh"));
+    cfg.require_tap = true;
+    let a = kb_term::runner::Runner::direct(cfg);
+    ensure_layout(&a.cfg).await.unwrap();
+    check_tmux_version(&a.tmux, "3.7c").await.unwrap();
+    adopt_anchors(&a).await.unwrap();
+    let req = common::launch_req(vec!["/bin/cat".to_string()], cwd);
+    let (id, pane_pid) = match rpc::dispatch(&a, &req).await {
+        Response::Ok { data } => (
+            data["id"].as_str().unwrap().to_string(),
+            data["pane_pid"].as_u64().unwrap() as u32,
+        ),
+        Response::Err { code, message } => panic!("launch failed ({code}): {message}"),
+    };
+    let (_, server_pid) = discovery::pane_and_server_pids(&a, &id).await;
+    let server_pid = server_pid.expect("server pid readable before restart");
+    assert!(!pid_gone(pane_pid), "the harness must be alive");
+    // Drop runner A; the holder survives as a setsid process nobody owns.
+    drop(a);
+    // Fresh runner B: its holders map is empty.
+    let b = kb_term::runner::Runner::direct(kb_term::runner::RunnerConfig::test_config(
+        run_dir.clone(),
+        tmux_bin,
+        common::conf_path(),
+    ));
+    ensure_layout(&b.cfg).await.unwrap();
+    check_tmux_version(&b.tmux, "3.7c").await.unwrap();
+    adopt_anchors(&b).await.unwrap();
+    let resp = rpc::dispatch(
+        &b,
+        &Request::Kill {
+            id: id.clone(),
+            grace_secs: Some(2),
+        },
+    )
+    .await;
+    match resp {
+        Response::Ok { .. } => {}
+        Response::Err { code, message } => panic!("kill-after-restart failed ({code}): {message}"),
+    }
+    let gone = poll_until(Duration::from_secs(10), || async move {
+        pid_gone(pane_pid) && pid_gone(server_pid)
+    })
+    .await;
+    assert!(
+        gone,
+        "pane {pane_pid} and server {server_pid} must be reaped"
+    );
+    assert!(
+        !run_dir.join("s").join(format!("{id}.sock")).exists(),
+        "the holder socket must be removed"
     );
 }
