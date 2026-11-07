@@ -184,38 +184,56 @@ impl Supervisor for DirectSupervisor {
         if let Some(mut held) = tap {
             kill_held(&mut held).await;
         }
-        let holder = self.holders.lock().unwrap().remove(id);
-        let mut held = match holder {
-            Some(h) => h,
-            None => return Ok(()),
-        };
         // Direct-mode kill of a holder: SIGTERM the server and the pane
         // process group (the pane child is its own session leader, so
         // pgid == pane_pid), wait 2 s, then SIGKILL both and reap the
         // Child. `forced` is the caller's diagnosis; this path always
         // SIGKILLs whatever survived the SIGTERM grace.
+        //
+        // The pane/server signals come from `ctx` BEFORE the holders-map
+        // lookup: after a runner restart the map is empty (the holder is
+        // a setsid survivor, not re-adopted into the map), and a
+        // state-free kill must still reap the adopted session. Only the
+        // wait()/reap below needs the held Child.
         if let Some(pane) = ctx.pane_pid {
             kill_group(pane, libc::SIGTERM);
         }
         if let Some(server) = ctx.server_pid {
             kill_group(server, libc::SIGTERM);
         }
-        // The holder was setsid'd, so its pgid is the child pid.
-        let pid = held.child.id().unwrap_or(0);
-        if pid != 0 {
-            kill_group(pid, libc::SIGTERM);
+        let holder = self.holders.lock().unwrap().remove(id);
+        match holder {
+            Some(mut held) => {
+                // The holder was setsid'd, so its pgid is the child pid.
+                let pid = held.child.id().unwrap_or(0);
+                if pid != 0 {
+                    kill_group(pid, libc::SIGTERM);
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                if let Some(pane) = ctx.pane_pid {
+                    kill_group(pane, libc::SIGKILL);
+                }
+                if let Some(server) = ctx.server_pid {
+                    kill_group(server, libc::SIGKILL);
+                }
+                if pid != 0 {
+                    kill_group(pid, libc::SIGKILL);
+                }
+                kill_held(&mut held).await;
+            }
+            None => {
+                // No held Child (kill-after-restart): still run the
+                // SIGKILL grace against the pane/server groups, then
+                // return.
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                if let Some(pane) = ctx.pane_pid {
+                    kill_group(pane, libc::SIGKILL);
+                }
+                if let Some(server) = ctx.server_pid {
+                    kill_group(server, libc::SIGKILL);
+                }
+            }
         }
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        if let Some(pane) = ctx.pane_pid {
-            kill_group(pane, libc::SIGKILL);
-        }
-        if let Some(server) = ctx.server_pid {
-            kill_group(server, libc::SIGKILL);
-        }
-        if pid != 0 {
-            kill_group(pid, libc::SIGKILL);
-        }
-        kill_held(&mut held).await;
         Ok(())
     }
 }

@@ -234,10 +234,7 @@ pub async fn check_tmux_version<T: tmux::Tmux>(
     tmux: &T,
     expected: &str,
 ) -> Result<(), RunnerError> {
-    let out = tmux
-        .version()
-        .await
-        .map_err(|m| RunnerError::TmuxFailed(m))?;
+    let out = tmux.version().await.map_err(RunnerError::TmuxFailed)?;
     if out.trim() == format!("tmux {expected}") {
         Ok(())
     } else {
@@ -291,8 +288,52 @@ pub fn pid_alive(pid: u32) -> bool {
 }
 
 /// Signal a whole process group (the pane child is its own session leader).
+///
+/// Pids 0 and 1 are never valid targets: `kill(0)` would signal the
+/// runner's own process group and `kill(-1)` every process this user can
+/// signal. A parsed-zero/one pane or server pid therefore means "absent".
 pub fn kill_group(pid: u32, sig: i32) {
+    if pid <= 1 {
+        return;
+    }
     unsafe {
         libc::kill(-(pid as i32), sig);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runner::tmux::fake::FakeTmux;
+
+    #[tokio::test]
+    async fn tmux_version_mismatch_refuses() {
+        let fake = FakeTmux {
+            version_out: std::sync::Mutex::new("tmux 9.9\n".to_string()),
+            ..FakeTmux::default()
+        };
+        let err = check_tmux_version(&fake, "3.7c").await.unwrap_err();
+        assert_eq!(
+            err.code(),
+            "tmux-version",
+            "a non-matching -V must refuse at boot: {err}"
+        );
+        // The default fake reports the pinned version and passes.
+        let matching = FakeTmux::new();
+        check_tmux_version(&matching, "3.7c")
+            .await
+            .expect("tmux 3.7c must satisfy expected 3.7c");
+    }
+
+    #[test]
+    fn kill_group_ignores_pid_zero_and_one() {
+        // Without the guard, kill(0, SIGTERM) would terminate this test
+        // process's own group and kill(-1, SIGTERM) would signal every
+        // process this user can signal. Survival proves the no-op.
+        let me = std::process::id();
+        assert!(pid_alive(me));
+        kill_group(0, libc::SIGTERM);
+        kill_group(1, libc::SIGTERM);
+        assert!(pid_alive(me), "kill_group(0/1) must be a no-op");
     }
 }

@@ -49,6 +49,7 @@ impl Anchor {
         cmd.env("TERM", "xterm-256color");
         cmd.env("LANG", "C.UTF-8");
         cmd.env("HOME", std::env::var("HOME").unwrap_or_default());
+        cmd.kill_on_drop(true);
         cmd.stdin(
             slave
                 .try_clone()
