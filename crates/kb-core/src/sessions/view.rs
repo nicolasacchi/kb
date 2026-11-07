@@ -528,6 +528,90 @@ pub enum Item {
     Raw {
         reason: String,
     },
+    Image {
+        // "image/png" … or "image/*" when only a sha is known
+        mime: String,
+        // 64 lowercase hex; ONLY when the capture named a blob
+        sha256: Option<String>,
+        // base64 length when the pixels are inline in THIS transcript (Claude); never the data
+        inline_bytes: Option<u32>,
+        width: Option<u32>,
+        height: Option<u32>,
+    },
+}
+
+/// The one image label every presenter prints: `[image <mime> blob:<…>]`
+/// (a content-addressed blob wins when both are known) or
+/// `[image <mime> inline <N> b64 chars]` (pixels inline in this transcript)
+/// or the bare `[image <mime>]`. Presenters format the wire fields with
+/// this helper rather than reinterpreting image blocks themselves.
+pub fn image_label(mime: &str, sha256: Option<&str>, inline_bytes: Option<u32>) -> String {
+    if let Some(sha) = sha256 {
+        format!("[image {mime} blob:{}]", &sha[..12.min(sha.len())])
+    } else if let Some(n) = inline_bytes {
+        format!("[image {mime} inline {n} b64 chars]")
+    } else {
+        format!("[image {mime}]")
+    }
+}
+
+/// Build an [`Item::Image`] from a transcript image content block, or
+/// `None` when the block names neither an `image/` mime nor a validated
+/// blob sha (the caller then keeps the legacy "[image attachment]"
+/// placeholder, for assistant blocks). Pixels NEVER enter the Item: a
+/// base64 source contributes only its length (`inline_bytes`); a blob
+/// contributes only its validated hex-64 `sha256`. When only a sha is
+/// known the mime is `image/*`.
+fn image_item_from_block(b: &Value) -> Option<Item> {
+    let source = b.get("source");
+    let mime = source
+        .and_then(|s| s.get("media_type"))
+        .and_then(|x| x.as_str())
+        .filter(|m| !m.is_empty() && m.starts_with("image/"))
+        .or_else(|| {
+            ["mimeType", "mime_type", "media_type"]
+                .iter()
+                .filter_map(|k| b.get(*k).and_then(|x| x.as_str()))
+                .find(|m| !m.is_empty() && m.starts_with("image/"))
+        });
+    let sha256 = source
+        .and_then(|s| s.get("sha256"))
+        .and_then(|x| x.as_str())
+        .filter(|h| {
+            h.len() == 64
+                && h.bytes()
+                    .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+        })
+        .map(str::to_string);
+    let inline_bytes = source
+        .filter(|s| s.get("type").and_then(|x| x.as_str()) == Some("base64"))
+        .and_then(|s| s.get("data"))
+        .and_then(|d| d.as_str())
+        .map(|d| u32::try_from(d.chars().count()).unwrap_or(u32::MAX));
+    let dim = |key: &str| {
+        b.get(key)
+            .or_else(|| source.and_then(|s| s.get(key)))
+            .and_then(|x| x.as_u64())
+            .map(|n| u32::try_from(n).unwrap_or(u32::MAX))
+    };
+    let (width, height) = (dim("width"), dim("height"));
+    match (mime, sha256) {
+        (Some(m), s) => Some(Item::Image {
+            mime: m.to_string(),
+            sha256: s,
+            inline_bytes,
+            width,
+            height,
+        }),
+        (None, Some(s)) => Some(Item::Image {
+            mime: "image/*".to_string(),
+            sha256: Some(s),
+            inline_bytes,
+            width,
+            height,
+        }),
+        (None, None) => None,
+    }
 }
 
 // ─── the incremental carry ─────────────────────────────────────────────
@@ -1091,9 +1175,12 @@ impl ViewCarry {
                 });
             }
             "tool_use" => self.ingest_tool_use(b),
-            "image" => self.push_open_item(Item::Prose {
-                text: "[image attachment]".to_string(),
-            }),
+            "image" => match image_item_from_block(b) {
+                Some(item) => self.push_open_item(item),
+                None => self.push_open_item(Item::Prose {
+                    text: "[image attachment]".to_string(),
+                }),
+            },
             _ => {}
         }
     }
@@ -1236,6 +1323,11 @@ impl ViewCarry {
             .iter()
             .filter(|b| b.get("type").and_then(|x| x.as_str()) == Some("text"))
             .copied()
+            .collect();
+        let images: Vec<Item> = blocks
+            .iter()
+            .filter(|b| b.get("type").and_then(|x| x.as_str()) == Some("image"))
+            .filter_map(|b| image_item_from_block(b))
             .collect();
 
         // Fold every tool_result present into its call, wherever it lives.
@@ -1457,6 +1549,13 @@ impl ViewCarry {
                 items.push(Item::Prose {
                     text: text.to_string(),
                 });
+                // Image references ride along after the prose; they are
+                // NOT attached to wrapper, meta or command classes (those
+                // arms never extend). An image-only user message never
+                // reaches here: it returns at the `real_text` check above
+                // and opens no turn, so turn ordinals and ids for
+                // image-free captures never shift.
+                items.extend(images);
                 out.push(ViewEvent::TurnClosed(Turn {
                     id,
                     ordinal: self.ordinal,
@@ -1486,8 +1585,12 @@ impl ViewCarry {
             self.error_count += 1;
         }
         let body = tool_result_text_view(b);
-        let raw = serde_json::to_string_pretty(b.get("content").unwrap_or(&Value::Null))
-            .unwrap_or_default();
+        // `raw` must never carry pixels: a base64 image block riding a
+        // result is elided to a length marker before the wire. Only when
+        // the content actually contains such a block is `raw` rebuilt
+        // (from a clone); text-only results keep the exact computation
+        // below, byte-identical to the historical form.
+        let raw = tool_result_raw_view(b);
 
         let Some(open) = self.open.as_mut() else {
             return;
@@ -1548,6 +1651,19 @@ impl ViewCarry {
                 *result_view = Some(interpret_kb_output(verb, &body));
             }
             _ => {}
+        }
+        // Image references ride along after the call: append-only, never
+        // inserted mid-vector — `pending_calls` indices address positions
+        // in `open.items`, so an image for a parallel call may land after
+        // a later call's item. Unrecognised shapes are dropped (no Item).
+        if let Some(arr) = b.get("content").and_then(|c| c.as_array()) {
+            for blk in arr {
+                if blk.get("type").and_then(|x| x.as_str()) == Some("image") {
+                    if let Some(item) = image_item_from_block(blk) {
+                        open.items.push(item);
+                    }
+                }
+            }
         }
         // TaskCreate is registered as a ToolCall above (falls into the first
         // arm); additionally resolve its subject into the task registry the
@@ -2080,6 +2196,56 @@ fn tool_result_text_view(b: &Value) -> String {
         Some(other) => serde_json::to_string_pretty(other).unwrap_or_default(),
         None => String::new(),
     }
+}
+
+/// The full pretty-printed `tool_result.content` for a [`ResultView`]'s
+/// `raw`, with base64 PIXELS elided: when the content carries an image
+/// block whose source is inline base64, its `source.data` is replaced by
+/// `"[image data omitted: N chars]"` (N = the original length) so pixels
+/// never reach the wire, the HTML `raw` details, or `kb sessions read
+/// --json`. Without such a block the historical one-liner runs unchanged,
+/// so text-only results stay byte-identical.
+fn tool_result_raw_view(b: &Value) -> String {
+    let content = b.get("content").unwrap_or(&Value::Null);
+    if !is_b64_image_content(content) {
+        return serde_json::to_string_pretty(content).unwrap_or_default();
+    }
+    let mut elided = content.clone();
+    if let Some(arr) = elided.as_array_mut() {
+        for it in arr {
+            if !is_b64_image_block(it) {
+                continue;
+            }
+            let n = it
+                .get("source")
+                .and_then(|s| s.get("data"))
+                .and_then(|d| d.as_str())
+                .map(|s| s.chars().count())
+                .unwrap_or(0);
+            if let Some(src) = it.get_mut("source").and_then(|s| s.as_object_mut()) {
+                src.insert(
+                    "data".to_string(),
+                    Value::String(format!("[image data omitted: {n} chars]")),
+                );
+            }
+        }
+    }
+    serde_json::to_string_pretty(&elided).unwrap_or_default()
+}
+
+fn is_b64_image_block(it: &Value) -> bool {
+    it.get("type").and_then(|x| x.as_str()) == Some("image")
+        && it
+            .get("source")
+            .and_then(|s| s.get("type"))
+            .and_then(|x| x.as_str())
+            == Some("base64")
+}
+
+fn is_b64_image_content(content: &Value) -> bool {
+    content
+        .as_array()
+        .is_some_and(|arr| arr.iter().any(is_b64_image_block))
 }
 
 fn attachment_text(att: &Value, key: &str) -> Option<String> {
@@ -4230,6 +4396,270 @@ mod tests {
         turns
     }
 
+    // --- T20: Item::Image ---------------------------------------------------
+
+    #[test]
+    fn image_blocks_become_item_image_not_prose() {
+        let jsonl = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}]}}"#;
+        let v = session_view(jsonl, &TailBlocks::default(), &ViewOptions::default());
+        let turn = &v.turns[0];
+        match &turn.items[0] {
+            Item::Image {
+                mime, inline_bytes, ..
+            } => {
+                assert_eq!(mime, "image/png");
+                assert_eq!(*inline_bytes, Some(4));
+            }
+            other => panic!("expected Item::Image, got {other:?}"),
+        }
+        assert!(
+            !turn
+                .items
+                .iter()
+                .any(|i| matches!(i, Item::Prose { text } if text == "[image attachment]")),
+            "no legacy placeholder may be emitted"
+        );
+    }
+
+    #[test]
+    fn unrecognised_assistant_image_stays_the_legacy_placeholder() {
+        // No mime, no sha: the block is opaque, so the legacy literal stays.
+        let jsonl = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"image","data":"AAAA"}]}}"#;
+        let v = session_view(jsonl, &TailBlocks::default(), &ViewOptions::default());
+        assert!(matches!(
+            &v.turns[0].items[0],
+            Item::Prose { text } if text == "[image attachment]"
+        ));
+    }
+
+    #[test]
+    fn user_image_attaches_to_the_real_human_turn_after_the_prose() {
+        let with_image = [
+            r#"{"type":"user","uuid":"00000001-0000-4000-8000-000000000001","timestamp":"2026-06-04T09:00:10.000Z","message":{"role":"user","content":[{"type":"text","text":"look"},{"type":"image","source":{"type":"blob_ref","media_type":"image/png","sha256":"abababababababababababababababababababababababababababababababab"}}]}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"seen"}]}}"#,
+        ]
+        .join("\n");
+        let without_image = [
+            r#"{"type":"user","uuid":"00000001-0000-4000-8000-000000000001","timestamp":"2026-06-04T09:00:10.000Z","message":{"role":"user","content":[{"type":"text","text":"look"}]}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"seen"}]}}"#,
+        ]
+        .join("\n");
+        let v = session_view(&with_image, &TailBlocks::default(), &ViewOptions::default());
+        let base = session_view(
+            &without_image,
+            &TailBlocks::default(),
+            &ViewOptions::default(),
+        );
+        let human = &v.turns[0];
+        assert_eq!(human.items.len(), 2, "prose + image");
+        assert!(matches!(&human.items[0], Item::Prose { text } if text == "look"));
+        assert!(matches!(&human.items[1], Item::Image { mime, .. } if mime == "image/png"));
+        assert_eq!(human.id, base.turns[0].id);
+        assert_eq!(human.ordinal, base.turns[0].ordinal);
+    }
+
+    #[test]
+    fn image_only_user_message_still_opens_no_turn() {
+        let jsonl = [
+            r#"{"type":"user","uuid":"00000001-0000-4000-8000-000000000001","timestamp":"2026-06-04T09:00:10.000Z","message":{"role":"user","content":[{"type":"text","text":"first"}]}}"#,
+            r#"{"type":"user","uuid":"00000002-0000-4000-8000-000000000002","timestamp":"2026-06-04T09:00:20.000Z","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}]}}"#,
+            r#"{"type":"user","uuid":"00000003-0000-4000-8000-000000000003","timestamp":"2026-06-04T09:00:30.000Z","message":{"role":"user","content":[{"type":"text","text":"second"}]}}"#,
+        ]
+        .join("\n");
+        let v = session_view(&jsonl, &TailBlocks::default(), &ViewOptions::default());
+        assert_eq!(v.turns.len(), 2, "the image-only record opens no turn");
+        assert_eq!(v.turns[1].ordinal, 2);
+        assert!(matches!(&v.turns[1].items[0], Item::Prose { text } if text == "second"));
+    }
+
+    #[test]
+    fn tool_result_images_append_after_the_call_and_do_not_shift_pairing() {
+        let jsonl = [
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Read","input":{"file_path":"/tmp/widget.py"}}]}}"#,
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","is_error":false,"content":[{"type":"text","text":"hello result"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"QUJD"}}]}]}}"#,
+        ]
+        .join("\n");
+        let v = session_view(&jsonl, &TailBlocks::default(), &ViewOptions::default());
+        let turn = &v.turns[0];
+        assert_eq!(turn.items.len(), 2);
+        match &turn.items[0] {
+            Item::ToolCall {
+                result, unpaired, ..
+            } => {
+                assert!(!unpaired, "the text result still pairs to its call");
+                assert_eq!(result.as_ref().unwrap().preview, "hello result");
+            }
+            other => panic!("expected ToolCall, got {other:?}"),
+        }
+        assert!(
+            matches!(&turn.items[1], Item::Image { mime, .. } if mime == "image/png"),
+            "the image follows the call in the same turn"
+        );
+    }
+
+    fn image_of_block(block: &str) -> Item {
+        let jsonl = format!(
+            r#"{{"type":"assistant","message":{{"role":"assistant","content":[{block}]}}}}"#
+        );
+        let v = session_view(&jsonl, &TailBlocks::default(), &ViewOptions::default());
+        v.turns[0].items[0].clone()
+    }
+
+    #[test]
+    fn blob_ref_sha_is_validated() {
+        // Uppercase sha: not lowercase hex.
+        let upper = image_of_block(
+            r#"{"type":"image","source":{"type":"blob_ref","media_type":"image/png","sha256":"ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB"}}"#,
+        );
+        match upper {
+            Item::Image { sha256: None, .. } => {}
+            other => panic!("uppercase sha must be None, got {other:?}"),
+        }
+        // 63-char sha: too short.
+        let short = image_of_block(
+            r#"{"type":"image","source":{"type":"blob_ref","media_type":"image/png","sha256":"ababababababababababababababababababababababababababababababababa"}}"#,
+        );
+        match short {
+            Item::Image { sha256: None, .. } => {}
+            other => panic!("63-char sha must be None, got {other:?}"),
+        }
+        // Non-hex sha: 'g' is outside [0-9a-f].
+        let nonhex = image_of_block(
+            r#"{"type":"image","source":{"type":"blob_ref","media_type":"image/png","sha256":"gbababababababababababababababababababababababababababababababababa"}}"#,
+        );
+        match nonhex {
+            Item::Image { sha256: None, .. } => {}
+            other => panic!("non-hex sha must be None, got {other:?}"),
+        }
+        // A valid sha is kept verbatim.
+        let valid = image_of_block(
+            r#"{"type":"image","source":{"type":"blob_ref","media_type":"image/png","sha256":"abababababababababababababababababababababababababababababababab"}}"#,
+        );
+        match valid {
+            Item::Image { sha256, .. } => {
+                assert_eq!(
+                    sha256.as_deref(),
+                    Some("abababababababababababababababababababababababababababababababab")
+                )
+            }
+            other => panic!("valid sha must be kept, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn base64_payload_never_reaches_the_wire() {
+        let v = view("synthetic-images");
+        let wire = serde_json::to_string(&v).unwrap();
+        // The fixture's distinctive inline payload appears nowhere in the
+        // whole serialization (items AND every ResultView.raw).
+        assert!(
+            !wire.contains("QUJDREVGRw=="),
+            "inline base64 leaked to the wire"
+        );
+        // No image block on the structured wire carries a "data" key with
+        // pixels: an image object with a non-elided `data` fails the walk.
+        fn carries_pixels(v: &Value) -> bool {
+            match v {
+                Value::Object(m) => {
+                    if m.get("type").and_then(|x| x.as_str()) == Some("image") {
+                        match m.get("source").and_then(|s| s.get("data")) {
+                            Some(Value::String(s)) if s.starts_with("[image data omitted:") => {}
+                            Some(_) => return true,
+                            None if m.get("data").is_some() => return true,
+                            None => {}
+                        }
+                    }
+                    m.values().any(carries_pixels)
+                }
+                Value::Array(a) => a.iter().any(carries_pixels),
+                _ => false,
+            }
+        }
+        let parsed: Value = serde_json::from_str(&wire).unwrap();
+        assert!(
+            !carries_pixels(&parsed),
+            "an image block kept its pixel data"
+        );
+        // The base64 tool_result's raw keeps the elision marker with the
+        // original length (12).
+        let mut saw_marker = false;
+        let mut saw_text_only = false;
+        for t in &v.turns {
+            for i in &t.items {
+                if let Item::ToolCall {
+                    result: Some(r), ..
+                } = i
+                {
+                    if r.raw.contains("[image data omitted: 12 chars]") {
+                        saw_marker = true;
+                    }
+                    let content: Value =
+                        serde_json::from_str(r#"[{"type":"text","text":"3 matches"}]"#).unwrap();
+                    if r.raw == serde_json::to_string_pretty(&content).unwrap() {
+                        saw_text_only = true;
+                    }
+                }
+            }
+        }
+        assert!(saw_marker, "the elision marker is missing from some raw");
+        assert!(saw_text_only, "a text-only raw is no longer byte-identical");
+        // And the surviving image item carries only the length.
+        assert!(
+            v.turns.iter().flat_map(|t| &t.items).any(|i| matches!(
+                i,
+                Item::Image {
+                    inline_bytes: Some(12),
+                    ..
+                }
+            )),
+            "inline_bytes must equal the base64 length"
+        );
+    }
+
+    #[test]
+    fn item_image_wire_shape_is_pinned() {
+        let item = image_of_block(
+            r#"{"type":"image","source":{"type":"blob_ref","media_type":"image/jpeg","sha256":"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef"},"width":800,"height":600}"#,
+        );
+        let j = serde_json::to_string(&item).unwrap();
+        assert_eq!(
+            j,
+            r#"{"item":"Image","mime":"image/jpeg","sha256":"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef","inline_bytes":null,"width":800,"height":600}"#
+        );
+        let item = image_of_block(
+            r#"{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}"#,
+        );
+        let j = serde_json::to_string(&item).unwrap();
+        assert_eq!(
+            j,
+            r#"{"item":"Image","mime":"image/png","sha256":null,"inline_bytes":4,"width":null,"height":null}"#
+        );
+    }
+
+    #[test]
+    fn image_never_becomes_the_outcome() {
+        let prose =
+            "The header moved down by one row, and the search box stayed put exactly where it was.";
+        let jsonl = [
+            r#"{"type":"user","uuid":"00000001-0000-4000-8000-000000000001","timestamp":"2026-06-04T09:00:10.000Z","message":{"role":"user","content":[{"type":"text","text":"look"}]}}"#,
+            format!(r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{prose}"}}]}}}}"#),
+            r#"{"type":"user","uuid":"00000002-0000-4000-8000-000000000002","timestamp":"2026-06-04T09:00:20.000Z","message":{"role":"user","content":[{"type":"text","text":"again"}]}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"image","source":{"type":"blob_ref","media_type":"image/png","sha256":"abababababababababababababababababababababababababababababababab"}}]}}"#,
+        ]
+        .join("\n");
+        let v = session_view(&jsonl, &TailBlocks::default(), &ViewOptions::default());
+        let outcome = v.header.outcome.expect("an outcome from the earlier prose");
+        assert_eq!(
+            outcome.text, prose,
+            "the trailing image must not become the closure"
+        );
+        assert_ne!(outcome.text, "[image attachment]");
+        assert!(
+            !outcome.text.contains("blob:"),
+            "the image label is never an outcome"
+        );
+    }
+
     /// A turn's structural fingerprint for cross-chunking comparison — id,
     /// role, item KIND sequence (not full item payloads, since a
     /// `ToolCall.raw` result JSON's whitespace is not itself part of the
@@ -4259,6 +4689,7 @@ mod tests {
                 Item::ModeChange { .. } => "mode_change",
                 Item::TimeGap { .. } => "time_gap",
                 Item::Raw { .. } => "raw",
+                Item::Image { .. } => "image",
             })
             .collect();
         (t.id.clone(), role, kinds, t.raw_lines.clone())
@@ -4270,6 +4701,7 @@ mod tests {
             "synthetic-workflow-heavy",
             "synthetic-kb-commands",
             "synthetic-husk",
+            "synthetic-images",
         ] {
             let jsonl = fixture(fixture_name);
             let full = session_view(&jsonl, &TailBlocks::default(), &ViewOptions::default());
