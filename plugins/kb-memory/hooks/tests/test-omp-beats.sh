@@ -186,6 +186,7 @@ test("a bash child after a subagent ran sees the main sid", () => {
 });
 
 test("beat is not called for kind sub", async () => {
+  await Bun.sleep(600); // let the previous test's fire-and-forget main beat land BEFORE truncating
   writeFileSync(CALLS, "");
   const h = makePi();
   await h.get("session_start")({}, subCtx);
