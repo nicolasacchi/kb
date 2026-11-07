@@ -172,6 +172,21 @@ segment_of?: string,
  */
 segment_idx?: number, 
 /**
+ * V0045/seg1 — DERIVED at read time: how many newest-capture parts the
+ * logical session has (`segment_of = ? AND is_newest = 1`, plus part
+ * 1). Absent for ordinary sessions; nothing about it is stored.
+ */
+segment_count?: number, 
+/**
+ * OL IDEA3 -- the session evidence card: was the code checked after its
+ * last edit. DERIVED at read time from the persisted
+ * `sessions.evidence_json` (V0046) by `kb_core::sessions::checks`; always
+ * `Some` from `from_row` (a NULL or unreadable column reads as
+ * `not_extracted`). SURFACED, never scored: no route sorts, filters or
+ * ranks on it.
+ */
+evidence?: SessionEvidenceOut, 
+/**
  * V0047 — lineage, SURFACED never scored (invariant #11). `None` for
  * a top-level session or an unstamped row; omitted on the wire so a
  * lineage-less row serialises byte-identically.
@@ -186,19 +201,4 @@ root_session_id?: string,
  * V0047 — lineage, SURFACED never scored (invariant #11). The capture
  * cwd's repo slug; `None` when the cwd is gone.
  */
-project_slug?: string, 
-/**
- * V0045/seg1 — DERIVED at read time: how many newest-capture parts the
- * logical session has (`segment_of = ? AND is_newest = 1`, plus part
- * 1). Absent for ordinary sessions; nothing about it is stored.
- */
-segment_count?: number, 
-/**
- * OL IDEA3 -- the session evidence card: was the code checked after its
- * last edit. DERIVED at read time from the persisted
- * `sessions.evidence_json` (V0046) by `kb_core::sessions::checks`; always
- * `Some` from `from_row` (a NULL or unreadable column reads as
- * `not_extracted`). SURFACED, never scored: no route sorts, filters or
- * ranks on it.
- */
-evidence?: SessionEvidenceOut, };
+project_slug?: string, };
