@@ -14,6 +14,7 @@
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use super::http;
@@ -33,13 +34,15 @@ pub(crate) fn backfill_tree_path(apply: bool) -> String {
 }
 
 /// Read one `session` header line from a JSONL file: `(id, parentSession,
-/// cwd)` — first `type:"session"` record, head-capped like the hook.
+/// cwd)` — first `type:"session"` record, head-capped like the hook (only
+/// the first 262144 bytes are read; the rest is never loaded).
 fn read_header(path: &Path) -> (Option<String>, Option<String>, Option<String>) {
-    let Ok(bytes) = std::fs::read(path) else {
+    let Ok(mut f) = std::fs::File::open(path) else {
         return (None, None, None);
     };
-    let head = &bytes[..bytes.len().min(262144)];
-    let text = String::from_utf8_lossy(head);
+    let mut bytes = Vec::new();
+    let _ = f.by_ref().take(262144).read_to_end(&mut bytes);
+    let text = String::from_utf8_lossy(&bytes);
     for line in text.lines() {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
@@ -119,16 +122,14 @@ pub fn collect_tree_items(sessions_dir: &Path) -> Vec<TreeItem> {
 }
 
 /// The sibling `<dir>/<Name>.jsonl` header id for a nested
-/// `<dir>/<Name>/<Name>.<Child>.jsonl` file, if it exists.
+/// `<dir>/<Name>/<Name>.<Child>.jsonl` file, if it exists: the parent
+/// session file lives in the dir AROUND the `<Name>` dir, named by that
+/// dir (brief step 4). Also resolves depth-1 files to the top session's
+/// file, whose id folds to the same parent as the depth-1 fallback.
 fn nested_sibling_id(file: &Path) -> Option<String> {
-    let name = file.file_name()?.to_string_lossy();
-    let dot = name.find('.')?;
-    let stem = &name[..dot];
-    if stem.is_empty() {
-        return None;
-    }
     let dir = file.parent()?;
-    let sibling = dir.join(format!("{stem}.jsonl"));
+    let name = dir.file_name()?.to_string_lossy();
+    let sibling = dir.parent()?.join(format!("{name}.jsonl"));
     if sibling == *file {
         return None;
     }
@@ -224,11 +225,7 @@ pub async fn backfill_tree(
 }
 
 fn default_sessions_dir() -> PathBuf {
-    if let Some(home) = std::env::home_dir() {
-        home.join(".omp/agent/sessions")
-    } else {
-        PathBuf::from("~/.omp/agent/sessions")
-    }
+    super::import::expand_tilde(PathBuf::from("~/.omp/agent/sessions"))
 }
 
 #[cfg(test)]
@@ -249,15 +246,20 @@ mod tests {
 
     #[test]
     fn collect_tree_items_folds_a_synthetic_tree() {
-        let root = std::env::temp_dir().join(format!("kb-tree-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
         std::fs::create_dir_all(root.join("bucket")).unwrap();
         let top = root.join("bucket/2026-09-01T10-00-00-000Z_root0001.jsonl");
         let depth1 = root.join("bucket/2026-09-01T10-00-00-000Z_root0001/child0001.jsonl");
+        // Sep depth-1 child WITHOUT parentSession: the directory fallback
+        // (depth-1 => parent = root) must resolve it.
+        let sep = root.join("bucket/2026-09-01T10-00-00-000Z_root0001/sep0001.jsonl");
         std::fs::create_dir_all(depth1.parent().unwrap()).unwrap();
         let nested_dir = root.join("bucket/2026-09-01T10-00-00-000Z_root0001/Worker");
         std::fs::create_dir_all(&nested_dir).unwrap();
-        let sibling = nested_dir.join("Worker.jsonl");
+        // The parent session file for the nested child is `<dir>/<Name>.jsonl`
+        // (in the root stem dir, next to the `<Name>` dir).
+        let sibling = root.join("bucket/2026-09-01T10-00-00-000Z_root0001/Worker.jsonl");
         let nested = nested_dir.join("Worker.child0003.jsonl");
         let write = |p: &Path, id: &str, parent: Option<&str>| {
             let mut v = json!({"type":"session","id":id});
@@ -268,10 +270,11 @@ mod tests {
         };
         write(&top, "root0001", None);
         write(&depth1, "child0001", Some(&top.to_string_lossy()));
+        write(&sep, "sep0001", None);
         write(&sibling, "child0002", None);
         write(&nested, "child0003", None);
 
-        let items = collect_tree_items(&root);
+        let items = collect_tree_items(root);
         let find = |sid: &str| items.iter().find(|i| i.session_id == sid).unwrap().clone();
         let top_it = find("root0001");
         assert_eq!(
@@ -286,6 +289,15 @@ mod tests {
             ),
             (Some("root0001"), Some("root0001"))
         );
+        let sep_it = find("sep0001");
+        assert_eq!(
+            (
+                sep_it.parent_session_id.as_deref(),
+                sep_it.root_session_id.as_deref()
+            ),
+            (Some("root0001"), Some("root0001")),
+            "Sep depth-1 child without parentSession falls back to parent=root"
+        );
         let nested_it = find("child0003");
         assert_eq!(
             (
@@ -295,6 +307,6 @@ mod tests {
             (Some("child0002"), Some("root0001")),
             "nested with sibling header"
         );
-        let _ = std::fs::remove_dir_all(&root);
+        // `tmp` (TempDir) removes the tree on drop, including on failure.
     }
 }
