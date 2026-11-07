@@ -34,7 +34,7 @@ async fn run(cfg: kb_term::runner::RunnerConfig) -> Result<(), RunnerError> {
     }
 }
 
-async fn run_mode<S: kb_term::runner::supervisor::Supervisor>(
+async fn run_mode<S: kb_term::runner::supervisor::Supervisor + 'static>(
     cfg: kb_term::runner::RunnerConfig,
     build: fn(kb_term::runner::RunnerConfig) -> Runner<S>,
 ) -> Result<(), RunnerError> {
