@@ -93,6 +93,7 @@ pub fn base_config(daemon_name: &str, kb: BTreeMap<KbName, KbSection>) -> KbConf
         kb,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     }
 }
 

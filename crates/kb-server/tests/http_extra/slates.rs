@@ -91,6 +91,7 @@ pub(crate) async fn boot() -> (tempfile::TempDir, std::net::SocketAddr, KbPaths)
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
     let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
     std::fs::create_dir_all(&paths.config).unwrap();

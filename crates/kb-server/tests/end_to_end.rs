@@ -104,6 +104,7 @@ fn fixture_corpus_with(
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
 
     let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
@@ -4519,6 +4520,7 @@ async fn folders_route_returns_tree_with_counts() {
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
     let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
     let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)
@@ -4966,6 +4968,7 @@ async fn boot_with_cross_link_corpus() -> (tempfile::TempDir, std::net::SocketAd
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
     let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
     let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)
@@ -5207,6 +5210,7 @@ async fn boot_with_same_folder_cohabiting_corpus(
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
     let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
     let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)
@@ -6468,6 +6472,7 @@ async fn boot_with_nested_fixture() -> (tempfile::TempDir, std::net::SocketAddr)
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
     let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
     let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)
@@ -6662,6 +6667,7 @@ async fn boot_with_deep_nested_fixture() -> (tempfile::TempDir, std::net::Socket
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
     let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
     let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)
@@ -6905,6 +6911,7 @@ async fn boot_with_walk_up_shadowing_fixture() -> (tempfile::TempDir, std::net::
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
     let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
     let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)
@@ -7025,6 +7032,7 @@ async fn boot_with_walk_up_root_only_assets_fixture() -> (tempfile::TempDir, std
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
     let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
     let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)
@@ -7185,6 +7193,7 @@ async fn boot_with_walk_up_cohabit_fixture() -> (tempfile::TempDir, std::net::So
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
     let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
     let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)
@@ -7377,6 +7386,7 @@ async fn boot_with_walk_up_two_kb_fixture() -> (tempfile::TempDir, std::net::Soc
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
     let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
     let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)
@@ -7814,6 +7824,7 @@ async fn boot_with_two_kbs_files(
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
     let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
     let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)
@@ -9184,6 +9195,7 @@ async fn lookup_reports_ambiguity_with_candidates() {
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
     let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
     let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)
@@ -9496,6 +9508,7 @@ async fn daemon_brings_up_two_kbs_with_different_disk_dims() {
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
 
     // Daemon must bring up both kbs without erroring on the dim mix.
@@ -9602,6 +9615,7 @@ async fn daemon_startup_fails_when_kb_dim_mismatches_configured_model() {
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
 
     let result = kb_server::serve_on_random_port_with_paths(cfg, paths).await;
@@ -9703,6 +9717,7 @@ async fn daemon_resolves_defaults_embedding_model_for_dim_check() {
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
 
     let err = kb_server::serve_on_random_port_with_paths(cfg, paths)
@@ -9795,6 +9810,7 @@ async fn daemon_per_kb_embedding_model_wins_over_defaults() {
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
 
     let err = kb_server::serve_on_random_port_with_paths(cfg, paths)
@@ -9844,6 +9860,7 @@ async fn daemon_refuses_public_bind_without_token() {
         kb: BTreeMap::new(),
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
     let err = kb_server::serve_with_paths(cfg, paths.config_file(), paths)
         .await
@@ -10039,6 +10056,7 @@ async fn boot_with_multifolder_fixture() -> (tempfile::TempDir, std::net::Socket
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
     let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
     let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)
@@ -10437,6 +10455,7 @@ async fn boot_memory_corpora_with_code_url(
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
     let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
     let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)
@@ -10910,6 +10929,7 @@ async fn atlas_points_omits_memory_fields_for_non_memory_scoped_kb() {
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
     let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
     let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)
@@ -12931,6 +12951,7 @@ async fn boot_with_tagged_fixture() -> (tempfile::TempDir, std::net::SocketAddr)
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
     let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
     let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)
@@ -13784,6 +13805,7 @@ async fn boot_kb_with_default_search_category(
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
     let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
     let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)
@@ -13994,6 +14016,7 @@ async fn default_search_category_does_not_leak_into_scope_all() {
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
     let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
     let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)
@@ -17524,6 +17547,7 @@ async fn boot_links_fixture() -> (tempfile::TempDir, std::net::SocketAddr) {
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
     let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
     let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)
@@ -18731,6 +18755,7 @@ async fn boot_git_corpus() -> (tempfile::TempDir, std::net::SocketAddr, String) 
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
     let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
     let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)
@@ -18913,6 +18938,7 @@ async fn boot_git_corpus_nested() -> (tempfile::TempDir, std::net::SocketAddr, S
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
     let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
     let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)
@@ -21454,6 +21480,7 @@ fn fixture_inbox_kbs() -> (tempfile::TempDir, KbConfig, KbPaths) {
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
     let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
     (tmp, cfg, paths)
@@ -22227,6 +22254,7 @@ async fn relocate_folder_rename_remaps_nested_docs() {
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
     let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
     let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)
@@ -22815,6 +22843,7 @@ async fn boot_memory_corpus_scoring_v2(
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
     let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
     let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)
@@ -23410,6 +23439,7 @@ async fn tombstone_era_route_returns_the_persisted_marker() {
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
     let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
     std::fs::create_dir_all(&paths.state).unwrap();

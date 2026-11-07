@@ -18,6 +18,7 @@ pub mod routes;
 pub mod scrub;
 pub mod slate_registry;
 pub mod state;
+pub mod terminal;
 pub mod touches_cache;
 
 use anyhow::{Context, Result};

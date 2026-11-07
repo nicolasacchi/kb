@@ -48,6 +48,10 @@ form_urlencoded = "1.2"
 # HTTP client. Already in the dep graph (lancedb → reqwest); promoting it
 # from a dev-dep to a runtime dep adds no new compile cost.
 reqwest = { workspace = true }
+# T11 — the single-use terminal ticket (`terminal::ticket`) draws
+# 16 random bytes from `getrandom::fill`. Already in the workspace
+# graph via kb-core, so no retained version moves.
+getrandom = { workspace = true }
 # TS bindings for the route wire types — see the workspace dep comment
 # + `just types`.
 ts-rs = { workspace = true, optional = true }
