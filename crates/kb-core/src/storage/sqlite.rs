@@ -17972,12 +17972,13 @@ mod tests {
         // children (grandchild-1, whose parent_session_id == child-1).
         // This is the same number the card's children lane reports for
         // either row.
-        let counts = db
+        let mut counts = db
             .sessions_child_counts(&["tree-root".into(), "child-1".into(), "grandchild-1".into()])
             .unwrap();
+        counts.sort();
         assert_eq!(
             counts,
-            vec![("tree-root".to_string(), 3), ("child-1".to_string(), 1),]
+            vec![("child-1".to_string(), 1), ("tree-root".to_string(), 3),]
         );
     }
 

@@ -484,9 +484,10 @@ async fn comments_lane(state: &Arc<KbHandles>, session: &SessionOut) -> Comments
     let mut file_futs: Vec<super::CorpusFut<'_, Vec<kb_core::storage::sqlite::SessionFileRow>>> =
         Vec::new();
     for (kb_name, ctx) in state.kbs.iter() {
+        let sid = sid.clone();
         file_futs.push(Box::pin(async move {
             ctx.storage
-                .session_files_for_session(sid.clone())
+                .session_files_for_session(sid)
                 .await
                 .unwrap_or_else(|e| {
                     tracing::warn!(kb = %kb_name, error = %e, "session_files_for_session failed in card comments");
