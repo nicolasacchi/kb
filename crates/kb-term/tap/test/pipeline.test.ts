@@ -5,6 +5,7 @@ import { TapPipeline } from '../src/pipeline.ts';
 import { stripAll } from '../src/strip.ts';
 import { E, enc, cat, eq, mulberry32, harness } from './helpers.ts';
 
+const BEL = '\x07';
 const esc = (s: string) => s.replaceAll(E, '\\033').replaceAll('\x07', '\\007'); // control-mode octal escaping
 
 test('control_stream_to_viewer_bytes', () => {
@@ -40,16 +41,18 @@ test('panes_do_not_share_parser_state', () => {
   const drain = (chunk: Uint8Array) => {
     for (const o of p.feed(chunk)) if ('pane' in o) out.push(o);
   };
-  // pane %0 ends mid-ESC[; pane %1 carries a plain 'c', which must stay plain text.
-  drain(enc(`%output %0 ${esc(`${E}[`)}hello` + '\n'));
+  // pane %0 ends mid-ESC[ (unfinished CSI, no final byte yet); pane %1 carries a
+  // plain 'c', which must stay plain text and must not complete %0's sequence.
+  drain(enc(`%output %0 ${esc(`${E}[6`)}\n`));
+  expect(p.pending('%0')).toBeGreaterThan(0);
   drain(enc(`%output %1 c\n`));
-  drain(enc(`%output %0 ${esc('6n')}world\n`));   // completes pane %0's sequence: DSR, stripped
-  expect(p.pending('%0')).toBe(0);
   expect(p.pending('%1')).toBe(0);
+  drain(enc(`%output %0 nw\n`));   // completes pane %0's ESC[6n: DSR, stripped
+  expect(p.pending('%0')).toBe(0);
   const p0 = cat(out.filter(o => o.pane === '%0').map(o => o.bytes));
   const p1 = cat(out.filter(o => o.pane === '%1').map(o => o.bytes));
-  expect(eq(p0, enc('helloworld'))).toBe(true);   // the CSI finished on %0, not spliced
-  expect(eq(p1, enc('c'))).toBe(true);            // plain text on %1
+  expect(eq(p0, enc('w'))).toBe(true);   // only 'w' survived: the DSR died, nothing spliced
+  expect(eq(p1, enc('c'))).toBe(true);   // plain text on %1
 });
 
 test('reply_lines_never_reach_a_pane_stream', () => {

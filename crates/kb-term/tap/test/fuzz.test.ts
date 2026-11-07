@@ -91,19 +91,6 @@ test('semantic fuzz C: exhaustive over all 2-cut splits of fragment+query+tail s
   expect(c.mismatches.slice(0, 8)).toEqual([]);
 }, 300000);
 
-// ---------------------------------------------------------------- fake_harness.py streams + injected queries
-export function harness(seed: number, length: number): Uint8Array {
-  const py = new URL('../../fixtures/fake_harness.py', import.meta.url).pathname;
-  const p = spawnSync('python3', ['-I', py, '--seed', String(seed), '--length', String(length)], { maxBuffer: 1 << 28 });
-  if (p.status !== 0) throw new Error(`fake_harness.py failed: ${p.stderr}`);
-  return new Uint8Array(p.stdout);
-}
-export function inject(r: R, base: Uint8Array, n: number): Uint8Array {
-  const pos = Array.from({ length: n }, () => Math.floor(r() * (base.length + 1))).sort((a, b) => a - b);
-  const parts: Uint8Array[] = []; let p = 0;
-  for (const x of pos) { parts.push(base.subarray(p, x)); parts.push(enc(r() < 0.5 ? genQuery(r) : pick(r, FRAGMENTS) + genQuery(r) + pick(r, TAILS))); p = x; }
-  parts.push(base.subarray(p)); return cat(parts);
-}
 test('semantic fuzz D: fake_harness.py output, clean and with queries injected at random byte offsets', () => {
   const r = mulberry32(0x4a52); const c = fresh();
   const harnessHasEnvelopes: number[] = [];

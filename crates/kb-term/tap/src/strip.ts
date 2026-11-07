@@ -42,6 +42,12 @@ export interface Ch { arr: Int16Array; n: number }
 
 const EMPTY_CH: Ch = { arr: new Int16Array(0), n: 0 };
 
+/** true if any of the first n values is >= 0x80 (the C1 filter's concern). */
+function hasHighByte(a: Int16Array, n: number): boolean {
+  for (let i = 0; i < n; i++) if (a[i] >= 0x80) return true;
+  return false;
+}
+
 /** A growable Int16Array buffer; Ch views into it are valid until the owner reuses it. */
 export class HBuf {
   arr: Int16Array = new Int16Array(64);
@@ -505,14 +511,23 @@ export class QueryStripper {
     for (let i = 0; i < c.n; i++) this.outBytes[this.outLen++] = c.arr[i];
   }
 
-  /** run the full machine chain over chunk[start,end) and append its output. */
+  /** run the full machine chain over chunk[start,end) and append its output.
+   *
+   * A stage sitting in ground state is an identity pass for input free of the
+   * bytes that can affect it (ESC for the unwrap stages and the stripper, high
+   * bytes for the C1 filter): skipping the per-byte walk then is a memcpy, not
+   * a semantic change, and the differential suite proves it byte-for-byte.
+   */
   private runMachines(chunk: Uint8Array, start: number, end: number): void {
     this.inBuf.reset();
     for (let i = start; i < end; i++) this.inBuf.push(chunk[i]);
     let v: Ch = this.inBuf.view();
-    for (const u of this.unwrap) v = u.process(v);
-    v = this.c1.process(v);
-    this.outAppendCh(this.strip.process(v));
+    for (const u of this.unwrap) {
+      if (!(u.isIdle() && v.arr.subarray(0, v.n).indexOf(ESC) === -1)) v = u.process(v);
+    }
+    if (!(this.c1.isIdle() && !hasHighByte(v.arr, v.n))) v = this.c1.process(v);
+    if (!(this.strip.isIdle() && v.arr.subarray(0, v.n).indexOf(ESC) === -1)) v = this.strip.process(v);
+    this.outAppendCh(v);
   }
 
   push(chunk: Uint8Array): Uint8Array {

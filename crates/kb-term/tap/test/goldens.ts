@@ -1,7 +1,7 @@
 // Golden input/expected pairs shared by strip.test.ts and differential.test.ts.
 // Kept in a non-test module so test files are never imported (importing a
 // test file would re-register its tests in the importer's run).
-import { E } from './helpers.ts';
+import { E, wrap } from './helpers.ts';
 
 const BEL = '\x07', ST = `${E}\\`;
 type G = [name: string, input: string | Uint8Array, expected: string | Uint8Array];
