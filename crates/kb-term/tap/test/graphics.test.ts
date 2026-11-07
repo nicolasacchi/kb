@@ -109,7 +109,7 @@ test('omp_shape_stream_roundtrip', () => {
   expect(stored).toEqual(oracle.transmits[0]!.png);
   expect(readFileSync(join(sess, 'img', def.sha256))).toEqual(Buffer.from(oracle.transmits[0]!.png));
   // 19*90 placeholder cells survive: U+10EEEE (1 cell per 4 UTF-8 bytes, 12 B per cell).
-  expect(outBytes).toContain(Buffer.from('\u{10EEEE}'));
+  expect(Buffer.from(outBytes).includes(Buffer.from('\u{10EEEE}'))).toBe(true);
   const s = new TextDecoder().decode(outBytes);
   expect(s.split('\u{10EEEE}').length - 1).toBe(19 * 90);
 });
@@ -321,15 +321,15 @@ test('abort_inside_apc', () => {
     else stream = cat([enc('pre'), first.slice(0, first.length - 6), enc('\x1b[1m'), enc('post')]);
     const items = ex.push(stream);
     const outBytes = bytesOf(items);
-    expect(outBytes).toContain(Buffer.from('pre'));
-    expect(outBytes).toContain(Buffer.from('post'));
+    expect(Buffer.from(outBytes).includes(Buffer.from('pre'))).toBe(true);
+    expect(Buffer.from(outBytes).includes(Buffer.from('post'))).toBe(true);
     // The CAN/SUB itself is swallowed.
-    expect(outBytes).not.toContain(Buffer.from('\x18'));
-    expect(outBytes).not.toContain(Buffer.from('\x1a'));
+    expect(Buffer.from(outBytes).includes(Buffer.from('\x18'))).toBe(false);
+    expect(Buffer.from(outBytes).includes(Buffer.from('\x1a'))).toBe(false);
     // No APC G body bytes leak (base64 of the aborted chunk must not appear).
-    expect(outBytes).not.toContain(Buffer.from('iVBOR'));
+    expect(Buffer.from(outBytes).includes(Buffer.from('iVBOR'))).toBe(false);
     // In the ESC case the aborting ESC starts a new sequence: `[1m` passes.
-    if (abort === 'ESC') expect(outBytes).toContain(Buffer.from('\x1b[1m'));
+    if (abort === 'ESC') expect(Buffer.from(outBytes).includes(Buffer.from('\x1b[1m'))).toBe(true);
     // A new valid transmit still works.
     const png2 = makePng(4, 4, 15);
     const ok = ex.push(cat([...transmitApcs(7002, png2, 4096), placeApc(7002, 2, 1)]));
@@ -339,7 +339,7 @@ test('abort_inside_apc', () => {
     const rest = cat(parts.slice(1));
     ex.push(rest);
     expect(ex.stats.orphanChunk).toBe(parts.length - 1);
-    expect(rest).toContain(Buffer.from('q=2,m='));
+    expect(Buffer.from(rest).includes(Buffer.from('q=2,m='))).toBe(true);
   }
   // T3-style forwarded-then-aborted string: APC cut by CAN leaves no CAN in output.
   // Simulate: an APC body forwarded past the stripper cap, then CAN, then text.
@@ -359,10 +359,10 @@ test('oversize_apc_body_is_skipped_not_leaked', () => {
   const tail = cat([...transmitApcs(8003, small, 4096), placeApc(8003, 2, 1), enc('tail')]);
   const items = ex.push(cat([enc('head'), big, tail]));
   const outBytes = bytesOf(items);
-  expect(outBytes).toContain(Buffer.from('head'));
-  expect(outBytes).toContain(Buffer.from('tail'));
+  expect(Buffer.from(outBytes).includes(Buffer.from('head'))).toBe(true);
+  expect(Buffer.from(outBytes).includes(Buffer.from('tail'))).toBe(true);
   // The oversize body never appears in the output.
-  expect(outBytes).not.toContain(Buffer.from('A'.repeat(100)));
+  expect(Buffer.from(outBytes).includes(Buffer.from('A'.repeat(100)))).toBe(false);
   expect(ex.stats.oversizeApc).toBe(1);
   // A following valid APC still works.
   expect(items.filter((i) => i.kind === 'imagedef').length).toBe(1);
@@ -430,8 +430,8 @@ test('iip_and_sixel_stored_and_stubbed', () => {
   expect(store.readSeq(sha2)).toEqual(iipSt);
   expect(store.readSeq(sha3)).toEqual(sixel);
   const stub1 = buildMediaStub('iip', sha1, iipBel.length);
-  expect(outBytes).toContain(Buffer.from(stub1));
-  expect(outBytes).toContain(Buffer.from(buildMediaStub('sixel', sha3, sixel.length)));
+  expect(Buffer.from(outBytes).includes(Buffer.from(stub1))).toBe(true);
+  expect(Buffer.from(outBytes).includes(Buffer.from(buildMediaStub('sixel', sha3, sixel.length)))).toBe(true);
   // Each mediadef precedes its stub: find indexes.
   const kinds = co.map((i) => i.kind);
   expect(kinds.indexOf('mediadef')).toBeLessThan(kinds.lastIndexOf('bytes'));

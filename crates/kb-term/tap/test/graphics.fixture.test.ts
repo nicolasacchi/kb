@@ -96,7 +96,7 @@ test('twelve_img_fixture_matches_known_counts', () => {
     }
     const outBytes = cat(parts);
     expect(outBytes.length).toBe(input.length - 31_860);
-    expect(outBytes).not.toContain(Buffer.from('\x1b_G'));
+    expect(Buffer.from(outBytes).includes(Buffer.from('\x1b_G'))).toBe(false);
     // All 60,416 placeholder cells survive.
     const cells = Buffer.from('\u{10EEEE}');
     let count = 0;
