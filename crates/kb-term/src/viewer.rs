@@ -10,7 +10,6 @@
 //! owns the client handle and the id validation.
 
 use std::fs::File;
-use std::os::unix::io::{IntoRawFd, OwnedFd};
 
 use crate::pty::{open_pty, set_winsize, spawn_on_pty, winsize_of};
 use crate::responder::{spawn_pump, PumpHandle, ResponderCfg};
@@ -139,7 +138,7 @@ fn async_fd_dup(master: &OwnedFd) -> Result<AsyncFd<File>, RunnerError> {
     let raw = dup.into_raw_fd();
     // SAFETY: `raw` is a fresh fd owned by us; File takes ownership.
     let file = unsafe { File::from_raw_fd(raw) };
-    AsyncFd::new(file).map_err(|e| RunnerError::Internal(format!("AsyncFd: {e}")))
+    AsyncFd::register(file).map_err(|e| RunnerError::Internal(format!("AsyncFd: {e}")))
 }
 
 /// A registered viewer: its hidden client behind a viewer id.

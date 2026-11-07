@@ -71,6 +71,15 @@ async fn pane_flag_and_id<T: Tmux>(tmux: &T, sock: &Path) -> Result<(bool, Strin
     Ok((bracketed, pane))
 }
 
+/// The outcome of a successful paste.
+#[derive(Debug, Clone, Copy)]
+pub struct PasteOutcome {
+    /// Whether bracketed paste was on in the pane.
+    pub bracketed: bool,
+    /// Whether the text starts with `/` or `@` (composer: Enter suppressed).
+    pub paste_only: bool,
+}
+
 /// Paste `text` into the session's pane via the tmux server.
 pub async fn paste_text<S, T>(
     runner: &Runner<S>,

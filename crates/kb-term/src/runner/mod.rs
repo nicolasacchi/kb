@@ -300,7 +300,10 @@ impl<S: Supervisor> Runner<S> {
         // viewers of that session close with it.
         let anchor_closed = {
             let anchors = self.anchors.lock().await;
-            anchors.get(id).map(|a| a.pump().is_closed()).unwrap_or(false)
+            anchors
+                .get(id)
+                .map(|a| a.pump().is_closed())
+                .unwrap_or(false)
         };
         if anchor_closed {
             self.close_viewers_for(id).await;

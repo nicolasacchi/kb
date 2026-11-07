@@ -269,10 +269,9 @@ mod tests {
                     }
                 }
                 "set-option" => {
-                    if args.get(3).map(String::as_str) == Some(OWNER_OPTION)
-                        || args.iter().any(|a| *a == OWNER_OPTION)
+                    if args.get(3) == Some(&OWNER_OPTION) || args.iter().any(|a| *a == OWNER_OPTION)
                     {
-                        let val = args.last().map(String::as_str).unwrap_or("");
+                        let val = args.last().map(|s| *s).unwrap_or("");
                         let mut owner = self.owner.lock().unwrap();
                         *owner = if val.is_empty() {
                             None

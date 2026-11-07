@@ -9,7 +9,8 @@
 //! crash take its client ptys (and anchors) with it. All `unsafe` lives
 //! in this file.
 
-use std::os::unix::io::{AsRawFd, OwnedFd};
+use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd};
+use std::process::Stdio as StdStdio;
 
 use tokio::process::{Command, Stdio};
 
@@ -41,7 +42,7 @@ pub fn open_pty(
         if master_raw < 0 {
             return Err(open_err("posix_openpt"));
         }
-        let master = OwnedFd::from_raw_fd(master_raw);
+        let master = OwnedFd::from(unsafe { std::fs::File::from_raw_fd(master_raw) });
         if libc::grantpt(master.as_raw_fd()) != 0 {
             return Err(open_err("grantpt"));
         }
@@ -71,7 +72,7 @@ pub fn open_pty(
         if slave_raw < 0 {
             return Err(open_err("open slave"));
         }
-        let slave = OwnedFd::from_raw_fd(slave_raw);
+        let slave = OwnedFd::from(unsafe { std::fs::File::from_raw_fd(slave_raw) });
         set_winsize(&master, cols, rows, xpix, ypix);
         // Master non-blocking for AsyncFd; the slave stays blocking so the
         // child sees a normal tty.
@@ -125,9 +126,9 @@ pub fn spawn_on_pty(mut cmd: Command, slave: &OwnedFd) -> Result<PtyChild, Runne
             .try_clone()
             .map_err(|e| RunnerError::Internal(format!("dup pty slave: {e}")))
     };
-    cmd.stdin(Stdio::from(dup()?))
-        .stdout(Stdio::from(dup()?))
-        .stderr(Stdio::from(dup()?));
+    cmd.stdin(StdStdio::from(dup()?))
+        .stdout(StdStdio::from(dup()?))
+        .stderr(StdStdio::from(dup()?));
     unsafe {
         cmd.pre_exec(move || {
             if libc::setsid() == -1 {

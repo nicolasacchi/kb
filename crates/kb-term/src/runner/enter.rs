@@ -32,7 +32,7 @@ pub trait QuietSource: Send + Sync {
 }
 
 /// The anchor-backed quiet clock (over the runner's anchor pumps).
-pub struct AnchorQuiet<'a, S> {
+pub struct AnchorQuiet<'a, S: crate::runner::supervisor::Supervisor> {
     /// The runner whose anchor pumps supply `last_output`.
     pub runner: &'a Runner<S>,
 }

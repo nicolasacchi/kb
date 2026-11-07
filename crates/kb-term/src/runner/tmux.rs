@@ -39,7 +39,7 @@ pub trait Tmux: Send + Sync {
         &'a self,
         sock: &'a Path,
         args: &'a [&'a str],
-        stdin: Option<&'a [u8]>,
+        _stdin: Option<&'a [u8]>,
     ) -> impl std::future::Future<Output = Result<TmuxOut, RunnerError>> + Send + 'a {
         let sock = sock.to_path_buf();
         let args: Vec<String> = args.iter().map(ToString::to_string).collect();

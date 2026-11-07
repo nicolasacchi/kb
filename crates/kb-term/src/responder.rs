@@ -68,11 +68,8 @@ impl ResponderCfg {
 fn hex16(s: &str) -> String {
     let hex = s.strip_prefix('#').unwrap_or(s);
     if hex.len() == 6 {
-        if let Ok([a, b, c]) = [
-            u8::from_str_radix(&hex[0..2], 16),
-            u8::from_str_radix(&hex[2..4], 16),
-            u8::from_str_radix(&hex[4..6], 16),
-        ] {
+        let parse = |h: &str| u8::from_str_radix(h, 16);
+        if let (Ok(a), Ok(b), Ok(c)) = (parse(&hex[0..2]), parse(&hex[2..4]), parse(&hex[4..6])) {
             return format!("{a:02x}{a:02x}/{b:02x}{b:02x}/{c:02x}{c:02x}");
         }
     }
@@ -430,9 +427,9 @@ pub fn spawn_pump(
                 Ok(g) => g,
                 Err(_) => break,
             };
-            let n = readable.try_io(|inner| {
+            let n = readable.try_io(|inner: &AsyncFd<std::fs::File>| {
                 use std::io::Read;
-                inner.read(&mut buf)
+                inner.get_ref().read(&mut buf)
             });
             match n {
                 Ok(Ok(0)) => break,
@@ -466,9 +463,9 @@ async fn write_all_async(fd: &AsyncFd<std::fs::File>, item: &[u8]) -> Result<(),
     let mut pos = 0usize;
     while pos < item.len() {
         let writable = fd.writable().await.map_err(|_| ())?;
-        let n = writable.try_io(|inner: &std::fs::File| {
+        let n = writable.try_io(|inner: &AsyncFd<std::fs::File>| {
             use std::io::Write;
-            let mut f = inner.try_clone()?;
+            let mut f = inner.get_ref().try_clone()?;
             f.write(&item[pos..])
         });
         match n {
