@@ -45,11 +45,12 @@ pub trait Tmux: Send + Sync {
         &self,
     ) -> impl std::future::Future<Output = Result<String, String>> + Send {
         async move {
-        let out = self.run_global(&["-V"]).await.map_err(|e| e.message())?;
-        if out.ok {
-            Ok(out.stdout)
-        } else {
-            Err(out.stderr)
+            let out = self.run_global(&["-V"]).await.map_err(|e| e.message())?;
+            if out.ok {
+                Ok(out.stdout)
+            } else {
+                Err(out.stderr)
+            }
         }
     }
 }
