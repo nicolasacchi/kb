@@ -45,7 +45,7 @@ pub fn open_pty(
         if master_raw < 0 {
             return Err(open_err("posix_openpt"));
         }
-        let master = OwnedFd::from(unsafe { std::fs::File::from_raw_fd(master_raw) });
+        let master = OwnedFd::from(std::fs::File::from_raw_fd(master_raw));
         if libc::grantpt(master.as_raw_fd()) != 0 {
             return Err(open_err("grantpt"));
         }
@@ -75,7 +75,7 @@ pub fn open_pty(
         if slave_raw < 0 {
             return Err(open_err("open slave"));
         }
-        let slave = OwnedFd::from(unsafe { std::fs::File::from_raw_fd(slave_raw) });
+        let slave = OwnedFd::from(std::fs::File::from_raw_fd(slave_raw));
         set_winsize(&master, cols, rows, xpix, ypix);
         // Master non-blocking for AsyncFd; the slave stays blocking so the
         // child sees a normal tty.
