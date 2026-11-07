@@ -578,5 +578,46 @@ else
 fi
 
 echo
+echo "== T20: omp images: user + toolResult images become blob_ref blocks =="
+IMG_SESSION="$TMPROOT/images.jsonl"
+{
+  title='{"type":"title","v":1,"title":"images test"}'
+  pad_len=$((256 - ${#title} - 1))
+  printf '%s%*s\n' "$title" "$pad_len" ''
+  cat "$SCRIPT_DIR/fixtures/omp-session-images.jsonl"
+} >"$IMG_SESSION"
+IMG_OUTDIR="$TMPROOT/sessions-images"
+mkdir -p "$IMG_OUTDIR"
+KB_SESSIONS_DIR="$IMG_OUTDIR" "$CAPTURE" "$IMG_SESSION" >/dev/null 2>&1
+img_out="$(find "$IMG_OUTDIR" -name 'session-*-imgsess1.html' | head -1)"
+img_body="$(sed -n '/<pre>/,/<\/pre>/p' "$img_out" 2>/dev/null | sed '1d;$s|</pre>$||')"
+if [ -n "$img_out" ]; then
+  ok "images fixture captured"
+else
+  bad "images fixture produced no capture file"
+fi
+if printf '%s\n' "$img_body" | jq -e 'select(.type == "user" and (.message.content | map(select(.type == "image")) | length) == 1) | .message.content[1] | select(.source.type == "blob_ref" and .source.media_type == "image/png")' >/dev/null 2>&1; then
+  ok "user message carries a blob_ref image block"
+else
+  bad "user image blob_ref missing: $img_body"
+fi
+if printf '%s\n' "$img_body" | jq -e 'select(.message.content | map(select(.type == "tool_result")) | length == 1) | .message.content[0].content | map(select(.type == "image")) | length == 1' >/dev/null 2>&1; then
+  ok "tool_result keeps its text entry plus an image block"
+else
+  bad "tool_result image missing: $img_body"
+fi
+img_sha="$(printf '%s\n' "$img_body" | jq -r 'select(.type == "user") | .message.content[1].source.sha256 // empty' | head -1)"
+if [ "$img_sha" = "abababababababababababababababababababababababababababababababab" ]; then
+  ok "user image carries the invented blob sha"
+else
+  bad "user image sha wrong: $img_sha"
+fi
+if printf '%s\n' "$img_body" | jq -e '[.. | objects | select(.type == "image")] | map(select(has("data"))) | length == 0' >/dev/null 2>&1; then
+  ok "no image block in the capture keeps a data key"
+else
+  bad "an image block kept its data key"
+fi
+
+echo
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]

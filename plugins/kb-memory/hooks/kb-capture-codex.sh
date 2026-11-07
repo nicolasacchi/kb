@@ -68,13 +68,16 @@ TRANSLATE='
      cwd: $cwd, timestamp: $ts} + (if ju != "" then {job_ulid: ju} else {} end)
   elif .type == "response_item" and $p.type == "message" and $p.role == "user" then
     ([$p.content[]? | select(.type == "input_text") | .text] | join("\n")) as $t |
+    ([$p.content[]? | select(.type == "input_image") |
+      ((.image_url // "") | if type == "string" and startswith("data:") and contains(";") then .[5:(index(";") // 5)] else "image/*" end) as $mt |
+      {type: "image", source: {type: "blob_ref", media_type: $mt}}]) as $imgs |
     if $t == "" then empty else
     {sessionId: $sid, timestamp: $ts, cwd: $cwd, type: "user",
      isMeta: ($t | (startswith("<")
                     or startswith("# AGENTS.md instructions")
                     or startswith("The following is the Codex agent history")
                     or contains(">>> TRANSCRIPT START"))),
-     message: {role: "user", content: [{type: "text", text: $t}]}}
+     message: {role: "user", content: [{type: "text", text: $t}] + $imgs}}
     end
   elif .type == "response_item" and $p.type == "message" and $p.role == "assistant" then
     ([$p.content[]? | select(.type == "output_text") | .text] | join("\n")) as $t |
