@@ -168,7 +168,7 @@ function TurnCard({ turn, harness }: { turn: Turn; harness: string }) {
   );
 }
 
-function ItemLine({ item }: { item: Item }) {
+export function ItemLine({ item }: { item: Item }) {
   switch (item.item) {
     case "Prose":
       return <p className="kb-livetail__prose">{item.text}</p>;
@@ -221,6 +221,12 @@ function ItemLine({ item }: { item: Item }) {
           phase(s)
         </p>
       );
+    case "Image":
+      // A picture REFERENCE (never pixels: no media route until T21). The
+      // class is an unstyled hook; the label matches the CLI/HTML label.
+      return (
+        <p className="kb-livetail__image">▣ {imageLabel(item.mime, item.sha256, item.inline_bytes)}</p>
+      );
     case "KbCommand":
       return (
         <p className="kb-livetail__kbcmd">
@@ -240,6 +246,17 @@ function ItemLine({ item }: { item: Item }) {
     default:
       return null;
   }
+}
+
+/** The one image label (mirrors `image_label` in the Rust view engine). */
+function imageLabel(mime: string, sha256: string | null, inline_bytes: number | null): string {
+  if (sha256 != null) {
+    return `[image ${mime} blob:${sha256.slice(0, 12)}]`;
+  }
+  if (inline_bytes != null) {
+    return `[image ${mime} inline ${inline_bytes} b64 chars]`;
+  }
+  return `[image ${mime}]`;
 }
 
 /// The live header's "current activity" line (cockpit-honest, design
