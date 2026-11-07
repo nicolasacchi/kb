@@ -42,11 +42,7 @@ async fn term_int_conf_loads_clean() {
 // edited out: window-size manual is proven behaviorally by
 // term_int_grid_is_fixed_until_resized, so a query that cannot see it
 // (the round-5 `-g -w`, which read back `latest`) is the wrong query,
-// not a broken conf. Each option is queried in its own scope: `-g` for
-// session/server/user options (the production `show-options -gv`
-// idiom), `-w` for the window option, `-p` for the pane options.
-// With exactly one session on the server, an unscoped `-w`/`-p`
-// resolves to its window/pane.
+// not a broken conf.
 fn run_tmux_file_probe(tmux_bin: &str, sock: &std::path::Path, conf: &std::path::Path) {
     use std::process::Command;
     // Start the holder (tmux -D) with the shipped conf.
@@ -96,15 +92,41 @@ fn run_tmux_file_probe(tmux_bin: &str, sock: &std::path::Path, conf: &std::path:
         .output()
         .unwrap();
     assert!(out.status.success(), "new-session must succeed");
+    // Window/pane queries also use `-g`: show-options has no `-t` in
+    // 3.7's argument spec, and a bare `-w`/`-p` has no current session
+    // to resolve against (commands via `-S` carry no client context),
+    // so it errors and prints nothing. `-g` reads the global option —
+    // exactly what the conf's `set -g` lines write. Round 5's
+    // `-g -w` answered `latest` only because its throwaway server was
+    // started with `new-session -f conf` instead of the `-D -f` form,
+    // so the conf never loaded; with the `-D -f` holder the same query
+    // answers `manual`.
+    // Query scopes per the tmux manual:
+    // - session options (mouse, history-limit) and the user option
+    //   @kb_conf_version via -g (the global session values the conf
+    //   sets with set -g).
+    // - window-size via -g -w: the global window option, which is what
+    //   `set -g window-size manual` writes. Round 5's same query
+    //   answered `latest` only because its throwaway server was
+    //   started with `new-session -f conf` instead of the `-D -f`
+    //   form, so the conf never loaded; this run proves @kb_conf_version
+    //   reads back 2, i.e. the conf now loads.
+    // - exit-empty / extended-keys are SERVER options (set -s in the
+    //   conf); the manual says they are displayed with -s, not -g.
+    // - allow-passthrough / remain-on-exit are PANE options; they are
+    //   read from the live pane kb:0.0 (the only pane), whose value
+    //   inherits the set -g globals. A bare -w/-p has no target to
+    //   resolve (commands via -S carry no client context) and prints
+    //   nothing, so explicit targets are required.
     let checks: [(&str, &str, &[&str]); 8] = [
         ("@kb_conf_version", "2", &["-g"]),
-        ("window-size", "manual", &["-w"]),
-        ("exit-empty", "off", &["-g"]),
+        ("window-size", "manual", &["-g", "-w"]),
+        ("exit-empty", "off", &["-s"]),
         ("mouse", "off", &["-g"]),
-        ("allow-passthrough", "off", &["-p"]),
+        ("allow-passthrough", "off", &["-p", "-t", "kb:0.0"]),
         ("history-limit", "50000", &["-g"]),
-        ("remain-on-exit", "on", &["-p"]),
-        ("extended-keys", "always", &["-g"]),
+        ("remain-on-exit", "on", &["-p", "-t", "kb:0.0"]),
+        ("extended-keys", "always", &["-s"]),
     ];
     for (opt, want, flags) in checks {
         let mut cmd = Command::new(tmux_bin);
@@ -115,7 +137,8 @@ fn run_tmux_file_probe(tmux_bin: &str, sock: &std::path::Path, conf: &std::path:
         cmd.arg("-v").arg(opt);
         let out = common::run_bounded(&mut cmd, Duration::from_secs(10)).unwrap();
         let got = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        assert_eq!(got, want, "show-options {opt}");
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        assert_eq!(got, want, "show-options {opt} (stderr: {err})");
     }
     // No keys bound in root or prefix.
     for table in ["root", "prefix"] {
