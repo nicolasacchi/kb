@@ -353,8 +353,8 @@ test('abort_inside_apc', () => {
 
 test('oversize_apc_body_is_skipped_not_leaked', () => {
   const { store } = mkStore();
-  const ex = new GraphicsExtractor(store, { maxApcBody: 64 });
-  const big = kittyApc('a=t,f=100,i=8002', 'A'.repeat(200));
+  const ex = new GraphicsExtractor(store, { maxApcBody: 256 });
+  const big = kittyApc('a=t,f=100,i=8002', 'A'.repeat(400));
   const small = makePng(4, 4, 3);
   const tail = cat([...transmitApcs(8003, small, 4096), placeApc(8003, 2, 1), enc('tail')]);
   const items = ex.push(cat([enc('head'), big, tail]));
