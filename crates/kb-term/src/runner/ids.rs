@@ -32,7 +32,7 @@ pub fn valid_harness(harness: &str) -> bool {
 /// `s/<id>.sock` or `s/<id>/` in `sessions_dir`.
 pub fn generate_id(sessions_dir: &Path) -> Result<String, RunnerError> {
     for _ in 0..16 {
-        let id = random_id();
+        let id = random_id()?;
         if !sessions_dir.join(format!("{id}.sock")).exists() && !sessions_dir.join(&id).exists() {
             return Ok(id);
         }
@@ -42,23 +42,21 @@ pub fn generate_id(sessions_dir: &Path) -> Result<String, RunnerError> {
     ))
 }
 
-fn random_id() -> String {
+fn random_id() -> Result<String, RunnerError> {
     const CHARS: &[u8; 36] = b"abcdefghijklmnopqrstuvwxyz0123456789";
     let mut buf = [0u8; 10];
-    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-        use std::io::Read;
-        let _ = f.read_exact(&mut buf);
-    } else {
-        // /dev/urandom is always present on the Linux hosts this runs on;
-        // the fallback keeps the id well-formed rather than failing hard.
-        let pid = std::process::id();
-        for (i, b) in buf.iter_mut().enumerate() {
-            *b = (pid >> (i % 4 * 8)) as u8;
-        }
-    }
-    buf.iter()
+    // No pid-derived fallback: /dev/urandom is always present on the
+    // Linux hosts this runs on, and a low-entropy id would be worse
+    // than a clean `internal` error.
+    let mut f = std::fs::File::open("/dev/urandom")
+        .map_err(|e| RunnerError::Internal(format!("/dev/urandom unavailable: {e}")))?;
+    use std::io::Read;
+    f.read_exact(&mut buf)
+        .map_err(|e| RunnerError::Internal(format!("read /dev/urandom: {e}")))?;
+    Ok(buf
+        .iter()
         .map(|b| CHARS[(*b % 36) as usize] as char)
-        .collect()
+        .collect())
 }
 
 #[cfg(test)]
