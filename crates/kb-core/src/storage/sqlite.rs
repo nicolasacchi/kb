@@ -4123,7 +4123,7 @@ impl Db {
                 evidence_json               = excluded.evidence_json,
                 parent_session_id           = COALESCE(excluded.parent_session_id, sessions.parent_session_id),
                 root_session_id             = COALESCE(excluded.root_session_id, sessions.root_session_id),
-                project_slug                = COALESCE(excluded.project_slug, sessions.project_slug)
+                project_slug                = COALESCE(excluded.project_slug, sessions.project_slug)",
             params![
                 row.artifact_id,
                 row.session_id,
@@ -4332,10 +4332,8 @@ impl Db {
                      OR (?4 IS NOT NULL AND project_slug IS NULL))",
             )?;
             for (sid, parent, root, slug) in items {
-                let c: i64 = count_stmt.query_row(
-                    params![sid, parent, root, slug],
-                    |r| r.get(0),
-                )?;
+                let c: i64 =
+                    count_stmt.query_row(params![sid, parent, root, slug], |r| r.get(0))?;
                 if c > 0 {
                     would += c as u64;
                 }

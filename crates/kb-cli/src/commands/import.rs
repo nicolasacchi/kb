@@ -561,9 +561,7 @@ pub(crate) fn wrap_envelope_spooled(
     subagents: &[kb_core::sessions::SubagentDigest],
     sidecar_texts: &[kb_core::sidecar_spool::SidecarSpool],
 ) -> String {
-    wrap_envelope_spooled_with_slug(
-        ts, sid, raw_jsonl, commits, subagents, sidecar_texts, None,
-    )
+    wrap_envelope_spooled_with_slug(ts, sid, raw_jsonl, commits, subagents, sidecar_texts, None)
 }
 
 pub(crate) fn wrap_envelope_spooled_with_slug(

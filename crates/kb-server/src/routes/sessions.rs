@@ -4859,7 +4859,9 @@ pub(crate) fn is_plain_token(s: &str) -> bool {
             .all(|&c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b':' | b'-'))
 }
 
-fn validate_backfill_tree_body(body: &BackfillTreeBody) -> Result<Vec<(String, Option<String>, Option<String>, Option<String>)>> {
+fn validate_backfill_tree_body(
+    body: &BackfillTreeBody,
+) -> Result<Vec<(String, Option<String>, Option<String>, Option<String>)>> {
     if body.items.len() > 500 {
         return Err(kb_core::Error::BadRequest(
             "backfill-tree: at most 500 items per request".into(),
@@ -4886,7 +4888,12 @@ fn validate_backfill_tree_body(body: &BackfillTreeBody) -> Result<Vec<(String, O
                 }
             }
         };
-        out.push((it.session_id.clone(), check(&it.parent_session_id)?, check(&it.root_session_id)?, check(&it.project_slug)?));
+        out.push((
+            it.session_id.clone(),
+            check(&it.parent_session_id)?,
+            check(&it.root_session_id)?,
+            check(&it.project_slug)?,
+        ));
     }
     Ok(out)
 }
