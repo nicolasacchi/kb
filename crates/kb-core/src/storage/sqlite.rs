@@ -17037,16 +17037,19 @@ mod tests {
         ];
         // Dry-run writes nothing.
         let (would, changed, unmatched) = db.sessions_backfill_tree(false, &items).unwrap();
-        assert!(would >= 1, "would={would}");
+        // Exact: the two sid-bf-1 rows (main + segment part) and the
+        // partially-filled sid-bf-4 row can change; sid-bf-3 (non-omp) and
+        // sid-missing match nothing, so both count as unmatched.
+        assert_eq!(would, 3, "would={would}");
         assert_eq!(changed, 0);
-        assert_eq!(unmatched, 1);
+        assert_eq!(unmatched, 2);
         let got = db.sessions_get("sid-bf-1").unwrap().unwrap();
         assert_eq!(got.parent_session_id, None);
         // Apply fills NULLs on session_id and segment_of parts.
         let (would, changed, unmatched) = db.sessions_backfill_tree(true, &items).unwrap();
-        assert!(would >= 1);
-        assert!(changed >= 2, "changed={changed} would={would}");
-        assert_eq!(unmatched, 1);
+        assert_eq!(would, 3);
+        assert_eq!(changed, 3);
+        assert_eq!(unmatched, 2);
         let got = db.sessions_get("sid-bf-1").unwrap().unwrap();
         assert_eq!(got.parent_session_id.as_deref(), Some("par1"));
         let got = db.sessions_get("sid-bf-2").unwrap().unwrap();

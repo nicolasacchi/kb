@@ -6318,7 +6318,7 @@ mod tests {
     #[tokio::test]
     async fn sessions_backfill_tree_runs_in_the_actor_and_bumps_only_on_change() {
         let (h, _tmp) = handle().await;
-        let mut row = SessionRow {
+        let row = SessionRow {
             artifact_id: "art-tree".into(),
             session_id: "sid-tree".into(),
             started_at: 1_700_000_000,
@@ -6338,13 +6338,13 @@ mod tests {
             .sessions_backfill_tree(false, items.clone())
             .await
             .unwrap();
-        assert!(would >= 1);
+        assert_eq!(would, 1);
         assert_eq!(changed, 0);
         assert_eq!(unmatched, 0);
         assert_eq!(h.index_generation(), g0, "a dry run must not bump");
         let (would, changed, unmatched) =
             h.sessions_backfill_tree(true, items.clone()).await.unwrap();
-        assert!(would >= 1);
+        assert_eq!(would, 1);
         assert_eq!(changed, 1);
         assert_eq!(unmatched, 0);
         assert!(h.index_generation() > g0, "an apply must bump");
@@ -6352,7 +6352,6 @@ mod tests {
         let (would, changed, _) = h.sessions_backfill_tree(true, items).await.unwrap();
         assert_eq!((would, changed), (0, 0));
         assert_eq!(h.index_generation(), g1, "a no-op apply must not bump");
-        let _ = row;
     }
 
     #[tokio::test]
