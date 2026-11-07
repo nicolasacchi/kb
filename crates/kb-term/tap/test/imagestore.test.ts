@@ -101,19 +101,17 @@ test('host_cap_spans_sibling_sessions', () => {
   const store1 = new ImageStore({ sessionDir: s1, sessionCapBytes: 1 << 30, hostCapBytes: cap, hostRoot, now: () => t });
   const store2 = new ImageStore({ sessionDir: s2, sessionCapBytes: 1 << 30, hostCapBytes: cap, hostRoot, now: () => t });
   store1.putPng(shaA, pngA); t = 2_000;
-  store2.putPng(shaB, pngB); t = 10_000; // >5s after store1/store2 scans
-  // At the last put, the host total exceeded cap and the LRU file was evicted.
-  // Store1's A is the oldest; allow either store to have performed the eviction.
-  const hasA = existsSync(join(s1, 'img', shaA));
-  const hasB = existsSync(join(s2, 'img', shaB));
-  expect(hasA && hasB).toBe(false);
-  // Third image forces another eviction; the just-written file survives.
+  store2.putPng(shaB, pngB);
+  // Two images fit under the host cap: both present across the siblings.
+  expect(existsSync(join(s1, 'img', shaA))).toBe(true);
+  expect(existsSync(join(s2, 'img', shaB))).toBe(true);
+  // Third image (past the 5 s throttle) pushes the host total over cap: the
+  // LRU file (A) is evicted; the just-written file survives. Exactly two remain.
   t = 20_000;
   store1.putPng(shaC, pngC);
   expect(existsSync(join(s1, 'img', shaC))).toBe(true);
-  const totalAlive = [join(s1, 'img', shaA), join(s1, 'img', shaC), join(s2, 'img', shaB)]
-    .filter((p) => existsSync(p)).length;
-  expect(totalAlive).toBe(2);
+  expect(existsSync(join(s1, 'img', shaA))).toBe(false);
+  expect(existsSync(join(s2, 'img', shaB))).toBe(true);
 });
 
 test('evicted_then_retransmitted_rewrites_silently', () => {

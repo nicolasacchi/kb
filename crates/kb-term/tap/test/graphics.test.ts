@@ -332,10 +332,12 @@ test('abort_inside_apc', () => {
     const png2 = makePng(4, 4, 15);
     const ok = ex.push(cat([...transmitApcs(7002, png2, 4096), placeApc(7002, 2, 1)]));
     expect(ok.filter((i) => i.kind === 'imagedef').length).toBe(1);
-    expect(ex.stats.abortedApc).toBeGreaterThan(0);
-    // Pending transfer was discarded: remaining chunks drop as orphans.
-    expect(ex.stats.orphanChunk).toBeGreaterThan(0);
-    void parts;
+    expect(ex.stats.abortedApc).toBe(1);
+    // The aborted transfer's remaining chunks now drop as orphans (pending was discarded).
+    const rest = cat(parts.slice(1));
+    ex.push(rest);
+    expect(ex.stats.orphanChunk).toBe(parts.length - 1);
+    expect(rest).toContain(Buffer.from('q=2,m='));
   }
   // T3-style forwarded-then-aborted string: APC cut by CAN leaves no CAN in output.
   // Simulate: an APC body forwarded past the stripper cap, then CAN, then text.
