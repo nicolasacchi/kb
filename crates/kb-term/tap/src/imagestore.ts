@@ -101,6 +101,7 @@ export class ImageStore {
   }
 
   bind(id: number, v: { sha256: string; w: number; h: number }): IdRecord {
+    assertHex(v.sha256);
     const existing = this.map.get(id);
     if (existing === undefined) {
       const rec: IdRecord = { id, gen: 1, sha256: v.sha256, mime: 'image/png', w: v.w, h: v.h, cols: null, rows: null };

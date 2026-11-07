@@ -18,6 +18,9 @@ import { MAX_APC_BODY, MAX_IMAGE_BYTES } from './kitty.ts';
 
 export { MAX_APC_BODY, MAX_IMAGE_BYTES };
 export const MAX_MEDIA_BYTES = 8 * 1024 * 1024;
+// Spec 4.1: sniffing covers only the first 32 bytes of a sequence. A held
+// prefix longer than this is passed through verbatim (never buffered).
+export const SNIFF_WINDOW = 32;
 
 export interface ImageDef {
   id: number;
@@ -110,7 +113,7 @@ export class GraphicsExtractor {
   private readonly maxMediaBytes: number;
 
   private state: State = 'ground';
-  private sniffBuf: number[] = [];
+  private sniffBuf = new GrowBuf();
   private sniffPhase: SniffPhase = 'afterEsc';
   private iipStep = 0;
   private apcBody = new GrowBuf();
@@ -158,7 +161,8 @@ export class GraphicsExtractor {
         case 'ground': {
           if (b === ESC) {
             this.state = 'sniff';
-            this.sniffBuf = [ESC];
+            this.sniffBuf.reset();
+            this.sniffBuf.push(ESC);
             this.sniffPhase = 'afterEsc';
           } else {
             out.push(b);
@@ -181,7 +185,8 @@ export class GraphicsExtractor {
             } else {
               // ESC-not-backslash: re-process as a new sequence start.
               this.state = 'sniff';
-              this.sniffBuf = [ESC];
+              this.sniffBuf.reset();
+              this.sniffBuf.push(ESC);
               this.sniffPhase = 'afterEsc';
               this.feedSniff(b, out, items);
             }
@@ -205,7 +210,8 @@ export class GraphicsExtractor {
               this.state = 'ground';
             } else {
               this.state = 'sniff';
-              this.sniffBuf = [ESC];
+              this.sniffBuf.reset();
+              this.sniffBuf.push(ESC);
               this.sniffPhase = 'afterEsc';
               this.feedSniff(b, out, items);
             }
@@ -228,7 +234,7 @@ export class GraphicsExtractor {
 
   flush(): GfxItem[] {
     this.state = 'ground';
-    this.sniffBuf = [];
+    this.sniffBuf.reset();
     this.sniffPhase = 'afterEsc';
     this.apcBody.reset();
     this.apcPendEsc = false;
@@ -264,29 +270,25 @@ export class GraphicsExtractor {
           this.state = 'apc';
           this.apcBody.reset();
           this.apcPendEsc = false;
-          this.sniffBuf = [];
+          this.sniffBuf.reset();
         } else {
           this.flushSniffAsBytes(out, b);
         }
         break;
       }
       case 'iip': {
-        // Tolerate optional spaces anywhere in the introducer (docs style).
-        if (b === 0x20) {
-          this.sniffBuf.push(b);
-          break;
-        }
+        // Spec 4.1: IIP is exactly ESC]1337;File= (no space tolerance).
         const exp = IIP_EXPECT[this.iipStep]!;
         if (String.fromCharCode(b) === exp) {
           this.sniffBuf.push(b);
           this.iipStep++;
           if (this.iipStep === IIP_EXPECT.length) {
             this.mediaBuf.reset();
-            for (const x of this.sniffBuf) this.mediaBuf.push(x);
+            this.mediaBuf.pushBytes(this.sniffBuf.copy());
             this.mediaKind = 'iip';
             this.mediaPendEsc = false;
             this.state = 'media';
-            this.sniffBuf = [];
+            this.sniffBuf.reset();
           }
         } else {
           this.flushSniffAsBytes(out, b);
@@ -294,19 +296,23 @@ export class GraphicsExtractor {
         break;
       }
       case 'sixel': {
-        // Tolerate optional spaces in the introducer.
-        if (b === 0x20) {
-          this.sniffBuf.push(b);
-        } else if (b >= 0x30 && b <= 0x39 || b === 0x3b) {
-          this.sniffBuf.push(b);
-        } else if (b === 0x71) { // 'q'
-          this.sniffBuf.push(b);
-          this.mediaBuf.reset();
-          for (const x of this.sniffBuf) this.mediaBuf.push(x);
-          this.mediaKind = 'sixel';
-          this.mediaPendEsc = false;
-          this.state = 'media';
-          this.sniffBuf = [];
+        // Spec 4.1: SIXEL is ESC P + [0-9;]* + q, sniffed in the first 32
+        // bytes only. A longer digit run is not a SIXEL introducer: flush
+        // the held prefix verbatim (bounded) and continue in ground state.
+        if (b >= 0x30 && b <= 0x39 || b === 0x3b || b === 0x71) {
+          if (this.sniffBuf.length >= SNIFF_WINDOW) {
+            this.flushSniffAsBytes(out, b);
+          } else {
+            this.sniffBuf.push(b);
+            if (b === 0x71) { // 'q'
+              this.mediaBuf.reset();
+              this.mediaBuf.pushBytes(this.sniffBuf.copy());
+              this.mediaKind = 'sixel';
+              this.mediaPendEsc = false;
+              this.state = 'media';
+              this.sniffBuf.reset();
+            }
+          }
         } else {
           this.flushSniffAsBytes(out, b);
         }
@@ -317,12 +323,13 @@ export class GraphicsExtractor {
 
   /** Held prefix is not a kitty/IIP/SIXEL start: emit it verbatim, then handle `b` fresh. */
   private flushSniffAsBytes(out: GrowBuf, b: number): void {
-    for (const x of this.sniffBuf) out.push(x);
-    this.sniffBuf = [];
+    out.pushBytes(this.sniffBuf.copy());
+    this.sniffBuf.reset();
     this.state = 'ground';
     if (b === ESC) {
       this.state = 'sniff';
-      this.sniffBuf = [ESC];
+      this.sniffBuf.reset();
+      this.sniffBuf.push(ESC);
       this.sniffPhase = 'afterEsc';
     } else {
       out.push(b);
@@ -345,7 +352,8 @@ export class GraphicsExtractor {
       this.stats.abortedApc++;
       this.kitty.abortPending();
       this.state = 'sniff';
-      this.sniffBuf = [ESC];
+      this.sniffBuf.reset();
+      this.sniffBuf.push(ESC);
       this.sniffPhase = 'afterEsc';
       this.apcBody.reset();
       this.feedSniff(b, out, items);
@@ -456,7 +464,8 @@ export class GraphicsExtractor {
       // Aborting ESC: drop, re-process.
       this.stats.abortedMedia++;
       this.state = 'sniff';
-      this.sniffBuf = [ESC];
+      this.sniffBuf.reset();
+      this.sniffBuf.push(ESC);
       this.sniffPhase = 'afterEsc';
       this.mediaBuf.reset();
       this.feedSniff(b, out, items);
