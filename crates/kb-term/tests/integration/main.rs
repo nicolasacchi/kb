@@ -35,7 +35,7 @@ async fn term_int_conf_loads_clean() {
     let sock = dir.path().join("t.sock");
     let conf = common::conf_path();
     // `source-file -n` (no-exec) must exit 0.
-    let ok = run_tmux_file_probe(&dir, &sock, &conf);
+    let ok = run_tmux_file_probe(dir.path(), &sock, &conf);
     assert!(ok, "source-file -n must exit 0 on the shipped conf");
 }
 
@@ -139,10 +139,12 @@ async fn term_int_exit_empty_off_keeps_the_D_server_alive() {
         .spawn()
         .unwrap();
     let sock = sock.clone();
+    let tmux = tmux_bin.clone();
     let alive = poll_until(Duration::from_secs(5), || {
         let sock = sock.clone();
+        let tmux = tmux.clone();
         async move {
-            let out = std::process::Command::new(&tmux_bin)
+            let out = std::process::Command::new(&tmux)
                 .arg("-S")
                 .arg(&sock)
                 .arg("list-sessions")
@@ -176,8 +178,9 @@ async fn term_int_exit_empty_off_keeps_the_D_server_alive() {
     }
     let still = poll_until(Duration::from_secs(3), || {
         let sock = sock.clone();
+        let tmux = tmux.clone();
         async move {
-            let out = std::process::Command::new(&tmux_bin)
+            let out = std::process::Command::new(&tmux)
                 .arg("-S")
                 .arg(&sock)
                 .arg("display-message")
@@ -211,10 +214,12 @@ async fn term_int_wait_for_signal_before_wait_returns() {
         .spawn()
         .unwrap();
     let sock_owned = sock.clone();
+    let tmux_owned = tmux_bin.clone();
     poll_until(Duration::from_secs(5), move || {
         let sock = sock_owned.clone();
+        let tmux = tmux_owned.clone();
         async move {
-            let out = std::process::Command::new(&tmux_bin)
+            let out = std::process::Command::new(&tmux)
                 .arg("-S")
                 .arg(&sock)
                 .arg("list-sessions")
@@ -674,7 +679,7 @@ async fn term_int_grid_is_fixed_until_resized() {
     let (cols, rows) = window_size(&tr, &sock);
     assert_eq!((cols, rows), (120, 40), "initial grid");
     let (mut master, _slave) = pty_pair(50, 20);
-    let child = std::process::Command::new(&tmux_bin)
+    let mut child = std::process::Command::new(&tmux_bin)
         .arg("-S")
         .arg(&sock)
         .arg("attach-session")
