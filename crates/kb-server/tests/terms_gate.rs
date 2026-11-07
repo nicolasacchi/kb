@@ -16,7 +16,6 @@ use kb_core::types::KbName;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
 const FIXTURE_TOKEN: &str = "test-token-fixture-deadbeef";
@@ -70,7 +69,7 @@ fn spawn_fake(
     let counter = conns.clone();
     tokio::spawn(async move {
         loop {
-            let (mut stream, _) = match listener.accept().await {
+            let (stream, _) = match listener.accept().await {
                 Ok(v) => v,
                 Err(_) => return,
             };
