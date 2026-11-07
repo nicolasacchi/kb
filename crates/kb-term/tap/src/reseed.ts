@@ -1,0 +1,426 @@
+// kb-term tap: the reseed (A/B capture) recipe with mode restore. Pure
+// orchestration over a ControlLike and a Twin.
+//
+// Why: whenever the tap lost bytes (pause, `%exit too far behind`, restart,
+// new control client), the twin is rebuilt from tmux itself. The recipe
+// (spike T6: 12/12 identical reconstructions, 10/10 concurrent, and after a
+// >300 s disconnect) is: wait for a quiescent point, then in ONE stdin
+// write capture the pane twice around a `capture-pane`, retry if output
+// interleaves, feed the capture to the twin, restore modes, then feed every
+// %output that arrived after B, in order, with no gap. Live %output during
+// a reseed is queued here; the caller must not feed the twin meanwhile.
+//
+// The capture is joined with CRLF and NOT sliced by history_size+cursor_y:
+// with `-J` wrapped rows are joined, so the capture has fewer lines than
+// grid rows whenever any line wrapped. The twin re-wraps at the same width;
+// the twin's total line count is compared to B.history_size + rows, blank
+// tail rows are padded with CRLFs, and an overflow counts a discard and
+// retries from statement 2.
+
+import type { Twin } from './twin.ts';
+
+/** The narrow surface reseed needs from the control client. */
+export interface ControlLike {
+  cmd(line: string): Promise<string[]>;
+  write(lines: string[]): Promise<string[]>[];
+  onOutput(cb: (pane: string, bytes: Uint8Array, ageMs?: number) => void): void;
+}
+
+/** Quiet window before a capture is safe. STARTING value, unmeasured. */
+export const QUIESCENT_MS = 50;
+/** Absolute bound on the quiescent wait; then proceed with quiescent:false. */
+export const QUIESCENT_MAX_MS = 2000;
+export const MAX_RESEED_ATTEMPTS = 5;
+
+/**
+ * Mode format names queried in the same write as the capture. Confirmed on
+ * tmux 3.7c by term_int_mode_formats_exist_on_pinned_tmux (display-message
+ * -a); a name missing there would be dropped from this list and the restore.
+ */
+export const MODE_FORMATS = [
+  'alternate_on',
+  'scroll_region_upper',
+  'scroll_region_lower',
+  'wrap_flag',
+  'cursor_flag',
+  'insert_flag',
+  'keypad_cursor_flag',
+  'keypad_flag',
+  'origin_flag',
+] as const;
+
+const ESC = '\x1b';
+/** Synchronized-frame end: the parser is back in ground state after this. */
+const FRAME_END = `${ESC}[?2026l`;
+const FRAME_END_BYTES = new TextEncoder().encode(FRAME_END);
+
+export interface ModeState {
+  alternateOn: boolean;
+  scrollTop: number | null;
+  scrollBottom: number | null;
+  wrap: boolean | null;
+  cursor: boolean | null;
+  insert: boolean | null;
+  keypadCursor: boolean | null;
+  keypad: boolean | null;
+  origin: boolean | null;
+}
+
+export interface ReseededResult {
+  attempts: number;
+  quiescent: boolean;
+  bytesFed: number;
+  historySize: number;
+  mode: ModeState | null;
+}
+
+export interface ReseedStats {
+  totalAttempts: number;
+  reseedCalls: number;
+  preABytes: number;
+  interleavedRetries: number;
+  abDisagreeRetries: number;
+  badMarkerRetries: number;
+  overflowRetries: number;
+  givesUp: number;
+  queuedDroppedBytes: number;
+  altUnsupported: number;
+  quiescentFalse: number;
+}
+
+export interface ReseedOpts {
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+  quiescentMs?: number;
+  quiescentMaxMs?: number;
+  maxAttempts?: number;
+  onReseeded?: (r: ReseededResult) => void;
+}
+
+export class ReseedError extends Error {
+  readonly attempts: number;
+  readonly reason: string;
+  constructor(reason: string, attempts: number) {
+    super(`reseed gave up after ${attempts} attempts: ${reason}`);
+    this.name = 'ReseedError';
+    this.attempts = attempts;
+    this.reason = reason;
+  }
+}
+
+interface Marker {
+  history: number;
+  cursorX: number;
+  cursorY: number;
+}
+
+function parseMarker(lines: string[] | undefined, tag: string): Marker | null {
+  if (!lines || lines.length === 0) return null;
+  const parts = lines[0].split(/\s+/).filter((x) => x.length > 0);
+  if (parts.length < 4 || parts[0] !== tag) return null;
+  const history = Number(parts[1]);
+  const cursorX = Number(parts[2]);
+  const cursorY = Number(parts[3]);
+  if (![history, cursorX, cursorY].every(Number.isInteger) || history < 0) return null;
+  return { history, cursorX, cursorY };
+}
+
+function parseMode(lines: string[] | undefined): ModeState | null {
+  if (!lines || lines.length === 0) return null;
+  const parts = lines[0].split(/\s+/);
+  if (parts.length === 0 || parts[0] !== 'M') return null;
+  const num = (i: number): number | null => {
+    const v = Number(parts[i]);
+    return Number.isInteger(v) ? v : null;
+  };
+  const flag = (i: number): boolean | null => {
+    const t = parts[i];
+    if (t === '1') return true;
+    if (t === '0') return false;
+    return null;
+  };
+  return {
+    alternateOn: parts[1] === '1',
+    scrollTop: num(2),
+    scrollBottom: num(3),
+    wrap: flag(4),
+    cursor: flag(5),
+    insert: flag(6),
+    keypadCursor: flag(7),
+    keypad: flag(8),
+    origin: flag(9),
+  };
+}
+
+/** Mode restore bytes: DECSTBM, origin, other modes, then an absolute CUP
+ * LAST (CSI r homes the cursor; with origin mode the row is relative to the
+ * region top). */
+export function modeRestoreBytes(mode: ModeState | null, cursorX: number, cursorY: number): string {
+  let s = '';
+  if (mode) {
+    if (mode.scrollTop !== null && mode.scrollBottom !== null && mode.scrollTop <= mode.scrollBottom) {
+      s += `${ESC}[${mode.scrollTop};${mode.scrollBottom}r`;
+    }
+    if (mode.origin !== null) s += `${ESC}[?6${mode.origin ? 'h' : 'l'}`;
+    if (mode.wrap !== null) s += `${ESC}[?7${mode.wrap ? 'h' : 'l'}`;
+    if (mode.cursor !== null) s += `${ESC}[?25${mode.cursor ? 'h' : 'l'}`;
+    if (mode.insert !== null) s += `${ESC}[4${mode.insert ? 'h' : 'l'}`;
+    if (mode.keypadCursor !== null) s += `${ESC}[?1${mode.keypadCursor ? 'h' : 'l'}`;
+    if (mode.keypad !== null) s += mode.keypad ? `${ESC}=` : `${ESC}>`;
+  }
+  s += `${ESC}[${cursorY + 1};${cursorX + 1}H`;
+  return s;
+}
+
+function joinLines(lines: string[]): string {
+  return lines.map((l) => (l.endsWith('\r') ? l.slice(0, -1) : l)).join('\r\n');
+}
+
+function countIn(haystack: Uint8Array, needle: Uint8Array): boolean {
+  outer: for (let i = 0; i + needle.length <= haystack.length; i++) {
+    for (let j = 0; j < needle.length; j++) {
+      if (haystack[i + j] !== needle[j]) continue outer;
+    }
+    return true;
+  }
+  return false;
+}
+
+interface QuiescentState {
+  lastOutputAt: number;
+  frameEnded: boolean;
+  tail: Uint8Array;
+}
+
+export class Reseeder {
+  private readonly control: ControlLike;
+  private readonly twin: Twin;
+  private readonly now: () => number;
+  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly qstates = new Map<string, QuiescentState>();
+  private readonly st: ReseedStats = {
+    totalAttempts: 0,
+    reseedCalls: 0,
+    preABytes: 0,
+    interleavedRetries: 0,
+    abDisagreeRetries: 0,
+    badMarkerRetries: 0,
+    overflowRetries: 0,
+    givesUp: 0,
+    queuedDroppedBytes: 0,
+    altUnsupported: 0,
+    quiescentFalse: 0,
+  };
+  private active: {
+    pane: string;
+    queue: Uint8Array[];
+    interleaved: boolean;
+    aResolved: boolean;
+    bResolved: boolean;
+  } | null = null;
+
+  constructor(control: ControlLike, twin: Twin, opts?: ReseedOpts) {
+    this.control = control;
+    this.twin = twin;
+    this.now = opts?.now ?? Date.now;
+    this.sleep = opts?.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    control.onOutput((pane, bytes) => this.noteOutput(bytes, pane));
+  }
+
+  /** Track the post-transform stream for the quiescent wait; queue output
+   * arriving during a reseed. Called by the control subscription (and
+   * directly by tests). */
+  noteOutput(bytes: Uint8Array, pane = ''): void {
+    const q = this.qstate(pane);
+    q.lastOutputAt = this.now();
+    const grown = new Uint8Array(Math.min(q.tail.length + bytes.length, 128));
+    grown.set(q.tail.subarray(0, Math.max(0, grown.length - bytes.length)));
+    grown.set(bytes.subarray(Math.max(0, bytes.length - grown.length)), Math.max(0, grown.length - bytes.length));
+    q.tail = grown;
+    q.frameEnded = countIn(q.tail, FRAME_END_BYTES);
+    const a = this.active;
+    if (a && (pane === '' || pane === a.pane)) {
+      if (!a.aResolved) {
+        // already inside the capture: drop silently, but count it.
+        this.st.preABytes += bytes.length;
+      } else if (!a.bResolved) {
+        // between A's %begin and B's %end: this attempt cannot stand.
+        a.interleaved = true;
+      } else {
+        // after B's %end: feed after the mode restore, with no gap.
+        const copy = new Uint8Array(bytes.length);
+        copy.set(bytes);
+        a.queue.push(copy);
+      }
+    }
+  }
+
+  stats(): ReseedStats {
+    return { ...this.st };
+  }
+
+  private qstate(pane: string): QuiescentState {
+    let q = this.qstates.get(pane);
+    if (!q) {
+      q = { lastOutputAt: -Infinity, frameEnded: false, tail: new Uint8Array(0) };
+      this.qstates.set(pane, q);
+    }
+    return q;
+  }
+
+  async waitQuiescent(pane: string, opts?: ReseedOpts): Promise<boolean> {
+    const qms = opts?.quiescentMs ?? QUIESCENT_MS;
+    if (qms <= 0) return true;
+    const max = opts?.quiescentMaxMs ?? QUIESCENT_MAX_MS;
+    const q = this.qstate(pane);
+    const start = this.now();
+    for (;;) {
+      const t = this.now();
+      if (q.frameEnded) return true;
+      if (t - q.lastOutputAt >= qms) return true;
+      if (t - start >= max) return false;
+      const qPane = q;
+      await this.sleep(Math.max(1, Math.min(5, qms)));
+      // late noteOutput may have changed the state object only via this.qstate
+      void qPane;
+    }
+  }
+
+  async reseed(paneId: string, opts?: ReseedOpts): Promise<ReseededResult> {
+    const maxAttempts = opts?.maxAttempts ?? MAX_RESEED_ATTEMPTS;
+    this.st.reseedCalls++;
+    const quiescent = await this.waitQuiescent(paneId, opts);
+    if (!quiescent) this.st.quiescentFalse++;
+    let lastReason = 'no attempt';
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      this.st.totalAttempts++;
+      const active = { pane: paneId, queue: [] as Uint8Array[], interleaved: false, aResolved: false, bResolved: false };
+      this.active = active;
+      try {
+        const result = await this.attempt(paneId, active);
+        if (result.ok) {
+          const out: ReseededResult = { attempts: attempt, quiescent, ...result.ok };
+          opts?.onReseeded?.(out);
+          return out;
+        }
+        lastReason = result.reason;
+      } catch (err) {
+        lastReason = err instanceof Error ? err.message : String(err);
+      } finally {
+        this.active = null;
+        this.st.queuedDroppedBytes += active.queue.reduce((n, b) => n + b.length, 0);
+      }
+    }
+    this.st.givesUp++;
+    throw new ReseedError(lastReason, maxAttempts);
+  }
+  private async attempt(
+    pane: string,
+    active: { pane: string; queue: Uint8Array[]; interleaved: boolean; aResolved: boolean; bResolved: boolean },
+  ): Promise<{ ok?: Omit<ReseededResult, 'attempts' | 'quiescent'>; reason?: string }> {
+    const aCmd = `display-message -p -t ${pane} 'A #{history_size} #{cursor_x} #{cursor_y}'`;
+    const capture = `capture-pane -p -e -J -S - -t ${pane}`;
+    const altCapture = `capture-pane -p -e -J -S - -a -t ${pane}`;
+    const bCmd = `display-message -p -t ${pane} 'B #{history_size} #{cursor_x} #{cursor_y}'`;
+    const modeCmd = `display-message -p -t ${pane} 'M ${MODE_FORMATS.map((f) => `#{${f}}`).join(' ')}'`;
+    const ps = this.control.write([aCmd, capture, altCapture, bCmd, modeCmd]);
+    ps[0].then(
+      () => {
+        active.aResolved = true;
+      },
+      () => {
+        active.aResolved = true;
+      },
+    );
+    ps[3].then(
+      () => {
+        active.bResolved = true;
+      },
+      () => {
+        active.bResolved = true;
+      },
+    );
+    // the -a capture must not abort a non-alt reseed if this tmux lacks it.
+    const altPromise: Promise<string[] | null> = ps[2].then(
+      (lines) => lines,
+      () => {
+        this.st.altUnsupported++;
+        return null;
+      },
+    );
+    const [aLines, captureLines, altLines, bLines, modeLines] = await Promise.all([
+      ps[0],
+      ps[1],
+      altPromise,
+      ps[3],
+      ps[4],
+    ]);
+    if (active.interleaved) {
+      this.st.interleavedRetries++;
+      return { reason: 'output interleaved between A and B' };
+    }
+    const a = parseMarker(aLines, 'A');
+    const b = parseMarker(bLines, 'B');
+    if (!a || !b) {
+      this.st.badMarkerRetries++;
+      return { reason: 'unparseable A/B marker' };
+    }
+    if (a.history !== b.history || a.cursorX !== b.cursorX || a.cursorY !== b.cursorY) {
+      this.st.abDisagreeRetries++;
+      return { reason: 'A and B disagree' };
+    }
+    const mode = parseMode(modeLines);
+    let bytesFed = 0;
+    const feed = async (text: string): Promise<void> => {
+      bytesFed += new TextEncoder().encode(text).length;
+      await this.twin.feed(text);
+    };
+    const feedBytes = async (bytes: Uint8Array): Promise<void> => {
+      bytesFed += bytes.length;
+      await this.twin.feed(bytes);
+    };
+    const padTo = async (which: 'normal' | 'alt', expected: number): Promise<boolean> => {
+      for (let rounds = 0; rounds < 5; rounds++) {
+        const n = this.twin.lineCount(which);
+        if (n === expected) return true;
+        if (n > expected) return false;
+        await feed('\r\n'.repeat(Math.min(1024, expected - n)));
+      }
+      return this.twin.lineCount(which) === expected;
+    };
+    this.twin.reset();
+    if (mode?.alternateOn) {
+      if (altLines === null) {
+        return { reason: 'alternate screen on but -a capture unsupported' };
+      }
+      await feed(joinLines(altLines));
+      if (!(await padTo('normal', b.history + this.twin.rows))) {
+        this.st.overflowRetries++;
+        return { reason: 'normal-buffer line count overflow' };
+      }
+      await feed(`${ESC}[?1049h`);
+      await feed(joinLines(captureLines));
+      if (!(await padTo('alt', this.twin.rows))) {
+        this.st.overflowRetries++;
+        return { reason: 'alt-buffer line count overflow' };
+      }
+    } else {
+      await feed(joinLines(captureLines));
+      if (!(await padTo('normal', b.history + this.twin.rows))) {
+        this.st.overflowRetries++;
+        return { reason: 'normal-buffer line count overflow' };
+      }
+    }
+    await feed(modeRestoreBytes(mode, b.cursorX, b.cursorY));
+    for (const chunk of active.queue) {
+      await feedBytes(chunk);
+    }
+    active.queue = [];
+    return { ok: { bytesFed, historySize: b.history, mode } };
+  }
+}
+
+/** One-shot convenience for tests that do not need a persistent reseeder. */
+export async function reseed(control: ControlLike, twin: Twin, paneId: string, opts?: ReseedOpts): Promise<ReseededResult> {
+  return new Reseeder(control, twin, opts).reseed(paneId, opts);
+}
