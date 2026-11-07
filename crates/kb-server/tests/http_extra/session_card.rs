@@ -253,9 +253,10 @@ async fn a_failing_lane_degrades_that_lane_only() {
     assert_eq!(card["files"]["total"], 1);
 }
 
-/// Test 5 — the card carries no transcript body: the only copy of derived
-/// session prose on the wire is the capped outcome preview, appearing
-/// exactly once (as `outcome.last_assistant_text`), never as a raw turn.
+/// Test 5 — the card carries no transcript body: the sentinel seeded as the
+/// capped outcome preview rides the wire exactly twice — structured
+/// (`outcome.last_assistant_text`) and rendered (`text`) — and never as a
+/// raw turn; no transcript-bearing keys ride along.
 #[tokio::test]
 async fn card_carries_no_transcript_body() {
     let (_tmp, addr, paths) = boot().await;
@@ -270,10 +271,14 @@ async fn card_carries_no_transcript_body() {
     let (status, card, body) = get_json(&client, addr, "/api/sessions/sent-1/card").await;
     assert_eq!(status, 200, "{card}");
     assert_eq!(card["outcome"]["last_assistant_text"], SENTINEL);
+    assert!(
+        card["text"].as_str().unwrap_or_default().contains(SENTINEL),
+        "rendered text carries the capped preview"
+    );
     assert_eq!(
         body.matches(SENTINEL).count(),
-        1,
-        "the preview is the ONE copy of session prose on the card — no raw turn body rides along"
+        2,
+        "the preview appears only as outcome.last_assistant_text + rendered text — no raw turn body rides along"
     );
     // No transcript-bearing keys anywhere on the card.
     for forbidden in ["turns", "transcript", "body_text", "jsonl"] {
