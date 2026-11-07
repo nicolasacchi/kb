@@ -1110,6 +1110,7 @@ GET  /api/sessions/{session_id}/view        W2/R1 — the `session-view/1`
        &turns=A..B&scrub=…]                  presenter): joined turns, outline,
                                             task board, subagent summaries,
                                             minimap, and honesty stats.
+                                            `Item::Image` carries a mime and an optional content-address (`sha256`) or inline size, never pixels.
                                             `?fields=` projects to a subset
                                             (absent = everything); `?turns=A..B`
                                             windows the `turns`/`side_lanes`
