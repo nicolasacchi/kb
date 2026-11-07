@@ -11,5 +11,9 @@ while [ $# -gt 0 ]; do
     *) shift ;;
   esac
 done
+# The supervisor already silences the tap (stderr to /dev/null), so a
+# failing tap is invisible in CI. Keep the diagnostics per-session
+# instead: s/<id>.tap_err carries the tmux error if attach fails.
+exec 2>>"$rundir/s/$session.tap_err"
 printf '%s' "$(date +%s%N)" > "$rundir/s/$session.tap_ts"
 exec "$KB_TMUX_BIN" -S "$rundir/s/$session.sock" -C attach -f ignore-size -t kb
