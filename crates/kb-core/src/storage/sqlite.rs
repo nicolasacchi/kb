@@ -6420,7 +6420,7 @@ impl Db {
                  AND parent_session_id IN ({ph}))\
              GROUP BY key"
         );
-        let mut binds: Vec<Box<dyn rusqlite::ToSql>> = ids
+        let binds: Vec<Box<dyn rusqlite::ToSql>> = ids
             .iter()
             .map(|id| Box::new(id.clone()) as Box<dyn rusqlite::ToSql>)
             .chain(
@@ -6431,7 +6431,7 @@ impl Db {
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt
             .query_map(
-                rusqlite::params_from_iter(binds.drain(..).map(|b| b.as_ref())),
+                rusqlite::params_from_iter(binds.iter().map(|b| b.as_ref())),
                 |r| Ok((r.get::<_, String>(0)?, i64_as_u32_sat(r.get(1)?))),
             )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
