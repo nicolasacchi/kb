@@ -1516,7 +1516,7 @@ jobs:
           n="$(sed -n 's/^Ran \([0-9]*\) tests\? .*/\1/p' /tmp/term-tools.log | tail -1)"
           test "${n:-0}" -ge 15
 
-      - name: Tap pipeline tests (ci.sh: bun test + mutation + JUnit)
+      - name: 'Tap pipeline tests (ci.sh: bun test + mutation + JUnit)'
         env:
           KB_REQUIRE_BUN_PIN: "1"
         run: |
