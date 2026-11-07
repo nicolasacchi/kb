@@ -11,11 +11,10 @@
 //!
 //! On SIGTERM/SIGINT kb-termd stops accepting, closes anchor masters,
 //! removes `runner.sock` and leaves every holder alone.
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::broadcast;
 
@@ -122,14 +121,22 @@ async fn handle_connection<S: Supervisor + 'static>(runner: Arc<Runner<S>>, stre
     let mut reader = BufReader::new(read_half);
     loop {
         let mut line = String::new();
-        let n = match reader.read_line(&mut line).await {
+        // Bounded read: an unterminated line can never buffer past
+        // MAX_LINE + 1 bytes, so an oversized client is answered
+        // `bad-request` instead of exhausting memory.
+        let n = match reader
+            .by_ref()
+            .take((MAX_LINE + 1) as u64)
+            .read_line(&mut line)
+            .await
+        {
             Ok(n) => n,
             Err(_) => return,
         };
         if n == 0 {
             return; // EOF
         }
-        if n > MAX_LINE || line.len() > MAX_LINE {
+        if n > MAX_LINE && !line.ends_with('\n') {
             // Over-long request: bad-request and close the connection.
             let err = crate::wire::Response::Err {
                 code: "bad-request".to_string(),
@@ -200,8 +207,9 @@ mod tests {
         let _ = std::fs::create_dir_all(sock.parent().unwrap());
         let listener = bind_runner_socket(&sock).unwrap();
         let (tx, rx) = broadcast::channel::<()>(1);
+        let server_runner = runner.clone();
         let handle = tokio::spawn(async move {
-            let _ = serve(runner.clone(), listener, sock, rx).await;
+            let _ = serve(server_runner, listener, sock, rx).await;
         });
         (handle, runner, tx)
     }
@@ -212,7 +220,13 @@ mod tests {
         stream.write_all(b"\n").await.unwrap();
         let mut reader = BufReader::new(stream);
         let mut line = String::new();
-        reader.read_line(&mut line).await.unwrap();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            reader.read_line(&mut line),
+        )
+        .await
+        .expect("rpc roundtrip must answer within 10 s")
+        .unwrap();
         line
     }
 
@@ -248,6 +262,34 @@ mod tests {
         assert!(sock.exists(), "dead socket file must exist");
         let listener = bind_runner_socket(&sock).expect("stale socket must be replaced");
         drop(listener);
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn overlong_line_gets_bad_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (handle, runner, _tx) = stub_runner(&root).await;
+        let sock = runner.cfg.run_dir.join("runner").join("runner.sock");
+        // 128 KiB without a newline: the server must answer bad-request
+        // from a bounded read (never buffer the whole line).
+        let mut stream = UnixStream::connect(&sock).await.unwrap();
+        let big = vec![b'x'; 128 * 1024];
+        let _ = stream.write_all(&big).await; // server closes early; EPIPE ok
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            reader.read_line(&mut line),
+        )
+        .await
+        .expect("overlong line must be answered within 10 s")
+        .unwrap();
+        assert!(
+            line.contains("bad-request"),
+            "overlong line must be bad-request: {line}"
+        );
+        handle.abort();
         let _ = std::fs::remove_file(&sock);
     }
 }
