@@ -27,6 +27,8 @@ pub struct TreeItem {
     pub root_session_id: Option<String>,
     pub project_slug: Option<String>,
 }
+/// One parsed session header: `(id, parentSession, cwd)`.
+type Header = (Option<String>, Option<String>, Option<String>);
 
 /// The route + query for one run (PURE: pinned by a unit test).
 pub(crate) fn backfill_tree_path(apply: bool) -> String {
@@ -36,7 +38,7 @@ pub(crate) fn backfill_tree_path(apply: bool) -> String {
 /// Read one `session` header line from a JSONL file: `(id, parentSession,
 /// cwd)` — first `type:"session"` record, head-capped like the hook (only
 /// the first 262144 bytes are read; the rest is never loaded).
-fn read_header(path: &Path) -> (Option<String>, Option<String>, Option<String>) {
+fn read_header(path: &Path) -> Header {
     let Ok(mut f) = std::fs::File::open(path) else {
         return (None, None, None);
     };
@@ -72,12 +74,11 @@ pub fn collect_tree_items(sessions_dir: &Path) -> Vec<TreeItem> {
 
     // Two passes: first every header, so a parent file's id is known
     // before any child folds.
-    let mut headers: HashMap<PathBuf, (Option<String>, Option<String>, Option<String>)> =
-        HashMap::new();
+    let mut headers: HashMap<PathBuf, Header> = HashMap::new();
     for f in &files {
         headers.insert(f.clone(), read_header(f));
     }
-    let by_path: HashMap<String, (Option<String>, Option<String>, Option<String>)> = headers
+    let by_path: HashMap<String, Header> = headers
         .iter()
         .map(|(p, h)| (p.to_string_lossy().into_owned(), h.clone()))
         .collect();
@@ -181,7 +182,7 @@ pub async fn backfill_tree(
 ) -> Result<()> {
     let dir = sessions_dir
         .cloned()
-        .unwrap_or_else(|| default_sessions_dir());
+        .unwrap_or_else(default_sessions_dir);
     let items = collect_tree_items(&dir);
     let Some(url) = http::detect_daemon(daemon, bearer).await else {
         bail!(

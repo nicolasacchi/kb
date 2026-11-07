@@ -480,7 +480,7 @@ impl PublishLock {
 /// mandatory; omp headers may carry cwd "unknown"). Empty slug -> None.
 pub(crate) fn project_slug_for_cwd(cwd: Option<&Path>) -> Option<String> {
     cwd.filter(|d| d.is_absolute() && d.is_dir())
-        .map(|d| super::memory::current_repo_slug_in(d))
+        .map(super::memory::current_repo_slug_in)
         .filter(|s| !s.is_empty())
 }
 

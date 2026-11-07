@@ -2273,14 +2273,14 @@ mod tests {
             "slug envelope == plain envelope + one meta line"
         );
         // First <pre> payload untouched by the slug.
-        let pre = |h: &str| -> &str {
+        fn pre(h: &str) -> &str {
             h.split("<pre>")
                 .nth(1)
                 .unwrap()
                 .split("</pre>")
                 .next()
                 .unwrap()
-        };
+        }
         assert_eq!(pre(&none), pre(&some));
         assert_eq!(pre(&none), "a&lt;b&gt;&amp;c");
         // Empty slug == None byte-for-byte.
