@@ -27,7 +27,7 @@ use crate::state::KbHandles;
 use crate::terminal::gate::{
     gate, Problem, ERR_TERMINAL_BAD_REPLY, ERR_TERMINAL_BAD_REQUEST, ERR_TERMINAL_CONFLICT,
     ERR_TERMINAL_NOT_FOUND, ERR_TERMINAL_PAYLOAD_TOO_LARGE, ERR_TERMINAL_REFUSED,
-    ERR_TERMINAL_RUNNER_UNAVAILABLE,
+    ERR_TERMINAL_RUNNER_UNAVAILABLE, ERR_TERMINAL_TICKET_FULL, ERR_TERMINAL_TICKET_UNAVAILABLE,
 };
 use crate::terminal::runner_client::{RunnerError, UnixRunner};
 use crate::terminal::wire::{Harness, RunnerReply, RunnerRequest};
@@ -135,6 +135,18 @@ fn runner_down() -> Response<Body> {
     ))
 }
 
+/// The runner answered with something unreadable (oversize or
+/// unparseable): a bad-gateway shape (502), not "unavailable" — the
+/// runner was reachable and spoke nonsense.
+fn runner_bad_reply() -> Response<Body> {
+    no_store(Problem::response(
+        ERR_TERMINAL_BAD_REPLY,
+        StatusCode::BAD_GATEWAY,
+        "Bad Gateway",
+        "terminal runner returned an unreadable reply".to_string(),
+    ))
+}
+
 /// Build the per-request runner client from the CURRENT config
 /// (invariant #13: a config edit restarts in-process; building it here
 /// means the very next request uses the new socket/timeout).
@@ -152,7 +164,7 @@ async fn call(state: &Arc<KbHandles>, req: &RunnerRequest) -> Result<RunnerReply
     match runner.call(req).await {
         Ok(reply) => Ok(reply),
         Err(RunnerError::Unavailable | RunnerError::Timeout) => Err(runner_down()),
-        Err(RunnerError::TooLarge | RunnerError::BadReply) => Err(runner_down()),
+        Err(RunnerError::TooLarge | RunnerError::BadReply) => Err(runner_bad_reply()),
     }
 }
 
@@ -329,19 +341,19 @@ pub async fn ticket(
                     .into_response(),
                 ),
                 Err(crate::terminal::ticket::TicketError::Full) => no_store(Problem::response(
-                    ERR_TERMINAL_BAD_REQUEST,
+                    ERR_TERMINAL_TICKET_FULL,
                     StatusCode::TOO_MANY_REQUESTS,
                     "Too Many Requests",
                     "ticket table is full".to_string(),
                 )),
                 Err(crate::terminal::ticket::TicketError::Rng) => no_store(Problem::response(
-                    ERR_TERMINAL_RUNNER_UNAVAILABLE,
+                    ERR_TERMINAL_TICKET_UNAVAILABLE,
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "Internal Server Error",
                     "ticket mint failed".to_string(),
                 )),
                 Err(_) => no_store(Problem::response(
-                    ERR_TERMINAL_BAD_REQUEST,
+                    ERR_TERMINAL_TICKET_UNAVAILABLE,
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "Internal Server Error",
                     "ticket mint failed".to_string(),
@@ -486,12 +498,19 @@ pub async fn kill(
     Extension(identity): Extension<Identity>,
     headers: axum::http::HeaderMap,
     Path(id): Path<String>,
+    body: axum::body::Bytes,
 ) -> Response<Body> {
     if let Err(e) = gate(&state, &headers, &identity, true).await {
         return e;
     }
     if !check_id(&id) {
         return bad_request("invalid terminal id");
+    }
+    // Kill takes no client body: anything sent is ignored, but the
+    // 256 KiB ceiling still applies so the shape stays uniform with
+    // the other POSTs (spec §5 common rules).
+    if body.len() > MAX_BODY_BYTES {
+        return payload_too_large("request body over 256 KiB");
     }
     let req = RunnerRequest::Kill { id: id.clone() };
     match call(&state, &req).await {

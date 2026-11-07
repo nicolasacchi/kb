@@ -46,6 +46,13 @@ pub(crate) const ERR_TERMINAL_BAD_REPLY: &str = "urn:kb:errors:terminal-bad-repl
 /// `urn:kb:errors:payload-too-large` — a request body or paste text the
 /// relay refuses before parsing (same urn as the rest of the daemon).
 pub(crate) const ERR_TERMINAL_PAYLOAD_TOO_LARGE: &str = "urn:kb:errors:payload-too-large";
+/// `urn:kb:errors:terminal-ticket-full` — the ticket table is full of
+/// live tickets (429).
+pub(crate) const ERR_TERMINAL_TICKET_FULL: &str = "urn:kb:errors:terminal-ticket-full";
+/// `urn:kb:errors:terminal-ticket-unavailable` — the ticket mint
+/// failed in the daemon (500).
+pub(crate) const ERR_TERMINAL_TICKET_UNAVAILABLE: &str =
+    "urn:kb:errors:terminal-ticket-unavailable";
 
 /// The SPA-only intent header. An INTENT marker, not an authorization:
 /// kb has one trust tier and a local non-browser client can forge both
@@ -124,10 +131,13 @@ impl GateRefusal {
 
 /// A bodiless 404 for a disabled terminal tier: no JSON, no
 /// content-type, no header naming the feature — a disabled daemon
-/// leaks nothing about the terminal tier.
+/// leaks nothing about the terminal tier. It still carries
+/// `Cache-Control: no-store` like every other terminal response
+/// (spec §5) — that header names no feature.
 fn disabled() -> Response<Body> {
     Response::builder()
         .status(StatusCode::NOT_FOUND)
+        .header(header::CACHE_CONTROL, "no-store")
         .body(Body::empty())
         .unwrap_or_else(|_| Response::new(Body::empty()))
 }

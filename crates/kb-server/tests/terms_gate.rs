@@ -260,6 +260,11 @@ async fn disabled_by_default_returns_bodiless_404_on_every_terms_route() {
             resp.headers().get("content-type").is_none(),
             "{m} {path} must be bodiless (no content-type)"
         );
+        assert_eq!(
+            resp.headers().get("cache-control").map(|v| v.as_str()),
+            Some("no-store"),
+            "{m} {path} must carry Cache-Control: no-store"
+        );
         let (status, text) = body_text(resp).await;
         assert_eq!(status, 404);
         assert!(text.is_empty(), "{m} {path} must be bodiless, got: {text}");
@@ -644,4 +649,24 @@ async fn runner_errors_map_to_statuses() {
     let (_s, text) = body_text(resp).await;
     assert!(!text.contains(&missing.to_string_lossy().into_owned()));
     assert_problem(&text, "terminal-runner-unavailable");
+
+    // Malformed (unparseable) reply from a reachable runner → 502
+    // `terminal-bad-reply`, spec §5 "anything else → 502" (only
+    // unreachable/timeout is 503).
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("kill".to_string(), "not json at all".to_string());
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), replies);
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    let resp = c
+        .post(format!("{}/api/terms/{TERM_ID}/kill", base_url(addr)))
+        .header("Origin", origin_header(addr))
+        .header("x-kb-intent", "terminal")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 502);
+    let (_s, text) = body_text(resp).await;
+    assert_problem(&text, "terminal-bad-reply");
 }

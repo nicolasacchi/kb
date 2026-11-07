@@ -23,9 +23,3 @@ pub mod wire;
 pub struct TerminalState {
     pub(crate) tickets: ticket::TicketStore,
 }
-
-impl TerminalState {
-    pub fn new() -> Self {
-        Self::default()
-    }
-}

@@ -117,6 +117,20 @@ impl TicketStore {
         }
         Ok(())
     }
+
+    /// [`consume_ticket`]'s rule, on the store alone: `true` iff the
+    /// consume succeeds, `false` for every failure (unknown, expired,
+    /// wrong terminal, wrong user). `consume_ticket` delegates here so
+    /// this pin needs no `KbHandles`.
+    pub(crate) fn consume_collapsed(
+        &self,
+        token: &str,
+        term_id: &str,
+        user: &str,
+        now: Instant,
+    ) -> bool {
+        self.consume(token, term_id, user, now).is_ok()
+    }
 }
 
 /// Consume a ticket and collapse every failure to `false`. The future
@@ -131,8 +145,7 @@ pub(crate) fn consume_ticket(
     state
         .terminals
         .tickets
-        .consume(token, term_id, user, Instant::now())
-        .is_ok()
+        .consume_collapsed(token, term_id, user, Instant::now())
 }
 
 #[cfg(test)]
@@ -248,20 +261,42 @@ mod tests {
 
     #[test]
     fn consume_ticket_collapses_every_failure_to_false() {
-        // Proves the four internal consume variants carry no signal to
-        // the caller through `consume_ticket`.
-        assert_ne!(TicketError::Unknown, TicketError::Expired);
-        assert_ne!(TicketError::Unknown, TicketError::WrongSession);
-        assert_ne!(TicketError::Unknown, TicketError::WrongUser);
-        assert_ne!(TicketError::Expired, TicketError::WrongSession);
-        // A token unknown to a fresh store is false without any state.
+        // Every `consume_ticket` failure collapses to `false` and a
+        // valid ticket is `true`. `consume_ticket` delegates to
+        // `consume_collapsed`, so this pins the collapse rule without
+        // constructing `KbHandles`.
         let store = TicketStore::new();
-        assert_eq!(
-            store.consume("0".repeat(32).as_str(), "abcd1234", "operator", now()),
-            Err(TicketError::Unknown)
-        );
-        assert!(store
-            .consume("0".repeat(32).as_str(), "abcd1234", "operator", now())
-            .is_err());
+        let at = now();
+        // Unknown token.
+        let unknown = "0".repeat(32);
+        assert!(!store.consume_collapsed(&unknown, "abcd1234", "operator", at));
+        // Expired (TTL 30, consumed 31 s later).
+        let tok = store
+            .mint("abcd1234", "operator", Duration::from_secs(30), at)
+            .unwrap();
+        assert!(!store.consume_collapsed(
+            &tok,
+            "abcd1234",
+            "operator",
+            at + Duration::from_secs(31)
+        ));
+        // Wrong terminal (and the entry is burned: a later correct
+        // attempt is also false).
+        let tok = store
+            .mint("abcd1234", "operator", Duration::from_secs(30), at)
+            .unwrap();
+        assert!(!store.consume_collapsed(&tok, "efgh5678", "operator", at));
+        assert!(!store.consume_collapsed(&tok, "abcd1234", "operator", at));
+        // Wrong user (burned likewise).
+        let tok = store
+            .mint("abcd1234", "operator", Duration::from_secs(30), at)
+            .unwrap();
+        assert!(!store.consume_collapsed(&tok, "abcd1234", "someoneelse", at));
+        assert!(!store.consume_collapsed(&tok, "abcd1234", "operator", at));
+        // A valid ticket is `true`.
+        let tok = store
+            .mint("abcd1234", "operator", Duration::from_secs(30), at)
+            .unwrap();
+        assert!(store.consume_collapsed(&tok, "abcd1234", "operator", at));
     }
 }

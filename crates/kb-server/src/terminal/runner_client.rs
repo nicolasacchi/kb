@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::wire::{RunnerReply, RunnerRequest};
 
@@ -75,20 +75,46 @@ impl UnixRunner {
             .await
             .map_err(|_| RunnerError::Unavailable)?;
 
-        let mut reader = tokio::io::BufReader::new(stream);
-        let mut line = String::new();
-        let n = reader
-            .read_line(&mut line)
-            .await
-            .map_err(|_| RunnerError::Unavailable)?;
-        if n == 0 {
+        // Bounded read: the cap is enforced DURING I/O, not after a
+        // whole line is buffered. The take adapter caps the bytes the
+        // socket yields at `MAX_REPLY_BYTES + 1`, so an oversize
+        // reply errors without ever allocating past the cap (the
+        // `+1` lets exactly-one-over and way-over both report
+        // `TooLarge`). Read chunked until the newline, EOF, or the
+        // cap: a bare `read_line` would buffer an unbounded line
+        // before the length check.
+        let reader = tokio::io::BufReader::new(stream);
+        let mut limited = reader.take((MAX_REPLY_BYTES + 1) as u64);
+        let mut line = Vec::new();
+        let mut chunk = [0u8; 8192];
+        let mut saw_newline = false;
+        loop {
+            let n = limited
+                .read(&mut chunk)
+                .await
+                .map_err(|_| RunnerError::Unavailable)?;
+            if n == 0 {
+                break;
+            }
+            let read = &chunk[..n];
+            if let Some(pos) = read.iter().position(|&b| b == b'\n') {
+                line.extend_from_slice(&read[..=pos]);
+                saw_newline = true;
+                break;
+            }
+            line.extend_from_slice(read);
+            if line.len() > MAX_REPLY_BYTES {
+                return Err(RunnerError::TooLarge);
+            }
+        }
+        if line.is_empty() && !saw_newline {
             // EOF without a reply: the runner dropped the connection.
             return Err(RunnerError::BadReply);
         }
         if line.len() > MAX_REPLY_BYTES {
             return Err(RunnerError::TooLarge);
         }
-        Ok(line.into_bytes())
+        Ok(line)
     }
 }
 

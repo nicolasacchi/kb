@@ -188,42 +188,60 @@ pub struct SessionInfo {
 mod tests {
     use super::*;
 
-    /// The business-logic half of each upstream golden file. None of the
-    /// upstream goldens take the directory form, so this table maps the
-    /// golden filename to the JSON payload used for the byte-round-trip
-    /// below; the upstream file bytes are checked separately in
-    /// `crates/kb-term/tests/wire_golden.rs`.
+    /// The upstream T1 goldens, read from `crates/kb-term/tests/golden/`
+    /// with `include_str!` so a drift in the merged contract
+    /// (`crates/kb-term/src/wire.rs` / the golden files) fails this
+    /// mirror test. `include_str!` resolves relative to this file, so
+    /// `../../../kb-term/...` reaches it.
     fn golden_samples() -> Vec<(&'static str, &'static str)> {
         vec![
-            ("req_list", "{\"op\":\"list\"}"),
+            (
+                "req_list",
+                include_str!("../../../kb-term/tests/golden/req_list.json"),
+            ),
             (
                 "req_launch",
-                "{\"op\":\"launch\",\"harness\":\"omp\",\"argv\":null,\"resume_sid\":null,\"cwd\":\"/work/proj\",\"cols\":120,\"rows\":40}",
+                include_str!("../../../kb-term/tests/golden/req_launch.json"),
             ),
-            ("req_kill", "{\"op\":\"kill\",\"id\":\"abcd1234\"}"),
+            (
+                "req_kill",
+                include_str!("../../../kb-term/tests/golden/req_kill.json"),
+            ),
             (
                 "req_paste",
-                "{\"op\":\"paste\",\"id\":\"abcd1234\",\"text\":\"hello\"}",
+                include_str!("../../../kb-term/tests/golden/req_paste.json"),
             ),
             (
                 "req_enter",
-                "{\"op\":\"enter\",\"id\":\"abcd1234\",\"blocked\":false}",
+                include_str!("../../../kb-term/tests/golden/req_enter.json"),
             ),
-            ("req_keys", "{\"op\":\"keys\",\"id\":\"abcd1234\",\"keys\":[\"C-c\"]}"),
-            ("req_read", "{\"op\":\"read\",\"id\":\"abcd1234\"}"),
-            ("req_history", "{\"op\":\"history\",\"id\":\"abcd1234\"}"),
+            (
+                "req_keys",
+                include_str!("../../../kb-term/tests/golden/req_keys.json"),
+            ),
+            (
+                "req_read",
+                include_str!("../../../kb-term/tests/golden/req_read.json"),
+            ),
+            (
+                "req_history",
+                include_str!("../../../kb-term/tests/golden/req_history.json"),
+            ),
             (
                 "req_take_size",
-                "{\"op\":\"take_size\",\"id\":\"abcd1234\",\"cols\":120,\"rows\":40,\"by\":\"kb-term\"}",
+                include_str!("../../../kb-term/tests/golden/req_take_size.json"),
             ),
-            ("resp_ok", "{\"status\":\"ok\",\"data\":{\"n\":1}}"),
+            (
+                "resp_ok",
+                include_str!("../../../kb-term/tests/golden/resp_ok.json"),
+            ),
             (
                 "resp_err",
-                "{\"status\":\"err\",\"code\":\"not_found\",\"message\":\"synthetic error\"}",
+                include_str!("../../../kb-term/tests/golden/resp_err.json"),
             ),
             (
                 "session_info",
-                "{\"id\":\"abcd1234\",\"harness\":\"omp\",\"cwd\":\"/work/proj\",\"started_unix\":1234567890,\"resume_sid\":null,\"pane_pid\":4242,\"cols\":120,\"rows\":40,\"bracket_paste_flag\":true,\"pane_dead\":false,\"exit_code\":null,\"grid_owner\":null}",
+                include_str!("../../../kb-term/tests/golden/session_info.json"),
             ),
         ]
     }
@@ -231,6 +249,10 @@ mod tests {
     #[test]
     fn terms_runner_wire_matches_golden() {
         for (name, golden) in golden_samples() {
+            // Drop a final newline the file may carry; the comparison
+            // is against the JSON body itself (the upstream files
+            // today carry none).
+            let golden = golden.trim_end();
             // Byte-identical round-trip: deserialize, re-serialize, and
             // compare with the golden bytes (the upstream contract
             // serializes `None` as an explicit `null` and keeps field

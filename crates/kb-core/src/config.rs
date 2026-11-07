@@ -5074,10 +5074,22 @@ mod tests {
 
     #[test]
     fn terminal_runner_socket_tilde_expands() {
+        // `~/` expansion is pinned under a controlled `HOME` (the
+        // `HOME_ENV_LOCK` pattern below): an actual assertion on the
+        // `~/runner.sock` case, not a bare construction.
+        let _guard = HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let orig = std::env::var_os("HOME");
+        std::env::set_var("HOME", "/home/tildetest");
         let s = TerminalSection {
             runner_socket: Some(PathBuf::from("~/runner.sock")),
             ..Default::default()
         };
+        let resolved = s.resolved_runner_socket();
+        match orig {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        assert_eq!(resolved, PathBuf::from("/home/tildetest/runner.sock"));
         // The default never tilde-expands (absolute); a relative path
         // without a leading `~/` passes through unchanged per the
         // `expand_tilde` contract.
@@ -5095,7 +5107,6 @@ mod tests {
             abs.resolved_runner_socket(),
             PathBuf::from("/var/run/x.sock")
         );
-        drop(s);
     }
 
     // ---- W7/LF-1 — [sessions] ----
