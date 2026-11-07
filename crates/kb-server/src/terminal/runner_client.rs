@@ -95,7 +95,6 @@ impl UnixRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::AsyncReadExt;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     async fn serve_one(socket: std::path::PathBuf, reply: &'static str) {
