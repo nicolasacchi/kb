@@ -180,9 +180,7 @@ pub async fn backfill_tree(
     daemon: Option<&str>,
     bearer: Option<&str>,
 ) -> Result<()> {
-    let dir = sessions_dir
-        .cloned()
-        .unwrap_or_else(default_sessions_dir);
+    let dir = sessions_dir.cloned().unwrap_or_else(default_sessions_dir);
     let items = collect_tree_items(&dir);
     let Some(url) = http::detect_daemon(daemon, bearer).await else {
         bail!(
