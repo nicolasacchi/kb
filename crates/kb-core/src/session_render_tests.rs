@@ -670,3 +670,56 @@ fn runtime_js_ships_the_find_in_transcript_wiring() {
     assert!(rendered.contains("ses-find-current"));
     assert!(rendered.contains("data-find-action"));
 }
+
+// ─── T20 — Item::Image picture references ────────────────────────────────
+
+#[test]
+fn image_item_renders_a_figure_with_escaped_attrs() {
+    let rendered = render(
+        r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"image","source":{"type":"blob_ref","media_type":"image/png","sha256":"abababababababababababababababababababababababababababababababab"}}]}}"#,
+    );
+    assert!(rendered.contains(r#"class="ses-img""#));
+    assert!(rendered.contains(r#"data-kb-image-mime="image/png""#));
+    assert!(rendered.contains(
+        r#"data-kb-image-sha="abababababababababababababababababababababababababababababababab""#
+    ));
+    assert!(
+        rendered.contains("blob:abababababab"),
+        "the 12-char label: {rendered}"
+    );
+    assert!(!rendered.contains("<img"), "no pixels, no media route");
+    assert!(!rendered.contains("http"), "no URL: {rendered}");
+    // The sha-attr render must not contain the raw base64 of an inline case.
+    let rendered = render(
+        r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}]}}"#,
+    );
+    assert!(rendered.contains("inline 4 b64 chars"));
+    assert!(
+        !rendered.contains("AAAA"),
+        "base64 must not leak: {rendered}"
+    );
+    // A hostile mime is escaped in both the attr and the label.
+    let rendered = render(
+        r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"image","source":{"type":"blob_ref","media_type":"image/\"><script>","sha256":"abababababababababababababababababababababababababababababababab"}}]}}"#,
+    );
+    assert!(
+        !rendered.contains("\"><script>"),
+        "mime must be escaped: {rendered}"
+    );
+    assert!(
+        rendered.contains("&lt;script&gt;"),
+        "escaped form present: {rendered}"
+    );
+}
+
+#[test]
+fn image_item_is_not_hidden_by_hide_system() {
+    let rendered = render(
+        r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"image","source":{"type":"blob_ref","media_type":"image/png","sha256":"abababababababababababababababababababababababababababababababab"}}]}}"#,
+    );
+    assert!(rendered.contains(r#"class="ses-img""#));
+    assert!(
+        !rendered.contains(r#"class="ses-chip"#),
+        "ses-img is not a chip"
+    );
+}
