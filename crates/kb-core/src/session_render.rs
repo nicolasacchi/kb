@@ -791,7 +791,7 @@ fn render_image(mime: &str, sha256: Option<&str>, inline_bytes: Option<u32>) -> 
         r#"<figure class="ses-img" data-kb-image-mime="{}"{}><figcaption>{}</figcaption></figure>"#,
         esc_attr(mime),
         sha_attr,
-        esc(&label)
+        esc_attr(&label)
     )
 }
 
