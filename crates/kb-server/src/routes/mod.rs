@@ -186,6 +186,7 @@ pub mod review_notes;
 pub mod saved_queries;
 pub mod schema;
 pub mod search;
+pub mod session_card;
 pub mod sessions;
 pub mod settings;
 pub mod share;

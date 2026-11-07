@@ -5536,6 +5536,14 @@ impl Db {
         substance: &[String],
         harness: &[String],
         collapse_logical: bool,
+        /// A3 — `tree=collapsed` (the `GET /api/sessions` default): keep
+        /// only rows with no tree root (`root_session_id IS NULL`), so
+        /// subagent children hide and trees read as their roots. A pure
+        /// WHERE term with no bind params — like `collapse_logical` —
+        /// so the keyset cursor stays coherent. `false` (every caller of
+        /// the `sessions_list` wrapper, live-status Tier-0, funnels,
+        /// digests) means flat: no hidden row changes their byte output.
+        tree_collapsed: bool,
     ) -> Result<Vec<SessionRow>> {
         // Build the WHERE dynamically: the optional keyset cursor and the
         // optional folder (A1) filter are ANDed; placeholder indices are
@@ -5568,6 +5576,13 @@ impl Db {
                     AND sx.segment_idx > COALESCE(sessions.segment_idx, 1))"
                     .to_string(),
             );
+        }
+        // A3 — `tree=collapsed`: subagent children (rows with a tree
+        // root) are hidden here, in SQL BEFORE LIMIT, so the keyset
+        // cursor stays coherent. NULL-root rows — including unresolved
+        // parents — stay visible (an unknown parent never hides a row).
+        if tree_collapsed {
+            conds.push("root_session_id IS NULL".to_string());
         }
         match (before, before_id) {
             (Some(b), Some(id)) => {
@@ -5736,7 +5751,7 @@ impl Db {
         harness: &[String],
     ) -> Result<Vec<SessionRow>> {
         self.sessions_list_with(
-            limit, before, before_id, folder, q, project, substance, harness, false,
+            limit, before, before_id, folder, q, project, substance, harness, false, false,
         )
     }
 
@@ -6265,6 +6280,140 @@ impl Db {
                 rusqlite::params_from_iter(keys.iter().chain(keys.iter())),
                 |r| Ok((r.get::<_, String>(0)?, i64_as_u32_sat(r.get(1)?))),
             )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+    /// A3 — the newest-capture CHILDREN of one session, paged by
+    /// `(started_at ASC, session_id ASC)`. The caller supplies exactly one
+    /// of `root_of` / `parent_of`:
+    /// - `root_of`: every newest-capture row with `root_session_id =
+    ///   root_of` — the whole subagent flood under that tree, any depth;
+    /// - `parent_of`: rows with `parent_session_id = parent_of` — a
+    ///   non-root session's direct children.
+    /// Either way `is_newest = 1` keeps one row per child (a child is
+    /// captured repeatedly at every Stop, too). `after` is the opaque
+    /// `"<started_at>:<session_id>"` cursor: rows strictly after
+    /// `(started_at, session_id)` in the page order. Fetch `limit + 1` to
+    /// detect a next page. Callers merge per-kb results by the same key.
+    pub fn sessions_children_page(
+        &self,
+        root_of: Option<&str>,
+        parent_of: Option<&str>,
+        after: Option<(i64, &str)>,
+        limit: u32,
+    ) -> Result<Vec<SessionRow>> {
+        debug_assert!(
+            root_of.is_some() != parent_of.is_some(),
+            "sessions_children_page requires exactly one of root_of/parent_of"
+        );
+        let mut binds: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        let pred = match (root_of, parent_of) {
+            (Some(r), None) => {
+                binds.push(Box::new(r.to_string()));
+                let p = binds.len();
+                format!("root_session_id = ?{p}")
+            }
+            (None, Some(p)) => {
+                binds.push(Box::new(p.to_string()));
+                let p = binds.len();
+                format!("parent_session_id = ?{p}")
+            }
+            _ => unreachable!("exactly one of root_of/parent_of must be Some"),
+        };
+        let mut conds = vec!["is_newest = 1".to_string(), pred];
+        if let Some((at, sid)) = after {
+            binds.push(Box::new(at));
+            let pa = binds.len();
+            binds.push(Box::new(sid.to_string()));
+            let pid = binds.len();
+            conds.push(format!(
+                "(started_at > ?{pa} OR (started_at = ?{pa} AND session_id > ?{pid}))"
+            ));
+        }
+        binds.push(Box::new(limit as i64));
+        let lim = binds.len();
+        let where_clause = format!("WHERE {}", conds.join(" AND "));
+        let sql = format!(
+            "SELECT {SESSION_ROW_COLS} FROM sessions {where_clause} \
+             ORDER BY started_at ASC, session_id ASC LIMIT ?{lim}"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(
+                rusqlite::params_from_iter(binds.iter().map(|b| b.as_ref())),
+                Self::map_session_row,
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// A3 — the total number of newest-capture children of `root_of` /
+    /// `parent_of` (the same predicate as
+    /// [`Self::sessions_children_page`]).
+    pub fn sessions_children_count(
+        &self,
+        root_of: Option<&str>,
+        parent_of: Option<&str>,
+    ) -> Result<u64> {
+        debug_assert!(
+            root_of.is_some() != parent_of.is_some(),
+            "sessions_children_count requires exactly one of root_of/parent_of"
+        );
+        let row = self.conn.query_row(
+            "SELECT COUNT(*) FROM sessions
+             WHERE is_newest = 1 AND ((
+                 (?1 IS NOT NULL AND root_session_id = ?1)
+                 OR (?2 IS NOT NULL AND parent_session_id = ?2)
+             ))",
+            params![root_of, parent_of],
+            |r| r.get::<_, i64>(0),
+        )?;
+        Ok(u64::try_from(row).unwrap_or(0))
+    }
+
+    /// A3 — the resume target of each requested session id, as
+    /// `(session_id, target)`: the tree root's id, else the segment
+    /// chain head, else the row's own id — the same value
+    /// `SessionOut::from_row` feeds `resume_command`. Resolved from each
+    /// id's NEWEST capture (invariant #11). Ids with no capture are
+    /// absent (drop-on-error: the caller falls back to the id itself).
+    pub fn sessions_root_of(&self, ids: &[String]) -> Result<Vec<(String, String)>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ph = vec!["?"; ids.len()].join(",");
+        let sql = format!(
+            "SELECT session_id, COALESCE(root_session_id, segment_of, session_id) \
+             FROM sessions WHERE is_newest = 1 AND session_id IN ({ph})"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(ids.iter()), |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// A3 — for each requested session id, the number of newest-capture
+    /// rows whose `root_session_id` is that id (the list/card
+    /// `child_count`). Zero counts are omitted (callers read a missing
+    /// id as 0).
+    pub fn sessions_child_counts(&self, ids: &[String]) -> Result<Vec<(String, u32)>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ph = vec!["?"; ids.len()].join(",");
+        let sql = format!(
+            "SELECT root_session_id, COUNT(*) FROM sessions \
+             WHERE is_newest = 1 AND root_session_id IS NOT NULL \
+               AND root_session_id IN ({ph}) GROUP BY root_session_id"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(ids.iter()), |r| {
+                Ok((r.get::<_, String>(0)?, i64_as_u32_sat(r.get(1)?)))
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
@@ -17183,6 +17332,7 @@ mod tests {
                 &[],
                 &[],
                 true,
+                false,
             )
             .unwrap();
         assert_eq!(
@@ -17202,6 +17352,7 @@ mod tests {
                 &[],
                 &[],
                 true,
+                false,
             )
             .unwrap();
         assert_eq!(page1.len(), 1);
@@ -17216,6 +17367,7 @@ mod tests {
                 &[],
                 &[],
                 true,
+                false,
             )
             .unwrap();
         assert_eq!(ids(page2), ["solo"]);
@@ -17678,5 +17830,165 @@ mod tests {
                 "two embedded migrations share a version: {versions:?}"
             );
         }
+    }
+    /// A3 — a newest-capture tree: one root plus children (direct, nested,
+    /// and a stale duplicate capture of one child) plus an unresolved-
+    /// parent orphan, all in one small fixture.
+    fn tree_fixture() -> Db {
+        let mut db = db();
+        // Root R, child C1 (parent R), grandchild GC (parent C1),
+        // child C2 (parent R, with a stale earlier capture), and an
+        // orphan O (parent set, root NULL — an unresolved parent).
+        let mut root = session_row("art-root", "tree-root", 1_000);
+        root.harness = "omp".into();
+        db.sessions_upsert(&root).unwrap();
+        let mut c1 = session_row("art-c1", "child-1", 1_100);
+        c1.parent_session_id = Some("tree-root".into());
+        c1.root_session_id = Some("tree-root".into());
+        db.sessions_upsert(&c1).unwrap();
+        let mut gc = session_row("art-gc", "grandchild-1", 1_200);
+        gc.parent_session_id = Some("child-1".into());
+        gc.root_session_id = Some("tree-root".into());
+        db.sessions_upsert(&gc).unwrap();
+        let mut c2_old = session_row("art-c2-old", "child-2", 1_050);
+        c2_old.parent_session_id = Some("tree-root".into());
+        c2_old.root_session_id = Some("tree-root".into());
+        db.sessions_upsert(&c2_old).unwrap();
+        let mut c2 = session_row("art-c2", "child-2", 1_150);
+        c2.parent_session_id = Some("tree-root".into());
+        c2.root_session_id = Some("tree-root".into());
+        db.sessions_upsert(&c2).unwrap();
+        let mut orphan = session_row("art-orph", "orphan-1", 1_300);
+        orphan.parent_session_id = Some("missing-parent".into());
+        db.sessions_upsert(&orphan).unwrap();
+        db
+    }
+
+    #[test]
+    fn children_page_root_sees_the_whole_flood_and_parent_only_direct() {
+        let db = tree_fixture();
+        // The root predicate groups the whole flood (any depth), one row
+        // per child (the stale capture of child-2 is excluded by
+        // is_newest). Page order is (started_at ASC, session_id ASC):
+        // child-1 (1100), grandchild-1 (1200), child-2 (1150) -> 1100,
+        // 1150, 1200 ascending.
+        let page = db
+            .sessions_children_page(Some("tree-root"), None, None, 50)
+            .unwrap();
+        let ids: Vec<&str> = page.iter().map(|r| r.session_id.as_str()).collect();
+        assert_eq!(ids, vec!["child-1", "child-2", "grandchild-1"]);
+        assert_eq!(
+            db.sessions_children_count(Some("tree-root"), None).unwrap(),
+            3
+        );
+        // The parent predicate gives only DIRECT children.
+        let direct = db
+            .sessions_children_page(None, Some("child-1"), None, 50)
+            .unwrap();
+        let ids: Vec<&str> = direct.iter().map(|r| r.session_id.as_str()).collect();
+        assert_eq!(ids, vec!["grandchild-1"]);
+        assert_eq!(
+            db.sessions_children_count(None, Some("child-1")).unwrap(),
+            1
+        );
+        // The orphan's parent IS set: it is a direct child of the missing
+        // parent's own page (and not of our root's flood-count, since
+        // root_session_id is NULL).
+        let orphan_page = db
+            .sessions_children_page(None, Some("missing-parent"), None, 50)
+            .unwrap();
+        assert_eq!(orphan_page.len(), 1);
+        // Keyset paging walks the flood without gaps or duplicates.
+        let p1 = db
+            .sessions_children_page(Some("tree-root"), None, None, 2)
+            .unwrap();
+        let p2 = db
+            .sessions_children_page(
+                Some("tree-root"),
+                None,
+                Some((p1.last().unwrap().started_at, p1.last().unwrap().session_id.as_str())),
+                2,
+            )
+            .unwrap();
+        assert_eq!(p2.len(), 1);
+        assert_eq!(p2[0].session_id, "grandchild-1");
+        assert_eq!(db.sessions_children_count(Some("tree-root"), None).unwrap(), 3);
+    }
+
+    #[test]
+    fn root_of_and_child_counts_resolve_the_resume_target_and_flood_size() {
+        let db = tree_fixture();
+        // Resume targets: roots to their root, children to their root,
+        // grandchild to its root; the orphan passes through to itself;
+        // unknown ids are absent (drop-on-error: caller uses own id).
+        let got = db
+            .sessions_root_of(&[
+                "child-1".into(),
+                "grandchild-1".into(),
+                "tree-root".into(),
+                "orphan-1".into(),
+                "ghost".into(),
+            ])
+            .unwrap();
+        let mut map: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+        for (sid, target) in &got {
+            map.insert(sid.as_str(), target.as_str());
+        }
+        assert_eq!(map.get("child-1"), Some(&"tree-root"));
+        assert_eq!(map.get("grandchild-1"), Some(&"tree-root"));
+        assert_eq!(map.get("tree-root"), Some(&"tree-root"));
+        assert_eq!(map.get("orphan-1"), Some(&"orphan-1"));
+        assert!(!map.contains_key("ghost"));
+        // child_count: 3 newest rows whose root_session_id == tree-root
+        // (child-1, grandchild-1, child-2 newest) — the stale capture
+        // does not count. A non-root session's own id counts 0 (its
+        // descendants name the tree root, not it).
+        let counts = db
+            .sessions_child_counts(&["tree-root".into(), "child-1".into()])
+            .unwrap();
+        assert_eq!(counts, vec![("tree-root".to_string(), 3)]);
+    }
+
+    #[test]
+    fn tree_collapsed_hides_rooted_rows_and_non_http_caller_stays_flat() {
+        let db = tree_fixture();
+        let proj = || Default::default();
+        // Collapsed: only NULL-root rows (the root + the orphan).
+        let collapsed: Vec<String> = db
+            .sessions_list_with(100, None, None, None, None, &proj(), &[], &[], false, true)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.session_id)
+            .collect();
+        let mut sorted = collapsed.clone();
+        sorted.sort();
+        assert_eq!(sorted, vec!["orphan-1".to_string(), "tree-root".to_string()]);
+        // Flat (the sessions_list wrapper's posture): every row shows.
+        let flat = db
+            .sessions_list(100, None, None, None, None, &proj(), &[], &[])
+            .unwrap();
+        assert_eq!(flat.len(), 5, "flat shows root + 3 children + orphan");
+        // The keyset cursor stays coherent over the collapsed set even
+        // when a hidden child sits between two visible rows in time.
+        let page1 = db
+            .sessions_list_with(1, None, None, None, None, &proj(), &[], &[], false, true)
+            .unwrap();
+        assert_eq!(page1.len(), 1);
+        let page2 = db
+            .sessions_list_with(
+                1,
+                Some(page1[0].started_at),
+                Some(page1[0].artifact_id.clone()),
+                None,
+                None,
+                &proj(),
+                &[],
+                &[],
+                false,
+                true,
+            )
+            .unwrap();
+        assert_eq!(page2.len(), 1);
+        assert_ne!(page1[0].session_id, page2[0].session_id);
     }
 }

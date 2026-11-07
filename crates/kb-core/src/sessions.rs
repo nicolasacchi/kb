@@ -38,6 +38,9 @@ pub mod tail;
 /// and the presence windows. Re-exported below, so every consumer says
 /// `kb_core::sessions::HARNESS_DEFAULT`, never a literal.
 pub mod constants;
+/// A3 — `kb-session-card/1`: one daemon-rendered session card (pure types +
+/// text renderer; the fan-out that fills them is kb-server's).
+pub mod card;
 
 /// AH3 — the one verified per-harness resume-command table.
 pub mod resume;

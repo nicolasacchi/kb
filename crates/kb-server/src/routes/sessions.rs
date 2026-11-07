@@ -225,6 +225,10 @@ pub struct SessionOut {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-export", ts(optional))]
     pub root_session_id: Option<String>,
+    /// A3 — how many newest-capture rows hang under this session's tree
+    /// root (`root_session_id = this id`). Always present (0 for a leaf);
+    /// filled per page by one batched read, surfaced never scored.
+    pub child_count: u32,
     /// V0047 — lineage, SURFACED never scored (invariant #11). The capture
     /// cwd's repo slug; `None` when the cwd is gone.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -294,7 +298,7 @@ pub struct SessionEvidenceOut {
     pub uncommitted: bool,
 }
 
-fn check_out(
+pub(crate) fn check_out(
     ev: &kb_core::sessions::checks::SessionEvidence,
     c: &kb_core::sessions::checks::SessionCheck,
 ) -> SessionCheckOut {
@@ -409,13 +413,13 @@ pub fn widen_artifact_ids(
     out
 }
 
-async fn session_read_ids(state: &Arc<KbHandles>, session_id: &str) -> Vec<String> {
+pub(crate) async fn session_read_ids(state: &Arc<KbHandles>, session_id: &str) -> Vec<String> {
     widen_session_ids(session_id, &session_chain_parts(state, session_id).await)
 }
 
 /// V0045/seg1 — the logical session's newest-capture parts across every kb,
 /// in chain order (empty when no kb holds a capture of `session_id`).
-async fn session_chain_parts(
+pub(crate) async fn session_chain_parts(
     state: &Arc<KbHandles>,
     session_id: &str,
 ) -> Vec<kb_core::storage::sqlite::SegmentPart> {
@@ -515,13 +519,19 @@ impl SessionOut {
     /// the cross-kb fan-out; `title` comes from the persisted column (no
     /// lance read).
     pub fn from_row(kb: &str, row: kb_core::storage::sqlite::SessionRow) -> Self {
+        // A3 — root-targeted resume: omp resumes only top-level sessions,
+        // so a child row resumes its ROOT (then a segment chain head,
+        // then its own id — the pre-A3 rule).
         let resume = kb_core::sessions::resume_command(
             if row.harness.is_empty() {
                 kb_core::sessions::HARNESS_DEFAULT
             } else {
                 &row.harness
             },
-            row.segment_of.as_deref().unwrap_or(&row.session_id),
+            row.root_session_id
+                .as_deref()
+                .or(row.segment_of.as_deref())
+                .unwrap_or(&row.session_id),
             row.cwd.as_deref(),
         );
         let display_name = display_name_of(
@@ -586,6 +596,8 @@ impl SessionOut {
             evidence: Some(evidence),
             parent_session_id: row.parent_session_id,
             root_session_id: row.root_session_id,
+            // Filled per page/get by `annotate_child_counts`; 0 until then.
+            child_count: 0,
             project_slug: row.project_slug,
             evidence_full,
         }
@@ -647,6 +659,49 @@ fn apply_segment_counts(rows: &mut [SessionOut], counts: &HashMap<String, u32>) 
         }
     }
 }
+/// A3 — fill the DERIVED `child_count` (newest-capture rows whose
+/// `root_session_id` is this row's id) on a page. One batched indexed
+/// lookup per kb (fan-out, #28), over the page's ids only. Type-pure
+/// half is [`apply_child_counts`] (unit-pinned). A failure folds to an
+/// empty map, so an id renders 0 — same posture as `memory_count`.
+async fn annotate_child_counts(state: &Arc<KbHandles>, rows: &mut [SessionOut]) {
+    if rows.is_empty() {
+        return;
+    }
+    let ids: Vec<String> = {
+        let mut k: Vec<String> = rows.iter().map(|r| r.session_id.clone()).collect();
+        k.sort();
+        k.dedup();
+        k
+    };
+    let ids = &ids;
+    let mut futs: Vec<super::CorpusFut<'_, Vec<(String, u32)>>> = Vec::new();
+    for (kb_name, ctx) in state.kbs.iter() {
+        futs.push(Box::pin(async move {
+            ctx.storage
+                .sessions_child_counts(ids.clone())
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!(kb = %kb_name, error = %e, "sessions_child_counts failed");
+                    Vec::new()
+                })
+        }));
+    }
+    let mut counts: HashMap<String, u32> = HashMap::new();
+    for per_kb in super::buffered_join(futs, state.fanout_cap).await {
+        for (k, n) in per_kb {
+            *counts.entry(k).or_insert(0) += n;
+        }
+    }
+    apply_child_counts(rows, &counts);
+}
+
+/// Pure half of [`annotate_child_counts`] (unit-pinned).
+fn apply_child_counts(rows: &mut [SessionOut], counts: &HashMap<String, u32>) {
+    for r in rows.iter_mut() {
+        r.child_count = counts.get(&r.session_id).copied().unwrap_or(0);
+    }
+}
 
 /// V0045/seg1 — `?collapse=` grammar: absent/`none` = every part is its own
 /// row (the default — nothing is hidden silently); `logical` = keep only the
@@ -658,6 +713,20 @@ fn parse_collapse(raw: Option<&str>) -> Result<bool, Response> {
         Some("logical") => Ok(true),
         Some(other) => Err(error_to_problem_json(&kb_core::Error::BadRequest(format!(
             "unknown collapse value {other:?} (expected `logical` or `none`)"
+        )))),
+    }
+}
+/// A3 — `?tree=` grammar: absent | `collapsed` = only rows with no tree
+/// root (the DEFAULT — subagent children hide and trees read as their
+/// roots); `flat` = every row; anything else is a 400 naming the allowed
+/// values.
+#[allow(clippy::result_large_err)]
+fn parse_tree(raw: Option<&str>) -> Result<bool, Response> {
+    match raw.map(str::trim) {
+        None | Some("") | Some("collapsed") => Ok(true),
+        Some("flat") => Ok(false),
+        Some(other) => Err(error_to_problem_json(&kb_core::Error::BadRequest(format!(
+            "unknown tree value {other:?} (expected `collapsed` or `flat`)"
         )))),
     }
 }
@@ -714,6 +783,10 @@ pub struct ListParams {
     /// `segment_*` fields so a long session is never silently hidden).
     /// `none`/absent = no collapse; any other value 400s.
     pub collapse: Option<String>,
+    /// A3 — `?tree=collapsed` (the default) hides subagent children
+    /// (`root_session_id IS NULL` in SQL); `tree=flat` shows every row;
+    /// any other value 400s.
+    pub tree: Option<String>,
 }
 
 /// `?undistilled=` truthiness: `1|true|yes` (case-insensitive) is on;
@@ -1021,6 +1094,9 @@ pub async fn list(
     if let Err(resp) = parse_collapse(params.collapse.as_deref()) {
         return resp;
     }
+    if let Err(resp) = parse_tree(params.tree.as_deref()) {
+        return resp;
+    }
     if !undistilled && params.since.is_none() {
         let (out, had_more) = list_page(
             &state,
@@ -1167,6 +1243,10 @@ async fn list_page(
     // full page even when one corpus dominates. Each per-kb fetch
     // honours the same `before` cursor so older pages stay coherent.
     let per_kb = limit.saturating_mul(2);
+    // A3 — validated by `list` before this point; a malformed value can
+    // only reach here through a future caller, where it reads as the
+    // default (`collapsed`).
+    let tree_collapsed = parse_tree(params.tree.as_deref()).unwrap_or(true);
     // V0045/seg1 — validated by `list` before this point; a malformed value
     // can only reach here through a future caller, where it reads as "off".
     let collapse_logical = parse_collapse(params.collapse.as_deref()).unwrap_or(false);
@@ -1192,6 +1272,7 @@ async fn list_page(
                     substance.to_vec(),
                     harness.to_vec(),
                     collapse_logical,
+                    tree_collapsed,
                 )
                 .await
             {
@@ -1229,6 +1310,7 @@ async fn list_page(
     let had_more = out.len() > limit as usize;
     out.truncate(limit as usize);
     annotate_segments(state, &mut out).await;
+    annotate_child_counts(state, &mut out).await;
     // Second pass — the page is now fixed, so fill `memory_count` for the
     // surviving rows ONLY, via ONE batched grouped count per corpus
     // (`count_docs_by_kb_session`: one projection scan each) fanned out
@@ -3426,6 +3508,28 @@ fn commit_files_unavailable() -> Json<CommitFilesResponse> {
         truncated: false,
     })
 }
+/// Shared tail of `commit_files` and the session card's `not_committed`
+/// lane: the touched files of one resolved commit row, when its
+/// capture-time git resolution produced the repo root and full sha to run
+/// git against. `None` marks unusable coverage (unresolved, or a
+/// resolved row whose resolution metadata is missing).
+pub(crate) async fn touched_files_for_commit(
+    row: &kb_core::storage::sqlite::SessionCommitRow,
+) -> Option<(Vec<kb_core::vcs::TouchedFile>, bool)> {
+    if !row.resolved {
+        return None;
+    }
+    let repo_root = row.repo_root.as_deref()?;
+    let sha_full = row.sha_full.as_deref()?;
+    Some(
+        kb_core::vcs::commit_touched_files(
+            std::path::Path::new(repo_root),
+            sha_full,
+            kb_core::vcs::TOUCHED_FILES_CAP,
+        )
+        .await,
+    )
+}
 
 /// `GET /api/sessions/{session_id}/commits/{sha}/files` — the files `sha`
 /// (one of `session_id`'s recorded commits) touched, each annotated with
@@ -3463,19 +3567,13 @@ pub async fn commit_files(
     let matched = rows.into_iter().find(|r| {
         r.sha.as_deref() == Some(sha.as_str()) || r.sha_full.as_deref() == Some(sha.as_str())
     });
-    let Some(matched) = matched.filter(|r| r.resolved) else {
+    let Some(matched) = matched else {
         return commit_files_unavailable();
     };
-    let (Some(repo_root), Some(sha_full)) = (matched.repo_root, matched.sha_full) else {
-        return commit_files_unavailable();
+    let (files, truncated) = match touched_files_for_commit(&matched).await {
+        Some(v) => v,
+        None => return commit_files_unavailable(),
     };
-
-    let (files, truncated) = kb_core::vcs::commit_touched_files(
-        std::path::Path::new(&repo_root),
-        &sha_full,
-        kb_core::vcs::TOUCHED_FILES_CAP,
-    )
-    .await;
     Json(CommitFilesResponse {
         available: true,
         files: files.into_iter().map(TouchedFileOut::from).collect(),
@@ -5496,6 +5594,7 @@ pub async fn get(
         return error_to_problem_json(&kb_core::Error::NotFound(format!("session {session_id}")));
     };
     annotate_segments(&state, std::slice::from_mut(&mut session)).await;
+    annotate_child_counts(&state, std::slice::from_mut(&mut session)).await;
     // memory_ids: scan every kb and concatenate. Bounded by
     // PER_SESSION_MEMORY_LIMIT per corpus so a runaway script can't
     // blow out the response. V0045/seg1 — for a chain's raw id the scan
@@ -8326,6 +8425,13 @@ pub struct LiveStatusRow {
     #[cfg_attr(feature = "ts-export", ts(optional))]
     pub title: Option<String>,
     pub resume: String,
+    /// A3 — the id `resume` was built from (the tree root for a child,
+    /// else the row's own id). Not serialised: a copy-paste command does
+    /// not get its own id field; it exists so the non-loopback scrub can
+    /// rebuild `resume` (without `--cwd`) against the same id.
+    #[serde(skip)]
+    #[cfg_attr(feature = "ts-export", ts(skip))]
+    pub resume_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-export", ts(optional))]
     pub last_line: Option<String>,
@@ -8477,7 +8583,13 @@ fn redact_for_non_loopback(row: &mut LiveStatusRow) {
     // AH3 — the resume string must not re-leak what this floor removes: a grok
     // command carries `--cwd <full path>`, so a non-loopback reader gets it rebuilt
     // without one (invariant #11 LSC forced-scrub floor).
-    row.resume = resume_command(&row.harness, &row.session_id, None);
+    // A3 — rebuild against the id the command was built from (the root),
+    // never the row's own id.
+    row.resume = resume_command(
+        &row.harness,
+        row.resume_id.as_deref().unwrap_or(&row.session_id),
+        None,
+    );
     if let Some(cwd) = row.cwd.take() {
         let base = std::path::Path::new(&cwd)
             .file_name()
@@ -8512,6 +8624,21 @@ fn redact_for_non_loopback(row: &mut LiveStatusRow) {
                 .any(|&n| n > BACKGROUND_COUNT_MAX)
     }) {
         row.background = None;
+    }
+}
+/// A3 — point every registry (hook) row at its `sessions_root_of` target
+/// (its tree root, its segment head, else itself). A row with no lookup
+/// result keeps the resume it was built with (drop-on-error). Pure half
+/// of the live-status registry-root resolution (unit-pinned).
+fn apply_registry_roots(rows: &mut [LiveStatusRow], roots: &HashMap<String, String>) {
+    for r in rows.iter_mut() {
+        if r.source != StateSource::Hook {
+            continue;
+        }
+        if let Some(root) = roots.get(&r.session_id) {
+            r.resume_id = Some(root.clone());
+            r.resume = resume_command(&r.harness, root, r.cwd.as_deref());
+        }
     }
 }
 
@@ -8629,6 +8756,9 @@ pub async fn live_status(
             };
             LiveStatusRow {
                 resume: resume_command(&r.harness, &r.session_id, r.cwd.as_deref()),
+                // A3 — resolved to the tree root (or left `None`) by the
+                // batched `sessions_root_of` step before this returns.
+                resume_id: None,
                 session_id: r.session_id,
                 harness: r.harness,
                 holder: r.holder,
@@ -8713,8 +8843,16 @@ pub async fn live_status(
                             kb_core::sessions::OUTCOME_WIRE_MAX_CHARS,
                         )
                     });
+                    // A3 — a capture row resumes its root, not its own id.
+                    let resume_id = row.root_session_id.clone();
+                    let resume = resume_command(
+                        &row.harness,
+                        resume_id.as_deref().unwrap_or(&row.session_id),
+                        row.cwd.as_deref(),
+                    );
                     LiveStatusRow {
-                        resume: resume_command(&row.harness, &row.session_id, row.cwd.as_deref()),
+                        resume,
+                        resume_id,
                         session_id: row.session_id,
                         harness: row.harness,
                         holder: Holder::Human,
@@ -8754,6 +8892,42 @@ pub async fn live_status(
         .flatten()
         .collect();
     rows.extend(tier0);
+    // A3 — registry (hook) rows have no capture row at hand: resolve their
+    // resume target to the tree root through ONE batched
+    // `sessions_root_of` across all kbs (drop-on-error → own id).
+    {
+        let hook_ids: Vec<String> = rows
+            .iter()
+            .filter(|r| r.source == StateSource::Hook)
+            .map(|r| r.session_id.clone())
+            .collect();
+        if !hook_ids.is_empty() {
+            let hook_ids_ref = &hook_ids;
+            let mut futs: Vec<super::CorpusFut<'_, Vec<(String, String)>>> = Vec::new();
+            for (kb_name, ctx) in state.kbs.iter() {
+                futs.push(Box::pin(async move {
+                    ctx.storage
+                        .sessions_root_of(hook_ids_ref.clone())
+                        .await
+                        .unwrap_or_else(|e| {
+                            tracing::warn!(
+                                kb = %kb_name,
+                                error = %e,
+                                "sessions_root_of failed in live_status"
+                            );
+                            Vec::new()
+                        })
+                }));
+            }
+            let mut roots: HashMap<String, String> = HashMap::new();
+            for per_kb in super::buffered_join(futs, state.fanout_cap).await {
+                for (sid, root) in per_kb {
+                    roots.entry(sid).or_insert(root);
+                }
+            }
+            apply_registry_roots(&mut rows, &roots);
+        }
+    }
 
     if wants_raw_flag(&q.blocked) {
         // Eight hours of silence ends the claim, as for any agent row.
@@ -8979,6 +9153,7 @@ mod lsc2_tests {
             model: None,
             title: Some("t".to_string()),
             resume: format!("claude -r {session_id}"),
+            resume_id: None,
             last_line: Some("hello world".to_string()),
             kb: None,
             artifact_id: None,
@@ -10658,7 +10833,7 @@ async fn lookup_session(state: &Arc<KbHandles>, session_id: &str) -> Option<Sess
 
 /// Locate a session AND fill its `memory_count` (the cross-kb count fan-out).
 /// Used by the single-session detail routes where the count is surfaced.
-async fn find_session(state: &Arc<KbHandles>, session_id: &str) -> Option<SessionOut> {
+pub(crate) async fn find_session(state: &Arc<KbHandles>, session_id: &str) -> Option<SessionOut> {
     let mut found = lookup_session(state, session_id).await;
     if let Some(so) = found.as_mut() {
         so.memory_count = count_memories_for_session(state, &so.session_id).await;
@@ -11240,6 +11415,104 @@ mod evidence_wire_tests {
         assert_eq!(v["parent_session_id"], "par1");
         assert_eq!(v["root_session_id"], "root1");
         assert_eq!(v["project_slug"], "my-proj");
+        // A3 — the ONE deliberate wire diff for any row: child_count.
+        assert_eq!(v["child_count"], 0);
+    }
+
+    #[test]
+    fn resume_targets_the_root_for_omp_children() {
+        let mut child = row(None, 1, 0);
+        child.session_id = "child-1".into();
+        child.harness = "omp".into();
+        child.parent_session_id = Some("tree-root".into());
+        child.root_session_id = Some("tree-root".into());
+        let out = SessionOut::from_row("smoke", child);
+        assert_eq!(
+            out.resume, "omp -r tree-root",
+            "an omp child must resume the root (omp resumes only top-level sessions)"
+        );
+        // A segment part without a root keeps its chain head.
+        let mut part = row(None, 1, 0);
+        part.session_id = "raw-p02".into();
+        part.harness = "omp".into();
+        part.segment_of = Some("raw".into());
+        let out = SessionOut::from_row("smoke", part);
+        assert_eq!(out.resume, "omp -r raw");
+        // Neither root nor segment: its own id.
+        let mut plain = row(None, 1, 0);
+        plain.session_id = "plain-1".into();
+        plain.harness = "omp".into();
+        let out = SessionOut::from_row("smoke", plain);
+        assert_eq!(out.resume, "omp -r plain-1");
+    }
+
+    #[test]
+    fn tree_param_grammar_is_closed_and_collapsed_is_default() {
+        assert_eq!(parse_tree(None).unwrap(), true);
+        assert_eq!(parse_tree(Some("")).unwrap(), true);
+        assert_eq!(parse_tree(Some("collapsed")).unwrap(), true);
+        assert_eq!(parse_tree(Some("flat")).unwrap(), false);
+        let resp = parse_tree(Some("weird")).unwrap_err();
+        assert_eq!(resp.status(), axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn apply_registry_roots_points_hook_rows_at_their_root() {
+        use kb_core::sessions::live::StateSource;
+        let mut reg = row(LiveState::Working, 10, "child-1");
+        reg.harness = "omp".into();
+        reg.cwd = Some("/w/x".into());
+        // A registry row with no lookup result keeps its own resume.
+        let mut orphan = row(LiveState::Waiting, 5, "ghost");
+        orphan.harness = "omp".into();
+        let mut rows = vec![reg, orphan];
+        let mut roots = HashMap::new();
+        roots.insert("child-1".to_string(), "tree-root".to_string());
+        apply_registry_roots(&mut rows, &roots);
+        assert_eq!(rows[0].resume, "omp -r tree-root");
+        assert_eq!(rows[0].resume_id.as_deref(), Some("tree-root"));
+        assert_eq!(rows[1].resume, "claude -r ghost");
+        assert_eq!(rows[1].resume_id, None);
+        // Capture-sourced rows are never rewritten by this step.
+        let mut cap = row(LiveState::Cold, 3, "child-2");
+        cap.source = StateSource::Capture;
+        cap.resume = "omp -r child-2".into();
+        let mut roots2 = HashMap::new();
+        roots2.insert("child-2".to_string(), "tree-root".to_string());
+        apply_registry_roots(std::slice::from_mut(&mut cap), &roots2);
+        assert_eq!(cap.resume, "omp -r child-2");
+    }
+
+    #[test]
+    fn redact_rebuilds_a_rooted_resume_without_the_cwd() {
+        let mut r = row(LiveState::Working, 9, "child-9");
+        r.harness = "grok".into();
+        r.cwd = Some("/some/deep/work tree".into());
+        r.resume = resume_command("grok", "tree-root", Some("/some/deep/work tree"));
+        assert!(r.resume.contains("--cwd"), "precondition: {:?}", r.resume);
+        r.resume_id = Some("tree-root".into());
+        redact_for_non_loopback(&mut r);
+        assert_eq!(r.resume, "grok -r tree-root");
+        // Without a resume_id the row's own id is used (drop-on-error).
+        let mut r = row(LiveState::Working, 9, "own-9");
+        r.harness = "grok".into();
+        r.resume = resume_command("grok", "own-9", Some("/w/x"));
+        redact_for_non_loopback(&mut r);
+        assert_eq!(r.resume, "grok -r own-9");
+    }
+
+    #[test]
+    fn apply_child_counts_fills_only_listed_rows() {
+        let mut a = row(None, 1, 0);
+        a.session_id = "a".into();
+        let mut b = row(None, 1, 0);
+        b.session_id = "b".into();
+        let mut rows = vec![SessionOut::from_row("k", a), SessionOut::from_row("k", b)];
+        let mut counts = HashMap::new();
+        counts.insert("a".to_string(), 7u32);
+        apply_child_counts(&mut rows, &counts);
+        assert_eq!(rows[0].child_count, 7);
+        assert_eq!(rows[1].child_count, 0);
     }
 
     #[test]
