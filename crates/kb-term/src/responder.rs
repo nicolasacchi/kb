@@ -771,4 +771,29 @@ mod tests {
         assert_eq!(r.queries_answered() - before, 2);
         assert_eq!(r.queries_answered(), 2);
     }
+
+    #[tokio::test]
+    async fn pump_counts_every_query_over_a_pty_pair() {
+        // The shared counter the pump moves per batch: feed two queries
+        // in ONE write to the slave side and wait for the handle to
+        // report both answered (fails if the pump drops/miscounts the
+        // shared fetch_add).
+        let (master, slave) = crate::pty::open_pty(80, 24, 720, 432).unwrap();
+        let reader = crate::pty::async_fd_dup(&master).unwrap();
+        let writer = crate::pty::async_fd_dup(&master).unwrap();
+        let handle = spawn_pump(reader, writer, ResponderCfg::default());
+        use std::io::Write as _;
+        let mut slave: std::fs::File = slave.into();
+        slave.write_all(b"\x1b[c\x1b[>q").unwrap();
+        let got = tokio::time::timeout(Duration::from_secs(5), async {
+            while handle.queries_answered() < 2 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .is_ok();
+        assert!(got, "pump must reach 2 answered queries");
+        assert_eq!(handle.queries_answered(), 2);
+        assert!(handle.bytes_drained() > 0);
+    }
 }

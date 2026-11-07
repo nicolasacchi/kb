@@ -1106,6 +1106,23 @@ async fn term_int_identity_is_the_kb_profile() {
         },
     )
     .await;
+    // The brief's identity setup: anchor + viewer at grid 100x30,
+    // cell 9x18. Launch boots at 120x40, so take the grid before the
+    // identity assertions run.
+    let grid_data = dispatch_ok(
+        &tr,
+        Request::TakeSize {
+            id: id.clone(),
+            cols: 100,
+            rows: 30,
+            owner: "a".to_string(),
+            force: false,
+        },
+    )
+    .await;
+    assert_eq!(grid_data["cols"].as_u64().unwrap(), 100);
+    assert_eq!(grid_data["rows"].as_u64().unwrap(), 30);
+    assert_eq!(grid_data["owner"], "a");
     // Every non-control client is the kb profile: TERM xterm-256color,
     // termtype kb-term, no sixel. (The fake tap is a control client.)
     let sock = tr.sock(&id);
@@ -1182,8 +1199,10 @@ async fn term_int_identity_is_the_kb_profile() {
         "pane log must carry the OSC 11 bg reply and the 16t answer: {}",
         read_log(&log)
     );
-    // Winsize pin (behavioral): the pane's own `stty size` is launched at
-    // 120x40; the identity proof above is the OSC reply.
+    // Winsize pin (behavioral): the take above moved the session to the
+    // brief's 100x30 grid; the identity proof above is the OSC reply.
+    // (The pane tile is checked below in the take_size test: tmux
+    // derives the pane winsize from this window, one pane per window.)
     let (ok, size) = tr.tmux(
         &sock,
         &[
@@ -1194,7 +1213,7 @@ async fn term_int_identity_is_the_kb_profile() {
             "#{window_width}x#{window_height}",
         ],
     );
-    assert!(ok && size == "120x40", "window 120x40: {size}");
+    assert!(ok && size == "100x30", "window 100x30: {size}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1224,8 +1243,12 @@ async fn term_int_keys_reach_the_pane_unsplit() {
         },
     )
     .await;
+    // Exact-line assertions: the probe logs one hex line per read, and
+    // tmux emits one write per key, so each key is one line. Substring
+    // matches would also fire inside longer hex ("02" in "025").
     let ok = poll_log(&log, Duration::from_secs(10), |text| {
-        text.contains("02") && text.contains("25") && text.contains("1b5b31333b3275")
+        let lines: std::collections::HashSet<&str> = text.lines().collect();
+        lines.contains("02") && lines.contains("25") && lines.contains("1b5b31333b3275")
     })
     .await;
     assert!(ok, "keys must reach the pane verbatim: {}", read_log(&log));
@@ -1477,6 +1500,20 @@ async fn term_int_take_size_moves_the_window_and_a_foreign_owner_is_refused() {
         ],
     );
     assert_eq!(size, "100x30", "window after take");
+    // The pane tile agrees with the window (what an in-pane
+    // `stty size` would print: tmux sizes the pane tty from the
+    // window, one pane per window).
+    let (_, pane) = tr.tmux(
+        &sock,
+        &[
+            "display-message",
+            "-p",
+            "-t",
+            "kb",
+            "#{pane_width}x#{pane_height}",
+        ],
+    );
+    assert_eq!(pane, "100x30", "pane tile after take");
     // Typing through an extra hidden client never moves the grid.
     dispatch_ok(
         &tr,
@@ -1750,10 +1787,19 @@ async fn term_int_viewers_are_drained_and_never_slow_the_pane() {
     for v in ["v1", "v2", "v3"] {
         let stats = tr.runner.viewer_stats(&id, v).await;
         assert!(stats.is_some(), "viewer {v} must exist");
-        assert!(stats.unwrap().0 > 0, "viewer {v} must have drained output");
+        let (drained, answered) = stats.unwrap();
+        assert!(drained > 0, "viewer {v} must have drained output");
+        assert!(
+            answered > 0,
+            "viewer {v} pump must have answered tmux queries: {answered}"
+        );
     }
     let anchor = tr.runner.anchor_stats(&id).await;
     assert!(anchor.is_some() && anchor.unwrap().0 > 0);
+    assert!(
+        anchor.unwrap().1 > 0,
+        "anchor pump must have answered tmux queries"
+    );
     // Closing a viewer removes it from list-clients. The drop path
     // SIGTERMs (does not SIGHUP/close the master synchronously and does
     // not reap inline), so poll until the pid leaves before asserting.
@@ -1797,7 +1843,7 @@ async fn term_int_viewers_are_drained_and_never_slow_the_pane() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn term_int_anchor_death_closes_viewers_without_an_open() {
+async fn term_int_anchor_death_closes_viewers_promptly_without_an_rpc() {
     let Some(tmux_bin) = require_tmux() else {
         return;
     };
