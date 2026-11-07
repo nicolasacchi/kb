@@ -4640,9 +4640,12 @@ mod tests {
     fn image_never_becomes_the_outcome() {
         let prose =
             "The header moved down by one row, and the search box stayed put exactly where it was.";
+        let second = format!(
+            r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{prose}"}}]}}}}"#
+        );
         let jsonl = [
             r#"{"type":"user","uuid":"00000001-0000-4000-8000-000000000001","timestamp":"2026-06-04T09:00:10.000Z","message":{"role":"user","content":[{"type":"text","text":"look"}]}}"#,
-            format!(r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{prose}"}}]}}}}"#),
+            second.as_str(),
             r#"{"type":"user","uuid":"00000002-0000-4000-8000-000000000002","timestamp":"2026-06-04T09:00:20.000Z","message":{"role":"user","content":[{"type":"text","text":"again"}]}}"#,
             r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"image","source":{"type":"blob_ref","media_type":"image/png","sha256":"abababababababababababababababababababababababababababababababab"}}]}}"#,
         ]
