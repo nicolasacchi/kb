@@ -265,7 +265,7 @@ test("exit 3 is surfaced as a REFUSAL that quotes the holder line", async () => 
   expect(text).toContain("anyway");
 });
 
-test("session_start exports KB_SESSION_ID/KB_HARNESS so shell kb writes are attributed", async () => {
+test("session_start exports KB_SESSION_ID/KB_HARNESS for the MAIN agent so shell kb writes are attributed", async () => {
   delete process.env.KB_SESSION_ID;
   delete process.env.KB_HARNESS;
   const { handlers } = makePi();

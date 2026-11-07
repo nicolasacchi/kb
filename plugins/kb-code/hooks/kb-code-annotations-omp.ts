@@ -206,11 +206,17 @@ export default function kbCodeAnnotationsOmp(pi: {
         sid = String(ctx?.sessionManager?.getSessionId?.() ?? "");
       } catch {}
       if (!sid) return;
-      // v0.44 X4 — same identity export as kb-memory's kb-omp.ts: the
-      // kb-code CLI's author ladder reads KB_HARNESS, so a shell
+      // v0.44 X4 — same identity export as kb-memory's kb-omp.ts (main agent
+      // only): the kb-code CLI's author ladder reads KB_HARNESS, so a shell
       // `kb-code annotate` the agent runs is saved as `omp`, not `claude`.
-      process.env.KB_SESSION_ID = sid;
-      process.env.KB_HARNESS = "omp";
+      let isSub = false;
+      try {
+        isSub = ctx?.agent?.kind === "sub";
+      } catch {}
+      if (!isSub) {
+        process.env.KB_SESSION_ID = sid;
+        process.env.KB_HARNESS = "omp";
+      }
 
       const cwd = (typeof ctx?.cwd === "string" && ctx.cwd) || process.cwd();
       const filePath = toAbsolute(resolveTouchedPath(event), cwd);

@@ -60,11 +60,12 @@ command -v jq >/dev/null 2>&1 || exit 0
 
 TRANSLATE='
   def msts($t): if ($t | type) == "number" then (($t / 1000) | todate) else $created end;
+  def ju: (($ENV.KB_JOB_ULID // "") | if test("^[A-Za-z0-9_-]{1,64}$") then . else "" end);
   . as $l |
   if $l.type == "metadata" then
     {sessionId: $sid, type: "adapter-meta", adapter: "kb-capture-kimi/1",
      harness: "kimi", wire_path: $wire, cwd: $cwd,
-     timestamp: msts($l.created_at)}
+     timestamp: msts($l.created_at)} + (if ju != "" then {job_ulid: ju} else {} end)
   elif $l.type == "turn.prompt" and ($l.origin.kind // "") == "user" then
     (if ($l.input | type) == "string"
      then (try ($l.input | fromjson) catch [])

@@ -6,6 +6,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod adapter_codex;
 mod adapter_grok;
 mod adapter_opencode;
 mod atlas;
