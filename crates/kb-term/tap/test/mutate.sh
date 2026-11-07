@@ -28,11 +28,14 @@ fi
 mut() {
   local target="$1" a="$2" b="$3"
   cp "$TMP/$(basename "$target").orig" "$TMP/mp/tap/$target"
-  python3 -I -c "
+  if ! python3 -I -c "
 import sys
 s=open('$target').read(); a,b=sys.argv[1],sys.argv[2]
 assert a in s, 'stale anchor: '+a[:80]
-open('$target','w').write(s.replace(a,b,1))" "$a" "$b" || return
+open('$target','w').write(s.replace(a,b,1))" "$a" "$b"; then
+    echo "mutate.sh: stale anchor for mutant $((n+1)) in $target; aborting" >&2
+    exit 1
+  fi
   out=$(bun test --bail --timeout 300000 test/fuzz.test.ts test/strip.test.ts test/differential.test.ts test/decode.test.ts 2>&1)
   ec=$?
   n=$((n+1))
@@ -83,4 +86,4 @@ mut src/decode.ts "    if (this.block) {" "    if (false) {"
 mut src/decode.ts "      out[o++] = ((v[i + 1] - 0x30) << 6) | ((v[i + 2] - 0x30) << 3) | (v[i + 3] - 0x30);" "      out[o++] = ((v[i + 1] - 0x30) << 6) | ((v[i + 2] - 0x30) << 3);"
 
 echo "mutants=$n survivors=$surv"
-[ "$surv" = 0 ]
+[ "$n" = 11 ] && [ "$surv" = 0 ]
