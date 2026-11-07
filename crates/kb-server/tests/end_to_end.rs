@@ -433,11 +433,67 @@ async fn sessions_backfill_project_key_route_is_dry_run_by_default() {
     assert_eq!(applied["apply"], true, "{applied}");
 }
 
+/// V0047 — the tree backfill is a daemon route (the storage actor stays
+/// the single writer): a dry run reports `would_change` and writes
+/// nothing; `apply=true` fills the NULL lineage columns on matching omp
+/// rows and reports `changed`; a second apply is a no-op (never
+/// overwrites non-NULL).
 #[tokio::test]
 async fn backfill_tree_route_dry_run_then_apply() {
-    let (_tmp, addr) = boot().await;
+    let sid = "sid-tree-1";
+    let jsonl = format!(
+        "{{\"sessionId\":\"{sid}\",\"type\":\"adapter-meta\",\"adapter\":\"kb-capture-omp/1\",\"harness\":\"omp\"}}\n\
+         {{\"sessionId\":\"{sid}\",\"type\":\"user\",\"promptSource\":\"typed\",\"message\":{{\"role\":\"user\",\"content\":\"child work\"}}}}\n"
+    );
+    let global = vec![(
+        "session-20260601T100000Z-sid-tree-1.html",
+        session_transcript_html(sid, "20260601T100000Z", &jsonl),
+    )];
+    let (_tmp, addr) = boot_memory_corpora(&global, &[]).await;
     let client = reqwest::Client::new();
-    let body = serde_json::json!({"items": [{"session_id": "sid-missing", "parent_session_id": "par1", "root_session_id": "root1"}]});
+    // Wait for the enrichment row (harness=omp, NULL lineage) to land.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let rows: serde_json::Value = client
+            .get(url(addr, "/api/sessions?limit=100"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if rows["sessions"]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|r| r["session_id"] == serde_json::json!(sid)))
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for {sid}: {rows}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let get_detail = |sid: String| {
+        let client = client.clone();
+        async move {
+            let resp = client
+                .get(url(addr, &format!("/api/sessions/{sid}")))
+                .send()
+                .await
+                .unwrap();
+            resp.json::<serde_json::Value>().await.unwrap()
+        }
+    };
+    // Baseline: a lineage-less row serialises without the keys.
+    let before = get_detail(sid.to_string()).await;
+    assert!(before.get("parent_session_id").is_none(), "{before}");
+    assert!(before.get("root_session_id").is_none(), "{before}");
+    assert!(before.get("project_slug").is_none(), "{before}");
+    let body = serde_json::json!({"items": [
+        {"session_id": "sid-tree-1", "parent_session_id": "par1", "root_session_id": "root1"},
+        {"session_id": "sid-missing", "parent_session_id": "par1", "root_session_id": "root1"},
+    ]});
     let dry: serde_json::Value = client
         .post(url(addr, "/api/sessions/backfill-tree"))
         .json(&body)
@@ -448,8 +504,12 @@ async fn backfill_tree_route_dry_run_then_apply() {
         .await
         .unwrap();
     assert_eq!(dry["apply"], false, "{dry}");
+    assert_eq!(dry["would_change"], 1, "{dry}");
     assert_eq!(dry["changed"], 0, "{dry}");
     assert_eq!(dry["unmatched"], 1, "{dry}");
+    // Dry-run writes nothing: the row is still lineage-less.
+    let after_dry = get_detail(sid.to_string()).await;
+    assert!(after_dry.get("parent_session_id").is_none(), "{after_dry}");
     let applied: serde_json::Value = client
         .post(url(addr, "/api/sessions/backfill-tree?apply=true"))
         .json(&body)
@@ -460,7 +520,27 @@ async fn backfill_tree_route_dry_run_then_apply() {
         .await
         .unwrap();
     assert_eq!(applied["apply"], true, "{applied}");
+    assert_eq!(applied["would_change"], 1, "{applied}");
+    assert_eq!(applied["changed"], 1, "{applied}");
     assert_eq!(applied["unmatched"], 1, "{applied}");
+    let after = get_detail(sid.to_string()).await;
+    assert_eq!(after["parent_session_id"], "par1", "{after}");
+    assert_eq!(after["root_session_id"], "root1", "{after}");
+    // A second apply is a no-op and never overwrites the filled columns.
+    let again: serde_json::Value = client
+        .post(url(addr, "/api/sessions/backfill-tree?apply=true"))
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(again["would_change"], 0, "{again}");
+    assert_eq!(again["changed"], 0, "{again}");
+    assert_eq!(again["unmatched"], 1, "{again}");
+    let final_row = get_detail(sid.to_string()).await;
+    assert_eq!(final_row["parent_session_id"], "par1", "{final_row}");
 }
 
 #[tokio::test]

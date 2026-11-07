@@ -808,11 +808,14 @@ fn parse_session_activity_lines<S: AsRef<str>>(
             }
         }
 
-        // V0047 — session lineage: the first adapter-meta record's
+        // V0047 — session lineage: the adapter-meta record's
         // `parentSessionId` / `rootSessionId`, plain-token validated
         // key-by-key (an invalid parent never blocks a valid root). A root
-        // equal to the record's own `sessionId` is ignored. SURFACED,
-        // never scored (invariant #11).
+        // equal to the record's own `sessionId` is ignored. Reads the first
+        // adapter-meta record carrying valid keys for each id (the same
+        // `is_none()` first-writer idiom as the neighbours above, not a
+        // strict first-record lock). SURFACED, never scored
+        // (invariant #11).
         if act.parent_session_id.is_none()
             && act.root_session_id.is_none()
             && v.get("type").and_then(|x| x.as_str()) == Some("adapter-meta")
