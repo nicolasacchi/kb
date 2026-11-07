@@ -1467,7 +1467,9 @@ mod tests {
         let label = image_label(
             image["mime"].as_str().unwrap(),
             image["sha256"].as_str(),
-            image["inline_bytes"].as_u64().map(|n| u32::try_from(n).unwrap_or(u32::MAX)),
+            image["inline_bytes"]
+                .as_u64()
+                .map(|n| u32::try_from(n).unwrap_or(u32::MAX)),
         );
         // CLI renders the same label behind the ▣ glyph…
         let cli = render_view(&wire, &opts());
