@@ -6413,8 +6413,8 @@ impl Db {
             "SELECT key, COUNT(*) FROM (\
                SELECT session_id, root_session_id AS key FROM sessions \
                WHERE is_newest = 1 AND root_session_id IS NOT NULL \
-                 AND root_session_id IN ({ph})\
-               UNION\
+                 AND root_session_id IN ({ph}) \
+               UNION \
                SELECT session_id, parent_session_id AS key FROM sessions \
                WHERE is_newest = 1 AND parent_session_id IS NOT NULL \
                  AND parent_session_id IN ({ph}))\

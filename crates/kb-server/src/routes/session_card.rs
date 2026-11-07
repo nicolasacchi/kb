@@ -42,7 +42,7 @@ const CARD_SLATE_CAP: usize = 20;
 const CARD_CHILDREN_CAP: u32 = 50;
 const CARD_PRODUCED_CAP: usize = 50;
 const HISTORY_SCAN_CAP: u32 = 500;
-const RAISED_SCAN_CAP: u64 = 1000;
+const RAISED_SCAN_CAP: u32 = 1000;
 const RAISED_WINDOW_FALLBACK_SECS: i64 = 86_400;
 const PER_SESSION_MEMORY_LIMIT: u32 = 100;
 
@@ -136,7 +136,7 @@ async fn children_page(
                 .sessions_children_page(
                     root_of,
                     parent_of,
-                    after.as_ref().map(|(a, s)| (*a, s.as_str())),
+                    after.as_ref().map(|(a, s)| (*a, s.clone())),
                     fetch_limit,
                 )
                 .await
@@ -426,9 +426,10 @@ async fn research_lane(state: &Arc<KbHandles>, session_id: &str) -> ResearchLane
     let mut futs: Vec<super::CorpusFut<'_, Vec<kb_core::storage::sqlite::SessionResearchRow>>> =
         Vec::new();
     for (kb_name, ctx) in state.kbs.iter() {
+        let session_id = session_id.clone();
         futs.push(Box::pin(async move {
             ctx.storage
-                .session_research_for_session(session_id.clone())
+                .session_research_for_session(session_id)
                 .await
                 .unwrap_or_else(|e| {
                     tracing::warn!(kb = %kb_name, error = %e, "session_research_for_session failed in card");
@@ -547,7 +548,7 @@ async fn comments_lane(state: &Arc<KbHandles>, session: &SessionOut) -> Comments
                         .to_string(),
                         body: c.body.clone(),
                         file_label: c.file_label.clone(),
-                        created_at: c.created_at,
+                        created_at: c.created_at.timestamp(),
                         status: "open".to_string(),
                         touched: true,
                     });
@@ -716,7 +717,7 @@ async fn readings_lane(state: &Arc<KbHandles>, session: &SessionOut) -> Readings
                         .reading_latest_for_artifact(artifact_id.clone(), operator.clone())
                         .await
                     {
-                        Ok(Some((pct, last, _))) => (Some(pct), last),
+                        Ok(Some((pct, last, _))) => (Some(f64::from(pct)), last),
                         _ => (None, None),
                     }
                 } else {
