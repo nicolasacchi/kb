@@ -1363,6 +1363,9 @@ pub(crate) fn closing_text_from_prose_candidates<'a>(
             continue;
         }
         // Image placeholders the view injects are never a closure.
+        // Item::Image is not Prose and can never be a closure; this guard
+        // still earns its keep for unrecognised shapes, which stay the
+        // literal.
         if text == "[image attachment]" {
             continue;
         }
