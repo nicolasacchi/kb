@@ -227,7 +227,7 @@ fn valid_exit_key(k: &str) -> bool {
 /// Launch one session (the full start order). Generic over the tmux driver
 /// and the supervisor; the production [`Runner`] calls this with the real
 /// driver, and the unit tests with the fakes.
-pub async fn launch_session<T: Tmux, S: Supervisor>(
+pub async fn launch_session<S: Supervisor>(
     runner: &Runner<S>,
     spec: ValidatedLaunch,
 ) -> Result<LaunchOutcome, RunnerError> {
@@ -253,7 +253,7 @@ pub async fn launch_session<T: Tmux, S: Supervisor>(
     }
 }
 
-async fn launch_locked<T: Tmux, S: Supervisor>(
+async fn launch_locked<S: Supervisor>(
     runner: &Runner<S>,
     id: &str,
     spec: &ValidatedLaunch,
@@ -262,7 +262,7 @@ async fn launch_locked<T: Tmux, S: Supervisor>(
     // Step 2: start the holder; poll until the server answers (5 s).
     runner.supervisor.start_holder(id).await?;
     create_session_dir(runner, id).await?;
-    poll_until(
+    let ready = poll_until(
         Duration::from_secs(5),
         Duration::from_millis(50),
         || async {
@@ -273,8 +273,12 @@ async fn launch_locked<T: Tmux, S: Supervisor>(
             matches!(out, Ok(o) if o.ok)
         },
     )
-    .await
-    .ok_or_else(|| RunnerError::TmuxFailed(format!("holder for {id} did not answer")))?;
+    .await;
+    if !ready {
+        return Err(RunnerError::TmuxFailed(format!(
+            "holder for {id} did not answer"
+        )));
+    }
     // Step 3: create the session (the pane command is the gate).
     let args = gate_argv(
         &runner.cfg.tmux_bin,
@@ -383,7 +387,7 @@ async fn create_session_dir<S: Supervisor>(
     Ok(())
 }
 
-async fn set_user_options<T: Tmux, S: Supervisor>(
+async fn set_user_options<S: Supervisor>(
     runner: &Runner<S>,
     sock: &Path,
     id: &str,
@@ -478,7 +482,7 @@ pub async fn control_client_present<T: Tmux, S: Supervisor>(
     matches!(out, Ok(o) if o.ok && o.stdout.lines().any(|l| l.contains("control-mode")))
 }
 
-async fn wait_for_control_client<T: Tmux, S: Supervisor>(
+async fn wait_for_control_client<S: Supervisor>(
     runner: &Runner<S>,
     sock: &Path,
     timeout: Duration,

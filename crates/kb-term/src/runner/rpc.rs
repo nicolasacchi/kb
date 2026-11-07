@@ -16,6 +16,7 @@ use crate::runner::ids::{valid_harness, valid_id};
 use crate::runner::kill;
 use crate::runner::launch;
 use crate::runner::supervisor::Supervisor;
+use crate::runner::tmux::Tmux;
 use crate::runner::{Runner, RunnerError};
 use crate::wire::{Request, Response};
 

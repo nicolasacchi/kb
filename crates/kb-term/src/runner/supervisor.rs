@@ -25,7 +25,7 @@ pub struct StopCtx {
 }
 
 /// How the runner starts and stops holders and taps.
-pub trait Supervisor {
+pub trait Supervisor: Send + Sync {
     /// Start the holder for `id` (`tmux -D` in its own session).
     fn start_holder(&self, id: &str) -> impl Future<Output = Result<(), RunnerError>>;
     /// Start the tap for `id` (no-op when no tap binary is configured).
@@ -278,7 +278,6 @@ pub mod fake {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn unit_files_pin_the_lifecycle() {

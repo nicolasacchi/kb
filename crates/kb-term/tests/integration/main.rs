@@ -670,8 +670,8 @@ async fn term_int_grid_is_fixed_until_resized() {
         .arg("kb")
         .env("TERM", "xterm-256color")
         .env("HOME", std::env::var("HOME").unwrap_or_default())
-        .stdin(master.try_clone_to_owned().unwrap())
-        .stdout(master.try_clone_to_owned().unwrap())
+        .stdin(master.try_clone().unwrap())
+        .stdout(master.try_clone().unwrap())
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("spawn raw client");
@@ -739,7 +739,15 @@ fn pty_pair(cols: u16, rows: u16) -> (std::fs::File, std::fs::File) {
     };
     let mut master: libc::c_int = -1;
     let mut slave: libc::c_int = -1;
-    let rc = unsafe { libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), &ws) };
+    let rc = unsafe {
+        libc::openpty(
+            &mut master,
+            &mut slave,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            &ws,
+        )
+    };
     assert_eq!(rc, 0, "openpty");
     use std::os::unix::io::FromRawFd;
     let master = unsafe { std::fs::File::from_raw_fd(master) };

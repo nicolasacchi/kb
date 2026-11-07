@@ -39,7 +39,7 @@ pub trait Tmux {
 
     /// The pinned tmux's `-V` output.
     async fn version(&self) -> Result<String, String> {
-        let out = self.run_global(&["-V"]).await?;
+        let out = self.run_global(&["-V"]).await.map_err(|e| e.message())?;
         if out.ok {
             Ok(out.stdout)
         } else {
