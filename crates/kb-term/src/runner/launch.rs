@@ -406,10 +406,13 @@ async fn set_user_options<S: Supervisor>(
     }
     // (step 6 writes `@kb_anchor_pid`; until then it reads as absent and
     // adoption treats that as "recreate".)
+    // tmux 3.7c's `set-option` has no `--` terminator: `key -- value`
+    // is parsed as option=`key`, value=`--`, extra arg → "too many
+    // arguments". Set the value directly after the option name.
     for (key, value) in opts {
         let out = runner
             .tmux
-            .run(sock, &["set-option", "-g", key, "--", &value], None)
+            .run(sock, &["set-option", "-g", key, &value], None)
             .await?;
         if !out.ok {
             return Err(RunnerError::TmuxFailed(format!(
@@ -504,7 +507,7 @@ pub async fn spawn_anchor_and_wait<S: Supervisor>(
         .tmux
         .run(
             &sock,
-            &["set-option", "-g", "@kb_anchor_pid", "--", &pid.to_string()],
+            &["set-option", "-g", "@kb_anchor_pid", &pid.to_string()],
             None,
         )
         .await?;

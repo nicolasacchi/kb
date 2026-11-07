@@ -73,25 +73,27 @@ fn run_tmux_file_probe(
         .arg(conf);
     let out = common::run_bounded(&mut cmd, Duration::from_secs(10)).unwrap();
     assert!(out.status.success(), "source-file -n must exit 0");
+    // `set -g` in the conf is class-agnostic, but a scope-less
+    // `show-options` only sees session/server options: window-size is a
+    // window option (-w), remain-on-exit and allow-passthrough are pane
+    // options (-p), exit-empty/extended-keys are server options (via -g).
     let checks = [
-        ("window-size", "manual"),
-        ("exit-empty", "off"),
-        ("mouse", "off"),
-        ("allow-passthrough", "off"),
-        ("history-limit", "50000"),
-        ("remain-on-exit", "on"),
-        ("extended-keys", "always"),
+        ("window-size", "manual", Some("-w")),
+        ("exit-empty", "off", None),
+        ("mouse", "off", None),
+        ("allow-passthrough", "off", Some("-p")),
+        ("history-limit", "50000", None),
+        ("remain-on-exit", "on", Some("-p")),
+        ("extended-keys", "always", None),
     ];
-    for (opt, want) in checks {
-        let out = Command::new(&tmux_bin)
-            .arg("-S")
-            .arg(sock)
-            .arg("show-options")
-            .arg("-g")
-            .arg("-v")
-            .arg(opt)
-            .output()
-            .unwrap();
+    for (opt, want, scope) in checks {
+        let mut cmd = Command::new(&tmux_bin);
+        cmd.arg("-S").arg(sock).arg("show-options").arg("-g");
+        if let Some(scope) = scope {
+            cmd.arg(scope);
+        }
+        cmd.arg("-v").arg(opt);
+        let out = common::run_bounded(&mut cmd, Duration::from_secs(10)).unwrap();
         let got = String::from_utf8_lossy(&out.stdout).trim().to_string();
         assert_eq!(got, want, "show-options {opt}");
     }
@@ -879,7 +881,6 @@ async fn term_int_runner_rejects_wrong_tmux_version() {
         .arg("--supervisor")
         .arg("direct")
         .arg("--require-tap")
-        .arg("false")
         .arg("--expected-tmux")
         .arg("9.9");
     let out = common::run_bounded(&mut cmd, Duration::from_secs(15)).unwrap();
