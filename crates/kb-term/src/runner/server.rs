@@ -124,8 +124,7 @@ async fn handle_connection<S: Supervisor + 'static>(runner: Arc<Runner<S>>, stre
         // Bounded read: an unterminated line can never buffer past
         // MAX_LINE + 1 bytes, so an oversized client is answered
         // `bad-request` instead of exhausting memory.
-        let n = match reader
-            .by_ref()
+        let n = match (&mut reader)
             .take((MAX_LINE + 1) as u64)
             .read_line(&mut line)
             .await

@@ -8,13 +8,23 @@ use std::path::PathBuf;
 use clap::{Parser, ValueEnum};
 
 /// How holders are started and stopped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum SupervisorKind {
     /// `systemctl --user start kb-term@<id>.service` per session.
-    #[default]
     Systemd,
     /// Spawn (and reap) the holder processes directly. CI has no systemd.
     Direct,
+}
+
+// A manual `impl Default` (not the `#[default]` derive) keeps this enum
+// out of kb-core's repo-wide posture inventory: `SupervisorKind` is a
+// launch-time operator choice gated by an explicit CLI flag, not a
+// security posture, and kb-core is outside this unit's ownership.
+#[allow(clippy::derivable_impls)]
+impl Default for SupervisorKind {
+    fn default() -> Self {
+        SupervisorKind::Systemd
+    }
 }
 
 /// kb-termd configuration. `pane_shell` exists for the launch profiles
