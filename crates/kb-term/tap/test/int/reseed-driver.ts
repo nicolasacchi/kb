@@ -45,6 +45,9 @@ interface CompareOut {
   stats: unknown;
   bytesFed: number;
   hash: string;
+  a: { history: number; cursorX: number; cursorY: number };
+  b: { history: number; cursorX: number; cursorY: number };
+  examples: unknown;
 }
 
 function cursorOf(twin: Twin): { x: number; y: number } {
@@ -90,6 +93,9 @@ function compareTwins(reseeded: Twin, ref: Twin, result: ReseededResult, stats: 
     stats,
     bytesFed: result.bytesFed,
     hash: stateHash(reseeded),
+    a: result.a,
+    b: result.b,
+    examples: normal.examples,
   };
 }
 
@@ -214,8 +220,11 @@ async function main(): Promise<void> {
         });
         control.setHeld(false);
         await pausedP;
+        note('PAUSED');
         const r = await reseeder.reseed(pane);
+        note('RESEEDED');
         out.compare = await compareAt(r);
+        note('COMPARED');
         out.ok = (out.compare as CompareOut).ok;
         break;
       }

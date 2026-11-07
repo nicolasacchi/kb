@@ -569,7 +569,15 @@ fn term_int_reseed_after_long_pause() {
             Ok(None) => {
                 if Instant::now() > deadline {
                     let _ = child.kill();
-                    panic!("pause driver exceeded 120s");
+                    let out = child.wait_with_output().expect("driver output");
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    let stdout = String::from_utf8_lossy(&out.stdout);
+                    let tail = |s: &str| s.lines().rev().take(20).collect::<Vec<_>>().join("\n");
+                    panic!(
+                        "pause driver exceeded 120s; driver stderr tail:\n{}\ndriver stdout tail:\n{}",
+                        tail(&stderr),
+                        tail(&stdout)
+                    );
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }

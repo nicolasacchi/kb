@@ -73,6 +73,8 @@ export interface ReseededResult {
   bytesFed: number;
   historySize: number;
   mode: ModeState | null;
+  a: ReseedMarker;
+  b: ReseedMarker;
 }
 
 export interface ReseedStats {
@@ -109,13 +111,14 @@ export class ReseedError extends Error {
   }
 }
 
-interface Marker {
+/** A/B capture markers: tmux's own `#{history_size} #{cursor_x} #{cursor_y}`. */
+export interface ReseedMarker {
   history: number;
   cursorX: number;
   cursorY: number;
 }
 
-function parseMarker(lines: string[] | undefined, tag: string): Marker | null {
+function parseMarker(lines: string[] | undefined, tag: string): ReseedMarker | null {
   if (!lines || lines.length === 0) return null;
   const parts = lines[0].split(/\s+/).filter((x) => x.length > 0);
   if (parts.length < 4 || parts[0] !== tag) return null;
@@ -444,7 +447,7 @@ export class Reseeder {
       await feedBytes(chunk);
     }
     active.queue = [];
-    return { ok: { bytesFed, historySize: b.history, mode } };
+    return { ok: { bytesFed, historySize: b.history, mode, a, b } };
   }
 }
 
