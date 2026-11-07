@@ -136,16 +136,15 @@ impl Responder {
 
     fn feed_byte(&mut self, byte: u8, out: &mut Vec<u8>) {
         match self.state {
-            State::Ground => match byte {
-                0x1B => {
+            State::Ground => {
+                // C1 bytes are ignored so UTF-8 continuations are never
+                // misread as C1 starts.
+                if byte == 0x1B {
                     self.state = State::Esc;
                     self.buf.clear();
                     self.ignoring = false;
                 }
-                // C1 bytes are ignored so UTF-8 continuations are never
-                // misread as C1 starts.
-                _ => {}
-            },
+            }
             State::Esc => match byte {
                 b'[' => {
                     self.state = State::Csi;
@@ -292,22 +291,20 @@ impl Responder {
                 return;
             }
         }
-        if final_byte == b'q' {
-            if params.starts_with(b">") {
-                let rest = &params[1..];
-                if rest.is_empty() || rest == b"0" {
-                    // Single DCS string: ESC P > | <name> <ver> ESC \
-                    // (8-bit `|` 0x7C marks XTVERSION for tmux; the ST
-                    // terminates the DCS, so the name is payload).
-                    let mut reply = b"\x1bP>|".to_vec();
-                    reply.extend_from_slice(XTVERSION_NAME.as_bytes());
-                    reply.push(b' ');
-                    reply.extend_from_slice(env!("CARGO_PKG_VERSION").as_bytes());
-                    reply.extend_from_slice(b"\x1b\\");
-                    self.answer(out, "xtversion", &reply);
-                }
-                return;
+        if final_byte == b'q' && params.starts_with(b">") {
+            let rest = &params[1..];
+            if rest.is_empty() || rest == b"0" {
+                // Single DCS string: ESC P > | <name> <ver> ESC \
+                // (8-bit `|` 0x7C marks XTVERSION for tmux; the ST
+                // terminates the DCS, so the name is payload).
+                let mut reply = b"\x1bP>|".to_vec();
+                reply.extend_from_slice(XTVERSION_NAME.as_bytes());
+                reply.push(b' ');
+                reply.extend_from_slice(env!("CARGO_PKG_VERSION").as_bytes());
+                reply.extend_from_slice(b"\x1b\\");
+                self.answer(out, "xtversion", &reply);
             }
+            return;
         }
         if final_byte == b'n' && params == b"?996" {
             let code = if self.cfg.dark { b"1" } else { b"2" };
@@ -648,7 +645,7 @@ mod tests {
     fn responder_overlong_sequences_are_dropped_not_answered_and_memory_stays_bounded() {
         // DA1 padded past 64 B: no reply, but a normal DA1 afterwards answers.
         let mut overlong = b"\x1b[".to_vec();
-        overlong.extend(std::iter::repeat(b'9').take(100));
+        overlong.extend([b'9'; 100]);
         overlong.extend_from_slice(b"c");
         let mut r = Responder::new(ResponderCfg::default());
         let mut out = Vec::new();
@@ -663,7 +660,7 @@ mod tests {
         assert_eq!(&out[..], DA1_REPLY);
         // OSC 11 query padded past 256 B: no reply; next query answers.
         let mut osc = b"\x1b]11;?".to_vec();
-        osc.extend(std::iter::repeat(b' ').take(300));
+        osc.extend([b' '; 300]);
         osc.extend_from_slice(b"\x07");
         let mut r = Responder::new(ResponderCfg::default());
         let mut out = Vec::new();

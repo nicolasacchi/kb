@@ -164,8 +164,7 @@ pub fn async_fd_dup(master: &OwnedFd) -> Result<AsyncFd<File>, RunnerError> {
     let file = unsafe { File::from_raw_fd(raw) };
     // SAFETY: `file` wraps a valid non-blocking pty fd; register takes
     // ownership of the fd.
-    Ok(unsafe { AsyncFd::register(file) }
-        .map_err(|e| RunnerError::Internal(format!("AsyncFd: {e}")))?)
+    unsafe { AsyncFd::register(file) }.map_err(|e| RunnerError::Internal(format!("AsyncFd: {e}")))
 }
 
 /// SIGTERM `pid` if it is still alive (caller checks pid != 0).

@@ -100,11 +100,6 @@ where
         runner.next_buffer_seq(id).await,
     )
     .await
-    .map(|outcome| {
-        // Recorded by the caller via the runner's per-session flag after
-        // success; the tee to the runner keeps this one canonical.
-        outcome
-    })
 }
 
 /// Validated paste against any [`Tmux`] (real or fake); the RPC records
@@ -203,8 +198,8 @@ mod tests {
         let out = paste_with(&fake, &sock(), "abcd1234", "ab", 65536, 1)
             .await
             .unwrap();
-        assert_eq!(out.bracketed, false);
-        assert_eq!(out.paste_only, false);
+        assert!(!out.bracketed);
+        assert!(!out.paste_only);
         // Multi-line, bracketed off: refused, nothing pasted (no
         // load-buffer call).
         let fake = fake_with(false);

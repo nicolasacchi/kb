@@ -267,7 +267,7 @@ pub mod fake {
             // set-option / resize-window); other keys fall back to the
             // canned script.
             match key {
-                "show-options" if args.iter().any(|a| *a == "@kb_owner_grid") => {
+                "show-options" if args.contains(&"@kb_owner_grid") => {
                     let owner = self.owner.lock().unwrap().clone().unwrap_or_default();
                     return Ok(TmuxOut {
                         ok: true,
@@ -275,8 +275,8 @@ pub mod fake {
                         stderr: String::new(),
                     });
                 }
-                "set-option" if args.iter().any(|a| *a == "@kb_owner_grid") => {
-                    let val = args.last().map(|s| *s).unwrap_or("");
+                "set-option" if args.contains(&"@kb_owner_grid") => {
+                    let val = args.last().copied().unwrap_or("");
                     let mut owner = self.owner.lock().unwrap();
                     *owner = if val.is_empty() {
                         None
