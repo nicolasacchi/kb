@@ -6291,6 +6291,7 @@ impl Db {
     ///   root_of` — the whole subagent flood under that tree, any depth;
     /// - `parent_of`: rows with `parent_session_id = parent_of` — a
     ///   non-root session's direct children.
+    ///
     /// Either way `is_newest = 1` keeps one row per child (a child is
     /// captured repeatedly at every Stop, too). `after` is the opaque
     /// `"<started_at>:<session_id>"` cursor: rows strictly after

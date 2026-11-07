@@ -11422,6 +11422,39 @@ mod evidence_wire_tests {
         assert_eq!(v["child_count"], 0);
     }
 
+    fn live_row(state: LiveState, since_secs: i64, session_id: &str) -> LiveStatusRow {
+        LiveStatusRow {
+            session_id: session_id.to_string(),
+            harness: "claude".to_string(),
+            holder: match state {
+                LiveState::Working | LiveState::Stalled => Holder::Agent,
+                LiveState::Waiting | LiveState::Cold => Holder::Human,
+                LiveState::Finished | LiveState::PresumedEnded => Holder::Ended,
+            },
+            state,
+            source: StateSource::Hook,
+            confidence: kb_core::sessions::live::Confidence::Observed,
+            since_unix: 0,
+            since_secs,
+            project: Some("kb".to_string()),
+            cwd: Some("/home/user/project/kb".to_string()),
+            model: None,
+            title: Some("t".to_string()),
+            resume: format!("claude -r {session_id}"),
+            resume_id: None,
+            last_line: Some("hello world".to_string()),
+            kb: None,
+            artifact_id: None,
+            blocked: false,
+            detail_reason: None,
+            blocked_tool: None,
+            blocked_since_unix: None,
+            last_tool: None,
+            last_tool_at: None,
+            background: None,
+        }
+    }
+
     #[test]
     fn resume_targets_the_root_for_omp_children() {
         let mut child = row(None, 1, 0);
@@ -11462,11 +11495,11 @@ mod evidence_wire_tests {
     #[test]
     fn apply_registry_roots_points_hook_rows_at_their_root() {
         use kb_core::sessions::live::StateSource;
-        let mut reg = row(LiveState::Working, 10, "child-1");
+        let mut reg = live_row(LiveState::Working, 10, "child-1");
         reg.harness = "omp".into();
         reg.cwd = Some("/w/x".into());
         // A registry row with no lookup result keeps its own resume.
-        let mut orphan = row(LiveState::Waiting, 5, "ghost");
+        let mut orphan = live_row(LiveState::Waiting, 5, "ghost");
         orphan.harness = "omp".into();
         let mut rows = vec![reg, orphan];
         let mut roots = HashMap::new();
@@ -11477,7 +11510,7 @@ mod evidence_wire_tests {
         assert_eq!(rows[1].resume, "claude -r ghost");
         assert_eq!(rows[1].resume_id, None);
         // Capture-sourced rows are never rewritten by this step.
-        let mut cap = row(LiveState::Cold, 3, "child-2");
+        let mut cap = live_row(LiveState::Cold, 3, "child-2");
         cap.source = StateSource::Capture;
         cap.resume = "omp -r child-2".into();
         let mut roots2 = HashMap::new();
@@ -11488,7 +11521,7 @@ mod evidence_wire_tests {
 
     #[test]
     fn redact_rebuilds_a_rooted_resume_without_the_cwd() {
-        let mut r = row(LiveState::Working, 9, "child-9");
+        let mut r = live_row(LiveState::Working, 9, "child-9");
         r.harness = "grok".into();
         r.cwd = Some("/some/deep/work tree".into());
         r.resume = resume_command("grok", "tree-root", Some("/some/deep/work tree"));
@@ -11497,7 +11530,7 @@ mod evidence_wire_tests {
         redact_for_non_loopback(&mut r);
         assert_eq!(r.resume, "grok -r tree-root");
         // Without a resume_id the row's own id is used (drop-on-error).
-        let mut r = row(LiveState::Working, 9, "own-9");
+        let mut r = live_row(LiveState::Working, 9, "own-9");
         r.harness = "grok".into();
         r.resume = resume_command("grok", "own-9", Some("/w/x"));
         redact_for_non_loopback(&mut r);
