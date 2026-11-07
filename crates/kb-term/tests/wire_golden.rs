@@ -47,6 +47,8 @@ fn request_goldens() -> Vec<&'static str> {
         "req_list.json",
         "req_launch.json",
         "req_kill.json",
+        "req_resize.json",
+        "req_ping.json",
         "req_paste.json",
         "req_enter.json",
         "req_keys.json",

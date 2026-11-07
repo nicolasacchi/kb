@@ -271,6 +271,8 @@ pub async fn launch(
         cwd: parsed.cwd.clone().unwrap_or_else(|| "/".to_string()),
         cols: parsed.cols.unwrap_or(80),
         rows: parsed.rows.unwrap_or(24),
+        env: None,
+        exit_keys: None,
     };
     match call(&state, &req).await {
         Err(e) => e,
@@ -512,7 +514,10 @@ pub async fn kill(
     if body.len() > MAX_BODY_BYTES {
         return payload_too_large("request body over 256 KiB");
     }
-    let req = RunnerRequest::Kill { id: id.clone() };
+    let req = RunnerRequest::Kill {
+        id: id.clone(),
+        grace_secs: None,
+    };
     match call(&state, &req).await {
         Err(e) => e,
         Ok(reply) => relay(reply),

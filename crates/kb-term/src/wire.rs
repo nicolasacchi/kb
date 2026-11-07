@@ -251,16 +251,38 @@ pub enum Request {
         resume_sid: Option<String>,
         /// Working directory.
         cwd: String,
-        /// Grid columns.
-        cols: u16,
-        /// Grid rows.
-        rows: u16,
+        /// Grid columns (`None` means the runner's default).
+        #[serde(default)]
+        cols: Option<u16>,
+        /// Grid rows (`None` means the runner's default).
+        #[serde(default)]
+        rows: Option<u16>,
+        /// Extra environment for the harness pane.
+        #[serde(default)]
+        env: Option<std::collections::BTreeMap<String, String>>,
+        /// Exit keys used by the kill RPC (`None` means the default sequence).
+        #[serde(default)]
+        exit_keys: Option<Vec<String>>,
     },
     /// Kill a session.
     Kill {
         /// Session id.
         id: String,
+        /// Grace in seconds before the forced path runs (`None` means the default).
+        #[serde(default)]
+        grace_secs: Option<u64>,
     },
+    /// Resize the session grid.
+    Resize {
+        /// Session id.
+        id: String,
+        /// Grid columns.
+        cols: u16,
+        /// Grid rows.
+        rows: u16,
+    },
+    /// Liveness probe.
+    Ping {},
     /// Paste text into a session.
     Paste {
         /// Session id.
@@ -356,4 +378,13 @@ pub struct SessionInfo {
     pub exit_code: Option<i32>,
     /// Grid owner, if any.
     pub grid_owner: Option<String>,
+    /// `kb-term.conf` version the holder loaded.
+    #[serde(default)]
+    pub conf_version: u32,
+    /// The anchor client pid, if any.
+    #[serde(default)]
+    pub anchor_pid: Option<u32>,
+    /// Whether the holder socket did not answer (stale).
+    #[serde(default)]
+    pub stale: bool,
 }
