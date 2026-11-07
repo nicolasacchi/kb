@@ -278,6 +278,24 @@ mod tests {
         }
     }
 
+    /// Whether `needle` occurs as a standalone identifier — so
+    /// `claude_project_slug` (the pre-existing Claude Code slug helper)
+    /// does not trip the `project_slug` needle. The V0047 lineage field
+    /// itself appears as `project_slug` standalone (column, struct
+    /// field, variable), so real lineage reads still match.
+    fn contains_word(src: &str, needle: &str) -> bool {
+        fn is_ident(c: u8) -> bool {
+            c.is_ascii_alphanumeric() || c == b'_'
+        }
+        let bytes = src.as_bytes();
+        src.match_indices(needle).any(|(i, _)| {
+            let before_ok = i == 0 || !is_ident(bytes[i - 1]);
+            let after = i + needle.len();
+            let after_ok = after >= bytes.len() || !is_ident(bytes[after]);
+            before_ok && after_ok
+        })
+    }
+
     // invariant:11
     #[test]
     fn no_ranking_module_reads_session_lineage() {
@@ -290,19 +308,18 @@ mod tests {
             ("sessions/projects.rs", include_str!("projects.rs")),
         ];
         for (name, src) in RANKERS {
-            for needle in [
-                "parent_session_id",
-                "root_session_id",
-                "project_slug",
-                "lineage::",
-            ] {
+            for needle in ["parent_session_id", "root_session_id", "project_slug"] {
                 assert!(
-                    !src.contains(needle),
+                    !contains_word(src, needle),
                     "{name} names `{needle}` -- session lineage is SURFACED, NEVER SCORED \
                      (V0047's own header, invariant #11): it may be rendered beside a row, \
                      never folded into a rank, a sort key or a filter"
                 );
             }
+            assert!(
+                !src.contains("lineage::"),
+                "{name} names `lineage::` -- session lineage fold must not reach a ranker"
+            );
         }
     }
 }
