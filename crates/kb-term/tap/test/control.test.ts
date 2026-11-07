@@ -106,7 +106,9 @@ test('control_parses_begin_end_blocks_and_interleaved_output', async () => {
   expect(lines).toEqual(['line-one', 'line-two']);
   // %output is a NOTIFICATION line: it belongs outside reply blocks, so it
   // arrives after the block closes and flows to onOutput with octal decoded.
-  fake.stdout.push(enc('%output %0 hello\\033[31mworld\\n'));
+  // The wire value carries `\n` as DATA (decoded to a real newline byte) and
+  // the line itself ends with a separate real newline terminator.
+  fake.stdout.push(enc('%output %0 hello\\033[31mworld\\n\n'));
   await waitFor(() => outputs.length === 1);
   expect(outputs.length).toBe(1);
   expect(outputs[0].pane).toBe('%0');
@@ -164,10 +166,14 @@ test('pause_sends_quoted_continue_then_reseeds', async () => {
   c.onPause(() => {
     writesBefore.push(fake.writes.length);
     // mimic the reseed opening: A/capture/B batch written AFTER the continue.
-    void c.write([`display-message -p -t %0 'A #{history_size}'`, `capture-pane -p -e -J -S - -t %0`, `display-message -p -t %0 'B #{history_size}'`]);
+    // Replies never arrive in this unit test, so consume the rejections that
+    // stop() raises later (a connection-close rejection, not a test error).
+    for (const p of c.write([`display-message -p -t %0 'A #{history_size}'`, `capture-pane -p -e -J -S - -t %0`, `display-message -p -t %0 'B #{history_size}'`])) p.catch(() => {});
   });
   fake.stdout.push(enc('%pause %0\n'));
-  await settle();
+  // Wait until the continue AND the handler's reseed batch have been written
+  // (pause-after, continue, batch = 3 stdin writes).
+  await waitFor(() => fake.writes.length >= 3);
   const all = fake.writes.join('');
   const continueLine = "refresh-client -A '%0:continue'";
   expect(all).toContain(continueLine);
@@ -183,4 +189,48 @@ test('pause_sends_quoted_continue_then_reseeds', async () => {
 test('exit_too_far_behind_needs_reseed', () => {
   expect(exitNeedsReseed('too far behind')).toBe(true);
   expect(exitNeedsReseed('normal exit')).toBe(false);
+});
+
+test('control_fire_and_forget_block_does_not_steal_tracked_pending', async () => {
+  const fake = new FakeSpawn();
+  const c = await start(fake);
+  // pause-after (written by start, fire-and-forget) owns a Pending exactly
+  // like any tracked command: its %begin/%end block (num 1) must resolve
+  // only its own promise, never the cmd issued after it (num 2).
+  const done = c.cmd("display-message -p -t %0 'A #{history_size}'");
+  fake.stdout.push(enc('%begin 5000 1 0\n%end 5000 1 0\n'));
+  fake.stdout.push(enc('%begin 5000 2 0\nA 3 5 0\n%end 5000 2 0\n'));
+  const lines = await done;
+  expect(lines).toEqual(['A 3 5 0']);
+  c.stop();
+});
+
+test('control_pause_with_invalid_pane_sends_no_continue', async () => {
+  const fake = new FakeSpawn();
+  const c = await start(fake);
+  await waitFor(() => fake.writes.length >= 1); // pause-after from start()
+  fake.stdout.push(enc('%pause %0;send-keys\n'));
+  // Let the read loop dispatch it; only the pause-after write exists.
+  await new Promise<void>((r) => setImmediate(r));
+  await new Promise<void>((r) => setImmediate(r));
+  const all = fake.writes.join('');
+  expect(all).not.toContain('continue');
+  c.stop();
+});
+
+test('control_dispatch_error_is_recorded_and_loop_continues', async () => {
+  const fake = new FakeSpawn();
+  const c = await start(fake);
+  c.onOutput(() => {
+    throw new Error('handler boom');
+  });
+  fake.stdout.push(enc('%output %0 first\n'));
+  await waitFor(() => c.lastError !== null);
+  expect(c.lastError?.message).toBe('handler boom');
+  // The loop did not die on the throwing handler: on the SAME client a later
+  // command still dispatches and resolves with its own replies.
+  const done = c.cmd('capture-pane -p -t %0');
+  fake.stdout.push(enc('%begin 6000 1 0\nline-one\n%end 6000 1 0\n'));
+  expect(await done).toEqual(['line-one']);
+  c.stop();
 });

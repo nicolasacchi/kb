@@ -37,6 +37,11 @@ fn bun_bin() -> String {
     std::env::var("KB_BUN_BIN").unwrap_or_else(|_| "bun".to_string())
 }
 
+/// POSIX single-quote a shell word (for the single-string pane command).
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 /// A unique temp directory, removed on drop. Std-only (no new deps).
 struct TempDir(PathBuf);
 impl TempDir {
@@ -116,6 +121,12 @@ impl Server {
     /// Create the brief's session: manual window size, remain-on-exit, and the
     /// pane command gated on a ready-file so the driver is attached BEFORE the
     /// stream starts. Returns the pane id (%N).
+    ///
+    /// The pane command is passed as ONE string, exactly like
+    /// `scripts/ci/tmux-smoke.sh`'s ensure_session: tmux joins word-separated
+    /// command args with spaces, so a multi-arg `sh -c gate _ ready ...`
+    /// form breaks under CI's non-tty stdin ("open terminal failed: not a
+    /// terminal") while the single-string form runs.
     fn new_session(
         &self,
         name: &str,
@@ -125,18 +136,25 @@ impl Server {
         payload: &[&str],
     ) -> String {
         let gate = "while [ ! -e \"$1\" ]; do sleep 0.05; done; shift; exec \"$@\"";
-        let mut argv: Vec<String> =
-            vec!["new-session".into(), "-d".into(), "-s".into(), name.into()];
-        argv.push("-x".into());
-        argv.push(cols.to_string());
-        argv.push("-y".into());
-        argv.push(rows.to_string());
-        argv.push("sh".into());
-        argv.push("-c".into());
-        argv.push(gate.into());
-        argv.push("_".into());
-        argv.push(ready.to_string_lossy().into_owned());
-        argv.extend(payload.iter().map(|s| s.to_string()));
+        let mut cmd = String::from("sh -c ");
+        cmd.push_str(&shell_quote(gate));
+        cmd.push_str(" _ ");
+        cmd.push_str(&shell_quote(&ready.to_string_lossy()));
+        for part in payload {
+            cmd.push(' ');
+            cmd.push_str(&shell_quote(part));
+        }
+        let argv: Vec<String> = vec![
+            "new-session".into(),
+            "-d".into(),
+            "-s".into(),
+            name.into(),
+            "-x".into(),
+            cols.to_string(),
+            "-y".into(),
+            rows.to_string(),
+            cmd,
+        ];
         let refs: Vec<&str> = argv.iter().map(|s| s.as_str()).collect();
         self.tmux(&refs);
         let pane =
@@ -180,54 +198,58 @@ fn rss_bytes(pid: u32) -> Option<u64> {
     None
 }
 
-/// Run the TS driver to completion with a hard deadline; returns its JSON
-/// (last stdout line) and stderr tail for panic messages.
-fn run_driver(
-    sock: &Path,
-    session: &str,
-    tmux: &Path,
+/// Parameters for one driver run (struct, not 13 positional args: clippy
+/// `too_many_arguments` under `-D warnings`).
+struct DriverParams<'a> {
+    sock: &'a Path,
+    session: &'a str,
+    tmux: &'a Path,
     cols: u32,
     rows: u32,
-    pane: &str,
-    ready: &Path,
-    ref_mode: &str,
-    stream: &Path,
-    scenario: &str,
+    pane: &'a str,
+    ready: &'a Path,
+    ref_mode: &'a str,
+    stream: &'a Path,
+    scenario: &'a str,
     expect_bytes: usize,
-    quiescent: Option<&str>,
+    quiescent: Option<&'a str>,
     deadline_secs: u64,
-) -> (serde_json::Value, String) {
+}
+
+/// Run the TS driver to completion with a hard deadline; returns its JSON
+/// (last stdout line) and stderr tail for panic messages.
+fn run_driver(p: &DriverParams<'_>) -> (serde_json::Value, String) {
     let driver = tap_dir().join("tap/test/int/reseed-driver.ts");
     let mut cmd = Command::new(bun_bin());
     for a in [
         "run".to_string(),
         driver.to_string_lossy().into_owned(),
         "--socket".into(),
-        sock.to_string_lossy().into_owned(),
+        p.sock.to_string_lossy().into_owned(),
         "--session".into(),
-        session.to_string(),
+        p.session.to_string(),
         "--tmux".into(),
-        tmux.to_string_lossy().into_owned(),
+        p.tmux.to_string_lossy().into_owned(),
         "--cols".into(),
-        cols.to_string(),
+        p.cols.to_string(),
         "--rows".into(),
-        rows.to_string(),
+        p.rows.to_string(),
         "--pane".into(),
-        pane.to_string(),
+        p.pane.to_string(),
         "--ready".into(),
-        ready.to_string_lossy().into_owned(),
+        p.ready.to_string_lossy().into_owned(),
         "--ref".into(),
-        ref_mode.to_string(),
+        p.ref_mode.to_string(),
         "--stream".into(),
-        stream.to_string_lossy().into_owned(),
+        p.stream.to_string_lossy().into_owned(),
         "--scenario".into(),
-        scenario.to_string(),
+        p.scenario.to_string(),
         "--expect-bytes".into(),
-        expect_bytes.to_string(),
+        p.expect_bytes.to_string(),
     ] {
         cmd.arg(a);
     }
-    if let Some(q) = quiescent {
+    if let Some(q) = p.quiescent {
         cmd.arg("--quiescent").arg(q);
     }
     let mut child = cmd
@@ -236,14 +258,14 @@ fn run_driver(
         .stderr(Stdio::piped())
         .spawn()
         .unwrap_or_else(|e| panic!("spawn driver: {e}"));
-    let deadline = Instant::now() + Duration::from_secs(deadline_secs);
+    let deadline = Instant::now() + Duration::from_secs(p.deadline_secs);
     loop {
         match child.try_wait() {
             Ok(Some(_status)) => break,
             Ok(None) => {
                 if Instant::now() > deadline {
                     let _ = child.kill();
-                    panic!("driver for {scenario} exceeded {deadline_secs}s");
+                    panic!("driver for {} exceeded {}s", p.scenario, p.deadline_secs);
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
@@ -329,9 +351,21 @@ fn term_int_reseed_equals_tmux_for_text_workload() {
             stream.to_str().unwrap(),
         ],
     );
-    let (json, stderr) = run_driver(
-        &srv.sock, "s", &tmux, 100, 30, &pane, &ready, "emitted", &stream, "text", 1, None, 120,
-    );
+    let (json, stderr) = run_driver(&DriverParams {
+        sock: &srv.sock,
+        session: "s",
+        tmux: &tmux,
+        cols: 100,
+        rows: 30,
+        pane: &pane,
+        ready: &ready,
+        ref_mode: "emitted",
+        stream: &stream,
+        scenario: "text",
+        expect_bytes: 1,
+        quiescent: None,
+        deadline_secs: 120,
+    });
     assert_json_ok(&json, &stderr);
     let comps = json
         .get("comparisons")
@@ -546,9 +580,21 @@ fn term_int_reseed_mid_line_cursor() {
     std::fs::write(&stream, b"HELLO\r\nWORLD").expect("write stream");
     let ready = srv._dir.file("ready");
     let pane = srv.new_session("s", 100, 30, &ready, &["cat", stream.to_str().unwrap()]);
-    let (json, stderr) = run_driver(
-        &srv.sock, "s", &tmux, 100, 30, &pane, &ready, "file", &stream, "cursor", 12, None, 90,
-    );
+    let (json, stderr) = run_driver(&DriverParams {
+        sock: &srv.sock,
+        session: "s",
+        tmux: &tmux,
+        cols: 100,
+        rows: 30,
+        pane: &pane,
+        ready: &ready,
+        ref_mode: "file",
+        stream: &stream,
+        scenario: "cursor",
+        expect_bytes: 12,
+        quiescent: None,
+        deadline_secs: 90,
+    });
     assert_json_ok(&json, &stderr);
     let c = &json["compare"];
     assert_eq!(
@@ -577,9 +623,21 @@ fn term_int_reseed_pending_wrap() {
     std::fs::write(&stream, &bytes).expect("write stream");
     let ready = srv._dir.file("ready");
     let pane = srv.new_session("s", 100, 30, &ready, &["cat", stream.to_str().unwrap()]);
-    let (json, stderr) = run_driver(
-        &srv.sock, "s", &tmux, 100, 30, &pane, &ready, "file", &stream, "wrap", 100, None, 90,
-    );
+    let (json, stderr) = run_driver(&DriverParams {
+        sock: &srv.sock,
+        session: "s",
+        tmux: &tmux,
+        cols: 100,
+        rows: 30,
+        pane: &pane,
+        ready: &ready,
+        ref_mode: "file",
+        stream: &stream,
+        scenario: "wrap",
+        expect_bytes: 100,
+        quiescent: None,
+        deadline_secs: 90,
+    });
     assert_json_ok(&json, &stderr);
     let c = &json["compare"];
     // Cells must match. Cursor state: either tmux exposes the pending wrap and
@@ -621,9 +679,21 @@ fn term_int_reseed_wrapped_lines_and_blank_tail() {
     let ready = srv._dir.file("ready");
     let pane = srv.new_session("s", 100, 30, &ready, &["cat", stream.to_str().unwrap()]);
     let len = bytes.len();
-    let (json, stderr) = run_driver(
-        &srv.sock, "s", &tmux, 100, 30, &pane, &ready, "file", &stream, "wrapped", len, None, 90,
-    );
+    let (json, stderr) = run_driver(&DriverParams {
+        sock: &srv.sock,
+        session: "s",
+        tmux: &tmux,
+        cols: 100,
+        rows: 30,
+        pane: &pane,
+        ready: &ready,
+        ref_mode: "file",
+        stream: &stream,
+        scenario: "wrapped",
+        expect_bytes: len,
+        quiescent: None,
+        deadline_secs: 90,
+    });
     assert_json_ok(&json, &stderr);
     assert_eq!(
         json["compare"]["cellsDiff"],
@@ -644,9 +714,21 @@ fn term_int_reseed_alt_screen() {
     .expect("write stream");
     let ready = srv._dir.file("ready");
     let pane = srv.new_session("s", 100, 30, &ready, &["cat", stream.to_str().unwrap()]);
-    let (json, stderr) = run_driver(
-        &srv.sock, "s", &tmux, 100, 30, &pane, &ready, "file", &stream, "alt", 40, None, 90,
-    );
+    let (json, stderr) = run_driver(&DriverParams {
+        sock: &srv.sock,
+        session: "s",
+        tmux: &tmux,
+        cols: 100,
+        rows: 30,
+        pane: &pane,
+        ready: &ready,
+        ref_mode: "file",
+        stream: &stream,
+        scenario: "alt",
+        expect_bytes: 40,
+        quiescent: None,
+        deadline_secs: 90,
+    });
     assert_json_ok(&json, &stderr);
     let c = &json["compare"];
     assert_eq!(
@@ -707,21 +789,21 @@ fn term_int_placeholder_rows_survive_capture_pane() {
     let ready = srv._dir.file("ready");
     let pane = srv.new_session("s", 100, 30, &ready, &["cat", stream.to_str().unwrap()]);
     let len = std::fs::metadata(&stream).map(|m| m.len()).unwrap_or(0) as usize;
-    let (json, stderr) = run_driver(
-        &srv.sock,
-        "s",
-        &tmux,
-        100,
-        30,
-        &pane,
-        &ready,
-        "file",
-        &stream,
-        "placeholder",
-        len,
-        None,
-        90,
-    );
+    let (json, stderr) = run_driver(&DriverParams {
+        sock: &srv.sock,
+        session: "s",
+        tmux: &tmux,
+        cols: 100,
+        rows: 30,
+        pane: &pane,
+        ready: &ready,
+        ref_mode: "file",
+        stream: &stream,
+        scenario: "placeholder",
+        expect_bytes: len,
+        quiescent: None,
+        deadline_secs: 90,
+    });
     assert_json_ok(&json, &stderr);
     assert_eq!(
         json["compare"]["cellsDiff"],
@@ -748,21 +830,21 @@ fn term_int_partial_sequence_quiescent_wait() {
         &["python3", "-I", midseq.to_str().unwrap(), "--gap", "1"],
     );
     // ON case: both quiescent joins must be clean.
-    let (json, stderr) = run_driver(
-        &srv.sock,
-        "s",
-        &tmux,
-        100,
-        30,
-        &pane,
-        &ready,
-        "emitted",
-        &stream,
-        "midseq",
-        70,
-        Some("on"),
-        90,
-    );
+    let (json, stderr) = run_driver(&DriverParams {
+        sock: &srv.sock,
+        session: "s",
+        tmux: &tmux,
+        cols: 100,
+        rows: 30,
+        pane: &pane,
+        ready: &ready,
+        ref_mode: "emitted",
+        stream: &stream,
+        scenario: "midseq",
+        expect_bytes: 70,
+        quiescent: Some("on"),
+        deadline_secs: 90,
+    });
     assert_json_ok(&json, &stderr);
     assert_eq!(
         json["metric"],
@@ -780,21 +862,21 @@ fn term_int_partial_sequence_quiescent_wait() {
         &["python3", "-I", midseq.to_str().unwrap(), "--gap", "1"],
     );
     let _ = std::fs::remove_file(&ready);
-    let (json2, stderr2) = run_driver(
-        &srv.sock,
-        "s",
-        &tmux,
-        100,
-        30,
-        &pane2,
-        &ready,
-        "emitted",
-        &stream,
-        "midseq",
-        70,
-        Some("off"),
-        90,
-    );
+    let (json2, stderr2) = run_driver(&DriverParams {
+        sock: &srv.sock,
+        session: "s",
+        tmux: &tmux,
+        cols: 100,
+        rows: 30,
+        pane: &pane2,
+        ready: &ready,
+        ref_mode: "emitted",
+        stream: &stream,
+        scenario: "midseq",
+        expect_bytes: 70,
+        quiescent: Some("off"),
+        deadline_secs: 90,
+    });
     eprintln!(
         "term_int_partial_sequence_quiescent_wait OFF metric: {}",
         json2["metric"]

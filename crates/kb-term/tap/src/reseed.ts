@@ -18,6 +18,7 @@
 // retries from statement 2.
 
 import type { Twin } from './twin.ts';
+import { PANE_ID_RE } from './control.ts';
 
 /** The narrow surface reseed needs from the control client. */
 export interface ControlLike {
@@ -189,6 +190,9 @@ function countIn(haystack: Uint8Array, needle: Uint8Array): boolean {
 interface QuiescentState {
   lastOutputAt: number;
   frameEnded: boolean;
+  /** When `?2026l` was last seen: a frame end counts as quiescent only if
+   * fresh (at/after the wait start), not a stale tail survivor. */
+  frameEndedAt: number;
   tail: Uint8Array;
 }
 
@@ -237,7 +241,13 @@ export class Reseeder {
     grown.set(q.tail.subarray(0, Math.max(0, grown.length - bytes.length)));
     grown.set(bytes.subarray(Math.max(0, bytes.length - grown.length)), Math.max(0, grown.length - bytes.length));
     q.tail = grown;
-    q.frameEnded = countIn(q.tail, FRAME_END_BYTES);
+    const frameNow = countIn(q.tail, FRAME_END_BYTES);
+    if (frameNow && !q.frameEnded) {
+      // Rising edge only: fresh bytes that merely follow a frame end must
+      // not re-stamp it, or every later wait reads as instantly quiescent.
+      q.frameEndedAt = this.now();
+    }
+    q.frameEnded = frameNow;
     const a = this.active;
     if (a && (pane === '' || pane === a.pane)) {
       if (!a.aResolved) {
@@ -262,31 +272,38 @@ export class Reseeder {
   private qstate(pane: string): QuiescentState {
     let q = this.qstates.get(pane);
     if (!q) {
-      q = { lastOutputAt: -Infinity, frameEnded: false, tail: new Uint8Array(0) };
+      q = { lastOutputAt: -Infinity, frameEnded: false, frameEndedAt: -Infinity, tail: new Uint8Array(0) };
       this.qstates.set(pane, q);
     }
     return q;
   }
 
   async waitQuiescent(pane: string, opts?: ReseedOpts): Promise<boolean> {
+    // Per-call now/sleep win over the constructor's (tests inject a fake
+    // clock here); ignoring them froze the wait forever.
+    const now = opts?.now ?? this.now;
+    const sleepFn = opts?.sleep ?? this.sleep;
     const qms = opts?.quiescentMs ?? QUIESCENT_MS;
     if (qms <= 0) return true;
     const max = opts?.quiescentMaxMs ?? QUIESCENT_MAX_MS;
     const q = this.qstate(pane);
-    const start = this.now();
+    const start = now();
     for (;;) {
-      const t = this.now();
-      if (q.frameEnded) return true;
+      const t = now();
+      // A `?2026l` seen at/after this wait started (or in the previous qms
+      // window) proves the parser is back in ground state; a stale one does
+      // not -- fall through to the silence rule instead.
+      if (q.frameEndedAt >= start - qms) return true;
       if (t - q.lastOutputAt >= qms) return true;
       if (t - start >= max) return false;
-      const qPane = q;
-      await this.sleep(Math.max(1, Math.min(5, qms)));
-      // late noteOutput may have changed the state object only via this.qstate
-      void qPane;
+      await sleepFn(Math.max(1, Math.min(5, qms)));
     }
   }
 
   async reseed(paneId: string, opts?: ReseedOpts): Promise<ReseededResult> {
+    // paneId is spliced into tmux command lines verbatim: only tmux's own
+    // `%N` form is accepted, anything else is rejected before any write.
+    if (!PANE_ID_RE.test(paneId)) throw new ReseedError(`invalid pane id ${JSON.stringify(paneId)}`, 0);
     const maxAttempts = opts?.maxAttempts ?? MAX_RESEED_ATTEMPTS;
     this.st.reseedCalls++;
     const quiescent = await this.waitQuiescent(paneId, opts);
@@ -380,13 +397,23 @@ export class Reseeder {
       await this.twin.feed(bytes);
     };
     const padTo = async (which: 'normal' | 'alt', expected: number): Promise<boolean> => {
-      for (let rounds = 0; rounds < 5; rounds++) {
-        const n = this.twin.lineCount(which);
-        if (n === expected) return true;
-        if (n > expected) return false;
+      let n = this.twin.lineCount(which);
+      if (n > expected) return false;
+      if (n === expected) return true;
+      // Blank-tail padding must append from the bottom row: CRLFs fed with
+      // the cursor mid-screen only move the cursor down and never add a
+      // line, so park it on the last row first. Each LF at the bottom then
+      // scrolls exactly one blank row into the buffer.
+      await feed(`${ESC}[${this.twin.rows};1H`);
+      n = this.twin.lineCount(which);
+      if (n > expected) return false;
+      while (n < expected) {
+        const before = n;
         await feed('\r\n'.repeat(Math.min(1024, expected - n)));
+        n = this.twin.lineCount(which);
+        if (n === before) return n === expected; // no progress (scrollback cap)
       }
-      return this.twin.lineCount(which) === expected;
+      return n === expected;
     };
     this.twin.reset();
     if (mode?.alternateOn) {

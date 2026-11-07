@@ -219,10 +219,12 @@ test('reseed_restores_alt_screen_region_and_wrap_modes', async () => {
     expect(state.activeBuffer).toBe('alternate');
     expect(state['alt.scrollTop']).toBe(2);
     expect(state['alt.scrollBottom']).toBe(19);
-    // normal buffer holds the -a capture.
-    const normal = dumpRows(twin.term as never, 'normal', 3);
-    expect(normal).toContain('normal-1');
-    expect(normal).toContain('normal-2');
+    // normal buffer holds the -a capture. dumpRows returns the LAST n rows,
+    // so dump the whole buffer; rows are space-padded to cols width, hence
+    // the substring (includes) form rather than exact-element contains.
+    const normal = dumpRows(twin.term as never, 'normal', 1000);
+    expect(normal.some((r) => r.includes('normal-1'))).toBe(true);
+    expect(normal.some((r) => r.includes('normal-2'))).toBe(true);
     // CUP is the last restore step: its row is relative to the region top.
     expect(cursorOf(twin).y).toBe(3);
     // restore byte order: region first, CUP last.
@@ -293,6 +295,20 @@ test('reseed_waits_for_quiescence', async () => {
     const r3 = await done3;
     expect(r3.quiescent).toBe(false);
     expect(reseeder3.stats().quiescentFalse).toBe(1);
+
+    // A `?2026l` seen long ago must NOT satisfy a fresh wait: fresh output
+    // after it re-dates the silence window, so the wait pays the 50ms rule
+    // even though frameEnded bytes still sit in the tail.
+    control.now = 100;
+    reseeder2.noteOutput(new TextEncoder().encode('x'), '%0');
+    const done4 = reseeder2.reseed('%0', opts);
+    await tick();
+    // The write must only land after 50ms past the fresh output.
+    expect(control.writes.length).toBe(4);
+    expect(control.now).toBeGreaterThanOrEqual(150);
+    await resolveAttempt(control, ['hello'], ['A 0 5 0'], ['B 0 5 0']);
+    const r4 = await done4;
+    expect(r4.quiescent).toBe(true);
   } finally {
     twin.dispose();
   }
@@ -320,14 +336,27 @@ test('reseed_pads_blank_tail_and_does_not_slice_joined_wrapped_lines', async () 
     await resolveAttempt(control, [long], ['A 0 40 2'], ['B 0 40 2']);
     await done2;
     const rows = dumpRows(twin.term as never, 'normal', 24);
-    expect(rows[0].length).toBe(80);
-    expect(rows[1].length).toBe(80);
-    expect(rows[2].length).toBe(40);
-    expect(rows[0]).toBe('X'.repeat(80));
-    expect(rows[1]).toBe('X'.repeat(80));
-    expect(rows[2]).toBe('X'.repeat(40));
+    // dumpRows pads every row to cols width with spaces: compare trimmed
+    // content (the 3rd row is 40 X + 40 spaces, not length 40).
+    expect(rows[0].trimEnd()).toBe('X'.repeat(80));
+    expect(rows[1].trimEnd()).toBe('X'.repeat(80));
+    expect(rows[2].trimEnd()).toBe('X'.repeat(40));
     const s: ReseedStats = reseeder.stats();
     expect(s.overflowRetries).toBe(0);
+  } finally {
+    twin.dispose();
+  }
+});
+
+test('reseed_rejects_invalid_pane_id_before_any_write', async () => {
+  const { control, twin, reseeder } = setup();
+  try {
+    // paneId is spliced into tmux command lines: a crafted id carrying a
+    // newline/quote must be rejected before anything reaches the socket.
+    await expect(reseeder.reseed('%0\ndisplay-message -p INJECTED', { quiescentMs: 0 })).rejects.toThrow(/invalid pane id/);
+    await expect(reseeder.reseed('0', { quiescentMs: 0 })).rejects.toThrow(/invalid pane id/);
+    await expect(reseeder.reseed('', { quiescentMs: 0 })).rejects.toThrow(/invalid pane id/);
+    expect(control.writes.length).toBe(0);
   } finally {
     twin.dispose();
   }

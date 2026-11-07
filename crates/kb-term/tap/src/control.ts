@@ -25,6 +25,10 @@ import { ControlDecoder, type CtlEvent } from './decode.ts';
 /** Stall policy: tmux drops output paused longer than this. */
 export const PAUSE_AFTER_SECS = 20;
 
+/** Pane ids are tmux's own `%N` tokens; anything else is rejected before it
+ * can be spliced into a command line (injection via paneId). */
+export const PANE_ID_RE = /^%\d+$/;
+
 /** Exact wire form for the pause continue (pane QUOTED). Pinned by tests. */
 export function continueCommand(pane: string): string {
   return `refresh-client -A '${pane}:continue'`;
@@ -109,6 +113,9 @@ export class Control {
   private startAck: (() => void) | null = null;
   private held = false;
   private resumeWait: (() => void) | null = null;
+  /** Most recent read/dispatch failure. Recorded and surfaced here instead
+   * of silently ending handling (one bad event must not kill the client). */
+  lastError: Error | null = null;
 
   constructor(deps: ControlDeps) {
     this.deps = deps;
@@ -128,14 +135,15 @@ export class Control {
   }
 
   /** Spawn the control attach and send `refresh-client -f pause-after=20`
-   * right after the first attach acknowledgement. Resolves once the
+   * right after the attach's own `%begin` block. Resolves once the
    * pause-after line has been written. */
   async start(): Promise<void> {
     const spawn = this.deps.spawn ?? defaultSpawn;
     this.proc = spawn(attachArgv(this.deps.tmuxBin, this.deps.socketPath, this.deps.sessionName));
     this.started = true;
     void this.readLoop(this.proc);
-    // first decoder event of any kind implies the attach succeeded.
+    // The attach ack is the attach's own `%begin` block (command num 0);
+    // output/pause notifications that race it must NOT trigger pause-after.
     const { promise: ackPromise, resolve: ack } = Promise.withResolvers<void>();
     this.startAck = ack;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -147,7 +155,7 @@ export class Control {
     } finally {
       clearTimeout(timer);
     }
-    this.writeRaw(`refresh-client -f pause-after=${this.deps.pauseAfterSecs ?? PAUSE_AFTER_SECS}`);
+    this.writeFireAndForget(`refresh-client -f pause-after=${this.deps.pauseAfterSecs ?? PAUSE_AFTER_SECS}`);
   }
 
   /** Hold/resume the read loop. While held, unread output accumulates in
@@ -180,6 +188,14 @@ export class Control {
     return promises;
   }
 
+  /** Send one command through write() (so it owns its Pending and its
+   * %begin/%end block is consumed correctly) but drop the promise: used for
+   * pause-after and the pause continue, whose replies no caller awaits. */
+  private writeFireAndForget(text: string): void {
+    const [p] = this.write([text]);
+    p.catch(() => {});
+  }
+
   stop(): void {
     this.setHeld(false);
     this.proc?.kill();
@@ -203,15 +219,37 @@ export class Control {
         }
         const next = await it.next();
         if (next.done) break;
-        for (const ev of this.dec.push(next.value)) this.dispatch(ev);
+        for (const ev of this.dec.push(next.value)) {
+          try {
+            this.dispatch(ev);
+          } catch (err) {
+            // One bad event must not kill the client: record it and keep
+            // handling instead of silently ending the loop.
+            this.lastError = err instanceof Error ? err : new Error(String(err));
+          }
+        }
       }
-    } catch {
-      // stdout closed (tmux exit) -- stop handling silently.
+    } catch (err) {
+      this.lastError = err instanceof Error ? err : new Error(String(err));
+    } finally {
+      // tmux died mid-reseed: every blocked cmd/write promise must reject
+      // instead of hanging its awaiter forever.
+      this.failPending(new ControlError('control process exited', []));
     }
   }
 
+  private failPending(err: Error): void {
+    for (const p of this.pending) p.reject(err);
+    for (const p of this.byNum.values()) p.reject(err);
+    this.pending.length = 0;
+    this.byNum.clear();
+    this.currentNum = null;
+  }
+
   private dispatch(ev: CtlEvent): void {
-    if (this.startAck) {
+    // Only the attach's own `%begin` block completes start(); notifications
+    // (output/pause/continue) that race in first must not trigger pause-after.
+    if (ev.kind === 'begin' && this.startAck) {
       const ack = this.startAck;
       this.startAck = null;
       ack();
@@ -225,8 +263,9 @@ export class Control {
         return;
       case 'pause': {
         // continue FIRST (quoted), then notify: a reseed triggered by the
-        // callback must write its commands after the continue.
-        this.writeRaw(continueCommand(ev.pane));
+        // callback must write its commands after the continue. A pane token
+        // that is not tmux's `%N` form is never spliced into a command line.
+        if (PANE_ID_RE.test(ev.pane)) this.writeFireAndForget(continueCommand(ev.pane));
         for (const h of this.pauseHandlers) h(ev.pane);
         return;
       }

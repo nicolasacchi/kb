@@ -59,6 +59,10 @@ test('twin_options_are_the_pinned_ones', async () => {
       const glyph = placeholder + String.fromCodePoint(diac[i]) + String.fromCodePoint(diac[i + 1]);
       if ((await aloneWidth(twin, glyph)) !== 1) split++;
     }
+    // 297 = 148 pairs + 1: the odd leftover diacritic is fed with the
+    // placeholder as well (a single combining diacritic still occupies no
+    // cell of its own, so the combined width is 1).
+    if (diac.length % 2 === 1 && (await aloneWidth(twin, placeholder + String.fromCodePoint(diac[diac.length - 1]))) !== 1) split++;
     expect(split).toBe(0);
   } finally {
     twin.dispose();
@@ -143,9 +147,10 @@ test('width_tables_match_recorded_facts', async () => {
     }
 
     // Post-Unicode-11 emoji lag in BOTH xterm tables: the recorded residual
-    // is that xterm does not match tmux on at least one post-11 glyph in each
-    // variant (documented known residual, not a pass condition). The count is
-    // reported as a metric; agreement on pre-11 emoji is expected in both.
+    // (pinned counts below, measured against the tmux/Bun records) is that
+    // xterm does not match tmux on the recorded number of post-11 glyphs in
+    // each variant (documented known residual, not a pass condition). The
+    // count is reported as a metric; agreement on pre-11 emoji is expected.
     let lagGraph = 0;
     let lag11 = 0;
     let totalPost = 0;
@@ -156,8 +161,12 @@ test('width_tables_match_recorded_facts', async () => {
       if ((await aloneWidth(u11, g.text)) !== expected) lag11++;
     }
     expect(totalPost).toBe(16);
-    expect(lagGraph).toBeGreaterThan(0);
-    expect(lag11).toBeGreaterThan(0);
+    // Recorded lag: 13 of the 16 post-11 glyphs miss in graphemes, 14 in
+    // unicode11 (fixtures/widths-*.json + metrics-twin.json). Any drift in
+    // either count fails this test loudly.
+    expect(lagGraph).toBe(13);
+    expect(lag11).toBe(14);
+    expect(u11.widthPin).toEqual({ addon: 'unicode11', version: '0.9.0', activeVersion: '11' });
     for (const g of glyphsFile.glyphs.filter((x) => x.cls === 'emoji-pre11')) {
       expect(await aloneWidth(graphemes, g.text)).toBe(2);
       expect(await aloneWidth(u11, g.text)).toBe(2);

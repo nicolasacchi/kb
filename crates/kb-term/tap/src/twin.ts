@@ -65,7 +65,9 @@ export interface Twin {
   resize(c: number, r: number): void;
   dispose(): void;
   repliesDropped(): number;
-  widthPin: { addon: 'unicode-graphemes'; version: '0.4.0'; activeVersion: string };
+  /** The width-table pin of the ACTIVE variant: production is always
+   * unicode-graphemes 0.4.0; the unicode11 test variant pins itself. */
+  widthPin: { addon: 'unicode-graphemes' | 'unicode11'; version: string; activeVersion: string };
   /** Live line count of one buffer (scrollback rows + viewport rows). */
   lineCount(which: 'normal' | 'alt'): number;
 }
@@ -89,13 +91,22 @@ export function makeTwin(cols: number, rows: number, opts?: MakeTwinOpts): Twin 
   const term = new headless.Terminal({ cols, rows, ...TWIN_OPTS });
   let dropped = 0;
   let activeVersion: string;
+  // Error-path dispose must never mask the real throw: a stub/test addon
+  // may lack dispose(), so clean up best-effort and always throw the pin error.
+  const disposeBestEffort = (): void => {
+    try {
+      term.dispose();
+    } catch {
+      // ignore: the pinned throw below is the error that must surface
+    }
+  };
   if (variant === 'graphemes') {
     const Ctor = opts?.graphemesAddonForTest ?? graphemesPkg.UnicodeGraphemesAddon;
     term.loadAddon(new Ctor());
     const versions = (term.unicode.versions ?? []) as string[];
     const found = versions.find((k) => /grapheme/i.test(String(k)));
     if (!found) {
-      term.dispose();
+      disposeBestEffort();
       throw new Error(
         `graphemes addon registered no version; versions=${JSON.stringify(term.unicode.versions)}`,
       );
@@ -110,7 +121,7 @@ export function makeTwin(cols: number, rows: number, opts?: MakeTwinOpts): Twin 
     term.unicode.activeVersion = '11';
     activeVersion = '11';
   } else {
-    term.dispose();
+    disposeBestEffort();
     throw new Error(`bad variant ${String(variant)}`);
   }
   term.onData(() => {
@@ -143,7 +154,10 @@ export function makeTwin(cols: number, rows: number, opts?: MakeTwinOpts): Twin 
     repliesDropped() {
       return dropped;
     },
-    widthPin: { addon: 'unicode-graphemes', version: '0.4.0', activeVersion },
+    widthPin:
+      variant === 'unicode11'
+        ? { addon: 'unicode11', version: '0.9.0', activeVersion }
+        : { addon: 'unicode-graphemes', version: '0.4.0', activeVersion },
     lineCount(which) {
       return bufferLineCount(term, which);
     },

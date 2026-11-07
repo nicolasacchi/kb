@@ -1604,7 +1604,7 @@ jobs:
         uses: ./.github/actions/setup-rust
 
       - name: term_int_reseed (nextest, real tmux 3.7c + bun driver)
-        run: KB_TMUX_BIN="$KB_TMUX_BIN" KB_REQUIRE_TMUX=1 cargo nextest run --locked --profile ci -p kb-term --test term_int_reseed
+        run: KB_TMUX_BIN="$KB_TMUX_BIN" KB_REQUIRE_TMUX=1 cargo nextest run --locked --no-fail-fast --profile ci -p kb-term --test term_int_reseed
         timeout-minutes: 25
 
       - name: Merge term-int JUnit (smoke + reseed)
