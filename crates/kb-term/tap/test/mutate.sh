@@ -24,7 +24,7 @@ import sys
 s=open('$target').read(); a,b=sys.argv[1],sys.argv[2]
 assert a in s, 'stale anchor: '+a[:80]
 open('$target','w').write(s.replace(a,b,1))" "$a" "$b" || return
-  r=$(bun test --timeout 300000 test/fuzz.test.ts test/strip.test.ts test/differential.test.ts test/decode.test.ts 2>&1 | grep -E "^ *[0-9]+ fail" | tr -d ' ')
+  r=$(bun test --bail --timeout 300000 test/fuzz.test.ts test/strip.test.ts test/differential.test.ts test/decode.test.ts 2>&1 | grep -E "^ *[0-9]+ fail" | tr -d ' ')
   n=$((n+1))
   case "$r" in
     0fail|"") echo "SURVIVED mutant $n: ${a:0:80}"; surv=$((surv+1)) ;;

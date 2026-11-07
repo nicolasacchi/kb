@@ -67,6 +67,30 @@ test('extended_output_value_is_after_first_space_colon_space', () => {
   expect(d.stats.malformed).toBe(1);
 });
 
+test('extended_output_strips_one_trailing_cr_but_output_does_not', () => {
+  const d = new ControlDecoder();
+  // CRLF framing: extended-output value must not end with a stray 0x0d byte.
+  const evs = d.push(enc('%extended-output %3 42 foo : v' + '\r' + NL));
+  expect(evs.length).toBe(1);
+  expect(evs[0].kind).toBe('extended-output');
+  if (evs[0].kind === 'extended-output') expect(eq(evs[0].data, enc('v'))).toBe(true);
+  // %output keeps a raw trailing \r verbatim (spec rule 1 strips only
+  // non-%output control lines).
+  const evs2 = d.push(enc('%output %0 v' + '\r' + NL));
+  expect(evs2.length).toBe(1);
+  expect(evs2[0].kind).toBe('output');
+  if (evs2[0].kind === 'output') expect(eq(evs2[0].data, Uint8Array.from([0x76, 0x0d]))).toBe(true);
+});
+
+test('extended_output_empty_age_is_malformed', () => {
+  const d = new ControlDecoder();
+  // Number('') === 0 must not be accepted as age 0.
+  const evs = d.push(enc('%extended-output %3  : v' + NL));
+  expect(evs.length).toBe(1);
+  expect(evs[0].kind).toBe('other');
+  expect(d.stats.malformed).toBe(1);
+});
+
 test('reply_block_lines_are_not_notifications', () => {
   const d = new ControlDecoder();
   const stream =
@@ -90,6 +114,29 @@ test('reply_block_lines_are_not_notifications', () => {
   const orphan = d2.push(enc('%end 1 1 0' + NL));
   expect(orphan.length).toBe(1);
   expect(orphan[0].kind).toBe('other');
+});
+
+test('error_terminates_reply_block_and_next_output_decodes', () => {
+  const d = new ControlDecoder();
+  const stream =
+    `%begin 99 7 0` + NL +
+    `%output %0 hello` + NL +      // reply text, NOT output
+    `%error 99 7 0` + NL +
+    `%output %0 real` + NL;
+  const evs = d.push(enc(stream));
+  expect(evs.map(e => e.kind)).toEqual(['begin', 'reply', 'error', 'output']);
+  const r = evs[1];
+  expect(r.kind).toBe('reply');
+  if (r.kind === 'reply') expect(eq(r.line, enc('%output %0 hello'))).toBe(true);
+  const e = evs[2];
+  expect(e.kind).toBe('error');
+  if (e.kind === 'error') { expect(e.time).toBe('99'); expect(e.num).toBe('7'); expect(e.flags).toBe('0'); }
+  const o = evs[3];
+  expect(o.kind).toBe('output');
+  if (o.kind === 'output') {
+    expect(o.pane).toBe('%0');
+    expect(eq(o.data, enc('real'))).toBe(true);
+  }
 });
 
 test('pause_continue_exit_events', () => {

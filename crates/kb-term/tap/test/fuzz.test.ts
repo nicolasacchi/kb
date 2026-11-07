@@ -27,8 +27,7 @@ function checkStream(data: Uint8Array, cuts: number[][], c: Counters, tag: strin
     if (ob.acts.join('\n') !== exp.join('\n')) {
       let k = 0; while (k < exp.length && exp[k] === ob.acts[k]) k++;
       const ctx = (a: string[]) => a.slice(Math.max(0, k - 3), k + 4).map(x => x.slice(0, 60)).join(' ');
-      const bi = Buffer.from(data).toString('latin1');
-      c.mismatches.push(`${tag} ACTIONS DIFFER at action ${k}/${exp.length} cuts=${cs.length}\n  want ${ctx(exp)}\n  got  ${ctx(ob.acts)}\n  in-len=${data.length} small-in=${data.length < 400 ? hexs(data) : ''}`); void bi; return;
+      c.mismatches.push(`${tag} ACTIONS DIFFER at action ${k}/${exp.length} cuts=${cs.length}\n  want ${ctx(exp)}\n  got  ${ctx(ob.acts)}\n  in-len=${data.length} small-in=${data.length < 400 ? hexs(data) : ''}`); return;
     }
   }
   c.streams++;

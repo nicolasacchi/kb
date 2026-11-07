@@ -149,6 +149,10 @@ export class ControlDecoder {
 
     if (line.startsWith('%output ')) {
       // %output %P <value>: value = everything after the single space after the pane id.
+      // CR handling: per spec rule 1 a trailing \r is stripped only from
+      // non-%output control lines, so %output values keep a trailing raw \r byte
+      // verbatim — tmux escapes a real CR inside values as \015, so a raw \r
+      // here is payload, not line framing.
       const afterPfx = line.slice('%output '.length);
       const sp = afterPfx.indexOf(' ');
       if (sp < 0) { events.push({ kind: 'other', line }); return; }
@@ -166,15 +170,21 @@ export class ControlDecoder {
       if (sp < 0) { this.stats.malformed++; events.push({ kind: 'other', line }); return; }
       const pane = afterPfx.slice(0, sp);
       const ageTok = afterPfx.slice(sp + 1).split(' ')[0];
+      // Number('') === 0, so an empty age token must be rejected explicitly;
+      // a non-numeric token yields NaN, which is not an integer.
       const ageMs = Number(ageTok);
       const sep = line.indexOf(' : ');
-      if (sep < 0 || !Number.isInteger(ageMs)) {
+      if (sep < 0 || ageTok === '' || !Number.isInteger(ageMs)) {
         this.stats.malformed++;
         events.push({ kind: 'other', line });
         return;
       }
-      const valueStart = sep + 3;
-      const { data, bad } = decodeValueCounted(raw.subarray(valueStart));
+      // Extended-output is not %output, so spec rule 1 applies: strip one
+      // trailing raw \r (CRLF framing) from the value. %output keeps it (see
+      // the comment on the %output branch above).
+      let valueEnd = raw.length;
+      if (valueEnd > sep + 3 && raw[valueEnd - 1] === 0x0d) valueEnd--;
+      const { data, bad } = decodeValueCounted(raw.subarray(sep + 3, valueEnd));
       this.stats.badEscapes += bad;
       events.push({ kind: 'extended-output', pane, ageMs, data });
       return;
