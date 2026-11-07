@@ -82,7 +82,7 @@ fn peer_uid(stream: &UnixStream) -> Option<u32> {
 /// Serve until a shutdown signal arrives. `shutdown` is signalled by the
 /// caller (SIGTERM/SIGINT handling lives in the binary); the socket file
 /// is removed and anchors closed before returning. Holders are untouched.
-pub async fn serve<S: Supervisor>(
+pub async fn serve<S: Supervisor + 'static>(
     runner: Arc<Runner<S>>,
     listener: UnixListener,
     sock_path: PathBuf,
@@ -117,7 +117,7 @@ pub async fn serve<S: Supervisor>(
     }
 }
 
-async fn handle_connection<S: Supervisor>(runner: Arc<Runner<S>>, stream: UnixStream) {
+async fn handle_connection<S: Supervisor + 'static>(runner: Arc<Runner<S>>, stream: UnixStream) {
     let (read_half, mut write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
     loop {
