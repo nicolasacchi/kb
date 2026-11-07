@@ -271,12 +271,12 @@ export class GraphicsExtractor {
         break;
       }
       case 'iip': {
-        const exp = IIP_EXPECT[this.iipStep]!;
-        // Tolerate a single optional space before ';' and '=' (iTerm docs style).
-        if ((exp === ';' || exp === '=') && b === 0x20) {
+        // Tolerate optional spaces anywhere in the introducer (docs style).
+        if (b === 0x20) {
           this.sniffBuf.push(b);
           break;
         }
+        const exp = IIP_EXPECT[this.iipStep]!;
         if (String.fromCharCode(b) === exp) {
           this.sniffBuf.push(b);
           this.iipStep++;
@@ -294,7 +294,10 @@ export class GraphicsExtractor {
         break;
       }
       case 'sixel': {
-        if (b >= 0x30 && b <= 0x39 || b === 0x3b) { // digit or ';'
+        // Tolerate optional spaces in the introducer.
+        if (b === 0x20) {
+          this.sniffBuf.push(b);
+        } else if (b >= 0x30 && b <= 0x39 || b === 0x3b) {
           this.sniffBuf.push(b);
         } else if (b === 0x71) { // 'q'
           this.sniffBuf.push(b);
