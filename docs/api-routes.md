@@ -240,6 +240,7 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | GET | `/api/slates/{slug}/posts/{key}` | `routes::slates::post_detail` |
 | POST | `/api/slates/{slug}/reopen` | `routes::slates::reopen` |
 | POST | `/api/slates/{slug}/rotate` | `routes::slates::rotate` |
+| GET | `/api/stats` | `routes::stats::cross` |
 | GET | `/api/terms` | `routes::terms::list` |
 | POST | `/api/terms` | `routes::terms::launch` |
 | POST | `/api/terms/{id}/enter` | `routes::terms::enter` |
@@ -250,7 +251,6 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | GET | `/api/terms/{id}/read` | `routes::terms::read` |
 | POST | `/api/terms/{id}/take-size` | `routes::terms::take_size` |
 | POST | `/api/terms/{id}/ticket` | `routes::terms::ticket` |
-| GET | `/api/stats` | `routes::stats::cross` |
 | GET | `/api/turn` | `routes::turn::get` |
 | GET | `/api/users` | `routes::users::list` |
 | GET | `/api/why` | `routes::sessions::why` |
