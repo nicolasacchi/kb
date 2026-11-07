@@ -106,9 +106,10 @@ test('control_parses_begin_end_blocks_and_interleaved_output', async () => {
   expect(lines).toEqual(['line-one', 'line-two']);
   // %output is a NOTIFICATION line: it belongs outside reply blocks, so it
   // arrives after the block closes and flows to onOutput with octal decoded.
-  // The wire value carries `\n` as DATA (decoded to a real newline byte) and
-  // the line itself ends with a separate real newline terminator.
-  fake.stdout.push(enc('%output %0 hello\\033[31mworld\\n\n'));
+  // The wire value carries the newline as octal `\012` (tmux octal-escapes
+  // control bytes; the decoder's `\n` is literal backslash-n, not an escape)
+  // and the line itself ends with a separate real newline terminator.
+  fake.stdout.push(enc('%output %0 hello\\033[31mworld\\012\n'));
   await waitFor(() => outputs.length === 1);
   expect(outputs.length).toBe(1);
   expect(outputs[0].pane).toBe('%0');
