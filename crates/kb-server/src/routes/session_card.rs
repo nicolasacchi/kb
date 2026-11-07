@@ -82,7 +82,10 @@ fn children_predicate(target: &SessionOut) -> ChildrenPredicate {
 }
 
 /// Federated children total, summed across kbs (per-kb failure folds to 0
-/// with a warn, never a 500).
+/// with a warn, never a 500). Sessions are single-kb artifacts (V0040 /
+/// PF-R1: one newest capture per session id, in one kb's `sessions`
+/// table), so per-kb counts are disjoint and no cross-kb session-id
+/// dedup is needed — the sum can never double-count a child.
 async fn children_total(state: &Arc<KbHandles>, pred: &ChildrenPredicate) -> u64 {
     let (root_of, parent_of) = pred.args();
     let mut futs: Vec<super::CorpusFut<'_, u64>> = Vec::new();
@@ -108,7 +111,12 @@ async fn children_total(state: &Arc<KbHandles>, pred: &ChildrenPredicate) -> u64
 /// Federated one-page children fetch: over-fetches `limit + 1` per kb,
 /// then merges by `(started_at, session_id)` and truncates. `after` is
 /// `(started_at, session_id)`; the caller derives `next_after` from the
-/// overflow.
+/// overflow. Like [`children_total`], results are not deduplicated across
+/// kbs: sessions are single-kb by construction (V0040/PF-R1), so two kbs
+/// can never hold the same child id — the merge keeps the deterministic
+/// `(started_at, session_id)` total order and the total stays consistent
+/// with [`children_total`]'s `children_total_matches_card_children_total`
+/// pin.
 async fn children_page(
     state: &Arc<KbHandles>,
     pred: &ChildrenPredicate,
@@ -434,7 +442,14 @@ async fn research_lane(state: &Arc<KbHandles>, session_id: &str) -> ResearchLane
             .into_iter()
             .flatten()
             .collect();
-    rows.sort_by_key(|r| r.seq);
+    // Explicit total order (seq, query, kind): cross-kb seq ties resolve
+    // without depending on storage walk order.
+    rows.sort_by(|a, b| {
+        a.seq
+            .cmp(&b.seq)
+            .then_with(|| a.query.cmp(&b.query))
+            .then_with(|| a.kind.cmp(&b.kind))
+    });
     let total = rows.len() as u32;
     let mut kind_counts: std::collections::BTreeMap<String, u32> =
         std::collections::BTreeMap::new();
@@ -459,23 +474,31 @@ async fn research_lane(state: &Arc<KbHandles>, session_id: &str) -> ResearchLane
 
 /// R5 reader behind `session_comments`: open comments on the in-corpus
 /// artifacts this session touched, plus what the session raised during
-/// its window — the handler's two projections, fed by the session's own
-/// kb file edges.
+/// its window — the handler's two projections. The touched set mirrors
+/// the handler's scope exactly: `session_files_for_session` fans out
+/// across ALL kbs (a session may be captured across corpora), not just
+/// the session's own kb; a per-kb failure folds to no rows with a warn.
 async fn comments_lane(state: &Arc<KbHandles>, session: &SessionOut) -> CommentsLane {
-    let Some(ctx) = session_ctx(state, &session.kb) else {
-        return CommentsLane::unavailable("unknown kb");
-    };
-    let rows = match ctx
-        .storage
-        .session_files_for_session(session.session_id.clone())
-        .await
-    {
-        Ok(rows) => rows,
-        Err(e) => {
-            tracing::warn!(kb = %session.kb, error = %e, "session_files_for_session failed in card comments");
-            return CommentsLane::unavailable("files unreadable");
-        }
-    };
+    let sid = session.session_id.clone();
+    let mut file_futs: Vec<super::CorpusFut<'_, Vec<kb_core::storage::sqlite::SessionFileRow>>> =
+        Vec::new();
+    for (kb_name, ctx) in state.kbs.iter() {
+        file_futs.push(Box::pin(async move {
+            ctx.storage
+                .session_files_for_session(sid.clone())
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!(kb = %kb_name, error = %e, "session_files_for_session failed in card comments");
+                    Vec::new()
+                })
+        }));
+    }
+    let rows: Vec<kb_core::storage::sqlite::SessionFileRow> =
+        super::buffered_join(file_futs, state.fanout_cap)
+            .await
+            .into_iter()
+            .flatten()
+            .collect();
     let touched: std::collections::HashSet<(String, String)> = rows
         .iter()
         .filter(|r| r.in_corpus)
@@ -533,11 +556,18 @@ async fn comments_lane(state: &Arc<KbHandles>, session: &SessionOut) -> Comments
             out
         }));
     }
-    let open: Vec<CommentItem> = super::buffered_join(futs, state.fanout_cap)
+    let mut open: Vec<CommentItem> = super::buffered_join(futs, state.fanout_cap)
         .await
         .into_iter()
         .flatten()
         .collect();
+    // Explicit total order (kb, artifact_id, comment_id) so repeat reads
+    // are byte-identical by construction, not by storage walk order.
+    open.sort_by(|a, b| {
+        a.kb.cmp(&b.kb)
+            .then_with(|| a.artifact_id.cmp(&b.artifact_id))
+            .then_with(|| a.comment_id.cmp(&b.comment_id))
+    });
     let open_count = open.len() as u32;
 
     let raised_from = session.started_at;
@@ -710,7 +740,14 @@ async fn readings_lane(state: &Arc<KbHandles>, session: &SessionOut) -> Readings
         .into_iter()
         .flatten()
         .collect();
-    rows.sort_by_key(|b| std::cmp::Reverse(b.opened_at));
+    // Explicit total order (opened_at desc, artifact_id, kb): same-second
+    // opens resolve without depending on storage walk order.
+    rows.sort_by(|a, b| {
+        b.opened_at
+            .cmp(&a.opened_at)
+            .then_with(|| a.artifact_id.cmp(&b.artifact_id))
+            .then_with(|| a.kb.cmp(&b.kb))
+    });
     let total = rows.len() as u32;
     ReadingsLane {
         available: true,
@@ -789,14 +826,17 @@ async fn memory_lane(
     for v in super::buffered_join(id_futs, state.fanout_cap).await {
         rows.extend(v);
     }
-    if read_ids.len() > 1 {
-        rows.sort_by(|a, b| {
-            a.recalled_at
-                .is_none()
-                .cmp(&b.recalled_at.is_none())
-                .then_with(|| a.recalled_at.cmp(&b.recalled_at))
-        });
-    }
+    // Explicit total order (recalled_at with NULL last, memory_id,
+    // memory_kb) on every read, not just multi-part chains: same-instant
+    // recalls resolve without depending on row walk order.
+    rows.sort_by(|a, b| {
+        a.recalled_at
+            .is_none()
+            .cmp(&b.recalled_at.is_none())
+            .then_with(|| a.recalled_at.cmp(&b.recalled_at))
+            .then_with(|| a.memory_id.cmp(&b.memory_id))
+            .then_with(|| a.memory_kb.cmp(&b.memory_kb))
+    });
     let mut ids_by_kb: std::collections::BTreeMap<String, Vec<String>> =
         std::collections::BTreeMap::new();
     for r in &rows {
@@ -1032,11 +1072,14 @@ async fn outcome_lane(
         checks,
         not_committed: None,
     };
-    if !files_ok {
-        return OutcomeLane::unavailable("files unavailable");
-    }
-    if !commits_ok {
-        return OutcomeLane::unavailable("commits unavailable");
+    // Per-lane drop-on-error: `verdict`/`checks`/`last_assistant_text`
+    // come from the already-loaded `SessionOut`, never from a failing
+    // reader, so a files- or commits-lane failure must NOT cascade here.
+    // Only `not_committed` depends on those readers; when either failed
+    // it stays `None` (its Option models "not computed") and the failing
+    // lane itself carries its own `unavailable`.
+    if !files_ok || !commits_ok {
+        return base;
     }
     OutcomeLane {
         not_committed: Some(compute_not_committed(files_rows, commit_rows).await),

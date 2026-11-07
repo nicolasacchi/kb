@@ -681,8 +681,14 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
         )
         // A3 — one daemon-rendered session card (kb-session-card/1) with
         // paged children, derived read over other lanes' readers.
-        .route("/sessions/{session_id}/card", get(routes::session_card::card))
-        .route("/sessions/{session_id}/children", get(routes::session_card::children))
+        .route(
+            "/sessions/{session_id}/card",
+            get(routes::session_card::card),
+        )
+        .route(
+            "/sessions/{session_id}/children",
+            get(routes::session_card::children),
+        )
         // RL-track (v0.18) — reading lists. Multiple named, ordered lists
         // per kb; entries target a whole artifact or an anchored section;
         // read state derived from reading progress. Cross-kb GET fan-out;

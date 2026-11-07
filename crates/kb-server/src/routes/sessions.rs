@@ -225,9 +225,12 @@ pub struct SessionOut {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-export", ts(optional))]
     pub root_session_id: Option<String>,
-    /// A3 — how many newest-capture rows hang under this session's tree
-    /// root (`root_session_id = this id`). Always present (0 for a leaf);
-    /// filled per page by one batched read, surfaced never scored.
+    /// A3 — how many children this row has, by the card predicate — the
+    /// ONE definition both this list and the card use: a root counts its
+    /// whole flood (`root_session_id = this id`, any depth); a non-root
+    /// counts its direct children (`parent_session_id = this id`).
+    /// Always present (0 for a leaf); filled per page by one batched
+    /// read, surfaced never scored.
     pub child_count: u32,
     /// V0047 — lineage, SURFACED never scored (invariant #11). The capture
     /// cwd's repo slug; `None` when the cwd is gone.
@@ -659,9 +662,9 @@ fn apply_segment_counts(rows: &mut [SessionOut], counts: &HashMap<String, u32>) 
         }
     }
 }
-/// A3 — fill the DERIVED `child_count` (newest-capture rows whose
-/// `root_session_id` is this row's id) on a page. One batched indexed
-/// lookup per kb (fan-out, #28), over the page's ids only. Type-pure
+/// A3 — fill the DERIVED `child_count` (this row's children by the card
+/// predicate — see `SessionOut::child_count`) on a page. One batched
+/// indexed lookup per kb (fan-out, #28), over the page's ids only.
 /// half is [`apply_child_counts`] (unit-pinned). A failure folds to an
 /// empty map, so an id renders 0 — same posture as `memory_count`.
 async fn annotate_child_counts(state: &Arc<KbHandles>, rows: &mut [SessionOut]) {
