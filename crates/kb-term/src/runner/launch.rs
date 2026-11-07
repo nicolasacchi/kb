@@ -34,6 +34,10 @@ pub const DEFAULT_EXIT_KEYS: [&str; 3] = ["C-c", "C-c", "C-d"];
 
 /// Build the exact `new-session` argv for a launch. Pure (no IO) so the
 /// gate shape is pinned by a unit test.
+///
+/// The eight parameters are the documented argv pieces in order; bundling
+/// them into a struct would obscure the exact-vector test.
+#[allow(clippy::too_many_arguments)]
 pub fn gate_argv(
     tmux_bin: &str,
     sock: &Path,
@@ -301,15 +305,11 @@ async fn launch_locked<S: Supervisor>(
     // Step 4: user options (never env, argv or secret-bearing text).
     let started = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
     set_user_options(runner, &sock, id, spec, started).await?;
     // The pane already exists (the gate holds the harness); name its pid
     // in the tap-timeout error so diagnostics can confirm the teardown.
-    let pane_pid_early: u32 = match read_pane_pid(runner, &sock).await {
-        Ok(pid) => pid,
-        Err(_) => 0,
-    };
+    let pane_pid_early: u32 = read_pane_pid(runner, &sock).await.unwrap_or_default();
     // Step 5: tap stage.
     if runner.cfg.require_tap {
         runner.supervisor.start_tap(id).await?;
@@ -556,8 +556,6 @@ pub fn harness_known(harness: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runner::supervisor::fake::FakeSupervisor;
-    use crate::runner::tmux::fake::FakeTmux;
     use std::collections::HashMap;
     use std::path::PathBuf;
 
@@ -647,18 +645,11 @@ mod tests {
             *cwd = "/definitely/not/a/dir/kb-term".to_string();
         }
         bad.push(r);
-        if let Request::Launch { argv, .. } = {
-            let mut r = base();
-            if let Request::Launch { argv, .. } = &mut r {
-                *argv = Some(vec![]);
-            }
-            r
-        } {
-            bad.push(Request::Launch {
-                argv: argv.clone(),
-                ..base()
-            });
+        let mut r = base();
+        if let Request::Launch { argv, .. } = &mut r {
+            *argv = Some(vec![]);
         }
+        bad.push(r);
         let mut r = base();
         if let Request::Launch { argv, .. } = &mut r {
             *argv = Some(vec!["cat".to_string()]);
@@ -688,19 +679,51 @@ mod tests {
             *argv = Some(vec!["/bin/cat\0x".to_string()]);
         }
         bad.push(r);
+        // `validate_launch` is pure (takes neither Tmux nor Supervisor),
+        // so it cannot spawn anything by construction; the ordering
+        // "validation before any tmux/process call" is pinned at the RPC
+        // boundary by `bad_launch_precedes_any_tmux_call` below.
         for req in bad {
-            let fake = FakeTmux::new();
-            let sup = FakeSupervisor::new();
             let err = validate_launch(&req, &cfg).unwrap_err();
             assert_eq!(err.code(), "bad-request", "request {req:?}");
-            assert!(
-                fake.calls.lock().unwrap().is_empty(),
-                "no tmux call may happen before validation"
-            );
-            assert!(
-                sup.calls.lock().unwrap().is_empty(),
-                "no process may be spawned before validation"
-            );
         }
+    }
+
+    /// Validation precedes ANY tmux/process interaction: with a tmux
+    /// binary that does not exist, a bad launch must still answer
+    /// `bad-request` (not `tmux-failed`) and create no holder. If
+    /// validation ever ran after the holder spawn, spawning the bogus
+    /// binary would fail first and the code would differ.
+    #[tokio::test]
+    async fn bad_launch_precedes_any_tmux_call() {
+        let dir = tempfile::tempdir().unwrap();
+        let run_dir = dir.path().join("run");
+        std::fs::create_dir_all(run_dir.join("s")).unwrap();
+        std::fs::create_dir_all(run_dir.join("runner")).unwrap();
+        let cfg = RunnerConfig::test_config(
+            run_dir.clone(),
+            "/definitely/not/a/tmux/kb-term".to_string(),
+            std::path::PathBuf::from("/dev/null"),
+        );
+        let runner = crate::runner::Runner::direct(cfg);
+        let req = Request::Launch {
+            harness: Harness::Omp,
+            argv: Some(vec!["relative-argv".to_string()]),
+            resume_sid: None,
+            cwd: "/tmp".to_string(),
+            cols: Some(120),
+            rows: Some(40),
+            env: None,
+            exit_keys: None,
+        };
+        match crate::runner::rpc::dispatch(&runner, &req).await {
+            crate::wire::Response::Err { code, .. } => assert_eq!(code, "bad-request"),
+            crate::wire::Response::Ok { .. } => panic!("bad launch must be bad-request"),
+        }
+        let entries: Vec<_> = std::fs::read_dir(run_dir.join("s"))
+            .unwrap()
+            .flatten()
+            .collect();
+        assert!(entries.is_empty(), "no holder may be spawned");
     }
 }

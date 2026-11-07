@@ -114,7 +114,7 @@ async fn run_real(
     timeout: Option<Duration>,
 ) -> Result<TmuxOut, RunnerError> {
     let mut argv = vec!["-S".to_string(), sock.to_string_lossy().into_owned()];
-    argv.extend(args.into_iter());
+    argv.extend(args);
     this.exec(&argv, timeout.unwrap_or(Duration::from_secs(5)))
         .await
 }

@@ -8,18 +8,13 @@ use std::path::PathBuf;
 use clap::{Parser, ValueEnum};
 
 /// How holders are started and stopped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
 pub enum SupervisorKind {
     /// `systemctl --user start kb-term@<id>.service` per session.
+    #[default]
     Systemd,
     /// Spawn (and reap) the holder processes directly. CI has no systemd.
     Direct,
-}
-
-impl Default for SupervisorKind {
-    fn default() -> Self {
-        SupervisorKind::Systemd
-    }
 }
 
 /// kb-termd configuration. `pane_shell` exists for the launch profiles
