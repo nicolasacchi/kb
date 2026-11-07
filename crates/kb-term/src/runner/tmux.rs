@@ -213,6 +213,11 @@ pub mod fake {
     use std::sync::Mutex;
 
     /// A fake [`Tmux`] that records every call and answers from a script.
+    ///
+    /// The grid owner option `@kb_owner_grid` and the window size are
+    /// tracked statefully (set-option / resize-window / show-options /
+    /// display-message consult the tracked state before the canned
+    /// script) so `grid::take_size` / `release_size` run end-to-end.
     #[derive(Default)]
     pub struct FakeTmux {
         /// `(socket, args)` per call, in order.
@@ -225,6 +230,10 @@ pub mod fake {
         pub timeout: bool,
         /// Stdin payloads in call order (paste's `load-buffer -`).
         pub stdin_log: Mutex<Vec<Vec<u8>>>,
+        /// Tracked `@kb_owner_grid` value.
+        pub owner: Mutex<Option<String>>,
+        /// Tracked window size `(cols, rows)`.
+        pub size: Mutex<(u16, u16)>,
     }
 
     impl FakeTmux {
@@ -232,6 +241,7 @@ pub mod fake {
         pub fn new() -> Self {
             FakeTmux {
                 version_out: Mutex::new("tmux 3.7c\n".to_string()),
+                size: Mutex::new((100, 30)),
                 ..FakeTmux::default()
             }
         }
@@ -253,6 +263,62 @@ pub mod fake {
                 ));
             }
             let key = args.first().copied().unwrap_or("");
+            // Stateful grid behaviour first (owner + size survive
+            // set-option / resize-window); other keys fall back to the
+            // canned script.
+            match key {
+                "show-options" if args.iter().any(|a| *a == "@kb_owner_grid") => {
+                    let owner = self.owner.lock().unwrap().clone().unwrap_or_default();
+                    return Ok(TmuxOut {
+                        ok: true,
+                        stdout: format!("{owner}\n"),
+                        stderr: String::new(),
+                    });
+                }
+                "set-option" if args.iter().any(|a| *a == "@kb_owner_grid") => {
+                    let val = args.last().map(|s| *s).unwrap_or("");
+                    let mut owner = self.owner.lock().unwrap();
+                    *owner = if val.is_empty() {
+                        None
+                    } else {
+                        Some(val.to_string())
+                    };
+                    return Ok(TmuxOut {
+                        ok: true,
+                        stdout: String::new(),
+                        stderr: String::new(),
+                    });
+                }
+                "resize-window" => {
+                    if let (Some(x), Some(y)) = (
+                        args.iter().position(|a| *a == "-x"),
+                        args.iter().position(|a| *a == "-y"),
+                    ) {
+                        let cols: u16 =
+                            args.get(x + 1).and_then(|s| (*s).parse().ok()).unwrap_or(0);
+                        let rows: u16 =
+                            args.get(y + 1).and_then(|s| (*s).parse().ok()).unwrap_or(0);
+                        *self.size.lock().unwrap() = (cols, rows);
+                    }
+                    return Ok(TmuxOut {
+                        ok: true,
+                        stdout: String::new(),
+                        stderr: String::new(),
+                    });
+                }
+                "display-message"
+                    if args.iter().any(|a| a.contains("window_width"))
+                        && !self.canned.lock().unwrap().contains_key("display-message") =>
+                {
+                    let (cols, rows) = *self.size.lock().unwrap();
+                    return Ok(TmuxOut {
+                        ok: true,
+                        stdout: format!("{cols} {rows}\n"),
+                        stderr: String::new(),
+                    });
+                }
+                _ => {}
+            }
             let out = self
                 .canned
                 .lock()

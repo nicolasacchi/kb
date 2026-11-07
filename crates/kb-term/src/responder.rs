@@ -239,15 +239,9 @@ impl Responder {
             }
         }
     }
-
     fn feed_string(&mut self, byte: u8, out: &mut Vec<u8>) {
-        if byte == 0x07 && self.state == State::Osc {
+        if byte == 0x07 && matches!(self.state, State::Osc | State::Dcs) {
             self.finish_string(Terminator::Bel, out);
-            return;
-        }
-        if byte == 0x9C {
-            // C1 ST terminates a string.
-            self.finish_string(Terminator::St, out);
             return;
         }
         if byte == 0x1B {
@@ -260,6 +254,8 @@ impl Responder {
             };
             return;
         }
+        // C1 bytes (including 0x9C) are ignored so UTF-8 continuations
+        // inside a string payload are never misread as terminators.
         if (0x80..=0x9F).contains(&byte) {
             return;
         }
@@ -300,7 +296,12 @@ impl Responder {
             if params.starts_with(b">") {
                 let rest = &params[1..];
                 if rest.is_empty() || rest == b"0" {
-                    let mut reply = b"\x1bP>\x1b\\kb-term ".to_vec();
+                    // Single DCS string: ESC P > | <name> <ver> ESC \
+                    // (8-bit `|` 0x7C marks XTVERSION for tmux; the ST
+                    // terminates the DCS, so the name is payload).
+                    let mut reply = b"\x1bP>|".to_vec();
+                    reply.extend_from_slice(XTVERSION_NAME.as_bytes());
+                    reply.push(b' ');
                     reply.extend_from_slice(env!("CARGO_PKG_VERSION").as_bytes());
                     reply.extend_from_slice(b"\x1b\\");
                     self.answer(out, "xtversion", &reply);
@@ -423,7 +424,7 @@ pub fn spawn_pump(
         let mut responder = Responder::new(cfg);
         let mut buf = vec![0u8; 65536];
         loop {
-            let readable = match master.readable().await {
+            let mut readable = match master.readable().await {
                 Ok(g) => g,
                 Err(_) => break,
             };
@@ -439,12 +440,23 @@ pub fn spawn_pump(
                         .fetch_add(n as u64, Ordering::Relaxed);
                     *read_shared.last_output.lock().unwrap() = Some(Instant::now());
                     let mut out = Vec::new();
+                    let before = responder.queries_answered();
                     responder.feed(&buf[..n], &mut out);
-                    if !out.is_empty() {
-                        read_shared.queries_answered.fetch_add(1, Ordering::Relaxed);
-                        // Replies queue into the same writer as keys;
-                        // never block the read loop on a full queue.
-                        let _ = write_tx.try_send(out);
+                    let added = responder.queries_answered() - before;
+                    if added > 0 {
+                        // Replies queue into the same writer as keys.
+                        // Await the send (2 s bound, like
+                        // PumpHandle::write) so a reply is never
+                        // silently dropped while still counted; the
+                        // counter only moves for replies actually queued.
+                        let sent = tokio::time::timeout(Duration::from_secs(2), write_tx.send(out))
+                            .await
+                            .is_ok_and(|r| r.is_ok());
+                        if sent {
+                            read_shared
+                                .queries_answered
+                                .fetch_add(added, Ordering::Relaxed);
+                        }
                     }
                 }
                 Ok(Err(e)) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
@@ -462,7 +474,7 @@ async fn write_all_async(fd: &AsyncFd<std::fs::File>, item: &[u8]) -> Result<(),
     }
     let mut pos = 0usize;
     while pos < item.len() {
-        let writable = fd.writable().await.map_err(|_| ())?;
+        let mut writable = fd.writable().await.map_err(|_| ())?;
         let n = writable.try_io(|inner: &AsyncFd<std::fs::File>| {
             use std::io::Write;
             let mut f = inner.get_ref().try_clone()?;
@@ -491,12 +503,10 @@ mod tests {
     #[test]
     fn responder_replies_are_pinned_goldens() {
         let dark = ResponderCfg::default();
-        assert_eq!(feed_all(dark.clone(), b"\x1b[c"), DA1_REPLY);
-        assert_eq!(feed_all(dark.clone(), b"\x1b[0c"), DA1_REPLY);
-        assert_eq!(feed_all(dark.clone(), b"\x1b[>c"), DA2_REPLY);
-        assert_eq!(feed_all(dark.clone(), b"\x1b[>0c"), DA2_REPLY);
         let ver = env!("CARGO_PKG_VERSION");
-        let xt = format!("\x1bP>\x1b\\kb-term {ver}\x1b\\");
+        // Single DCS string ESC P > | kb-term <ver> ESC \ : the `|`
+        // (0x7C) marks XTVERSION for tmux; the ST terminates the DCS.
+        let xt = format!("\x1bP>|{XTVERSION_NAME} {ver}\x1b\\");
         assert_eq!(feed_all(dark.clone(), b"\x1b[>q"), xt.as_bytes());
         assert_eq!(feed_all(dark.clone(), b"\x1b[>0q"), xt.as_bytes());
         assert_eq!(feed_all(dark.clone(), b"\x1b[?996n"), b"\x1b[?997;1n");
@@ -535,10 +545,17 @@ mod tests {
                 };
                 let reply = feed_all(cfg, b"\x1b[c");
                 assert_eq!(reply, DA1_REPLY);
-                let attrs: Vec<&str> = reply[5..reply.len() - 1]
-                    .split(|b| *b == b';')
-                    .map(|s| std::str::from_utf8(s).unwrap())
-                    .collect();
+                // Parse the CSI parameter string properly: strip the
+                // ESC [ ? prefix and c suffix, split on `;`, assert
+                // every attribute (a leading `4` would be missed by
+                // slicing a fixed span).
+                let text = std::str::from_utf8(&reply).unwrap();
+                let params = text
+                    .strip_prefix("\x1b[?")
+                    .and_then(|s| s.strip_suffix('c'))
+                    .expect("DA1 reply must be CSI ? ... c");
+                let attrs: Vec<&str> = params.split(';').collect();
+                assert_eq!(attrs, ["62", "22"], "DA1 attributes pinned");
                 assert!(!attrs.contains(&"4"), "DA1 must not contain attribute 4");
             }
         }
@@ -698,5 +715,58 @@ mod tests {
         let mut out2 = Vec::new();
         r.feed(&c1, &mut out2);
         assert!(out2.is_empty());
+    }
+    #[test]
+    fn responder_dcs_bel_terminates_then_da1_answers() {
+        // A DCS string closed by BEL must not swallow the next query.
+        let mut r = Responder::new(ResponderCfg::default());
+        let mut out = Vec::new();
+        r.feed(b"\x1bP1$r\x07", &mut out);
+        assert!(out.is_empty(), "DCS content answers nothing: {out:?}");
+        r.feed(b"\x1b[c", &mut out);
+        assert_eq!(
+            &out[..],
+            DA1_REPLY,
+            "DA1 after BEL-terminated DCS must answer"
+        );
+    }
+
+    #[test]
+    fn responder_c1_in_string_is_not_a_terminator() {
+        // 0x9C inside an OSC payload is a UTF-8 continuation, not ST:
+        // the string stays open, the DA1 inside it answers nothing,
+        // and chunking never changes the outcome.
+        let mut stream = b"\x1b]11;?".to_vec();
+        // A payload byte that would look like a C1 ST if misread.
+        stream.push(0x9C);
+        stream.extend_from_slice(b"\x07");
+        stream.extend_from_slice(b"\x1b[c");
+        let whole = feed_all(ResponderCfg::default(), &stream);
+        // The 0x9C is ignored, so the payload stays exactly `11;?`
+        // and the BEL terminates it: the OSC 11 reply (BEL-mirrored)
+        // plus the trailing DA1. Under the old C1-ST reading the
+        // terminator would have been ST and this would fail.
+        let mut want = b"\x1b]11;rgb:1e1e/1e1e/1e1e\x07".to_vec();
+        want.extend_from_slice(DA1_REPLY);
+        assert_eq!(&whole[..], &want[..]);
+        for cut in 0..stream.len() {
+            assert_eq!(
+                feed_split(ResponderCfg::default(), &stream, &[cut]),
+                whole,
+                "1-cut at {cut}"
+            );
+        }
+    }
+
+    #[test]
+    fn responder_queries_answered_counts_every_query_in_a_batch() {
+        // Two queries in one feed batch count as two (the pump's
+        // stats delta the shared counter moves by).
+        let mut r = Responder::new(ResponderCfg::default());
+        let mut out = Vec::new();
+        let before = r.queries_answered();
+        r.feed(b"\x1b[c\x1b[>q", &mut out);
+        assert_eq!(r.queries_answered() - before, 2);
+        assert_eq!(r.queries_answered(), 2);
     }
 }

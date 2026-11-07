@@ -10,12 +10,11 @@
 //! release_size, grid. Media arrives in a later unit and reports
 //! `bad-request` here.
 //!
-//! Success payloads for launch/kill/read/history are built with `json!`:
-//! launch is `{id, pane_pid, cols, rows}`, kill is `{exit_code, forced}`,
-//! read/history are `{text, truncated}`. Later units should prefer small
-//! typed `Serialize` structs (LaunchData/KillData/ReadData) for these
-//! shapes instead of extending the `json!` pattern; the wire map is kept
-//! stable either way.
+//! Success payloads for the T9 ops (viewer, paste, grid, empty) are
+//! typed `Serialize` structs from [`crate::wire`] (`ViewerData`,
+//! `PasteData`, `GridData`, `EmptyData`) so the wire map stays
+//! generator-visible. Launch/kill/read/history keep their pre-existing
+//! `json!` payloads (unchanged in this unit).
 
 use serde_json::{json, Value};
 
@@ -27,7 +26,7 @@ use crate::runner::launch;
 use crate::runner::supervisor::Supervisor;
 use crate::runner::tmux::Tmux;
 use crate::runner::{Runner, RunnerError};
-use crate::wire::{Request, Response};
+use crate::wire::{EmptyData, GridData, PasteData, Request, Response, ViewerData};
 
 /// Parse an enveloped request line. The envelope is `{v, id, op, ...}`;
 /// `v`/`id` are stripped before the wire `Request` (deny_unknown_fields)
@@ -133,7 +132,10 @@ async fn dispatch_inner<S: Supervisor>(
                 .unwrap_or((runner.cfg.default_cols, runner.cfg.default_rows));
             runner.viewer_open(id, viewer, cols, rows).await?;
             tracing::info!(id, viewer, "viewer opened");
-            Ok(json!({"viewer": viewer}))
+            Ok(serde_json::to_value(&ViewerData {
+                viewer: viewer.clone(),
+            })
+            .map_err(|e| RunnerError::Internal(e.to_string()))?)
         }
         Request::ViewerClose { id, viewer } => {
             if !valid_id(id) {
@@ -147,12 +149,16 @@ async fn dispatch_inner<S: Supervisor>(
             }
             runner.viewer_close(id, viewer).await?;
             tracing::info!(id, viewer, "viewer closed");
-            Ok(json!({"viewer": viewer}))
+            Ok(serde_json::to_value(&ViewerData {
+                viewer: viewer.clone(),
+            })
+            .map_err(|e| RunnerError::Internal(e.to_string()))?)
         }
         Request::Keys { id, viewer, input } => {
             if !valid_id(id) {
                 return Err(RunnerError::InvalidId);
             }
+            runner.reap_anchor_closed_viewers(id).await;
             if !crate::viewer::valid_viewer(viewer) {
                 return Err(RunnerError::BadViewer(format!("bad viewer id `{viewer}`")));
             }
@@ -171,12 +177,14 @@ async fn dispatch_inner<S: Supervisor>(
                 .ok_or_else(|| RunnerError::NoViewer(format!("no viewer `{viewer}` for {id}")))?;
             pump.write(bytes).await?;
             runner.set_paste_only(id, false).await;
-            Ok(json!({}))
+            Ok(serde_json::to_value(&EmptyData {})
+                .map_err(|e| RunnerError::Internal(e.to_string()))?)
         }
         Request::Paste { id, viewer, text } => {
             if !valid_id(id) {
                 return Err(RunnerError::InvalidId);
             }
+            runner.reap_anchor_closed_viewers(id).await;
             if !crate::viewer::valid_viewer(viewer) {
                 return Err(RunnerError::BadViewer(format!("bad viewer id `{viewer}`")));
             }
@@ -190,10 +198,11 @@ async fn dispatch_inner<S: Supervisor>(
             }
             let outcome = crate::runner::paste::paste_text(runner, &runner.tmux, id, text).await?;
             runner.set_paste_only(id, outcome.paste_only).await;
-            Ok(json!({
-                "paste_only": outcome.paste_only,
-                "bracketed": outcome.bracketed,
-            }))
+            Ok(serde_json::to_value(&PasteData {
+                paste_only: outcome.paste_only,
+                bracketed: outcome.bracketed,
+            })
+            .map_err(|e| RunnerError::Internal(e.to_string()))?)
         }
         Request::Enter {
             id,
@@ -204,6 +213,7 @@ async fn dispatch_inner<S: Supervisor>(
             if !valid_id(id) {
                 return Err(RunnerError::InvalidId);
             }
+            runner.reap_anchor_closed_viewers(id).await;
             if !crate::viewer::valid_viewer(viewer) {
                 return Err(RunnerError::BadViewer(format!("bad viewer id `{viewer}`")));
             }
@@ -227,7 +237,8 @@ async fn dispatch_inner<S: Supervisor>(
                 .ok_or_else(|| RunnerError::NoViewer(format!("no viewer `{viewer}` for {id}")))?;
             pump.write(vec![0x0d]).await?;
             runner.set_paste_only(id, false).await;
-            Ok(json!({}))
+            Ok(serde_json::to_value(&EmptyData {})
+                .map_err(|e| RunnerError::Internal(e.to_string()))?)
         }
         Request::TakeSize {
             id,
@@ -252,11 +263,12 @@ async fn dispatch_inner<S: Supervisor>(
                 *force,
             )
             .await?;
-            Ok(json!({
-                "cols": state.cols,
-                "rows": state.rows,
-                "owner": state.owner,
-            }))
+            Ok(serde_json::to_value(&GridData {
+                cols: state.cols,
+                rows: state.rows,
+                owner: state.owner.clone(),
+            })
+            .map_err(|e| RunnerError::Internal(e.to_string()))?)
         }
         Request::ReleaseSize { id, owner } => {
             if !valid_id(id) {
@@ -266,7 +278,8 @@ async fn dispatch_inner<S: Supervisor>(
                 return Err(RunnerError::NoSession(format!("no session {id}")));
             }
             crate::runner::grid::release_size(runner, &runner.tmux, id, owner).await?;
-            Ok(json!({}))
+            Ok(serde_json::to_value(&EmptyData {})
+                .map_err(|e| RunnerError::Internal(e.to_string()))?)
         }
         Request::Grid { id } => {
             if !valid_id(id) {
@@ -277,11 +290,12 @@ async fn dispatch_inner<S: Supervisor>(
             }
             let state =
                 crate::runner::grid::grid_state(&runner.tmux, &runner.holder_socket(id)).await?;
-            Ok(json!({
-                "cols": state.cols,
-                "rows": state.rows,
-                "owner": state.owner,
-            }))
+            Ok(serde_json::to_value(&GridData {
+                cols: state.cols,
+                rows: state.rows,
+                owner: state.owner.clone(),
+            })
+            .map_err(|e| RunnerError::Internal(e.to_string()))?)
         }
         // Later units own media; an honest bad-request, not a silent no-op.
         Request::Media { .. } => Err(RunnerError::BadRequest(

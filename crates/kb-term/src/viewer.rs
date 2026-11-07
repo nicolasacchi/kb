@@ -9,14 +9,13 @@
 //! The runner keeps the [`Viewer`] map (see `runner/mod.rs`); this module
 //! owns the client handle and the id validation.
 
-use std::fs::File;
+use std::os::unix::io::OwnedFd;
 
-use crate::pty::{open_pty, set_winsize, spawn_on_pty, winsize_of};
+use tokio::process::Command;
+
+use crate::pty::{async_fd_dup, drop_kill, open_pty, set_winsize, spawn_on_pty, winsize_of};
 use crate::responder::{spawn_pump, PumpHandle, ResponderCfg};
 use crate::runner::RunnerError;
-use std::os::unix::io::{FromRawFd, IntoRawFd, OwnedFd};
-use tokio::io::unix::AsyncFd;
-use tokio::process::Command;
 
 /// One attached hidden client (the anchor or a viewer).
 pub struct ClientHandle {
@@ -80,11 +79,8 @@ impl Drop for ClientHandle {
         // Dropping the pump closes the master (SIGHUP on the client);
         // SIGTERM as well keeps a dropped runner from leaking the client
         // process if it ignores HUP. Reaping is the pty wait task.
-        if self.pid != 0 {
-            unsafe {
-                libc::kill(self.pid as i32, libc::SIGTERM);
-            }
-        }
+        // All process signalling lives in `pty` (no unsafe here).
+        drop_kill(self.pid);
     }
 }
 
@@ -129,16 +125,6 @@ pub fn spawn_tmux_client(
         cell_w,
         cell_h,
     })
-}
-
-fn async_fd_dup(master: &OwnedFd) -> Result<AsyncFd<File>, RunnerError> {
-    let dup = master
-        .try_clone()
-        .map_err(|e| RunnerError::Internal(format!("dup master: {e}")))?;
-    let raw = dup.into_raw_fd();
-    // SAFETY: `raw` is a fresh fd owned by us; File takes ownership.
-    let file = unsafe { File::from_raw_fd(raw) };
-    AsyncFd::register(file).map_err(|e| RunnerError::Internal(format!("AsyncFd: {e}")))
 }
 
 /// A registered viewer: its hidden client behind a viewer id.

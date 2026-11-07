@@ -284,20 +284,12 @@ impl<S: Supervisor> Runner<S> {
         viewers.keys().filter(|(sid, _)| sid == id).count()
     }
 
-    /// Open (or re-open, idempotently) a hidden client for a viewer.
-    ///
-    /// The std Mutex guard is never held across an `.await`: the client
-    /// is spawned BEFORE the map is locked, and only discarded if a
-    /// second open won the race.
-    pub async fn viewer_open(
-        &self,
-        id: &str,
-        viewer: &str,
-        cols: u16,
-        rows: u16,
-    ) -> Result<(), RunnerError> {
-        // When the anchor reports closed, its session is gone: the
-        // viewers of that session close with it.
+    /// Close the session's viewers when its anchor reports closed (spec
+    /// 5: all viewers for a session are closed when the session's anchor
+    /// reports closed). Called on the keys/paste/enter dispatch paths
+    /// (not only viewer_open) so viewers never linger awaiting the next
+    /// open. (The kill path closes viewers directly.)
+    pub async fn reap_anchor_closed_viewers(&self, id: &str) {
         let anchor_closed = {
             let anchors = self.anchors.lock().await;
             anchors
@@ -308,12 +300,34 @@ impl<S: Supervisor> Runner<S> {
         if anchor_closed {
             self.close_viewers_for(id).await;
         }
+    }
+
+    /// Open (or re-open, idempotently) a hidden client for a viewer.
+    ///
+    /// The std Mutex guard is never held across an `.await`. The per-id
+    /// lock (see [`Runner::id_lock`]) serializes cap-check / spawn /
+    /// insert per session so two concurrent opens cannot both pass the
+    /// cap check and insert 2 (cap 8 -> 9); `spawn_tmux_client` is
+    /// synchronous, so no await spans the guard here.
+    pub async fn viewer_open(
+        &self,
+        id: &str,
+        viewer: &str,
+        cols: u16,
+        rows: u16,
+    ) -> Result<(), RunnerError> {
+        // When the anchor reports closed, its session is gone: the
+        // viewers of that session close with it.
+        self.reap_anchor_closed_viewers(id).await;
         if !crate::viewer::valid_viewer(viewer) {
             return Err(RunnerError::BadViewer(format!("bad viewer id `{viewer}`")));
         }
+        let _lock = self.id_lock(id).await;
+        let lock = _lock.lock().await;
         {
             let viewers = self.viewers.lock().await;
             if viewers.contains_key(&(id.to_string(), viewer.to_string())) {
+                drop(lock);
                 return Ok(());
             }
             if viewers.keys().filter(|(sid, _)| sid == id).count()
@@ -326,6 +340,8 @@ impl<S: Supervisor> Runner<S> {
             }
         }
         let (cell_w, cell_h) = self.cfg.cell_px_dims();
+        // `spawn_tmux_client` is synchronous (no .await inside), so
+        // holding the per-id lock across it cannot stall the runtime.
         let client = spawn_tmux_client(
             &self.cfg.tmux_bin,
             &self.holder_socket(id),
@@ -336,10 +352,13 @@ impl<S: Supervisor> Runner<S> {
             &self.cfg.responder_cfg(),
         )?;
         let mut viewers = self.viewers.lock().await;
-        // A concurrent open already inserted: drop ours (killed on drop).
+        // The per-id lock makes a concurrent insert impossible; the
+        // entry API still discards a same-key race as defence in depth.
         viewers
             .entry((id.to_string(), viewer.to_string()))
             .or_insert(Viewer { client });
+        drop(viewers);
+        drop(lock);
         Ok(())
     }
 

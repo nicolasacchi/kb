@@ -404,6 +404,37 @@ pub enum Response {
     },
 }
 
+/// Success payload for `viewer_open` / `viewer_close` (`{"viewer": ...}`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewerData {
+    /// The viewer id.
+    pub viewer: String,
+}
+
+/// Success payload for `paste` (`{"paste_only": ..., "bracketed": ...}`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PasteData {
+    /// Whether the text starts with `/` or `@`.
+    pub paste_only: bool,
+    /// Whether bracketed paste was on in the pane.
+    pub bracketed: bool,
+}
+
+/// Grid result for `take_size` / `grid` (`{"cols", "rows", "owner"}`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GridData {
+    /// Grid columns.
+    pub cols: u16,
+    /// Grid rows.
+    pub rows: u16,
+    /// Grid owner, if any.
+    pub owner: Option<String>,
+}
+
+/// Empty success payload (`{}` for keys / enter / release / resize).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EmptyData {}
+
 /// Session facts returned by `Request::List` inside `Response::Ok` `data`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionInfo {

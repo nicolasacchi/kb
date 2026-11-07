@@ -1557,6 +1557,46 @@ async fn term_int_take_size_moves_the_window_and_a_foreign_owner_is_refused() {
     let grid = dispatch_ok(&tr, Request::Grid { id: id.clone() }).await;
     assert_eq!(grid["owner"], "b");
     assert_eq!(grid["cols"].as_u64().unwrap(), 80);
+    // release_size: non-owner is refused, owner clears (size unchanged).
+    let resp = rpc::dispatch(
+        &tr.runner,
+        &Request::ReleaseSize {
+            id: id.clone(),
+            owner: "a".to_string(),
+        },
+    )
+    .await;
+    match resp {
+        Response::Err { code, .. } => assert_eq!(code, "grid-owned"),
+        Response::Ok { .. } => panic!("non-owner release must be grid-owned"),
+    }
+    dispatch_ok(
+        &tr,
+        Request::ReleaseSize {
+            id: id.clone(),
+            owner: "b".to_string(),
+        },
+    )
+    .await;
+    let grid = dispatch_ok(&tr, Request::Grid { id: id.clone() }).await;
+    assert_eq!(grid["owner"], serde_json::Value::Null);
+    assert_eq!(
+        grid["cols"].as_u64().unwrap(),
+        80,
+        "release must not resize"
+    );
+    // Re-take so the restart check below still finds an owner.
+    dispatch_ok(
+        &tr,
+        Request::TakeSize {
+            id: id.clone(),
+            cols: 80,
+            rows: 24,
+            owner: "b".to_string(),
+            force: false,
+        },
+    )
+    .await;
     // The owner survives a runner restart (read from @kb_owner_grid).
     let run_dir = tr.runner.cfg.run_dir.clone();
     drop(tr);
@@ -1709,7 +1749,9 @@ async fn term_int_viewers_are_drained_and_never_slow_the_pane() {
     }
     let anchor = tr.runner.anchor_stats(&id).await;
     assert!(anchor.is_some() && anchor.unwrap().0 > 0);
-    // Closing a viewer removes it from list-clients.
+    // Closing a viewer removes it from list-clients. The drop path
+    // SIGTERMs (does not SIGHUP/close the master synchronously and does
+    // not reap inline), so poll until the pid leaves before asserting.
     use std::collections::HashSet;
     let (_, before) = tr.tmux(&sock, &["list-clients", "-F", "#{client_pid}"]);
     let before: HashSet<&str> = before.lines().collect();
@@ -1721,11 +1763,105 @@ async fn term_int_viewers_are_drained_and_never_slow_the_pane() {
         },
     )
     .await;
-    let (_, after) = tr.tmux(&sock, &["list-clients", "-F", "#{client_pid}"]);
-    assert!(
-        after.lines().count() < before.len(),
-        "closed viewer must leave list-clients"
-    );
+    let sock2 = sock.clone();
+    let tmux_bin2 = tmux_bin.clone();
+    let n_before = before.len();
+    let gone = poll_until(Duration::from_secs(10), || {
+        let sock = sock2.clone();
+        let tmux = tmux_bin2.clone();
+        async move {
+            let out = std::process::Command::new(&tmux)
+                .arg("-S")
+                .arg(&sock)
+                .arg("list-clients")
+                .arg("-F")
+                .arg("#{client_pid}")
+                .output();
+            match out {
+                Ok(o) if o.status.success() => {
+                    String::from_utf8_lossy(&o.stdout).lines().count() < n_before
+                }
+                _ => false,
+            }
+        }
+    })
+    .await;
+    assert!(gone, "closed viewer must leave list-clients within 10s");
     assert!(!tr.runner.has_viewer(&id, "v1").await);
     assert!(tr.runner.has_viewer(&id, "v2").await);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn term_int_anchor_death_closes_viewers_without_an_open() {
+    let Some(tmux_bin) = require_tmux() else {
+        return;
+    };
+    let tr = TestRunner::new(tmux_bin);
+    boot_runner(&tr).await;
+    let (id, _log) = launch_probe(&tr, "raw").await;
+    dispatch_ok(
+        &tr,
+        Request::ViewerOpen {
+            id: id.clone(),
+            viewer: "web".to_string(),
+        },
+    )
+    .await;
+    assert!(tr.runner.has_viewer(&id, "web").await);
+    // Kill the anchor client (its pid is the @kb_anchor_pid option).
+    let anchor_pid = crate::runner::discovery::anchor_pid(&tr.runner, &id)
+        .await
+        .expect("anchor pid must be recorded");
+    let _ = std::process::Command::new("kill")
+        .arg("-9")
+        .arg(anchor_pid.to_string())
+        .status();
+    // The anchor pump reports closed within a bounded wait.
+    let sock = tr.sock(&id);
+    let tmux = tmux_bin.clone();
+    let sock2 = sock.clone();
+    let closed = poll_until(Duration::from_secs(10), || {
+        let tmux = tmux.clone();
+        let sock = sock2.clone();
+        async move {
+            let out = std::process::Command::new(&tmux)
+                .arg("-S")
+                .arg(&sock)
+                .arg("list-clients")
+                .arg("-F")
+                .arg("#{client_pid}")
+                .output();
+            match out {
+                Ok(o) if o.status.success() => !String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .any(|l| l.trim() == anchor_pid.to_string()),
+                _ => false,
+            }
+        }
+    })
+    .await;
+    assert!(closed, "killed anchor must leave list-clients");
+    // Keys dispatches trip the reap (no further viewer_open): poll
+    // until the pump has observed the anchor death and the viewer is
+    // gone even though nobody closed it explicitly.
+    let mut gone = false;
+    for _ in 0..200 {
+        let _ = rpc::dispatch(
+            &tr.runner,
+            &Request::Keys {
+                id: id.clone(),
+                viewer: "web".to_string(),
+                input: kb_term::wire::KeyInput::Named {
+                    named: vec!["C-c".to_string()],
+                },
+            },
+        )
+        .await;
+        if !tr.runner.has_viewer(&id, "web").await {
+            gone = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(gone, "anchor death must close viewers without an open");
 }

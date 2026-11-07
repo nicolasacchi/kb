@@ -179,11 +179,17 @@ where
     if !valid_owner(owner) {
         return Err(RunnerError::BadSize(format!("bad grid owner `{owner}`")));
     }
+    // Per-session serialization (like launch/kill): the
+    // read-decide-resize-write sequence is atomic per id, so two
+    // concurrent foreign takes cannot both read an unset owner.
+    let _lock = runner.id_lock(id).await;
+    let lock = _lock.lock().await;
     let sock = runner.holder_socket(id);
     let current = grid_state(tmux, &sock).await?;
     decide_take(&current.owner, owner, force)?;
     apply_size(runner, tmux, id, cols, rows).await?;
     write_owner(tmux, &sock, Some(owner)).await?;
+    drop(lock);
     Ok(GridState {
         cols,
         rows,
@@ -205,124 +211,61 @@ where
     if !valid_owner(owner) {
         return Err(RunnerError::BadSize(format!("bad grid owner `{owner}`")));
     }
+    // Same per-session serialization as take_size (release races a take).
+    let _lock = runner.id_lock(id).await;
+    let lock = _lock.lock().await;
     let sock = runner.holder_socket(id);
     let current = read_owner(tmux, &sock).await;
-    match current {
+    let res = match current {
         Some(cur) if cur == owner => write_owner(tmux, &sock, None).await,
         Some(cur) => Err(RunnerError::GridOwned(format!("grid is owned by {cur}"))),
         None => Err(RunnerError::GridOwned("grid has no owner".to_string())),
-    }
+    };
+    drop(lock);
+    res
 }
 
 /// `grid_owner_state_machine`: unset -> take ok; same owner retake ok;
 /// foreign non-force -> `grid-owned` with the size unchanged; foreign force
 /// ok and owner changes; release by non-owner -> `grid-owned`; release by
-/// owner clears; bounds -> `bad-size`. Pinned with a fake tmux.
+/// owner clears; bounds -> `bad-size`. Runs the REAL `take_size` /
+/// `release_size` / `grid_state` / `apply_size` against a stateful fake
+/// tmux, so a dropped `resize-window`, a skipped
+/// `set-option @kb_owner_grid`, or a broken release cannot pass.
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runner::config::RunnerConfig;
+    use crate::runner::supervisor::DirectSupervisor;
     use crate::runner::tmux::fake::FakeTmux;
+    use crate::runner::Runner;
 
-    fn sock() -> std::path::PathBuf {
-        std::path::PathBuf::from("/tmp/fake.sock")
-    }
-
-    /// Minimal in-memory owner map behind a fake-tmux script, standing
-    /// in for the tmux server's `@kb_owner_grid` handling.
-    struct OwnerFake {
-        owner: std::sync::Mutex<Option<String>>,
-        canned: std::sync::Mutex<std::collections::HashMap<String, String>>,
-    }
-
-    impl OwnerFake {
-        fn new(owner: Option<String>, cols: u16, rows: u16) -> Self {
-            let mut canned = std::collections::HashMap::new();
-            canned.insert("display-message".to_string(), format!("{cols} {rows}\n"));
-            OwnerFake {
-                owner: std::sync::Mutex::new(owner),
-                canned: std::sync::Mutex::new(canned),
-            }
-        }
-
-        fn take_decision(&self, owner: &str, force: bool) -> Result<(), RunnerError> {
-            decide_take(&self.owner.lock().unwrap().clone(), owner, force)
-        }
-    }
-
-    impl Tmux for OwnerFake {
-        fn run<'a>(
-            &'a self,
-            _sock: &'a Path,
-            args: &'a [&'a str],
-            _timeout: Option<std::time::Duration>,
-        ) -> impl std::future::Future<Output = Result<crate::runner::tmux::TmuxOut, RunnerError>>
-               + Send
-               + 'a {
-            let key = args.first().copied().unwrap_or("");
-            let out = match key {
-                "show-options" => {
-                    let owner = self.owner.lock().unwrap().clone().unwrap_or_default();
-                    crate::runner::tmux::TmuxOut {
-                        ok: true,
-                        stdout: format!("{owner}\n"),
-                        stderr: String::new(),
-                    }
-                }
-                "set-option" => {
-                    if args.get(3) == Some(&OWNER_OPTION) || args.iter().any(|a| *a == OWNER_OPTION)
-                    {
-                        let val = args.last().map(|s| *s).unwrap_or("");
-                        let mut owner = self.owner.lock().unwrap();
-                        *owner = if val.is_empty() {
-                            None
-                        } else {
-                            Some(val.to_string())
-                        };
-                    }
-                    crate::runner::tmux::TmuxOut {
-                        ok: true,
-                        stdout: String::new(),
-                        stderr: String::new(),
-                    }
-                }
-                other => {
-                    let ans = self
-                        .canned
-                        .lock()
-                        .unwrap()
-                        .get(other)
-                        .cloned()
-                        .unwrap_or_default();
-                    crate::runner::tmux::TmuxOut {
-                        ok: true,
-                        stdout: ans,
-                        stderr: String::new(),
-                    }
-                }
-            };
-            async move { Ok(out) }
-        }
-
-        fn run_global<'a>(
-            &'a self,
-            _args: &'a [&'a str],
-        ) -> impl std::future::Future<Output = Result<crate::runner::tmux::TmuxOut, RunnerError>>
-               + Send
-               + 'a {
-            let out = crate::runner::tmux::TmuxOut {
-                ok: true,
-                stdout: "tmux 3.7c\n".to_string(),
-                stderr: String::new(),
-            };
-            async move { Ok(out) }
-        }
+    fn size_calls(fake: &FakeTmux) -> usize {
+        fake.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, a)| a.first().map(String::as_str) == Some("resize-window"))
+            .count()
     }
 
     #[tokio::test]
     async fn grid_owner_state_machine() {
-        // Unset -> take ok; same owner retake ok.
-        let fake = OwnerFake::new(None, 100, 30);
-        let state = grid_state(&fake, &sock()).await.unwrap();
+        // A runner whose scripted tmux tracks owner + size (no anchors,
+        // so apply_size's client-winsize step is a no-op here).
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = RunnerConfig::test_config(
+            dir.path().join("run"),
+            "/bin/true".to_string(),
+            dir.path().join("conf"),
+        );
+        let runner: Runner<DirectSupervisor> = Runner::direct(cfg);
+        let fake = FakeTmux::new();
+        let id = "abcd1234";
+        let sock = runner.holder_socket(id);
+
+        // grid_state reads the tracked size.
+        let state = grid_state(&fake, &sock).await.unwrap();
         assert_eq!(
             state,
             GridState {
@@ -331,36 +274,83 @@ mod tests {
                 owner: None
             }
         );
-        fake.take_decision("a", false).unwrap();
-        write_owner(&fake, &sock(), Some("a")).await.unwrap();
-        fake.take_decision("a", false).unwrap();
-        // Foreign non-force -> grid-owned.
-        let err = fake.take_decision("b", false).unwrap_err();
+        // Unset -> take ok (resize-window + set-option both run).
+        let before = size_calls(&fake);
+        let state = take_size(&runner, &fake, id, 100, 30, "a", false)
+            .await
+            .unwrap();
+        assert_eq!(
+            state,
+            GridState {
+                cols: 100,
+                rows: 30,
+                owner: Some("a".to_string())
+            }
+        );
+        assert_eq!(size_calls(&fake), before + 1, "allowed take resizes");
+        assert_eq!(read_owner(&fake, &sock).await, Some("a".to_string()));
+        // Same owner retake ok.
+        take_size(&runner, &fake, id, 100, 30, "a", false)
+            .await
+            .unwrap();
+        // Foreign non-force -> grid-owned, no resize, size/owner unchanged.
+        let before_refused = size_calls(&fake);
+        let err = take_size(&runner, &fake, id, 80, 24, "b", false)
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), "grid-owned");
         assert!(err.message().contains('a'), "message names the owner");
-        // Foreign force -> ok; owner changes.
-        fake.take_decision("b", true).unwrap();
-        write_owner(&fake, &sock(), Some("b")).await.unwrap();
-        assert_eq!(read_owner(&fake, &sock()).await, Some("b".to_string()));
-        // Release by non-owner -> grid-owned.
-        let err = take_decision_release(&fake, "a").await.unwrap_err();
+        assert_eq!(
+            size_calls(&fake),
+            before_refused,
+            "refused take must not resize"
+        );
+        assert_eq!(
+            grid_state(&fake, &sock).await.unwrap(),
+            GridState {
+                cols: 100,
+                rows: 30,
+                owner: Some("a".to_string())
+            }
+        );
+        // Foreign force -> ok; owner changes; size moves.
+        take_size(&runner, &fake, id, 80, 24, "b", true)
+            .await
+            .unwrap();
+        assert_eq!(
+            grid_state(&fake, &sock).await.unwrap(),
+            GridState {
+                cols: 80,
+                rows: 24,
+                owner: Some("b".to_string())
+            }
+        );
+        // Release by non-owner -> grid-owned, owner unchanged.
+        let err = release_size(&runner, &fake, id, "a").await.unwrap_err();
         assert_eq!(err.code(), "grid-owned");
-        // Release by owner clears.
-        write_owner(&fake, &sock(), None).await.unwrap();
-        assert_eq!(read_owner(&fake, &sock()).await, None);
-        // Bounds -> bad-size (pure check): out-of-range in take_size's
-        // first arm; owner's charset check lives there too.
-        assert!(!valid_size(19, 30));
-        assert!(!valid_size(501, 30));
-        assert!(!valid_size(100, 4));
-        assert!(!valid_size(100, 201));
+        assert_eq!(read_owner(&fake, &sock).await, Some("b".to_string()));
+        // Release by owner clears (stateful set-option "").
+        release_size(&runner, &fake, id, "b").await.unwrap();
+        assert_eq!(read_owner(&fake, &sock).await, None);
+        // Bounds -> bad-size through the real take_size (no tmux writes).
+        let before_bounds = size_calls(&fake);
+        for (cols, rows) in [(19u16, 30u16), (501, 30), (100, 4), (100, 201)] {
+            let err = take_size(&runner, &fake, id, cols, rows, "x", false)
+                .await
+                .unwrap_err();
+            assert_eq!(
+                err.code(),
+                "bad-size",
+                "take {cols}x{rows} must be bad-size"
+            );
+        }
+        assert_eq!(size_calls(&fake), before_bounds);
+        // Pure helpers still agree with the machine.
         assert!(valid_size(20, 5) && valid_size(500, 200));
         assert!(valid_owner("kb-term"));
         assert!(!valid_owner("KB"));
         assert!(!valid_owner(""));
         assert!(!valid_owner(&"a".repeat(65)));
-        // decide_take matches the state machine exactly for the
-        // no-history matrix.
         assert!(decide_take(&None, "x", false).is_ok());
         assert!(decide_take(&Some("x".to_string()), "x", false).is_ok());
         assert!(decide_take(&Some("x".to_string()), "y", true).is_ok());
@@ -370,15 +360,5 @@ mod tests {
                 .code(),
             "grid-owned"
         );
-        let _ = FakeTmux::new();
-    }
-
-    async fn take_decision_release(fake: &OwnerFake, owner: &str) -> Result<(), RunnerError> {
-        let current = read_owner(fake, &sock()).await;
-        match current {
-            Some(cur) if cur == owner => write_owner(fake, &sock(), None).await,
-            Some(cur) => Err(RunnerError::GridOwned(format!("grid is owned by {cur}"))),
-            None => Err(RunnerError::GridOwned("grid has no owner".to_string())),
-        }
     }
 }

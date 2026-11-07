@@ -6,13 +6,16 @@
 //! command with stdin/stdout/stderr as dups of the slave, made a session
 //! leader with a controlling tty (`setsid` + `TIOCSCTTY`): dropping the
 //! master hangs the child up with SIGHUP, which is what makes a runner
-//! crash take its client ptys (and anchors) with it. All `unsafe` lives
-//! in this file.
+//! crash take its client ptys (and anchors) with it. All pty and
+//! client-handle `unsafe` lives in this file (the runner's pre-existing
+//! getuid/kill/umask unsafe is T8's and predates this module).
 
-use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd};
+use std::fs::File;
+use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::process::Stdio as StdStdio;
 
-use tokio::process::{Command, Stdio};
+use tokio::io::unix::AsyncFd;
+use tokio::process::Command;
 
 use crate::runner::RunnerError;
 
@@ -148,6 +151,49 @@ pub fn spawn_on_pty(mut cmd: Command, slave: &OwnedFd) -> Result<PtyChild, Runne
         let _ = child.wait().await;
     });
     Ok(PtyChild { pid })
+}
+/// Duplicate `master` into an [`AsyncFd`] (a reader or writer wrap over
+/// the same pty). All `unsafe` (raw-fd ownership + `AsyncFd::register`)
+/// stays in this file.
+pub fn async_fd_dup(master: &OwnedFd) -> Result<AsyncFd<File>, RunnerError> {
+    let dup = master
+        .try_clone()
+        .map_err(|e| RunnerError::Internal(format!("dup master: {e}")))?;
+    let raw = dup.into_raw_fd();
+    // SAFETY: `raw` is a fresh fd owned by us; File takes ownership.
+    let file = unsafe { File::from_raw_fd(raw) };
+    // SAFETY: `file` wraps a valid non-blocking pty fd; register takes
+    // ownership of the fd.
+    Ok(unsafe { AsyncFd::register(file) }
+        .map_err(|e| RunnerError::Internal(format!("AsyncFd: {e}")))?)
+}
+
+/// SIGTERM `pid` if it is still alive (caller checks pid != 0).
+/// All `unsafe` (the `kill` call) stays in this file.
+pub fn drop_kill(pid: u32) {
+    if pid == 0 {
+        return;
+    }
+    // Liveness check first: never signal a reaped/reused pid blindly.
+    // A zombie answers kill(pid, 0) but is already dead for our purposes.
+    if let Ok(state) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        if state
+            .rsplit(')')
+            .next()
+            .and_then(|s| s.split_whitespace().next())
+            == Some("Z")
+        {
+            return;
+        }
+    }
+    unsafe {
+        if libc::kill(pid as i32, 0) != 0 {
+            return;
+        }
+    }
+    unsafe {
+        libc::kill(pid as i32, libc::SIGTERM);
+    }
 }
 
 #[cfg(test)]

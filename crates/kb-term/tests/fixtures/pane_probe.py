@@ -64,6 +64,10 @@ def main():
         read_loop(3.0)
         send(ESC + b"[>4;2m")
         read_loop(3.0)
+    elif mode == "raw":
+        # Extended-key announcement first, then log input verbatim.
+        send(ESC + b"[>4;2m")
+        read_loop(3.0)
     elif mode == "altmouse":
         send(ESC + b"[?1049h" + ESC + b"[?1000h" + ESC + b"[?1006h")
         read_loop(3.0)
