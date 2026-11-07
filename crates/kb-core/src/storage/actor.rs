@@ -6356,6 +6356,7 @@ mod tests {
         assert!(true);
     }
 
+    #[tokio::test]
     async fn sessions_backfill_project_key_runs_in_the_actor_and_bumps_only_on_change() {
         let (h, _tmp) = handle().await;
         let row = SessionRow {

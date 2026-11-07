@@ -4303,7 +4303,7 @@ impl Db {
     pub fn sessions_backfill_tree(
         &mut self,
         apply: bool,
-        items: &[(String, Option<String>, Option<String>, Option<String>)],
+        items: &[BackfillTreeItem],
     ) -> Result<(u64, u64, u64)> {
         let mut would: u64 = 0;
         let mut matched: u64 = 0;
@@ -7761,6 +7761,9 @@ pub struct SessionRow {
     /// directory (A3 may leave it NULL in that case).
     pub project_slug: Option<String>,
 }
+
+/// V0047 — one `(session_id, parent, root, slug)` backfill item.
+pub type BackfillTreeItem = (String, Option<String>, Option<String>, Option<String>);
 
 /// One row from the `session_decisions` table (V0018/S9) — a steering moment.
 #[derive(Debug, Clone, PartialEq, Eq)]
