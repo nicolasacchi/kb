@@ -144,6 +144,7 @@ async fn boot_git_kb_with_future_era() -> (tempfile::TempDir, SocketAddr, String
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
     let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
 

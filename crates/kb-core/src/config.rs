@@ -114,6 +114,14 @@ pub struct KbConfig {
     /// deployment (prod, phone) is byte-unchanged until an operator opts in.
     #[serde(default)]
     pub sessions: SessionsSection,
+
+    /// kb-term (T11) — the SPA-only terminal API. Absent = disabled.
+    /// The `kb-termd` runner owns every terminal on the host; kb-server
+    /// is only a relay over a unix socket, and kb-server keeps no
+    /// terminal state except the in-memory single-use ticket table
+    /// (`kb_server::terminal`). See `kb_server::terminal::gate`.
+    #[serde(default)]
+    pub terminal: TerminalSection,
 }
 
 /// W7/LF-1 — Tier-1 "the transcript IS the presence signal" config. See
@@ -172,6 +180,108 @@ impl SessionsSection {
     /// typed with the tilde).
     pub fn resolved_live_dir(&self) -> Option<PathBuf> {
         self.live_transcripts_dir.as_deref().map(expand_tilde)
+    }
+}
+
+/// kb-term (T11) — the SPA-only terminal API (`KbConfig::terminal`). Every
+/// field uses the `Option` + accessor-method pattern (`SessionsSection`
+/// precedent) rather than a `#[serde(default = "fn")]` field default,
+/// because this struct also `#[derive(Default)]`s (for
+/// `#[serde(default)] pub terminal: TerminalSection` on `KbConfig`
+/// above) — a derived `Default` bypasses per-field serde defaults, so a
+/// bare `bool`/`u64` would silently resolve to `false`/`0` whenever
+/// `[terminal]` is absent from kb.toml entirely.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TerminalSection {
+    /// Whether the SPA-only terminal API is enabled. `None` (the default)
+    /// = disabled — every `/api/terms` route then answers a bodiless
+    /// 404, so the feature is invisible to anything probing the daemon.
+    #[serde(default)]
+    pub enabled: Option<bool>,
+
+    /// The unix socket of the `kb-termd` runner. `None` = the default
+    /// `/run/kb-term/runner/runner.sock`. `~`/`~/rest` is tilde-expanded
+    /// at read time; anything else is used verbatim.
+    #[serde(default)]
+    pub runner_socket: Option<PathBuf>,
+
+    /// Single-use WebSocket ticket TTL in seconds. Default 30s; values
+    /// outside `1..=120` are clamped into that range.
+    #[serde(default)]
+    pub ticket_ttl_secs: Option<u64>,
+
+    /// Refuse `Token`/`Legacy` identity callers on terminal routes
+    /// (default: refuse). The SPA is authenticated by loopback or the
+    /// trusted-hop identity header; scripts and agents carry bearer or
+    /// registry tokens and must never reach the gate anyway — this is a
+    /// belt-and-braces refusal. See the `[terminal]` docs block in
+    /// docs/configuration.md for the reverse-proxy caveat.
+    #[serde(default)]
+    pub refuse_token_callers: Option<bool>,
+
+    /// One runner RPC deadline (connect+write+read) in seconds. Default
+    /// 5s; values outside `1..=60` are clamped into that range.
+    #[serde(default)]
+    pub runner_timeout_secs: Option<u64>,
+}
+
+impl TerminalSection {
+    /// Default socket of the `kb-termd` runner (the inner unix socket
+    /// lives under the `/run/kb-term` bind mount the runner owns).
+    pub const DEFAULT_RUNNER_SOCKET: &str = "/run/kb-term/runner/runner.sock";
+
+    /// Default liveness of one WebSocket ticket, in seconds (T12 consumes
+    /// it at the upgrade).
+    pub const DEFAULT_TICKET_TTL_SECS: u64 = 30;
+
+    /// Hard ceiling on the ticket TTL: an operator cannot mint a ticket
+    /// that outlives two minutes.
+    pub const MAX_TICKET_TTL_SECS: u64 = 120;
+
+    /// Default runner RPC deadline, in seconds.
+    pub const DEFAULT_RUNNER_TIMEOUT_SECS: u64 = 5;
+
+    /// Whether the terminal API answers at all. `unwrap_or(false)` — the
+    /// terminal tier exists only when the operator opts in.
+    pub fn enabled(&self) -> bool {
+        self.enabled.unwrap_or(false)
+    }
+
+    /// `runner_socket`, tilde-expanded; the default socket when unset.
+    /// The socket lives under the `/run/kb-term` bind mount, so it is
+    /// almost never set — this key exists for tests and split
+    /// deployments.
+    pub fn resolved_runner_socket(&self) -> PathBuf {
+        self.runner_socket
+            .as_deref()
+            .map(expand_tilde)
+            .unwrap_or_else(|| PathBuf::from(Self::DEFAULT_RUNNER_SOCKET))
+    }
+
+    /// Ticket TTL in seconds: the configured value filtered for `> 0`,
+    /// defaulted to 30s, then clamped into `1..=120`.
+    pub fn ticket_ttl_secs(&self) -> u64 {
+        self.ticket_ttl_secs
+            .filter(|&s| s > 0)
+            .unwrap_or(Self::DEFAULT_TICKET_TTL_SECS)
+            .clamp(1, Self::MAX_TICKET_TTL_SECS)
+    }
+
+    /// Whether `Token`/`Legacy` callers are refused on terminal routes.
+    /// Default `true`; `false` is the operator escape hatch when the
+    /// deployed reverse proxy injects the shared token into every
+    /// request (see the `[terminal]` docs block).
+    pub fn refuse_token_callers(&self) -> bool {
+        self.refuse_token_callers.unwrap_or(true)
+    }
+
+    /// Runner RPC deadline in seconds: the configured value filtered for
+    /// `> 0`, defaulted to 5s, then clamped into `1..=60`.
+    pub fn runner_timeout_secs(&self) -> u64 {
+        self.runner_timeout_secs
+            .filter(|&s| s > 0)
+            .unwrap_or(Self::DEFAULT_RUNNER_TIMEOUT_SECS)
+            .clamp(1, 60)
     }
 }
 
@@ -4881,6 +4991,113 @@ mod tests {
         );
     }
 
+    // ---- kb-term — [terminal] (T11) ----
+
+    #[test]
+    fn terminal_section_defaults_when_absent() {
+        // The derive(Default)-bypasses-serde-defaults trap this struct's doc
+        // comment warns about: an absent `[terminal]` table must NOT resolve
+        // to enabled/TTL 0 / timeout 0 / refuse=false.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("kb.toml");
+        std::fs::write(&path, "[daemon]\nname = \"preset\"\n").unwrap();
+        let c = KbConfig::load(&path).unwrap();
+        assert!(!c.terminal.enabled());
+        assert_eq!(
+            c.terminal.ticket_ttl_secs(),
+            TerminalSection::DEFAULT_TICKET_TTL_SECS
+        );
+        assert_eq!(
+            c.terminal.runner_timeout_secs(),
+            TerminalSection::DEFAULT_RUNNER_TIMEOUT_SECS
+        );
+        assert!(c.terminal.refuse_token_callers());
+        assert_eq!(
+            c.terminal.resolved_runner_socket(),
+            PathBuf::from(TerminalSection::DEFAULT_RUNNER_SOCKET)
+        );
+    }
+
+    #[test]
+    fn ticket_ttl_is_clamped() {
+        let zero = TerminalSection {
+            ticket_ttl_secs: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(
+            zero.ticket_ttl_secs(),
+            TerminalSection::DEFAULT_TICKET_TTL_SECS
+        );
+        let huge = TerminalSection {
+            ticket_ttl_secs: Some(9999),
+            ..Default::default()
+        };
+        assert_eq!(huge.ticket_ttl_secs(), TerminalSection::MAX_TICKET_TTL_SECS);
+        let sane = TerminalSection {
+            ticket_ttl_secs: Some(45),
+            ..Default::default()
+        };
+        assert_eq!(sane.ticket_ttl_secs(), 45);
+        let timeout = TerminalSection {
+            runner_timeout_secs: Some(999),
+            ..Default::default()
+        };
+        assert_eq!(timeout.runner_timeout_secs(), 60);
+    }
+
+    #[test]
+    fn terminal_section_roundtrips_through_toml() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("kb.toml");
+        std::fs::write(
+            &path,
+            "[terminal]\nenabled = true\nrunner_socket = \"/tmp/runner.sock\"\nticket_ttl_secs = 45\nrefuse_token_callers = false\nrunner_timeout_secs = 9\n",
+        )
+        .unwrap();
+        let c = KbConfig::load(&path).unwrap();
+        assert!(c.terminal.enabled());
+        assert_eq!(
+            c.terminal.resolved_runner_socket(),
+            PathBuf::from("/tmp/runner.sock")
+        );
+        assert_eq!(c.terminal.ticket_ttl_secs(), 45);
+        assert!(!c.terminal.refuse_token_callers());
+        assert_eq!(c.terminal.runner_timeout_secs(), 9);
+        // Serde write→read keeps the same resolved values.
+        let toml = toml::to_string(&c.terminal).unwrap();
+        let back: TerminalSection = toml::from_str(&toml).unwrap();
+        assert!(back.enabled());
+        assert_eq!(back.ticket_ttl_secs(), 45);
+        assert_eq!(back.runner_timeout_secs(), 9);
+        assert!(!back.refuse_token_callers());
+    }
+
+    #[test]
+    fn terminal_runner_socket_tilde_expands() {
+        let s = TerminalSection {
+            runner_socket: Some(PathBuf::from("~/runner.sock")),
+            ..Default::default()
+        };
+        // The default never tilde-expands (absolute); a relative path
+        // without a leading `~/` passes through unchanged per the
+        // `expand_tilde` contract.
+        let rel = TerminalSection {
+            runner_socket: Some(PathBuf::from("runner.sock")),
+            ..Default::default()
+        };
+        assert_eq!(rel.resolved_runner_socket(), PathBuf::from("runner.sock"));
+        // Absolute paths are used verbatim.
+        let abs = TerminalSection {
+            runner_socket: Some(PathBuf::from("/var/run/x.sock")),
+            ..Default::default()
+        };
+        assert_eq!(
+            abs.resolved_runner_socket(),
+            PathBuf::from("/var/run/x.sock")
+        );
+        drop(s);
+    }
+
     // ---- W7/LF-1 — [sessions] ----
 
     #[test]
@@ -5036,6 +5253,11 @@ mod docs_coverage_tests {
     }
 
     #[test]
+    fn every_terminal_key_is_documented() {
+        assert_documented("terminal", &["TerminalSection"]);
+    }
+
+    #[test]
     fn every_backup_key_is_documented() {
         assert_documented("backup", &["BackupSection"]);
     }
@@ -5070,5 +5292,8 @@ mod docs_coverage_tests {
             assert!(backup.iter().any(|f| f == k), "{backup:?} lacks {k}");
         }
         assert!(pub_fields("ServerSection").iter().any(|f| f == "hostnames"));
+        assert!(pub_fields("TerminalSection")
+            .iter()
+            .any(|f| f == "runner_socket"));
     }
 }

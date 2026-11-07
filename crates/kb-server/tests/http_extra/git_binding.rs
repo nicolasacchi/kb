@@ -152,6 +152,7 @@ async fn boot(
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
+        terminal: Default::default(),
     };
     let paths = KbPaths::rooted_at(fx.tmp.path(), daemon_name);
     let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)

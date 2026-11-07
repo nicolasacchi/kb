@@ -347,6 +347,58 @@ still kills every beat. There is no daemon-side key: the daemon keeps the
 paths in memory only and relative to the repo root the beat named. See
 [`docs/live-sessions.md`](live-sessions.md#file-presence).
 
+## `[terminal]`
+
+kb-term — SPA-only terminal API. Absent the table, the feature is off
+entirely: every `/api/terms` route answers a bodiless 404, so a
+disabled daemon leaks nothing about the terminal tier. The `kb-termd`
+runner owns every terminal on the host (tmux, the tap, the responder)
+and speaks one-JSON-line RPCs over its unix socket; kb-server is only a
+relay and keeps no terminal state except an in-memory ticket table that
+is rebuilt empty on every restart. See
+[`docs/http-api.md`](http-api.md) for the route shapes.
+
+| key | type | default | meaning |
+|---|---|---|---|
+| `enabled` | bool | `false` | Whether the terminal API answers at all. **Off by default** — set `true` to opt in. |
+| `runner_socket` | path | `/run/kb-term/runner/runner.sock` | The `kb-termd` runner socket. `~`/`~/rest` is tilde-expanded at read time; anything else is used verbatim. Almost never set (the socket lives under the `/run/kb-term` bind mount the runner owns) except in tests and split deployments. |
+| `ticket_ttl_secs` | u64 | `30` | Single-use WebSocket ticket lifetime in seconds, clamped into `1..=120`. |
+| `refuse_token_callers` | bool | `true` | Refuse `Token`/`Legacy` identity callers on terminal routes (see Security posture below). |
+| `runner_timeout_secs` | u64 | `5` | One runner RPC deadline (connect+write+read) in seconds, clamped into `1..=60`. |
+
+```toml
+[terminal]
+enabled = true
+# runner_socket = "/run/kb-term/runner/runner.sock"  # default; rarely set
+# ticket_ttl_secs = 30     # default; 1..=120
+# refuse_token_callers = true
+# runner_timeout_secs = 5  # default; 1..=60
+```
+
+**Security posture.** Terminal routes are SPA-only, behind `enabled =
+false` by default. Every route needs an exact `Origin` (absent fails
+closed; only the configured parent Origin or a same-host Origin passes
+— artifact-subdomain origins never do, even on GETs), and every POST
+needs an `X-Kb-Intent: terminal` header. The WebSocket upgrade needs a
+single-use short-lived ticket minted by an authenticated POST, written
+only into the mint response body. The loopback bypass does NOT apply —
+agents run on loopback, so admission by the bearer gate is necessary
+but never sufficient. Terminal bytes and pictures are unscrubbed and
+never leave this gate; the CLI and agents never call these routes (there
+is no CLI verb). A config edit restarts the daemon in-process (invariant
+#13), so a new `runner_socket` or timeout applies to the very next
+request; a ticket never survives that restart. `refuse_token_callers`
+proxy caveat: where a reverse proxy injects the shared token into every
+request (e.g. a "kb-inject-bearer" style layer), the identity ladder
+(registry token > trusted-hop header > legacy token) resolves an
+Authelia `Remote-User` request to `header` only when that header is
+present on the request. Before enabling, verify once on the real
+deployment via `GET /api/identity` (`identity_source`); `refuse_token_callers
+= false` is the escape hatch when the SPA resolves to a token source
+anyway. This is a convention gate for light security, not a hard
+boundary: a local non-browser client can forge both the `Origin` and
+the intent header.
+
 ## `[webhooks]`
 
 Daemon-wide reactive bridge: one background subscriber forwards selected
