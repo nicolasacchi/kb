@@ -66,8 +66,13 @@ async function start(fake: FakeSpawn): Promise<Control> {
 }
 
 /** Let the read loop consume pushed lines. */
-async function settle(): Promise<void> {
-  await new Promise<void>((r) => setImmediate(r));
+/** Poll until cond() holds (or the deadline passes). */
+async function waitFor(cond: () => boolean): Promise<void> {
+  const deadline = Date.now() + 2000;
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error('waitFor timed out');
+    await new Promise<void>((r) => setImmediate(r));
+  }
 }
 
 test('attach_uses_ignore_size_and_the_configured_tmux_bin', async () => {
@@ -102,7 +107,7 @@ test('control_parses_begin_end_blocks_and_interleaved_output', async () => {
   // %output is a NOTIFICATION line: it belongs outside reply blocks, so it
   // arrives after the block closes and flows to onOutput with octal decoded.
   fake.stdout.push(enc('%output %0 hello\\033[31mworld\\n'));
-  await settle();
+  await waitFor(() => outputs.length === 1);
   expect(outputs.length).toBe(1);
   expect(outputs[0].pane).toBe('%0');
   expect(outputs[0].bytes).toEqual(new TextEncoder().encode('hello\x1b[31mworld\n'));
@@ -133,7 +138,7 @@ test('extended_output_data_is_after_first_colon_space', async () => {
   // The value is the data after the FIRST " : " in the line, so the "a" in
   // the header slot is not part of the value and the second " : " stays.
   fake.stdout.push(enc('%extended-output %0 42 a : 1 : tail\n'));
-  await settle();
+  await waitFor(() => got.length === 1);
   expect(got.length).toBe(1);
   expect(got[0].ageMs).toBe(42);
   expect(got[0].bytes).toEqual(new TextEncoder().encode('1 : tail'));
@@ -146,7 +151,7 @@ test('octal_escapes_decode', async () => {
   const got: Uint8Array[] = [];
   c.onOutput((_pane, bytes) => got.push(bytes));
   fake.stdout.push(enc('%output %0 \\033[?2026h\\134x\\007\n'));
-  await settle();
+  await waitFor(() => got.length === 1);
   expect(got.length).toBe(1);
   expect(got[0]).toEqual(new TextEncoder().encode('\x1b[?2026h\\x\x07'));
   c.stop();

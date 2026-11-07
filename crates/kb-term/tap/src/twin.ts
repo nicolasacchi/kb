@@ -19,6 +19,7 @@
 // test/support/compare.ts.
 
 
+import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const headless = require('@xterm/headless') as { Terminal: TerminalCtor };
 const serializePkg = require('@xterm/addon-serialize') as { SerializeAddon: SerializeCtor };

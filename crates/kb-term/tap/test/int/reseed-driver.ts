@@ -122,6 +122,22 @@ async function main(): Promise<void> {
       await sleep(50);
     }
   };
+  /** File-reference scenarios cannot require seeing the whole stream (a late
+   * attacher misses it entirely); they only need the pane settled. */
+  const waitSettled = async (): Promise<void> => {
+    const deadline = Date.now() + 60_000;
+    let lastTotal = -1;
+    let quietSince = Date.now();
+    for (;;) {
+      if (emittedTotal !== lastTotal) {
+        lastTotal = emittedTotal;
+        quietSince = Date.now();
+      }
+      if (Date.now() - quietSince > 300) return;
+      if (Date.now() > deadline) throw new Error(`timeout waiting for the pane to settle (emitted ${emittedTotal})`);
+      await sleep(50);
+    }
+  };
   const concat = (chunks: Uint8Array[]): Uint8Array => {
     const total = chunks.reduce((n, c) => n + c.length, 0);
     const out = new Uint8Array(total);
@@ -176,7 +192,7 @@ async function main(): Promise<void> {
       case 'alt':
       case 'placeholder': {
         touchReady();
-        await waitEmitted(expectBytes || 1);
+        await waitSettled();
         await sleep(200);
         const r = await reseeder.reseed(pane);
         out.compare = await compareAt(r);
