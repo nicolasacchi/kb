@@ -21,5 +21,6 @@ mod notes;
 mod queries;
 mod search_json;
 mod search_scope;
+mod session_card;
 mod share;
 mod slate;

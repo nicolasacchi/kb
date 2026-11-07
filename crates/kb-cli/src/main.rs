@@ -3019,6 +3019,21 @@ enum SessionsAction {
         #[arg(long)]
         daemon: Option<String>,
     },
+    /// Print the daemon-rendered session card (`kb-session-card/1`) as
+    /// the daemon's `text`, verbatim. The CLI NEVER renders card lanes of
+    /// its own (the slate-digest precedent); `--json` prints the whole
+    /// card object instead. No daemon → a clear error; a missing
+    /// session → the not-found error other `kb sessions` verbs use.
+    Card {
+        /// The session id to card.
+        session_id: String,
+        /// Print the whole card JSON instead of the rendered `text`.
+        #[arg(long)]
+        json: bool,
+        /// Daemon to read through (default: the local one).
+        #[arg(long)]
+        daemon: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -6548,6 +6563,20 @@ async fn main() -> Result<()> {
                     batch,
                     daemon.as_deref(),
                     bearer.as_deref(),
+                )
+                .await
+            }
+            SessionsAction::Card {
+                session_id,
+                daemon,
+                json,
+            } => {
+                let bearer = read_bearer();
+                commands::sessions::session_card(
+                    &session_id,
+                    daemon.as_deref(),
+                    bearer.as_deref(),
+                    json,
                 )
                 .await
             }
