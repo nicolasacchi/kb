@@ -6,7 +6,8 @@ import { stripAll } from '../src/strip.ts';
 import { E, enc, cat, eq, mulberry32, harness } from './helpers.ts';
 
 const BEL = '\x07';
-const esc = (s: string) => escBytes(enc(s));
+// string-form control-mode escaping for ASCII-only payloads (bytes go through escBytes)
+const esc = (s: string) => Buffer.from(escBytes(enc(s))).toString('latin1');
 /** control-mode octal escaping, as tmux puts stream bytes into a %output value */
 const escBytes = (raw: Uint8Array): Uint8Array => {
   const out: number[] = [];
