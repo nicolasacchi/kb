@@ -309,6 +309,22 @@ test('reseed_waits_for_quiescence', async () => {
     await resolveAttempt(control, ['hello'], ['A 0 5 0'], ['B 0 5 0']);
     const r4 = await done4;
     expect(r4.quiescent).toBe(true);
+
+    // A frame end followed within the quiescent window by fresh output must
+    // NOT take the frame-end fast path: the frame end is no longer the most
+    // recent output, so the wait pays the 50ms silence rule.
+    control.now = 200;
+    const reseeder4 = new Reseeder(control, twin, opts);
+    reseeder4.noteOutput(new TextEncoder().encode('\x1b[?2026l'), '%0');
+    control.now = 230;
+    reseeder4.noteOutput(new TextEncoder().encode('x'), '%0');
+    const done5 = reseeder4.reseed('%0', opts);
+    await tick();
+    // The write must only land after 50ms past the fresh output (now=230).
+    expect(control.now).toBeGreaterThanOrEqual(280);
+    await resolveAttempt(control, ['hello'], ['A 0 5 0'], ['B 0 5 0']);
+    const r5 = await done5;
+    expect(r5.quiescent).toBe(true);
   } finally {
     twin.dispose();
   }

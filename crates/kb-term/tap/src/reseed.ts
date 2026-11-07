@@ -291,9 +291,10 @@ export class Reseeder {
     for (;;) {
       const t = now();
       // A `?2026l` seen at/after this wait started (or in the previous qms
-      // window) proves the parser is back in ground state; a stale one does
-      // not -- fall through to the silence rule instead.
-      if (q.frameEndedAt >= start - qms) return true;
+      // window) that is ALSO the most recent output proves the parser is back
+      // in ground state; a stale one, or one superseded by fresh output,
+      // falls through to the silence rule instead.
+      if (q.frameEndedAt >= start - qms && q.frameEndedAt >= q.lastOutputAt) return true;
       if (t - q.lastOutputAt >= qms) return true;
       if (t - start >= max) return false;
       await sleepFn(Math.max(1, Math.min(5, qms)));

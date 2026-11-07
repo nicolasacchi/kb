@@ -79,35 +79,48 @@ impl Server {
         }
     }
 
-    fn run(&self, session: &str, sub: &[&str]) -> Vec<u8> {
-        let mut argv: Vec<std::ffi::OsString> = vec![
-            std::ffi::OsString::from(&self.tmux),
-            std::ffi::OsString::from("-S"),
-            self.sock.clone().into_os_string(),
-            std::ffi::OsString::from("-f"),
-            std::ffi::OsString::from("/dev/null"),
-        ];
-        if !session.is_empty() {
-            argv.push(std::ffi::OsString::from("-t"));
-            argv.push(std::ffi::OsString::from(session));
-        }
-        let out = Command::new(&argv[0])
-            .args(&argv[1..])
-            .output()
+    /// Run one tmux client command against the private socket and return its
+    /// stdout.
+    ///
+    /// Stdio shape mirrors the bash `tm()` helper in
+    /// `scripts/ci/tmux-smoke.sh`, which PASSES in the same CI job: stdin is
+    /// an explicit null (a valid /dev/null, never an inherited pipe/closed
+    /// fd from the nextest harness) and stdout/stderr go to regular FILES
+    /// (like the smoke's `>/dev/null 2>&1` redirections), never OS pipes
+    /// (Rust's `Command::output()`). `new-session` under piped stdio dies
+    /// with `open terminal failed: not a terminal` on the CI runner; file
+    /// redirection is what the working smoke uses.
+    ///
+    /// Global tmux options only (`-S`, `-f`): command options like `-t` must
+    /// follow the subcommand, so callers embed their own target.
+    fn run(&self, sub: &[&str]) -> Vec<u8> {
+        let out_path = self._dir.file("tmux-out");
+        let err_path = self._dir.file("tmux-err");
+        let out_f = std::fs::File::create(&out_path).expect("create tmux stdout file");
+        let err_f = std::fs::File::create(&err_path).expect("create tmux stderr file");
+        let status = Command::new(&self.tmux)
+            .args(["-S", &self.sock.to_string_lossy(), "-f", "/dev/null"])
+            .args(sub)
+            .stdin(Stdio::null())
+            .stdout(std::process::Stdio::from(out_f))
+            .stderr(std::process::Stdio::from(err_f))
+            .status()
             .unwrap_or_else(|e| panic!("tmux {sub:?} spawn: {e}"));
-        if !out.status.success() {
+        let out = std::fs::read(&out_path).unwrap_or_default();
+        if !status.success() {
+            let err = std::fs::read(&err_path).unwrap_or_default();
             panic!(
                 "tmux {sub:?} failed: status={} stdout={} stderr={}",
-                out.status,
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
+                status,
+                String::from_utf8_lossy(&out),
+                String::from_utf8_lossy(&err)
             );
         }
-        out.stdout
+        out
     }
 
     fn tmux(&self, args: &[&str]) -> Vec<u8> {
-        self.run("", args)
+        self.run(args)
     }
 
     fn server_pid(&self) -> u32 {
@@ -183,7 +196,10 @@ impl Drop for Server {
                 "/dev/null",
                 "kill-server",
             ])
-            .output();
+            .stdin(Stdio::null())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status();
     }
 }
 
@@ -749,7 +765,7 @@ fn term_int_mode_formats_exist_on_pinned_tmux() {
     let srv = Server::start(&tmux);
     let ready = srv._dir.file("ready");
     let pane = srv.new_session("s", 100, 30, &ready, &["sleep", "300"]);
-    let out = srv.run("s", &["display-message", "-a", "-t", &pane]);
+    let out = srv.tmux(&["display-message", "-a", "-t", &pane]);
     let text = String::from_utf8_lossy(&out);
     // Every name in reseed.ts's MODE_FORMATS must be listed by display-message -a.
     for name in [
@@ -853,7 +869,7 @@ fn term_int_partial_sequence_quiescent_wait() {
     );
     // OFF case (metric only): restart the pane, reseed without the wait, and
     // RECORD the result in the test output as a metric -- never asserted.
-    srv.run("s", &["kill-session", "-t", "s"]);
+    srv.tmux(&["kill-session", "-t", "s"]);
     let pane2 = srv.new_session(
         "s",
         100,

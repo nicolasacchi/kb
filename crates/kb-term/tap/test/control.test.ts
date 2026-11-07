@@ -60,7 +60,11 @@ const enc = (s: string): string => s;
 async function start(fake: FakeSpawn): Promise<Control> {
   const c = new Control({ tmuxBin: '/fake/tmux-3.7c', socketPath: '/tmp/s.sock', sessionName: 's1', spawn: fake.fn });
   const starting = c.start();
+  // pause-after is written at spawn (control mode emits %begin/%end only for
+  // client-issued commands; there is no attach ack). Mirror real tmux
+  // numbering: the attach block (num 0) and the pause-after block (num 1).
   fake.stdout.push(enc('%begin 1000 0 0\n%end 1000 0 0\n'));
+  fake.stdout.push(enc('%begin 1000 1 0\n%end 1000 1 0\n'));
   await starting;
   return c;
 }
@@ -98,10 +102,10 @@ test('control_parses_begin_end_blocks_and_interleaved_output', async () => {
   const outputs: { pane: string; bytes: Uint8Array }[] = [];
   c.onOutput((pane, bytes) => outputs.push({ pane, bytes }));
   const done = c.cmd('capture-pane -p -t %0');
-  fake.stdout.push(enc('%begin 2000 1 0\n'));
+  fake.stdout.push(enc('%begin 2000 2 0\n'));
   fake.stdout.push(enc('line-one\n'));
   fake.stdout.push(enc('line-two\n'));
-  fake.stdout.push(enc('%end 2000 1 0\n'));
+  fake.stdout.push(enc('%end 2000 2 0\n'));
   const lines = await done;
   expect(lines).toEqual(['line-one', 'line-two']);
   // %output is a NOTIFICATION line: it belongs outside reply blocks, so it
@@ -121,9 +125,9 @@ test('control_error_block_rejects_the_command', async () => {
   const fake = new FakeSpawn();
   const c = await start(fake);
   const done = c.cmd('refresh-client -A %0:continue');
-  fake.stdout.push(enc('%begin 3000 1 0\n'));
+  fake.stdout.push(enc('%begin 3000 2 0\n'));
   fake.stdout.push(enc('parse failed\n'));
-  fake.stdout.push(enc('%error 3000 1 0\n'));
+  fake.stdout.push(enc('%error 3000 2 0\n'));
   await expect(done).rejects.toBeInstanceOf(ControlError);
   try {
     await done;
@@ -195,12 +199,16 @@ test('exit_too_far_behind_needs_reseed', () => {
 test('control_fire_and_forget_block_does_not_steal_tracked_pending', async () => {
   const fake = new FakeSpawn();
   const c = await start(fake);
-  // pause-after (written by start, fire-and-forget) owns a Pending exactly
-  // like any tracked command: its %begin/%end block (num 1) must resolve
-  // only its own promise, never the cmd issued after it (num 2).
+  // start()'s pause-after (fire-and-forget) was already answered by the
+  // helper's num-1 block. A %pause makes control write the (fire-and-forget)
+  // continue, which owns a Pending exactly like any tracked command: its
+  // %begin/%end block (num 2) must resolve only its own promise, never the
+  // cmd issued after it (num 3).
+  fake.stdout.push(enc('%pause %0\n'));
+  await waitFor(() => fake.writes.length >= 2);
   const done = c.cmd("display-message -p -t %0 'A #{history_size}'");
-  fake.stdout.push(enc('%begin 5000 1 0\n%end 5000 1 0\n'));
-  fake.stdout.push(enc('%begin 5000 2 0\nA 3 5 0\n%end 5000 2 0\n'));
+  fake.stdout.push(enc('%begin 5000 2 0\n%end 5000 2 0\n'));
+  fake.stdout.push(enc('%begin 5000 3 0\nA 3 5 0\n%end 5000 3 0\n'));
   const lines = await done;
   expect(lines).toEqual(['A 3 5 0']);
   c.stop();
@@ -231,7 +239,20 @@ test('control_dispatch_error_is_recorded_and_loop_continues', async () => {
   // The loop did not die on the throwing handler: on the SAME client a later
   // command still dispatches and resolves with its own replies.
   const done = c.cmd('capture-pane -p -t %0');
-  fake.stdout.push(enc('%begin 6000 1 0\nline-one\n%end 6000 1 0\n'));
+  fake.stdout.push(enc('%begin 6000 2 0\nline-one\n%end 6000 2 0\n'));
   expect(await done).toEqual(['line-one']);
+  c.stop();
+});
+test('control_start_acks_pause_after_with_no_initial_begin', async () => {
+  const fake = new FakeSpawn();
+  const c = new Control({ tmuxBin: '/fake/tmux-3.7c', socketPath: '/tmp/s.sock', sessionName: 's1', spawn: fake.fn });
+  const starting = c.start();
+  // control mode emits no %begin for the attach itself: pause-after must be
+  // written WITHOUT waiting for any block first.
+  await waitFor(() => fake.writes.length >= 1);
+  expect(fake.writes.join('')).toContain('refresh-client -f pause-after=20');
+  // pause-after's own block (num 0) then acks start().
+  fake.stdout.push(enc('%begin 7000 0 0\n%end 7000 0 0\n'));
+  await starting;
   c.stop();
 });

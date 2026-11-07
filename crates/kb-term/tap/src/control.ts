@@ -110,7 +110,6 @@ export class Control {
   private readonly continueHandlers: PaneHandler[] = [];
   private readonly exitHandlers: ExitHandler[] = [];
   private started = false;
-  private startAck: (() => void) | null = null;
   private held = false;
   private resumeWait: (() => void) | null = null;
   /** Most recent read/dispatch failure. Recorded and surfaced here instead
@@ -134,18 +133,23 @@ export class Control {
     this.exitHandlers.push(cb);
   }
 
-  /** Spawn the control attach and send `refresh-client -f pause-after=20`
-   * right after the attach's own `%begin` block. Resolves once the
-   * pause-after line has been written. */
+  /** Spawn the control attach and write `refresh-client -f pause-after=20`
+   * immediately. Control mode emits `%begin`/`%end` only for client-issued
+   * commands, NOT for the attach itself, so there is no attach ack to wait
+   * for: start() resolves when the pause-after Pending resolves (its own
+   * `%end`; if tmux does emit an attach block it is consumed positionally by
+   * that Pending, which resolves start() no later). Resolves once the
+   * pause-after block has closed, or throws after a 10s deadline. */
   async start(): Promise<void> {
     const spawn = this.deps.spawn ?? defaultSpawn;
     this.proc = spawn(attachArgv(this.deps.tmuxBin, this.deps.socketPath, this.deps.sessionName));
     this.started = true;
     void this.readLoop(this.proc);
-    // The attach ack is the attach's own `%begin` block (command num 0);
-    // output/pause notifications that race it must NOT trigger pause-after.
     const { promise: ackPromise, resolve: ack } = Promise.withResolvers<void>();
-    this.startAck = ack;
+    const [pauseAck] = this.write([`refresh-client -f pause-after=${this.deps.pauseAfterSecs ?? PAUSE_AFTER_SECS}`]);
+    // Resolved or rejected (`%error`): the line is on the wire either way and
+    // the pause-after failure surfaces through the RSS lane if at all.
+    pauseAck.then(() => ack(), () => ack());
     let timer: ReturnType<typeof setTimeout> | null = null;
     const deadline = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => reject(new Error('control attach timed out after 10s')), 10_000);
@@ -155,7 +159,6 @@ export class Control {
     } finally {
       clearTimeout(timer);
     }
-    this.writeFireAndForget(`refresh-client -f pause-after=${this.deps.pauseAfterSecs ?? PAUSE_AFTER_SECS}`);
   }
 
   /** Hold/resume the read loop. While held, unread output accumulates in
@@ -247,13 +250,6 @@ export class Control {
   }
 
   private dispatch(ev: CtlEvent): void {
-    // Only the attach's own `%begin` block completes start(); notifications
-    // (output/pause/continue) that race in first must not trigger pause-after.
-    if (ev.kind === 'begin' && this.startAck) {
-      const ack = this.startAck;
-      this.startAck = null;
-      ack();
-    }
     switch (ev.kind) {
       case 'output':
         for (const h of this.outHandlers) h(ev.pane, ev.data);
