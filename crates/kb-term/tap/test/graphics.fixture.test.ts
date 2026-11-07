@@ -134,8 +134,11 @@ test('store_survives_restart', () => {
   const sess = join(parent, 'sess');
   const store = new ImageStore({ sessionDir: sess, now: () => 1_000 });
   const ex = new GraphicsExtractor(store);
-  ex.push(input);
-  ex.flush();
+  const first = [...ex.push(input), ...ex.flush()];
+  expect(first.filter((i) => i.kind === 'imagedef').length).toBe(14);
+  const firstParts: Uint8Array[] = [];
+  for (const it of first) if (it.kind === 'bytes') firstParts.push(it.data);
+  const firstBytes = cat(firstParts);
   expect(store.entries().length).toBe(14);
   // Fresh store on the same dir reports the same entries.
   const fresh = new ImageStore({ sessionDir: sess, now: () => 1_000 });
@@ -143,6 +146,12 @@ test('store_survives_restart', () => {
   // Pushing again through a new extractor yields zero imagedef items.
   const ex2 = new GraphicsExtractor(fresh);
   const again = [...ex2.push(input), ...ex2.flush()];
+  // Seeded last-emitted: a restart re-push emits zero imagedefs and identical
+  // viewer bytes (fails if seeding broke and all 14 defs were re-emitted).
+  expect(again.filter((i) => i.kind === 'imagedef').length).toBe(0);
+  const againParts: Uint8Array[] = [];
+  for (const it of again) if (it.kind === 'bytes') againParts.push(it.data);
+  expect(cat(againParts)).toEqual(firstBytes);
   // Then one id with different bytes yields gen 2.
   const victim = fresh.entries()[0]!;
   const oldSha = victim.sha256;

@@ -147,9 +147,6 @@ test('every_one_cut_split_is_equivalent', () => {
   expect(stream.length).toBeLessThanOrEqual(1500);
   const refStore = mkStore().store;
   const ref = runWhole(refStore, stream);
-  const firstStore = mkStore().store;
-  const first = runWhole(firstStore, stream.slice(0, 5));
-  void first;
   for (let cut = 0; cut <= stream.length; cut++) {
     const st = mkStore().store;
     const got = runSplit(st, stream, [cut]);
@@ -337,9 +334,11 @@ test('abort_inside_apc', () => {
     expect(ex.stats.abortedApc).toBe(1);
     // The aborted transfer's remaining chunks now drop as orphans (pending was discarded).
     const rest = cat(parts.slice(1));
-    ex.push(rest);
+    const restItems = ex.push(rest);
     expect(ex.stats.orphanChunk).toBe(parts.length - 1);
-    expect(Buffer.from(rest).includes(Buffer.from('q=2,m='))).toBe(true);
+    // Orphan chunks are kitty APCs: no introducer or control bytes leak out.
+    expect(Buffer.from(bytesOf(restItems)).includes(Buffer.from('\x1b_G'))).toBe(false);
+    expect(Buffer.from(bytesOf(restItems)).includes(Buffer.from('q=2,m='))).toBe(false);
   }
   // T3-style forwarded-then-aborted string: APC cut by CAN leaves no CAN in output.
   // Simulate: an APC body forwarded past the stripper cap, then CAN, then text.
@@ -371,20 +370,14 @@ test('oversize_apc_body_is_skipped_not_leaked', () => {
 test('unrelated_strings_pass_verbatim', () => {
   const { store } = mkStore();
   const ex = new GraphicsExtractor(store);
-  const input = cat([
-    enc('\x1b_xhello\x1b\\'),
-    enc('\x1b]0;my title\x07'),
-    enc('\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\'),
-    enc('\x1bPq;0;1;0?\x01\x02\x1b\\'.replace('?','x')), // non-sixel-ish DCS? still SIXEL-shaped; use non-matching instead
-    enc('\x1b[38;5;196m'),
-    enc('\x1b)'), // ESC intermediate -> pass through
-    enc('text'),
-  ]);
-  // The SIXEL-shaped DCS above is captured (mediadef), so test the others verbatim
-  // on a stream without it.
+  // Non-sixel DCS (`+` and `$` cannot match SIXEL's [0-9;]*q) passes verbatim
+  // with no mediadef, as do non-`G` APCs, OSC strings and CSI.
   const plain = cat([
     enc('\x1b_xhello\x1b\\'),
     enc('\x1b]0;my title\x07'),
+    enc('\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\'),
+    enc('\x1bP+q\x01\x02\x1b\\'),
+    enc('\x1bP$q\x01\x02\x1b\\'),
     enc('\x1b[38;5;196m'),
     enc('text'),
   ]);
@@ -398,7 +391,6 @@ test('unrelated_strings_pass_verbatim', () => {
   expect(first.length).toBe(1); // only 'a'
   const second = ex2.push(enc('[1m'));
   expect(cat([bytesOf(first), bytesOf(second)])).toEqual(enc('a\x1b[1m'));
-  void input;
 });
 
 test('no_esc_chunk_is_zero_copy', () => {
@@ -444,9 +436,10 @@ test('iip_and_sixel_stored_and_stubbed', () => {
   const ex2 = new GraphicsExtractor(store);
   const before = readdirSync(join(sess, 'seq')).length;
   ex2.push(sixel);
-  void before;
   expect(store.readSeq(sha3)).toEqual(sixel);
   expect(ex2.stats.sixel).toBe(1);
+  // Write-once: a second push of the same payload writes nothing new.
+  expect(readdirSync(join(sess, 'seq')).length).toBe(before);
 
   // Oversize media: tail not leaked, counted, nothing stored.
   const small = mkStore();
@@ -463,4 +456,35 @@ test('iip_and_sixel_stored_and_stubbed', () => {
   expect(exAbort.stats.abortedMedia).toBe(1);
   const stats: GfxStats = exAbort.stats;
   expect(stats.iip).toBe(0);
+});
+
+test('long_nonmatching_prefix_passes_verbatim_bounded', () => {
+  // Spec 4.1: sniffing covers only the first 32 bytes. Longer digit runs /
+  // spaced prefixes are not SIXEL/IIP introducers and pass through verbatim
+  // (whole and split), never buffered or captured.
+  const longSixel = cat([enc('\x1bP'), enc('1;'.repeat(200)), enc('q'), enc('\x01\x02'), enc('\x1b\\')]);
+  const longIipSpaces = cat([enc('\x1b]'), enc(' '.repeat(300)), enc('\x07')]);
+  const stream = cat([enc('pre'), longSixel, enc('mid'), longIipSpaces, enc('post')]);
+  const ref = runWhole(mkStore().store, stream);
+  expect(bytesOf(ref)).toEqual(stream);
+  expect(ref.filter((i) => i.kind === 'mediadef').length).toBe(0);
+  // Split inside the digit run and inside the space run: same output.
+  for (const cut of [10, 100, 260, 500]) {
+    const got = runSplit(mkStore().store, stream, [cut]);
+    if (!itemsEqual(ref, got)) throw new Error(`bounded-prefix split mismatch at ${cut}`);
+  }
+  // Boundary: `ESC P` (2) + 29 digits + `q` = 32 bytes is a SIXEL introducer.
+  const edge = cat([enc('\x1bP'), enc('1'.repeat(29)), enc('q'), enc('\x01'), enc('\x1b\\')]);
+  const edgeItems = runWhole(mkStore().store, edge);
+  expect(edgeItems.filter((i) => i.kind === 'mediadef').length).toBe(1);
+  // One more digit pushes the introducer past 32 bytes: verbatim, no mediadef.
+  const over = cat([enc('\x1bP'), enc('1'.repeat(30)), enc('q'), enc('\x01'), enc('\x1b\\')]);
+  const overItems = runWhole(mkStore().store, over);
+  expect(bytesOf(overItems)).toEqual(over);
+  expect(overItems.filter((i) => i.kind === 'mediadef').length).toBe(0);
+  // Spaced introducers are not IIP/SIXEL (Spec 4.1 names the exact bytes).
+  const spaced = cat([enc('\x1b] 1337;File=x:AAAA\x07'), enc('\x1bP 0;1q\x01\x1b\\')]);
+  const spacedItems = runWhole(mkStore().store, spaced);
+  expect(bytesOf(spacedItems)).toEqual(spaced);
+  expect(spacedItems.filter((i) => i.kind === 'mediadef').length).toBe(0);
 });

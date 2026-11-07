@@ -209,3 +209,12 @@ test('place_on_unbound_id_is_noop', () => {
   expect(store.entries()).toEqual([]);
   expect(existsSync(join(sess, 'idmap.jsonl'))).toBe(false);
 });
+
+test('bind_rejects_non_hex_sha', () => {
+  const parent = mkParent();
+  const store = new ImageStore({ sessionDir: join(parent, 'sess'), now: () => 1_000 });
+  expect(() => store.bind(1, { sha256: '../traversal', w: 1, h: 1 })).toThrow();
+  expect(() => store.bind(1, { sha256: 'A'.repeat(64), w: 1, h: 1 })).toThrow();
+  expect(store.get(1)).toBeNull();
+  expect(store.entries()).toEqual([]);
+});
