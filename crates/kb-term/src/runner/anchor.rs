@@ -51,17 +51,17 @@ impl Anchor {
         cmd.env("HOME", std::env::var("HOME").unwrap_or_default());
         cmd.stdin(
             slave
-                .try_clone_to_owned()
+                .try_clone()
                 .map_err(|e| RunnerError::Internal(e.to_string()))?,
         )
         .stdout(
             slave
-                .try_clone_to_owned()
+                .try_clone()
                 .map_err(|e| RunnerError::Internal(e.to_string()))?,
         )
         .stderr(
             slave
-                .try_clone_to_owned()
+                .try_clone()
                 .map_err(|e| RunnerError::Internal(e.to_string()))?,
         );
         unsafe {
@@ -81,7 +81,7 @@ impl Anchor {
         let pid = child.id().unwrap_or(0);
         // The drain task reads the master and discards; it never writes.
         let drain = master
-            .try_clone_to_owned()
+            .try_clone()
             .map_err(|e| RunnerError::Internal(e.to_string()))?;
         tokio::task::spawn_blocking(move || {
             let mut buf = [0u8; 4096];
@@ -155,7 +155,15 @@ fn openpty_pair(
     };
     let mut master: libc::c_int = -1;
     let mut slave: libc::c_int = -1;
-    let rc = unsafe { libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), &ws) };
+    let rc = unsafe {
+        libc::openpty(
+            &mut master,
+            &mut slave,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            &ws,
+        )
+    };
     if rc != 0 || master < 0 || slave < 0 {
         return Err(RunnerError::Internal(format!(
             "openpty failed: {}",

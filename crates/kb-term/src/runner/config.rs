@@ -8,13 +8,18 @@ use std::path::PathBuf;
 use clap::{Parser, ValueEnum};
 
 /// How holders are started and stopped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum SupervisorKind {
     /// `systemctl --user start kb-term@<id>.service` per session.
-    #[default]
     Systemd,
     /// Spawn (and reap) the holder processes directly. CI has no systemd.
     Direct,
+}
+
+impl Default for SupervisorKind {
+    fn default() -> Self {
+        SupervisorKind::Systemd
+    }
 }
 
 /// kb-termd configuration. `pane_shell` exists for the launch profiles
@@ -100,8 +105,8 @@ fn default_tmux_bin() -> String {
     format!("{}/.local/libexec/kb-term/tmux", home())
 }
 
-fn default_conf() -> PathBuf {
-    PathBuf::from(format!("{}/.local/share/kb-term/kb-term.conf", home()))
+fn default_conf() -> String {
+    format!("{}/.local/share/kb-term/kb-term.conf", home())
 }
 
 impl RunnerConfig {

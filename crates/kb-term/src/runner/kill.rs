@@ -10,6 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::runner::discovery;
 use crate::runner::ids::valid_id;
 use crate::runner::supervisor::{StopCtx, Supervisor};
+use crate::runner::tmux::Tmux;
 use crate::runner::{Runner, RunnerError};
 
 /// The outcome of a kill.

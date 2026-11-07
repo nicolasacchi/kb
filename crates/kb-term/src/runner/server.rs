@@ -117,7 +117,7 @@ pub async fn serve<S: Supervisor>(
     }
 }
 
-async fn handle_connection<S: Supervisor>(runner: Arc<Runner<S>>, mut stream: UnixStream) {
+async fn handle_connection<S: Supervisor>(runner: Arc<Runner<S>>, stream: UnixStream) {
     let (read_half, mut write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
     loop {
