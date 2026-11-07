@@ -29,43 +29,51 @@ async fn term_int_conf_loads_clean() {
     let Some(tmux_bin) = require_tmux() else {
         return;
     };
-    let _ = tmux_bin;
-    // Load the conf into a throwaway server and read the options back.
+    // Load the conf into a throwaway holder (the production `-D -f` form)
+    // and read the options back from the live `kb` session.
     let dir = tempfile::tempdir().unwrap();
     let sock = dir.path().join("t.sock");
     let conf = common::conf_path();
-    // `source-file -n` (no-exec) must exit 0.
-    let ok = run_tmux_file_probe(dir.path(), &sock, &conf);
-    assert!(ok, "source-file -n must exit 0 on the shipped conf");
+    run_tmux_file_probe(&tmux_bin, &sock, &conf);
 }
 
-fn run_tmux_file_probe(
-    dir: &std::path::Path,
-    sock: &std::path::Path,
-    conf: &std::path::Path,
-) -> bool {
+// Every assert below fails with the conf absent (window-size reads the
+// default `latest`, @kb_conf_version reads empty) or with a conf line
+// edited out: window-size manual is proven behaviorally by
+// term_int_grid_is_fixed_until_resized, so a query that cannot see it
+// (the round-5 `-g -w`, which read back `latest`) is the wrong query,
+// not a broken conf. Each option is queried in its own scope: `-g` for
+// session/server/user options (the production `show-options -gv`
+// idiom), `-w` for the window option, `-p` for the pane options.
+// With exactly one session on the server, an unscoped `-w`/`-p`
+// resolves to its window/pane.
+fn run_tmux_file_probe(tmux_bin: &str, sock: &std::path::Path, conf: &std::path::Path) {
     use std::process::Command;
-    let tmux_bin = std::env::var("KB_TMUX_BIN").unwrap();
-    let out = Command::new(&tmux_bin)
+    // Start the holder (tmux -D) with the shipped conf.
+    let mut child = Command::new(tmux_bin)
+        .arg("-D")
         .arg("-S")
         .arg(sock)
-        .arg("new-session")
-        .arg("-d")
-        .arg("-s")
-        .arg("kb")
         .arg("-f")
         .arg(conf)
-        .arg("--")
-        .arg("/bin/sh")
-        .arg("-c")
-        .arg("sleep 30")
-        .output()
+        .spawn()
         .unwrap();
-    if !out.status.success() {
-        return false;
+    // The -D server must answer before source-file/show-options can run.
+    let mut up = false;
+    for _ in 0..100 {
+        let mut cmd = Command::new(tmux_bin);
+        cmd.arg("-S").arg(sock).arg("list-sessions");
+        match common::run_bounded(&mut cmd, Duration::from_secs(2)) {
+            Some(o) if o.status.success() => {
+                up = true;
+                break;
+            }
+            _ => std::thread::sleep(Duration::from_millis(50)),
+        }
     }
+    assert!(up, "the -D holder with the shipped conf must answer");
     // `source-file -n` (no-exec) must exit 0 on the shipped conf.
-    let mut cmd = Command::new(&tmux_bin);
+    let mut cmd = Command::new(tmux_bin);
     cmd.arg("-S")
         .arg(sock)
         .arg("source-file")
@@ -73,24 +81,36 @@ fn run_tmux_file_probe(
         .arg(conf);
     let out = common::run_bounded(&mut cmd, Duration::from_secs(10)).unwrap();
     assert!(out.status.success(), "source-file -n must exit 0");
-    // `set -g` in the conf is class-agnostic, but a scope-less
-    // `show-options` only sees session/server options: window-size is a
-    // window option (-w), remain-on-exit and allow-passthrough are pane
-    // options (-p), exit-empty/extended-keys are server options (via -g).
-    let checks = [
-        ("window-size", "manual", Some("-w")),
-        ("exit-empty", "off", None),
-        ("mouse", "off", None),
-        ("allow-passthrough", "off", Some("-p")),
-        ("history-limit", "50000", None),
-        ("remain-on-exit", "on", Some("-p")),
-        ("extended-keys", "always", None),
+    // Create the session the window/pane queries resolve to.
+    let out = Command::new(tmux_bin)
+        .arg("-S")
+        .arg(sock)
+        .arg("new-session")
+        .arg("-d")
+        .arg("-s")
+        .arg("kb")
+        .arg("--")
+        .arg("/bin/sh")
+        .arg("-c")
+        .arg("sleep 30")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "new-session must succeed");
+    let checks: [(&str, &str, &[&str]); 8] = [
+        ("@kb_conf_version", "2", &["-g"]),
+        ("window-size", "manual", &["-w"]),
+        ("exit-empty", "off", &["-g"]),
+        ("mouse", "off", &["-g"]),
+        ("allow-passthrough", "off", &["-p"]),
+        ("history-limit", "50000", &["-g"]),
+        ("remain-on-exit", "on", &["-p"]),
+        ("extended-keys", "always", &["-g"]),
     ];
-    for (opt, want, scope) in checks {
-        let mut cmd = Command::new(&tmux_bin);
-        cmd.arg("-S").arg(sock).arg("show-options").arg("-g");
-        if let Some(scope) = scope {
-            cmd.arg(scope);
+    for (opt, want, flags) in checks {
+        let mut cmd = Command::new(tmux_bin);
+        cmd.arg("-S").arg(sock).arg("show-options");
+        for f in flags {
+            cmd.arg(*f);
         }
         cmd.arg("-v").arg(opt);
         let out = common::run_bounded(&mut cmd, Duration::from_secs(10)).unwrap();
@@ -99,27 +119,26 @@ fn run_tmux_file_probe(
     }
     // No keys bound in root or prefix.
     for table in ["root", "prefix"] {
-        let out = Command::new(&tmux_bin)
-            .arg("-S")
+        let mut cmd = Command::new(tmux_bin);
+        cmd.arg("-S")
             .arg(sock)
             .arg("list-keys")
             .arg("-T")
-            .arg(table)
-            .output()
-            .unwrap();
+            .arg(table);
+        let out = common::run_bounded(&mut cmd, Duration::from_secs(10)).unwrap();
         let got = String::from_utf8_lossy(&out.stdout).trim().to_string();
         assert!(
             got.is_empty(),
             "list-keys -T {table} must be empty, got: {got}"
         );
     }
-    let _ = dir;
-    let _ = Command::new(&tmux_bin)
+    let _ = Command::new(tmux_bin)
         .arg("-S")
         .arg(sock)
         .arg("kill-server")
         .output();
-    true
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 // 2. exit-empty off keeps the -D server alive with no sessions.
@@ -283,13 +302,15 @@ async fn term_int_start_order_tap_then_anchor_then_release() {
         ])
         .await;
     // probe.sh records ts, $$, then one control-mode flag per client.
+    // The file is created by `>` before content lands, so poll for a
+    // complete record (ts + $$ + the tap and anchor flag lines), not
+    // mere existence.
     let probe = poll_until(Duration::from_secs(10), || {
         let probe_out = probe_out.clone();
         async move {
-            probe_out.exists()
-                && std::fs::read_to_string(&probe_out)
-                    .map(|s| !s.is_empty())
-                    .unwrap_or(false)
+            std::fs::read_to_string(&probe_out)
+                .map(|s| s.lines().count() >= 4)
+                .unwrap_or(false)
         }
     })
     .await;
@@ -398,9 +419,16 @@ async fn term_int_pane_pid_is_the_harness_pid() {
             run_dir,
         ])
         .await;
+    // probe.sh writes ts, $$, then the control-mode flags. The file is
+    // created by `>` before content lands, so poll for a complete
+    // record (>= 3 lines means the $$ line is fully in), not existence.
     let present = poll_until(Duration::from_secs(10), || {
         let out = out.clone();
-        async move { out.exists() }
+        async move {
+            std::fs::read_to_string(&out)
+                .map(|s| s.lines().count() >= 3)
+                .unwrap_or(false)
+        }
     })
     .await;
     assert!(present, "probe.sh must have written $$");
@@ -421,13 +449,19 @@ async fn term_int_list_is_state_free() {
     std::fs::create_dir_all(run_dir.join("s")).unwrap();
     std::fs::create_dir_all(run_dir.join("runner")).unwrap();
     let cwd = dir.path().to_string_lossy().into_owned();
-    let mut seed = kb_term::runner::Runner::direct(kb_term::runner::RunnerConfig::test_config(
+    // The tap config must be set on the config BEFORE Runner::direct:
+    // direct() clones tap_bin into the supervisor at construction, so a
+    // later seed.cfg.tap_bin assignment is invisible to start_tap (a
+    // no-op) and launch dies tap-timeout. This was the round-5
+    // term_int_list_is_state_free failure.
+    let mut seed_cfg = kb_term::runner::RunnerConfig::test_config(
         run_dir.clone(),
         tmux_bin.clone(),
         common::conf_path(),
-    ));
-    seed.cfg.tap_bin = Some(fixture("fake_tap.sh"));
-    seed.cfg.require_tap = true;
+    );
+    seed_cfg.tap_bin = Some(fixture("fake_tap.sh"));
+    seed_cfg.require_tap = true;
+    let seed = kb_term::runner::Runner::direct(seed_cfg);
     ensure_layout(&seed.cfg).await.unwrap();
     check_tmux_version(&seed.tmux, "3.7c").await.unwrap();
     adopt_anchors(&seed).await.unwrap();
