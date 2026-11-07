@@ -41,7 +41,10 @@ pub trait Tmux: Send + Sync {
     ) -> impl std::future::Future<Output = Result<TmuxOut, RunnerError>> + Send + 'a;
 
     /// The pinned tmux's `-V` output.
-    async fn version(&self) -> Result<String, String> {
+    fn version(
+        &self,
+    ) -> impl std::future::Future<Output = Result<String, String>> + Send {
+        async move {
         let out = self.run_global(&["-V"]).await.map_err(|e| e.message())?;
         if out.ok {
             Ok(out.stdout)
