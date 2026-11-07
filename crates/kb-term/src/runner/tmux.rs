@@ -24,18 +24,21 @@ pub struct TmuxOut {
 
 /// tmux operations the runner needs. Async in the trait (Rust 1.91): the
 /// production impl and the test fake both satisfy it.
-pub trait Tmux {
+pub trait Tmux: Send + Sync {
     /// Run the pinned tmux against `sock` with `args` (5 s default timeout
     /// in the real impl; `timeout` overrides for stale detection/slow polls).
-    async fn run(
-        &self,
-        sock: &Path,
-        args: &[&str],
+    fn run<'a>(
+        &'a self,
+        sock: &'a Path,
+        args: &'a [&'a str],
         timeout: Option<Duration>,
-    ) -> Result<TmuxOut, RunnerError>;
+    ) -> impl std::future::Future<Output = Result<TmuxOut, RunnerError>> + Send + 'a;
 
     /// Run the pinned tmux with NO socket (used for `-V`).
-    async fn run_global(&self, args: &[&str]) -> Result<TmuxOut, RunnerError>;
+    fn run_global<'a>(
+        &'a self,
+        args: &'a [&'a str],
+    ) -> impl std::future::Future<Output = Result<TmuxOut, RunnerError>> + Send + 'a;
 
     /// The pinned tmux's `-V` output.
     async fn version(&self) -> Result<String, String> {
@@ -80,22 +83,42 @@ impl RealTmux {
 }
 
 impl Tmux for RealTmux {
-    async fn run(
-        &self,
-        sock: &Path,
-        args: &[&str],
+    fn run<'a>(
+        &'a self,
+        sock: &'a Path,
+        args: &'a [&'a str],
         timeout: Option<Duration>,
-    ) -> Result<TmuxOut, RunnerError> {
-        let mut argv = vec!["-S".to_string(), sock.to_string_lossy().into_owned()];
-        argv.extend(args.iter().map(ToString::to_string));
-        self.exec(&argv, timeout.unwrap_or(Duration::from_secs(5)))
-            .await
+    ) -> impl std::future::Future<Output = Result<TmuxOut, RunnerError>> + Send + 'a {
+        let sock = sock.to_path_buf();
+        let args: Vec<String> = args.iter().map(ToString::to_string).collect();
+        let this = self.clone();
+        async move { self::run_real(this, sock, args, timeout).await }
     }
 
-    async fn run_global(&self, args: &[&str]) -> Result<TmuxOut, RunnerError> {
-        let argv: Vec<String> = args.iter().map(ToString::to_string).collect();
-        self.exec(&argv, Duration::from_secs(5)).await
+    fn run_global<'a>(
+        &'a self,
+        args: &'a [&'a str],
+    ) -> impl std::future::Future<Output = Result<TmuxOut, RunnerError>> + Send + 'a {
+        let args: Vec<String> = args.iter().map(ToString::to_string).collect();
+        let this = self.clone();
+        async move { self::run_global_real(this, args).await }
     }
+}
+
+async fn run_real(
+    this: RealTmux,
+    sock: std::path::PathBuf,
+    args: Vec<String>,
+    timeout: Option<Duration>,
+) -> Result<TmuxOut, RunnerError> {
+    let mut argv = vec!["-S".to_string(), sock.to_string_lossy().into_owned()];
+    argv.extend(args.iter());
+    this.exec(&argv, timeout.unwrap_or(Duration::from_secs(5)))
+        .await
+}
+
+async fn run_global_real(this: RealTmux, args: Vec<String>) -> Result<TmuxOut, RunnerError> {
+    this.exec(&args, Duration::from_secs(5)).await
 }
 
 #[cfg(test)]
@@ -124,10 +147,9 @@ pub mod fake {
                 ..FakeTmux::default()
             }
         }
-    }
 
-    impl Tmux for FakeTmux {
-        async fn run(
+        /// Record one call and compute its canned answer.
+        fn answer(
             &self,
             sock: &Path,
             args: &[&str],
@@ -156,13 +178,31 @@ pub mod fake {
                 stderr: String::new(),
             })
         }
+    }
 
-        async fn run_global(&self, _args: &[&str]) -> Result<TmuxOut, RunnerError> {
-            Ok(TmuxOut {
+    impl Tmux for FakeTmux {
+        fn run<'a>(
+            &'a self,
+            sock: &'a Path,
+            args: &'a [&'a str],
+            timeout: Option<Duration>,
+        ) -> impl std::future::Future<Output = Result<TmuxOut, RunnerError>> + Send + 'a {
+            // The answer is computed synchronously; the future is only
+            // scheduled, so the !Send Mutex guards never cross an await.
+            let out = self.answer(sock, args, timeout);
+            async move { out }
+        }
+
+        fn run_global<'a>(
+            &'a self,
+            _args: &'a [&'a str],
+        ) -> impl std::future::Future<Output = Result<TmuxOut, RunnerError>> + Send + 'a {
+            let out = TmuxOut {
                 ok: true,
                 stdout: self.version_out.lock().unwrap().clone(),
                 stderr: String::new(),
-            })
+            };
+            async move { Ok(out) }
         }
     }
 }

@@ -27,11 +27,11 @@ pub struct StopCtx {
 /// How the runner starts and stops holders and taps.
 pub trait Supervisor: Send + Sync {
     /// Start the holder for `id` (`tmux -D` in its own session).
-    fn start_holder(&self, id: &str) -> impl Future<Output = Result<(), RunnerError>>;
+    fn start_holder(&self, id: &str) -> impl Future<Output = Result<(), RunnerError>> + Send;
     /// Start the tap for `id` (no-op when no tap binary is configured).
-    fn start_tap(&self, id: &str) -> impl Future<Output = Result<(), RunnerError>>;
+    fn start_tap(&self, id: &str) -> impl Future<Output = Result<(), RunnerError>> + Send;
     /// Stop the tap and the holder for `id`, reaping strays.
-    fn stop(&self, id: &str, ctx: StopCtx) -> impl Future<Output = Result<(), RunnerError>>;
+    fn stop(&self, id: &str, ctx: StopCtx) -> impl Future<Output = Result<(), RunnerError>> + Send;
 }
 
 /// The systemd supervisor: one `kb-term@<id>` unit per holder.
@@ -180,10 +180,12 @@ impl Supervisor for DirectSupervisor {
 
     async fn stop(&self, id: &str, ctx: StopCtx) -> Result<(), RunnerError> {
         // Stop the tap first (it is attached to the holder).
-        if let Some(mut held) = self.taps.lock().unwrap().remove(id) {
+        let tap = self.taps.lock().unwrap().remove(id);
+        if let Some(mut held) = tap {
             kill_held(&mut held).await;
         }
-        let mut held = match self.holders.lock().unwrap().remove(id) {
+        let holder = self.holders.lock().unwrap().remove(id);
+        let mut held = match holder {
             Some(h) => h,
             None => return Ok(()),
         };
