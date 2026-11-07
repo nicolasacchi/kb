@@ -20,6 +20,8 @@ pub const SESSION_CARD_SCHEMA: &str = "kb-session-card/1";
 /// `not_committed` considers at most this many of a session's resolved
 /// `kind="commit"` commits (newest first by `seq`).
 pub const NOT_COMMITTED_COMMIT_CAP: usize = 20;
+/// The renderer's line budget: `render_text` never emits a longer line.
+pub const CARD_TEXT_LINE_MAX_CHARS: usize = 80;
 
 // ---------------------------------------------------------------------------
 // Pure helpers (set difference, captions, sanitising) — everything pinned
