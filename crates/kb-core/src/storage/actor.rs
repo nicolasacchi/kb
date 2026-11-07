@@ -597,7 +597,7 @@ pub enum StorageMsg {
     /// `(session_id, parent, root, slug)`; bumps only on change.
     SessionsBackfillTree {
         apply: bool,
-        items: Vec<(String, Option<String>, Option<String>, Option<String>)>,
+        items: Vec<crate::storage::sqlite::BackfillTreeItem>,
         reply: oneshot::Sender<Result<(u64, u64, u64)>>,
     },
     /// CT-F5 — append one `kb slo snapshot` run (one row per indicator).
@@ -4567,7 +4567,7 @@ impl StorageHandle {
     pub async fn sessions_backfill_tree(
         &self,
         apply: bool,
-        items: Vec<(String, Option<String>, Option<String>, Option<String>)>,
+        items: Vec<crate::storage::sqlite::BackfillTreeItem>,
     ) -> Result<(u64, u64, u64)> {
         self.send_and_await(|reply| StorageMsg::SessionsBackfillTree {
             apply,
@@ -6352,8 +6352,7 @@ mod tests {
         let (would, changed, _) = h.sessions_backfill_tree(true, items).await.unwrap();
         assert_eq!((would, changed), (0, 0));
         assert_eq!(h.index_generation(), g1, "a no-op apply must not bump");
-        row.parent_session_id = Some("par1".to_string());
-        assert!(true);
+        let _ = row;
     }
 
     #[tokio::test]
