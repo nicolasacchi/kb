@@ -386,6 +386,11 @@ impl PumpHandle {
         self.shared.closed.load(Ordering::Relaxed)
     }
 
+    /// Whether both handles point at the same pump (same shared state).
+    pub fn is_same(&self, other: &PumpHandle) -> bool {
+        Arc::ptr_eq(&self.shared, &other.shared)
+    }
+
     /// How long the master has been quiet (`None` if never active).
     pub fn quiet_for(&self) -> Option<Duration> {
         self.last_output().map(|t| t.elapsed())

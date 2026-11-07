@@ -1846,27 +1846,15 @@ async fn term_int_anchor_death_closes_viewers_without_an_open() {
     })
     .await;
     assert!(closed, "killed anchor must leave list-clients");
-    // Keys dispatches trip the reap (no further viewer_open): poll
-    // until the pump has observed the anchor death and the viewer is
-    // gone even though nobody closed it explicitly.
-    let mut gone = false;
-    for _ in 0..200 {
-        let _ = rpc::dispatch(
-            &tr.runner,
-            &Request::Keys {
-                id: id.clone(),
-                viewer: "web".to_string(),
-                input: kb_term::wire::KeyInput::Named {
-                    named: vec!["C-c".to_string()],
-                },
-            },
-        )
-        .await;
-        if !tr.runner.has_viewer(&id, "web").await {
-            gone = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    assert!(gone, "anchor death must close viewers without an open");
+    // The anchor-closed watcher (armed at store_anchor) must close the
+    // viewers promptly on the is_closed() transition, with NO further
+    // RPC of any kind: poll has_viewer until it reports gone.
+    let gone = poll_until(Duration::from_secs(10), || async {
+        !tr.runner.has_viewer(&id, "web").await
+    })
+    .await;
+    assert!(
+        gone,
+        "anchor death must close viewers promptly without any RPC"
+    );
 }

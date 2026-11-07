@@ -166,9 +166,9 @@ pub struct Runner<S: Supervisor> {
     pub cfg: RunnerConfig,
     pub tmux: RealTmux,
     pub supervisor: S,
-    anchors: Mutex<HashMap<String, Anchor>>,
+    anchors: std::sync::Arc<Mutex<HashMap<String, Anchor>>>,
     locks: Mutex<HashMap<String, std::sync::Arc<Mutex<()>>>>,
-    viewers: Mutex<HashMap<(String, String), Viewer>>,
+    viewers: std::sync::Arc<Mutex<HashMap<(String, String), Viewer>>>,
     paste_only: Mutex<HashMap<String, bool>>,
     buffer_seqs: Mutex<HashMap<String, u64>>,
     /// Peer-uid accepted by the runner socket (this process's uid).
@@ -189,9 +189,9 @@ impl Runner<DirectSupervisor> {
             cfg,
             tmux,
             supervisor,
-            anchors: Mutex::new(HashMap::new()),
+            anchors: std::sync::Arc::new(Mutex::new(HashMap::new())),
             locks: Mutex::new(HashMap::new()),
-            viewers: Mutex::new(HashMap::new()),
+            viewers: std::sync::Arc::new(Mutex::new(HashMap::new())),
             paste_only: Mutex::new(HashMap::new()),
             buffer_seqs: Mutex::new(HashMap::new()),
             server_uid: unsafe { libc::getuid() },
@@ -207,10 +207,9 @@ impl Runner<SystemdSupervisor> {
             cfg,
             tmux,
             supervisor: SystemdSupervisor,
-            anchors: Mutex::new(HashMap::new()),
+            anchors: std::sync::Arc::new(Mutex::new(HashMap::new())),
             locks: Mutex::new(HashMap::new()),
-            viewers: Mutex::new(HashMap::new()),
-            paste_only: Mutex::new(HashMap::new()),
+            viewers: std::sync::Arc::new(Mutex::new(HashMap::new())),
             buffer_seqs: Mutex::new(HashMap::new()),
             server_uid: unsafe { libc::getuid() },
         }
@@ -237,9 +236,35 @@ impl<S: Supervisor> Runner<S> {
             .clone()
     }
 
-    /// Insert (or replace) the anchor for a session.
+    /// Insert (or replace) the anchor for a session, and arm the
+    /// anchor-closed watcher: a background task that polls the anchor
+    /// pump's `is_closed()` and, on the transition, closes the session's
+    /// viewers promptly (spec 5) without waiting for the next RPC. The
+    /// watcher reaps only if the closed pump is still the session's
+    /// current anchor, so a replaced anchor (re-adoption) is not reaped
+    /// by the stale task.
     pub async fn store_anchor(&self, id: &str, anchor: Anchor) {
-        self.anchors.lock().await.insert(id.to_string(), anchor);
+        let pump = anchor.pump().clone();
+        let anchors = std::sync::Arc::clone(&self.anchors);
+        let viewers = std::sync::Arc::clone(&self.viewers);
+        let id = id.to_string();
+        self.anchors.lock().await.insert(id.clone(), anchor);
+        tokio::spawn(async move {
+            while !pump.is_closed() {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            let current_is_this = {
+                let guard = anchors.lock().await;
+                match guard.get(&id) {
+                    None => true,
+                    Some(current) => current.pump().is_same(&pump),
+                }
+            };
+            if current_is_this {
+                let mut viewers = viewers.lock().await;
+                viewers.retain(|(sid, _), _| sid != &id);
+            }
+        });
     }
 
     /// Take the anchor for a session, closing its master (the anchor client
@@ -286,9 +311,11 @@ impl<S: Supervisor> Runner<S> {
 
     /// Close the session's viewers when its anchor reports closed (spec
     /// 5: all viewers for a session are closed when the session's anchor
-    /// reports closed). Called on the keys/paste/enter dispatch paths
-    /// (not only viewer_open) so viewers never linger awaiting the next
-    /// open. (The kill path closes viewers directly.)
+    /// reports closed). The anchor-closed watcher armed by
+    /// [`Runner::store_anchor`] fires promptly on the `is_closed()`
+    /// transition; this dispatch-time reap is the fallback for any
+    /// window before the watcher runs. (The kill path closes viewers
+    /// directly.)
     pub async fn reap_anchor_closed_viewers(&self, id: &str) {
         let anchor_closed = {
             let anchors = self.anchors.lock().await;
