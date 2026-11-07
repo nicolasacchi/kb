@@ -1094,7 +1094,7 @@ async fn term_int_identity_is_the_kb_profile() {
     let Some(tmux_bin) = require_tmux() else {
         return;
     };
-    let tr = TestRunner::new(tmux_bin);
+    let tr = TestRunner::new(tmux_bin.clone());
     boot_runner(&tr).await;
     let (id, log) = launch_probe(&tr, "query").await;
     // The anchor answers tmux's startup queries; one viewer joins beside it.
@@ -1253,7 +1253,12 @@ async fn term_int_sgr_mouse_is_byte_identical_on_an_alt_screen_pane() {
     )
     .await;
     // CSI < 0;10;5 M / CSI < 0;10;5 m / CSI < 64;10;5 M in one keys call.
-    let payload: Vec<u8> = [b"\x1b[<0;10;5M", b"\x1b[<0;10;5m", b"\x1b[<64;10;5M"].concat();
+    let payload: Vec<u8> = [
+        b"\x1b[<0;10;5M".as_slice(),
+        b"\x1b[<0;10;5m".as_slice(),
+        b"\x1b[<64;10;5M".as_slice(),
+    ]
+    .concat();
     let b64 = base64::engine::general_purpose::STANDARD.encode(&payload);
     dispatch_ok(
         &tr,
@@ -1607,7 +1612,7 @@ async fn term_int_take_size_moves_the_window_and_a_foreign_owner_is_refused() {
     ));
     let owned = runner2.session_live(&id).await;
     assert!(owned);
-    let state = crate::runner::grid::grid_state(&runner2.tmux, &runner2.holder_socket(&id))
+    let state = kb_term::runner::grid::grid_state(&runner2.tmux, &runner2.holder_socket(&id))
         .await
         .unwrap();
     assert_eq!(state.owner, Some("b".to_string()));
@@ -1708,7 +1713,7 @@ async fn term_int_viewers_are_drained_and_never_slow_the_pane() {
     let Some(tmux_bin) = require_tmux() else {
         return;
     };
-    let tr = TestRunner::new(tmux_bin);
+    let tr = TestRunner::new(tmux_bin.clone());
     boot_runner(&tr).await;
     let (id, _log) = launch_probe(&tr, "flood").await;
     for v in ["v1", "v2", "v3"] {
@@ -1809,7 +1814,7 @@ async fn term_int_anchor_death_closes_viewers_without_an_open() {
     .await;
     assert!(tr.runner.has_viewer(&id, "web").await);
     // Kill the anchor client (its pid is the @kb_anchor_pid option).
-    let anchor_pid = crate::runner::discovery::anchor_pid(&tr.runner, &id)
+    let anchor_pid = discovery::anchor_pid(&tr.runner, &id)
         .await
         .expect("anchor pid must be recorded");
     let _ = std::process::Command::new("kill")
