@@ -260,8 +260,8 @@ mod tests {
             store.consume("0".repeat(32).as_str(), "abcd1234", "operator", now()),
             Err(TicketError::Unknown)
         );
-        assert!(!store
+        assert!(store
             .consume("0".repeat(32).as_str(), "abcd1234", "operator", now())
-            .is_ok());
+            .is_err());
     }
 }

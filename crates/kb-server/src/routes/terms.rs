@@ -60,7 +60,7 @@ fn no_store(mut resp: Response<Body>) -> Response<Body> {
 }
 
 fn bad_request(detail: impl Into<String>) -> Response<Body> {
-    no_store(Problem::new(
+    no_store(Problem::response(
         ERR_TERMINAL_BAD_REQUEST,
         StatusCode::BAD_REQUEST,
         "Bad Request",
@@ -69,7 +69,7 @@ fn bad_request(detail: impl Into<String>) -> Response<Body> {
 }
 
 fn payload_too_large(detail: impl Into<String>) -> Response<Body> {
-    no_store(Problem::new(
+    no_store(Problem::response(
         ERR_TERMINAL_PAYLOAD_TOO_LARGE,
         StatusCode::PAYLOAD_TOO_LARGE,
         "Payload Too Large",
@@ -78,7 +78,7 @@ fn payload_too_large(detail: impl Into<String>) -> Response<Body> {
 }
 
 fn not_found(detail: impl Into<String>) -> Response<Body> {
-    no_store(Problem::new(
+    no_store(Problem::response(
         ERR_TERMINAL_NOT_FOUND,
         StatusCode::NOT_FOUND,
         "Not Found",
@@ -118,7 +118,7 @@ fn runner_err(code: &str, message: &str) -> Response<Body> {
     } else {
         message.to_string()
     };
-    no_store(Problem::new(
+    no_store(Problem::response(
         urn,
         status,
         status.canonical_reason().unwrap_or("Error"),
@@ -127,7 +127,7 @@ fn runner_err(code: &str, message: &str) -> Response<Body> {
 }
 
 fn runner_down() -> Response<Body> {
-    no_store(Problem::new(
+    no_store(Problem::response(
         ERR_TERMINAL_RUNNER_UNAVAILABLE,
         StatusCode::SERVICE_UNAVAILABLE,
         "Service Unavailable",
@@ -176,12 +176,8 @@ fn list_contains(data: &serde_json::Value, id: &str) -> bool {
     false
 }
 
-fn check_id(id: &str) -> Result<(), Response<Body>> {
-    if is_valid_term_id(id) {
-        Ok(())
-    } else {
-        Err(bad_request("invalid terminal id"))
-    }
+fn check_id(id: &str) -> bool {
+    is_valid_term_id(id)
 }
 
 /// A `resume_sid`/`cwd` value: non-empty, ≤ 512 bytes, no NUL/control.
@@ -292,8 +288,8 @@ pub async fn ticket(
     if let Err(e) = gate(&state, &headers, &identity, true).await {
         return e;
     }
-    if let Err(e) = check_id(&id) {
-        return e;
+    if !check_id(&id) {
+        return bad_request("invalid terminal id");
     }
     if body.len() > MAX_BODY_BYTES {
         return payload_too_large("request body over 256 KiB");
@@ -332,19 +328,19 @@ pub async fn ticket(
                     })
                     .into_response(),
                 ),
-                Err(crate::terminal::ticket::TicketError::Full) => no_store(Problem::new(
+                Err(crate::terminal::ticket::TicketError::Full) => no_store(Problem::response(
                     ERR_TERMINAL_BAD_REQUEST,
                     StatusCode::TOO_MANY_REQUESTS,
                     "Too Many Requests",
                     "ticket table is full".to_string(),
                 )),
-                Err(crate::terminal::ticket::TicketError::Rng) => no_store(Problem::new(
+                Err(crate::terminal::ticket::TicketError::Rng) => no_store(Problem::response(
                     ERR_TERMINAL_RUNNER_UNAVAILABLE,
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "Internal Server Error",
                     "ticket mint failed".to_string(),
                 )),
-                Err(_) => no_store(Problem::new(
+                Err(_) => no_store(Problem::response(
                     ERR_TERMINAL_BAD_REQUEST,
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "Internal Server Error",
@@ -373,8 +369,8 @@ pub async fn paste(
     if let Err(e) = gate(&state, &headers, &identity, true).await {
         return e;
     }
-    if let Err(e) = check_id(&id) {
-        return e;
+    if !check_id(&id) {
+        return bad_request("invalid terminal id");
     }
     if body.len() > MAX_BODY_BYTES {
         return payload_too_large("request body over 256 KiB");
@@ -412,8 +408,8 @@ pub async fn enter(
     if let Err(e) = gate(&state, &headers, &identity, true).await {
         return e;
     }
-    if let Err(e) = check_id(&id) {
-        return e;
+    if !check_id(&id) {
+        return bad_request("invalid terminal id");
     }
     if body.len() > MAX_BODY_BYTES {
         return payload_too_large("request body over 256 KiB");
@@ -457,8 +453,8 @@ pub async fn keys(
     if let Err(e) = gate(&state, &headers, &identity, true).await {
         return e;
     }
-    if let Err(e) = check_id(&id) {
-        return e;
+    if !check_id(&id) {
+        return bad_request("invalid terminal id");
     }
     if body.len() > MAX_BODY_BYTES {
         return payload_too_large("request body over 256 KiB");
@@ -494,8 +490,8 @@ pub async fn kill(
     if let Err(e) = gate(&state, &headers, &identity, true).await {
         return e;
     }
-    if let Err(e) = check_id(&id) {
-        return e;
+    if !check_id(&id) {
+        return bad_request("invalid terminal id");
     }
     let req = RunnerRequest::Kill { id: id.clone() };
     match call(&state, &req).await {
@@ -523,8 +519,8 @@ pub async fn take_size(
     if let Err(e) = gate(&state, &headers, &identity, true).await {
         return e;
     }
-    if let Err(e) = check_id(&id) {
-        return e;
+    if !check_id(&id) {
+        return bad_request("invalid terminal id");
     }
     if body.len() > MAX_BODY_BYTES {
         return payload_too_large("request body over 256 KiB");
@@ -556,8 +552,8 @@ pub async fn read(
     if let Err(e) = gate(&state, &headers, &identity, false).await {
         return e;
     }
-    if let Err(e) = check_id(&id) {
-        return e;
+    if !check_id(&id) {
+        return bad_request("invalid terminal id");
     }
     match call(&state, &RunnerRequest::Read { id: id.clone() }).await {
         Err(e) => e,
@@ -574,8 +570,8 @@ pub async fn history(
     if let Err(e) = gate(&state, &headers, &identity, false).await {
         return e;
     }
-    if let Err(e) = check_id(&id) {
-        return e;
+    if !check_id(&id) {
+        return bad_request("invalid terminal id");
     }
     match call(&state, &RunnerRequest::History { id: id.clone() }).await {
         Err(e) => e,

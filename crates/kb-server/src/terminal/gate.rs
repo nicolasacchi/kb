@@ -163,7 +163,7 @@ impl Problem {
         .into_response()
     }
 
-    pub(crate) fn new(
+    pub(crate) fn response(
         urn: &'static str,
         status: StatusCode,
         title: &'static str,
