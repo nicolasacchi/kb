@@ -27,7 +27,9 @@ function mkStore(opts?: { sessionCapBytes?: number; hostCapBytes?: number; now?:
   }
   const parent = sharedParent;
   const sess = join(parent, `sess-${++sessCounter}`);
-  const store = new ImageStore({ sessionDir: sess, sessionCapBytes: opts?.sessionCapBytes, hostCapBytes: opts?.hostCapBytes, now: opts?.now });
+  // Isolate the host-cap scan to this session: sharing one parent with
+  // thousands of sibling sessions would make the per-store host scan O(n^2).
+  const store = new ImageStore({ sessionDir: sess, sessionCapBytes: opts?.sessionCapBytes, hostCapBytes: opts?.hostCapBytes, hostRoot: sess, now: opts?.now });
   return { parent, sess, store };
 }
 function coalesce(items: GfxItem[]): GfxItem[] {
