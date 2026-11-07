@@ -2940,7 +2940,11 @@ impl StorageActor {
             StorageMsg::SessionsRecallCensusTotals { reply } => {
                 let _ = reply.send(self.db.sessions_recall_census_totals());
             }
-            StorageMsg::SessionsBackfillTree { apply, items, reply } => {
+            StorageMsg::SessionsBackfillTree {
+                apply,
+                items,
+                reply,
+            } => {
                 let result = self.db.sessions_backfill_tree(apply, &items);
                 if matches!(result, Ok((_, changed, _)) if changed > 0) {
                     self.bump_generation();
@@ -4565,8 +4569,12 @@ impl StorageHandle {
         apply: bool,
         items: Vec<(String, Option<String>, Option<String>, Option<String>)>,
     ) -> Result<(u64, u64, u64)> {
-        self.send_and_await(|reply| StorageMsg::SessionsBackfillTree { apply, items, reply })
-            .await
+        self.send_and_await(|reply| StorageMsg::SessionsBackfillTree {
+            apply,
+            items,
+            reply,
+        })
+        .await
     }
 
     /// CT-F5 — append one snapshot run: one row per indicator, all sharing
@@ -6308,9 +6316,8 @@ mod tests {
     /// exactly once; a second apply has nothing to do and does not bump.
     // invariant:15 generation-bump
     #[tokio::test]
-    #[tokio::test]
     async fn sessions_backfill_tree_runs_in_the_actor_and_bumps_only_on_change() {
-        let h = handle().await;
+        let (h, _tmp) = handle().await;
         let mut row = SessionRow {
             artifact_id: "art-tree".into(),
             session_id: "sid-tree".into(),
@@ -6327,8 +6334,10 @@ mod tests {
             Some("root1".to_string()),
             None,
         )];
-        let (would, changed, unmatched) =
-            h.sessions_backfill_tree(false, items.clone()).await.unwrap();
+        let (would, changed, unmatched) = h
+            .sessions_backfill_tree(false, items.clone())
+            .await
+            .unwrap();
         assert!(would >= 1);
         assert_eq!(changed, 0);
         assert_eq!(unmatched, 0);

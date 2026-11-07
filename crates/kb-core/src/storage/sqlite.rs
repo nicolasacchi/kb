@@ -17003,7 +17003,7 @@ mod tests {
         part.segment_of = Some("sid-bf-1".to_string());
         db.sessions_upsert(&part).unwrap();
         // Non-omp row: never touched.
-        let mut cl = session_row("bf-3", "sid-bf-3", 1_700_000_200);
+        let cl = session_row("bf-3", "sid-bf-3", 1_700_000_200);
         db.sessions_upsert(&cl).unwrap();
         // Pre-filled omp row: never overwritten.
         let mut full = session_row("bf-4", "sid-bf-4", 1_700_000_300);

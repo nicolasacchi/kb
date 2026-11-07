@@ -4861,7 +4861,7 @@ pub(crate) fn is_plain_token(s: &str) -> bool {
 
 fn validate_backfill_tree_body(
     body: &BackfillTreeBody,
-) -> Result<Vec<(String, Option<String>, Option<String>, Option<String>)>> {
+) -> Result<Vec<(String, Option<String>, Option<String>, Option<String>)>, kb_core::Error> {
     if body.items.len() > 500 {
         return Err(kb_core::Error::BadRequest(
             "backfill-tree: at most 500 items per request".into(),
@@ -4874,7 +4874,7 @@ fn validate_backfill_tree_body(
                 "backfill-tree: unsafe session_id".into(),
             ));
         }
-        let check = |v: &Option<String>| -> Result<Option<String>> {
+        let check = |v: &Option<String>| -> Result<Option<String>, kb_core::Error> {
             match v {
                 None => Ok(None),
                 Some(s) => {

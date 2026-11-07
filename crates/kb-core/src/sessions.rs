@@ -818,13 +818,19 @@ fn parse_session_activity_lines<S: AsRef<str>>(
             && v.get("type").and_then(|x| x.as_str()) == Some("adapter-meta")
         {
             if act.parent_session_id.is_none() {
-                let raw = v.get("parentSessionId").and_then(|x| x.as_str()).map(str::trim);
+                let raw = v
+                    .get("parentSessionId")
+                    .and_then(|x| x.as_str())
+                    .map(str::trim);
                 if raw.is_some_and(crate::sessions::lineage::is_plain_token_pub) {
                     act.parent_session_id = raw.map(str::to_string);
                 }
             }
             if act.root_session_id.is_none() {
-                let raw = v.get("rootSessionId").and_then(|x| x.as_str()).map(str::trim);
+                let raw = v
+                    .get("rootSessionId")
+                    .and_then(|x| x.as_str())
+                    .map(str::trim);
                 let own = v.get("sessionId").and_then(|x| x.as_str()).map(str::trim);
                 if let Some(r) = raw {
                     if crate::sessions::lineage::is_plain_token_pub(r) && Some(r) != own {
@@ -3999,7 +4005,7 @@ mod tests {
         assert_eq!(meta_project_slug(html).as_deref(), Some("my-proj_1"));
         assert_eq!(meta_project_slug(r#"<head></head>"#), None);
         assert_eq!(
-            meta_project_slug(r#"<meta name="kb-project-slug" content="UPPER">"#, ),
+            meta_project_slug(r#"<meta name="kb-project-slug" content="UPPER">"#,),
             None
         );
         assert_eq!(
@@ -4007,7 +4013,10 @@ mod tests {
             None
         );
         assert_eq!(
-            meta_project_slug(&format!(r#"<meta name="kb-project-slug" content="{}">"#, "a".repeat(65))),
+            meta_project_slug(&format!(
+                r#"<meta name="kb-project-slug" content="{}">"#,
+                "a".repeat(65)
+            )),
             None
         );
     }
