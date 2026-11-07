@@ -123,9 +123,9 @@ fn run_tmux_file_probe(tmux_bin: &str, sock: &std::path::Path, conf: &std::path:
         ("window-size", "manual", &["-g", "-w"]),
         ("exit-empty", "off", &["-s"]),
         ("mouse", "off", &["-g"]),
-        ("allow-passthrough", "off", &["-p", "-t", "kb:0.0"]),
+        ("allow-passthrough", "off", &["-A", "-p", "-t", "kb:0.0"]),
         ("history-limit", "50000", &["-g"]),
-        ("remain-on-exit", "on", &["-p", "-t", "kb:0.0"]),
+        ("remain-on-exit", "on", &["-A", "-p", "-t", "kb:0.0"]),
         ("extended-keys", "always", &["-s"]),
     ];
     for (opt, want, flags) in checks {
