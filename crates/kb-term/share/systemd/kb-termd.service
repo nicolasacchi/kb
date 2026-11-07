@@ -1,0 +1,10 @@
+[Unit]
+Description=kb-term runner
+After=network.target
+
+[Service]
+ExecStart=%h/.local/bin/kb-termd --supervisor systemd
+Restart=on-failure
+KillMode=process
+
+Type=simple

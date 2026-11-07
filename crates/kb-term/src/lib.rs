@@ -13,4 +13,5 @@
 //! and mirrored in TypeScript by later units, so later changes there are
 //! additive only (with the goldens updated in the same change).
 
+pub mod runner;
 pub mod wire;
