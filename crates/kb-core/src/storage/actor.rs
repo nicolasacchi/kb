@@ -592,6 +592,14 @@ pub enum StorageMsg {
         apply: bool,
         reply: oneshot::Sender<Result<(u64, u64)>>,
     },
+    /// V0047 — fill NULL lineage columns from the CLI's tree walk
+    /// (`Db::sessions_backfill_tree`). Items are
+    /// `(session_id, parent, root, slug)`; bumps only on change.
+    SessionsBackfillTree {
+        apply: bool,
+        items: Vec<crate::storage::sqlite::BackfillTreeItem>,
+        reply: oneshot::Sender<Result<(u64, u64, u64)>>,
+    },
     /// CT-F5 — append one `kb slo snapshot` run (one row per indicator).
     SloSnapshotAppend {
         taken_at_unix: i64,
@@ -2932,6 +2940,17 @@ impl StorageActor {
             StorageMsg::SessionsRecallCensusTotals { reply } => {
                 let _ = reply.send(self.db.sessions_recall_census_totals());
             }
+            StorageMsg::SessionsBackfillTree {
+                apply,
+                items,
+                reply,
+            } => {
+                let result = self.db.sessions_backfill_tree(apply, &items);
+                if matches!(result, Ok((_, changed, _)) if changed > 0) {
+                    self.bump_generation();
+                }
+                let _ = reply.send(result);
+            }
             StorageMsg::SessionsBackfillProjectKey { apply, reply } => {
                 let result = self.db.sessions_backfill_project_key(apply);
                 // `project_key` feeds the sessions lists/rollups that
@@ -4540,6 +4559,22 @@ impl StorageHandle {
     pub async fn sessions_backfill_project_key(&self, apply: bool) -> Result<(u64, u64)> {
         self.send_and_await(|reply| StorageMsg::SessionsBackfillProjectKey { apply, reply })
             .await
+    }
+
+    /// V0047 — `(would_change, changed, unmatched)` of the tree backfill;
+    /// `apply = false` writes nothing. See
+    /// [`StorageMsg::SessionsBackfillTree`].
+    pub async fn sessions_backfill_tree(
+        &self,
+        apply: bool,
+        items: Vec<crate::storage::sqlite::BackfillTreeItem>,
+    ) -> Result<(u64, u64, u64)> {
+        self.send_and_await(|reply| StorageMsg::SessionsBackfillTree {
+            apply,
+            items,
+            reply,
+        })
+        .await
     }
 
     /// CT-F5 — append one snapshot run: one row per indicator, all sharing
@@ -6281,6 +6316,45 @@ mod tests {
     /// exactly once; a second apply has nothing to do and does not bump.
     // invariant:15 generation-bump
     #[tokio::test]
+    async fn sessions_backfill_tree_runs_in_the_actor_and_bumps_only_on_change() {
+        let (h, _tmp) = handle().await;
+        let row = SessionRow {
+            artifact_id: "art-tree".into(),
+            session_id: "sid-tree".into(),
+            started_at: 1_700_000_000,
+            ended_at: 1_700_000_600,
+            harness: "omp".into(),
+            ..Default::default()
+        };
+        h.sessions_upsert(row.clone()).await.unwrap();
+        let g0 = h.index_generation();
+        let items = vec![(
+            "sid-tree".to_string(),
+            Some("par1".to_string()),
+            Some("root1".to_string()),
+            None,
+        )];
+        let (would, changed, unmatched) = h
+            .sessions_backfill_tree(false, items.clone())
+            .await
+            .unwrap();
+        assert_eq!(would, 1);
+        assert_eq!(changed, 0);
+        assert_eq!(unmatched, 0);
+        assert_eq!(h.index_generation(), g0, "a dry run must not bump");
+        let (would, changed, unmatched) =
+            h.sessions_backfill_tree(true, items.clone()).await.unwrap();
+        assert_eq!(would, 1);
+        assert_eq!(changed, 1);
+        assert_eq!(unmatched, 0);
+        assert!(h.index_generation() > g0, "an apply must bump");
+        let g1 = h.index_generation();
+        let (would, changed, _) = h.sessions_backfill_tree(true, items).await.unwrap();
+        assert_eq!((would, changed), (0, 0));
+        assert_eq!(h.index_generation(), g1, "a no-op apply must not bump");
+    }
+
+    #[tokio::test]
     async fn sessions_backfill_project_key_runs_in_the_actor_and_bumps_only_on_change() {
         let (h, _tmp) = handle().await;
         let row = SessionRow {
@@ -6318,6 +6392,7 @@ mod tests {
             segment_of: None,
             segment_idx: None,
             evidence_json: None,
+            ..Default::default()
         };
         h.sessions_upsert(row).await.unwrap();
         let g0 = h.index_generation();

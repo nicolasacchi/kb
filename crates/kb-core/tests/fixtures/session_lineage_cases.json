@@ -1,0 +1,74 @@
+[
+  {
+    "name": "top-level",
+    "session_file": "/sessions/bucket/2026-09-01T10-00-00-000Z_root0001.jsonl",
+    "header_id": "root0001",
+    "parent_session_file": null,
+    "parent_header_id": null,
+    "expect": {"parent": null, "root": null}
+  },
+  {
+    "name": "oct-depth-1-with-parentSession",
+    "session_file": "/sessions/bucket/2026-09-01T10-00-00-000Z_root0001/child0001.jsonl",
+    "header_id": "child0001",
+    "parent_session_file": "/sessions/bucket/2026-09-01T10-00-00-000Z_root0001.jsonl",
+    "parent_header_id": "root0001",
+    "expect": {"parent": "root0001", "root": "root0001"}
+  },
+  {
+    "name": "sep-depth-1-without-parentSession",
+    "session_file": "/sessions/bucket/2026-09-01T10-00-00-000Z_root0001/child0002.jsonl",
+    "header_id": "child0002",
+    "parent_session_file": null,
+    "parent_header_id": null,
+    "expect": {"parent": "root0001", "root": "root0001"}
+  },
+  {
+    "name": "nested-depth-2-with-sibling-header",
+    "session_file": "/sessions/bucket/2026-09-01T10-00-00-000Z_root0001/Worker/worker.child0003.jsonl",
+    "header_id": "child0003",
+    "parent_session_file": null,
+    "parent_header_id": "child0002",
+    "expect": {"parent": "child0002", "root": "root0001"}
+  },
+  {
+    "name": "nested-depth-2-without-sibling-header",
+    "session_file": "/sessions/bucket/2026-09-01T10-00-00-000Z_root0001/Worker/worker.child0004.jsonl",
+    "header_id": "child0004",
+    "parent_session_file": null,
+    "parent_header_id": null,
+    "expect": {"parent": "root0001", "root": "root0001"}
+  },
+  {
+    "name": "self-parent",
+    "session_file": "/sessions/bucket/2026-09-01T10-00-00-000Z_root0001/child0005.jsonl",
+    "header_id": "child0005",
+    "parent_session_file": "/sessions/bucket/2026-09-01T10-00-00-000Z_root0001/child0005.jsonl",
+    "parent_header_id": "child0005",
+    "expect": {"parent": null, "root": "root0001"}
+  },
+  {
+    "name": "unsafe-root-id",
+    "session_file": "/sessions/bucket/2026-09-01T10-00-00-000Z_bad id!/child0006.jsonl",
+    "header_id": "child0006",
+    "parent_session_file": null,
+    "parent_header_id": null,
+    "expect": {"parent": null, "root": null}
+  },
+  {
+    "name": "unreadable-parent",
+    "session_file": "/sessions/bucket/2026-09-01T10-00-00-000Z_root0001/child0007.jsonl",
+    "header_id": "child0007",
+    "parent_session_file": "/sessions/bucket/2026-09-01T10-00-00-000Z_root0001.jsonl",
+    "parent_header_id": null,
+    "expect": {"parent": "root0001", "root": "root0001"}
+  },
+  {
+    "name": "oct-depth-1-parent-distinct-from-root",
+    "session_file": "/sessions/bucket/2026-09-01T10-00-00-000Z_root0001/child0008.jsonl",
+    "header_id": "child0008",
+    "parent_session_file": "/sessions/bucket/2026-09-01T10-00-00-000Z_root0001.jsonl",
+    "parent_header_id": "root0001",
+    "expect": {"parent": "root0001", "root": "root0001"}
+  }
+]

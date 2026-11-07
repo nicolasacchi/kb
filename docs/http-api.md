@@ -882,7 +882,14 @@ GET  /api/sessions[?cursor=<unix>&limit=N   Cross-kb list of captured Claude
                                             checks are a closed list of test,
                                             lint and build commands. SURFACED,
                                             NEVER SCORED: no route sorts,
-                                            filters or ranks on it.
+                                            filters or ranks on it. V0047 —
+                                            every row also carries additive
+                                            `parent_session_id` /
+                                            `root_session_id` /
+                                            `project_slug` (absent when NULL:
+                                            a top-level session or a
+                                            pre-V0047 capture). SURFACED,
+                                            NEVER SCORED (invariant #11).
 GET  /api/sessions/recall-coverage[?days=7]  v0.44 F10 — recall-hook coverage
                                             per harness over the trailing
                                             window (default 7, clamp 1-365),
@@ -1415,6 +1422,19 @@ POST /api/sessions/backfill-project-key     v0.44 X3 — fill NULL
                                             backfill-project-key [--apply]`
                                             (direct index.db open only when no
                                             daemon answers).
+POST /api/sessions/backfill-tree             V0047 — fill NULL
+     [?apply=true]                          `sessions.parent_session_id` /
+                                            `root_session_id` /
+                                            `project_slug` on omp rows, from
+                                            the CLI's host-side tree walk
+                                            (`kb sessions backfill-tree`).
+                                            Cap 500 items/request; unsafe
+                                            tokens 400. Dry-run unless
+                                            `apply=true`. Returns {apply,
+                                            would_change, changed,
+                                            unmatched, kbs[{kb,
+                                            would_change, changed,
+                                            unmatched}], degraded[]}.
 GET  /api/why?path=<file>                   R2 — the WHY assembler: the past
                                             sessions that touched a file + their
                                             prompt/decisions/commits. Basename-

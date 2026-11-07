@@ -69,7 +69,7 @@ use kb_core::vcs::resolve_commit;
 
 use super::import::{
     collect_extra_sidecar_sources, collect_sidecars, expand_tilde, sanitize_sid,
-    scrub_capture_lanes, wrap_envelope_spooled,
+    scrub_capture_lanes, wrap_envelope_spooled_with_slug,
 };
 
 /// The env var kb-capture.sh resolves its target from — mirrored exactly so
@@ -474,6 +474,16 @@ impl PublishLock {
     }
 }
 
+/// V0047 — the capture cwd's repo slug for envelope stamping: the record
+/// cwd only when absolute AND a directory (a missing dir would make
+/// `current_repo_slug_in` fall back to the process cwd, so the guard is
+/// mandatory; omp headers may carry cwd "unknown"). Empty slug -> None.
+pub(crate) fn project_slug_for_cwd(cwd: Option<&Path>) -> Option<String> {
+    cwd.filter(|d| d.is_absolute() && d.is_dir())
+        .map(super::memory::current_repo_slug_in)
+        .filter(|s| !s.is_empty())
+}
+
 /// `capture_with` plus `stale_before`: when set (a REPLAYED spool item, whose
 /// value is the snapshot's own mtime), an existing capture of the session that
 /// was published AFTER that instant is strictly fresher - the snapshot is
@@ -641,13 +651,20 @@ async fn capture_inner(
     let (captured, commits_redacted) = super::sessions_scrub::scrub_commits(captured);
     secrets_redacted += commits_redacted;
 
-    let html = wrap_envelope_spooled(
+    // V0047 — stamp the project slug: the record cwd (explicit hint else
+    // the transcript's modal cwd) only when absolute and a directory; a
+    // missing dir would make `current_repo_slug_in` fall back to the
+    // process cwd, so the guard is mandatory (omp headers may carry cwd
+    // "unknown"). Empty slug -> no meta.
+    let project_slug = project_slug_for_cwd(record_cwd.as_deref());
+    let html = wrap_envelope_spooled_with_slug(
         &capture_ts,
         &sid,
         &raw,
         &captured,
         &subagents,
         &sidecar_texts,
+        project_slug.as_deref(),
     );
     // Pure budget math over the sidecar RAW lengths
     // (`kb_core::sessions::sidecar_text_truncates`), NOT a substring scan of
@@ -2062,5 +2079,16 @@ mod tests {
         if let Some(v) = saved {
             std::env::set_var(SESSIONS_DIR_ENV, v);
         }
+    }
+
+    /// V0047 (step 6) — the slug is stamped only for an existing absolute
+    /// cwd; `None`, a relative path, and a missing dir all yield no meta.
+    #[test]
+    fn project_slug_for_cwd_guards_missing_and_relative_cwds() {
+        assert_eq!(project_slug_for_cwd(None), None);
+        assert_eq!(project_slug_for_cwd(Some(Path::new("relative/dir"))), None);
+        let missing = Path::new("/tmp/kb-no-such-cwd-xyzzy-nonexistent");
+        debug_assert!(!missing.exists());
+        assert_eq!(project_slug_for_cwd(Some(missing)), None);
     }
 }

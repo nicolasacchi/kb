@@ -381,5 +381,202 @@ else
   bad "invalid KB_JOB_ULID still carries job_ulid: $job3_first"
 fi
 echo
+echo "== A2: session lineage from the shared fixture =="
+# Generate a synthetic tree from session_lineage_cases.json; each file's
+# header carries id/parentSession so cap_lineage folds the same (parent,
+# root) the Rust fold_lineage expects.
+LIN_FIXTURE="$HOOKS_DIR/../../../crates/kb-core/tests/fixtures/session_lineage_cases.json"
+LIN_ROOT="$TMPROOT/lintree"
+mkdir -p "$LIN_ROOT"
+LIN_CASES_FILE="$TMPROOT/lin-cases.txt"
+# Each case gets its OWN tree (case-<i>/bucket/<rel>) so the sibling of one
+# nested case can never satisfy the no-sibling case in the same dir.
+if [ -f "$LIN_FIXTURE" ]; then
+  python3 -I - "$LIN_FIXTURE" "$LIN_ROOT" >"$LIN_CASES_FILE" <<'PYEOF'
+import json, sys, os
+cases = json.load(open(sys.argv[1]))
+root = sys.argv[2]
+msg = {"type": "message", "id": "m1", "parentId": None, "timestamp": "2026-09-01T10:00:01.000Z", "message": {"role": "user", "content": [{"type": "text", "text": "hi"}]}}
+for i, c in enumerate(cases):
+    base = os.path.join(root, "case-%d" % i, "bucket")
+    sf = c["session_file"]
+    rel = sf.split("/bucket/")[-1] if "/bucket/" in sf else sf
+    target = os.path.join(base, rel)
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    hdr = {"type": "session", "id": c["header_id"], "timestamp": "2026-09-01T10:00:00.000Z", "cwd": "/tmp/kb-omp-fixture"}
+    ps = c.get("parent_session_file")
+    if ps:
+        # point the header parentSession at the mapped parent path
+        prel = ps.split("/bucket/")[-1] if "/bucket/" in ps else ps
+        hdr["parentSession"] = os.path.join(base, prel)
+    with open(target, "w") as f:
+        f.write(json.dumps(hdr) + "\n")
+        f.write(json.dumps(msg) + "\n")
+    # materialize the referenced parent file in this tree so the Oct
+    # parent-header resolution path is exercised (skip when the case
+    # expects an unreadable parent or is its own parent).
+    if ps and c.get("parent_header_id") and ps.split("/")[-1] != rel:
+        ppath = os.path.join(base, prel)
+        if not os.path.exists(ppath):
+            phdr = {"type": "session", "id": c["parent_header_id"], "timestamp": "2026-09-01T10:00:00.000Z", "cwd": "/tmp/kb-omp-fixture"}
+            os.makedirs(os.path.dirname(ppath), exist_ok=True)
+            with open(ppath, "w") as f:
+                f.write(json.dumps(phdr) + "\n")
+                f.write(json.dumps(msg) + "\n")
+    with open(target, "w") as f:
+        f.write(json.dumps(hdr) + "\n")
+        f.write(json.dumps(msg) + "\n")
+    # sibling <dir>/<Name>.jsonl for nested cases with a sibling header:
+    # the parent session file lives around the <Name> dir (brief step 4).
+    if c.get("parent_header_id") and not c.get("parent_session_file"):
+        parts = rel.split("/")
+        if len(parts) >= 3:
+            name = parts[-2]
+            sib = os.path.join(base, parts[0], name + ".jsonl")
+            if not os.path.exists(sib):
+                shdr = {"type": "session", "id": c["parent_header_id"], "timestamp": "2026-09-01T10:00:00.000Z", "cwd": "/tmp/kb-omp-fixture"}
+                with open(sib, "w") as f:
+                    f.write(json.dumps(shdr) + "\n")
+                    f.write(json.dumps(msg) + "\n")
+    # one 4-line record per case: path, header id, expect parent, expect root
+    print(target)
+    print(c["header_id"])
+    print(c["expect"]["parent"] or "")
+    print(c["expect"]["root"] or "")
+PYEOF
+fi
+# Extract cap_is_plain_token + cap_lineage WITHOUT running the script's
+# main block: kb-capture-omp.sh has no source guard (sourcing runs the
+# capture and exits 0), so slice the two functions into a lib and source
+# only that. The awk stops at the closing `}` of cap_lineage (verified:
+# no other line matches `^}$` inside it).
+LIN_LIB="$TMPROOT/caplineage-lib.sh"
+awk '/^cap_is_plain_token\(\)/ {f=1} f {print} /^cap_lineage\(\)/ {g=1} g && /^\}$/ {exit}' "$CAPTURE" >"$LIN_LIB"
+# Directly assert cap_lineage output per shared case (4 lines per case:
+# path, header id, expect parent, expect root). Line-oriented reads keep
+# the unsafe-root-id "bad id!" dir (a space in the path) in one piece.
+if [ -s "$LIN_CASES_FILE" ]; then
+while IFS= read -r LIN_F && IFS= read -r LIN_ID && IFS= read -r LIN_P && IFS= read -r LIN_R; do
+  LIN_OUT="$(bash -c '. "$1"; cap_lineage "$2"' _ "$LIN_LIB" "$LIN_F" 2>/dev/null || true)"
+  LIN_OK=1
+  if [ -n "$LIN_P" ]; then
+    printf '%s' "$LIN_OUT" | jq -e --arg v "$LIN_P" '.parentSessionId == $v' >/dev/null 2>&1 || LIN_OK=0
+  else
+    printf '%s' "$LIN_OUT" | jq -e 'has("parentSessionId") == false' >/dev/null 2>&1 || LIN_OK=0
+  fi
+  if [ -n "$LIN_R" ]; then
+    printf '%s' "$LIN_OUT" | jq -e --arg v "$LIN_R" '.rootSessionId == $v' >/dev/null 2>&1 || LIN_OK=0
+  else
+    printf '%s' "$LIN_OUT" | jq -e 'has("rootSessionId") == false' >/dev/null 2>&1 || LIN_OK=0
+  fi
+  if [ "$LIN_OK" = "1" ]; then
+    ok "cap_lineage $LIN_ID -> parent=${LIN_P:-none} root=${LIN_R:-none}"
+  else
+    bad "cap_lineage $LIN_ID: got $LIN_OUT want parent=${LIN_P:-none} root=${LIN_R:-none}"
+  fi
+done <"$LIN_CASES_FILE"
+else
+  bad "shared lineage fixture missing at $LIN_FIXTURE"
+fi
+# Static wiring pin: --argjson lineage reaches exactly the main transcript
+# and both segment (P1/PN) translations; the sidecar call takes none.
+LIN_NARG="$(grep -c -- '--argjson lineage' "$CAPTURE")"
+if [ "$LIN_NARG" = "3" ]; then
+  ok "lineage argjson on the main + both segment translations only (3 sites)"
+else
+  bad "lineage argjson site count is $LIN_NARG, want 3 (main + P1 + PN)"
+fi
+# A top-level capture still lands and carries neither lineage key.
+LIN_OUTDIR="$TMPROOT/sessions-lineage"
+mkdir -p "$LIN_OUTDIR"
+KB_SESSIONS_DIR="$LIN_OUTDIR" "$CAPTURE" "$LIN_ROOT/case-0/bucket/2026-09-01T10-00-00-000Z_root0001.jsonl" >/dev/null 2>&1
+LIN_FIRST="$(awk '/<pre>/{sub(/.*<pre>/,""); print; exit}' "$(find "$LIN_OUTDIR" -name "session-*-root0001.html" | head -1)" 2>/dev/null)"
+if printf '%s' "$LIN_FIRST" | jq -e 'has("parentSessionId") == false and has("rootSessionId") == false' >/dev/null 2>&1; then
+  ok "top-level capture carries neither lineage key"
+else
+  bad "top-level capture lineage keys wrong: $LIN_FIRST"
+fi
+# A child capture carries both.
+LIN_OUTDIR2="$TMPROOT/sessions-lineage2"
+mkdir -p "$LIN_OUTDIR2"
+KB_SESSIONS_DIR="$LIN_OUTDIR2" "$CAPTURE" "$LIN_ROOT/case-1/bucket/2026-09-01T10-00-00-000Z_root0001/child0001.jsonl" >/dev/null 2>&1
+LIN_FIRST2="$(awk '/<pre>/{sub(/.*<pre>/,""); print; exit}' "$(find "$LIN_OUTDIR2" -name "session-*-child0001.html" | head -1)" 2>/dev/null)"
+if printf '%s' "$LIN_FIRST2" | jq -e '.parentSessionId == "root0001" and .rootSessionId == "root0001"' >/dev/null 2>&1; then
+  ok "child capture stamps parent/root lineage"
+else
+  bad "child capture lineage wrong: $LIN_FIRST2"
+fi
+# Sidecar translations still succeed alongside lineage capture: a failing
+# kb parks the translated main transcript (carrying lineage) AND the
+# staged sidecar (translated with no lineage arg) in the spool.
+LIN_SPOOLD="$TMPROOT/linspool"
+LIN_BIN="$TMPROOT/linbin"
+mkdir -p "$LIN_SPOOLD" "$LIN_BIN"
+mkdir -p "$LIN_ROOT/case-1/bucket/2026-09-01T10-00-00-000Z_root0001/child0001"
+jq -nc '{type:"session",version:3,id:"side0001",timestamp:"2026-09-01T10:00:00.000Z",cwd:"/tmp/kb-omp-fixture"}' >"$LIN_ROOT/case-1/bucket/2026-09-01T10-00-00-000Z_root0001/child0001/Worker.jsonl"
+jq -nc '{type:"message",id:"sm1",parentId:null,timestamp:"2026-09-01T10:00:01.000Z",message:{role:"user",content:[{type:"text",text:"side work"}]}}' >>"$LIN_ROOT/case-1/bucket/2026-09-01T10-00-00-000Z_root0001/child0001/Worker.jsonl"
+cat >"$LIN_BIN/kb" <<'KB'
+#!/usr/bin/env bash
+[ "${LIN_KB_FAIL:-}" = 1 ] && exit 1
+exit 0
+KB
+chmod +x "$LIN_BIN/kb"
+LIN_SIDE_OUT="$TMPROOT/linside-out"
+mkdir -p "$LIN_SIDE_OUT"
+(
+  export PATH="$LIN_BIN:$PATH" KB_SESSIONS_DIR="$LIN_SIDE_OUT" KB_CAPTURE_SPOOL="$LIN_SPOOLD" LIN_KB_FAIL=1
+  "$CAPTURE" "$LIN_ROOT/case-1/bucket/2026-09-01T10-00-00-000Z_root0001/child0001.jsonl" >/dev/null 2>&1
+)
+LIN_SPOOL_MAIN="$(head -1 "$LIN_SPOOLD/child0001.jsonl" 2>/dev/null)"
+if printf '%s' "$LIN_SPOOL_MAIN" | jq -e '.parentSessionId == "root0001" and .rootSessionId == "root0001"' >/dev/null 2>&1 \
+  && [ -s "$LIN_SPOOLD/child0001.jsonl" ] && ls "$LIN_SPOOLD/child0001/subagents"/agent-*.jsonl >/dev/null 2>&1; then
+  ok "sidecar translation succeeds with lineage (spooled main carries it, sidecar staged)"
+else
+  bad "sidecar/lineage spool wrong: main=$LIN_SPOOL_MAIN spool=$(find "$LIN_SPOOLD" 2>/dev/null | tr '\n' ' ')"
+fi
+# Segmented capture stamps lineage on EVERY part: force a small segment
+# target with the real kb so the child file lands as several parts.
+if PATH="$REAL_PATH" command -v kb >/dev/null 2>&1 \
+  || [ -n "${KB_BIN_DIR:-}" ] && [ -x "${KB_BIN_DIR:-}/kb" ]; then
+  LIN_SEG_ROOT="$TMPROOT/linseg"
+  mkdir -p "$LIN_SEG_ROOT/bucket/2026-09-01T10-00-00-000Z_root0001"
+  LIN_SEG_FILE="$LIN_SEG_ROOT/bucket/2026-09-01T10-00-00-000Z_root0001/segchild.jsonl"
+  {
+    jq -nc '{type:"session",version:3,id:"segchild",timestamp:"2026-09-01T10:00:00.000Z",cwd:"/tmp/kb-omp-fixture"}'
+    jq -nc '{type:"message",id:"m1",parentId:null,timestamp:"2026-09-01T10:00:01.000Z",message:{role:"user",content:[{type:"text",text:"turn one message body"}]}}'
+    jq -nc '{type:"message",id:"m2",parentId:"m1",timestamp:"2026-09-01T10:00:02.000Z",message:{role:"assistant",model:"m",content:[{type:"text",text:"turn one answer body"}]}}'
+    jq -nc '{type:"message",id:"m3",parentId:"m2",timestamp:"2026-09-01T10:00:03.000Z",message:{role:"user",content:[{type:"text",text:"turn two message body"}]}}'
+    jq -nc '{type:"message",id:"m4",parentId:"m3",timestamp:"2026-09-01T10:00:04.000Z",message:{role:"assistant",model:"m",content:[{type:"text",text:"turn two answer body"}]}}'
+    jq -nc '{type:"message",id:"m5",parentId:"m4",timestamp:"2026-09-01T10:00:05.000Z",message:{role:"user",content:[{type:"text",text:"turn three message body"}]}}'
+    jq -nc '{type:"message",id:"m6",parentId:"m5",timestamp:"2026-09-01T10:00:06.000Z",message:{role:"assistant",model:"m",content:[{type:"text",text:"turn three answer body"}]}}'
+  } >"$LIN_SEG_FILE"
+  LIN_SEG_OUT="$TMPROOT/linseg-out"
+  mkdir -p "$LIN_SEG_OUT"
+  (
+    PATH="$REAL_PATH"
+    KB_SESSIONS_DIR="$LIN_SEG_OUT"
+    KB_CAPTURE_SEGMENTS=1
+    KB_CAPTURE_SEGMENT_BYTES=300
+    export PATH KB_SESSIONS_DIR KB_CAPTURE_SEGMENTS KB_CAPTURE_SEGMENT_BYTES
+    "$CAPTURE" "$LIN_SEG_FILE" >/dev/null 2>&1
+  )
+  LIN_SEG_FILES="$(find "$LIN_SEG_OUT" -name 'session-*-segchild*.html' 2>/dev/null)"
+  LIN_SEG_N="$(printf '%s\n' "$LIN_SEG_FILES" | grep -c . || true)"
+  LIN_SEG_OK=1
+  [ "$LIN_SEG_N" -ge 2 ] || LIN_SEG_OK=0
+  for part in $LIN_SEG_FILES; do
+    part_first="$(awk '/<pre>/{sub(/.*<pre>/,""); print; exit}' "$part" 2>/dev/null)"
+    printf '%s' "$part_first" | jq -e '.parentSessionId == "root0001" and .rootSessionId == "root0001"' >/dev/null 2>&1 || LIN_SEG_OK=0
+  done
+  if [ "$LIN_SEG_OK" = "1" ]; then
+    ok "segmented capture stamps parent/root lineage on every part ($LIN_SEG_N parts)"
+  else
+    bad "segmented lineage wrong or too few parts: n=$LIN_SEG_N files=$LIN_SEG_FILES"
+  fi
+else
+  echo "skip - no real kb on PATH or in KB_BIN_DIR, cannot exercise the segmented lineage run" >&2
+fi
+
+echo
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -805,6 +805,31 @@ Take the backup BEFORE upgrading; there is no in-place down-migration. The
 column holds derived facts only, so losing it loses nothing a reindex cannot
 rebuild.
 
+## Rolling back across V0047 (session lineage, Track A)
+
+V0047 adds three nullable columns to `sessions` (`parent_session_id`,
+`root_session_id`, `project_slug`) and nothing else; it backfills nothing.
+NULL means "not stamped": every capture indexed before the upgrade reads as
+`not_extracted`-style NULL until `kb sessions backfill-tree` stamps it from
+the host's omp sessions tree, and new captures get it at capture time. Like
+every schema migration it raises the volume's **refinery epoch**, so a daemon
+built BEFORE V0047 **refuses to boot** on a migrated `index.db`
+(`refusing to boot: schema epoch V47 on disk at <path> is NEWER than this
+binary's V46 …` — the `refuse_if_volume_ahead` guard, deliberately loud
+rather than a silent downgrade). To roll back:
+
+1. Stop the daemon.
+2. Restore each kb's `index.db` from the `kb backup` taken before the upgrade
+   (`kb restore <archive> --kb <name>`), or accept a re-derive: the `sessions`
+   table is rebuilt by `kb reindex` from the capture files, so deleting a kb's
+   `index.db` and reindexing on the older binary is safe for session data
+   (comment sidecars and `.review/` files are untouched either way).
+3. Start the older binary.
+
+Take the backup BEFORE upgrading; there is no in-place down-migration. The
+columns hold display-only lineage, so losing them loses nothing a
+`kb sessions backfill-tree --apply` cannot re-stamp.
+
 ## Backup & restore (B1)
 
 `kb backup <kb>` writes a **consistent** `tar.gz` of a kb's persistent

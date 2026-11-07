@@ -214,6 +214,22 @@ pub struct SessionOut {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-export", ts(optional))]
     pub evidence: Option<SessionEvidenceOut>,
+    /// V0047 — lineage, SURFACED never scored (invariant #11). `None` for
+    /// a top-level session or an unstamped row; omitted on the wire so a
+    /// lineage-less row serialises byte-identically.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub parent_session_id: Option<String>,
+    /// V0047 — lineage, SURFACED never scored (invariant #11). The tree
+    /// root's session id; roots are NOT self-referenced.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub root_session_id: Option<String>,
+    /// V0047 — lineage, SURFACED never scored (invariant #11). The capture
+    /// cwd's repo slug; `None` when the cwd is gone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub project_slug: Option<String>,
     /// The full parsed evidence, for the detail route's per-check list. Never
     /// serialised.
     #[serde(skip)]
@@ -568,6 +584,9 @@ impl SessionOut {
             segment_idx: row.segment_idx,
             segment_count: None,
             evidence: Some(evidence),
+            parent_session_id: row.parent_session_id,
+            root_session_id: row.root_session_id,
+            project_slug: row.project_slug,
             evidence_full,
         }
     }
@@ -4782,6 +4801,187 @@ pub struct BackfillProjectKeyResponse {
     /// kbs whose backfill failed (closed error class, never the raw text).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub degraded: Vec<crate::routes::context::DegradedLane>,
+}
+
+/// V0047 — `POST /api/sessions/backfill-tree?apply=`: fill ONLY NULL
+/// lineage columns (`parent_session_id` / `root_session_id` /
+/// `project_slug`) on omp rows, from the CLI's host-side tree walk.
+/// Cap 500 items/request (400 over cap, never truncation); 400 on unsafe
+/// tokens. Same operator posture as `backfill-project-key`.
+#[derive(Debug, Deserialize, Default)]
+pub struct BackfillTreeParams {
+    #[serde(default)]
+    pub apply: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BackfillTreeItem {
+    pub session_id: String,
+    #[serde(default)]
+    pub parent_session_id: Option<String>,
+    #[serde(default)]
+    pub root_session_id: Option<String>,
+    #[serde(default)]
+    pub project_slug: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BackfillTreeBody {
+    #[serde(default)]
+    pub items: Vec<BackfillTreeItem>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BackfillTreeKb {
+    pub kb: String,
+    pub would_change: u64,
+    pub changed: u64,
+    pub unmatched: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BackfillTreeResponse {
+    pub apply: bool,
+    pub would_change: u64,
+    pub changed: u64,
+    pub unmatched: u64,
+    pub kbs: Vec<BackfillTreeKb>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub degraded: Vec<crate::routes::context::DegradedLane>,
+}
+
+pub(crate) fn is_plain_token(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 128
+        && s.as_bytes()[0].is_ascii_alphanumeric()
+        && s.as_bytes()
+            .iter()
+            .all(|&c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b':' | b'-'))
+}
+
+/// V0047 — backfill-tree items after validation: one `(session_id,
+/// parent, root, project_slug)` tuple per posted item.
+type ValidatedTreeItems = Vec<(String, Option<String>, Option<String>, Option<String>)>;
+
+fn validate_backfill_tree_body(
+    body: &BackfillTreeBody,
+) -> Result<ValidatedTreeItems, kb_core::Error> {
+    if body.items.len() > 500 {
+        return Err(kb_core::Error::BadRequest(
+            "backfill-tree: at most 500 items per request".into(),
+        ));
+    }
+    let mut out = Vec::with_capacity(body.items.len());
+    for it in &body.items {
+        if !is_plain_token(&it.session_id) {
+            return Err(kb_core::Error::BadRequest(
+                "backfill-tree: unsafe session_id".into(),
+            ));
+        }
+        let check = |v: &Option<String>| -> Result<Option<String>, kb_core::Error> {
+            match v {
+                None => Ok(None),
+                Some(s) => {
+                    if is_plain_token(s) {
+                        Ok(Some(s.clone()))
+                    } else {
+                        Err(kb_core::Error::BadRequest(
+                            "backfill-tree: unsafe lineage token".into(),
+                        ))
+                    }
+                }
+            }
+        };
+        // `project_slug` is the capture slug charset ([a-z0-9._-]{1,64},
+        // same as `meta_project_slug`), not the loose `is_plain_token`.
+        let check_slug = |v: &Option<String>| -> Result<Option<String>, kb_core::Error> {
+            match v {
+                None => Ok(None),
+                Some(s) => {
+                    let valid = !s.is_empty()
+                        && s.len() <= 64
+                        && s.as_bytes().iter().all(|&c| {
+                            c.is_ascii_lowercase()
+                                || c.is_ascii_digit()
+                                || matches!(c, b'.' | b'_' | b'-')
+                        });
+                    if valid {
+                        Ok(Some(s.clone()))
+                    } else {
+                        Err(kb_core::Error::BadRequest(
+                            "backfill-tree: unsafe project_slug".into(),
+                        ))
+                    }
+                }
+            }
+        };
+        out.push((
+            it.session_id.clone(),
+            check(&it.parent_session_id)?,
+            check(&it.root_session_id)?,
+            check_slug(&it.project_slug)?,
+        ));
+    }
+    Ok(out)
+}
+
+pub async fn backfill_tree(
+    State(state): State<Arc<KbHandles>>,
+    Query(params): Query<BackfillTreeParams>,
+    Json(body): Json<BackfillTreeBody>,
+) -> impl IntoResponse {
+    let apply = params.apply;
+    let items = match validate_backfill_tree_body(&body) {
+        Ok(v) => v,
+        Err(e) => return error_to_problem_json(&e).into_response(),
+    };
+    type Part = (
+        String,
+        Result<(u64, u64, u64), crate::routes::context::QueryErrorClass>,
+    );
+    let mut futs: Vec<super::CorpusFut<'_, Part>> = Vec::new();
+    for (kb_name, ctx) in state.kbs.iter() {
+        let items = items.clone();
+        futs.push(Box::pin(async move {
+            let r = match ctx.storage.sessions_backfill_tree(apply, items).await {
+                Ok(v) => Ok(v),
+                Err(e) => {
+                    tracing::warn!(kb = %kb_name, error = %e, "backfill-tree failed");
+                    Err(crate::routes::context::classify_query_error(&e.to_string()))
+                }
+            };
+            (kb_name.as_str().to_string(), r)
+        }));
+    }
+    let mut resp = BackfillTreeResponse {
+        apply,
+        would_change: 0,
+        changed: 0,
+        unmatched: 0,
+        kbs: Vec::new(),
+        degraded: Vec::new(),
+    };
+    for (kb, r) in super::buffered_join(futs, state.fanout_cap).await {
+        match r {
+            Ok((would, did, unmatched)) => {
+                resp.would_change += would;
+                resp.changed += did;
+                resp.unmatched += unmatched;
+                resp.kbs.push(BackfillTreeKb {
+                    kb,
+                    would_change: would,
+                    changed: did,
+                    unmatched,
+                });
+            }
+            Err(class) => resp.degraded.push(crate::routes::context::degraded_of(
+                &kb,
+                "backfill-tree",
+                class,
+            )),
+        }
+    }
+    Json(resp).into_response()
 }
 
 pub async fn backfill_project_key(
@@ -11022,6 +11222,24 @@ mod evidence_wire_tests {
         assert_eq!(v["evidence"]["verdict"], "verified");
         assert_eq!(v["evidence"]["deciding"]["after_last_edit"], true);
         assert!(v.get("evidence_full").is_none());
+    }
+
+    #[test]
+    fn session_out_lineage_less_row_is_byte_identical_without_lineage_keys() {
+        let out = SessionOut::from_row("k", row(None, 1, 0));
+        let v = serde_json::to_value(&out).unwrap();
+        assert!(v.get("parent_session_id").is_none());
+        assert!(v.get("root_session_id").is_none());
+        assert!(v.get("project_slug").is_none());
+        let mut r = row(None, 1, 0);
+        r.parent_session_id = Some("par1".to_string());
+        r.root_session_id = Some("root1".to_string());
+        r.project_slug = Some("my-proj".to_string());
+        let out = SessionOut::from_row("k", r);
+        let v = serde_json::to_value(&out).unwrap();
+        assert_eq!(v["parent_session_id"], "par1");
+        assert_eq!(v["root_session_id"], "root1");
+        assert_eq!(v["project_slug"], "my-proj");
     }
 
     #[test]

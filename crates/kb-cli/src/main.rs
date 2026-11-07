@@ -2999,6 +2999,26 @@ enum SessionsAction {
         #[arg(long)]
         daemon: Option<String>,
     },
+    /// Walk the host's omp sessions tree and fill NULL lineage
+    /// columns (`parent_session_id` / `root_session_id` /
+    /// `project_slug`) on omp rows through the daemon. Dry-run by
+    /// default (prints `would_change=<n> changed=<n> unmatched=<n>`);
+    /// `--apply` writes. Never overwrites a non-NULL value. Requires a
+    /// running daemon (the storage actor stays the single writer).
+    BackfillTree {
+        /// Write the lineage. Absent = dry-run; nothing is written.
+        #[arg(long)]
+        apply: bool,
+        /// The omp sessions directory to walk (default `~/.omp/agent/sessions`).
+        #[arg(long)]
+        sessions_dir: Option<std::path::PathBuf>,
+        /// Items per POST batch (default 200; the route caps at 500).
+        #[arg(long, default_value_t = 200)]
+        batch: usize,
+        /// Daemon to run it through (default: the local one).
+        #[arg(long)]
+        daemon: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -6510,6 +6530,22 @@ async fn main() -> Result<()> {
                 commands::sessions::backfill_project_key(
                     cli.config.as_ref(),
                     apply,
+                    daemon.as_deref(),
+                    bearer.as_deref(),
+                )
+                .await
+            }
+            SessionsAction::BackfillTree {
+                apply,
+                sessions_dir,
+                batch,
+                daemon,
+            } => {
+                let bearer = read_bearer();
+                commands::sessions_lineage::backfill_tree(
+                    apply,
+                    sessions_dir.as_ref(),
+                    batch,
                     daemon.as_deref(),
                     bearer.as_deref(),
                 )

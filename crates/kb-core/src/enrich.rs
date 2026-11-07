@@ -339,6 +339,9 @@ impl EnrichmentHook for SessionCaptureHook {
                 segment_of: act.segment_of.clone(),
                 segment_idx: act.segment_idx,
                 evidence_json,
+                parent_session_id: act.parent_session_id.clone(),
+                root_session_id: act.root_session_id.clone(),
+                project_slug: crate::sessions::meta_project_slug(ctx.html),
             };
             if let Err(e) = ctx.storage.sessions_upsert(row).await {
                 tracing::warn!(

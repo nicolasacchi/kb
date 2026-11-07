@@ -433,6 +433,179 @@ async fn sessions_backfill_project_key_route_is_dry_run_by_default() {
     assert_eq!(applied["apply"], true, "{applied}");
 }
 
+/// V0047 — the tree backfill is a daemon route (the storage actor stays
+/// the single writer): a dry run reports `would_change` and writes
+/// nothing; `apply=true` fills the NULL lineage columns on matching omp
+/// rows and reports `changed`; a second apply is a no-op (never
+/// overwrites non-NULL).
+#[tokio::test]
+async fn backfill_tree_route_dry_run_then_apply() {
+    let sid = "sid-tree-1";
+    let jsonl = format!(
+        "{{\"sessionId\":\"{sid}\",\"type\":\"adapter-meta\",\"adapter\":\"kb-capture-omp/1\",\"harness\":\"omp\"}}\n\
+         {{\"sessionId\":\"{sid}\",\"type\":\"user\",\"promptSource\":\"typed\",\"message\":{{\"role\":\"user\",\"content\":\"child work\"}}}}\n"
+    );
+    let global = vec![(
+        "session-20260601T100000Z-sid-tree-1.html",
+        session_transcript_html(sid, "20260601T100000Z", &jsonl),
+    )];
+    let (_tmp, addr) = boot_memory_corpora(&global, &[]).await;
+    let client = reqwest::Client::new();
+    // Wait for the enrichment row (harness=omp, NULL lineage) to land.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let rows: serde_json::Value = client
+            .get(url(addr, "/api/sessions?limit=100"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if rows["sessions"]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|r| r["session_id"] == serde_json::json!(sid)))
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for {sid}: {rows}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let get_detail = |sid: String| {
+        let client = client.clone();
+        async move {
+            let resp = client
+                .get(url(addr, &format!("/api/sessions/{sid}")))
+                .send()
+                .await
+                .unwrap();
+            resp.json::<serde_json::Value>().await.unwrap()
+        }
+    };
+    // Baseline: a lineage-less row serialises without the keys.
+    let before = get_detail(sid.to_string()).await;
+    assert!(before.get("parent_session_id").is_none(), "{before}");
+    assert!(before.get("root_session_id").is_none(), "{before}");
+    assert!(before.get("project_slug").is_none(), "{before}");
+    // The route fans out across BOTH booted corpora: `globalmem` holds
+    // the session (so `sid-tree-1` is a would-change there and
+    // `sid-missing` is unmatched), while `projmem` is empty (both items
+    // unmatched). Totals are the per-kb sums.
+    let kb_entry = |resp: &serde_json::Value, name: &str| {
+        resp["kbs"]
+            .as_array()
+            .expect("kbs array")
+            .iter()
+            .find(|k| k["kb"] == name)
+            .unwrap_or_else(|| panic!("kb {name} present: {resp}"))
+            .clone()
+    };
+    let body = serde_json::json!({"items": [
+        {"session_id": "sid-tree-1", "parent_session_id": "par1", "root_session_id": "root1"},
+        {"session_id": "sid-missing", "parent_session_id": "par1", "root_session_id": "root1"},
+    ]});
+    let dry: serde_json::Value = client
+        .post(url(addr, "/api/sessions/backfill-tree"))
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(dry["apply"], false, "{dry}");
+    assert_eq!(dry["would_change"], 1, "{dry}");
+    assert_eq!(dry["changed"], 0, "{dry}");
+    assert_eq!(dry["unmatched"], 3, "{dry}");
+    assert_eq!(
+        kb_entry(&dry, "globalmem"),
+        serde_json::json!({"kb": "globalmem", "would_change": 1, "changed": 0, "unmatched": 1}),
+        "{dry}"
+    );
+    assert_eq!(
+        kb_entry(&dry, "projmem"),
+        serde_json::json!({"kb": "projmem", "would_change": 0, "changed": 0, "unmatched": 2}),
+        "{dry}"
+    );
+    // Dry-run writes nothing: the row is still lineage-less.
+    let after_dry = get_detail(sid.to_string()).await;
+    assert!(after_dry.get("parent_session_id").is_none(), "{after_dry}");
+    let applied: serde_json::Value = client
+        .post(url(addr, "/api/sessions/backfill-tree?apply=true"))
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(applied["apply"], true, "{applied}");
+    assert_eq!(applied["would_change"], 1, "{applied}");
+    assert_eq!(applied["changed"], 1, "{applied}");
+    assert_eq!(applied["unmatched"], 3, "{applied}");
+    assert_eq!(
+        kb_entry(&applied, "globalmem"),
+        serde_json::json!({"kb": "globalmem", "would_change": 1, "changed": 1, "unmatched": 1}),
+        "{applied}"
+    );
+    assert_eq!(
+        kb_entry(&applied, "projmem"),
+        serde_json::json!({"kb": "projmem", "would_change": 0, "changed": 0, "unmatched": 2}),
+        "{applied}"
+    );
+    let after = get_detail(sid.to_string()).await;
+    assert_eq!(after["parent_session_id"], "par1", "{after}");
+    assert_eq!(after["root_session_id"], "root1", "{after}");
+    // A second apply is a no-op and never overwrites the filled columns.
+    let again: serde_json::Value = client
+        .post(url(addr, "/api/sessions/backfill-tree?apply=true"))
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(again["would_change"], 0, "{again}");
+    assert_eq!(again["changed"], 0, "{again}");
+    assert_eq!(again["unmatched"], 3, "{again}");
+    let final_row = get_detail(sid.to_string()).await;
+    assert_eq!(final_row["parent_session_id"], "par1", "{final_row}");
+}
+
+#[tokio::test]
+async fn backfill_tree_rejects_over_cap_and_unsafe_ids() {
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let many: Vec<_> = (0..501)
+        .map(|i| serde_json::json!({"session_id": format!("s{i}")}))
+        .collect();
+    let resp = client
+        .post(url(addr, "/api/sessions/backfill-tree"))
+        .json(&serde_json::json!({"items": many}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 400, "over cap must 400");
+    let bad = client
+        .post(url(addr, "/api/sessions/backfill-tree"))
+        .json(&serde_json::json!({"items": [{"session_id": "bad id!"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad.status().as_u16(), 400, "unsafe id must 400");
+    let bad2 = client
+        .post(url(addr, "/api/sessions/backfill-tree"))
+        .json(&serde_json::json!({"items": [{"session_id": "s1", "parent_session_id": "bad id!"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad2.status().as_u16(), 400, "unsafe parent must 400");
+}
+
 /// v044-F6 — `/api/turn` takes `project`/`visible_to`/`lanes`: an unknown
 /// lane is a 400 (not a silent skip), an unknown project fails open, and a
 /// lane subset is honoured.
