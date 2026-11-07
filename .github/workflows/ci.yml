@@ -1491,10 +1491,10 @@ jobs:
       contents: read
     name: term-tap (bun tap + fixtures)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    # No `needs:` — the bun tap lane (placeholder tests, `bun build
+    timeout-minutes: 45
+    # No `needs:` — the bun tap lane (real tap tests, `bun build
     # --compile`) plus the stdlib fixture generators. Unix-only needs
-    # nothing from the Rust build. T3-T7 add the real tap tests here.
+    # nothing from the Rust build.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -1516,12 +1516,12 @@ jobs:
           n="$(sed -n 's/^Ran \([0-9]*\) tests\? .*/\1/p' /tmp/term-tools.log | tail -1)"
           test "${n:-0}" -ge 15
 
-      - name: Tap smoke tests (bun test, JUnit report)
+      - name: Tap pipeline tests (ci.sh: bun test + mutation + JUnit)
+        env:
+          KB_REQUIRE_BUN_PIN: "1"
         run: |
-          mkdir -p "$RUNNER_TEMP/witness"
-          cd crates/kb-term/tap
-          KB_REQUIRE_BUN_PIN=1 bun test --reporter=junit --reporter-outfile="$RUNNER_TEMP/witness/bun-junit.xml"
-          head -c 1500 "$RUNNER_TEMP/witness/bun-junit.xml" || true
+          bash crates/kb-term/tap/test/ci.sh
+          head -c 1500 crates/kb-term/tap/out/junit.xml || true
 
       - name: Compile the tap binary
         run: |
@@ -1531,13 +1531,13 @@ jobs:
 
       - name: Witness (bun JUnit report -> floor + zero failures)
         if: ${{ !cancelled() }}
-        run: python3 scripts/ci/witness.py junit "$RUNNER_TEMP/witness/bun-junit.xml" --lane term-tap
+        run: python3 scripts/ci/witness.py nextest-junit crates/kb-term/tap/out/junit.xml --lane term-tap
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: witness-term-tap
-          path: ${{ runner.temp }}/witness
+          path: crates/kb-term/tap/out
 
   term-int:
     permissions:
