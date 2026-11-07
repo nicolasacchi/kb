@@ -34,6 +34,25 @@ pub trait Tmux: Send + Sync {
         timeout: Option<Duration>,
     ) -> impl std::future::Future<Output = Result<TmuxOut, RunnerError>> + Send + 'a;
 
+    /// Run with an optional stdin payload (paste's `load-buffer -`).
+    fn run_with_stdin<'a>(
+        &'a self,
+        sock: &'a Path,
+        args: &'a [&'a str],
+        stdin: Option<&'a [u8]>,
+    ) -> impl std::future::Future<Output = Result<TmuxOut, RunnerError>> + Send + 'a {
+        let sock = sock.to_path_buf();
+        let args: Vec<String> = args.iter().map(ToString::to_string).collect();
+        async move {
+            self.run(
+                &sock,
+                &args.iter().map(String::as_str).collect::<Vec<_>>(),
+                None,
+            )
+            .await
+        }
+    }
+
     /// Run the pinned tmux with NO socket (used for `-V`).
     fn run_global<'a>(
         &'a self,
@@ -84,6 +103,58 @@ impl RealTmux {
     }
 }
 
+impl RealTmux {
+    async fn exec_stdin(
+        &self,
+        argv: &[String],
+        payload: &[u8],
+        timeout: Duration,
+    ) -> Result<TmuxOut, RunnerError> {
+        use std::process::Stdio;
+        use tokio::io::AsyncWriteExt;
+        let mut cmd = Command::new(&self.bin);
+        cmd.args(argv);
+        cmd.env_clear();
+        cmd.env("LANG", "C.UTF-8");
+        cmd.env("HOME", std::env::var("HOME").unwrap_or_default());
+        cmd.kill_on_drop(true);
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| RunnerError::TmuxFailed(format!("spawn tmux: {e}")))?;
+        if let Some(stdin) = child.stdin.take() {
+            let data = payload.to_vec();
+            tokio::spawn(async move {
+                let mut stdin = stdin;
+                let _ = stdin.write_all(&data).await;
+            });
+        }
+        let out = tokio::time::timeout(timeout, child.wait_with_output())
+            .await
+            .map_err(|_| RunnerError::TmuxFailed("tmux command timed out".to_string()))?
+            .map_err(|e| RunnerError::TmuxFailed(format!("wait tmux: {e}")))?;
+        Ok(TmuxOut {
+            ok: out.status.success(),
+            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        })
+    }
+
+    async fn run_stdin_real(
+        this: RealTmux,
+        sock: std::path::PathBuf,
+        args: Vec<String>,
+        payload: Vec<u8>,
+    ) -> Result<TmuxOut, RunnerError> {
+        let mut argv = vec!["-S".to_string(), sock.to_string_lossy().into_owned()];
+        argv.extend(args);
+        this.exec_stdin(&argv, &payload, Duration::from_secs(5))
+            .await
+    }
+}
+
 impl Tmux for RealTmux {
     fn run<'a>(
         &'a self,
@@ -95,6 +166,19 @@ impl Tmux for RealTmux {
         let args: Vec<String> = args.iter().map(ToString::to_string).collect();
         let this = self.clone();
         async move { self::run_real(this, sock, args, timeout).await }
+    }
+
+    fn run_with_stdin<'a>(
+        &'a self,
+        sock: &'a Path,
+        args: &'a [&'a str],
+        stdin: Option<&'a [u8]>,
+    ) -> impl std::future::Future<Output = Result<TmuxOut, RunnerError>> + Send + 'a {
+        let sock = sock.to_path_buf();
+        let args: Vec<String> = args.iter().map(ToString::to_string).collect();
+        let payload: Vec<u8> = stdin.unwrap_or(&[]).to_vec();
+        let this = self.clone();
+        async move { RealTmux::run_stdin_real(this, sock, args, payload).await }
     }
 
     fn run_global<'a>(
@@ -139,6 +223,8 @@ pub mod fake {
         pub version_out: Mutex<String>,
         /// When true, every call "times out".
         pub timeout: bool,
+        /// Stdin payloads in call order (paste's `load-buffer -`).
+        pub stdin_log: Mutex<Vec<Vec<u8>>>,
     }
 
     impl FakeTmux {
@@ -192,6 +278,19 @@ pub mod fake {
             // The answer is computed synchronously; the future is only
             // scheduled, so the !Send Mutex guards never cross an await.
             let out = self.answer(sock, args, timeout);
+            async move { out }
+        }
+
+        fn run_with_stdin<'a>(
+            &'a self,
+            sock: &'a Path,
+            args: &'a [&'a str],
+            stdin: Option<&'a [u8]>,
+        ) -> impl std::future::Future<Output = Result<TmuxOut, RunnerError>> + Send + 'a {
+            if let Some(payload) = stdin {
+                self.stdin_log.lock().unwrap().push(payload.to_vec());
+            }
+            let out = self.answer(sock, args, None);
             async move { out }
         }
 

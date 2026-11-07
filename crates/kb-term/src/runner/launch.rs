@@ -500,7 +500,15 @@ pub async fn spawn_anchor_and_wait<S: Supervisor>(
 ) -> Result<(), RunnerError> {
     let sock = runner.holder_socket(id);
     let (cell_w, cell_h) = runner.cfg.cell_px_dims();
-    let anchor = Anchor::spawn(&runner.cfg.tmux_bin, &sock, cols, rows, cell_w, cell_h)?;
+    let anchor = Anchor::spawn(
+        &runner.cfg.tmux_bin,
+        &sock,
+        cols,
+        rows,
+        cell_w,
+        cell_h,
+        &runner.cfg.responder_cfg(),
+    )?;
     let pid = anchor.pid();
     runner.store_anchor(id, anchor).await;
     let out = runner

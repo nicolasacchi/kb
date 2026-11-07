@@ -55,6 +55,10 @@ fn request_goldens() -> Vec<&'static str> {
         "req_history.json",
         "req_read.json",
         "req_take_size.json",
+        "req_release_size.json",
+        "req_grid.json",
+        "req_viewer_open.json",
+        "req_viewer_close.json",
         "req_media.json",
     ]
 }
@@ -103,6 +107,40 @@ fn runner_requests_match_golden() {
             serde_json::from_slice(&bytes).unwrap_or_else(|e| panic!("deserialize {name}: {e}"));
         let out = serde_json::to_vec(&req).unwrap_or_else(|e| panic!("serialize {name}: {e}"));
         assert_eq!(out, bytes, "runner request golden {name}");
+    }
+}
+
+#[test]
+fn rpc_wire_goldens() {
+    // The T9 request variants round-trip byte-identically against the
+    // committed goldens, and every request rejects unknown fields.
+    for name in [
+        "req_paste.json",
+        "req_enter.json",
+        "req_keys.json",
+        "req_take_size.json",
+        "req_release_size.json",
+        "req_grid.json",
+        "req_viewer_open.json",
+        "req_viewer_close.json",
+    ] {
+        let bytes = read_golden(name);
+        let req: Request =
+            serde_json::from_slice(&bytes).unwrap_or_else(|e| panic!("deserialize {name}: {e}"));
+        let out = serde_json::to_vec(&req).unwrap_or_else(|e| panic!("serialize {name}: {e}"));
+        assert_eq!(out, bytes, "runner request golden {name}");
+    }
+    for bad in [
+        r#"{"op":"paste","id":"abcd1234","viewer":"web","text":"x","extra":1}"#,
+        r#"{"op":"enter","id":"abcd1234","viewer":"web","blocked":false,"from_composer":true,"extra":1}"#,
+        r#"{"op":"keys","id":"abcd1234","viewer":"web","input":{"kind":"named","named":["C-c"]},"extra":1}"#,
+        r#"{"op":"keys","id":"abcd1234","viewer":"web","input":{"kind":"named","named":["C-c"],"extra":1}}"#,
+        r#"{"op":"take_size","id":"abcd1234","cols":120,"rows":40,"owner":"a","force":false,"extra":1}"#,
+        r#"{"op":"viewer_open","id":"abcd1234","viewer":"web","extra":1}"#,
+        r#"{"op":"grid","id":"abcd1234","extra":1}"#,
+    ] {
+        let r: Result<Request, _> = serde_json::from_str(bad);
+        assert!(r.is_err(), "unknown field must be rejected: {bad}");
     }
 }
 

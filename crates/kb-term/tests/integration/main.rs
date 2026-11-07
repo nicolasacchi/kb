@@ -1020,3 +1020,712 @@ async fn term_int_kill_after_restart_reaps_holder() {
         "the holder socket must be removed"
     );
 }
+
+// ---- T9: responder identity, viewer bridge, paste/enter/keys, grid ----
+
+use base64::Engine;
+
+/// Locate `python3` (the pane fixture interpreter) on PATH.
+fn python3_bin() -> String {
+    if let Ok(path) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let cand = dir.join("python3");
+            if cand.exists() {
+                return cand.to_string_lossy().into_owned();
+            }
+        }
+    }
+    "/usr/bin/python3".to_string()
+}
+
+/// The `pane_probe.py` log for (mode, path).
+fn probe_log(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+    dir.join(format!("{name}.log"))
+}
+
+/// Launch a probe pane and return (id, log path).
+async fn launch_probe(tr: &TestRunner, mode: &str) -> (String, std::path::PathBuf) {
+    let log = probe_log(tr.dir.path(), mode);
+    let argv = vec![
+        python3_bin(),
+        "-I".to_string(),
+        fixture("pane_probe.py").to_string_lossy().into_owned(),
+        mode.to_string(),
+        log.to_string_lossy().into_owned(),
+    ];
+    let (id, _pid) = tr.launch(argv).await;
+    // Give the fixture a moment to open the log and send its first bytes.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    (id, log)
+}
+
+/// Read a probe log file (empty if missing).
+fn read_log(path: &std::path::Path) -> String {
+    std::fs::read_to_string(path).unwrap_or_default()
+}
+
+/// Poll until the log satisfies `f` or the deadline passes.
+async fn poll_log<F>(path: &std::path::Path, deadline: Duration, mut f: F) -> bool
+where
+    F: FnMut(&str) -> bool,
+{
+    let start = std::time::Instant::now();
+    loop {
+        if f(&read_log(path)) {
+            return true;
+        }
+        if start.elapsed() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Dispatch expecting Ok (panics with the error otherwise).
+async fn dispatch_ok(tr: &TestRunner, req: Request) -> serde_json::Value {
+    match rpc::dispatch(&tr.runner, &req).await {
+        Response::Ok { data } => data,
+        Response::Err { code, message } => panic!("{req:?} failed ({code}): {message}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn term_int_identity_is_the_kb_profile() {
+    let Some(tmux_bin) = require_tmux() else {
+        return;
+    };
+    let tr = TestRunner::new(tmux_bin);
+    boot_runner(&tr).await;
+    let (id, log) = launch_probe(&tr, "query").await;
+    // The anchor answers tmux's startup queries; one viewer joins beside it.
+    dispatch_ok(
+        &tr,
+        Request::ViewerOpen {
+            id: id.clone(),
+            viewer: "web".to_string(),
+        },
+    )
+    .await;
+    // Every non-control client is the kb profile: TERM xterm-256color,
+    // termtype kb-term, no sixel. (The fake tap is a control client.)
+    let sock = tr.sock(&id);
+    // The viewer client takes a moment to attach; poll until two
+    // non-control clients are visible, then read the identity below.
+    let tmux_bin2 = tmux_bin.clone();
+    let appeared = poll_until(Duration::from_secs(10), || {
+        let tmux_bin2 = tmux_bin2.clone();
+        let sock = sock.clone();
+        async move {
+            let out = std::process::Command::new(&tmux_bin2)
+                .arg("-S")
+                .arg(&sock)
+                .arg("list-clients")
+                .arg("-F")
+                .arg("#{client_control_mode}")
+                .output();
+            match out {
+                Ok(o) if o.status.success() => {
+                    String::from_utf8_lossy(&o.stdout)
+                        .lines()
+                        .filter(|l| l.trim() == "0")
+                        .count()
+                        >= 2
+                }
+                _ => false,
+            }
+        }
+    })
+    .await;
+    assert!(appeared, "two non-control clients must appear");
+    let (_, out) = tr.tmux(
+        &sock,
+        &[
+            "list-clients",
+            "-F",
+            "#{client_control_mode} #{client_termname} #{client_termtype} #{client_termfeatures}",
+        ],
+    );
+    let mut noncontrol = 0;
+    for line in out.lines() {
+        let mut parts = line.split_whitespace();
+        let control = parts.next().unwrap_or("");
+        if control == "1" {
+            continue;
+        }
+        noncontrol += 1;
+        let termname = parts.next().unwrap_or("");
+        let termtype = parts.next().unwrap_or("");
+        let features = parts.next().unwrap_or("");
+        assert_eq!(termname, "xterm-256color", "line {line}");
+        assert!(
+            termtype.starts_with("kb-term"),
+            "termtype must start with kb-term: {line}"
+        );
+        assert!(
+            !features.contains("sixel"),
+            "no sixel feature may be advertised: {line}"
+        );
+    }
+    assert!(noncontrol >= 2, "anchor + viewer expected: {out}");
+    // The pane got an OSC 11 reply equal to the cfg colour: the bytes
+    // `rgb:1e1e/1e1e/1e1e` (the bg #1e1e1e) appear in the log as hex.
+    // CSI 16t answers `6;18;9t` (cell pixel size 9x18, the verified
+    // shape), whose hex is `363b31383b3974`.
+    let osc11 = "7267623a31653165312f31653165312f31653165";
+    let t16 = "363b31383b3974";
+    let ok = poll_log(&log, Duration::from_secs(10), |text| {
+        text.contains(osc11) && text.contains(t16)
+    })
+    .await;
+    assert!(
+        ok,
+        "pane log must carry the OSC 11 bg reply and the 16t answer: {}",
+        read_log(&log)
+    );
+    // Winsize pin (behavioral): the pane's own `stty size` is launched at
+    // 120x40; the identity proof above is the OSC reply.
+    let (ok, size) = tr.tmux(
+        &sock,
+        &[
+            "display-message",
+            "-p",
+            "-t",
+            "kb",
+            "#{window_width}x#{window_height}",
+        ],
+    );
+    assert!(ok && size == "120x40", "window 120x40: {size}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn term_int_keys_reach_the_pane_unsplit() {
+    let Some(tmux_bin) = require_tmux() else {
+        return;
+    };
+    let tr = TestRunner::new(tmux_bin);
+    boot_runner(&tr).await;
+    let (id, log) = launch_probe(&tr, "raw").await;
+    dispatch_ok(
+        &tr,
+        Request::ViewerOpen {
+            id: id.clone(),
+            viewer: "web".to_string(),
+        },
+    )
+    .await;
+    let b64 = base64::engine::general_purpose::STANDARD
+        .encode([0x02u8, b'%', 0x1b, b'[', b'1', b'3', b';', b'2', b'u']);
+    dispatch_ok(
+        &tr,
+        Request::Keys {
+            id: id.clone(),
+            viewer: "web".to_string(),
+            input: kb_term::wire::KeyInput::Bytes { bytes_b64: b64 },
+        },
+    )
+    .await;
+    let ok = poll_log(&log, Duration::from_secs(10), |text| {
+        text.contains("02") && text.contains("25") && text.contains("1b5b31333b3275")
+    })
+    .await;
+    assert!(ok, "keys must reach the pane verbatim: {}", read_log(&log));
+    let (_, panes) = tr.tmux(
+        &tr.sock(&id),
+        &["list-panes", "-t", "kb", "-F", "#{pane_id}"],
+    );
+    assert_eq!(panes.lines().count(), 1, "still exactly one pane");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn term_int_sgr_mouse_is_byte_identical_on_an_alt_screen_pane() {
+    let Some(tmux_bin) = require_tmux() else {
+        return;
+    };
+    let tr = TestRunner::new(tmux_bin);
+    boot_runner(&tr).await;
+    let (id, log) = launch_probe(&tr, "altmouse").await;
+    dispatch_ok(
+        &tr,
+        Request::ViewerOpen {
+            id: id.clone(),
+            viewer: "web".to_string(),
+        },
+    )
+    .await;
+    // CSI < 0;10;5 M / CSI < 0;10;5 m / CSI < 64;10;5 M in one keys call.
+    let payload: Vec<u8> = [b"\x1b[<0;10;5M", b"\x1b[<0;10;5m", b"\x1b[<64;10;5M"].concat();
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&payload);
+    dispatch_ok(
+        &tr,
+        Request::Keys {
+            id: id.clone(),
+            viewer: "web".to_string(),
+            input: kb_term::wire::KeyInput::Bytes { bytes_b64: b64 },
+        },
+    )
+    .await;
+    let want: String = payload.iter().map(|b| format!("{b:02x}")).collect();
+    let ok = poll_log(&log, Duration::from_secs(10), |text| text.contains(&want)).await;
+    assert!(
+        ok,
+        "SGR mouse must be byte-identical: want {want}, got {}",
+        read_log(&log)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn term_int_paste_is_bracketed_only_when_the_pane_asked_and_multiline_is_refused_otherwise() {
+    let Some(tmux_bin) = require_tmux() else {
+        return;
+    };
+    let tr = TestRunner::new(tmux_bin);
+    boot_runner(&tr).await;
+    // Pane A: bracketed on.
+    let (id_a, log_a) = launch_probe(&tr, "paste-on").await;
+    dispatch_ok(
+        &tr,
+        Request::ViewerOpen {
+            id: id_a.clone(),
+            viewer: "web".to_string(),
+        },
+    )
+    .await;
+    let data = dispatch_ok(
+        &tr,
+        Request::Paste {
+            id: id_a.clone(),
+            viewer: "web".to_string(),
+            text: "a\nb".to_string(),
+        },
+    )
+    .await;
+    assert_eq!(data["bracketed"], true);
+    assert_eq!(data["paste_only"], false);
+    let ok = poll_log(&log_a, Duration::from_secs(10), |text| {
+        text.contains("1b5b3230307e610a621b5b3230317e")
+    })
+    .await;
+    assert!(ok, "bracketed paste A: {}", read_log(&log_a));
+    // /x is paste_only.
+    let data = dispatch_ok(
+        &tr,
+        Request::Paste {
+            id: id_a.clone(),
+            viewer: "web".to_string(),
+            text: "/x".to_string(),
+        },
+    )
+    .await;
+    assert_eq!(data["paste_only"], true);
+    // Pane B: bracketed off.
+    let (id_b, log_b) = launch_probe(&tr, "paste-off").await;
+    dispatch_ok(
+        &tr,
+        Request::ViewerOpen {
+            id: id_b.clone(),
+            viewer: "web".to_string(),
+        },
+    )
+    .await;
+    let resp = rpc::dispatch(
+        &tr.runner,
+        &Request::Paste {
+            id: id_b.clone(),
+            viewer: "web".to_string(),
+            text: "a\nb".to_string(),
+        },
+    )
+    .await;
+    match resp {
+        Response::Err { code, .. } => assert_eq!(code, "multi-line-refused"),
+        Response::Ok { .. } => panic!("multi-line unbracketed paste must be refused"),
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        read_log(&log_b).is_empty(),
+        "refused paste reaches nothing: {}",
+        read_log(&log_b)
+    );
+    // Single-line pastes raw, no CR appended.
+    dispatch_ok(
+        &tr,
+        Request::Paste {
+            id: id_b.clone(),
+            viewer: "web".to_string(),
+            text: "ab".to_string(),
+        },
+    )
+    .await;
+    let ok = poll_log(&log_b, Duration::from_secs(10), |text| {
+        // "ab" = 6162; a CR (0d) would make 610d62 or similar failures.
+        text.contains("6162")
+    })
+    .await;
+    assert!(ok, "raw single-line paste: {}", read_log(&log_b));
+    assert!(
+        !read_log(&log_b).contains("0d"),
+        "no CR may be appended: {}",
+        read_log(&log_b)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn term_int_enter_waits_for_quiet_and_honours_blocked() {
+    let Some(tmux_bin) = require_tmux() else {
+        return;
+    };
+    let tr = TestRunner::new(tmux_bin);
+    boot_runner(&tr).await;
+    let (id, log) = launch_probe(&tr, "tick").await;
+    dispatch_ok(
+        &tr,
+        Request::ViewerOpen {
+            id: id.clone(),
+            viewer: "web".to_string(),
+        },
+    )
+    .await;
+    // Blocked: code blocked, pane receives nothing.
+    let resp = rpc::dispatch(
+        &tr.runner,
+        &Request::Enter {
+            id: id.clone(),
+            viewer: "web".to_string(),
+            blocked: true,
+            from_composer: false,
+        },
+    )
+    .await;
+    match resp {
+        Response::Err { code, .. } => assert_eq!(code, "blocked"),
+        Response::Ok { .. } => panic!("blocked enter must fail"),
+    }
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        !read_log(&log).contains("0d"),
+        "blocked enter writes nothing: {}",
+        read_log(&log)
+    );
+    // Real enter: waits for quiet (last print + 400ms window).
+    let t0 = std::time::Instant::now();
+    dispatch_ok(
+        &tr,
+        Request::Enter {
+            id: id.clone(),
+            viewer: "web".to_string(),
+            blocked: false,
+            from_composer: false,
+        },
+    )
+    .await;
+    let elapsed = t0.elapsed();
+    // Printing ran 1.5s from ~0.3s after launch; the anchor quiet clock
+    // trails printing, so the enter returns well after print-stop.
+    assert!(
+        elapsed >= Duration::from_millis(500),
+        "enter must wait for quiet, took {elapsed:?}"
+    );
+    let ok = poll_log(&log, Duration::from_secs(10), |text| text.contains("0d")).await;
+    assert!(ok, "0d reaches the pane: {}", read_log(&log));
+    // The stop timestamp in the log precedes the 0d: read the log order.
+    let text = read_log(&log);
+    let stop_pos = text.find("stop");
+    let enter_pos = text.find("0d");
+    assert!(
+        stop_pos.is_some() && enter_pos.is_some() && enter_pos.unwrap() > stop_pos.unwrap(),
+        "enter byte strictly after printing stopped: {text}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn term_int_take_size_moves_the_window_and_a_foreign_owner_is_refused() {
+    let Some(tmux_bin) = require_tmux() else {
+        return;
+    };
+    let tr = TestRunner::new(tmux_bin);
+    boot_runner(&tr).await;
+    let (id, _log) = launch_probe(&tr, "raw").await;
+    let sock = tr.sock(&id);
+    // take 100x30 as `a`.
+    let data = dispatch_ok(
+        &tr,
+        Request::TakeSize {
+            id: id.clone(),
+            cols: 100,
+            rows: 30,
+            owner: "a".to_string(),
+            force: false,
+        },
+    )
+    .await;
+    assert_eq!(data["cols"].as_u64().unwrap(), 100);
+    assert_eq!(data["rows"].as_u64().unwrap(), 30);
+    assert_eq!(data["owner"], "a");
+    let (_, size) = tr.tmux(
+        &sock,
+        &[
+            "display-message",
+            "-p",
+            "-t",
+            "kb",
+            "#{window_width}x#{window_height}",
+        ],
+    );
+    assert_eq!(size, "100x30", "window after take");
+    // Typing through an extra hidden client never moves the grid.
+    dispatch_ok(
+        &tr,
+        Request::ViewerOpen {
+            id: id.clone(),
+            viewer: "extra".to_string(),
+        },
+    )
+    .await;
+    let b64 = base64::engine::general_purpose::STANDARD.encode([b'x']);
+    dispatch_ok(
+        &tr,
+        Request::Keys {
+            id: id.clone(),
+            viewer: "extra".to_string(),
+            input: kb_term::wire::KeyInput::Bytes { bytes_b64: b64 },
+        },
+    )
+    .await;
+    let (_, size2) = tr.tmux(
+        &sock,
+        &[
+            "display-message",
+            "-p",
+            "-t",
+            "kb",
+            "#{window_width}x#{window_height}",
+        ],
+    );
+    assert_eq!(size2, "100x30", "typing must not move the grid");
+    // Foreign take without force: refused, size unchanged.
+    let resp = rpc::dispatch(
+        &tr.runner,
+        &Request::TakeSize {
+            id: id.clone(),
+            cols: 80,
+            rows: 24,
+            owner: "b".to_string(),
+            force: false,
+        },
+    )
+    .await;
+    match resp {
+        Response::Err { code, .. } => assert_eq!(code, "grid-owned"),
+        Response::Ok { .. } => panic!("foreign take must be grid-owned"),
+    }
+    let (_, size3) = tr.tmux(
+        &sock,
+        &[
+            "display-message",
+            "-p",
+            "-t",
+            "kb",
+            "#{window_width}x#{window_height}",
+        ],
+    );
+    assert_eq!(size3, "100x30", "refused take changes nothing");
+    // With force: 80x24, owner b, list shows b.
+    let data = dispatch_ok(
+        &tr,
+        Request::TakeSize {
+            id: id.clone(),
+            cols: 80,
+            rows: 24,
+            owner: "b".to_string(),
+            force: true,
+        },
+    )
+    .await;
+    assert_eq!(data["owner"], "b");
+    let (_, size4) = tr.tmux(
+        &sock,
+        &[
+            "display-message",
+            "-p",
+            "-t",
+            "kb",
+            "#{window_width}x#{window_height}",
+        ],
+    );
+    assert_eq!(size4, "80x24");
+    // The grid RPC + list agree on the owner.
+    let grid = dispatch_ok(&tr, Request::Grid { id: id.clone() }).await;
+    assert_eq!(grid["owner"], "b");
+    assert_eq!(grid["cols"].as_u64().unwrap(), 80);
+    // The owner survives a runner restart (read from @kb_owner_grid).
+    let run_dir = tr.runner.cfg.run_dir.clone();
+    drop(tr);
+    let runner2 = kb_term::runner::Runner::direct(kb_term::runner::RunnerConfig::test_config(
+        run_dir.clone(),
+        tmux_bin.clone(),
+        common::conf_path(),
+    ));
+    let owned = runner2.session_live(&id).await;
+    assert!(owned);
+    let state = crate::runner::grid::grid_state(&runner2.tmux, &runner2.holder_socket(&id))
+        .await
+        .unwrap();
+    assert_eq!(state.owner, Some("b".to_string()));
+    let _ = std::process::Command::new(&tmux_bin)
+        .arg("-S")
+        .arg(run_dir.join("s").join(format!("{id}.sock")))
+        .arg("kill-server")
+        .output();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn term_int_runner_restart_readopts_a_responder_anchor() {
+    let Some(tmux_bin) = require_tmux() else {
+        return;
+    };
+    let dir = tempfile::TempDir::new_in("/tmp").unwrap();
+    let run_dir = dir.path().join("run");
+    std::fs::create_dir_all(run_dir.join("s")).unwrap();
+    std::fs::create_dir_all(run_dir.join("runner")).unwrap();
+    let cfg1 = {
+        let mut cfg = kb_term::runner::RunnerConfig::test_config(
+            run_dir.clone(),
+            tmux_bin.clone(),
+            common::conf_path(),
+        );
+        cfg.tap_bin = Some(fixture("fake_tap.sh"));
+        cfg.require_tap = true;
+        cfg
+    };
+    let a = kb_term::runner::Runner::direct(cfg1);
+    ensure_layout(&a.cfg).await.unwrap();
+    check_tmux_version(&a.tmux, "3.7c").await.unwrap();
+    adopt_anchors(&a).await.unwrap();
+    let cwd = dir.path().to_string_lossy().into_owned();
+    let req = common::launch_req(vec!["/bin/cat".to_string()], cwd);
+    let (id, _pane) = match rpc::dispatch(&a, &req).await {
+        Response::Ok { data } => (
+            data["id"].as_str().unwrap().to_string(),
+            data["pane_pid"].as_u64().unwrap() as u32,
+        ),
+        Response::Err { code, message } => panic!("launch failed ({code}): {message}"),
+    };
+    // Stop the runner (drop everything it owns, closing the masters).
+    drop(a);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    // Start the runner again; the session and harness pane survive.
+    let cfg2 = {
+        let mut cfg = kb_term::runner::RunnerConfig::test_config(
+            run_dir.clone(),
+            tmux_bin.clone(),
+            common::conf_path(),
+        );
+        cfg.tap_bin = Some(fixture("fake_tap.sh"));
+        cfg.require_tap = true;
+        cfg
+    };
+    let b = kb_term::runner::Runner::direct(cfg2);
+    ensure_layout(&b.cfg).await.unwrap();
+    check_tmux_version(&b.tmux, "3.7c").await.unwrap();
+    adopt_anchors(&b).await.unwrap();
+    // Within a bounded wait a non-control client with termtype kb-term
+    // exists again; the identity assertions from the first test hold.
+    let sock = b.holder_socket(&id);
+    let tmux = tmux_bin.clone();
+    let ok = poll_until(Duration::from_secs(10), || {
+        let tmux = tmux.clone();
+        let sock = sock.clone();
+        async move {
+            let out = std::process::Command::new(&tmux)
+                .arg("-S")
+                .arg(&sock)
+                .arg("list-clients")
+                .arg("-F")
+                .arg("#{client_control_mode} #{client_termtype}")
+                .output();
+            match out {
+                Ok(o) if o.status.success() => {
+                    String::from_utf8_lossy(&o.stdout).lines().any(|l| {
+                        let mut p = l.split_whitespace();
+                        p.next() == Some("0") && p.next().unwrap_or("").starts_with("kb-term")
+                    })
+                }
+                _ => false,
+            }
+        }
+    })
+    .await;
+    assert!(ok, "a kb-term responder anchor must reappear");
+    let _ = std::process::Command::new(&tmux_bin)
+        .arg("-S")
+        .arg(&sock)
+        .arg("kill-server")
+        .output();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn term_int_viewers_are_drained_and_never_slow_the_pane() {
+    let Some(tmux_bin) = require_tmux() else {
+        return;
+    };
+    let tr = TestRunner::new(tmux_bin);
+    boot_runner(&tr).await;
+    let (id, _log) = launch_probe(&tr, "flood").await;
+    for v in ["v1", "v2", "v3"] {
+        dispatch_ok(
+            &tr,
+            Request::ViewerOpen {
+                id: id.clone(),
+                viewer: v.to_string(),
+            },
+        )
+        .await;
+    }
+    // The flood must still reach pane death (viewers never block the pane).
+    let sock = tr.sock(&id);
+    let tmux = tmux_bin.clone();
+    let dead = poll_until(Duration::from_secs(20), || {
+        let tmux = tmux.clone();
+        let sock = sock.clone();
+        async move {
+            let out = std::process::Command::new(&tmux)
+                .arg("-S")
+                .arg(&sock)
+                .arg("display-message")
+                .arg("-p")
+                .arg("-t")
+                .arg("kb")
+                .arg("#{pane_dead}")
+                .output();
+            matches!(out, Ok(o) if o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "1")
+        }
+    })
+    .await;
+    assert!(dead, "flood pane must die (remain-on-exit)");
+    for v in ["v1", "v2", "v3"] {
+        let stats = tr.runner.viewer_stats(&id, v).await;
+        assert!(stats.is_some(), "viewer {v} must exist");
+        assert!(stats.unwrap().0 > 0, "viewer {v} must have drained output");
+    }
+    let anchor = tr.runner.anchor_stats(&id).await;
+    assert!(anchor.is_some() && anchor.unwrap().0 > 0);
+    // Closing a viewer removes it from list-clients.
+    use std::collections::HashSet;
+    let (_, before) = tr.tmux(&sock, &["list-clients", "-F", "#{client_pid}"]);
+    let before: HashSet<&str> = before.lines().collect();
+    dispatch_ok(
+        &tr,
+        Request::ViewerClose {
+            id: id.clone(),
+            viewer: "v1".to_string(),
+        },
+    )
+    .await;
+    let (_, after) = tr.tmux(&sock, &["list-clients", "-F", "#{client_pid}"]);
+    assert!(
+        after.lines().count() < before.len(),
+        "closed viewer must leave list-clients"
+    );
+    assert!(!tr.runner.has_viewer(&id, "v1").await);
+    assert!(tr.runner.has_viewer(&id, "v2").await);
+}

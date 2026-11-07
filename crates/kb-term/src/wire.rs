@@ -283,26 +283,34 @@ pub enum Request {
     },
     /// Liveness probe.
     Ping {},
-    /// Paste text into a session.
+    /// Paste text into a session (through the tmux server, not the client).
     Paste {
         /// Session id.
         id: String,
+        /// Viewer the paste is attributed to (must already exist).
+        viewer: String,
         /// Text to paste.
         text: String,
     },
-    /// Mark a session as entered (caller supplies the beat-derived flag).
+    /// Enter on the viewer's hidden client (caller supplies beat state).
     Enter {
         /// Session id.
         id: String,
-        /// Currently blocked.
+        /// Viewer.
+        viewer: String,
+        /// Currently blocked (beat-derived).
         blocked: bool,
+        /// The Enter comes from the composer.
+        from_composer: bool,
     },
-    /// Send keys to a session.
+    /// Send input bytes or named keys to a viewer's hidden client.
     Keys {
         /// Session id.
         id: String,
-        /// Key names.
-        keys: Vec<String>,
+        /// Viewer.
+        viewer: String,
+        /// Input payload.
+        input: KeyInput,
     },
     /// Read session history.
     History {
@@ -314,7 +322,7 @@ pub enum Request {
         /// Session id.
         id: String,
     },
-    /// Take (or report) the grid size for a session.
+    /// Take the grid size for a session.
     TakeSize {
         /// Session id.
         id: String,
@@ -323,12 +331,57 @@ pub enum Request {
         /// Grid rows.
         rows: u16,
         /// Who is taking the grid.
-        by: String,
+        owner: String,
+        /// Override a foreign owner.
+        #[serde(default)]
+        force: bool,
+    },
+    /// Release the grid size for a session.
+    ReleaseSize {
+        /// Session id.
+        id: String,
+        /// The owner releasing the grid.
+        owner: String,
+    },
+    /// Report the grid size and owner for a session.
+    Grid {
+        /// Session id.
+        id: String,
+    },
+    /// Open a hidden input client for a viewer.
+    ViewerOpen {
+        /// Session id.
+        id: String,
+        /// Viewer id.
+        viewer: String,
+    },
+    /// Close a viewer's hidden client.
+    ViewerClose {
+        /// Session id.
+        id: String,
+        /// Viewer id.
+        viewer: String,
     },
     /// Fetch media by sha256.
     Media {
         /// sha256 of the media bytes.
         sha256: String,
+    },
+}
+
+/// Key input for the `keys` RPC (kind-tagged; unknown fields rejected).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+pub enum KeyInput {
+    /// Raw bytes, base64-encoded (written verbatim).
+    Bytes {
+        /// Base64 of the bytes (4 KiB decoded cap per call).
+        bytes_b64: String,
+    },
+    /// Named keys from the closed table.
+    Named {
+        /// Key names.
+        named: Vec<String>,
     },
 }
 

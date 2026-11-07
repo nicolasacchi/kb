@@ -1,0 +1,173 @@
+//! Hidden input clients: one per viewer, output drained and discarded.
+//!
+//! The anchor and every viewer share [`spawn_tmux_client`]: a
+//! responder-equipped `tmux attach` on a pty whose output is drained
+//! (answering only queries) and never forwarded anywhere. Typing flows
+//! the other way: keys / Enter go through the writer each pump owns.
+//! `-f ignore-size` means hidden clients never move the window size.
+//!
+//! The runner keeps the [`Viewer`] map (see `runner/mod.rs`); this module
+//! owns the client handle and the id validation.
+
+use std::fs::File;
+use std::os::unix::io::{IntoRawFd, OwnedFd};
+
+use crate::pty::{open_pty, set_winsize, spawn_on_pty, winsize_of};
+use crate::responder::{spawn_pump, PumpHandle, ResponderCfg};
+use crate::runner::RunnerError;
+use std::os::unix::io::{FromRawFd, IntoRawFd, OwnedFd};
+use tokio::io::unix::AsyncFd;
+use tokio::process::Command;
+
+/// One attached hidden client (the anchor or a viewer).
+pub struct ClientHandle {
+    pump: PumpHandle,
+    pid: u32,
+    /// Master fd for `TIOCSWINSZ` grid updates (kept alongside the pump).
+    master: OwnedFd,
+    cell_w: u16,
+    cell_h: u16,
+}
+
+impl std::fmt::Debug for ClientHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientHandle")
+            .field("pid", &self.pid)
+            .finish()
+    }
+}
+
+impl ClientHandle {
+    /// The client process pid.
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    /// Pump handle (writer for keys/Enter, stats, quiet clock).
+    pub fn pump(&self) -> &PumpHandle {
+        &self.pump
+    }
+
+    /// Pump handle (owned clone).
+    pub fn pump_handle(&self) -> PumpHandle {
+        self.pump.clone()
+    }
+
+    /// Current pty size: (cols, rows, xpix, ypix).
+    pub fn winsize(&self) -> (u16, u16, u16, u16) {
+        winsize_of(&self.master)
+    }
+
+    /// Resize the pty (cells and pixel fields).
+    pub fn set_winsize(&self, cols: u16, rows: u16) {
+        set_winsize(
+            &self.master,
+            cols,
+            rows,
+            cols.saturating_mul(self.cell_w),
+            rows.saturating_mul(self.cell_h),
+        );
+    }
+
+    /// Queue one item to the writer task (whole, never split); `busy-pty`
+    /// on timeout.
+    pub async fn write(&self, item: Vec<u8>) -> Result<(), RunnerError> {
+        self.pump.write(item).await
+    }
+}
+
+impl Drop for ClientHandle {
+    fn drop(&mut self) {
+        // Dropping the pump closes the master (SIGHUP on the client);
+        // SIGTERM as well keeps a dropped runner from leaking the client
+        // process if it ignores HUP. Reaping is the pty wait task.
+        if self.pid != 0 {
+            unsafe {
+                libc::kill(self.pid as i32, libc::SIGTERM);
+            }
+        }
+    }
+}
+
+/// Spawn ONE hidden client: the path both the anchor and every viewer use.
+///
+/// Command: `<tmux> -u -S <sock> attach-session -f ignore-size -t kb`.
+/// Environment: `env_clear()` plus exactly `TERM=xterm-256color`,
+/// `LANG=C.UTF-8`, `PATH=/usr/bin:/bin`. Winsize pixel fields are the
+/// profile cell size, so tmux answers a pane's `CSI 14t/16t/18t`
+/// consistently with the anchor's starting size.
+pub fn spawn_tmux_client(
+    tmux_bin: &str,
+    sock: &std::path::Path,
+    cols: u16,
+    rows: u16,
+    cell_w: u16,
+    cell_h: u16,
+    cfg: &ResponderCfg,
+) -> Result<ClientHandle, RunnerError> {
+    let xpix = cols.saturating_mul(cell_w);
+    let ypix = rows.saturating_mul(cell_h);
+    let (master, slave) = open_pty(cols, rows, xpix, ypix)?;
+    let mut cmd = Command::new(tmux_bin);
+    cmd.arg("-u")
+        .arg("-S")
+        .arg(sock)
+        .args(["attach-session", "-f", "ignore-size", "-t", "kb"]);
+    cmd.env_clear();
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("LANG", "C.UTF-8");
+    cmd.env("PATH", "/usr/bin:/bin");
+    let child = spawn_on_pty(cmd, &slave)?;
+    drop(slave);
+    // Two AsyncFd wraps over the same pty (dups): a reader and a writer.
+    let reader = async_fd_dup(&master)?;
+    let writer = async_fd_dup(&master)?;
+    let pump = spawn_pump(reader, writer, cfg.clone());
+    Ok(ClientHandle {
+        pump,
+        pid: child.pid,
+        master,
+        cell_w,
+        cell_h,
+    })
+}
+
+fn async_fd_dup(master: &OwnedFd) -> Result<AsyncFd<File>, RunnerError> {
+    let dup = master
+        .try_clone()
+        .map_err(|e| RunnerError::Internal(format!("dup master: {e}")))?;
+    let raw = dup.into_raw_fd();
+    // SAFETY: `raw` is a fresh fd owned by us; File takes ownership.
+    let file = unsafe { File::from_raw_fd(raw) };
+    AsyncFd::new(file).map_err(|e| RunnerError::Internal(format!("AsyncFd: {e}")))
+}
+
+/// A registered viewer: its hidden client behind a viewer id.
+pub struct Viewer {
+    /// Hidden client handle.
+    pub client: ClientHandle,
+}
+
+/// Whether `viewer` is a valid viewer id: `[a-z0-9:_-]{1,64}`.
+pub fn valid_viewer(viewer: &str) -> bool {
+    (1..=64).contains(&viewer.len())
+        && viewer.chars().all(|c| {
+            c.is_ascii_lowercase() || c.is_ascii_digit() || c == ':' || c == '_' || c == '-'
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn viewer_id_and_session_validation() {
+        assert!(valid_viewer("web"));
+        assert!(valid_viewer("phone:1"));
+        assert!(valid_viewer("a_b-c:1"));
+        assert!(valid_viewer(&"a".repeat(64)));
+        for bad in ["", "Web", "a b", "a/b", "UPPER", "wörk", &"a".repeat(65)] {
+            assert!(!valid_viewer(bad), "viewer {bad:?} must be rejected");
+        }
+    }
+}

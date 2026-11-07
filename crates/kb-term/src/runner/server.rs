@@ -94,6 +94,7 @@ pub async fn serve<S: Supervisor + 'static>(
                 // Stop accepting, close anchor masters, remove the socket,
                 // leave every holder alone.
                 runner.close_all_anchors().await;
+                runner.close_viewers_for_all().await;
                 drop(listener);
                 let _ = std::fs::remove_file(&sock_path);
                 return Ok(());
