@@ -1,0 +1,26 @@
+[package]
+name = "kb-term"
+description = "kb-term — host-side terminal substrate: the kb-termd runner plus an operator-local kb-term client. NOT a kb verb surface: kb-term deliberately has no kb-core edge (cold-compile isolation). Wire types in src/wire.rs are golden-pinned."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "kb-termd"
+path = "src/bin/kb-termd.rs"
+
+[[bin]]
+name = "kb-term"
+path = "src/bin/kb-term.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+clap = { workspace = true }

@@ -9,6 +9,7 @@ members = [
     "crates/kb-code-cli",
     "crates/kb-lip",
     "crates/kb-buildstamp",
+    "crates/kb-term",
 ]
 # Spikes/* are intentionally NOT workspace members — each has its own
 # Cargo.toml/Cargo.lock/target so retirement is `rm -rf spikes/<name>`.
