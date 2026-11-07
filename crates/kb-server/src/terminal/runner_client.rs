@@ -96,9 +96,9 @@ impl UnixRunner {
 mod tests {
     use super::*;
     use tokio::io::AsyncReadExt;
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    async fn serve_one(socket: std::path::PathBuf, reply: &str) {
+    async fn serve_one(socket: std::path::PathBuf, reply: &'static str) {
         let listener = tokio::net::UnixListener::bind(&socket).unwrap();
         tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
@@ -147,7 +147,8 @@ mod tests {
         let sock = dir.path().join("runner.sock");
         let big = "x".repeat(MAX_REPLY_BYTES + 1);
         let reply = format!("{{\"status\":\"ok\",\"data\":\"{big}\"}}");
-        serve_one(sock.clone(), &reply).await;
+        // Leaked so the spawned server task gets a 'static reply.
+        serve_one(sock.clone(), Box::leak(reply.into_boxed_str())).await;
         let runner = UnixRunner::new(sock, Duration::from_secs(5));
         assert!(matches!(
             runner.call(&RunnerRequest::List {}).await,
