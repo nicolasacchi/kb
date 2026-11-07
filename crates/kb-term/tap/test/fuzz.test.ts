@@ -8,7 +8,7 @@
 import { test, expect, afterAll } from 'bun:test';
 import { QueryStripper } from '../src/strip.ts';
 import { expected, observed, parse } from './oracle.ts';
-import { E, enc, cat, run, eq, hexs, wrap, mulberry32, metric, writeMetrics, FRAGMENTS, TAILS, genQuery, genStream, soup, randomCuts, harness, inject, type R } from './helpers.ts';
+import { E, enc, cat, run, eq, hexs, wrap, mulberry32, metric, writeMetrics, FRAGMENTS, TAILS, genQuery, genStream, soup, randomCuts, harness, inject, pick, type R } from './helpers.ts';
 const BEL = '\x07', ST = `${E}\\`;
 
 interface Counters { streams: number; bytesIn: number; bytesOut: number; chunkings: number; queriesInInput: number; mismatches: string[] }

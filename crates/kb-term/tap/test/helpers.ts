@@ -54,7 +54,7 @@ export const wrap = (inner: string) => `${E}Ptmux;${inner.replaceAll(E, E + E)}$
 // ---------------------------------------------------------------- fuzz generators (seeded, synthetic)
 // Shared corpus so fuzz/differential/perf tests never import test files.
 export type R = () => number;
-const pick = <T>(r: R, a: readonly T[]): T => a[Math.floor(r() * a.length)];
+export const pick = <T>(r: R, a: readonly T[]): T => a[Math.floor(r() * a.length)];
 
 const BEL = '\x07', ST = `${E}\\`;
 

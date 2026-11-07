@@ -7,6 +7,7 @@ import { test, expect } from 'bun:test';
 import { E, enc, cat, eq, hexs, mulberry32, wrap, makeProd, makeRef, runChunks, FRAGMENTS, TAILS, SOUP, genStream, soup, harness, inject, randomCuts } from './helpers.ts';
 import { goldens } from './goldens.ts';
 
+const BEL = '\x07';
 const bytes = (x: string | Uint8Array) => (typeof x === 'string' ? enc(x) : x);
 
 function compare(tag: string, data: Uint8Array, cutsList: number[][]): string[] {
