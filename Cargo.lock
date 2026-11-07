@@ -4716,10 +4716,16 @@ dependencies = [
 name = "kb-term"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "clap",
+ "libc",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
