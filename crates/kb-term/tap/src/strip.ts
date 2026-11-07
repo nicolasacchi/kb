@@ -526,7 +526,10 @@ export class QueryStripper {
       if (!(u.isIdle() && v.arr.subarray(0, v.n).indexOf(ESC) === -1)) v = u.process(v);
     }
     if (!(this.c1.isIdle() && !hasHighByte(v.arr, v.n))) v = this.c1.process(v);
-    if (!(this.strip.isIdle() && v.arr.subarray(0, v.n).indexOf(ESC) === -1)) v = this.strip.process(v);
+    // The stripper consumes BOUNDARY tokens (aborting whatever is in progress),
+    // so its identity condition must also require none.
+    if (!(this.strip.isIdle() && v.arr.subarray(0, v.n).indexOf(ESC) === -1
+        && v.arr.subarray(0, v.n).indexOf(BOUNDARY) === -1)) v = this.strip.process(v);
     this.outAppendCh(v);
   }
 

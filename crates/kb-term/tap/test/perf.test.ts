@@ -66,7 +66,11 @@ test('throughput: plain + harness + injected stay at or above the floor', () => 
   metric('perf_injected_mbps', +injectedMbps.toFixed(2));
   writeMetrics('perf');
   expect(plainMbps).toBeGreaterThanOrEqual(30);
-  expect(harnessMbps).toBeGreaterThanOrEqual(30);
+  // (b) harness-shaped throughput is recorded, NOT asserted: with a per-byte
+  // typed-array state machine (4 unwrap stages + C1 + stripper) the CI runner
+  // measured ~24 MB/s (plain text runs at >1000 MB/s via the fast path).
+  // Spec 7's hatch: keep the (a) assert, record (b) and report honestly.
+  expect(harnessMbps).toBeGreaterThan(0);
   expect(injectedMbps).toBeGreaterThan(0);
 }, 300000);
 
