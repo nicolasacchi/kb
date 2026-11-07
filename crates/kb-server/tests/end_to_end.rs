@@ -490,6 +490,19 @@ async fn backfill_tree_route_dry_run_then_apply() {
     assert!(before.get("parent_session_id").is_none(), "{before}");
     assert!(before.get("root_session_id").is_none(), "{before}");
     assert!(before.get("project_slug").is_none(), "{before}");
+    // The route fans out across BOTH booted corpora: `globalmem` holds
+    // the session (so `sid-tree-1` is a would-change there and
+    // `sid-missing` is unmatched), while `projmem` is empty (both items
+    // unmatched). Totals are the per-kb sums.
+    let kb_entry = |resp: &serde_json::Value, name: &str| {
+        resp["kbs"]
+            .as_array()
+            .expect("kbs array")
+            .iter()
+            .find(|k| k["kb"] == name)
+            .unwrap_or_else(|| panic!("kb {name} present: {resp}"))
+            .clone()
+    };
     let body = serde_json::json!({"items": [
         {"session_id": "sid-tree-1", "parent_session_id": "par1", "root_session_id": "root1"},
         {"session_id": "sid-missing", "parent_session_id": "par1", "root_session_id": "root1"},
@@ -506,7 +519,17 @@ async fn backfill_tree_route_dry_run_then_apply() {
     assert_eq!(dry["apply"], false, "{dry}");
     assert_eq!(dry["would_change"], 1, "{dry}");
     assert_eq!(dry["changed"], 0, "{dry}");
-    assert_eq!(dry["unmatched"], 1, "{dry}");
+    assert_eq!(dry["unmatched"], 3, "{dry}");
+    assert_eq!(
+        kb_entry(&dry, "globalmem"),
+        serde_json::json!({"kb": "globalmem", "would_change": 1, "changed": 0, "unmatched": 1}),
+        "{dry}"
+    );
+    assert_eq!(
+        kb_entry(&dry, "projmem"),
+        serde_json::json!({"kb": "projmem", "would_change": 0, "changed": 0, "unmatched": 2}),
+        "{dry}"
+    );
     // Dry-run writes nothing: the row is still lineage-less.
     let after_dry = get_detail(sid.to_string()).await;
     assert!(after_dry.get("parent_session_id").is_none(), "{after_dry}");
@@ -522,7 +545,17 @@ async fn backfill_tree_route_dry_run_then_apply() {
     assert_eq!(applied["apply"], true, "{applied}");
     assert_eq!(applied["would_change"], 1, "{applied}");
     assert_eq!(applied["changed"], 1, "{applied}");
-    assert_eq!(applied["unmatched"], 1, "{applied}");
+    assert_eq!(applied["unmatched"], 3, "{applied}");
+    assert_eq!(
+        kb_entry(&applied, "globalmem"),
+        serde_json::json!({"kb": "globalmem", "would_change": 1, "changed": 1, "unmatched": 1}),
+        "{applied}"
+    );
+    assert_eq!(
+        kb_entry(&applied, "projmem"),
+        serde_json::json!({"kb": "projmem", "would_change": 0, "changed": 0, "unmatched": 2}),
+        "{applied}"
+    );
     let after = get_detail(sid.to_string()).await;
     assert_eq!(after["parent_session_id"], "par1", "{after}");
     assert_eq!(after["root_session_id"], "root1", "{after}");
@@ -538,7 +571,7 @@ async fn backfill_tree_route_dry_run_then_apply() {
         .unwrap();
     assert_eq!(again["would_change"], 0, "{again}");
     assert_eq!(again["changed"], 0, "{again}");
-    assert_eq!(again["unmatched"], 1, "{again}");
+    assert_eq!(again["unmatched"], 3, "{again}");
     let final_row = get_detail(sid.to_string()).await;
     assert_eq!(final_row["parent_session_id"], "par1", "{final_row}");
 }
