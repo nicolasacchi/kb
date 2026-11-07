@@ -384,7 +384,9 @@ fn kb_cli_bash_spawns_are_pinned() {
         ("cli_offline/hook_shell.rs", 1),
         ("cli_offline/adapter_grok.rs", 2),
         // adapter_opencode.rs: sets its own per-test HOME/KB_CAPTURE_SPOOL.
-        ("cli_offline/adapter_opencode.rs", 1),
+        ("cli_offline/adapter_opencode.rs", 3),
+        // adapter_codex.rs: sets its own per-test HOME/KB_CAPTURE_SPOOL.
+        ("cli_offline/adapter_codex.rs", 1),
     ];
     let mut files = Vec::new();
     rust_files(&root.join("crates/kb-cli/tests"), &mut files);
