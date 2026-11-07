@@ -3,6 +3,7 @@ import { test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { metric, writeMetrics } from './helpers.ts';
+import { PHONE_SCROLLBACK, TWIN_OPTS, makeTwin, type Twin } from '../src/twin.ts';
 
 const FIXTURES = new URL('./fixtures/', import.meta.url).pathname;
 

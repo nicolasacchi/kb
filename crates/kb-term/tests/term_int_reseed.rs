@@ -67,12 +67,11 @@ impl Server {
     fn start(tmux: &Path) -> Server {
         let dir = TempDir::new("srv");
         let sock = dir.file("s.sock");
-        let srv = Server {
+        Server {
             tmux: tmux.to_path_buf(),
             sock,
             _dir: dir,
-        };
-        srv
+        }
     }
 
     fn run(&self, session: &str, sub: &[&str]) -> Vec<u8> {
@@ -125,26 +124,25 @@ impl Server {
         ready: &Path,
         payload: &[&str],
     ) -> String {
-        let gate = format!("while [ ! -e \"$1\" ]; do sleep 0.05; done; shift; exec \"$@\"",);
+        let gate = "while [ ! -e \"$1\" ]; do sleep 0.05; done; shift; exec \"$@\"";
         let mut argv: Vec<String> =
             vec!["new-session".into(), "-d".into(), "-s".into(), name.into()];
         argv.push("-x".into());
         argv.push(cols.to_string());
         argv.push("-y".into());
         argv.push(rows.to_string());
-        argv.push("-P".into());
-        argv.push("-F".into());
-        argv.push("#{pane_id}".into());
         argv.push("sh".into());
         argv.push("-c".into());
-        argv.push(gate);
+        argv.push(gate.into());
         argv.push("_".into());
         argv.push(ready.to_string_lossy().into_owned());
         argv.extend(payload.iter().map(|s| s.to_string()));
         let refs: Vec<&str> = argv.iter().map(|s| s.as_str()).collect();
-        let pane = String::from_utf8_lossy(&self.tmux(&refs))
-            .trim()
-            .to_string();
+        self.tmux(&refs);
+        let pane =
+            String::from_utf8_lossy(&self.tmux(&["list-panes", "-t", name, "-F", "#{pane_id}"]))
+                .trim()
+                .to_string();
         assert!(pane.starts_with('%'), "unexpected pane id: {pane:?}");
         self.tmux(&["set", "-g", "window-size", "manual"]);
         self.tmux(&["set", "-g", "remain-on-exit", "on"]);
@@ -575,7 +573,7 @@ fn term_int_reseed_pending_wrap() {
     let srv = Server::start(&tmux);
     let stream = srv._dir.file("stream.bin");
     let mut bytes = Vec::with_capacity(100);
-    bytes.extend(std::iter::repeat(b'X').take(100));
+    bytes.extend(std::iter::repeat_n(b'X', 100));
     std::fs::write(&stream, &bytes).expect("write stream");
     let ready = srv._dir.file("ready");
     let pane = srv.new_session("s", 100, 30, &ready, &["cat", stream.to_str().unwrap()]);
@@ -615,7 +613,7 @@ fn term_int_reseed_wrapped_lines_and_blank_tail() {
     // Four lines longer than the 100-col pane (they wrap), then a short line.
     for row in 0..4 {
         let ch = b'A' + (row as u8);
-        bytes.extend(std::iter::repeat(ch).take(250));
+        bytes.extend(std::iter::repeat_n(ch, 250));
         bytes.extend_from_slice(b"\r\n");
     }
     bytes.extend_from_slice(b"END\r\n");

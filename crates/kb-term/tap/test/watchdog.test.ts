@@ -39,11 +39,15 @@ test('watchdog_age_lag_rss_thresholds', () => {
   const lagWarns = warns.filter((w) => w.what === 'loop-lag');
   expect(lagWarns.length).toBe(1);
   expect(lagWarns[0].value).toBe(4000);
+  // an on-schedule tick ends the episode, so the next crossing warns again.
   now += 1000;
   wd2.tick(1000);
-  now += 5000;
+  now += 1000;
   wd2.tick(1000);
   expect(warns.filter((w) => w.what === 'loop-lag').length).toBe(1);
+  now += 5000;
+  wd2.tick(1000);
+  expect(warns.filter((w) => w.what === 'loop-lag').length).toBe(2);
   now += 1000;
   wd2.tick(1000);
   wd2.stop();

@@ -95,11 +95,14 @@ test('control_parses_begin_end_blocks_and_interleaved_output', async () => {
   const done = c.cmd('capture-pane -p -t %0');
   fake.stdout.push(enc('%begin 2000 1 0\n'));
   fake.stdout.push(enc('line-one\n'));
-  fake.stdout.push(enc('%output %0 hello\\033[31mworld\\n'));
   fake.stdout.push(enc('line-two\n'));
   fake.stdout.push(enc('%end 2000 1 0\n'));
   const lines = await done;
   expect(lines).toEqual(['line-one', 'line-two']);
+  // %output is a NOTIFICATION line: it belongs outside reply blocks, so it
+  // arrives after the block closes and flows to onOutput with octal decoded.
+  fake.stdout.push(enc('%output %0 hello\\033[31mworld\\n'));
+  await settle();
   expect(outputs.length).toBe(1);
   expect(outputs[0].pane).toBe('%0');
   expect(outputs[0].bytes).toEqual(new TextEncoder().encode('hello\x1b[31mworld\n'));
@@ -111,12 +114,13 @@ test('control_error_block_rejects_the_command', async () => {
   const c = await start(fake);
   const done = c.cmd('refresh-client -A %0:continue');
   fake.stdout.push(enc('%begin 3000 1 0\n'));
-  fake.stdout.push(enc('%error 3000 1 0 parse\n'));
+  fake.stdout.push(enc('parse failed\n'));
+  fake.stdout.push(enc('%error 3000 1 0\n'));
   await expect(done).rejects.toBeInstanceOf(ControlError);
   try {
     await done;
   } catch (err) {
-    expect((err as Error).message).toContain('parse');
+    expect((err as Error).message).toContain('parse failed');
   }
   c.stop();
 });
@@ -126,12 +130,13 @@ test('extended_output_data_is_after_first_colon_space', async () => {
   const c = await start(fake);
   const got: { bytes: Uint8Array; ageMs?: number }[] = [];
   c.onOutput((_pane, bytes, ageMs) => got.push({ bytes, ageMs }));
-  // value contains " : " twice; only the first one is the separator.
+  // The value is the data after the FIRST " : " in the line, so the "a" in
+  // the header slot is not part of the value and the second " : " stays.
   fake.stdout.push(enc('%extended-output %0 42 a : 1 : tail\n'));
   await settle();
   expect(got.length).toBe(1);
   expect(got[0].ageMs).toBe(42);
-  expect(got[0].bytes).toEqual(new TextEncoder().encode('a : 1 : tail'));
+  expect(got[0].bytes).toEqual(new TextEncoder().encode('1 : tail'));
   c.stop();
 });
 
