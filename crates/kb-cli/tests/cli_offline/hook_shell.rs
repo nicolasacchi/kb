@@ -184,6 +184,13 @@ fn omp_sidecar_names_disambiguate_only_on_collision_and_spool_with_the_item() {
     run_with_real_kb("test-capture-omp.sh");
 }
 
+/// T20 - codex `input_image` is captured as a mime-only blob_ref (the
+/// base64 never survives). Needs the REAL `kb` binary.
+#[test]
+fn codex_input_image_becomes_a_mime_only_ref() {
+    run_with_real_kb("test-capture-codex-images.sh");
+}
+
 /// Run `script` with `KB_BIN_DIR` pointing at the freshly built `kb`.
 fn run_with_real_kb(script: &str) {
     run_with_real_kb_env(script, &[]);
