@@ -51,17 +51,17 @@ impl Anchor {
         cmd.env("HOME", std::env::var("HOME").unwrap_or_default());
         cmd.stdin(
             slave
-                .try_clone()
+                .try_clone_to_owned()
                 .map_err(|e| RunnerError::Internal(e.to_string()))?,
         )
         .stdout(
             slave
-                .try_clone()
+                .try_clone_to_owned()
                 .map_err(|e| RunnerError::Internal(e.to_string()))?,
         )
         .stderr(
             slave
-                .try_clone()
+                .try_clone_to_owned()
                 .map_err(|e| RunnerError::Internal(e.to_string()))?,
         );
         unsafe {
@@ -81,7 +81,7 @@ impl Anchor {
         let pid = child.id().unwrap_or(0);
         // The drain task reads the master and discards; it never writes.
         let drain = master
-            .try_clone()
+            .try_clone_to_owned()
             .map_err(|e| RunnerError::Internal(e.to_string()))?;
         tokio::task::spawn_blocking(move || {
             let mut buf = [0u8; 4096];
