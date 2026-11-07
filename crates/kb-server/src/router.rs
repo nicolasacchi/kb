@@ -475,6 +475,16 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
         // `routes::sessions::live_status`'s doc comment for why serving
         // metadata (not raw transcript bytes) under the ordinary auth
         // posture is safe here. Static, registered before `/{session_id}`.
+        .route("/terms", get(routes::terms::list))
+        .route("/terms", post(routes::terms::launch))
+        .route("/terms/{id}/ticket", post(routes::terms::ticket))
+        .route("/terms/{id}/paste", post(routes::terms::paste))
+        .route("/terms/{id}/enter", post(routes::terms::enter))
+        .route("/terms/{id}/keys", post(routes::terms::keys))
+        .route("/terms/{id}/kill", post(routes::terms::kill))
+        .route("/terms/{id}/take-size", post(routes::terms::take_size))
+        .route("/terms/{id}/read", get(routes::terms::read))
+        .route("/terms/{id}/history", get(routes::terms::history))
         .route("/sessions/beat", post(routes::sessions::beat))
         .route("/sessions/live-status", get(routes::sessions::live_status))
         // OL PRES1 — which files live agent sessions are touching. Same

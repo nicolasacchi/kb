@@ -197,6 +197,7 @@ pub mod sources;
 pub mod spa;
 pub mod stats;
 pub mod tags;
+pub mod terms;
 pub mod timeline;
 pub mod turn;
 pub mod users;

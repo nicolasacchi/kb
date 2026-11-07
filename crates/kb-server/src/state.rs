@@ -918,6 +918,10 @@ pub struct KbHandles {
     /// `parent_origin`. The dispatcher reads `artifact_host_suffix` to
     /// pick artifact vs. SPA; `origin_allowlist` reads both for CSRF.
     pub origin: Arc<OriginConfig>,
+    /// T11 — the SPA-only terminal relay state (`terminal::TerminalState`):
+    /// the in-memory single-use ticket table. Nothing here is persisted
+    /// (LF-7) and a ticket never survives an in-process restart.
+    pub terminals: Arc<crate::terminal::TerminalState>,
     /// `kb share` publishing config (`[share]`), resolved at boot. The
     /// share route reads it to build the Cloudflare/GitHub backend; the
     /// host API tokens come from the daemon's own environment, not here.
@@ -1364,6 +1368,7 @@ impl KbHandles {
             // real `[server] fanout_cap` (if any) is loaded.
             fanout_cap: crate::routes::FANOUT_CAP,
             origin: Arc::new(OriginConfig::default()),
+            terminals: Arc::new(crate::terminal::TerminalState::default()),
             share: Arc::new(ShareSection::default()),
             // G6 — sized from KB_EVENT_BUS_CAPACITY (escape hatch for large
             // corpora whose changed-file bursts exceed the 1024 default),

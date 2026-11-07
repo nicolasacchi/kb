@@ -1,0 +1,648 @@
+//! The SPA-only terminal gate over the REAL router, with a FAKE unix
+//! runner: ten routes, one scripted daemon.
+//!
+//! The runner is a `tokio::net::UnixListener` task in the test's
+//! tempdir; `runner_socket` points at it. It counts connections and
+//! returns scripted replies, so "the gate never touched the runner" is
+//! an observable assertion, not an assumption.
+
+mod common;
+
+use kb_core::config::{
+    DaemonSection, DefaultsSection, KbConfig, KbSection, TerminalSection, UiSection,
+};
+use kb_core::paths::KbPaths;
+use kb_core::types::KbName;
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+const FIXTURE_TOKEN: &str = "test-token-fixture-deadbeef";
+const TERM_ID: &str = "abcd1234";
+
+fn kb_section(path: std::path::PathBuf) -> KbSection {
+    KbSection {
+        path,
+        skip_patterns: Vec::new(),
+        ui: UiSection::default(),
+        embedding_model: None,
+        reranker_model: None,
+        chunked_embeddings: false,
+        graph_boost: None,
+        outbound: None,
+        atlas: None,
+        templates: std::collections::BTreeMap::new(),
+        memory_scope: None,
+        project_slugs: Vec::new(),
+        default_search_category: None,
+        code_url: None,
+        decay_policy: None,
+        versions: None,
+        git_dir: None,
+        git_prefix: None,
+        reading_progress: None,
+        search: Default::default(),
+        indexable_extensions: None,
+        reconcile_secs: None,
+        capture_dir: None,
+        resurface: None,
+        slo: None,
+        id_patterns: Vec::new(),
+    }
+}
+
+/// Scripted replies keyed by op, plus a connection counter to prove
+/// "the gate never touched the runner".
+struct FakeRunner {
+    conns: Arc<AtomicUsize>,
+    socket: std::path::PathBuf,
+}
+
+fn spawn_fake(
+    dir: &std::path::Path,
+    replies: std::collections::HashMap<String, String>,
+) -> FakeRunner {
+    let sock = dir.join("runner.sock");
+    let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+    let conns = Arc::new(AtomicUsize::new(0));
+    let counter = conns.clone();
+    tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = match listener.accept().await {
+                Ok(v) => v,
+                Err(_) => return,
+            };
+            counter.fetch_add(1, Ordering::SeqCst);
+            let replies = replies.clone();
+            tokio::spawn(async move {
+                let mut line = String::new();
+                let mut reader = tokio::io::BufReader::new(stream);
+                if reader.read_line(&mut line).await.is_err() {
+                    return;
+                }
+                let op = serde_json::from_str::<serde_json::Value>(line.trim())
+                    .ok()
+                    .and_then(|v| v.get("op").and_then(|v| v.as_str()).map(String::from))
+                    .unwrap_or_default();
+                let reply = replies.get(&op).cloned().unwrap_or_else(|| {
+                    "{\"status\":\"err\",\"code\":\"not_found\",\"message\":\"no script\"}"
+                        .to_string()
+                });
+                let mut stream = reader.into_inner();
+                let _ = stream.write_all(reply.as_bytes()).await;
+                let _ = stream.write_all(b"\n").await;
+            });
+        }
+    });
+    FakeRunner {
+        conns,
+        socket: sock,
+    }
+}
+
+fn list_reply(ids: &[&str]) -> String {
+    let items: Vec<serde_json::Value> = ids
+        .iter()
+        .map(|id| {
+            serde_json::json!({
+                "id": id,
+                "harness": "omp",
+                "cwd": "/work/proj",
+                "started_unix": 1234567890,
+                "resume_sid": null,
+                "pane_pid": 4242,
+                "cols": 120,
+                "rows": 40,
+                "bracket_paste_flag": true,
+                "pane_dead": false,
+                "exit_code": null,
+                "grid_owner": null,
+            })
+        })
+        .collect();
+    serde_json::json!({"status":"ok","data":items}).to_string()
+}
+
+fn ok_reply(data: &str) -> String {
+    format!("{{\"status\":\"ok\",\"data\":{data}}}")
+}
+
+async fn boot(
+    terminal: TerminalSection,
+    fake: &FakeRunner,
+    with_token: bool,
+) -> (tempfile::TempDir, std::net::SocketAddr) {
+    boot_with(terminal, fake, with_token).await
+}
+
+async fn boot_with(
+    terminal: TerminalSection,
+    fake: &FakeRunner,
+    with_token: bool,
+) -> (tempfile::TempDir, std::net::SocketAddr) {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = tmp.path().join("corpus");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(source.join("seed.md"), "# seed\n\none doc\n").unwrap();
+
+    let daemon_name = format!("test-{}", tmp.path().file_name().unwrap().to_string_lossy());
+    let mut kb_map: BTreeMap<KbName, KbSection> = BTreeMap::new();
+    kb_map.insert(KbName::new("smoke").unwrap(), kb_section(source));
+    let mut terminal = terminal;
+    terminal.runner_socket = Some(fake.socket.clone());
+    let cfg = KbConfig {
+        daemon: DaemonSection {
+            name: Some(daemon_name.clone()),
+        },
+        ui: UiSection::default(),
+        kb: kb_map,
+        defaults: DefaultsSection {
+            embedding_model: None,
+            disable_embedder_fallback: true,
+        },
+        terminal,
+        ..Default::default()
+    };
+
+    let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
+    if with_token {
+        std::fs::create_dir_all(&paths.config).unwrap();
+        std::fs::write(paths.token_file(), FIXTURE_TOKEN).unwrap();
+    }
+    let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)
+        .await
+        .expect("serve");
+    common::wait_http_up(addr).await;
+    (tmp, addr)
+}
+
+fn enabled_terminal() -> TerminalSection {
+    TerminalSection {
+        enabled: Some(true),
+        ..Default::default()
+    }
+}
+
+fn base_url(addr: std::net::SocketAddr) -> String {
+    format!("http://{addr}")
+}
+
+fn client() -> reqwest::Client {
+    reqwest::Client::new()
+}
+
+fn origin_header(addr: std::net::SocketAddr) -> String {
+    format!("http://{addr}")
+}
+
+async fn body_text(resp: reqwest::Response) -> (u16, String) {
+    let status = resp.status().as_u16();
+    let text = resp.text().await.unwrap_or_default();
+    (status, text)
+}
+
+fn assert_problem(text: &str, urn_tail: &str) {
+    assert!(
+        text.contains(urn_tail),
+        "response must carry {urn_tail}, got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn disabled_by_default_returns_bodiless_404_on_every_terms_route() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (_tmp, addr) = boot(TerminalSection::default(), &fake, false).await;
+    let c = client();
+    let origin = origin_header(addr);
+    // All ten routes with valid Origin+intent → 404 empty body, no
+    // content-type, fake runner saw 0 connections.
+    let routes: Vec<(&str, &str, Option<&str>)> = vec![
+        ("GET", "/api/terms", None),
+        ("POST", "/api/terms", Some("{}")),
+        ("POST", "/api/terms/abcd1234/ticket", Some("{}")),
+        (
+            "POST",
+            "/api/terms/abcd1234/paste",
+            Some("{\"text\":\"hi\"}"),
+        ),
+        ("POST", "/api/terms/abcd1234/enter", Some("{}")),
+        (
+            "POST",
+            "/api/terms/abcd1234/keys",
+            Some("{\"keys\":[\"Enter\"]}"),
+        ),
+        ("POST", "/api/terms/abcd1234/kill", None),
+        (
+            "POST",
+            "/api/terms/abcd1234/take-size",
+            Some("{\"cols\":80,\"rows\":24}"),
+        ),
+        ("GET", "/api/terms/abcd1234/read", None),
+        ("GET", "/api/terms/abcd1234/history", None),
+    ];
+    for (m, path, body) in routes {
+        let mut req = match m {
+            "GET" => c.get(format!("{}{}", base_url(addr), path)),
+            _ => c.post(format!("{}{}", base_url(addr), path)),
+        }
+        .header("Origin", origin.clone())
+        .header("x-kb-intent", "terminal");
+        if let Some(b) = body {
+            req = req
+                .header("Content-Type", "application/json")
+                .body(b.to_string());
+        }
+        let resp = req.send().await.expect("request");
+        assert_eq!(resp.status().as_u16(), 404, "{m} {path}");
+        assert!(
+            resp.headers().get("content-type").is_none(),
+            "{m} {path} must be bodiless (no content-type)"
+        );
+        let (status, text) = body_text(resp).await;
+        assert_eq!(status, 404);
+        assert!(text.is_empty(), "{m} {path} must be bodiless, got: {text}");
+    }
+    assert_eq!(
+        fake.conns.load(Ordering::SeqCst),
+        0,
+        "a disabled daemon must never dial the runner"
+    );
+}
+
+#[tokio::test]
+async fn absent_origin_is_refused_even_on_get() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    let resp = c
+        .get(format!("{}/api/terms", base_url(addr)))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 403);
+    let (_s, text) = body_text(resp).await;
+    assert_problem(&text, "terminal-origin-refused");
+    assert_eq!(fake.conns.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn artifact_subdomain_and_foreign_origins_are_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    for origin in [
+        "https://evil.example",
+        "http://x.artifacts.localhost",
+        "http://localhost:9999",
+    ] {
+        let resp = c
+            .get(format!("{}/api/terms", base_url(addr)))
+            .header("Origin", origin)
+            .header("x-kb-intent", "terminal")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 403, "origin {origin}");
+        let (_s, text) = body_text(resp).await;
+        assert_problem(&text, "terminal-origin-refused");
+    }
+    assert_eq!(fake.conns.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn same_origin_host_is_accepted() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("list".to_string(), list_reply(&[TERM_ID]));
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), replies);
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    // reqwest sends Origin exactly equal to the Host it dials.
+    let resp = c
+        .get(format!("{}/api/terms", base_url(addr)))
+        .header("Origin", origin_header(addr))
+        .header("x-kb-intent", "terminal")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let (_s, text) = body_text(resp).await;
+    assert!(text.contains(TERM_ID), "must relay the list: {text}");
+}
+
+#[tokio::test]
+async fn post_without_intent_header_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    for intent in [None, Some("nope")] {
+        let mut req = c
+            .post(format!("{}/api/terms/abcd1234/kill", base_url(addr)))
+            .header("Origin", origin_header(addr));
+        if let Some(v) = intent {
+            req = req.header("x-kb-intent", v);
+        }
+        let resp = req.send().await.unwrap();
+        assert_eq!(resp.status().as_u16(), 403, "intent {intent:?}");
+        let (_s, text) = body_text(resp).await;
+        assert_problem(&text, "terminal-intent-required");
+    }
+    // `Terminal` (case-insensitive) passes the gate — the kill is
+    // relayed to the fake (which answers not_found → 404).
+    let resp = c
+        .post(format!("{}/api/terms/abcd1234/kill", base_url(addr)))
+        .header("Origin", origin_header(addr))
+        .header("x-kb-intent", "Terminal")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 404);
+    assert_eq!(
+        fake.conns.load(Ordering::SeqCst),
+        1,
+        "Terminal must reach the runner"
+    );
+}
+
+#[tokio::test]
+async fn get_routes_do_not_need_the_intent_header() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("list".to_string(), list_reply(&[TERM_ID]));
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), replies);
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    let resp = c
+        .get(format!("{}/api/terms", base_url(addr)))
+        .header("Origin", origin_header(addr))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+}
+
+#[tokio::test]
+async fn loopback_caller_without_origin_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    // A loopback peer (this process) sending nothing: the auth
+    // bypass admits it, but the gate refuses it — no bypass.
+    let c = client();
+    let resp = c
+        .post(format!("{}/api/terms/abcd1234/kill", base_url(addr)))
+        .header("x-kb-intent", "terminal")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 403);
+    let (_s, text) = body_text(resp).await;
+    assert_problem(&text, "terminal-origin-refused");
+}
+
+#[tokio::test]
+async fn legacy_token_callers_are_refused_by_default_and_allowed_when_configured() {
+    // Default: refuse.
+    {
+        let tmp = tempfile::tempdir().unwrap();
+        let fake = spawn_fake(tmp.path(), Default::default());
+        let (_tmp, addr) = boot(enabled_terminal(), &fake, true).await;
+        let c = client();
+        let resp = c
+            .post(format!("{}/api/terms/abcd1234/kill", base_url(addr)))
+            .header("Origin", origin_header(addr))
+            .header("x-kb-intent", "terminal")
+            .header("Authorization", format!("Bearer {FIXTURE_TOKEN}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 403);
+        let (_s, text) = body_text(resp).await;
+        assert_problem(&text, "terminal-token-refused");
+        assert_eq!(fake.conns.load(Ordering::SeqCst), 0);
+    }
+    // Configured off: the gate passes (the runner answers not_found).
+    {
+        let tmp = tempfile::tempdir().unwrap();
+        let fake = spawn_fake(tmp.path(), Default::default());
+        let t = TerminalSection {
+            refuse_token_callers: Some(false),
+            ..enabled_terminal()
+        };
+        let (_tmp, addr) = boot(t, &fake, true).await;
+        let c = client();
+        let resp = c
+            .post(format!("{}/api/terms/abcd1234/kill", base_url(addr)))
+            .header("Origin", origin_header(addr))
+            .header("x-kb-intent", "terminal")
+            .header("Authorization", format!("Bearer {FIXTURE_TOKEN}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 404);
+        assert_eq!(fake.conns.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
+async fn ticket_mint_returns_hex_and_is_unique_per_call() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("list".to_string(), list_reply(&[TERM_ID]));
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), replies);
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    let mut tickets = Vec::new();
+    for _ in 0..2 {
+        let resp = c
+            .post(format!("{}/api/terms/{TERM_ID}/ticket", base_url(addr)))
+            .header("Origin", origin_header(addr))
+            .header("x-kb-intent", "terminal")
+            .header("Content-Type", "application/json")
+            .body("{}")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 200);
+        let (_s, text) = body_text(resp).await;
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let ticket = v["ticket"].as_str().unwrap().to_string();
+        assert_eq!(ticket.len(), 32);
+        assert!(ticket
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit()));
+        assert_eq!(v["expires_in"], 30);
+        assert_eq!(v["term"], TERM_ID);
+        tickets.push(ticket);
+    }
+    assert_ne!(tickets[0], tickets[1], "every mint must be distinct");
+}
+
+#[tokio::test]
+async fn ticket_is_not_minted_for_an_unknown_terminal() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("list".to_string(), list_reply(&["efgh5678"]));
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), replies);
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    let resp = c
+        .post(format!("{}/api/terms/{TERM_ID}/ticket", base_url(addr)))
+        .header("Origin", origin_header(addr))
+        .header("x-kb-intent", "terminal")
+        .header("Content-Type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 404);
+}
+
+#[tokio::test]
+async fn terminal_id_charset_is_enforced_before_the_runner() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    for id in ["..%2Fx", "A1", "a".repeat(17).as_str(), "a%20b"] {
+        let resp = c
+            .post(format!("{}/api/terms/{id}/kill", base_url(addr)))
+            .header("Origin", origin_header(addr))
+            .header("x-kb-intent", "terminal")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 400, "id {id}");
+        let (_s, text) = body_text(resp).await;
+        assert_problem(&text, "bad-request");
+    }
+    assert_eq!(fake.conns.load(Ordering::SeqCst), 0, "0 runner connections");
+}
+
+#[tokio::test]
+async fn launch_rejects_unknown_harness_and_bad_cwd() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert(
+        "launch".to_string(),
+        ok_reply("{\"id\":\"abcd1234\",\"harness\":\"omp\"}"),
+    );
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), replies);
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    let launch = |body: String| {
+        c.post(format!("{}/api/terms", base_url(addr)))
+            .header("Origin", origin_header(addr))
+            .header("x-kb-intent", "terminal")
+            .header("Content-Type", "application/json")
+            .body(body)
+    };
+    for body in [
+        "{\"harness\":\"emacs\",\"cwd\":\"/work/proj\"}".to_string(),
+        "{\"harness\":\"omp\",\"cwd\":\"rel/path\"}".to_string(),
+        "{\"harness\":\"omp\",\"cwd\":\"/work/proj\",\"resume_sid\":\"bad\\u0000sid\"}".to_string(),
+        "{\"harness\":\"omp\",\"cwd\":\"/work/proj\",\"unknown\":1}".to_string(),
+    ] {
+        let resp = launch(body.clone()).send().await.unwrap();
+        assert_eq!(resp.status().as_u16(), 400, "body {body}");
+    }
+    // All six harnesses are accepted.
+    for h in ["claude", "codex", "opencode", "grok", "kimi", "omp"] {
+        let resp = launch(format!("{{\"harness\":\"{h}\",\"cwd\":\"/work/proj\"}}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 201, "harness {h}");
+    }
+}
+
+#[tokio::test]
+async fn paste_over_32kib_is_413_and_unknown_field_is_400() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    // > 32 KiB decoded → 413.
+    let big = "a".repeat(33 * 1024);
+    let body = format!("{{\"text\":\"{big}\"}}");
+    let resp = c
+        .post(format!("{}/api/terms/{TERM_ID}/paste", base_url(addr)))
+        .header("Origin", origin_header(addr))
+        .header("x-kb-intent", "terminal")
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 413);
+    // Unknown field → 400.
+    let resp = c
+        .post(format!("{}/api/terms/{TERM_ID}/paste", base_url(addr)))
+        .header("Origin", origin_header(addr))
+        .header("x-kb-intent", "terminal")
+        .header("Content-Type", "application/json")
+        .body("{\"text\":\"hi\",\"unknown\":1}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 400);
+    let (_s, text) = body_text(resp).await;
+    assert_problem(&text, "bad-request");
+    assert_eq!(fake.conns.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn runner_errors_map_to_statuses() {
+    async fn run(code: &str, want: u16) {
+        let mut replies = std::collections::HashMap::new();
+        replies.insert(
+            "kill".to_string(),
+            format!("{{\"status\":\"err\",\"code\":\"{code}\",\"message\":\"synthetic {code}\"}}"),
+        );
+        let tmp = tempfile::tempdir().unwrap();
+        let fake = spawn_fake(tmp.path(), replies);
+        let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+        let c = client();
+        let resp = c
+            .post(format!("{}/api/terms/{TERM_ID}/kill", base_url(addr)))
+            .header("Origin", origin_header(addr))
+            .header("x-kb-intent", "terminal")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), want, "code {code}");
+    }
+    run("blocked", 409).await;
+    run("multi_line_refused", 422).await;
+    run("grid_owned", 409).await;
+    run("not_found", 404).await;
+    run("bad_request", 400).await;
+    run("weird_code", 502).await;
+
+    // Socket absent → 503, body does not contain the socket path.
+    let tmp = tempfile::tempdir().unwrap();
+    let missing = tmp.path().join("absent.sock");
+    let fake = FakeRunner {
+        conns: Arc::new(AtomicUsize::new(0)),
+        socket: missing.clone(),
+    };
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    let resp = c
+        .post(format!("{}/api/terms/{TERM_ID}/kill", base_url(addr)))
+        .header("Origin", origin_header(addr))
+        .header("x-kb-intent", "terminal")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 503);
+    let (_s, text) = body_text(resp).await;
+    assert!(!text.contains(&missing.to_string_lossy().into_owned()));
+    assert_problem(&text, "terminal-runner-unavailable");
+}

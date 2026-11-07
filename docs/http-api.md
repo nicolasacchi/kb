@@ -1294,6 +1294,88 @@ GET  /api/sessions/live-touches            OL PRES1 — which files live agent
                                             `Cache-Control: no-store`.
                                             Memory-only (a restart empties
                                             it); see docs/live-sessions.md.
+# kb-term (SPA-only, [terminal] enabled=false)
+GET  /api/terms                             SPA-only terminal relays
+                                            (T11). Behind `[terminal]
+                                            enabled = false` by
+                                            default: a disabled daemon
+                                            answers a bodiless 404 on
+                                            every route below, so the
+                                            tier is invisible. The gate
+                                            runs in the handler (not
+                                            middleware): an exact
+                                            `Origin` (absent fails
+                                            closed; only the configured
+                                            parent Origin or a
+                                            same-host Origin passes,
+                                            artifact-subdomain origins
+                                            are refused even on GETs)
+                                            and — on every POST — an
+                                            `X-Kb-Intent: terminal`
+                                            header. The loopback bypass
+                                            does NOT apply, and
+                                            `Token`/`Legacy` callers are
+                                            refused (see
+                                            `[terminal] refuse_token_callers`
+                                            in docs/configuration.md).
+                                            Terminal ids are
+                                            `[a-z0-9]{1,16}` (else
+                                            400); every response carries
+                                            `Cache-Control: no-store`.
+                                            No CLI verb; agents never
+                                            call these routes.
+GET    /api/terms                           Relay the runner's session
+                                            list as `{"terms":[...]}`.
+POST   /api/terms                           Launch: body `{harness,
+                                            resume_sid?, cwd?, cols?,
+                                            rows?}`. `harness` must be
+                                            one of the six known
+                                            harnesses; `resume_sid`/
+                                            `cwd` are non-empty, <= 512
+                                            bytes, no control chars;
+                                            `cwd` is absolute. 201 with
+                                            the runner's reply.
+POST   /api/terms/{id}/ticket               Mint a single-use
+                                            WebSocket ticket: the runner's
+                                            list must contain `id` (else
+                                            404, nothing minted). Returns
+                                            `{"ticket","expires_in",
+                                            "term"}` — the ticket exists
+                                            ONLY in this body (T12's WS
+                                            client carries it in the
+                                            upgrade query; it is never
+                                            logged). [terminal]
+                                            `ticket_ttl_secs` (30s
+                                            default, clamped 1..=120),
+                                            bound to the terminal and the
+                                            caller; consumed once at
+                                            the upgrade.
+POST   /api/terms/{id}/paste                Body `{text}`; decoded
+                                            text over 32 KiB is 413.
+                                            Relayed verbatim.
+POST   /api/terms/{id}/enter                Body `{}`. Relays the
+                                            beat-derived entered flag
+                                            (currently the constant
+                                            unblocked; T13 replaces it).
+POST   /api/terms/{id}/keys                 Body `{keys:[...]}` — 1..=32
+                                            entries, each <= 16 bytes of
+                                            `[A-Za-z0-9_-]`.
+POST   /api/terms/{id}/kill                 Kill the terminal.
+POST   /api/terms/{id}/take-size            Body `{cols,rows}`. Takes
+                                            (or reports) the grid.
+GET    /api/terms/{id}/read                 Relay the runner read.
+GET    /api/terms/{id}/history              Relay the runner history.
+                                            Error table: unreachable or
+                                            timed-out runner → 503
+                                            `terminal-runner-unavailable`
+                                            (the socket path never
+                                            leaks); `not_found` → 404;
+                                            `blocked` → 409;
+                                            `multi_line_refused` → 422;
+                                            `grid_owned` → 409 with the
+                                            runner's message;
+                                            `bad_request` → 400;
+                                            anything else → 502.
 GET  /api/sessions/by-artifact/{kb}/{aid}   W2/R11 — the canonical
                                             artifact→session join
                                             (`SessionsGetByArtifactIds`, #11):
@@ -2526,6 +2608,17 @@ GET    /api/desk[?kb=]                      federated handoff aggregate: every
                                             count).
                                             Backs the SPA desk pill + the
                                             changed-since-read reader banner.
+
+GET    /api/terms                           SPA-only terminal list [terminal]
+POST   /api/terms                           SPA-only terminal launch [terminal]
+POST   /api/terms/{id}/ticket               mint single-use WS ticket [terminal]
+POST   /api/terms/{id}/paste                paste text [terminal]
+POST   /api/terms/{id}/enter                mark entered [terminal]
+POST   /api/terms/{id}/keys                 send keys [terminal]
+POST   /api/terms/{id}/kill                 kill terminal [terminal]
+POST   /api/terms/{id}/take-size            take grid [terminal]
+GET    /api/terms/{id}/read                 relay read [terminal]
+GET    /api/terms/{id}/history              relay history [terminal]
 
 # admin
 GET    /api/kb/{kb}/quarantine              parser-quarantined artifacts
