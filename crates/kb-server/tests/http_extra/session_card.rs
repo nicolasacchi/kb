@@ -433,20 +433,26 @@ async fn slate_lane_reads_exactly_one_slate_and_only_this_sessions_posts() {
     }
     // One slate for this session, one for another; posts from a third
     // session and an unrelated ref must not leak in.
-    let post = |slug: &str, line: &str, sid: &str, refs: Value| async move {
-        let mut b = json!({
-            "kind": "found",
-            "line": line,
-            "prov": {"harness": "claude", "session_id": sid, "cwd": "/work"},
-        });
-        b["refs"] = refs;
-        let resp = client
-            .post(url(addr, &format!("/api/slates/{slug}/posts")))
-            .json(&b)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), 201, "post {line} into {slug}");
+    let post = |slug: &str, line: &str, sid: &str, refs: Value| {
+        let client = client.clone();
+        let slug = slug.to_string();
+        let line = line.to_string();
+        let sid = sid.to_string();
+        async move {
+            let mut b = json!({
+                "kind": "found",
+                "line": line,
+                "prov": {"harness": "claude", "session_id": sid, "cwd": "/work"},
+            });
+            b["refs"] = refs;
+            let resp = client
+                .post(url(addr, &format!("/api/slates/{slug}/posts")))
+                .json(&b)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 201, "post {line} into {slug}");
+        }
     };
     post(
         "alpha",

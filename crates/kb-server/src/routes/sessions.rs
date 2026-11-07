@@ -11484,10 +11484,10 @@ mod evidence_wire_tests {
 
     #[test]
     fn tree_param_grammar_is_closed_and_collapsed_is_default() {
-        assert_eq!(parse_tree(None).unwrap(), true);
-        assert_eq!(parse_tree(Some("")).unwrap(), true);
-        assert_eq!(parse_tree(Some("collapsed")).unwrap(), true);
-        assert_eq!(parse_tree(Some("flat")).unwrap(), false);
+        assert!(parse_tree(None).unwrap());
+        assert!(parse_tree(Some("")).unwrap());
+        assert!(parse_tree(Some("collapsed")).unwrap());
+        assert!(!parse_tree(Some("flat")).unwrap());
         let resp = parse_tree(Some("weird")).unwrap_err();
         assert_eq!(resp.status(), axum::http::StatusCode::BAD_REQUEST);
     }

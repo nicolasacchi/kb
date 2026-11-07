@@ -34,6 +34,11 @@ type SqliteRow = kb_core::storage::sqlite::SessionRow;
 type CommitRow = kb_core::storage::sqlite::SessionCommitRow;
 #[allow(dead_code)]
 type FileRow = kb_core::storage::sqlite::SessionFileRow;
+/// Fan-out future payloads, named so the future types stay under
+/// `clippy::type_complexity` (same convention as `LocatedSession` in
+/// `routes/sessions.rs`).
+type ResolvedDoc = ((String, String), (String, String));
+type ResolvedTouched = (String, Vec<kb_core::vcs::TouchedFile>);
 
 const CARD_FILES_CAP: usize = 100;
 const CARD_DECISIONS_CAP: usize = 50;
@@ -763,10 +768,10 @@ async fn readings_lane(state: &Arc<KbHandles>, session: &SessionOut) -> Readings
 }
 
 /// Memory produced + recalled. Produced uses the same
-/// `list_docs_with_kb_session` fan-out `get` uses (widened ids, sorted
-/// + deduped, cap 50 + total). Recalled uses the `recalls` handler's
-/// session-kb ledger scope, with each hit's MR1 `pos` preserved (NULL
-/// stays NULL, never inferred).
+/// `list_docs_with_kb_session` fan-out `get` uses (sorted, deduped,
+/// cap 50 + total). Recalled uses the `recalls` handler's session-kb
+/// ledger scope, with each hit's MR1 `pos` preserved (NULL stays NULL,
+/// never inferred).
 async fn memory_lane(
     state: &Arc<KbHandles>,
     session: &SessionOut,
@@ -852,8 +857,7 @@ async fn memory_lane(
     }
     let mut resolved: std::collections::HashMap<(String, String), (String, String)> =
         std::collections::HashMap::new();
-    let mut resolve_futs: Vec<super::CorpusFut<'_, Vec<((String, String), (String, String))>>> =
-        Vec::new();
+    let mut resolve_futs: Vec<super::CorpusFut<'_, Vec<ResolvedDoc>>> = Vec::new();
     for (memory_kb, ids) in ids_by_kb {
         let Some(mem_ctx) = session_ctx(state, &memory_kb) else {
             continue;
@@ -985,7 +989,7 @@ async fn slate_lane(
                     topic: p.topic.clone(),
                 })
                 .collect();
-            posts.sort_by(|a, b| b.seq.cmp(&a.seq));
+            posts.sort_by_key(|p| std::cmp::Reverse(p.seq));
             let total = posts.len() as u32;
             let head_seq = loaded.meta.head_seq;
             let slug = loaded.meta.slug;
@@ -1118,8 +1122,7 @@ async fn compute_not_committed(files_rows: &[FileRow], commit_rows: &[CommitRow]
     // Every non-resolved kind=commit row is unusable coverage.
     let mut unresolved: u32 = commits_total - resolved_total;
     let mut touched: Vec<String> = Vec::new();
-    let mut futs: Vec<super::CorpusFut<'_, Option<(String, Vec<kb_core::vcs::TouchedFile>)>>> =
-        Vec::new();
+    let mut futs: Vec<super::CorpusFut<'_, Option<ResolvedTouched>>> = Vec::new();
     for row in &considered {
         let Some(repo_root) = row.repo_root.clone() else {
             // A resolved row without git resolution metadata is unusable
@@ -1128,10 +1131,9 @@ async fn compute_not_committed(files_rows: &[FileRow], commit_rows: &[CommitRow]
             continue;
         };
         futs.push(Box::pin(async move {
-            match touched_files_for_commit(row).await {
-                Some((files, _)) => Some((repo_root, files)),
-                None => None,
-            }
+            touched_files_for_commit(row)
+                .await
+                .map(|(files, _)| (repo_root, files))
         }));
     }
     let results = super::buffered_join(futs, 20).await;
@@ -1156,7 +1158,7 @@ async fn compute_not_committed(files_rows: &[FileRow], commit_rows: &[CommitRow]
     // Git failures surface as empty touched lists: if every considered
     // commit answered with nothing and the diff is non-empty, the list
     // would otherwise read as confident.
-    if !files.is_empty() && caption.is_none() && considered.len() > 0 && touched.is_empty() {
+    if !files.is_empty() && caption.is_none() && !considered.is_empty() && touched.is_empty() {
         caption = Some(
             "touched-files lookup returned nothing for the considered commits; files may be committed earlier"
                 .to_string(),
