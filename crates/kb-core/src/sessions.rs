@@ -33,14 +33,14 @@ pub mod view;
 /// route AND `kb sessions read --live`/`--follow` both call.
 pub mod tail;
 
+/// A3 — `kb-session-card/1`: one daemon-rendered session card (pure types +
+/// text renderer; the fan-out that fills them is kb-server's).
+pub mod card;
 /// The ratified sessions constants (sessions-rethink W0): the outcome anchor
 /// id, the closed harness set + default, the active-time clamp, the wire caps
 /// and the presence windows. Re-exported below, so every consumer says
 /// `kb_core::sessions::HARNESS_DEFAULT`, never a literal.
 pub mod constants;
-/// A3 — `kb-session-card/1`: one daemon-rendered session card (pure types +
-/// text renderer; the fan-out that fills them is kb-server's).
-pub mod card;
 
 /// AH3 — the one verified per-harness resume-command table.
 pub mod resume;

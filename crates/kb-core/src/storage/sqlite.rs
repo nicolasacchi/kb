@@ -5536,13 +5536,13 @@ impl Db {
         substance: &[String],
         harness: &[String],
         collapse_logical: bool,
-        /// A3 — `tree=collapsed` (the `GET /api/sessions` default): keep
-        /// only rows with no tree root (`root_session_id IS NULL`), so
-        /// subagent children hide and trees read as their roots. A pure
-        /// WHERE term with no bind params — like `collapse_logical` —
-        /// so the keyset cursor stays coherent. `false` (every caller of
-        /// the `sessions_list` wrapper, live-status Tier-0, funnels,
-        /// digests) means flat: no hidden row changes their byte output.
+        // A3 — `tree=collapsed` (the `GET /api/sessions` default): keep
+        // only rows with no tree root (`root_session_id IS NULL`), so
+        // subagent children hide and trees read as their roots. A pure
+        // WHERE term with no bind params — like `collapse_logical` —
+        // so the keyset cursor stays coherent. `false` (every caller of
+        // the `sessions_list` wrapper, live-status Tier-0, funnels,
+        // digests) means flat: no hidden row changes their byte output.
         tree_collapsed: bool,
     ) -> Result<Vec<SessionRow>> {
         // Build the WHERE dynamically: the optional keyset cursor and the
@@ -6396,24 +6396,44 @@ impl Db {
     }
 
     /// A3 — for each requested session id, the number of newest-capture
-    /// rows whose `root_session_id` is that id (the list/card
-    /// `child_count`). Zero counts are omitted (callers read a missing
-    /// id as 0).
+    /// rows that are THAT row's children by the card predicate — the ONE
+    /// definition both surfaces use (`GET /api/sessions` `child_count`
+    /// and the card's `summary.child_total` / `children.total`): a root
+    /// (`root_session_id IS NULL`) counts its whole flood
+    /// (`root_session_id = id`, any depth); a non-root counts its direct
+    /// children (`parent_session_id = id`). The UNION dedups a root's
+    /// direct children, which carry both keys, to one row each. Zero
+    /// counts are omitted (callers read a missing id as 0).
     pub fn sessions_child_counts(&self, ids: &[String]) -> Result<Vec<(String, u32)>> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
         let ph = vec!["?"; ids.len()].join(",");
         let sql = format!(
-            "SELECT root_session_id, COUNT(*) FROM sessions \
-             WHERE is_newest = 1 AND root_session_id IS NOT NULL \
-               AND root_session_id IN ({ph}) GROUP BY root_session_id"
+            "SELECT key, COUNT(*) FROM (\
+               SELECT session_id, root_session_id AS key FROM sessions \
+               WHERE is_newest = 1 AND root_session_id IS NOT NULL \
+                 AND root_session_id IN ({ph})\
+               UNION\
+               SELECT session_id, parent_session_id AS key FROM sessions \
+               WHERE is_newest = 1 AND parent_session_id IS NOT NULL \
+                 AND parent_session_id IN ({ph}))\
+             GROUP BY key"
         );
+        let mut binds: Vec<Box<dyn rusqlite::ToSql>> = ids
+            .iter()
+            .map(|id| Box::new(id.clone()) as Box<dyn rusqlite::ToSql>)
+            .chain(
+                ids.iter()
+                    .map(|id| Box::new(id.clone()) as Box<dyn rusqlite::ToSql>),
+            )
+            .collect();
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt
-            .query_map(rusqlite::params_from_iter(ids.iter()), |r| {
-                Ok((r.get::<_, String>(0)?, i64_as_u32_sat(r.get(1)?)))
-            })?
+            .query_map(
+                rusqlite::params_from_iter(binds.drain(..).map(|b| b.as_ref())),
+                |r| Ok((r.get::<_, String>(0)?, i64_as_u32_sat(r.get(1)?))),
+            )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
@@ -17906,13 +17926,19 @@ mod tests {
             .sessions_children_page(
                 Some("tree-root"),
                 None,
-                Some((p1.last().unwrap().started_at, p1.last().unwrap().session_id.as_str())),
+                Some((
+                    p1.last().unwrap().started_at,
+                    p1.last().unwrap().session_id.as_str(),
+                )),
                 2,
             )
             .unwrap();
         assert_eq!(p2.len(), 1);
         assert_eq!(p2[0].session_id, "grandchild-1");
-        assert_eq!(db.sessions_children_count(Some("tree-root"), None).unwrap(), 3);
+        assert_eq!(
+            db.sessions_children_count(Some("tree-root"), None).unwrap(),
+            3
+        );
     }
 
     #[test]
@@ -17939,14 +17965,20 @@ mod tests {
         assert_eq!(map.get("tree-root"), Some(&"tree-root"));
         assert_eq!(map.get("orphan-1"), Some(&"orphan-1"));
         assert!(!map.contains_key("ghost"));
-        // child_count: 3 newest rows whose root_session_id == tree-root
-        // (child-1, grandchild-1, child-2 newest) — the stale capture
-        // does not count. A non-root session's own id counts 0 (its
-        // descendants name the tree root, not it).
+        // child_count (the ONE card-predicate definition): the root
+        // counts its whole flood (3 newest rows whose root_session_id ==
+        // tree-root: child-1, grandchild-1, child-2 newest — the stale
+        // capture does not count); a non-root counts its DIRECT
+        // children (grandchild-1, whose parent_session_id == child-1).
+        // This is the same number the card's children lane reports for
+        // either row.
         let counts = db
-            .sessions_child_counts(&["tree-root".into(), "child-1".into()])
+            .sessions_child_counts(&["tree-root".into(), "child-1".into(), "grandchild-1".into()])
             .unwrap();
-        assert_eq!(counts, vec![("tree-root".to_string(), 3)]);
+        assert_eq!(
+            counts,
+            vec![("tree-root".to_string(), 3), ("child-1".to_string(), 1),]
+        );
     }
 
     #[test]
@@ -17962,7 +17994,10 @@ mod tests {
             .collect();
         let mut sorted = collapsed.clone();
         sorted.sort();
-        assert_eq!(sorted, vec!["orphan-1".to_string(), "tree-root".to_string()]);
+        assert_eq!(
+            sorted,
+            vec!["orphan-1".to_string(), "tree-root".to_string()]
+        );
         // Flat (the sessions_list wrapper's posture): every row shows.
         let flat = db
             .sessions_list(100, None, None, None, None, &proj(), &[], &[])

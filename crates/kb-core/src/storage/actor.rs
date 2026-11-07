@@ -5598,7 +5598,7 @@ impl StorageHandle {
         substance: Vec<String>,
         harness: Vec<String>,
         collapse_logical: bool,
-        /// A3 — `tree=collapsed` (see `Db::sessions_list_with`).
+        // A3 — `tree=collapsed` (see `Db::sessions_list_with`).
         tree_collapsed: bool,
     ) -> Result<Vec<SessionRow>> {
         self.send_and_await(|reply| StorageMsg::SessionsList {

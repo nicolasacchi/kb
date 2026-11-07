@@ -885,17 +885,18 @@ pub fn render_text(card: &SessionCard) -> String {
     let mut out = String::new();
     let sections = render_section_lines(card);
 
+    // Section lines are sanitized once, at construction (see
+    // `render_section_lines`); `push` never re-sanitizes them — the
+    // unavailable-lane lines below are sanitized at construction too, so
+    // every emitted line passes `sanitize_line` exactly once.
     let mut push = |line: String| {
-        out.push_str(&sanitize_line(&line));
+        out.push_str(&line);
         out.push('\n');
     };
 
     // Lane order is the struct order: summary, outcome, files, decisions,
     // commits, research, comments, readings, memory, live, slate,
     // children, terminal.
-    for (name, _) in &sections {
-        let _ = name;
-    }
     // Unavailable lanes interleaved in lane order: rebuild the status of
     // each lane beside its section body.
     let lanes: Vec<(&str, bool, &Option<String>, Option<Vec<String>>)> = vec![
@@ -980,10 +981,10 @@ pub fn render_text(card: &SessionCard) -> String {
                 }
             }
         } else {
-            push(format!(
+            push(sanitize_line(&format!(
                 "{name}: unavailable ({})",
                 reason.as_deref().unwrap_or("unreadable")
-            ));
+            )));
         }
     }
     push("terminal: unavailable (no terminal runner)".to_string());

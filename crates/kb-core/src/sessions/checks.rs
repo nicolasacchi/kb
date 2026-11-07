@@ -3050,11 +3050,17 @@ mod tests {
             ("sessions/projects.rs", include_str!("projects.rs")),
         ];
         for (name, src) in RANKERS {
-            for needle in ["checks::", "evidence_json", "EvidenceSummary"] {
+            for needle in [
+                "checks::",
+                "evidence_json",
+                "EvidenceSummary",
+                "card::",
+                "SessionCard",
+            ] {
                 assert!(
                     !src.contains(needle),
-                    "{name} names `{needle}` -- session evidence is SURFACED, NEVER SCORED \
-                     (V0046's own header): it may be rendered beside a row, never folded \
+                    "{name} names `{needle}` -- session evidence and the session card are SURFACED, NEVER SCORED \
+                     (V0046's own header; the kb-session-card/1 #11 amendment): they may be rendered beside a row, never folded \
                      into a rank, a sort key or a filter"
                 );
             }
