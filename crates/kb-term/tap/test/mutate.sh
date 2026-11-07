@@ -15,6 +15,15 @@ cp -r "$SRC/../fixtures" "$TMP/mp/fixtures"
 cp "$SRC/src/strip.ts" "$TMP/strip.ts.orig"
 cp "$SRC/src/decode.ts" "$TMP/decode.ts.orig"
 cd "$TMP/mp/tap"
+# Preflight (spec 8): --bail must be accepted by this bun. `bun test --bail`
+# changes the summary format, so kill detection below uses the exit code
+# (plus a fail-count excerpt for the message), not the old anchored grep.
+# If bun rejects the flag, fail loudly with the raw output as evidence.
+if ! bun test --bail --timeout 60000 test/decode.test.ts > "$TMP/bail-sanity.log" 2>&1; then
+  echo "mutate.sh: bun rejected --bail (spec 8 flag unsupported); raw output follows"
+  cat "$TMP/bail-sanity.log"
+  exit 1
+fi
 
 mut() {
   local target="$1" a="$2" b="$3"
@@ -24,12 +33,17 @@ import sys
 s=open('$target').read(); a,b=sys.argv[1],sys.argv[2]
 assert a in s, 'stale anchor: '+a[:80]
 open('$target','w').write(s.replace(a,b,1))" "$a" "$b" || return
-  r=$(bun test --bail --timeout 300000 test/fuzz.test.ts test/strip.test.ts test/differential.test.ts test/decode.test.ts 2>&1 | grep -E "^ *[0-9]+ fail" | tr -d ' ')
+  out=$(bun test --bail --timeout 300000 test/fuzz.test.ts test/strip.test.ts test/differential.test.ts test/decode.test.ts 2>&1)
+  ec=$?
   n=$((n+1))
-  case "$r" in
-    0fail|"") echo "SURVIVED mutant $n: ${a:0:80}"; surv=$((surv+1)) ;;
-    *) echo "killed ($r) mutant $n: ${a:0:80}" ;;
-  esac
+  if [ "$ec" -ne 0 ]; then
+    fails=$(printf '%s\n' "$out" | grep -E '[0-9]+ fail' | tail -1 | tr -d ' ')
+    echo "killed (${fails:-fail, exit=$ec}) mutant $n: ${a:0:80}"
+  else
+    echo "SURVIVED mutant $n: ${a:0:80}"
+    printf '%s\n' "$out" | tail -n 25
+    surv=$((surv+1))
+  fi
 }
 n=0; surv=0
 
