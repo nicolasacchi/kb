@@ -1509,6 +1509,13 @@ jobs:
       - name: Fixture generators (stdlib python)
         run: python3 -I -m unittest discover -s crates/kb-term/fixtures -p 'test_*.py' -v
 
+      - name: mirror stand-in unit tests
+        run: |
+          python3 --version
+          python3 -I -m unittest discover -s crates/kb-term/tools -p 'test_*.py' -v 2>&1 | tee /tmp/term-tools.log
+          n="$(sed -n 's/^Ran \([0-9]*\) tests\? .*/\1/p' /tmp/term-tools.log | tail -1)"
+          test "${n:-0}" -ge 15
+
       - name: Tap smoke tests (bun test, JUnit report)
         run: |
           mkdir -p "$RUNNER_TEMP/witness"
