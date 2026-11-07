@@ -229,7 +229,8 @@ const SESSION_ROW_COLS: &str = "artifact_id, session_id, started_at, ended_at,
                             subagent_files_edited, subagent_launched_unstatted,
                             project_key, repo_root, harness, cc_version,
                             last_assistant_text, all_cwds, commit_count, user_turns,
-                            active_secs, substance, segment_of, segment_idx, evidence_json";
+                            active_secs, substance, segment_of, segment_idx, evidence_json,
+                            parent_session_id, root_session_id, project_slug";
 
 impl Db {
     /// Open (or create) the database at `path` and run all pending migrations.
@@ -4081,10 +4082,11 @@ impl Db {
                  subagent_files_edited, subagent_launched_unstatted,
                  project_key, repo_root, harness, cc_version,
                  last_assistant_text, all_cwds, commit_count, user_turns,
-                 active_secs, substance, segment_of, segment_idx, evidence_json, is_newest)
+                 active_secs, substance, segment_of, segment_idx, evidence_json,
+                 parent_session_id, root_session_id, project_slug, is_newest)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
                      ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21,
-                     ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, 0)
+                     ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, 0)
              ON CONFLICT(artifact_id) DO UPDATE SET
                 session_id                  = excluded.session_id,
                 started_at                  = excluded.started_at,
@@ -4118,7 +4120,10 @@ impl Db {
                 substance                   = excluded.substance,
                 segment_of                  = excluded.segment_of,
                 segment_idx                 = excluded.segment_idx,
-                evidence_json               = excluded.evidence_json",
+                evidence_json               = excluded.evidence_json,
+                parent_session_id           = COALESCE(excluded.parent_session_id, sessions.parent_session_id),
+                root_session_id             = COALESCE(excluded.root_session_id, sessions.root_session_id),
+                project_slug                = COALESCE(excluded.project_slug, sessions.project_slug)
             params![
                 row.artifact_id,
                 row.session_id,
@@ -4154,6 +4159,9 @@ impl Db {
                 row.segment_of,
                 row.segment_idx,
                 row.evidence_json,
+                row.parent_session_id,
+                row.root_session_id,
+                row.project_slug,
             ],
         )?;
         recompute_is_newest(&tx, &row.session_id)?;
@@ -4284,6 +4292,64 @@ impl Db {
         };
         tx.commit()?;
         Ok((would_change, changed))
+    }
+
+    /// V0047 — fill ONLY NULL `parent_session_id` / `root_session_id` /
+    /// `project_slug` on omp rows matching `session_id` or `segment_of`.
+    /// Returns `(would_change, changed, unmatched)` summed over `items`
+    /// (`(session_id, parent, root, slug)` each). `apply=false` writes
+    /// nothing. Never overwrites a non-NULL value; never touches a
+    /// non-omp row. A second apply reports `(0, 0)` once filled.
+    pub fn sessions_backfill_tree(
+        &mut self,
+        apply: bool,
+        items: &[(String, Option<String>, Option<String>, Option<String>)],
+    ) -> Result<(u64, u64, u64)> {
+        let mut would: u64 = 0;
+        let mut matched: u64 = 0;
+        let tx = self.conn.transaction()?;
+        let mut changed: u64 = 0;
+        {
+            let mut count_stmt = tx.prepare(
+                "SELECT COUNT(*) FROM sessions
+                 WHERE harness = 'omp' AND (session_id = ?1 OR segment_of = ?1)
+                   AND ((?2 IS NOT NULL AND parent_session_id IS NULL)
+                     OR (?3 IS NOT NULL AND root_session_id IS NULL)
+                     OR (?4 IS NOT NULL AND project_slug IS NULL))",
+            )?;
+            let mut exist_stmt = tx.prepare(
+                "SELECT COUNT(*) FROM sessions
+                 WHERE harness = 'omp' AND (session_id = ?1 OR segment_of = ?1)",
+            )?;
+            let mut upd_stmt = tx.prepare(
+                "UPDATE sessions
+                 SET parent_session_id = COALESCE(parent_session_id, ?2),
+                     root_session_id = COALESCE(root_session_id, ?3),
+                     project_slug = COALESCE(project_slug, ?4)
+                 WHERE harness = 'omp' AND (session_id = ?1 OR segment_of = ?1)
+                   AND ((?2 IS NOT NULL AND parent_session_id IS NULL)
+                     OR (?3 IS NOT NULL AND root_session_id IS NULL)
+                     OR (?4 IS NOT NULL AND project_slug IS NULL))",
+            )?;
+            for (sid, parent, root, slug) in items {
+                let c: i64 = count_stmt.query_row(
+                    params![sid, parent, root, slug],
+                    |r| r.get(0),
+                )?;
+                if c > 0 {
+                    would += c as u64;
+                }
+                let e: i64 = exist_stmt.query_row(params![sid], |r| r.get(0))?;
+                if e == 0 {
+                    matched += 1;
+                }
+                if apply {
+                    changed += upd_stmt.execute(params![sid, parent, root, slug])? as u64;
+                }
+            }
+        }
+        tx.commit()?;
+        Ok((would, changed, matched))
     }
 
     /// R4 — replace the full research list for one session artifact in one tx.
@@ -5359,7 +5425,8 @@ impl Db {
                     subagent_files_edited, subagent_launched_unstatted,
                     project_key, repo_root, harness, cc_version,
                     last_assistant_text, all_cwds, commit_count, user_turns,
-                    active_secs, substance, segment_of, segment_idx, evidence_json
+                    active_secs, substance, segment_of, segment_idx, evidence_json,
+                    parent_session_id, root_session_id, project_slug
              FROM sessions
              WHERE session_id IN ({placeholders})
              ORDER BY started_at DESC, artifact_id ASC"
@@ -5401,7 +5468,8 @@ impl Db {
                     subagent_files_edited, subagent_launched_unstatted,
                     project_key, repo_root, harness, cc_version,
                     last_assistant_text, all_cwds, commit_count, user_turns,
-                    active_secs, substance, segment_of, segment_idx, evidence_json
+                    active_secs, substance, segment_of, segment_idx, evidence_json,
+                    parent_session_id, root_session_id, project_slug
              FROM sessions
              WHERE artifact_id IN ({placeholders})"
         );
@@ -6115,7 +6183,8 @@ impl Db {
                     subagent_files_edited, subagent_launched_unstatted,
                     project_key, repo_root, harness, cc_version,
                     last_assistant_text, all_cwds, commit_count, user_turns,
-                    active_secs, substance, segment_of, segment_idx, evidence_json
+                    active_secs, substance, segment_of, segment_idx, evidence_json,
+                    parent_session_id, root_session_id, project_slug
              FROM sessions
              WHERE session_id = ?1
              ORDER BY started_at DESC, artifact_id ASC
@@ -6243,6 +6312,9 @@ impl Db {
             segment_of: r.get(31)?,
             segment_idx: r.get(32)?,
             evidence_json: r.get(33)?,
+            parent_session_id: r.get(34)?,
+            root_session_id: r.get(35)?,
+            project_slug: r.get(36)?,
         })
     }
 
@@ -7678,6 +7750,18 @@ pub struct SessionRow {
     /// own `v`). `None` = not extracted (a pre-V0046 capture; `kb reindex`
     /// backfills). SURFACED, never scored: no reader sorts or filters on it.
     pub evidence_json: Option<String>,
+    /// V0047 — lineage, SURFACED never scored: the parent session id of
+    /// this capture's tree (`None` for a top-level session or an
+    /// unstamped pre-V0047 capture). No reader sorts, filters or ranks
+    /// on it (invariant #11).
+    pub parent_session_id: Option<String>,
+    /// V0047 — lineage, SURFACED never scored: the tree root's session id
+    /// (`None` for a top-level session; roots are NOT self-referenced).
+    pub root_session_id: Option<String>,
+    /// V0047 — lineage, SURFACED never scored: the repo slug of the
+    /// capture's working directory. `None` when the cwd is gone or not a
+    /// directory (A3 may leave it NULL in that case).
+    pub project_slug: Option<String>,
 }
 
 /// One row from the `session_decisions` table (V0018/S9) — a steering moment.
@@ -10754,6 +10838,7 @@ mod tests {
             segment_of: None,
             segment_idx: None,
             evidence_json: None,
+            ..Default::default()
         }
     }
 
@@ -15083,6 +15168,7 @@ mod tests {
             segment_of: None,
             segment_idx: None,
             evidence_json: None,
+            ..Default::default()
         })
         .unwrap();
         db.session_files_replace(
@@ -16842,6 +16928,136 @@ mod tests {
             crate::sibling::volume_epoch(&db.conn).unwrap().unwrap() > older_binary_epoch,
             "a migrated volume is AHEAD of a V0045 binary: refuse_if_volume_ahead must refuse it"
         );
+    }
+
+    #[test]
+    fn sessions_upsert_round_trips_lineage_and_coalesces() {
+        let mut db = db();
+        let mut r = session_row("lin-1", "sid-lin-1", 1_700_000_000);
+        r.parent_session_id = Some("par1".to_string());
+        r.root_session_id = Some("root1".to_string());
+        r.project_slug = Some("my-proj".to_string());
+        db.sessions_upsert(&r).unwrap();
+        let got = db.sessions_get("sid-lin-1").unwrap().unwrap();
+        assert_eq!(got.parent_session_id.as_deref(), Some("par1"));
+        assert_eq!(got.root_session_id.as_deref(), Some("root1"));
+        assert_eq!(got.project_slug.as_deref(), Some("my-proj"));
+        // An older-hook recapture (NULLs) must not erase lineage.
+        r.parent_session_id = None;
+        r.root_session_id = None;
+        r.project_slug = None;
+        db.sessions_upsert(&r).unwrap();
+        let got = db.sessions_get("sid-lin-1").unwrap().unwrap();
+        assert_eq!(got.parent_session_id.as_deref(), Some("par1"));
+        assert_eq!(got.root_session_id.as_deref(), Some("root1"));
+        assert_eq!(got.project_slug.as_deref(), Some("my-proj"));
+        // A non-NULL new value wins.
+        r.parent_session_id = Some("par2".to_string());
+        db.sessions_upsert(&r).unwrap();
+        let got = db.sessions_get("sid-lin-1").unwrap().unwrap();
+        assert_eq!(got.parent_session_id.as_deref(), Some("par2"));
+    }
+
+    #[test]
+    fn v0047_adds_columns_and_index() {
+        let db = db();
+        for col in ["parent_session_id", "root_session_id", "project_slug"] {
+            let n: i64 = db
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = ?1",
+                    [col],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "column {col} must exist");
+        }
+        let n: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_sessions_root'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "idx_sessions_root must exist");
+        let unique: i64 = db
+            .conn
+            .query_row(
+                "SELECT `unique` FROM pragma_index_list('sessions') WHERE name = 'idx_sessions_root'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(unique, 0, "root index must be non-unique");
+        assert!(schema_epoch() >= 47, "epoch is {}", schema_epoch());
+    }
+
+    #[test]
+    fn sessions_backfill_tree_fills_only_nulls() {
+        let mut db = db();
+        let mut omp = session_row("bf-1", "sid-bf-1", 1_700_000_000);
+        omp.harness = "omp".to_string();
+        db.sessions_upsert(&omp).unwrap();
+        // Segment part: matches via segment_of.
+        let mut part = session_row("bf-2", "sid-bf-2", 1_700_000_100);
+        part.harness = "omp".to_string();
+        part.segment_of = Some("sid-bf-1".to_string());
+        db.sessions_upsert(&part).unwrap();
+        // Non-omp row: never touched.
+        let mut cl = session_row("bf-3", "sid-bf-3", 1_700_000_200);
+        db.sessions_upsert(&cl).unwrap();
+        // Pre-filled omp row: never overwritten.
+        let mut full = session_row("bf-4", "sid-bf-4", 1_700_000_300);
+        full.harness = "omp".to_string();
+        full.parent_session_id = Some("keep".to_string());
+        db.sessions_upsert(&full).unwrap();
+
+        let items = vec![
+            (
+                "sid-bf-1".to_string(),
+                Some("par1".to_string()),
+                Some("root1".to_string()),
+                Some("my-proj".to_string()),
+            ),
+            (
+                "sid-bf-4".to_string(),
+                Some("new".to_string()),
+                Some("newroot".to_string()),
+                Some("newproj".to_string()),
+            ),
+            (
+                "sid-bf-3".to_string(),
+                Some("x".to_string()),
+                Some("y".to_string()),
+                None,
+            ),
+            ("sid-missing".to_string(), Some("a".to_string()), None, None),
+        ];
+        // Dry-run writes nothing.
+        let (would, changed, unmatched) = db.sessions_backfill_tree(false, &items).unwrap();
+        assert!(would >= 1, "would={would}");
+        assert_eq!(changed, 0);
+        assert_eq!(unmatched, 1);
+        let got = db.sessions_get("sid-bf-1").unwrap().unwrap();
+        assert_eq!(got.parent_session_id, None);
+        // Apply fills NULLs on session_id and segment_of parts.
+        let (would, changed, unmatched) = db.sessions_backfill_tree(true, &items).unwrap();
+        assert!(would >= 1);
+        assert!(changed >= 2, "changed={changed} would={would}");
+        assert_eq!(unmatched, 1);
+        let got = db.sessions_get("sid-bf-1").unwrap().unwrap();
+        assert_eq!(got.parent_session_id.as_deref(), Some("par1"));
+        let got = db.sessions_get("sid-bf-2").unwrap().unwrap();
+        assert_eq!(got.parent_session_id.as_deref(), Some("par1"));
+        // Pre-filled kept; non-omp untouched.
+        let got = db.sessions_get("sid-bf-4").unwrap().unwrap();
+        assert_eq!(got.parent_session_id.as_deref(), Some("keep"));
+        let got = db.sessions_get("sid-bf-3").unwrap().unwrap();
+        assert_eq!(got.parent_session_id, None);
+        // Second apply is a no-op (0,0).
+        let (would, changed, _) = db.sessions_backfill_tree(true, &items).unwrap();
+        assert_eq!((would, changed), (0, 0));
     }
 
     #[test]

@@ -433,6 +433,66 @@ async fn sessions_backfill_project_key_route_is_dry_run_by_default() {
     assert_eq!(applied["apply"], true, "{applied}");
 }
 
+#[tokio::test]
+async fn backfill_tree_route_dry_run_then_apply() {
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({"items": [{"session_id": "sid-missing", "parent_session_id": "par1", "root_session_id": "root1"}]});
+    let dry: serde_json::Value = client
+        .post(url(addr, "/api/sessions/backfill-tree"))
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(dry["apply"], false, "{dry}");
+    assert_eq!(dry["changed"], 0, "{dry}");
+    assert_eq!(dry["unmatched"], 1, "{dry}");
+    let applied: serde_json::Value = client
+        .post(url(addr, "/api/sessions/backfill-tree?apply=true"))
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(applied["apply"], true, "{applied}");
+    assert_eq!(applied["unmatched"], 1, "{applied}");
+}
+
+#[tokio::test]
+async fn backfill_tree_rejects_over_cap_and_unsafe_ids() {
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let many: Vec<_> = (0..501)
+        .map(|i| serde_json::json!({"session_id": format!("s{i}")}))
+        .collect();
+    let resp = client
+        .post(url(addr, "/api/sessions/backfill-tree"))
+        .json(&serde_json::json!({"items": many}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 400, "over cap must 400");
+    let bad = client
+        .post(url(addr, "/api/sessions/backfill-tree"))
+        .json(&serde_json::json!({"items": [{"session_id": "bad id!"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad.status().as_u16(), 400, "unsafe id must 400");
+    let bad2 = client
+        .post(url(addr, "/api/sessions/backfill-tree"))
+        .json(&serde_json::json!({"items": [{"session_id": "s1", "parent_session_id": "bad id!"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad2.status().as_u16(), 400, "unsafe parent must 400");
+}
+
 /// v044-F6 — `/api/turn` takes `project`/`visible_to`/`lanes`: an unknown
 /// lane is a 400 (not a silent skip), an unknown project fails open, and a
 /// lane subset is honoured.

@@ -191,6 +191,7 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | GET | `/api/search` | `routes::search::get` |
 | GET | `/api/sessions` | `routes::sessions::list` |
 | POST | `/api/sessions/backfill-project-key` | `routes::sessions::backfill_project_key` |
+| POST | `/api/sessions/backfill-tree` | `routes::sessions::backfill_tree` |
 | POST | `/api/sessions/beat` | `routes::sessions::beat` |
 | GET | `/api/sessions/by-artifact/{kb}/{artifact_id}` | `routes::sessions::by_artifact` |
 | GET | `/api/sessions/by-commit` | `routes::sessions::by_commit` |

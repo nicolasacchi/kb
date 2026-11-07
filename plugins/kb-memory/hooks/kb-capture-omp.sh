@@ -182,7 +182,8 @@ TRANSLATE='
     harness: "omp", cwd: $cwd, title: $stitle, session_file: $file,
     timestamp: ($hdr.timestamp // "unknown")}
    + (if ju != "" then {job_ulid: ju} else {} end)
-   + (if $ttitle != "" then {aiTitle: $ttitle} else {} end)),
+   + (if $ttitle != "" then {aiTitle: $ttitle} else {} end)
+   + ($ARGS.named.lineage // {})),
   ($live[] |
    if .type == "message" then
      ((.message // {}) | if type == "object" then . else {} end) as $m |
@@ -614,6 +615,103 @@ cap_owner_dead() { # <base>: rc 0 only when the recorded owner is provably gone
 }
 cap_req_read() { local n; n="$(cat "$1.req" 2>/dev/null)"; printf '%s' "${n:-0}"; }
 
+cap_is_plain_token() { # <value>
+  case "$1" in
+    ''|*[!A-Za-z0-9._:-]*) return 1 ;;
+  esac
+  case "$1" in
+    [A-Za-z0-9]*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# cap_lineage <session_file>: print {"parentSessionId":...,"rootSessionId":...}
+# (absent keys omitted; {} for top-level or on ANY failure — capture must
+# never fail on it). Implements the Rust fold_lineage rules with jq/bash.
+cap_lineage() {
+  local f="$1" hdr hid ps root parent depth_one=""
+  [ -f "$f" ] || { printf '{}'; return 0; }
+  hdr="$(head -c 262144 "$f" | jq -c 'select(.type=="session") | {id, parentSession}' 2>/dev/null | head -1 || true)"
+  [ -n "$hdr" ] || { printf '{}'; return 0; }
+  hid="$(jq -r '.id // empty' <<<"$hdr" 2>/dev/null || true)"
+  ps="$(jq -r '.parentSession // empty' <<<"$hdr" 2>/dev/null || true)"
+  [ -n "$hid" ] || { printf '{}'; return 0; }
+
+  # Root: id after the FINAL _ of the OUTERMOST <ts>_<id> ancestor dir.
+  local dir rest comp found="" root_idx=-1 idx=0
+  dir="$(dirname -- "$f")"
+  # Walk ancestors from the top: split dir into components.
+  local IFS='/'
+  set -- $dir
+  local -a parts=("$@")
+  unset IFS
+  local n=${#parts[@]}
+  for ((idx=0; idx<n; idx++)); do
+    comp="${parts[$idx]}"
+    case "$comp" in
+      *_*)
+        root="${comp##*_}"
+        if cap_is_plain_token "$root"           && [ "${comp%"_$root"}" != "$comp" ]           && [ -n "${comp%"_$root"}" ]           && [ "$root" != "$hid" ]; then
+          found=1; root_idx=$idx; break
+        elif [ -n "${comp##*_}" ] && [ "${comp%"_${comp##*_}"}" != "$comp" ]; then
+          # unsafe stem: no lineage at all
+          printf '{}'; return 0
+        fi
+        ;;
+    esac
+  done
+  [ -n "$found" ] || { printf '{}'; return 0; }
+  if [ "$n" -le $((root_idx + 2)) ]; then depth_one=1; fi
+
+  # Parent: an explicitly read parent header wins; else dir fallback.
+  if [ -n "$ps" ]; then
+    local ph=""
+    [ -f "$ps" ] && ph="$(head -c 262144 "$ps" | jq -r 'select(.type=="session") | .id // empty' 2>/dev/null | head -1 || true)"
+    if [ -n "$ph" ]; then
+      if [ "$ph" = "$hid" ]; then
+        parent=""
+      elif cap_is_plain_token "$ph"; then
+        parent="$ph"
+      else
+        parent="$root"
+      fi
+    elif [ -z "$depth_one" ]; then
+      parent="$root"
+    else
+      parent="$root"
+    fi
+    # self-parent drops to no parent key
+    if [ "$parent" = "$hid" ]; then parent=""; fi
+  else
+    if [ -n "$depth_one" ]; then
+      parent="$root"
+    else
+      # deeper: sibling <dir>/<Name>.jsonl header id, else root floor
+      local stem sib sph=""
+      stem="$(basename -- "$f" | cut -d. -f1)"
+      if [ -n "$stem" ]; then
+        sib="$(dirname -- "$f")/$stem.jsonl"
+        if [ -f "$sib" ] && [ "$sib" != "$f" ]; then
+          sph="$(head -c 262144 "$sib" | jq -r 'select(.type=="session") | .id // empty' 2>/dev/null | head -1 || true)"
+        fi
+      fi
+      if [ -n "$sph" ] && [ "$sph" != "$hid" ] && cap_is_plain_token "$sph"; then
+        parent="$sph"
+      else
+        parent="$root"
+      fi
+    fi
+  fi
+
+  if [ -n "$parent" ] && [ -n "$root" ]; then
+    jq -nc --arg p "$parent" --arg r "$root" '{parentSessionId: $p, rootSessionId: $r}' 2>/dev/null || printf '{}'
+  elif [ -n "$root" ]; then
+    jq -nc --arg r "$root" '{rootSessionId: $r}' 2>/dev/null || printf '{}'
+  else
+    printf '{}'
+  fi
+}
+
 # Stage ONE subagent sidecar: lenient pre-clean, then the SAME TRANSLATE
 # program, into <out>. A sidecar that cannot be translated is dropped (the main
 # transcript and the healthy sidecars still land); rc 1 only for a deadline
@@ -707,7 +805,8 @@ cap_seg_build_programs() {
   shopt -u patsub_replacement 2>/dev/null
   a='(if ($hdr.id // "") != "" then $hdr.id else ($es[0].id // "unknown") end) as $sid |'
   b='($live | map(select(.type == "model_change") | .model) | last // "omp") as $dmodel |'
-  c='+ (if $ttitle != "" then {aiTitle: $ttitle} else {} end)),'
+  c='+ (if $ttitle != "" then {aiTitle: $ttitle} else {} end)
+   + ($ARGS.named.lineage // {})),'
   d='($live | map(select(.type == "custom" and .customType == "session_exit")) | last) as $exit |'
   # Legacy emits ONE [session-exit], for the session's LAST exit, at the very
   # end: only the live tail may emit it (falling back to the last exit found
@@ -715,7 +814,8 @@ cap_seg_build_programs() {
   rd='(if $emitexit then ((($live | map(select(.type == "custom" and .customType == "session_exit")) | last) // $xexit)) else null end) as $exit |'
   ra='($psid) as $sid |'
   rb='($pdmodel) as $dmodel |'
-  rc='+ (if $ttitle != "" then {aiTitle: $ttitle} else {} end) + $segmeta),'
+  rc='+ (if $ttitle != "" then {aiTitle: $ttitle} else {} end)
+   + ($ARGS.named.lineage // {}) + $segmeta),'
   case "$t" in *"$a"*) ;; *) return 1 ;; esac
   case "$t" in *"$b"*) ;; *) return 1 ;; esac
   case "$t" in *"$c"*) ;; *) return 1 ;; esac
@@ -1024,7 +1124,9 @@ cap_sc_stage() { # <src> <safe> <dest>
 # (bash dynamic scope). rc 0 ok, 1 failed/fatal, 5 translated part over the
 # size cap (the target was halved, the pass must re-plan).
 cap_seg_convert() {
-  local k="$1" pid="${PIDS[$1]}" d raw tmp trc erc edited snapsid dm segj
+  local k="$1" pid="${PIDS[$1]}" d raw tmp trc erc edited snapsid dm segj lin
+  lin="$(cap_lineage "$tpath" || true)"
+  [ -n "$lin" ] || lin='{}'
   d="${pdir:?}/$(printf '%02d' "$k")"
   raw="$CAP_RUN/part.raw"
   tmp="$d/transcript.jsonl.tmp"
@@ -1057,12 +1159,12 @@ cap_seg_convert() {
   cap_trace "convert part=$k state=${STATES[$k]}"
   if [ "$k" -le 1 ]; then
     snapsid="$sid"
-    cap_bg capt jq -c -s --arg file "$tpath" --argjson pdmodel "$dm" \
+    cap_bg capt jq -c -s --arg file "$tpath" --argjson lineage "$lin" --argjson pdmodel "$dm" \
       --argjson emitexit "$emitexit" --argjson xexit "$xexit" "$CAP_SEG_P1" "$raw" >"$tmp" 2>/dev/null
   else
     snapsid="$pid"
     segj="$(jq -n -c --arg of "$rawsid" --argjson idx "$k" '{segmentOf: $of, segmentIdx: $idx, rawSessionId: $of}')"
-    cap_bg capt jq -c -s --arg file "$tpath" --arg psid "$pid" --argjson pdmodel "$dm" \
+    cap_bg capt jq -c -s --arg file "$tpath" --argjson lineage "$lin" --arg psid "$pid" --argjson pdmodel "$dm" \
       --argjson segmeta "$segj" \
       --argjson emitexit "$emitexit" --argjson xexit "$xexit" "$CAP_SEG_PN" "$raw" >"$tmp" 2>/dev/null
   fi
@@ -1483,7 +1585,10 @@ capture_pass() {
   # record translated before it in $tmpjsonl: that partial transcript is landed
   # (as the former script did) rather than the whole session being lost and
   # retried forever. Only a deadline kill / TERM aborts the pass.
-  cap_bg capt jq -c -s --arg file "$tpath" "$TRANSLATE" "$tmpclean" >"$tmpjsonl" 2>/dev/null
+  local lin
+  lin="$(cap_lineage "$tpath" || true)"
+  [ -n "$lin" ] || lin=''{}''
+  cap_bg capt jq -c -s --arg file "$tpath" --argjson lineage "$lin" "$TRANSLATE" "$tmpclean" >"$tmpjsonl" 2>/dev/null
   trc=$?
   if cap_fatal_rc "$trc"; then cap_untrack "$scratch"; return 1; fi
   rm -f "$tmpclean"

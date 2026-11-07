@@ -553,6 +553,12 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
             "/sessions/backfill-project-key",
             post(routes::sessions::backfill_project_key),
         )
+        // V0047 — `kb sessions backfill-tree` through the daemon: the
+        // storage actor stays the single writer of index.db.
+        .route(
+            "/sessions/backfill-tree",
+            post(routes::sessions::backfill_tree),
+        )
         // R9 — research rollups + the activity funnel (static, before dynamic).
         .route(
             "/sessions/research-rollup",

@@ -81,6 +81,10 @@ pub mod narrative;
 /// code checked after its last edit". Pure; SURFACED, never scored.
 pub mod checks;
 
+/// Session lineage fold (V0047): pure `(parent, root)` fold over the omp
+/// on-disk tree. SURFACED, never scored (invariant #11).
+pub mod lineage;
+
 pub use projects::{
     project_registry, registry_entry, resolve_project_filter, resolve_registry_project,
     set_project_registry, ProjectDef, ProjectFilter, ResolvedProject,
@@ -318,6 +322,13 @@ pub struct SessionActivity {
     /// V0045/seg1 — the same record's `segmentIdx` (1-based part index; a
     /// JSON number or a numeric string). `None` unless `segment_of` is set.
     pub segment_idx: Option<i64>,
+    /// V0047 — the FIRST `adapter-meta` record's `parentSessionId` (the
+    /// parent session, plain-token validated). SURFACED, never scored.
+    pub parent_session_id: Option<String>,
+    /// V0047 — the FIRST `adapter-meta` record's `rootSessionId` (the tree
+    /// root, plain-token validated; a value equal to the record's own
+    /// `sessionId` is ignored). SURFACED, never scored.
+    pub root_session_id: Option<String>,
     /// OL IDEA3 -- the verification commands the MAIN transcript ran, the
     /// counted edits and the successful pushes, folded by
     /// [`checks::Tracker`] in this same single pass. Persisted (as
@@ -797,6 +808,32 @@ fn parse_session_activity_lines<S: AsRef<str>>(
             }
         }
 
+        // V0047 — session lineage: the first adapter-meta record's
+        // `parentSessionId` / `rootSessionId`, plain-token validated
+        // key-by-key (an invalid parent never blocks a valid root). A root
+        // equal to the record's own `sessionId` is ignored. SURFACED,
+        // never scored (invariant #11).
+        if act.parent_session_id.is_none()
+            && act.root_session_id.is_none()
+            && v.get("type").and_then(|x| x.as_str()) == Some("adapter-meta")
+        {
+            if act.parent_session_id.is_none() {
+                let raw = v.get("parentSessionId").and_then(|x| x.as_str()).map(str::trim);
+                if raw.is_some_and(crate::sessions::lineage::is_plain_token_pub) {
+                    act.parent_session_id = raw.map(str::to_string);
+                }
+            }
+            if act.root_session_id.is_none() {
+                let raw = v.get("rootSessionId").and_then(|x| x.as_str()).map(str::trim);
+                let own = v.get("sessionId").and_then(|x| x.as_str()).map(str::trim);
+                if let Some(r) = raw {
+                    if crate::sessions::lineage::is_plain_token_pub(r) && Some(r) != own {
+                        act.root_session_id = Some(r.to_string());
+                    }
+                }
+            }
+        }
+
         // V0045/seg1 — segmented capture: the first adapter-meta record's
         // `segmentOf` + `segmentIdx` (a continuation part of a long session).
         // Both must be present and well-formed (non-empty id, idx >= 1) or
@@ -1160,6 +1197,23 @@ pub(crate) fn meta_harness(html: &str) -> Option<String> {
     let end = html[start..].find('"')? + start;
     let val = html[start..end].trim();
     (!val.is_empty()).then(|| val.to_string())
+}
+
+/// V0047 — project slug ladder rung 2: `<meta name="kb-project-slug"
+/// content="...">` in the envelope head (stamped by `kb sessions capture`
+/// from the record cwd's repo slug). Same substring scan as [`meta_harness`];
+/// only `[a-z0-9._-]{1,64}` is accepted.
+pub(crate) fn meta_project_slug(html: &str) -> Option<String> {
+    let marker = r#"<meta name="kb-project-slug" content=""#;
+    let start = html.find(marker)? + marker.len();
+    let end = html[start..].find('"')? + start;
+    let val = html[start..end].trim();
+    if val.is_empty() || val.len() > 64 {
+        return None;
+    }
+    val.bytes()
+        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'-'))
+        .then(|| val.to_string())
 }
 
 /// S1/V0029 — the deterministic substance ladder (surfaces.md S1), rule-
@@ -3890,6 +3944,71 @@ mod tests {
             format!("{a_stripped:?}"),
             format!("{b:?}"),
             "the segment keys must not perturb any pre-existing parsed field"
+        );
+    }
+
+    #[test]
+    fn parse_reads_lineage_keys_and_changes_no_other_field() {
+        let body = concat!(
+            r#"{"sessionId":"S1","type":"user","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}"#,
+            "\n",
+        );
+        let with = format!(
+            "{}\n{body}",
+            r#"{"sessionId":"S1","type":"adapter-meta","adapter":"kb-capture-omp/1","harness":"omp","parentSessionId":"P1","rootSessionId":"R1"}"#
+        );
+        let without = format!(
+            "{}\n{body}",
+            r#"{"sessionId":"S1","type":"adapter-meta","adapter":"kb-capture-omp/1","harness":"omp"}"#
+        );
+        let a = parse_session_activity(&with);
+        let b = parse_session_activity(&without);
+        assert_eq!(a.parent_session_id.as_deref(), Some("P1"));
+        assert_eq!(a.root_session_id.as_deref(), Some("R1"));
+        assert_eq!(b.parent_session_id, None);
+        assert_eq!(b.root_session_id, None);
+        let mut a_stripped = a.clone();
+        a_stripped.parent_session_id = None;
+        a_stripped.root_session_id = None;
+        assert_eq!(
+            format!("{a_stripped:?}"),
+            format!("{b:?}"),
+            "lineage keys must not perturb any pre-existing parsed field"
+        );
+    }
+
+    #[test]
+    fn parse_lineage_rejects_unsafe_and_self_root_key_by_key() {
+        // Unsafe parent dropped, valid root kept.
+        let a = parse_session_activity(
+            r#"{"sessionId":"S1","type":"adapter-meta","harness":"omp","parentSessionId":"bad id!","rootSessionId":"R1"}"#,
+        );
+        assert_eq!(a.parent_session_id, None);
+        assert_eq!(a.root_session_id.as_deref(), Some("R1"));
+        // Root equal to own sessionId ignored; parent kept.
+        let a = parse_session_activity(
+            r#"{"sessionId":"S1","type":"adapter-meta","harness":"omp","parentSessionId":"P1","rootSessionId":"S1"}"#,
+        );
+        assert_eq!(a.parent_session_id.as_deref(), Some("P1"));
+        assert_eq!(a.root_session_id, None);
+    }
+
+    #[test]
+    fn meta_project_slug_reads_and_rejects() {
+        let html = r#"<head><meta name="kb-session" content="s1"><meta name="kb-project-slug" content="my-proj_1"></head>"#;
+        assert_eq!(meta_project_slug(html).as_deref(), Some("my-proj_1"));
+        assert_eq!(meta_project_slug(r#"<head></head>"#), None);
+        assert_eq!(
+            meta_project_slug(r#"<meta name="kb-project-slug" content="UPPER">"#, ),
+            None
+        );
+        assert_eq!(
+            meta_project_slug(r#"<meta name="kb-project-slug" content="">"#),
+            None
+        );
+        assert_eq!(
+            meta_project_slug(&format!(r#"<meta name="kb-project-slug" content="{}">"#, "a".repeat(65))),
+            None
         );
     }
 

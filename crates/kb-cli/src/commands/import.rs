@@ -561,6 +561,20 @@ pub(crate) fn wrap_envelope_spooled(
     subagents: &[kb_core::sessions::SubagentDigest],
     sidecar_texts: &[kb_core::sidecar_spool::SidecarSpool],
 ) -> String {
+    wrap_envelope_spooled_with_slug(
+        ts, sid, raw_jsonl, commits, subagents, sidecar_texts, None,
+    )
+}
+
+pub(crate) fn wrap_envelope_spooled_with_slug(
+    ts: &str,
+    sid: &str,
+    raw_jsonl: &str,
+    commits: &[kb_core::sessions::CapturedCommit],
+    subagents: &[kb_core::sessions::SubagentDigest],
+    sidecar_texts: &[kb_core::sidecar_spool::SidecarSpool],
+    slug: Option<&str>,
+) -> String {
     let esc = html_escape(raw_jsonl);
     let mut tail = String::new();
     let commits_block = kb_core::sessions::render_commits_block(commits);
@@ -579,6 +593,10 @@ pub(crate) fn wrap_envelope_spooled(
         tail.push_str(&sidecar_text_block);
         tail.push('\n');
     }
+    let slug_meta = slug
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("<meta name=\"kb-project-slug\" content=\"{s}\">\n"))
+        .unwrap_or_default();
     format!(
         "<!DOCTYPE html>\n\
          <html lang=\"en\"><head><meta charset=\"utf-8\">\n\
@@ -586,7 +604,7 @@ pub(crate) fn wrap_envelope_spooled(
          <meta name=\"kb-category\" content=\"{MEMORY_SESSION_CATEGORY}\">\n\
          <meta name=\"kb-decay\" content=\"fast\">\n\
          <meta name=\"kb-session\" content=\"{sid}\">\n\
-         </head><body>\n\
+         {slug_meta}         </head><body>\n\
          <h1>Session transcript {ts}</h1>\n\
          <pre>{esc}</pre>\n\
          {tail}\
