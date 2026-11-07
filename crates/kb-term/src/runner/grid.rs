@@ -345,6 +345,25 @@ mod tests {
             );
         }
         assert_eq!(size_calls(&fake), before_bounds);
+        // Bad owner charset -> bad-size through the real take_size and
+        // release_size (the first arm of each, no tmux writes).
+        for bad in ["KB", "has space", "", "x/y"] {
+            let err = take_size(&runner, &fake, id, 100, 30, bad, false)
+                .await
+                .unwrap_err();
+            assert_eq!(
+                err.code(),
+                "bad-size",
+                "take owner {bad:?} must be bad-size"
+            );
+            let err = release_size(&runner, &fake, id, bad).await.unwrap_err();
+            assert_eq!(
+                err.code(),
+                "bad-size",
+                "release owner {bad:?} must be bad-size"
+            );
+        }
+        assert_eq!(size_calls(&fake), before_bounds);
         // Pure helpers still agree with the machine.
         assert!(valid_size(20, 5) && valid_size(500, 200));
         assert!(valid_owner("kb-term"));
