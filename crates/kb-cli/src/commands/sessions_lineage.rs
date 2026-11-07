@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use super::http;
+use crate::http;
 
 /// One folded item to post: `(session_id, parent, root, project_slug)`.
 #[derive(Debug, Clone, PartialEq)]

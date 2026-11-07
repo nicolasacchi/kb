@@ -2273,7 +2273,7 @@ mod tests {
             "slug envelope == plain envelope + one meta line"
         );
         // First <pre> payload untouched by the slug.
-        let pre = |h: &str| {
+        let pre = |h: &str| -> &str {
             h.split("<pre>")
                 .nth(1)
                 .unwrap()
