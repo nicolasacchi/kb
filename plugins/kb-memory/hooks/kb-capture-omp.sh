@@ -616,6 +616,7 @@ cap_owner_dead() { # <base>: rc 0 only when the recorded owner is provably gone
 cap_req_read() { local n; n="$(cat "$1.req" 2>/dev/null)"; printf '%s' "${n:-0}"; }
 
 cap_is_plain_token() { # <value>
+  [ "${#1}" -le 128 ] || return 1
   case "$1" in
     ''|*[!A-Za-z0-9._:-]*) return 1 ;;
   esac
@@ -661,7 +662,10 @@ cap_lineage() {
     esac
   done
   [ -n "$found" ] || { printf '{}'; return 0; }
-  if [ "$n" -le $((root_idx + 2)) ]; then depth_one=1; fi
+  # Depth-1 = the file sits directly inside the root stem dir. With the
+  # leading-empty IFS=/ split, that is n == root_idx + 1 exactly; a
+  # `<= root_idx + 2` test misclassifies depth-2 files as depth-1.
+  if [ "$n" -eq $((root_idx + 1)) ]; then depth_one=1; fi
 
   # Parent: an explicitly read parent header wins; else dir fallback.
   if [ -n "$ps" ]; then
@@ -675,8 +679,6 @@ cap_lineage() {
       else
         parent="$root"
       fi
-    elif [ -z "$depth_one" ]; then
-      parent="$root"
     else
       parent="$root"
     fi
@@ -687,13 +689,14 @@ cap_lineage() {
       parent="$root"
     else
       # deeper: sibling <dir>/<Name>.jsonl header id, else root floor
-      local stem sib sph=""
-      stem="$(basename -- "$f" | cut -d. -f1)"
-      if [ -n "$stem" ]; then
-        sib="$(dirname -- "$f")/$stem.jsonl"
-        if [ -f "$sib" ] && [ "$sib" != "$f" ]; then
-          sph="$(head -c 262144 "$sib" | jq -r 'select(.type=="session") | .id // empty' 2>/dev/null | head -1 || true)"
-        fi
+      local sib sph=""
+      # Sibling <dir>/<Name>.jsonl: the parent session file lives in the
+      # dir AROUND the <Name> dir, named by that dir (brief step 4).
+      local pdir
+      pdir="$(dirname -- "$f")"
+      sib="$(dirname -- "$pdir")/$(basename -- "$pdir").jsonl"
+      if [ -f "$sib" ] && [ "$sib" != "$f" ]; then
+        sph="$(head -c 262144 "$sib" | jq -r 'select(.type=="session") | .id // empty' 2>/dev/null | head -1 || true)"
       fi
       if [ -n "$sph" ] && [ "$sph" != "$hid" ] && cap_is_plain_token "$sph"; then
         parent="$sph"
@@ -1587,7 +1590,7 @@ capture_pass() {
   # retried forever. Only a deadline kill / TERM aborts the pass.
   local lin
   lin="$(cap_lineage "$tpath" || true)"
-  [ -n "$lin" ] || lin=''{}''
+  [ -n "$lin" ] || lin='{}'
   cap_bg capt jq -c -s --arg file "$tpath" --argjson lineage "$lin" "$TRANSLATE" "$tmpclean" >"$tmpjsonl" 2>/dev/null
   trc=$?
   if cap_fatal_rc "$trc"; then cap_untrack "$scratch"; return 1; fi
