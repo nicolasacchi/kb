@@ -110,11 +110,7 @@ pub fn exit_code(checks: &[Check], strict: bool) -> i32 {
     for c in checks {
         match c.status {
             CheckStatus::Fail => code = 1,
-            CheckStatus::Warn => {
-                if strict {
-                    code = 1;
-                }
-            }
+            CheckStatus::Warn if strict => code = 1,
             _ => {}
         }
     }

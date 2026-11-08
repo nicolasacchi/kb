@@ -297,6 +297,15 @@ async fn launch_locked<S: Supervisor>(
         "{prelude}{} {GATE_SCRIPT}",
         profiles::env::shell_unset_prefixes_snippet()
     );
+    // The profile argv governs launches of the profile binary (the
+    // common case: argv[0] names the harness, e.g. /usr/bin/omp); any
+    // other argv[0] is an explicit alternate program (test probes)
+    // that runs verbatim, still with the profile env and exit keys.
+    let launch_argv = if is_profile_binary(&spec.argv, &plan.argv) {
+        plan.argv.clone()
+    } else {
+        spec.argv.clone()
+    };
     let args = gate_argv(
         &runner.cfg.tmux_bin,
         &sock,
@@ -305,7 +314,7 @@ async fn launch_locked<S: Supervisor>(
         spec.cols,
         spec.rows,
         &plan_env,
-        &plan.argv,
+        &launch_argv,
         &script,
     );
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -493,6 +502,42 @@ fn flattened_exit_keys(steps: &[profiles::ExitStep]) -> Vec<String> {
         }
     }
     out
+}
+/// Whether the caller's `argv[0]` names the profile binary (its file
+/// name equals the plan's bare binary, e.g. `/usr/bin/omp` -> `omp`).
+fn is_profile_binary(caller_argv: &[String], plan_argv: &[String]) -> bool {
+    let Some(first) = caller_argv.first() else {
+        return false;
+    };
+    let Some(bin) = plan_argv.first() else {
+        return false;
+    };
+    std::path::Path::new(first)
+        .file_name()
+        .is_some_and(|f| f.to_str() == Some(bin.as_str()))
+}
+#[cfg(test)]
+mod profile_binary_tests {
+    use super::*;
+
+    #[test]
+    fn profile_binary_matches_only_the_profile_name() {
+        let plan_argv = vec!["omp".to_string()];
+        assert!(is_profile_binary(&["/usr/bin/omp".to_string()], &plan_argv));
+        assert!(is_profile_binary(
+            &["/home/u/.local/bin/omp".to_string()],
+            &plan_argv
+        ));
+        assert!(!is_profile_binary(
+            &["/usr/bin/python3".to_string()],
+            &plan_argv
+        ));
+        assert!(!is_profile_binary(
+            &["/usr/bin/omp2".to_string()],
+            &plan_argv
+        ));
+        assert!(!is_profile_binary(&[], &plan_argv));
+    }
 }
 
 /// Poll `f` until it returns true or the deadline passes.
