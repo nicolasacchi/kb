@@ -217,7 +217,11 @@ export class Withholder {
       }
       case 'osc': {
         if (c === BEL) {
-          this.finishOsc(ctx);
+          const kind = this.oscKind;
+          const verbatim = this.finishOsc(ctx);
+          // A BEL that belongs to a withheld OSC goes with it; streamed
+          // (kind 2) and verbatim ones keep their terminator byte.
+          if (kind === 2 || verbatim) out.push(BEL);
           this.state = 'ground';
           this.osc = [];
           this.oscKind = 0;
@@ -271,10 +275,10 @@ export class Withholder {
       case 'oscEsc': {
         if (c === BS) {
           const kind = this.oscKind;
-          this.finishOsc(ctx);
-          // The ST belongs to the OSC: streamed OSCs carry it out, withheld
-          // ones take it with them.
-          if (kind === 2 || kind === 0) out.push(ESC, BS);
+          const verbatim = this.finishOsc(ctx);
+          // The ST belongs to the OSC: streamed/verbatim OSCs carry it out,
+          // withheld ones take it with them.
+          if (kind === 2 || verbatim) out.push(ESC, BS);
           this.state = 'ground';
           this.osc = [];
           this.oscKind = 0;
@@ -341,18 +345,12 @@ export class Withholder {
       if (hasMode(new Set([SYNC_MODE]))) this.syncModeOn = final === 0x68;
     }
 
-    const emit = (paramsOut: number[] | null, drop: boolean) => {
-      if (drop) return;
-      if (paramsOut === null) {
-        ctx.out.push(ESC, 0x5b, ...body, final);
-        return;
-      }
-      const head = paramsOut.length === 0 ? '' : `?${paramsOut.join(';')}`;
-      ctx.out.push(...Buffer.from(`${ESC}[${head}${String.fromCharCode(final)}`, 'latin1'));
+    const emit = () => {
+      ctx.out.push(ESC, 0x5b, ...body, final);
     };
 
     if (this.altScreen) {
-      emit(null, false);
+      emit();
       return;
     }
 
@@ -363,39 +361,39 @@ export class Withholder {
         // Rebuild only when every param token is numeric, else keep verbatim.
         if (tokens.every((t) => t !== '' && Number.isInteger(Number(t)))) {
           if (kept.length === 0) return; // drop the sequence entirely
-          ctx.out.push(...Buffer.from(`${ESC}[?${kept.join(';')}h`, 'latin1'));
+          ctx.out.push(ESC, 0x5b, 0x3f);
+          for (const ch of `${kept.join(';')}h`) ctx.out.push(ch.charCodeAt(0));
           return;
         }
-        emit(null, false);
+        emit();
         return;
       }
     }
     if ((prefix === 0x3e || prefix === 0x3c || prefix === 0x3d) && final === 0x75) {
       return; // kitty keyboard push/pop/set: withheld
     }
-    emit(null, false);
+    emit();
   }
 
-  private finishOsc(ctx: { out: number[]; clipboards: ClipboardEvent[]; headAtStart: number }): void {
+  private finishOsc(ctx: { out: number[]; clipboards: ClipboardEvent[]; headAtStart: number }): boolean {
+    // Only called at a terminator. Returns whether the OSC body went out
+    // verbatim into the shared stream (the terminator then goes out too).
     if (this.oscKind === 1) {
       const body = String.fromCharCode(...this.osc.slice(OSC52.length));
       const sep = body.indexOf(';');
       if (sep >= 0) {
         ctx.clipboards.push({ offset: ctx.headAtStart + ctx.out.length, data_b64: body.slice(sep + 1) });
-      } else {
-        // "52;" without a payload separator is not a set: pass it verbatim.
-        ctx.out.push(ESC, 0x5d, ...this.osc);
+        return false;
       }
-      return;
+      // "52;" without a payload separator is not a set: pass it verbatim.
+      ctx.out.push(ESC, 0x5d, ...this.osc);
+      return true;
     }
     if (this.oscKind === 0) {
-      // No terminator bytes beyond the decision window to hold for other
-      // OSCs: they stream verbatim once decided, so a zero-length hold at
-      // finish means the OSC never grew decided? It did: oscKind 0 with
-      // content means the body is still a prefix of "52;" (e.g. "5") — it
-      // passes verbatim as held prefix bytes.
+      // Undecided held bytes (a prefix of "52;", e.g. "5") pass verbatim.
       ctx.out.push(ESC, 0x5d, ...this.osc);
+      return true;
     }
-    // oscKind 2 (streamed) and 3 (dropped) emit nothing at finish.
+    return false;
   }
 }
