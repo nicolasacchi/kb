@@ -112,7 +112,6 @@ export function TerminalPanel(props: TerminalPanelProps) {
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
-    const decoder = new TextDecoder();
     let dead = false;
     let transientTimer: number | null = null;
     let fitTimer: number | null = null;
@@ -164,7 +163,17 @@ export function TerminalPanel(props: TerminalPanelProps) {
       } catch {
         // DOM renderer fallback.
       }
-      installReplyGuards(term.parser);
+      installReplyGuards({
+        registerCsiHandler: (prefix, intermediates, final, handler) =>
+          term.parser.registerCsiHandler({ prefix, intermediates, final }, (params) =>
+            handler(params.toArray()),
+          ),
+        registerOscHandler: (code, handler) => term.parser.registerOscHandler(code, handler),
+        registerDcsHandler: (prefix, intermediates, final, handler) =>
+          term.parser.registerDcsHandler({ prefix, intermediates, final }, (params, data) =>
+            handler(params.toArray(), data ?? ""),
+          ),
+      });
       term.parser.registerOscHandler(52, (data) => {
         if (data.includes("?")) return true;
         const parts = data.split(";");
@@ -197,7 +206,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
         if (sessionRef.current?.sendInput(data) ?? false) lastTypedRef.current = Date.now();
       });
       term.onBinary((bytes) => {
-        if (sessionRef.current?.sendInput(decoder.decode(bytes)) ?? false) {
+        if (sessionRef.current?.sendInput(bytes) ?? false) {
           lastTypedRef.current = Date.now();
         }
       });
@@ -274,7 +283,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
           if (
             profile.cols !== existing.cols ||
             profile.rows !== existing.rows ||
-            profile.scrollback !== existing.scrollback
+            profile.scrollback !== existing.options.scrollback
           ) {
             existing.dispose();
             termRef.current = null;

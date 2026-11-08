@@ -171,7 +171,7 @@ export class TermSession {
   }
 
   start(): void {
-    if (this.disposed || this.phase === "ended" || this.phase === "blocked") return;
+    if (this.disposed || this.isSettled()) return;
     this.phase = "connecting";
     void this.connect();
   }
@@ -205,7 +205,7 @@ export class TermSession {
 
   /** Discard stream position and rejoin FULL (used when the Profile grid changes). */
   rejoinFull(): void {
-    if (this.disposed || this.phase === "ended" || this.phase === "blocked") return;
+    if (this.disposed || this.isSettled()) return;
     this.applied = 0;
     this.clearAllTimers();
     // Bump the generation so the old socket's close handler is ignored
@@ -221,7 +221,7 @@ export class TermSession {
   // ------------------------------------------------------------ connect
 
   private async connect(): Promise<void> {
-    if (this.disposed || this.phase === "ended" || this.phase === "blocked") return;
+    if (this.disposed || this.isSettled()) return;
     const from = this.epoch !== null && this.applied > 0 ? this.applied : undefined;
     const abort = new AbortController();
     this.mintAbort = abort;
@@ -241,7 +241,7 @@ export class TermSession {
       return;
     }
     this.mintAbort = null;
-    if (this.disposed || this.phase === "ended" || this.phase === "blocked") return;
+    if (this.disposed || this.isSettled()) return;
     const url = wsUrl(this.termId, ticket, from);
     const gen = ++this.socketGen;
     const socket = this.fx.openSocket(url, {
@@ -261,7 +261,7 @@ export class TermSession {
   }
 
   private scheduleReconnect(): void {
-    if (this.disposed || this.phase === "ended" || this.phase === "blocked") return;
+    if (this.disposed || this.isSettled()) return;
     this.phase = "reconnecting";
     this.clearWatchdog();
     this.clearLiveReset();
@@ -274,6 +274,13 @@ export class TermSession {
       void this.connect();
     }, delay);
     this.emit();
+  }
+
+  /** Ended/blocked phases never reconnect. Read through a method so the
+  *  `connect()` resume check after `await mintTicket` does not compare
+  *  against a narrowed union (TS2367). */
+  private isSettled(): boolean {
+    return this.phase === "ended" || this.phase === "blocked";
   }
 
   /** Terminal-side block (pin/width mismatch): stop permanently, no retry. */
@@ -293,7 +300,7 @@ export class TermSession {
 
   private onClose(_code: number): void {
     this.socket = null;
-    if (this.disposed || this.phase === "ended" || this.phase === "blocked") return;
+    if (this.disposed || this.isSettled()) return;
     // 1012 (server restart) and every other unexpected close take the
     // same bounded backoff. The socket-generated watchdog going off
     // closes through here too (see armWatchdog).
@@ -316,7 +323,7 @@ export class TermSession {
     this.watchdog = this.fx.setTimer(() => {
       this.watchdog = null;
       if (this.disposed || gen !== this.socketGen || this.socket === null) return;
-      if (this.phase === "ended" || this.phase === "blocked") return;
+      if (this.isSettled()) return;
       // No first applied frame/seed within 1500 ms of open: treat as a
       // dead connection and rejoin (resume from `applied` when known).
       this.closeForRejoin();
@@ -362,7 +369,10 @@ export class TermSession {
 
   private enqueueWrite(data: Uint8Array): void {
     this.writeQueue = this.writeQueue.then(() => {
-      const { promise, resolve } = Promise.withResolvers<void>();
+      let resolve!: () => void;
+      const promise = new Promise<void>((res) => {
+        resolve = res;
+      });
       this.sink.write(data, resolve);
       return promise;
     });
