@@ -556,6 +556,19 @@ pub fn image_label(mime: &str, sha256: Option<&str>, inline_bytes: Option<u32>) 
     }
 }
 
+/// An `image/` mime is trustworthy only when it is a plain token:
+/// `image/` plus a subtype of token chars, capped so a hostile transcript
+/// cannot smuggle terminal controls (newline/ESC) into a presenter.
+/// Anything else counts as "no mime" (the sha fallback still applies).
+fn is_valid_image_mime(m: &str) -> bool {
+    m.len() > 6
+        && m.len() <= 64
+        && m.starts_with("image/")
+        && m.bytes().all(|c| {
+            c.is_ascii_alphanumeric() || matches!(c, b'/' | b'-' | b'_' | b'.' | b'+' | b'*')
+        })
+}
+
 /// Build an [`Item::Image`] from a transcript image content block, or
 /// `None` when the block names neither an `image/` mime nor a validated
 /// blob sha (the caller then keeps the legacy "[image attachment]"
@@ -568,12 +581,12 @@ fn image_item_from_block(b: &Value) -> Option<Item> {
     let mime = source
         .and_then(|s| s.get("media_type"))
         .and_then(|x| x.as_str())
-        .filter(|m| !m.is_empty() && m.starts_with("image/"))
+        .filter(|m| is_valid_image_mime(m))
         .or_else(|| {
             ["mimeType", "mime_type", "media_type"]
                 .iter()
                 .filter_map(|k| b.get(*k).and_then(|x| x.as_str()))
-                .find(|m| !m.is_empty() && m.starts_with("image/"))
+                .find(|m| is_valid_image_mime(m))
         });
     let sha256 = source
         .and_then(|s| s.get("sha256"))
@@ -4547,6 +4560,142 @@ mod tests {
                 )
             }
             other => panic!("valid sha must be kept, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sha_only_image_defaults_to_wildcard_mime() {
+        // No mime anywhere: the (None, Some) fallback arm still yields an
+        // Image, borrowing the wildcard mime for T21's fetchable refs.
+        let item = image_of_block(
+            r#"{"type":"image","source":{"type":"blob_ref","sha256":"abababababababababababababababababababababababababababababababab"}}"#,
+        );
+        match item {
+            Item::Image { mime, sha256, .. } => {
+                assert_eq!(mime, "image/*");
+                assert_eq!(
+                    sha256.as_deref(),
+                    Some("abababababababababababababababababababababababababababababababab")
+                );
+            }
+            other => panic!("sha-only block must yield Item::Image, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn top_level_mime_type_yields_image() {
+        // The mime lives at the block top level (omp capture shape), with
+        // only the sha under source: the mimeType lookup must find it.
+        let item = image_of_block(
+            r#"{"type":"image","mimeType":"image/png","source":{"type":"blob_ref","sha256":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"}}"#,
+        );
+        match item {
+            Item::Image { mime, sha256, .. } => {
+                assert_eq!(mime, "image/png");
+                assert_eq!(
+                    sha256.as_deref(),
+                    Some("cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd")
+                );
+            }
+            other => panic!("top-level mimeType must yield Item::Image, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn image_dimensions_precedence_string_negative_and_huge() {
+        // Top-level wins over source when both name the dimension.
+        let both = image_of_block(
+            r#"{"type":"image","source":{"type":"blob_ref","media_type":"image/png","sha256":"abababababababababababababababababababababababababababababababab","width":100,"height":100},"width":800,"height":600}"#,
+        );
+        match both {
+            Item::Image { width, height, .. } => {
+                assert_eq!(width, Some(800));
+                assert_eq!(height, Some(600));
+            }
+            other => panic!("expected Item::Image, got {other:?}"),
+        }
+        // Source-located dims are used when the top level is silent.
+        let sourced = image_of_block(
+            r#"{"type":"image","source":{"type":"blob_ref","media_type":"image/png","sha256":"abababababababababababababababababababababababababababababababab","width":640,"height":480}}"#,
+        );
+        match sourced {
+            Item::Image { width, height, .. } => {
+                assert_eq!(width, Some(640));
+                assert_eq!(height, Some(480));
+            }
+            other => panic!("expected Item::Image, got {other:?}"),
+        }
+        // String dims are not numbers: None.
+        let stringy = image_of_block(
+            r#"{"type":"image","source":{"type":"blob_ref","media_type":"image/png","sha256":"abababababababababababababababababababababababababababababababab"},"width":"800","height":"600"}"#,
+        );
+        match stringy {
+            Item::Image { width, height, .. } => {
+                assert_eq!(width, None);
+                assert_eq!(height, None);
+            }
+            other => panic!("expected Item::Image, got {other:?}"),
+        }
+        // Huge dims saturate at u32::MAX instead of wrapping or panicking.
+        let huge = image_of_block(
+            r#"{"type":"image","source":{"type":"blob_ref","media_type":"image/png","sha256":"abababababababababababababababababababababababababababababababab"},"width":5000000000,"height":5000000000}"#,
+        );
+        match huge {
+            Item::Image { width, height, .. } => {
+                assert_eq!(width, Some(u32::MAX));
+                assert_eq!(height, Some(u32::MAX));
+            }
+            other => panic!("expected Item::Image, got {other:?}"),
+        }
+        // Negative dims are not u64 numbers: None.
+        let negative = image_of_block(
+            r#"{"type":"image","source":{"type":"blob_ref","media_type":"image/png","sha256":"abababababababababababababababababababababababababababababababab"},"width":-5,"height":-10}"#,
+        );
+        match negative {
+            Item::Image { width, height, .. } => {
+                assert_eq!(width, None);
+                assert_eq!(height, None);
+            }
+            other => panic!("expected Item::Image, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn hostile_mime_is_rejected_at_the_view() {
+        // A transcript-controlled mime carrying newline + ESC would inject
+        // into terminal presenters. Alone it names no image: the assistant
+        // arm keeps the legacy placeholder.
+        let hostile = image_of_block(
+            r#"{"type":"image","source":{"type":"blob_ref","media_type":"image/x\n\u001b[2J"}}"#,
+        );
+        match hostile {
+            Item::Prose { text } => assert_eq!(text, "[image attachment]"),
+            other => panic!("hostile-only block must fall back to Prose, got {other:?}"),
+        }
+        // With a valid sha the same block still yields an Image on the
+        // wildcard mime, never the hostile string.
+        let hostile_sha = image_of_block(
+            r#"{"type":"image","source":{"type":"blob_ref","media_type":"image/x\n\u001b[2J","sha256":"abababababababababababababababababababababababababababababababab"}}"#,
+        );
+        match hostile_sha {
+            Item::Image { mime, sha256, .. } => {
+                assert_eq!(mime, "image/*");
+                assert_eq!(
+                    sha256.as_deref(),
+                    Some("abababababababababababababababababababababababababababababababab")
+                );
+            }
+            other => panic!("hostile+sha block must yield wildcard Image, got {other:?}"),
+        }
+        // An overlong mime is likewise not a mime.
+        let long_mime = "a".repeat(70);
+        let long_block = format!(
+            r#"{{"type":"image","source":{{"type":"blob_ref","media_type":"image/{long_mime}"}}}}"#
+        );
+        let long_item = image_of_block(&long_block);
+        match long_item {
+            Item::Prose { text } => assert_eq!(text, "[image attachment]"),
+            other => panic!("overlong mime must fall back to Prose, got {other:?}"),
         }
     }
 
