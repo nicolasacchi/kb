@@ -1184,6 +1184,13 @@ pub enum StorageMsg {
         parent_of: Option<String>,
         reply: oneshot::Sender<Result<u64>>,
     },
+    /// A3 — the ids of a session's children
+    /// (`Db::sessions_children_ids`).
+    SessionsChildrenIds {
+        root_of: Option<String>,
+        parent_of: Option<String>,
+        reply: oneshot::Sender<Result<Vec<String>>>,
+    },
     /// A3 — resume targets per session id (`Db::sessions_root_of`).
     SessionsRootOf {
         ids: Vec<String>,
@@ -3558,6 +3565,16 @@ impl StorageActor {
                         .sessions_children_count(root_of.as_deref(), parent_of.as_deref()),
                 );
             }
+            StorageMsg::SessionsChildrenIds {
+                root_of,
+                parent_of,
+                reply,
+            } => {
+                let _ = reply.send(
+                    self.db
+                        .sessions_children_ids(root_of.as_deref(), parent_of.as_deref()),
+                );
+            }
             StorageMsg::SessionsRootOf { ids, reply } => {
                 let _ = reply.send(self.db.sessions_root_of(&ids));
             }
@@ -5659,6 +5676,20 @@ impl StorageHandle {
         parent_of: Option<String>,
     ) -> Result<u64> {
         self.send_and_await(|reply| StorageMsg::SessionsChildrenCount {
+            root_of,
+            parent_of,
+            reply,
+        })
+        .await
+    }
+    /// A3 — the ids of a session's children (see
+    /// `Db::sessions_children_ids`).
+    pub async fn sessions_children_ids(
+        &self,
+        root_of: Option<String>,
+        parent_of: Option<String>,
+    ) -> Result<Vec<String>> {
+        self.send_and_await(|reply| StorageMsg::SessionsChildrenIds {
             root_of,
             parent_of,
             reply,
