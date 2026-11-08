@@ -12,7 +12,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, unlinkSync, chmodSync } from 'node:fs';
-import { createServer, type Server, type Socket } from 'node:net';
+import { connect, createServer, type Server, type Socket } from 'node:net';
 import { join as pathJoin } from 'node:path';
 import { buildMediaStub, type GfxItem, type ImageDef } from './graphics.ts';
 import { Ring } from './ring.ts';
@@ -71,6 +71,8 @@ export interface TapServerOpts {
   now?: () => number;
   quiesceMs?: number;
   joinWaitMs?: number;
+  /** Test only: shrink the ring so >cap chunk handling is reachable. */
+  ringCap?: number;
 }
 
 interface PendingControl {
@@ -126,8 +128,29 @@ function envNumber(name: string, fallback: number): number {
   return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 
+/** Resume coordinates must be safe integers >= 0 ("bad-frame" otherwise). */
+function validOffset(value: unknown, name: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new FrameError(`bad-frame: resumefrom.${name} must be a safe integer >= 0`);
+  }
+  return value as number;
+}
+
+function validEpoch(value: unknown): string {
+  if (typeof value !== 'string') throw new FrameError('bad-frame: resumefrom.epoch must be a string');
+  return value;
+}
+
+/** A viewer id that wrapS2C can carry: a 1..255-byte string. */
+function validViewerId(value: unknown, t: string): string {
+  if (typeof value !== 'string' || value.length === 0 || Buffer.byteLength(value, 'utf-8') > 255) {
+    throw new FrameError(`bad-frame: ${t}.viewer must be a 1..255-byte string`);
+  }
+  return value;
+}
+
 export class TapServer {
-  readonly ring = new Ring();
+  readonly ring: Ring;
   readonly withholder = new Withholder();
   epoch: string;
   readonly sockPath: string;
@@ -171,6 +194,7 @@ export class TapServer {
     this.quiesceMs = opts.quiesceMs ?? envNumber('KB_TAP_QUIESCE_MS', DEFAULT_QUISCE_MS);
     this.joinWaitMs = opts.joinWaitMs ?? envNumber('KB_TAP_JOIN_WAIT_MS', DEFAULT_JOIN_WAIT_MS);
     this.lastFeedAt = this.now();
+    this.ring = new Ring(opts.ringCap);
   }
 
   get head(): number {
@@ -188,6 +212,11 @@ export class TapServer {
         this.feedBytes(item.data);
       } else if (item.kind === 'imagedef') {
         const def = item.def;
+        // Keep only the latest generation per id: superseded gens are not
+        // twin-buffer state and must not accumulate within the epoch.
+        for (const [key, prev] of this.defsByKey) {
+          if (prev.id === def.id && prev.gen !== def.gen) this.defsByKey.delete(key);
+        }
         this.defsByKey.set(`${def.id}:${def.gen}`, def);
         this.recordMarker((seq, offset) =>
           encodeServerFrame({ t: 'imagedef', seq, id: def.id, gen: def.gen, sha256: def.sha256, mime: def.mime, w: def.w, h: def.h, cols: def.cols, rows: def.rows, offset }),
@@ -219,13 +248,15 @@ export class TapServer {
     if (data.length === 0) return;
     const { bytes, clipboards } = this.withholder.push(data, this.ring.head);
     if (bytes.length > 0) {
-      const start = this.ring.push(bytes);
+      this.ring.push(bytes);
       const end = this.ring.head;
       if (this.twin !== null) {
-        const chunk = this.ring.read(start, bytes.length);
+        // Feed the transformed bytes themselves, not a ring re-read: a
+        // chunk larger than the ring cap retains only its tail in the
+        // ring, but the twin must parse the whole stream.
         const twin = this.twin;
         this.twinTail = this.twinTail
-          .then(() => twin.feed(chunk ?? new Uint8Array(0)))
+          .then(() => twin.feed(bytes))
           .then(() => {
             if (end > this.twinOffset) this.twinOffset = end;
           })
@@ -304,7 +335,13 @@ export class TapServer {
       }
       await sleep(Math.min(10, Math.max(1, deadline - this.now())));
     }
-    this.joinNow(viewer);
+    try {
+      this.joinNow(viewer);
+    } catch {
+      // joinNow threw (no twin, oversize seed?): unregister, never park.
+      this.closeViewer(viewer);
+      return { ok: false, reason: 'error' };
+    }
     if (degraded) this.stats.degradedJoins++;
     return { ok: true };
   }
@@ -327,10 +364,11 @@ export class TapServer {
     // In range, synchronous registration: hello only, then replay.
     const from = Math.max(this.ring.tail, offset - Math.max(0, this.rewind));
     viewer.sentOffset = from;
-    viewer.pending = this.ring
-      .markersAfter(mseq)
-      .filter((m) => m.offset >= from)
-      .map((m) => ({ offset: m.offset, frame: m.frame }));
+    // Replay exactly markersAfter(mseq), in order. No offset filter: a
+    // marker with offset < from but seq > mseq was never applied by this
+    // viewer and is still owed (serviceViewer emits it before the first
+    // byte at `from` because its offset <= sentOffset).
+    viewer.pending = this.ring.markersAfter(mseq).map((m) => ({ offset: m.offset, frame: m.frame }));
     viewer.state = 'live';
     this.writeText(viewer.connection, viewer.id, encodeServerFrame({ t: 'hello', proto: 'kb-term/1', session: this.session, epoch: this.epoch, harness: this.harness, bound_sid: this.boundSid }));
     this.serviceViewer(viewer);
@@ -456,45 +494,65 @@ export class TapServer {
     if (value.t === 'resumefrom') {
       const viewer = this.viewers.get(id);
       if (viewer === undefined) return;
-      this.handleResume(viewer, Number(value.offset ?? 0), Number(value.mseq ?? 0), String(value.epoch ?? ''));
+      this.handleResume(viewer, validOffset(value.offset, 'offset'), validOffset(value.mseq, 'mseq'), validEpoch(value.epoch));
       return;
     }
     // ping and any other C->S text frame: accepted, no reply.
   }
 
   private handleControl(conn: Connection, msg: ControlMessage): void {
+    // msg came from JSON.parse of the control body: re-validate at this
+    // boundary (the typed cast above proves nothing).
     if (msg.t === 'viewer-open') {
-      const existing = this.viewers.get(msg.viewer);
+      const id = validViewerId((msg as { viewer?: unknown }).viewer, 'viewer-open');
+      const profile = (msg as { profile?: unknown }).profile;
+      if (profile !== 'desktop' && profile !== 'phone') {
+        throw new FrameError('bad-frame: viewer-open.profile must be desktop|phone');
+      }
+      const rawResume = (msg as { resume?: unknown }).resume;
+      let resume: { offset: number; mseq: number; epoch: string } | null = null;
+      if (rawResume !== null) {
+        if (typeof rawResume !== 'object' || rawResume === null) {
+          throw new FrameError('bad-frame: viewer-open.resume must be null or an object');
+        }
+        const r = rawResume as { offset?: unknown; mseq?: unknown; epoch?: unknown };
+        resume = { offset: validOffset(r.offset, 'resume.offset'), mseq: validOffset(r.mseq, 'resume.mseq'), epoch: validEpoch(r.epoch) };
+      }
+      const existing = this.viewers.get(id);
       if (existing !== undefined) {
-        existing.connection.viewers.delete(msg.viewer);
+        existing.connection.viewers.delete(id);
       }
       const viewer: Viewer = {
-        id: msg.viewer,
-        profile: msg.profile,
+        id,
+        profile,
         connection: conn,
         sentOffset: 0,
-        lastTypedAt: 0,
+        // Never typed: -Infinity keeps the clipboard window closed even on
+        // tiny fake clocks (a 0 sentinel would fake a recent typing there).
+        lastTypedAt: -Infinity,
         pending: [],
         state: 'joining',
       };
-      this.viewers.set(msg.viewer, viewer);
-      conn.viewers.add(msg.viewer);
-      if (msg.resume === null) {
+      this.viewers.set(id, viewer);
+      conn.viewers.add(id);
+      if (resume === null) {
         this.requestJoin(viewer).catch(() => {
           // A failed join surfaces as a busy/closed viewer; nothing to retry.
         });
       } else {
-        this.handleResume(viewer, msg.resume.offset, msg.resume.mseq, msg.resume.epoch);
+        this.handleResume(viewer, resume.offset, resume.mseq, resume.epoch);
       }
       return;
     }
     if (msg.t === 'viewer-close') {
-      const viewer = this.viewers.get(msg.viewer);
+      const id = validViewerId((msg as { viewer?: unknown }).viewer, 'viewer-close');
+      const viewer = this.viewers.get(id);
       if (viewer !== undefined) this.closeViewer(viewer);
       return;
     }
     if (msg.t === 'typed') {
-      const viewer = this.viewers.get(msg.viewer);
+      const id = validViewerId((msg as { viewer?: unknown }).viewer, 'typed');
+      const viewer = this.viewers.get(id);
       if (viewer !== undefined) viewer.lastTypedAt = this.now();
       return;
     }
@@ -505,21 +563,47 @@ export class TapServer {
     }
   }
 
-  /** Feed raw bytes into one attached connection (the socket data path). */
+  /** Feed raw bytes into one attached connection (the socket data path). A
+   * malformed or oversize envelope closes only this connection. */
   feedTransport(conn: Connection, chunk: Uint8Array): void {
-    for (const env of conn.decoder.push(chunk)) this.handleEnvelope(conn, env);
+    try {
+      for (const env of conn.decoder.push(chunk)) this.handleEnvelope(conn, env);
+    } catch {
+      conn.transport.close();
+      this.closeConnection(conn);
+    }
   }
 
   // ------------------------------------------------------------- real socket
 
-  /** Listen on `${runDir}/s/<session>/tap.sock` with mode 0600. */
-  async listen(): Promise<void> {
-    mkdirSync(pathJoin(this.sockPath, '..'), { recursive: true });
+  /**
+   * Brief section 6: remove a stale socket file on boot only if nothing
+   * answers on it. If a live tap answers, refuse (never steal its path).
+   */
+  private async refuseWhenLive(): Promise<void> {
+    const { promise, resolve } = Promise.withResolvers<boolean>();
+    const probe = connect(this.sockPath);
+    const done = (v: boolean) => {
+      probe.destroy();
+      resolve(v);
+    };
+    probe.once('connect', () => done(true));
+    probe.once('error', () => done(false));
+    // No answer within 2 s: assume live; the refusal is the safe side.
+    probe.setTimeout(2000, () => done(true));
+    const live = await promise;
+    if (live) throw new Error(`tap socket ${this.sockPath} is served by a live tap`);
     try {
       unlinkSync(this.sockPath);
     } catch {
       // No stale socket: fresh boot.
     }
+  }
+
+  /** Listen on `${runDir}/s/<session>/tap.sock` with mode 0600. */
+  async listen(): Promise<void> {
+    mkdirSync(pathJoin(this.sockPath, '..'), { recursive: true });
+    await this.refuseWhenLive();
     const previous = process.umask();
     process.umask(0o177); // no wider-mode window: 0600 from birth
     try {
@@ -528,7 +612,20 @@ export class TapServer {
         socket.on('error', () => socket.destroy());
         const transport = new NetTransport(socket);
         const conn = this.attachTransport(transport);
-        socket.on('data', (chunk: Buffer) => this.feedTransport(conn, chunk));
+        socket.on('data', (chunk: Buffer) => {
+          try {
+            this.feedTransport(conn, chunk);
+          } catch {
+            // feedTransport already closes only the offender; this is belt
+            // and braces against an unexpected throw.
+            try {
+              conn.transport.close();
+            } catch {
+              // Already gone.
+            }
+            this.closeConnection(conn);
+          }
+        });
       });
       this.server.on('error', reject);
       this.server.listen(this.sockPath, () => {

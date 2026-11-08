@@ -12,10 +12,11 @@
 // post-withhold stream, so a viewer (or the twin's serialized mode tail)
 // can never be switched into a mouse mode that eats wheel scrolling.
 //
-// Held-back bytes are bounded: CSI <= 64 B, OSC prefix window <= 256 B.
-// Over-cap CSI and OSC sequences pass verbatim EXCEPT OSC 52, which is
-// streamed through the router (its payload never enters the ring path) and
-// is dropped entirely above 1 MiB.
+// Held-back bytes are bounded: CSI <= 64 B; an OSC is decided within 3
+// bytes ("52;" prefix), so at most 3 OSC bytes are ever held before the
+// sequence either streams verbatim or is collected as OSC 52. Over-cap
+// CSI passes verbatim, EXCEPT OSC 52 whose payload never enters the ring
+// path (streamed through the router) and is dropped entirely above 1 MiB.
 //
 // Also tracked here (it sees every CSI): the alt screen (CSI ? 1049/1047/47
 // h|l) and synchronized output (CSI ?2026h/l), which T7 joins use as the
@@ -39,7 +40,6 @@ const SUB = 0x1a;
 const BS = 0x5c;
 
 const CSI_CAP = 64;
-const OSC_PREFIX_CAP = 256;
 const OSC52_CAP = 1024 * 1024;
 
 const MOUSE_MODES = new Set([9, 1000, 1001, 1002, 1003, 1005, 1006, 1015, 1016]);
@@ -69,7 +69,7 @@ export class Withholder {
     return this.syncModeOn;
   }
 
-  /** Held-back bytes not yet decided/emitted. Bounded by CSI_CAP/OSC_PREFIX_CAP. */
+  /** Held-back bytes not yet decided/emitted: <= CSI_CAP, or an OSC prefix of <= 3 bytes. */
   pending(): number {
     return this.csi.length + this.osc.length + (this.state === 'esc' || this.state === 'oscEsc' || this.state === 'strEsc' ? 1 : 0);
   }
@@ -103,12 +103,16 @@ export class Withholder {
   /**
    * End of stream: emit held bytes verbatim (best effort; production calls
    * this only at tap shutdown). Partial sequences are not interpreted.
+   * Over-cap CSI has already streamed out, so it adds nothing; a partial
+   * OSC 52 (still held in full) goes out verbatim like any undecided OSC.
    */
   flush(): WithholdResult {
     const out: number[] = [];
     if (this.state === 'esc' || this.state === 'oscEsc' || this.state === 'strEsc') out.push(ESC);
-    else if (this.state === 'csi' || this.state === 'csiOvercap') out.push(ESC, 0x5b, ...this.csi);
-    else if (this.state === 'osc' && this.oscKind === 0) out.push(ESC, 0x5d, ...this.osc);
+    else if (this.state === 'csi') out.push(ESC, 0x5b, ...this.csi);
+    else if (this.state === 'osc' && (this.oscKind === 0 || this.oscKind === 1)) {
+      out.push(ESC, 0x5d, ...this.osc);
+    }
     this.state = 'ground';
     this.csi = [];
     this.osc = [];
@@ -255,10 +259,6 @@ export class Withholder {
           if (s === OSC52) {
             this.oscKind = 1;
           } else if (!OSC52.startsWith(s)) {
-            this.oscKind = 2;
-            out.push(ESC, 0x5d, ...this.osc);
-            this.osc = [];
-          } else if (this.osc.length > OSC_PREFIX_CAP) {
             this.oscKind = 2;
             out.push(ESC, 0x5d, ...this.osc);
             this.osc = [];
