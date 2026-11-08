@@ -535,18 +535,6 @@ fn term_int_reseed_after_long_pause() {
     }
     bytes.truncate(30_000_000);
     std::fs::write(&flood, &bytes).expect("write flood");
-    // Meter the flood so pane output is still flowing for the whole stall
-    // window (~750 KB/s over ~40 s): tmux's pause-after logic engages on a
-    // sustained lag, and a 30 MB instant burst can finish (and be queued)
-    // before the watch window opens. The driver SIGSTOPs the tap ~10ms
-    // after the ready file appears, so by the time %pause is due the
-    // client is seconds behind a flowing stream.
-    let feed = srv._dir.file("feed2.py");
-    std::fs::write(
-        &feed,
-        "import sys,time\nf=open(sys.argv[1],'rb')\no=sys.stdout.buffer\nwhile True:\n    d=f.read(131072)\n    if not d: break\n    o.write(d)\n    o.flush()\n    time.sleep(0.175)\no.flush()\ntime.sleep(300)\n",
-    )
-    .expect("write feed2.py");
     let ready = srv._dir.file("ready");
     let pane = srv.new_session(
         "s",
@@ -554,9 +542,10 @@ fn term_int_reseed_after_long_pause() {
         30,
         &ready,
         &[
-            "python3",
-            "-I",
-            feed.to_str().unwrap(),
+            "sh",
+            "-c",
+            "cat \"$1\"; sleep 300",
+            "_",
             flood.to_str().unwrap(),
         ],
     );
@@ -611,13 +600,14 @@ fn term_int_reseed_after_long_pause() {
             }
         }
         // The driver SIGSTOPs itself once the ready file appears; resume it
-        // only after it has verifiably stopped for an extended window
-        // (/proc State poll), so pause-after=2 has ample time to elapse
-        // under the stopped process even on slow pipelines. Repeated
-        // SIGCONTs: a SIGCONT to a running process is a no-op; fallback
-        // resumes 45s after ready anyway, covering a /proc poll failure.
-        // The eprintln markers land in this test's stderr, so a failure
-        // log shows which stage ran.
+        // only after it has verifiably stopped for well over pause-after
+        // (2s) per the /proc State poll, so the stall lasts long enough
+        // for a full client backlog to build up (the driver then pauses
+        // the pane explicitly, since tmux 3.7c does not engage pause-after
+        // here; see the PR body). Repeated SIGCONTs: a SIGCONT to a
+        // running process is a no-op; fallback resumes 7s after ready
+        // anyway, covering a /proc poll failure. The eprintln markers land
+        // in this test's stderr, so a failure log shows which stage ran.
         if stalled_at.is_some() && stopped_at.is_none() {
             let st =
                 std::fs::read_to_string(format!("/proc/{}/status", child.id())).unwrap_or_default();
@@ -630,8 +620,8 @@ fn term_int_reseed_after_long_pause() {
             }
         }
         let resume_now = match (stalled_at, stopped_at) {
-            (Some(_), Some(t_stop)) => t_stop.elapsed() >= Duration::from_millis(40000),
-            (Some(t_ready), None) => t_ready.elapsed() >= Duration::from_millis(45000),
+            (Some(_), Some(t_stop)) => t_stop.elapsed() >= Duration::from_millis(5000),
+            (Some(t_ready), None) => t_ready.elapsed() >= Duration::from_millis(7000),
             (None, _) => false,
         };
         if resume_now && last_cont.is_none_or(|t| t.elapsed() >= Duration::from_millis(500)) {

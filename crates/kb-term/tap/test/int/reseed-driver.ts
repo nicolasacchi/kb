@@ -5,7 +5,7 @@
 // Prints one JSON object as the LAST stdout line (progress goes to stderr).
 
 import { readFileSync, writeFileSync } from 'node:fs';
-import { Control } from '../../src/control.ts';
+import { Control, pauseCommand } from '../../src/control.ts';
 import { makeTwin, type Twin } from '../../src/twin.ts';
 import { Reseeder, type ReseededResult } from '../../src/reseed.ts';
 import { compareBuffers, diffState, dumpRows, stateOf, termOf } from '../support/compare.ts';
@@ -88,8 +88,9 @@ function compareTwins(reseeded: Twin, ref: Twin, result: ReseededResult, stats: 
     c.rowsDiff + Object.values(c.cells).reduce((x, y) => x + y, 0);
   const cellsDiff = sumCells(normal) + (alt ? sumCells(alt) : 0);
   const sd = diffState(stateOf(a), stateOf(b));
+  const ok = cellsDiff === 0;
   return {
-    ok: cellsDiff === 0,
+    ok,
     cellsDiff,
     stateDiff: sd.length,
     stateDiffClasses: [...new Set(sd.map((d) => d.cls))].sort(),
@@ -105,10 +106,14 @@ function compareTwins(reseeded: Twin, ref: Twin, result: ReseededResult, stats: 
     b: result.b,
     examples: normal.examples,
     altExamples: alt?.examples ?? null,
-    // Diagnostics only (nothing asserts on these fields); capped at 60 rows
-    // so a 11K-line buffer does not balloon the driver's JSON output.
-    rowsRef: dumpRows(b, 'normal', 60),
-    rowsGot: dumpRows(a, 'normal', 60),
+    // Diagnostics only; dumped ONLY on mismatch (and capped at 4 rows) --
+    // the full dumps made the driver's JSON larger than the OS pipe
+    // buffer (64 KiB): with stdout piped and Rust reading only on
+    // process exit, the write blocked forever and the driver hung until
+    // the Rust deadline killed it (four CI runs, text always at the
+    // deadline). The gated fields (ok/cellsDiff/hash) are unaffected.
+    rowsRef: ok ? [] : dumpRows(b, 'normal', 4),
+    rowsGot: ok ? [] : dumpRows(a, 'normal', 4),
   };
 }
 
@@ -235,46 +240,45 @@ async function main(): Promise<void> {
       case 'pause': {
         // Stall the whole driver process BEFORE the flood starts: SIGSTOP
         // freezes every thread of the tap, so the kernel pipe is never read
-        // and tmux's pause-after=2 timer elapses for real; then the Rust
-        // test resumes us with SIGCONT after ~3.5s (see
-        // term_int_reseed_after_long_pause). A JS-side read hold
-        // (Control.setHeld) was tried first, but %pause never fired on
-        // tmux 3.7c: Bun's stream may prefetch the pipe in userspace, so
-        // tmux never saw a stall (CI run 42430279772). SIGSTOP is an
-        // OS-level stall -- no userspace buffering can drain the pipe.
+        // and a full client backlog builds up in tmux's queue while Rust
+        // polls RSS. `pause-after=2` is set on the client (verified
+        // accepted below) but tmux 3.7c never engaged its auto-pause in
+        // >40s of verified stopped-client lag (CI 42439069928: the entire
+        // 30MB flood drained post-resume undropped) -- see the PR body. The
+        // documented per-pane pause (`refresh-client -A '<pane>:pause'`,
+        // pauseCommand) pauses the pane deterministically here so the same
+        // %pause -> continue -> reseed recovery path is exercised.
         note('STALLED');
         touchReady();
         const bytesAtStop = emittedTotal;
         proc.kill(proc.pid, 'SIGSTOP');
         // Resumed by Rust's SIGCONT (Rust verifies /proc State stopped).
         note('RESUMED');
+        if (control.lastPauseAfterError) {
+          throw new Error(`pause-after=2 was rejected: ${control.lastPauseAfterError}`);
+        }
         // Registration is synchronous, so it completes before the event
         // loop delivers the %pause line tmux queued while we were stopped.
         const { promise: pausedP, resolve: pausedResolve } = Promise.withResolvers<string>();
         control.onPause((p) => {
           pausedResolve(p);
         });
-        // %pause must arrive within 30s of the resume; if the client never
-        // pauses, report that instead of burning the 120s lane budget.
-        // A failed pause-after command (recorded by Control) is quoted in
-        // the error so the lane shows whether the flag was accepted, and so
-        // is how much output flowed after the resume (a flowing stream with
-        // no %pause means pause-after never engaged).
+        // Explicit pane pause (quoted, like the continue).
+        await control.cmd(pauseCommand(pane));
+        // %pause must arrive within 10s of the pause command.
         const pauseResult = await Promise.race([
           pausedP.then(() => 'PAUSED' as const),
-          sleep(30_000).then(() => 'TIMEOUT' as const),
+          sleep(10_000).then(() => 'TIMEOUT' as const),
         ]);
         if (pauseResult === 'TIMEOUT') {
           throw new Error(
-            `no %pause within 30s of resume (post-resume ${emittedTotal - bytesAtStop} bytes${control.lastPauseAfterError ? `; pause-after=2 failed: ${control.lastPauseAfterError}` : ''})`,
+            `no %pause within 10s of explicit pane pause (post-resume ${emittedTotal - bytesAtStop} bytes)`,
           );
         }
         note('PAUSED');
-        if (control.lastPauseAfterError) note(`WARN pause-after=2 error: ${control.lastPauseAfterError}`);
-        // The flood keeps flowing at a metered rate; the pause dropped one
-        // client copy. Wait until the pane settles (flood done) before the
-        // reseed, so the capture holds the complete state and a partial
-        // tail cannot hide in the post-capture queue.
+        // Wait until the pane settles (flood done) before the reseed, so
+        // the capture holds the complete state and a partial tail cannot
+        // hide in the post-capture queue.
         await waitSettled();
         const r = await reseeder.reseed(pane);
         note('RESEEDED');

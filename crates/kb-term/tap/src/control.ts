@@ -33,6 +33,12 @@ export const PANE_ID_RE = /^%\d+$/;
 export function continueCommand(pane: string): string {
   return `refresh-client -A '${pane}:continue'`;
 }
+/** Exact wire form for pausing a pane explicitly (pane QUOTED, same
+ * convention as the continue). Used by the term-int pause test to trigger
+ * the documented per-pane pause deterministically. */
+export function pauseCommand(pane: string): string {
+  return `refresh-client -A '${pane}:pause'`;
+}
 
 /** Exact argv for the control attach. Production never influences size. */
 export function attachArgv(tmuxBin: string, socketPath: string, sessionName: string): string[] {

@@ -191,6 +191,13 @@ test('pause_sends_quoted_continue_then_reseeds', async () => {
   c.stop();
 });
 
+test('pause_sends_quoted_pause', () => {
+  const line = "refresh-client -A '%0:pause'";
+  expect(pauseCommand('%0')).toBe(line);
+  // the unquoted form fails with a %error parse (same rule as continue).
+  expect(line).not.toContain('refresh-client -A %0:pause');
+});
+
 test('exit_too_far_behind_needs_reseed', () => {
   expect(exitNeedsReseed('too far behind')).toBe(true);
   expect(exitNeedsReseed('normal exit')).toBe(false);
