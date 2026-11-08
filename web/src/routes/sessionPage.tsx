@@ -9,6 +9,7 @@ import { useMemo, type ReactNode } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { StateCard } from "@kb/ui/StateCard";
+import { Icon } from "@kb/ui/icons";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { useNowTick } from "../hooks/useNowTick";
 import { useSessionCard } from "../hooks/useSessionCard";
@@ -19,7 +20,7 @@ import {
   type ChildrenLane,
   type ChildrenResponse,
 } from "../api/sessions";
-import { TerminalSlot } from "../components/TerminalSlot";
+import { TerminalSlot, shouldRenderTerminal } from "../components/TerminalSlot";
 import { ChecksSection, CommitsSection, ResumeCommand } from "./sessions";
 import { sessionDisplayName } from "../lib/sessionDisplayName";
 import {
@@ -97,10 +98,10 @@ function ChildrenSection({
     queryKey: ["sessions", "card", sid, "children"] as const,
     enabled: lane.available,
     initialPageParam: null as string | null,
-    queryFn: ({ pageParam }): Promise<ChildrenResponse> =>
+    queryFn: ({ pageParam, signal }): Promise<ChildrenResponse> =>
       pageParam === null
         ? Promise.resolve(firstPage)
-        : fetchSessionChildren(sid, { after: pageParam, limit: 50 }),
+        : fetchSessionChildren(sid, { after: pageParam, limit: 50 }, signal),
     getNextPageParam: (last: ChildrenResponse): string | undefined =>
       last.next_after ?? undefined,
   });
@@ -212,7 +213,7 @@ export default function SessionPage() {
             to={from ?? `/sessions?focus=${encodeURIComponent(sid)}`}
             data-testid="session-back"
           >
-            ← back
+            <Icon.ArrowLeft aria-hidden="true" /> back
           </Link>
           {treeTarget && treeTarget !== sid && (
             <>
@@ -248,7 +249,7 @@ export default function SessionPage() {
         {lead && <p className="kb-sp__lead">{lead.text}</p>}
       </header>
 
-      {card.terminal.available && (
+      {shouldRenderTerminal(card.terminal) && (
         <details
           id="sec-terminal"
           data-testid="session-sec-terminal"
@@ -298,13 +299,13 @@ export default function SessionPage() {
       <Section name="transcript" title="Transcript" open={open}>
         <p className="kb-sp__links">
           <Link to={replayUrl(card.kb, sid)} data-testid="session-transcript-replay">
-            replay this session →
+            replay this session <Icon.Arrow aria-hidden="true" />
           </Link>
           {transcriptHref && (
             <>
               {" · "}
               <Link to={transcriptHref} data-testid="session-transcript-reader">
-                open transcript →
+                open transcript <Icon.Arrow aria-hidden="true" />
               </Link>
             </>
           )}
@@ -508,20 +509,18 @@ export default function SessionPage() {
         )}
       </Section>
 
-      <Section name="segments" title="Segments" open={open}>
-        {sum.segment_chain.length >= 2 ? (
+      {sum.segment_chain.length >= 2 && (
+        <Section name="segments" title="Segments" open={open}>
           <p className="kb-sp__chain">
             {sum.segment_chain.map((id, i) => (
               <span key={`${id}:${i}`}>
-                {i > 0 && " → "}
+                {i > 0 && <Icon.Arrow aria-hidden="true" />}
                 <Link to={leaf(id)}>{id}</Link>
               </span>
             ))}
           </p>
-        ) : (
-          <p className="kb-sp__empty">only one segment — no chain</p>
-        )}
-      </Section>
+        </Section>
+      )}
 
       <Section name="resume" title="Resume" open={open}>
         <ResumeCommand sessionId={sid} resume={sum.resume} />

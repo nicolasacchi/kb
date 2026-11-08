@@ -27,3 +27,15 @@ export function TerminalSlot(_props: TerminalSlotProps): ReactElement | null {
   // the kb-term TerminalPanel mounts here (React.lazy, explicit click)
   return null;
 }
+
+// The page renders the terminal wrapper `<details>` only when the slot
+// can render something: the lane must be available AND admitted. Today
+// the slot always returns null (no panel exists yet), and A3's lane has
+// no `admitted` field, so this is false for every card — an
+// `available:true` lane alone never shows an empty Terminal section.
+// T13/T14 flip `admitted` together with mounting the panel.
+export function shouldRenderTerminal(
+  lane: TerminalSlotProps["lane"],
+): boolean {
+  return lane.available === true && lane.admitted === true;
+}

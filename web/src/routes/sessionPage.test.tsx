@@ -357,4 +357,42 @@ describe("SessionPage", () => {
     );
     expect(container.textContent).toContain("Not Found: session missing");
   });
+  it("hides the segments section when the chain has fewer than two entries", async () => {
+    for (const chain of [[], [SID]]) {
+      cleanup();
+      const card = fullCard();
+      card.summary.segment_chain = chain;
+      vi.stubGlobal("fetch", mockFetch({ card }));
+      renderPage();
+      await waitFor(() =>
+        expect(screen.getByTestId("session-sec-resume")).toBeTruthy(),
+      );
+      expect(screen.queryByTestId("session-sec-segments")).toBeNull();
+    }
+  });
+
+  it("renders no terminal section while the lane is available but unadmitted", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({ card: fullCard({ terminal: { available: true } }) }),
+    );
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("session-sec-resume")).toBeTruthy(),
+    );
+    expect(screen.queryByTestId("session-sec-terminal")).toBeNull();
+    expect(screen.queryByTestId("terminal-slot")).toBeNull();
+  });
+
+  it("uses icons — not unicode glyphs — for the back and transcript links", async () => {
+    vi.stubGlobal("fetch", mockFetch({ card: fullCard() }));
+    const { container } = renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("session-sec-resume")).toBeTruthy(),
+    );
+    const back = screen.getByTestId("session-back");
+    expect(back.querySelector("svg")).toBeTruthy();
+    expect(container.textContent).not.toContain("←");
+    expect(container.textContent).not.toContain("→");
+  });
 });
