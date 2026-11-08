@@ -52,7 +52,7 @@ fi
 # note and VERSIONS. Args:
 #   $1 = tmux version line ("tmux 3.7c" / "tmux 3.4")
 #   $2 = include-kb-tap (1 / 0)
-#   $3 = kb-termd source ("stub" | "sleep-elf")
+#   $3 = kb-termd source ("stub" | "bash-elf")
 #   $4 = kb-termd-2 source for archive 2 | none
 #   $5 = unit extra line ("" / "second")
 ver="9.9.9"
@@ -66,8 +66,8 @@ build_fake_archive() {
   mkdir -p "$dir/$pkg/bin" "$dir/$pkg/libexec/kb-term" \
            "$dir/$pkg/share/kb-term/systemd" "$dir/$pkg/share/kb-term/tmpfiles.d" \
            "$dir/$pkg/share/kb-term/omp"
-  if [ "$termd_src" = "sleep-elf" ]; then
-    cp "$(type -P sleep)" "$dir/$pkg/bin/kb-termd"
+  if [ "$termd_src" = "bash-elf" ]; then
+    cp "$(type -P bash)" "$dir/$pkg/bin/kb-termd"
   elif [ "$termd_src" = "true-plus" ]; then
     cp "$(type -P true)" "$dir/$pkg/bin/kb-termd"
     printf 'x' >> "$dir/$pkg/bin/kb-termd"
@@ -252,21 +252,19 @@ grep -q "x86_64 Linux only" "$work/out" || fail "no x86_64-only message"
 say_ok "10 aarch64 aborts"
 
 # 11. idempotent re-run over a RUNNING ELF (ETXTBSY). The kb-termd stub is a
-# byte copy of the host `sleep`, started in the background between installs;
+# byte copy of the host `bash`, started in the background between installs;
 # archive 2 changes kb-termd and the unit. The installer replaces both via
 # same-dir temp + mv -f, so it never fails with "text file busy".
-# Newer GNU coreutils ships multicall binaries that dispatch on argv[0],
-# so a sleep binary copied and invoked as "kb-termd" exits with
-# "unknown program". Exec it through a symlink named "sleep" instead —
-# exactly how multicall applets are invoked. (exec -a does not help:
-# the runner's multicall still rejects it.)
-build_fake_archive "$work/src" "tmux 3.7c" 1 sleep-elf ""
+# (The brief suggests a copied `sleep`; current GitHub runner images ship
+# GNU coreutils as multicalls that name-check the on-disk executable —
+# "unknown program" as kb-termd, "Security violation" via a sleep symlink
+# or exec -a — so no sleep copy can run there. A copied bash has no name
+# check and IS a running ELF: the only property ETXTBSY needs.)
+build_fake_archive "$work/src" "tmux 3.7c" 1 bash-elf ""
 cp "$work/src/${pkg}.tar.gz" "$work/mirror/"
 cp "$work/src/${pkg}.tar.gz.expected" "$work/mirror/${pkg}.tar.gz.sha256"
 run "$work/p12" || fail "ELF install 1 should succeed"
-mkdir -p "$work/execdir"
-ln -s "$work/p12/bin/kb-termd" "$work/execdir/sleep"
-"$work/execdir/sleep" 30 &
+"$work/p12/bin/kb-termd" -c 'while :; do sleep 1; done' &
 running_pid=$!
 # give the background process a moment to be running
 sleep 1
