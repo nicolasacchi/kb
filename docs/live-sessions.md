@@ -261,6 +261,7 @@ POST itself is fire-and-forget: a detached background subshell with
 | `KB_BEAT_PATHS` | unset | `0` removes `detail.tool` / `detail.paths` / `detail.root` / `detail.project` from write-tool beats (see [File presence](#file-presence)). |
 | `KB_BEAT_BACKGROUND` | unset | `0` omits `detail.background` (Claude `Stop`'s `background_tasks`, counted by closed bucket; see [Resuming on their own](#resuming-on-their-own)) even when available. |
 | `KB_BEAT_LEASE_SECS` | `900` | `lease_secs` sent with every beat. |
+| `KB_TERM_ID` | unset | Set by the kb-term launcher, not by you. Echoed as the beat's top-level `term` (lowercase letters and digits, at most 32). |
 | `KB_BEAT_DRYRUN` | unset | `1` prints the JSON body to stdout instead of POSTing — no backgrounding, no curl. Used by `tests/test-beat.sh`; also a handy manual sanity check: `echo '{"session_id":"x","cwd":"/tmp"}' | KB_SESSIONS_DIR=/tmp KB_BEAT_DRYRUN=1 plugins/kb-memory/hooks/kb-beat.sh claude start`. |
 
 The beat auth token (when present) is read from

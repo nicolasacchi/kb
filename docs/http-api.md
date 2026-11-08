@@ -31,7 +31,15 @@ GET  /api/identity                          daemon name + version + kbs, plus
                                             `schema_epoch` (this binary's
                                             highest embedded migration — the
                                             number the boot guard compares each
-                                            volume against). A sibling daemon
+                                            volume against). `terminal_admitted`
+                                            says whether this request's caller
+                                            may use the terminal surface at
+                                            all (`[terminal] enabled` AND the
+                                            gate's caller class admits it) —
+                                            computed per request, never a
+                                            grant (Origin + intent header +
+                                            single-use ticket still apply). A
+                                            sibling daemon
                                             handshakes here before its first
                                             call and fails closed on a mismatch;
                                             /healthz stays pure liveness.
@@ -1213,10 +1221,15 @@ POST /api/sessions/beat                     LSC-2/3 (live-sessions cockpit
                                             session_id, harness, event, at,
                                             host?, pid?, cwd?, model?,
                                             lease_secs?, title?, last_line?,
-                                            detail?}`; unknown keys ignored
+                                            term?, detail?}`; unknown keys ignored
                                             (hook/daemon version-skew is
                                             expected), a malformed beat 400s
                                             (problem+json), never a 500.
+                                            `term` is echoed from `KB_TERM_ID`
+                                            (opaque, `^[a-z0-9]{1,32}$`); it is
+                                            ignored unless `[terminal] enabled`
+                                            and the beat's `pid` equals the
+                                            runner's pane pid — never a 400.
                                             Daemon-wide, NOT `{kb}`-scoped (a
                                             beat arrives before any capture
                                             exists to attribute it to).
@@ -1330,6 +1343,15 @@ GET  /api/sessions/live-status              LSC-2 — the merged cockpit read:
                                             other state and on every Tier-0 row. A
                                             non-loopback scrub drops an out-of-range
                                             value.
+                                            A hook row may also carry `term?`
+                                            (the kb-term terminal bound to this
+                                            session, an opaque validated id);
+                                            it is present only on the bound row
+                                            while `[terminal] enabled`, and it
+                                            survives the non-loopback
+                                            forced-scrub floor because it is
+                                            an opaque validated id (names no
+                                            path and no host; grants nothing).
                                             `?blocked=1|true|on` keeps only
                                             rows blocked on the operator
                                             (not `presumed_ended`) and skips

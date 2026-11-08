@@ -160,7 +160,7 @@ async fn kb_sessions_card_prints_the_daemon_text_verbatim() {
     let card = fx.daemon_card().await;
     let daemon_text = card["text"].as_str().unwrap().to_string();
     assert!(!daemon_text.is_empty());
-    assert!(daemon_text.contains("terminal: unavailable (no terminal runner)"));
+    assert!(daemon_text.contains("terminal: unavailable (terminal disabled)"));
 
     let stdout = fx.ok(&["card", "cli-1"]);
     assert_eq!(

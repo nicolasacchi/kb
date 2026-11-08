@@ -63,4 +63,11 @@ sibling_major: number,
  * operator can read "which binary is this" off the wire without
  * shelling into the container.
  */
-schema_epoch: number, };
+schema_epoch: number, 
+/**
+ * T13 — whether THIS request's caller may use the terminal surface at all: `[terminal] enabled`
+ * AND the caller class T11's gate admits. Computed per request, never cached, so the SPA can
+ * hide/disable-with-caption BEFORE a refused attach (same pattern as kb-code's
+ * `review_mutations_admitted`). NOT a grant: Origin + intent header + ticket still apply.
+ */
+terminal_admitted: boolean, };

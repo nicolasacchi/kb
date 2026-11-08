@@ -1023,6 +1023,57 @@ else
   bad "KB_BEAT_BACKGROUND_0_omits_it (got: $g)"
 fi
 
+# --- 55. KB_TERM_ID_echoes_as_term ------------------------------------------
+p='{"session_id":"s-term-1","cwd":"/tmp/proj-a","source":"startup"}'
+g_with="$(beat_dryrun claude start "$p" KB_TERM_ID=abc123)"
+g_without="$(beat_dryrun claude start "$p")"
+# Each run spawns its own process, so the echoed pid differs between the
+# two runs; it is not part of the term contract and is ignored here.
+if [ "$(jget "$g_with" '.term')" = "abc123" ] \
+   && [ "$(printf '%s' "$g_with" | jq -c 'del(.at, .term, .pid)')" = "$(printf '%s' "$g_without" | jq -c 'del(.at, .term, .pid)')" ]; then
+  ok "KB_TERM_ID_echoes_as_term"
+else
+  bad "KB_TERM_ID_echoes_as_term (got: $g_with)"
+fi
+
+# --- 56. KB_TERM_ID_unset_omits_term ----------------------------------------
+if [ "$(printf '%s' "$g_without" | jq -r 'has("term")')" = "false" ]; then
+  ok "KB_TERM_ID_unset_omits_term"
+else
+  bad "KB_TERM_ID_unset_omits_term (got: $g_without)"
+fi
+
+# --- 57.KB_TERM_ID_invalid_ids_omit_term -----------------------------------
+ok57=1
+for bad in "Bad ID" "a;b" "A1" "-x"; do
+  g="$(beat_dryrun claude start "$p" KB_TERM_ID="$bad")"; rc=$?
+  if [ "$rc" -ne 0 ] || [ "$(printf '%s' "$g" | jq -r 'has("term")')" = "true" ]; then
+    ok57=0
+  fi
+done
+g="$(beat_dryrun claude start "$p" KB_TERM_ID="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")"; rc=$?
+if [ "$rc" -ne 0 ] || [ "$(printf '%s' "$g" | jq -r 'has("term")')" = "true" ]; then
+  ok57=0
+fi
+if [ "$ok57" -eq 1 ]; then
+  ok "KB_TERM_ID_invalid_ids_omit_term"
+else
+  bad "KB_TERM_ID_invalid_ids_omit_term (got: $g)"
+fi
+
+# --- 58. KB_TERM_ID_present_on_turn_end_and_tool ------------------------------
+g1="$(beat_dryrun omp turn_end "$p" KB_TERM_ID=abc123)"
+g1n="$(beat_dryrun omp turn_end "$p")"
+g2="$(beat_dryrun claude tool "$p" KB_TERM_ID=abc123)"
+g2n="$(beat_dryrun claude tool "$p")"
+if [ "$(jget "$g1" '.term')" = "abc123" ] && [ "$(jget "$g2" '.term')" = "abc123" ] \
+   && [ "$(printf '%s' "$g1" | jq -c '.detail')" = "$(printf '%s' "$g1n" | jq -c '.detail')" ] \
+   && [ "$(printf '%s' "$g2" | jq -c '.detail')" = "$(printf '%s' "$g2n" | jq -c '.detail')" ]; then
+  ok "KB_TERM_ID_present_on_turn_end_and_tool"
+else
+  bad "KB_TERM_ID_present_on_turn_end_and_tool (got: $g1 / $g2)"
+fi
+
 echo
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]

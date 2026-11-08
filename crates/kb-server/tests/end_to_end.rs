@@ -9,7 +9,7 @@ mod common;
 
 use kb_core::config::{
     DaemonSection, DefaultsSection, IndexerSection, KbConfig, KbSection, OutboundSection,
-    RateLimitSection, RegexRule, ServerSection, UiSection,
+    RateLimitSection, RegexRule, ServerSection, TerminalSection, UiSection,
 };
 use kb_core::paths::KbPaths;
 use kb_core::types::KbName;
@@ -25938,5 +25938,412 @@ async fn pretool_beats_on_a_working_session_emit_no_session_state_event() {
     assert!(
         !buf.contains("ToolNo"),
         "tool name leaked onto the bus:\n{buf}"
+    );
+}
+
+// ===== T13: a beat binds a kb-term terminal to its main session ============
+
+/// Scripted fake runner (same shape as the `/api/terms` gate tests): a
+/// `UnixListener` answering by op, with a connection counter.
+struct FakeRunner {
+    conns: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    socket: std::path::PathBuf,
+}
+
+fn spawn_fake_runner(
+    dir: &std::path::Path,
+    replies: std::collections::HashMap<String, String>,
+) -> FakeRunner {
+    use std::sync::atomic::Ordering;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    let sock = dir.join("runner.sock");
+    let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+    let conns = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = conns.clone();
+    tokio::spawn(async move {
+        loop {
+            let (stream, _) = match listener.accept().await {
+                Ok(v) => v,
+                Err(_) => return,
+            };
+            counter.fetch_add(1, Ordering::SeqCst);
+            let replies = replies.clone();
+            tokio::spawn(async move {
+                let mut line = String::new();
+                let mut reader = tokio::io::BufReader::new(stream);
+                if reader.read_line(&mut line).await.is_err() {
+                    return;
+                }
+                let op = serde_json::from_str::<serde_json::Value>(line.trim())
+                    .ok()
+                    .and_then(|v| v.get("op").and_then(|v| v.as_str()).map(String::from))
+                    .unwrap_or_default();
+                let reply = replies.get(&op).cloned().unwrap_or_else(|| {
+                    "{\"status\":\"err\",\"code\":\"not_found\",\"message\":\"no script\"}"
+                        .to_string()
+                });
+                let mut stream = reader.into_inner();
+                let _ = stream.write_all(reply.as_bytes()).await;
+                let _ = stream.write_all(b"\n").await;
+            });
+        }
+    });
+    FakeRunner {
+        conns,
+        socket: sock,
+    }
+}
+
+fn runner_list_reply(ids: &[&str]) -> String {
+    let items: Vec<serde_json::Value> = ids
+        .iter()
+        .map(|id| {
+            serde_json::json!({
+                "id": id,
+                "harness": "omp",
+                "cwd": "/work/proj",
+                "started_unix": 1234567890,
+                "resume_sid": null,
+                "pane_pid": 4242,
+                "cols": 120,
+                "rows": 40,
+                "bracket_paste_flag": true,
+                "pane_dead": false,
+                "exit_code": null,
+                "grid_owner": null,
+            })
+        })
+        .collect();
+    serde_json::json!({"status":"ok","data":items}).to_string()
+}
+
+fn term_origin(addr: std::net::SocketAddr) -> String {
+    format!("http://{addr}")
+}
+
+async fn boot_with_terminal(fake: &FakeRunner) -> (tempfile::TempDir, std::net::SocketAddr) {
+    let (tmp, mut cfg, paths) = fixture_corpus();
+    cfg.terminal = TerminalSection {
+        enabled: Some(true),
+        runner_socket: Some(fake.socket.clone()),
+        ticket_ttl_secs: None,
+        refuse_token_callers: None,
+        runner_timeout_secs: None,
+    };
+    std::fs::create_dir_all(&paths.config).unwrap();
+    std::fs::write(paths.token_file(), FIXTURE_TOKEN).unwrap();
+    let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)
+        .await
+        .expect("serve");
+    common::wait_docs_listed(addr, "smoke", 4).await;
+    (tmp, addr)
+}
+
+async fn get_terms_list(client: &reqwest::Client, addr: std::net::SocketAddr) -> reqwest::Response {
+    client
+        .get(url(addr, "/api/terms"))
+        .header("Origin", term_origin(addr))
+        .send()
+        .await
+        .unwrap()
+}
+
+async fn post_term_beat(
+    client: &reqwest::Client,
+    addr: std::net::SocketAddr,
+    sid: &str,
+    event: &str,
+    term: Option<&str>,
+    pid: Option<i64>,
+    detail: serde_json::Value,
+) {
+    let mut body = serde_json::json!({
+        "v": 1,
+        "session_id": sid,
+        "harness": "claude",
+        "event": event,
+        "at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        "detail": detail,
+    });
+    if let Some(t) = term {
+        body["term"] = serde_json::Value::String(t.to_string());
+    }
+    if let Some(p) = pid {
+        body["pid"] = serde_json::json!(p);
+    }
+    let resp = client
+        .post(url(addr, "/api/sessions/beat"))
+        .header("Origin", ORIGIN)
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "beat {event}: {:?}",
+        resp.text().await
+    );
+}
+
+async fn live_status_row(
+    client: &reqwest::Client,
+    addr: std::net::SocketAddr,
+    sid: &str,
+    bearer: bool,
+) -> serde_json::Value {
+    let mut req = client.get(url(addr, "/api/sessions/live-status"));
+    if bearer {
+        req = req
+            .header("X-Forwarded-For", "8.8.8.8")
+            .header("Authorization", format!("Bearer {FIXTURE_TOKEN}"));
+    }
+    let resp = req.send().await.unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    body["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["session_id"] == sid)
+        .unwrap_or_else(|| panic!("no row {sid}: {body}"))
+        .clone()
+}
+
+#[tokio::test]
+async fn beat_binds_a_kb_term_terminal_and_live_status_names_it() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("list".to_string(), runner_list_reply(&["abc123"]));
+    let fake_dir = tempfile::tempdir().unwrap();
+    let fake = spawn_fake_runner(fake_dir.path(), replies);
+    let (_tmp, addr) = boot_with_terminal(&fake).await;
+    let client = reqwest::Client::new();
+    let list = get_terms_list(&client, addr).await;
+    assert_eq!(list.status().as_u16(), 200);
+    let list_body: serde_json::Value = list.json().await.unwrap();
+    // The list is additively enriched with the composer gate state.
+    assert_eq!(list_body["terms"][0]["session_id"], serde_json::Value::Null);
+    assert_eq!(list_body["terms"][0]["state"], serde_json::Value::Null);
+    assert_eq!(list_body["terms"][0]["blocked"], false);
+    post_term_beat(
+        &client,
+        addr,
+        "main-1",
+        "start",
+        Some("abc123"),
+        Some(4242),
+        serde_json::json!({}),
+    )
+    .await;
+    let row = live_status_row(&client, addr, "main-1", false).await;
+    assert_eq!(row["term"], "abc123", "{row}");
+    // A bearer, non-loopback peer sees the same opaque id through the scrub floor.
+    let scrubbed = live_status_row(&client, addr, "main-1", true).await;
+    assert_eq!(scrubbed["term"], "abc123", "{scrubbed}");
+    // A second session in the same pane never steals on a prompt beat.
+    post_term_beat(
+        &client,
+        addr,
+        "sub-1",
+        "prompt",
+        Some("abc123"),
+        Some(4242),
+        serde_json::json!({}),
+    )
+    .await;
+    let sub = live_status_row(&client, addr, "sub-1", false).await;
+    assert!(sub.get("term").is_none(), "{sub}");
+    // A beat whose pid is not the pane's never binds.
+    post_term_beat(
+        &client,
+        addr,
+        "ghost-1",
+        "start",
+        Some("abc123"),
+        Some(9999),
+        serde_json::json!({}),
+    )
+    .await;
+    let ghost = live_status_row(&client, addr, "ghost-1", false).await;
+    assert!(ghost.get("term").is_none(), "{ghost}");
+    // The bound row still names the terminal; list enrichment follows.
+    let row = live_status_row(&client, addr, "main-1", false).await;
+    assert_eq!(row["term"], "abc123", "{row}");
+    let list = get_terms_list(&client, addr).await;
+    let list_body: serde_json::Value = list.json().await.unwrap();
+    assert_eq!(list_body["terms"][0]["session_id"], "main-1", "{list_body}");
+    assert_eq!(list_body["terms"][0]["state"], "working", "{list_body}");
+    assert_eq!(list_body["terms"][0]["blocked"], false, "{list_body}");
+    let resp = client.get(url(addr, "/api/identity")).send().await.unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let id: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(id["terminal_admitted"], true, "{id}");
+}
+
+#[tokio::test]
+async fn beat_term_is_dropped_without_the_terminal_surface() {
+    let (_tmp, addr) = boot_with_token().await;
+    let client = reqwest::Client::new();
+    post_term_beat(
+        &client,
+        addr,
+        "main-1",
+        "start",
+        Some("abc123"),
+        Some(4242),
+        serde_json::json!({}),
+    )
+    .await;
+    let row = live_status_row(&client, addr, "main-1", false).await;
+    assert!(row.get("term").is_none(), "{row}");
+    let resp = client.get(url(addr, "/api/identity")).send().await.unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let id: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(id["terminal_admitted"], false, "{id}");
+}
+
+#[tokio::test]
+async fn enter_returns_409_term_blocked_when_the_bound_session_is_blocked() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("list".to_string(), runner_list_reply(&["abc123"]));
+    let ticket = "a".repeat(64);
+    replies.insert(
+        "enter".to_string(),
+        serde_json::json!({"status":"ok","data":{"ticket":ticket}}).to_string(),
+    );
+    let fake_dir = tempfile::tempdir().unwrap();
+    let fake = spawn_fake_runner(fake_dir.path(), replies);
+    let (_tmp, addr) = boot_with_terminal(&fake).await;
+    let client = reqwest::Client::new();
+    let list = get_terms_list(&client, addr).await;
+    assert_eq!(list.status().as_u16(), 200);
+    post_term_beat(
+        &client,
+        addr,
+        "main-1",
+        "start",
+        Some("abc123"),
+        Some(4242),
+        serde_json::json!({}),
+    )
+    .await;
+    post_term_beat(
+        &client,
+        addr,
+        "main-1",
+        "blocked",
+        Some("abc123"),
+        Some(4242),
+        serde_json::json!({"reason": "needs approval", "tool": "Bash"}),
+    )
+    .await;
+    let enter = |gated: bool| {
+        let client = client.clone();
+        async move {
+            let mut req = client
+                .post(url(addr, "/api/terms/abc123/enter"))
+                .json(&serde_json::json!({}));
+            if gated {
+                req = req
+                    .header("Origin", term_origin(addr))
+                    .header("x-kb-intent", "terminal");
+            }
+            req.send().await.unwrap()
+        }
+    };
+    // An ungated caller never reaches the blocked branch (and never learns the state).
+    let resp = enter(false).await;
+    assert_eq!(resp.status().as_u16(), 403, "ungated enter must be refused");
+    let text = resp.text().await.unwrap();
+    assert!(!text.contains("term-blocked"), "{text}");
+    assert!(
+        fake.conns.load(std::sync::atomic::Ordering::SeqCst) == 1,
+        "the ungated caller must not reach the runner"
+    );
+    // The gated enter on a blocked binding is a 409, never a relay.
+    let resp = enter(true).await;
+    assert_eq!(resp.status().as_u16(), 409, "blocked enter must be 409");
+    let text = resp.text().await.unwrap();
+    assert!(text.contains("urn:kb:errors:term-blocked"), "{text}");
+    assert!(
+        fake.conns.load(std::sync::atomic::Ordering::SeqCst) == 1,
+        "a blocked binding refuses before the runner relay"
+    );
+    // After an unblocked beat the same bound terminal relays again.
+    post_term_beat(
+        &client,
+        addr,
+        "main-1",
+        "unblocked",
+        Some("abc123"),
+        Some(4242),
+        serde_json::json!({}),
+    )
+    .await;
+    let resp = enter(true).await;
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "unblocked enter relays: {:?}",
+        resp.text().await
+    );
+    assert!(
+        resp.headers().get("x-kb-term-state").is_none(),
+        "a bound enter carries no unbound header"
+    );
+    // Re-block for the rest of the test: the bound-blocked 409 still applies.
+    post_term_beat(
+        &client,
+        addr,
+        "main-1",
+        "blocked",
+        Some("abc123"),
+        Some(4242),
+        serde_json::json!({"reason": "needs approval", "tool": "Bash"}),
+    )
+    .await;
+    // An unbound terminal is NOT blocked: the enter relays and carries the header.
+    post_term_beat(
+        &client,
+        addr,
+        "other-1",
+        "start",
+        Some("unbound9"),
+        Some(4242),
+        serde_json::json!({}),
+    )
+    .await;
+    let other = live_status_row(&client, addr, "other-1", false).await;
+    assert!(other.get("term").is_none(), "{other}");
+    let resp = enter(true).await;
+    // `unbound9` is not in the directory, so this beat cannot bind (verified above);
+    // the enter for abc123 stays blocked, so expect another 409 here.
+    assert_eq!(
+        resp.status().as_u16(),
+        409,
+        "the blocked binding still refuses"
+    );
+
+    // Fresh daemon shape sanity: an unbound enter relays when nothing is bound.
+    let (_tmp2, addr2) = boot_with_terminal(&fake).await;
+    let resp = client
+        .post(url(addr2, "/api/terms/abc123/enter"))
+        .header("Origin", term_origin(addr2))
+        .header("x-kb-intent", "terminal")
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "unbound enter relays: {:?}",
+        resp.text().await
+    );
+    assert_eq!(
+        resp.headers()
+            .get("x-kb-term-state")
+            .and_then(|v| v.to_str().ok()),
+        Some("unbound")
     );
 }

@@ -10,14 +10,14 @@
 //! turns (stored, capped, derived facts only), and there is no attach or
 //! type surface for agents or the CLI.
 
-use crate::middleware::error_to_problem_json;
+use crate::middleware::{error_to_problem_json, Identity};
 use crate::routes::sessions::{
     check_out, find_session, session_chain_parts, touched_files_for_commit, widen_session_ids,
     SessionOut,
 };
 use crate::state::KbHandles;
 use axum::{
-    extract::{ConnectInfo, Path, Query, State},
+    extract::{ConnectInfo, Extension, Path, Query, State},
     http::HeaderMap,
     response::{IntoResponse, Response},
     Json,
@@ -1036,6 +1036,54 @@ fn live_lane(state: &Arc<KbHandles>, session_id: &str) -> LiveLane {
     }
 }
 
+/// T13 — the registry-derived terminal lane. One failing reader never
+/// 500s the card (#28 drop-on-error); the registry read is infallible
+/// in-memory state.
+fn terminal_lane(
+    state: &Arc<KbHandles>,
+    peer: Option<std::net::IpAddr>,
+    source: crate::middleware::IdentitySource,
+    session_id: &str,
+    root_session_id: Option<&str>,
+) -> TerminalLane {
+    let (enabled, refuse) = state
+        .config
+        .try_read()
+        .map(|c| (c.terminal.enabled(), c.terminal.refuse_token_callers()))
+        .unwrap_or((false, true));
+    let admitted = crate::routes::identity::terminal_admitted_for(enabled, peer, source, refuse);
+    if !enabled {
+        return TerminalLane::unavailable("terminal disabled", admitted);
+    }
+    let now_unix = chrono::Utc::now().timestamp();
+    let (term, via) = match state.live_registry.term_for_session(session_id, now_unix) {
+        Some(t) => (Some(t), None),
+        None => match root_session_id {
+            Some(root) => match state.live_registry.term_for_session(root, now_unix) {
+                Some(t) => (Some(t), Some("root".to_string())),
+                None => (None, None),
+            },
+            None => (None, None),
+        },
+    };
+    let Some(term) = term else {
+        return TerminalLane::unavailable("not running in kb-term", admitted);
+    };
+    let Some((row, live_state, _)) = state.live_registry.session_for_term(&term, now_unix) else {
+        return TerminalLane::unavailable("not running in kb-term", admitted);
+    };
+    TerminalLane {
+        available: true,
+        reason: None,
+        term_id: Some(term),
+        harness: Some(row.harness),
+        state: Some(live_state),
+        blocked: Some(row.blocked),
+        admitted,
+        via,
+    }
+}
+
 fn map_check(c: crate::routes::sessions::SessionCheckOut) -> CardCheckOut {
     CardCheckOut {
         label: c.label,
@@ -1184,6 +1232,7 @@ async fn compute_not_committed(files_rows: &[FileRow], commit_rows: &[CommitRow]
 /// (drop-on-error). 404 when no kb holds the session row.
 pub async fn card(
     State(state): State<Arc<KbHandles>>,
+    Extension(identity): Extension<Identity>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Path(session_id): Path<String>,
@@ -1195,6 +1244,7 @@ pub async fn card(
     // The widened memory read-id set (`get`'s rule).
     let read_ids_parts = session_chain_parts(&state, &session_id).await;
     let read_ids = widen_session_ids(&session_id, &read_ids_parts);
+    let peer_ip = peer.ip();
 
     let (
         summary,
@@ -1224,6 +1274,17 @@ pub async fn card(
 
     let outcome = outcome_lane(&session, &files_rows, &commit_rows, files_ok, commits_ok).await;
 
+    // Compute the terminal lane BEFORE moving `summary` into the card:
+    // the child case resolves through the summary's root_session_id.
+    let root_sid = summary.root_session_id.clone();
+    let terminal = terminal_lane(
+        &state,
+        Some(peer_ip),
+        identity.source,
+        &session_id,
+        root_sid.as_deref(),
+    );
+
     let mut card = SessionCard {
         schema: SESSION_CARD_SCHEMA.to_string(),
         session_id: session_id.clone(),
@@ -1242,7 +1303,7 @@ pub async fn card(
         live,
         slate,
         children,
-        terminal: TerminalLane::constant(),
+        terminal,
     };
     card.text = render_text(&card);
     Json(card).into_response()

@@ -7994,6 +7994,10 @@ pub struct BeatBody {
     pub last_line: Option<String>,
     #[serde(default)]
     pub detail: Option<BeatDetail>,
+    /// T13 — optional kb-term echo (`KB_TERM_ID`). Unknown/invalid/unverified
+    /// values are dropped silently; the beat is always accepted (never a 400).
+    #[serde(default)]
+    pub term: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -8301,6 +8305,114 @@ fn derive_project(cwd: Option<&str>) -> Option<String> {
     })
 }
 
+/// T13 — verify a beat's `term` claim against the runner directory.
+///
+/// Never a 400: an unchecked or mismatched claim is simply dropped.
+fn verified_term(
+    dir: &crate::terminal::binding::TermDirectory,
+    enabled: bool,
+    raw: Option<&str>,
+    pid: Option<i64>,
+) -> Option<String> {
+    if !enabled {
+        return None;
+    }
+    let term = raw?;
+    let pane_pid = dir.pane_pid(term);
+    if crate::terminal::binding::claim_verified(term, pid, pane_pid) {
+        Some(term.to_string())
+    } else {
+        None
+    }
+}
+
+/// T13 — refresh the terminal directory from the runner, OFF the beat path.
+///
+/// Spawns at most one detached `tokio::spawn` task, guarded by an
+/// in-flight `AtomicBool` and a 1 s minimum interval, calling the runner
+/// `list` (500 ms timeout) then `directory.replace(..)` on success only.
+/// The task selects against the shutdown watch so it never blocks an
+/// in-process restart (#13). The beat route itself never awaits the runner.
+fn maybe_refresh_term_dir(state: Arc<KbHandles>) {
+    use std::sync::atomic::Ordering;
+    if state
+        .terminals
+        .refresh_inflight
+        .swap(true, Ordering::SeqCst)
+    {
+        return;
+    }
+    if let Ok(guard) = state.terminals.refresh_min.lock() {
+        if let Some(last) = *guard {
+            if last.elapsed() < std::time::Duration::from_secs(1) {
+                drop(guard);
+                state
+                    .terminals
+                    .refresh_inflight
+                    .store(false, Ordering::SeqCst);
+                return;
+            }
+        }
+    }
+    if let Ok(mut guard) = state.terminals.refresh_min.lock() {
+        *guard = Some(std::time::Instant::now());
+    }
+    tokio::spawn(async move {
+        let state2 = state.clone();
+        let mut shutdown = state.shutdown.subscribe();
+        let runner = {
+            let cfg = state.config.read().await;
+            let terminal = &cfg.terminal;
+            crate::terminal::runner_client::UnixRunner::new(
+                terminal.resolved_runner_socket(),
+                std::time::Duration::from_millis(500),
+            )
+        };
+        let reply = tokio::select! {
+            reply = runner.call(&crate::terminal::wire::RunnerRequest::List {}) => reply,
+            _ = shutdown.wait_for(|&d| d) => {
+                state2.terminals.refresh_inflight.store(false, Ordering::SeqCst);
+                return;
+            }
+        };
+        if let Ok(crate::terminal::wire::RunnerReply::Ok { data }) = reply {
+            let now = chrono::Utc::now().timestamp();
+            let items: Vec<(String, i64)> = parse_term_items(&data);
+            state2.terminals.term_dir.replace(items, now);
+        }
+        state2
+            .terminals
+            .refresh_inflight
+            .store(false, Ordering::SeqCst);
+    });
+}
+
+/// T13 — extract `(id, pane_pid)` pairs from a runner `list` reply `data`.
+///
+/// Tolerates both wire shapes (a bare array or a `{"terms": array}`
+/// envelope), mirroring `terms::list_contains`. A malformed shape yields
+/// no items; the old directory is kept untouched by the caller's
+/// success-only `replace`.
+fn parse_term_items(data: &serde_json::Value) -> Vec<(String, i64)> {
+    fn from_items(items: &[serde_json::Value]) -> Vec<(String, i64)> {
+        items
+            .iter()
+            .filter_map(|item| {
+                let id = item.get("id").and_then(|v| v.as_str())?.to_string();
+                let pid = item.get("pane_pid").and_then(|v| v.as_i64())?;
+                Some((id, pid))
+            })
+            .collect()
+    }
+    if let Some(items) = data.as_array() {
+        return from_items(items);
+    }
+    if let Some(items) = data.get("terms").and_then(|v| v.as_array()) {
+        return from_items(items);
+    }
+    Vec::new()
+}
+
 /// `POST /api/sessions/beat` — LSC-2/3's push intake: map one lifecycle
 /// EVENT (never a state — the daemon derives state, design §5's whole
 /// discipline) into `state.live_registry`, then fire `session.state` iff
@@ -8352,6 +8464,23 @@ pub async fn beat(State(state): State<Arc<KbHandles>>, Json(body): Json<BeatBody
     let effect = block_effect(&body.event);
     let tool_update = tool_update_for(&body.event, body.detail.as_ref(), at_unix, now_unix);
     let background = sanitize_background(&body.event, body.detail.as_ref());
+    let terminal_enabled = state.config.read().await.terminal.enabled();
+    let term = verified_term(
+        &state.terminals.term_dir,
+        terminal_enabled,
+        body.term.as_deref(),
+        body.pid,
+    );
+    if terminal_enabled && term.is_none() {
+        if let Some(raw) = body.term.as_deref() {
+            let known = state.terminals.term_dir.pane_pid(raw);
+            if crate::terminal::binding::is_valid_term_id(raw)
+                && (known.is_none() || known != body.pid)
+            {
+                maybe_refresh_term_dir(state.clone());
+            }
+        }
+    }
 
     let row = crate::live_registry::LiveRow {
         session_id: body.session_id,
@@ -8374,11 +8503,14 @@ pub async fn beat(State(state): State<Arc<KbHandles>>, Json(body): Json<BeatBody
         tool_update,
         last_tool: None,
         background,
+        term,
+        term_bound_unix: None,
     };
 
-    let outcome = state
-        .live_registry
-        .record_beat_effect(row, now_unix, effect);
+    let outcome =
+        state
+            .live_registry
+            .record_beat_term(row, now_unix, effect, body.event == "start");
 
     if let Some(payload) = session_state_payload(&outcome) {
         state.bus.emit("session.state", payload);
@@ -8477,6 +8609,13 @@ pub struct LiveStatusRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-export", ts(optional))]
     pub background: Option<BackgroundCounts>,
+    /// T13: the kb-term terminal bound to this session (an opaque id, `^[a-z0-9]{1,32}$`).
+    /// Present only on the BOUND row (`LiveRegistry::session_for_term`) of a hook row, and only
+    /// while `[terminal] enabled`. It names no path and no host; it grants nothing — attaching
+    /// still needs the SPA-only gate (Origin + intent header + single-use ticket).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub term: Option<String>,
 }
 
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
@@ -8628,6 +8767,15 @@ fn redact_for_non_loopback(row: &mut LiveStatusRow) {
     }) {
         row.background = None;
     }
+    // T13 — the opaque id survives the scrub (it names no path/host), but a
+    // malformed one must never leave this floor either.
+    if row
+        .term
+        .as_deref()
+        .is_some_and(|t| !crate::terminal::binding::is_valid_term_id(t))
+    {
+        row.term = None;
+    }
 }
 /// A3 — point every registry (hook) row at its `sessions_root_of` target
 /// (its tree root, its segment head, else itself). A row with no lookup
@@ -8741,13 +8889,38 @@ pub async fn live_status(
         None => Vec::new(),
     };
 
+    // T13 — the terminal winners map, built ONCE from the snapshot.
+    let terminal_enabled = state.config.read().await.terminal.enabled();
+    let snap = state.live_registry.snapshot(now_unix);
+    let term_winners: std::collections::HashMap<String, String> = {
+        use std::collections::HashMap;
+        let mut best: HashMap<String, (i64, String)> = HashMap::new();
+        for (r, live_state, _) in &snap {
+            let Some(term) = &r.term else { continue };
+            let Some(bound) = r.term_bound_unix else {
+                continue;
+            };
+            if matches!(live_state, LiveState::Finished | LiveState::PresumedEnded) {
+                continue;
+            }
+            match best.get(term) {
+                None => {
+                    best.insert(term.clone(), (bound, r.session_id.clone()));
+                }
+                Some((b, sid)) => {
+                    if bound > *b || (bound == *b && r.session_id < *sid) {
+                        best.insert(term.clone(), (bound, r.session_id.clone()));
+                    }
+                }
+            }
+        }
+        best.into_iter().map(|(t, (_, sid))| (t, sid)).collect()
+    };
     // Tier 1: every registry row, fresh-derived against now_unix.
     let known_ids = state.live_registry.known_session_ids();
-    let mut rows: Vec<LiveStatusRow> = state
-        .live_registry
-        .snapshot(now_unix)
+    let mut rows: Vec<LiveStatusRow> = snap
         .into_iter()
-        .map(|(r, live_state, confidence)| {
+        .map(|(mut r, live_state, confidence)| {
             let since_secs = (now_unix - r.last_activity_unix).max(0);
             let evidence = r
                 .last_tool
@@ -8757,6 +8930,11 @@ pub async fn live_status(
                 Some(t) => (Some(t.name.clone()), Some(t.at_unix)),
                 None => (None, None),
             };
+            let term = r
+                .term
+                .take()
+                .filter(|t| term_winners.get(t) == Some(&r.session_id))
+                .filter(|_| terminal_enabled);
             LiveStatusRow {
                 resume: resume_command(&r.harness, &r.session_id, r.cwd.as_deref()),
                 // A3 — resolved to the tree root (or left `None`) by the
@@ -8784,6 +8962,7 @@ pub async fn live_status(
                 last_tool,
                 last_tool_at,
                 background: r.background.filter(|_| background_visible(live_state)),
+                term,
             }
         })
         .collect();
@@ -8882,6 +9061,7 @@ pub async fn live_status(
                         last_tool: None,
                         last_tool_at: None,
                         background: None,
+                        term: None,
                     }
                 })
                 .collect()
@@ -9167,6 +9347,7 @@ mod lsc2_tests {
             last_tool: None,
             last_tool_at: None,
             background: None,
+            term: None,
         }
     }
 
@@ -9526,6 +9707,8 @@ mod lsc2_tests {
             tool_update: Default::default(),
             last_tool: None,
             background: None,
+            term: None,
+            term_bound_unix: None,
         };
         let out = reg.record_beat_effect(row, at, block_effect(event));
         session_state_payload(&out)
@@ -9846,6 +10029,8 @@ mod lsc2_tests {
             tool_update: Default::default(),
             last_tool: None,
             background: None,
+            term: None,
+            term_bound_unix: None,
         };
         let a = reg.record_beat(
             mk("a", sanitize_touches("tool", with.detail.as_ref(), 500)),
@@ -10085,6 +10270,8 @@ mod lsc2_tests {
             tool_update: Default::default(),
             last_tool: None,
             background: sanitize_background(event, Some(&d)),
+            term: None,
+            term_bound_unix: None,
         };
         reg.record_beat_effect(row, at, block_effect(event))
     }
@@ -10170,6 +10357,93 @@ mod lsc2_tests {
         zero.background = Some(BackgroundCounts::default());
         redact_for_non_loopback(&mut zero);
         assert!(zero.background.is_none());
+    }
+
+    #[test]
+    fn beat_drops_term_when_the_terminal_surface_is_disabled() {
+        let dir = crate::terminal::binding::TermDirectory::new();
+        dir.replace([("abc123".to_string(), 4242)], 1_000_000);
+        assert_eq!(verified_term(&dir, false, Some("abc123"), Some(4242)), None);
+    }
+
+    #[test]
+    fn beat_drops_term_on_pid_mismatch() {
+        let dir = crate::terminal::binding::TermDirectory::new();
+        dir.replace([("abc123".to_string(), 4242)], 1_000_000);
+        assert_eq!(verified_term(&dir, true, Some("abc123"), Some(9999)), None);
+        assert_eq!(
+            verified_term(&dir, true, Some("abc123"), Some(4242)),
+            Some("abc123".to_string())
+        );
+        assert_eq!(verified_term(&dir, true, Some("abc123"), None), None);
+    }
+
+    #[test]
+    fn beat_drops_a_term_the_runner_does_not_know() {
+        let dir = crate::terminal::binding::TermDirectory::new();
+        dir.replace([("other".to_string(), 4242)], 1_000_000);
+        assert_eq!(verified_term(&dir, true, Some("abc123"), Some(4242)), None);
+    }
+
+    #[test]
+    fn redact_for_non_loopback_keeps_a_valid_term_and_drops_a_malformed_one() {
+        let mut ok = row(LiveState::Working, 10, "a");
+        ok.term = Some("abc123".to_string());
+        redact_for_non_loopback(&mut ok);
+        assert_eq!(ok.term.as_deref(), Some("abc123"));
+        for bad in ["Bad", "a b", "-x", &"a".repeat(33)] {
+            let mut r = row(LiveState::Working, 10, "b");
+            r.term = Some(bad.to_string());
+            redact_for_non_loopback(&mut r);
+            assert_eq!(r.term, None, "{bad:?} must be dropped");
+        }
+    }
+
+    #[test]
+    fn live_status_row_term_only_on_the_bound_row() {
+        let reg = crate::live_registry::LiveRegistry::new();
+        let now = 1_000_000;
+        let mk = |sid: &str, term: Option<&str>, is_start: bool| {
+            let r = crate::live_registry::LiveRow {
+                session_id: sid.to_string(),
+                harness: "claude".to_string(),
+                holder: Holder::Agent,
+                last_activity_unix: now,
+                lease_secs: 900,
+                host: None,
+                pid: None,
+                cwd: None,
+                model: None,
+                title: None,
+                last_line: None,
+                blocked: false,
+                detail_reason: None,
+                blocked_tool: None,
+                blocked_since_unix: None,
+                touched_unix: now,
+                touches: std::collections::VecDeque::new(),
+                tool_update: Default::default(),
+                last_tool: None,
+                background: None,
+                term: term.map(str::to_string),
+                term_bound_unix: None,
+            };
+            reg.record_beat_term(r, now, crate::live_registry::BlockEffect::Clear, is_start)
+        };
+        mk("main-1", Some("abc123"), true);
+        // A second session claiming the same term on a prompt beat is dropped.
+        let r = mk("sub-1", Some("abc123"), false);
+        assert_eq!(r.row.term, None);
+        // Winners derived the same way live_status does: only main-1 wins.
+        assert_eq!(
+            reg.session_for_term("abc123", now).unwrap().0.session_id,
+            "main-1"
+        );
+        assert_eq!(
+            reg.term_for_session("main-1", now).as_deref(),
+            Some("abc123")
+        );
+        assert_eq!(reg.term_for_session("sub-1", now), None);
     }
 }
 
@@ -11452,6 +11726,7 @@ mod evidence_wire_tests {
             last_tool: None,
             last_tool_at: None,
             background: None,
+            term: None,
         }
     }
 

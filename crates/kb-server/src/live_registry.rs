@@ -167,6 +167,11 @@ pub struct LiveRow {
     /// AH7 — what the turn_end beat that made this row human-held reported;
     /// display only, never a `derive_state` input.
     pub background: Option<BackgroundCounts>,
+    /// T13 — a VERIFIED terminal claim (beat.term matched the runner's pane_pid). Display/join
+    /// only, never a `derive_state` input (pinned by `term_never_changes_the_derived_state`).
+    pub term: Option<String>,
+    /// T13 — when this row became the binding for `term` (see `terminal::binding::bound_at`).
+    pub term_bound_unix: Option<i64>,
 }
 
 /// The outcome of one [`LiveRegistry::record_beat`] call: the row as
@@ -194,6 +199,32 @@ pub enum BlockEffect {
     Set,
     Keep,
     Clear,
+}
+
+/// The terminal gate state for one terminal id (T13 §6).
+///
+/// `bound: None` means "state unknown", never "not blocked".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TermGate {
+    pub bound: Option<String>,
+    pub state: Option<LiveState>,
+    pub blocked: bool,
+}
+
+/// Whether `r` still holds its terminal at `now_unix`: not ended and not
+/// derived `Finished`/`PresumedEnded`.
+fn holds_term(r: &LiveRow, now_unix: i64, policy: &LivePolicy) -> bool {
+    if r.holder == Holder::Ended {
+        return false;
+    }
+    let (state, _) = derive_state(
+        r.holder,
+        r.last_activity_unix,
+        now_unix,
+        kb_core::sessions::live::StateSource::Hook,
+        policy,
+    );
+    !matches!(state, LiveState::Finished | LiveState::PresumedEnded)
 }
 
 /// The daemon-wide live registry. `std::sync::Mutex` — every method here is
@@ -226,9 +257,22 @@ impl LiveRegistry {
     /// flag, applied under the same lock as the touch-ring carry-forward.
     pub fn record_beat_effect(
         &self,
+        row: LiveRow,
+        now_unix: i64,
+        effect: BlockEffect,
+    ) -> RecordOutcome {
+        self.record_beat_term(row, now_unix, effect, false)
+    }
+
+    /// T13 — [`Self::record_beat_effect`] plus the verified terminal claim
+    /// on `row.term`. `is_start` is the `start`-event rebind signal: only
+    /// a `start` beat may take a terminal from a row that still holds it.
+    pub fn record_beat_term(
+        &self,
         mut row: LiveRow,
         now_unix: i64,
         effect: BlockEffect,
+        is_start: bool,
     ) -> RecordOutcome {
         let policy = LivePolicy::default();
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
@@ -335,6 +379,35 @@ impl LiveRegistry {
             row.background = None;
         }
 
+        // T13 — the terminal binding, inside the one lock, before the final
+        // insert: a verified claim on `row.term` resolves through bound_at.
+        // The event string is "start" when is_start, "end" when ended.
+        if let Some(term) = row.term.clone() {
+            let event_str = if is_start {
+                "start"
+            } else if row.holder == Holder::Ended {
+                "end"
+            } else {
+                "other"
+            };
+            let same = g.get(&row.session_id).and_then(|o| {
+                (o.term.as_deref() == Some(term.as_str()))
+                    .then_some(o.term_bound_unix)
+                    .flatten()
+            });
+            let other_holds = g.values().any(|r| {
+                r.session_id != row.session_id
+                    && r.term.as_deref() == Some(term.as_str())
+                    && r.term_bound_unix.is_some()
+                    && holds_term(r, now_unix, &policy)
+            });
+            row.term_bound_unix =
+                crate::terminal::binding::bound_at(event_str, same, other_holds, now_unix);
+            if row.term_bound_unix.is_none() {
+                row.term = None;
+            }
+        }
+
         let (state, confidence) = derive_state(
             row.holder,
             row.last_activity_unix,
@@ -414,6 +487,78 @@ impl LiveRegistry {
         g.keys().cloned().collect()
     }
 
+    /// T13 — the non-released row bound to `term` with the greatest
+    /// `term_bound_unix` (ties: smallest session_id). Snapshot-style: one
+    /// lock, clone out.
+    pub fn session_for_term(
+        &self,
+        term: &str,
+        now_unix: i64,
+    ) -> Option<(LiveRow, LiveState, Confidence)> {
+        let policy = LivePolicy::default();
+        let g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        g.values()
+            .filter(|r| r.term.as_deref() == Some(term) && r.term_bound_unix.is_some())
+            .filter(|r| holds_term(r, now_unix, &policy))
+            .max_by(|a, b| {
+                a.term_bound_unix
+                    .unwrap_or(i64::MIN)
+                    .cmp(&b.term_bound_unix.unwrap_or(i64::MIN))
+                    .then_with(|| b.session_id.cmp(&a.session_id))
+            })
+            .map(|r| {
+                let (state, confidence) = derive_state(
+                    r.holder,
+                    r.last_activity_unix,
+                    now_unix,
+                    kb_core::sessions::live::StateSource::Hook,
+                    &policy,
+                );
+                (r.clone(), state, confidence)
+            })
+    }
+
+    /// T13 — the term bound to `sid`, only if that row is also the winner
+    /// for its term (a stolen row reports nothing).
+    pub fn term_for_session(&self, sid: &str, now_unix: i64) -> Option<String> {
+        let policy = LivePolicy::default();
+        let g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let row_term = g
+            .get(sid)
+            .and_then(|r| r.term.clone().filter(|_| r.term_bound_unix.is_some()))
+            .filter(|_| holds_term(g.get(sid).unwrap(), now_unix, &policy))?;
+        let winner = g
+            .values()
+            .filter(|r| r.term.as_deref() == Some(row_term.as_str()) && r.term_bound_unix.is_some())
+            .filter(|r| holds_term(r, now_unix, &policy))
+            .max_by(|a, b| {
+                a.term_bound_unix
+                    .unwrap_or(i64::MIN)
+                    .cmp(&b.term_bound_unix.unwrap_or(i64::MIN))
+                    .then_with(|| b.session_id.cmp(&a.session_id))
+            })
+            .map(|r| r.session_id.clone());
+        (winner.as_deref() == Some(sid)).then_some(row_term)
+    }
+
+    /// T13 — the composer gate state for `term` (§6).
+    ///
+    /// `blocked` is the row's sticky blocked flag AND a live hook row.
+    pub fn term_gate(&self, term: &str, now_unix: i64) -> TermGate {
+        match self.session_for_term(term, now_unix) {
+            Some((row, state, _)) => TermGate {
+                blocked: row.blocked,
+                state: Some(state),
+                bound: Some(row.session_id),
+            },
+            None => TermGate {
+                bound: None,
+                state: None,
+                blocked: false,
+            },
+        }
+    }
+
     #[cfg(test)]
     fn len(&self) -> usize {
         self.inner.lock().unwrap_or_else(|e| e.into_inner()).len()
@@ -446,6 +591,8 @@ mod tests {
             tool_update: ToolUpdate::Keep,
             last_tool: None,
             background: None,
+            term: None,
+            term_bound_unix: None,
         }
     }
 
@@ -1045,5 +1192,179 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn with_term(mut r: LiveRow, term: &str) -> LiveRow {
+        r.term = Some(term.to_string());
+        r
+    }
+
+    #[test]
+    fn a_verified_claim_binds_and_session_for_term_returns_it() {
+        let reg = LiveRegistry::new();
+        let now = 1_000_000;
+        let out = reg.record_beat_term(
+            with_term(row("main-1", Holder::Agent, now, now), "abc123"),
+            now,
+            BlockEffect::Clear,
+            true,
+        );
+        assert_eq!(out.row.term.as_deref(), Some("abc123"));
+        assert_eq!(out.row.term_bound_unix, Some(now));
+        let (r, state, conf) = reg.session_for_term("abc123", now).unwrap();
+        assert_eq!(r.session_id, "main-1");
+        assert_eq!(state, LiveState::Working);
+        assert_eq!(conf, Confidence::Observed);
+        assert_eq!(
+            reg.term_for_session("main-1", now).as_deref(),
+            Some("abc123")
+        );
+    }
+
+    #[test]
+    fn a_second_session_in_the_same_terminal_does_not_steal_on_prompt_or_tool() {
+        let reg = LiveRegistry::new();
+        let now = 1_000_000;
+        reg.record_beat_term(
+            with_term(row("main-1", Holder::Agent, now, now), "abc123"),
+            now,
+            BlockEffect::Clear,
+            true,
+        );
+        for ev_holder in [Holder::Agent, Holder::Human] {
+            let out = reg.record_beat_term(
+                with_term(row("sub-1", ev_holder, now + 1, now + 1), "abc123"),
+                now + 1,
+                BlockEffect::Clear,
+                false,
+            );
+            assert_eq!(out.row.term, None, "prompt/tool beat must not steal");
+            assert_eq!(out.row.term_bound_unix, None);
+        }
+        assert_eq!(
+            reg.session_for_term("abc123", now + 1)
+                .unwrap()
+                .0
+                .session_id,
+            "main-1"
+        );
+        assert_eq!(reg.term_for_session("sub-1", now + 1), None);
+    }
+
+    #[test]
+    fn a_start_beat_rebinds_the_terminal_to_the_new_session() {
+        let reg = LiveRegistry::new();
+        let now = 1_000_000;
+        reg.record_beat_term(
+            with_term(row("main-1", Holder::Agent, now, now), "abc123"),
+            now,
+            BlockEffect::Clear,
+            true,
+        );
+        let out = reg.record_beat_term(
+            with_term(row("main-2", Holder::Agent, now + 5, now + 5), "abc123"),
+            now + 5,
+            BlockEffect::Clear,
+            true,
+        );
+        assert_eq!(out.row.term.as_deref(), Some("abc123"));
+        assert_eq!(out.row.term_bound_unix, Some(now + 5));
+        let (r, _, _) = reg.session_for_term("abc123", now + 6).unwrap();
+        assert_eq!(r.session_id, "main-2");
+    }
+
+    #[test]
+    fn an_ended_or_presumed_ended_holder_releases_the_terminal() {
+        let reg = LiveRegistry::new();
+        let now = 1_000_000;
+        reg.record_beat_term(
+            with_term(row("main-1", Holder::Agent, now, now), "abc123"),
+            now,
+            BlockEffect::Clear,
+            true,
+        );
+        // ended: the next session in the same terminal binds late.
+        let end = reg.record_beat_term(
+            with_term(row("main-1", Holder::Ended, now + 10, now + 10), "abc123"),
+            now + 10,
+            BlockEffect::Clear,
+            false,
+        );
+        assert_eq!(end.row.term.as_deref(), Some("abc123"));
+        assert_eq!(end.row.term_bound_unix, Some(now));
+        assert!(reg.session_for_term("abc123", now + 10).is_none());
+        let out = reg.record_beat_term(
+            with_term(row("main-2", Holder::Agent, now + 11, now + 11), "abc123"),
+            now + 11,
+            BlockEffect::Clear,
+            false,
+        );
+        assert_eq!(out.row.term.as_deref(), Some("abc123"));
+        // presumed-ended: an ancient Agent row no longer holds.
+        let reg2 = LiveRegistry::new();
+        reg2.record_beat_term(
+            with_term(row("old", Holder::Agent, now, now), "abc123"),
+            now,
+            BlockEffect::Clear,
+            true,
+        );
+        let far = now + 30 * 24 * 3600;
+        assert!(reg2.session_for_term("abc123", far).is_none());
+        let late = reg2.record_beat_term(
+            with_term(row("new", Holder::Agent, far, far), "abc123"),
+            far,
+            BlockEffect::Clear,
+            false,
+        );
+        assert_eq!(late.row.term.as_deref(), Some("abc123"));
+    }
+
+    #[test]
+    fn term_never_changes_the_derived_state() {
+        let with = LiveRegistry::new();
+        let without = LiveRegistry::new();
+        let t = 1_000_000;
+        let seq: Vec<(Holder, i64)> = vec![
+            (Holder::Agent, t),
+            (Holder::Human, t + 10),
+            (Holder::Human, t + 20),
+            (Holder::Agent, t + 3000),
+            (Holder::Human, t + 3010),
+            (Holder::Ended, t + 3020),
+        ];
+        for (holder, at) in seq {
+            let a = with.record_beat_term(
+                with_term(row("s", holder, at, at), "abc123"),
+                at,
+                BlockEffect::Clear,
+                false,
+            );
+            let b = without.record_beat(row("s", holder, at, at), at);
+            assert_eq!(a.state, b.state);
+            assert_eq!(a.confidence, b.confidence);
+            assert_eq!(a.previous_state, b.previous_state);
+            assert_eq!(a.previous_blocked, b.previous_blocked);
+            for off in [5, 5000, 100_000] {
+                assert_eq!(
+                    with.snapshot(at + off)[0].1,
+                    without.snapshot(at + off)[0].1
+                );
+                assert_eq!(
+                    with.snapshot(at + off)[0].2,
+                    without.snapshot(at + off)[0].2
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_row_without_a_term_is_byte_identical_to_today() {
+        let reg = LiveRegistry::new();
+        let now = 1_000_000;
+        let out = reg.record_beat(row("plain", Holder::Agent, now, now), now);
+        assert_eq!(out.row.term, None);
+        assert_eq!(out.row.term_bound_unix, None);
+        assert!(reg.session_for_term("abc123", now).is_none());
+        assert_eq!(reg.term_for_session("plain", now), None);
     }
 }
