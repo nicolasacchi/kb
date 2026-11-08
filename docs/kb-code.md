@@ -2135,6 +2135,30 @@ is an ordinary bearer read (not on the doc-lens CORS routes), always answers
 the short shared `KbClient` timeout, and caches and persists nothing. The
 payload is `kbc-presence/1`; see `docs/http-api.md`.
 
+**Session card (A5).** `GET /api/session-card?sid=SID[&repo=NAME]` is one
+read answering "what did this session do on the code side", served by kb-code
+and fetched cross-origin by kb's SPA session page (the doc-lens client is
+reused; kb itself never calls kb-code — invariant #2). The payload is
+`kbc-session-card/1`: four lanes (`commits`, `reviews`, `findings`,
+`presence`), each `{available, caption?, ...}` — one lane failing never fails
+the request, and a failure carries a caption from a closed vocabulary
+(`store error` for a local store failure, the shared `kb ...` captions
+otherwise). `sid` must be a plain token (non-empty, at most 128 bytes, first
+character ASCII alphanumeric, the rest alphanumeric or `.` `_` `:` `-`); a
+missing or malformed `sid`, or an unknown `repo`, is a 400 whose body never
+echoes the rejected `sid`. Any well-formed `sid` — even one nothing is known
+about — answers 200 with four empty lanes, never 404. The card carries no
+transcript text, prompt text, file contents or repo-relative paths: commits
+are listed by repo name and sha with join-ladder confidence and `via` plus an
+`attributed_here` flag (20 rows at most, with `total` and `truncated`
+reporting the full count), reviews (20 at most) by id, repo name, title,
+state and verdict, findings as a per-severity count of what the session
+authored, and presence as a file count plus the newest edit age. It is the
+one addition to the credentialed doc-lens CORS set (the five doc-lens routes
+plus this one); the `/api/kb/*` relays above stay off that set.
+`kb-code session-card <SID>` renders the same card on the CLI (`--json` for
+the wire body).
+
 **Theme family follows kb.** kb stores `theme_family` in its `ui` settings
 (`PATCH /api/settings`). `GET /api/kb/ui` relays `{theme, theme_family}` with
 the same `unavailable` semantics. On boot kb-code's SPA applies that family
@@ -2159,11 +2183,13 @@ polls it every 15 s while the tab is visible. Nothing is cached or persisted.
 **Code in kb's command palette.** kb's Cmd+K shows one row, "Search code for
 "q" in kb-code", linking to `{code_url}/search?q=` in a new tab when the
 active kb has a `[kb.*] code_url`, and nothing when it does not. kb does not
-query kb-code from the browser: the doc-lens CORS route set is pinned to the
-doc-lens read routes on purpose (any loopback origin passes the CORS
+query kb-code from the browser for code search: the credentialed doc-lens
+CORS set is the doc-lens read routes plus `/api/session-card` (the one
+addition, itself carrying only counts, shas and review ids/titles — no
+paths, no text), on purpose (any loopback origin passes the CORS
 predicate, so adding the code search route would hand repository contents to
-every page open in the operator's browser), and `/api/kb/search` and
-`/api/kb/ui` (and `/api/kb/presence`) are asserted absent from it in
+every page open in the operator's browser), and `/api/kb/search`,
+`/api/kb/ui` and `/api/kb/presence` are asserted absent from it in
 `cors_layer_route_set_is_pinned`.
 
 ## Cited-by chip and section crossing (OL SIBL1)
