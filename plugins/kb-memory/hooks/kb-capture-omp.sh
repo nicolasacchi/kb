@@ -142,6 +142,13 @@ TRANSLATE='
      glob:"Glob", task:"Task", web_search:"WebSearch"}[ascii_downcase]
     // ((.[0:1] | ascii_upcase) + .[1:]);
   def ju: (($ENV.KB_JOB_ULID // "") | if test("^[A-Za-z0-9_-]{1,64}$") then . else "" end);
+  def blobsha: if type == "string" then (capture("^blob:sha256:(?<h>[0-9a-f]{64})$")? | .h) // null else null end;
+  def imgblock:
+    select(type == "object" and .type == "image") |
+    ((.mimeType // .mime_type // .media_type // "")
+       | if type == "string" and startswith("image/") then . else "image/*" end) as $mt |
+    ((.data // .image_url // .url // null) | if type == "object" then (.url // null) else . end | blobsha) as $h |
+    {type: "image", source: ({type: "blob_ref", media_type: $mt} + (if $h != null then {sha256: $h} else {} end))};
   # OK4 — capture the title-slot line'"'"'s value BEFORE it is filtered out
   # below (it is dropped from the body either way, same as before).
   (map(select(.type == "title")) | first // {}) as $tslot |
@@ -190,9 +197,9 @@ TRANSLATE='
      (.timestamp // ($m.timestamp | ms2iso) // "unknown") as $ts |
      if $m.role == "user" then
        ([$m.content[]? | objects | select(.type == "text") | .text | if type == "object" or type == "array" then tojson else . end] | join("\n")) as $t |
-       select($t != "") |
-       {sessionId: $sid, timestamp: $ts, cwd: $cwd, type: "user",
-        message: {role: "user", content: [{type: "text", text: $t}]}}
+      select($t != "") |
+      {sessionId: $sid, timestamp: $ts, cwd: $cwd, type: "user",
+       message: {role: "user", content: [{type: "text", text: $t}] + ([$m.content[]? | imgblock])}}
      elif $m.role == "assistant" then
        ([$m.content[]? | objects |
          if .type == "text" and ((.text // "") != "") then
@@ -229,7 +236,7 @@ TRANSLATE='
         message: {role: "user", content: [
           {type: "tool_result", tool_use_id: ($m.toolCallId // ""),
            is_error: ($m.isError // false),
-           content: [{type: "text", text: $ofinal}]}]}}
+           content: [{type: "text", text: $ofinal}] + ([$m.content[]? | imgblock])}]}}
      else empty end
    elif .type == "compaction" then
      # OK4 — the agent already distilled this discarded history itself;
