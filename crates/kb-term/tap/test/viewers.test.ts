@@ -564,3 +564,74 @@ test('viewers_clipboard_never_reaches_a_viewer_that_never_typed', async () => {
   await server.close();
   twin.dispose();
 });
+
+test('viewers_cumulative_accepted_writes_never_count_as_backlog', async () => {
+  const clock = fakeClock();
+  const stubTwin = { feed: async () => {}, serialize: { serialize: () => '' } } as unknown as Twin;
+  const server = new TapServer({ session: 'lag000003', harness: 'omp', epoch: 'e'.repeat(32), twin: stubTwin, now: clock.now, quiesceMs: 0, joinWaitMs: 5000, makeSeed: () => new Uint8Array(0) });
+  // Non-blocking transport: every write returns true (accepted by the socket),
+  // so no write may ever add to the connection backlog. 10 MiB of cumulative
+  // stream output must not read as "8 MiB pending" and drop the viewer.
+  const t = new MockTransport();
+  openViewer(server, t, 'v1');
+  await waitUntil(() => server.stats.joins >= 1, 'initial join');
+  t.clear();
+  const chunk = new Uint8Array(1024 * 1024).fill(0x62);
+  for (let i = 0; i < 10; i++) server.feed([{ kind: 'bytes', data: chunk }]);
+  expect(server.viewerCount).toBe(1);
+  const frames = collect(t);
+  expect(frames.some((f) => f.text?.t === 'error' && f.text.code === 'too-far-behind')).toBe(false);
+  expect(frames.some((f) => f.binary !== undefined)).toBe(true);
+  await server.close();
+});
+
+// A join still waiting on quiescence must not run when the viewer has gone
+// away or become live in the meantime (one guard pins both cases). Real
+// wall-clock time is unavoidable here: the quiescence loop's deadline is
+// measured on the platform clock, so a frozen fake clock would never reach
+// it (deterministic time control cannot drive this wait).
+test('viewers_join_aborts_when_viewer_closes_during_quiescence_wait', async () => {
+  const stubTwin = { feed: async () => {}, serialize: { serialize: () => '' } } as unknown as Twin;
+  const server = new TapServer({ session: 'join00001', harness: 'omp', epoch: 'e'.repeat(32), twin: stubTwin, quiesceMs: 10_000, joinWaitMs: 200, makeSeed: () => new Uint8Array(0) });
+  const t = new MockTransport();
+  const conn = openViewer(server, t, 'v1');
+  await Bun.sleep(50);
+  server.feedTransport(conn, encodeEnvelope(ENV_CONTROL, enc(encodeControlMessage({ t: 'viewer-close', viewer: 'v1' }))));
+  await Bun.sleep(600); // past the join deadline; the guard must have fired
+  expect(server.viewerCount).toBe(0);
+  expect(server.stats.joins).toBe(0);
+  expect(kinds(t)).toEqual([]);
+  await server.close();
+});
+
+test('viewers_join_aborts_when_resume_makes_viewer_live_during_wait', async () => {
+  const stubTwin = { feed: async () => {}, serialize: { serialize: () => '' } } as unknown as Twin;
+  const server = new TapServer({ session: 'join00002', harness: 'omp', epoch: 'e'.repeat(32), twin: stubTwin, quiesceMs: 10_000, joinWaitMs: 200, makeSeed: () => new Uint8Array(0) });
+  server.feed([{ kind: 'bytes', data: enc('0123456789') }]);
+  const t = new MockTransport();
+  const conn = openViewer(server, t, 'v1');
+  await Bun.sleep(50);
+  // A resumefrom for the same viewer converts it to 'live' (hello + replay).
+  server.feedTransport(conn, encodeEnvelope(ENV_TEXT, wrapS2C('v1', enc('{"t":"resumefrom","offset":0,"mseq":0,"epoch":"' + 'e'.repeat(32) + '"}'))));
+  await waitUntil(() => kinds(t).includes('hello'), 'resume hello');
+  await Bun.sleep(600); // past the join deadline; the guard must have fired
+  expect(server.stats.joins).toBe(0);
+  expect(kinds(t).filter((k) => k === 'hello').length).toBe(1);
+  expect(kinds(t)).not.toContain('profile');
+  expect(kinds(t)).not.toContain('seed');
+  await server.close();
+});
+
+test('viewers_viewer_open_without_resume_joins_fresh', async () => {
+  const clock = fakeClock();
+  const twin = makeTwin(120, 40);
+  const server = new TapServer({ session: 'vo000001', harness: 'omp', epoch: 'e'.repeat(32), twin, now: clock.now, quiesceMs: 0, joinWaitMs: 5000, makeSeed: () => new Uint8Array(0) });
+  const t = new MockTransport();
+  const conn = server.attachTransport(t);
+  // No resume field at all: Rust decodes Option<ResumeInfo> as None, so this
+  // is a fresh full join, not a bad-frame.
+  server.feedTransport(conn, encodeEnvelope(ENV_CONTROL, enc('{"t":"viewer-open","viewer":"v1","profile":"desktop"}')));
+  await waitUntil(() => kinds(t).includes('seed'), 'join without resume');
+  await server.close();
+  twin.dispose();
+});

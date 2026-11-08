@@ -176,3 +176,19 @@ test('wire_envelope_length_capped_at_1_mib_in_both_directions', () => {
   expect(done.length).toBe(1);
   expect(done[0].body.length).toBe(MAX_ENVELOPE_LEN - 1);
 });
+
+// Golden-style lock-step vectors: serde treats a missing Option<T> field as
+// None, so TS must accept these frames (rust decode_text_frame does) rather
+// than rejecting them as bad-frame.
+test('wire_missing_optional_fields_accepted_like_rust', () => {
+  expect(decodeTextFrame('{"t":"hello","proto":"kb-term/1","session":"s","epoch":"e","harness":"omp"}').kind).toBe('known');
+  expect(
+    decodeTextFrame('{"t":"profile","xterm":"6.0.0","serialize":"0.14.0","width":"unicode-graphemes@0.4.0","image":"0.9.0","cols":120,"rows":40,"scrollback":50000,"scroll_on_erase_in_display":true,"cell_px_w":9,"cell_px_h":18}').kind,
+  ).toBe('known');
+  expect(decodeTextFrame('{"t":"exit","seq":10,"offset":1234}').kind).toBe('known');
+  expect(decodeTextFrame('{"t":"viewer-open","viewer":"v1","profile":"desktop"}').kind).toBe('known');
+  // Wrong types for those fields still reject: only absence means None.
+  expect(() => decodeTextFrame('{"t":"hello","proto":"kb-term/1","session":"s","epoch":"e","harness":"omp","bound_sid":5}')).toThrow(FrameError);
+  expect(() => decodeTextFrame('{"t":"exit","seq":10,"code":"1","offset":1234}')).toThrow(FrameError);
+  expect(() => decodeTextFrame('{"t":"viewer-open","viewer":"v1","profile":"desktop","resume":"x"}')).toThrow(FrameError);
+});
