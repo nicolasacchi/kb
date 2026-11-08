@@ -374,8 +374,8 @@ fn golden_files_are_complete() {
 }
 
 #[test]
-fn envelope_length_capped_at_1_mib() {
-    // Boundary: a body of MAX_ENVELOPE_LEN - 1 bytes (length == 1 MiB) is fine.
+fn envelope_length_capped_at_max_envelope_len() {
+    // Boundary: a body of MAX_ENVELOPE_LEN - 1 bytes (length == the cap) is fine.
     let ok = vec![0u8; MAX_ENVELOPE_LEN - 1];
     let env = encode_envelope(0, &ok).expect("boundary envelope must encode");
     assert_eq!(env.len(), 4 + MAX_ENVELOPE_LEN);
@@ -412,3 +412,35 @@ fn decode_text_frame_rejects_missing_required_fields() {
         Err(WireError::MalformedJson)
     );
 }
+
+#[test]
+fn decode_text_frame_rejects_offsets_at_2pow53() {
+    // Lock-step with the TS `reqUint` cap (Number.MAX_SAFE_INTEGER): text
+    // u64 offsets/seqs at or above 2^53 are OffsetOutOfRange on both sides.
+    // 2^53 - 1 is the largest legal value and still decodes.
+    assert!(
+        decode_text_frame(r#"{"t":"seed","offset":9007199254740991,"len":1}"#).is_ok(),
+        "2^53 - 1 must decode"
+    );
+    assert_eq!(
+        decode_text_frame(r#"{"t":"seed","offset":9007199254740992,"len":1}"#),
+        Err(WireError::OffsetOutOfRange)
+    );
+    assert_eq!(
+        decode_text_frame(r#"{"t":"seed","offset":0,"len":9007199254740992}"#),
+        Err(WireError::OffsetOutOfRange)
+    );
+    assert_eq!(
+        decode_text_frame(r#"{"t":"resumefrom","offset":0,"mseq":9007199254740992,"epoch":"e"}"#),
+        Err(WireError::OffsetOutOfRange)
+    );
+    assert_eq!(
+        decode_text_frame(r#"{"t":"viewer-open","viewer":"v1","profile":"desktop","resume":{"offset":9007199254740992,"mseq":0,"epoch":"e"}}"#),
+        Err(WireError::OffsetOutOfRange)
+    );
+    assert_eq!(
+        decode_text_frame(r#"{"t":"clipboard","offset":9007199254740992,"data_b64":""}"#),
+        Err(WireError::OffsetOutOfRange)
+    );
+}
+
