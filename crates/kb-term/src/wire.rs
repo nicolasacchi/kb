@@ -229,16 +229,11 @@ pub enum ServerFrame {
 pub enum ClientFrame {
     /// Resume the stream from an absolute offset.
     Resumefrom {
-        /// Absolute offset to resume from. Additive (T7): absent decodes as 0.
-        #[serde(default)]
+        /// Absolute offset to resume from.
         offset: u64,
-        /// Highest marker seq the client applied (0 if none). Additive
-        /// (T7): absent decodes as 0.
-        #[serde(default)]
+        /// Highest marker seq the client applied (0 if none).
         mseq: u64,
-        /// Stream epoch the offset belongs to. Additive (T7): absent
-        /// decodes as "".
-        #[serde(default)]
+        /// Stream epoch the offset belongs to.
         epoch: String,
     },
     /// Request grid size.
