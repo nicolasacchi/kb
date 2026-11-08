@@ -41,15 +41,13 @@ describe("useSessionCard", () => {
       wrapper: wrapper(),
     });
     // Give the disabled query a tick: a fetch would be issued here.
-    const { promise, resolve } = Promise.withResolvers<void>();
-    setTimeout(resolve, 0);
-    await promise;
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
     expect(fetchFn).not.toHaveBeenCalled();
     expect(result.current.card).toBeNull();
   });
 
   it("fetches the card for a sid", async () => {
-    const fetchFn = vi.fn(async (url: unknown) => ({
+    const fetchFn = vi.fn(async () => ({
       ok: true,
       status: 200,
       statusText: "OK",
