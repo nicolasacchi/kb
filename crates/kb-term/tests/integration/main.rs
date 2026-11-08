@@ -791,7 +791,12 @@ async fn term_int_grid_is_fixed_until_resized() {
     }
     let (cols, rows) = window_size(&tr, &sock);
     assert_eq!((cols, rows), (100, 30), "resize must move the window");
-    let winsize = tr.runner.anchor_winsize(&id).await.expect("anchor present");
+    let winsize = tr
+        .runner
+        .anchor_winsize(&id)
+        .await
+        .expect("anchor present")
+        .expect("winsize_of must succeed");
     assert_eq!(winsize, (100, 30, 900, 540), "anchor pty pixel fields");
 }
 
@@ -1467,8 +1472,14 @@ async fn term_int_enter_waits_for_quiet_and_honours_blocked() {
         "blocked enter writes nothing: {}",
         read_log(&log)
     );
-    // Real enter: waits for quiet (last print + 400ms window).
-    let t0 = std::time::Instant::now();
+    // Real enter: waits for quiet (last print + window). The window is
+    // pinned against the probe's `stop <epoch>` (wall clock, same source
+    // as here): a broken/shrunken `enter_quiet_ms` returns too early and
+    // fails the lower bound. The return time stands in for the `0d`
+    // write (the RPC writes it just before returning), so it must land
+    // in [stop + window - 100ms, stop + window + 1500ms].
+    let quiet_ms = tr.runner.cfg.enter_quiet_ms;
+    assert_eq!(quiet_ms, 400, "the pinned window under test");
     dispatch_ok(
         &tr,
         Request::Enter {
@@ -1479,23 +1490,29 @@ async fn term_int_enter_waits_for_quiet_and_honours_blocked() {
         },
     )
     .await;
-    let elapsed = t0.elapsed();
-    // Printing ran 1.5s from ~0.3s after launch; the anchor quiet clock
-    // trails printing, so the enter returns well after print-stop.
+    let enter_wall = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64();
+    // Wait for the probe's stop line and pin its epoch.
+    let ok = poll_log(&log, Duration::from_secs(10), |text| {
+        text.lines().any(|l| l.starts_with("stop "))
+    })
+    .await;
+    assert!(ok, "probe must log its stop epoch: {}", read_log(&log));
+    let stop: f64 = read_log(&log)
+        .lines()
+        .filter_map(|l| l.strip_prefix("stop "))
+        .filter_map(|s| s.trim().parse().ok())
+        .next()
+        .expect("stop <epoch> line must parse");
+    let delta_ms = ((enter_wall - stop) * 1000.0) as i64;
     assert!(
-        elapsed >= Duration::from_millis(500),
-        "enter must wait for quiet, took {elapsed:?}"
+        delta_ms >= quiet_ms as i64 - 100 && delta_ms < quiet_ms as i64 + 1500,
+        "enter must land at stop + {quiet_ms}ms +- tol (got stop+{delta_ms}ms)"
     );
     let ok = poll_log(&log, Duration::from_secs(10), |text| text.contains("0d")).await;
     assert!(ok, "0d reaches the pane: {}", read_log(&log));
-    // The stop timestamp in the log precedes the 0d: read the log order.
-    let text = read_log(&log);
-    let stop_pos = text.find("stop");
-    let enter_pos = text.find("0d");
-    assert!(
-        stop_pos.is_some() && enter_pos.is_some() && enter_pos.unwrap() > stop_pos.unwrap(),
-        "enter byte strictly after printing stopped: {text}"
-    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1694,6 +1711,110 @@ async fn term_int_take_size_moves_the_window_and_a_foreign_owner_is_refused() {
         .arg(run_dir.join("s").join(format!("{id}.sock")))
         .arg("kill-server")
         .output();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn term_int_legacy_resize_obeys_ownership_and_updates_viewers() {
+    // The legacy `resize{id,cols,rows}` RPC carries no owner claim: it
+    // must refuse while an owner is recorded (`grid-owned`, window and
+    // viewer ptys untouched), and after a release it must move the
+    // window AND the anchor + viewer pty winsizes (cells + pixels).
+    let Some(tmux_bin) = require_tmux() else {
+        return;
+    };
+    let tr = TestRunner::new(tmux_bin);
+    boot_runner(&tr).await;
+    let (id, _log) = launch_probe(&tr, "raw").await;
+    let sock = tr.sock(&id);
+    dispatch_ok(
+        &tr,
+        Request::ViewerOpen {
+            id: id.clone(),
+            viewer: "web".to_string(),
+        },
+    )
+    .await;
+    // Take 100x30 as `a` (anchor + viewer at 900x540).
+    dispatch_ok(
+        &tr,
+        Request::TakeSize {
+            id: id.clone(),
+            cols: 100,
+            rows: 30,
+            owner: "a".to_string(),
+            force: false,
+        },
+    )
+    .await;
+    // Legacy resize while owned: refused, nothing moves.
+    let resp = rpc::dispatch(
+        &tr.runner,
+        &Request::Resize {
+            id: id.clone(),
+            cols: 80,
+            rows: 24,
+        },
+    )
+    .await;
+    match resp {
+        Response::Err { code, .. } => assert_eq!(code, "grid-owned"),
+        Response::Ok { .. } => panic!("legacy resize under an owner must be grid-owned"),
+    }
+    assert_eq!(
+        window_size(&tr, &sock),
+        (100, 30),
+        "refused resize moves nothing"
+    );
+    assert_eq!(
+        tr.runner
+            .viewer_winsize(&id, "web")
+            .await
+            .expect("viewer present")
+            .expect("viewer winsize_of must succeed"),
+        (100, 30, 900, 540),
+        "refused resize leaves the viewer pty at 100x30"
+    );
+    // Release by the owner, then legacy resize applies everywhere.
+    dispatch_ok(
+        &tr,
+        Request::ReleaseSize {
+            id: id.clone(),
+            owner: "a".to_string(),
+        },
+    )
+    .await;
+    dispatch_ok(
+        &tr,
+        Request::Resize {
+            id: id.clone(),
+            cols: 80,
+            rows: 24,
+        },
+    )
+    .await;
+    assert_eq!(
+        window_size(&tr, &sock),
+        (80, 24),
+        "legacy resize moves the window"
+    );
+    assert_eq!(
+        tr.runner
+            .anchor_winsize(&id)
+            .await
+            .expect("anchor present")
+            .expect("anchor winsize_of must succeed"),
+        (80, 24, 720, 432),
+        "legacy resize updates the anchor pty"
+    );
+    assert_eq!(
+        tr.runner
+            .viewer_winsize(&id, "web")
+            .await
+            .expect("viewer present")
+            .expect("viewer winsize_of must succeed"),
+        (80, 24, 720, 432),
+        "legacy resize updates the viewer pty (cells + pixel fields)"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
