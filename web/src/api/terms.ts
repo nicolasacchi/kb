@@ -142,9 +142,14 @@ export function wsUrl(termId: string, ticket: string, from?: number): string {
     const u = new URL(base);
     scheme = u.protocol === "https:" ? "wss" : "ws";
     host = u.host;
-  } else {
+  } else if (typeof location !== "undefined") {
     scheme = location.protocol === "https:" ? "wss" : "ws";
     host = location.host;
+  } else {
+    // Node/vitest only: there is no page origin to derive the scheme or
+    // host from. The host is inert (no real socket is opened here).
+    scheme = "ws";
+    host = "localhost";
   }
   const q = new URLSearchParams();
   q.set("ticket", ticket);

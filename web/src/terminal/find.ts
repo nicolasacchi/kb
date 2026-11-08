@@ -31,7 +31,7 @@ export function findNext(
 ): FindHit | null {
   if (query === "" || source.length === 0) return null;
   const n = source.length;
-  for (let step = 1; step <= n; step += 1) {
+  for (let step = 0; step < n; step += 1) {
     const y = (((from.line + dir * step) % n) + n) % n;
     const text = source.lineToString(y);
     if (dir > 0) {

@@ -52,7 +52,7 @@ describe("binary frames", () => {
     const payload = new Uint8Array([1, 2, 3, 250]);
     const frame = encodeBinaryFrame(987654321, payload);
     expect(Array.from(frame.subarray(0, 8))).toEqual([
-      0, 0, 0, 0, 3, 174, 151, 133,
+      0, 0, 0, 0, 58, 222, 104, 177,
     ]);
     const decoded = decodeBinaryFrame(frame);
     expect(decoded.offset).toBe(987654321);
