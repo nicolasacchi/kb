@@ -95,7 +95,6 @@ export const INTERNALS_PATHS: readonly string[] = [
   '_core._charsetService',
   '_core._charsetService.glevel',
   '_core._charsetService._charsets',
-  '_core._charsetService.charset',
   'modes',
   'buffer',
   'buffer.active',
@@ -219,7 +218,9 @@ export function captureTwinState(twin: Twin): TwinState {
   const coreService = need(core, 'coreService', 'twin.term._core');
   const decPrivateModes = need(coreService, 'decPrivateModes', 'twin.term._core.coreService');
   const charsetService = need(core, '_charsetService', 'twin.term._core');
-  const charset = needMaybe<Record<string, unknown> | null | undefined>(charsetService, 'charset', 'twin.term._core._charsetService');
+  // Charset is diagnostic-only: xterm 6.0.0 CharsetService has no
+  // `charset` property (verified in CI), so read tolerantly as null.
+  const charset = (charsetService as Record<string, unknown>).charset as Record<string, unknown> | undefined;
   const charsets = need<unknown[]>(charsetService, '_charsets', 'twin.term._core._charsetService');
   const buffer = need(term, 'buffer', 'twin.term');
   const active = need(buffer, 'active', 'twin.term.buffer');
