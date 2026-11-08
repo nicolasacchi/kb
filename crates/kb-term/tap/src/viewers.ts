@@ -335,6 +335,12 @@ export class TapServer {
       }
       await sleep(Math.min(10, Math.max(1, deadline - this.now())));
     }
+    // The viewer may have gone away (viewer-close) or been converted to
+    // 'live' by a resumefrom while the quiescence wait was in flight; a
+    // full join must not run for a dead or already-live viewer.
+    if (viewer.state !== 'joining' || this.viewers.get(viewer.id) !== viewer) {
+      return { ok: false, reason: 'gone' };
+    }
     try {
       this.joinNow(viewer);
     } catch {
@@ -441,9 +447,15 @@ export class TapServer {
   }
 
   private write(conn: Connection, buf: Uint8Array): boolean {
-    conn.pendingBacklog += buf.length;
+    // Backlog = bytes written but not yet accepted by the socket: only a
+    // write that returns false (Node's backpressure signal, followed by a
+    // 'drain') adds anything. Accepted bytes are flushed by the socket and
+    // must not accumulate over the connection's lifetime.
     const accepted = conn.transport.write(buf);
-    if (!accepted) conn.blocked = true;
+    if (!accepted) {
+      conn.pendingBacklog += buf.length;
+      conn.blocked = true;
+    }
     return accepted;
   }
 
@@ -511,7 +523,8 @@ export class TapServer {
       }
       const rawResume = (msg as { resume?: unknown }).resume;
       let resume: { offset: number; mseq: number; epoch: string } | null = null;
-      if (rawResume !== null) {
+      // A missing resume means a fresh join (Rust Option<ResumeInfo>).
+      if (rawResume !== null && rawResume !== undefined) {
         if (typeof rawResume !== 'object' || rawResume === null) {
           throw new FrameError('bad-frame: viewer-open.resume must be null or an object');
         }
