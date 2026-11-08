@@ -379,14 +379,21 @@ export class Withholder {
     // Only called at a terminator. Returns whether the OSC body went out
     // verbatim into the shared stream (the terminator then goes out too).
     if (this.oscKind === 1) {
-      const body = String.fromCharCode(...this.osc.slice(OSC52.length));
+      // Chunked: a near-cap OSC 52 body is ~1 MiB, over the spread-argument
+      // limit, so the byte->string conversion cannot use a single spread.
+      let raw = '';
+      for (let i = 0; i < this.osc.length; i += 0x4000) {
+        raw += String.fromCharCode(...this.osc.slice(i, i + 0x4000));
+      }
+      const body = raw.slice(OSC52.length);
       const sep = body.indexOf(';');
       if (sep >= 0) {
         ctx.clipboards.push({ offset: ctx.headAtStart + ctx.out.length, data_b64: body.slice(sep + 1) });
         return false;
       }
       // "52;" without a payload separator is not a set: pass it verbatim.
-      ctx.out.push(ESC, 0x5d, ...this.osc);
+      ctx.out.push(ESC, 0x5d);
+      for (const b of this.osc) ctx.out.push(b);
       return true;
     }
     if (this.oscKind === 0) {
