@@ -467,6 +467,21 @@ impl<S: Supervisor> Runner<S> {
         *self.paste_only.lock().await.get(id).unwrap_or(&false)
     }
 
+    /// Why the anchor pump closed, for tests/diagnostics:
+    /// `Some((reason_code, errno))` — see `PumpShared` reason codes.
+    /// `None` if the anchor is unknown or the pump is still open.
+    pub async fn anchor_close_reason(&self, id: &str) -> Option<(u32, i32)> {
+        let anchors = self.anchors.lock().await;
+        anchors.get(id).and_then(|anchor| {
+            let pump = anchor.pump();
+            if pump.is_closed() {
+                Some((pump.closed_reason(), pump.closed_errno()))
+            } else {
+                None
+            }
+        })
+    }
+
     /// Record the `paste_only` flag for a session (in memory only).
     pub async fn set_paste_only(&self, id: &str, value: bool) {
         self.paste_only.lock().await.insert(id.to_string(), value);

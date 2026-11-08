@@ -542,6 +542,34 @@ pub async fn spawn_anchor_and_wait<S: Supervisor>(
             "anchor {pid} never appeared in list-clients for {id}"
         )));
     }
+    // The anchor must have ANSWERED tmux's startup queries before the
+    // harness is released (spec 4): wait until the client's termtype
+    // is the kb profile (tmux sets it from the XTVERSION reply).
+    let answered = poll_until(
+        Duration::from_secs(5),
+        Duration::from_millis(50),
+        || async {
+            let out = runner
+                .tmux
+                .run(
+                    &sock,
+                    &["list-clients", "-F", "#{client_pid} #{client_termtype}"],
+                    None,
+                )
+                .await;
+            matches!(out, Ok(o) if o.ok && o.stdout.lines().any(|l| {
+                let mut p = l.split_whitespace();
+                p.next() == Some(pid.to_string().as_str())
+                    && p.next().unwrap_or("").starts_with("kb-term")
+            }))
+        },
+    )
+    .await;
+    if !answered {
+        return Err(RunnerError::TmuxFailed(format!(
+            "anchor {pid} never answered tmux's startup queries for {id}"
+        )));
+    }
     Ok(())
 }
 

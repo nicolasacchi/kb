@@ -345,6 +345,12 @@ struct PumpShared {
     queries_answered: AtomicU64,
     last_output: std::sync::Mutex<Option<Instant>>,
     closed: AtomicBool,
+    /// Why the read loop exited (0 = still open). Test-visible reason codes:
+    /// 1 = `readable()` failed, 2 = EOF (read returned 0), 3 = a read error
+    /// (see `closed_errno`).
+    closed_reason: AtomicU32,
+    /// The `raw_os_error` of the `readable()`/read failure, if any.
+    closed_errno: AtomicI32,
 }
 
 /// One per-client pump handle: feed replies / keys / items to the hidden
@@ -391,6 +397,16 @@ impl PumpHandle {
         Arc::ptr_eq(&self.shared, &other.shared)
     }
 
+    /// Why the read loop exited (0 = still open; see `PumpShared`).
+    pub fn closed_reason(&self) -> u32 {
+        self.shared.closed_reason.load(Ordering::Relaxed)
+    }
+
+    /// The `raw_os_error` behind the close, if the failure carried one.
+    pub fn closed_errno(&self) -> i32 {
+        self.shared.closed_errno.load(Ordering::Relaxed)
+    }
+
     /// How long the master has been quiet (`None` if never active).
     pub fn quiet_for(&self) -> Option<Duration> {
         self.last_output().map(|t| t.elapsed())
@@ -410,6 +426,8 @@ pub fn spawn_pump(
         queries_answered: AtomicU64::new(0),
         last_output: std::sync::Mutex::new(None),
         closed: AtomicBool::new(false),
+        closed_reason: AtomicU32::new(0),
+        closed_errno: AtomicI32::new(0),
     });
     let (tx, mut rx) = mpsc::channel::<Vec<u8>>(64);
     // Writer task: one per client, whole items only.
@@ -428,14 +446,23 @@ pub fn spawn_pump(
         loop {
             let mut readable = match master.readable().await {
                 Ok(g) => g,
-                Err(_) => break,
+                Err(e) => {
+                    read_shared.closed_reason.store(1, Ordering::Relaxed);
+                    read_shared
+                        .closed_errno
+                        .store(e.raw_os_error().unwrap_or(0), Ordering::Relaxed);
+                    break;
+                }
             };
             let n = readable.try_io(|inner: &AsyncFd<std::fs::File>| {
                 use std::io::Read;
                 inner.get_ref().read(&mut buf)
             });
             match n {
-                Ok(Ok(0)) => break,
+                Ok(Ok(0)) => {
+                    read_shared.closed_reason.store(2, Ordering::Relaxed);
+                    break;
+                }
                 Ok(Ok(n)) => {
                     read_shared
                         .bytes_drained
@@ -462,7 +489,20 @@ pub fn spawn_pump(
                     }
                 }
                 Ok(Err(e)) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
-                _ => break,
+                Ok(Err(e)) => {
+                    read_shared.closed_reason.store(3, Ordering::Relaxed);
+                    read_shared
+                        .closed_errno
+                        .store(e.raw_os_error().unwrap_or(0), Ordering::Relaxed);
+                    break;
+                }
+                Err(e) => {
+                    read_shared.closed_reason.store(3, Ordering::Relaxed);
+                    read_shared
+                        .closed_errno
+                        .store(e.raw_os_error().unwrap_or(0), Ordering::Relaxed);
+                    break;
+                }
             }
         }
         read_shared.closed.store(true, Ordering::Relaxed);

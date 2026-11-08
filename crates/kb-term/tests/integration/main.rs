@@ -1899,8 +1899,9 @@ async fn term_int_anchor_death_closes_viewers_promptly_without_an_rpc() {
         !tr.runner.has_viewer(&id, "web").await
     })
     .await;
+    let reason = tr.runner.anchor_close_reason(&id).await;
     assert!(
         gone,
-        "anchor death must close viewers promptly without any RPC"
+        "anchor death must close viewers promptly without any RPC (close reason: {reason:?})"
     );
 }
