@@ -2,9 +2,9 @@
 # Package the kb-term host-side release archive (kb-term-<ver>-<target>.tar.gz).
 #
 # This script builds NOTHING. Inputs come from the environment (the release
-# workflow and the `term-package` CI job build the four components first and
-# then call this script — one shared script, so a packaging bug shows up on
-# the PR, not on release day):
+  # workflow and the CI `term-int` job build the four components first and
+  # then call this script — one shared script, so a packaging bug shows up on
+  # the PR, not on release day):
 #
 #   KB_TERM_VERSION    archive version, e.g. `0.44` or `main-<sha12>`
 #   KB_TERM_TARGET     target, e.g. `x86_64-unknown-linux-gnu` (x86_64 only)

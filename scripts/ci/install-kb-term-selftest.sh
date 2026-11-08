@@ -8,9 +8,9 @@
 # KB_INSECURE_SKIP_VERIFY=1 is the only override; the pinned tmux lands in
 # libexec (never bin/), never on PATH; unit/tmpfiles tokens are rendered.
 #
-# This file owns the expected archive manifest. `term-package` (ci.yml) and
-# every case here compare the archive listing against the list printed by
-# `--print-manifest`: one source of truth.
+  # This file owns the expected archive manifest. The `term-int` job
+  # (ci.yml) and every case here compare the archive listing against the
+  # list printed by `--print-manifest`: one source of truth.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"

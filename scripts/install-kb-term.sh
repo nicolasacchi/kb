@@ -213,7 +213,10 @@ main() {
   detect_target
   resolve_version
 
-  prefix="${PREFIX:-${HOME}/.local}"
+  # Export PREFIX so render() (which reads the global) always sees the
+  # resolved install root; both default to ${HOME}/.local.
+  PREFIX="${PREFIX:-${HOME}/.local}"
+  prefix="$PREFIX"
   bindir="${prefix}/bin"
   xdg_config="${XDG_CONFIG_HOME:-${HOME}/.config}"
   unit_dir="${xdg_config}/systemd/user"
@@ -369,7 +372,7 @@ main() {
       ;;
   esac
 
-  say "Docs: https://github.com/${REPO}/kb-term-install.md"
+  say "Docs: https://github.com/${REPO}/blob/main/docs/kb-term-install.md"
 }
 
 main "$@"
