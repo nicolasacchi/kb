@@ -1,0 +1,74 @@
+{
+  "schema": "kbc-session-card/1",
+  "sid": "sess-0001",
+  "now_unix": 1700000000,
+  "commits": {
+    "available": true,
+    "total": 3,
+    "shown": 3,
+    "truncated": false,
+    "items": [
+      {
+        "repo": "fixture",
+        "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "subject": "fixture commit one",
+        "visible": true,
+        "confidence": "trailer",
+        "via": "commit-trailer",
+        "attributed_here": true
+      },
+      {
+        "repo": "fixture",
+        "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "subject": "fixture commit two",
+        "visible": true,
+        "confidence": "exact",
+        "via": "by-commit",
+        "attributed_here": true
+      },
+      {
+        "repo": "fixture",
+        "sha": "cccccccccccccccccccccccccccccccccccccccc",
+        "subject": "fixture commit three",
+        "visible": false,
+        "caption": "commit not in this checkout",
+        "confidence": "none",
+        "via": "not-in-checkout",
+        "attributed_here": false
+      }
+    ]
+  },
+  "reviews": {
+    "available": true,
+    "total": 1,
+    "shown": 1,
+    "items": [
+      {
+        "id": 7,
+        "repo": "fixture",
+        "title": "Add fixture review",
+        "state": "open",
+        "verdict": "approve",
+        "verdict_ps": 2,
+        "pr_number": 12,
+        "updated_at": 1700000000,
+        "basis": "session_id"
+      }
+    ]
+  },
+  "findings": {
+    "available": true,
+    "total": 4,
+    "by_severity": {
+      "blocker": 1,
+      "concern": 2,
+      "ok": 1
+    },
+    "basis": "author"
+  },
+  "presence": {
+    "available": true,
+    "files": 2,
+    "newest_age_secs": 40
+  }
+}

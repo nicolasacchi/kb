@@ -78,6 +78,47 @@ impl Store {
         Ok(())
     }
 
+    /// A5 (`kbc-session-card/1`) — every `commit_sessions` cache row for one
+    /// session, newest resolution first, with the repo NAME joined for the
+    /// wire (`repo_id` alone cannot name a repo to a reader that does not
+    /// hold the config). The session-card lane unions these cache-only
+    /// rows with kb's own `session_commits` feed; `limit` bounds the scan,
+    /// so a caller wanting the full count passes an unbounded limit and
+    /// caps the display itself (the session-card lane does exactly that).
+    pub fn commit_sessions_for_session(
+        &self,
+        sid: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, String, CommitSessionRow)>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT r.name, cs.sha, cs.confidence, cs.via, cs.session_id, cs.kb,
+                    cs.display_name, cs.started_at, cs.resolved_at
+             FROM commit_sessions cs JOIN repos r ON r.id = cs.repo_id
+             WHERE cs.session_id = ?1
+             ORDER BY cs.resolved_at DESC, cs.repo_id, cs.sha
+             LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![sid, limit as i64], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    CommitSessionRow {
+                        confidence: r.get(2)?,
+                        via: r.get(3)?,
+                        session_id: r.get(4)?,
+                        kb: r.get(5)?,
+                        display_name: r.get(6)?,
+                        started_at: r.get(7)?,
+                        resolved_at: r.get(8)?,
+                    },
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     // --- transcripts (W2.5) ------------------------------------------------
     //
     // Deliberately NO `bump_generation()` calls in this section: `generation`

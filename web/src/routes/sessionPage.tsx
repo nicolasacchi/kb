@@ -21,6 +21,7 @@ import {
   type ChildrenResponse,
 } from "../api/sessions";
 import { TerminalSlot, shouldRenderTerminal } from "../components/TerminalSlot";
+import { CodeLaneSection } from "../components/sessions/CodeLaneSection";
 import { ChecksSection, CommitsSection, ResumeCommand } from "./sessions";
 import { sessionDisplayName } from "../lib/sessionDisplayName";
 import {
@@ -385,6 +386,11 @@ export default function SessionPage() {
           />
         )}
       </Section>
+
+      {/* A5 — the code-side lane (`kbc-session-card/1`), fetched
+          cross-origin through the doclens client. Renders nothing when
+          the corpus has no code_url. */}
+      <CodeLaneSection sid={sid} kb={card.kb} />
 
       <Section name="memory" title="Memory" open={open}>
         {!card.memory.available ? (

@@ -12,3 +12,4 @@ mod provenance;
 mod review;
 mod review_v4;
 mod rs_u10a_cli;
+mod session_card;
