@@ -13,7 +13,7 @@
 //! responder, and hands replies to one writer task per client (through an
 //! mpsc), so a reply can never land inside a key sequence.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -488,15 +488,13 @@ pub fn spawn_pump(
                         }
                     }
                 }
-                Ok(Err(e)) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+                // `try_io` maps a `WouldBlock` read to `Err(TryIoError)`
+                // (and clears readiness there), so that arm must re-wait,
+                // never mark the pump closed: a freshly registered AsyncFd
+                // starts "ready", so the first read usually WouldBlocks
+                // before tmux writes anything.
+                Err(_) => continue,
                 Ok(Err(e)) => {
-                    read_shared.closed_reason.store(3, Ordering::Relaxed);
-                    read_shared
-                        .closed_errno
-                        .store(e.raw_os_error().unwrap_or(0), Ordering::Relaxed);
-                    break;
-                }
-                Err(e) => {
                     read_shared.closed_reason.store(3, Ordering::Relaxed);
                     read_shared
                         .closed_errno
@@ -524,8 +522,11 @@ async fn write_all_async(fd: &AsyncFd<std::fs::File>, item: &[u8]) -> Result<(),
         });
         match n {
             Ok(Ok(k)) => pos += k,
-            Ok(Err(e)) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
-            _ => return Err(()),
+            // As in the read loop, `Err(TryIoError)` is the WouldBlock
+            // signal: readiness was already cleared by `try_io`, so retry
+            // instead of killing the writer.
+            Err(_) => continue,
+            Ok(Err(_)) => return Err(()),
         }
     }
     Ok(())

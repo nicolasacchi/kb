@@ -1243,12 +1243,15 @@ async fn term_int_keys_reach_the_pane_unsplit() {
         },
     )
     .await;
-    // Exact-line assertions: the probe logs one hex line per read, and
-    // tmux emits one write per key, so each key is one line. Substring
-    // matches would also fire inside longer hex ("02" in "025").
+    // Read-boundary-invariant check: the probe logs one hex line per read,
+    // and tmux may split or coalesce key writes across reads, so assert on
+    // the concatenation of all lines instead of per-line membership
+    // (substring matches would also fire inside longer hex, e.g. "02" in
+    // "025" — the exact 19-char suffix pins order and contiguity).
+    let want = "02251b5b31333b3275";
     let ok = poll_log(&log, Duration::from_secs(10), |text| {
-        let lines: std::collections::HashSet<&str> = text.lines().collect();
-        lines.contains("02") && lines.contains("25") && lines.contains("1b5b31333b3275")
+        let joined: String = text.lines().collect();
+        joined.ends_with(want)
     })
     .await;
     assert!(ok, "keys must reach the pane verbatim: {}", read_log(&log));
