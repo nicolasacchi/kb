@@ -105,3 +105,44 @@ test('deleting savedX makes captureTwinState throw (mutation)', () => {
     twin.dispose();
   }
 });
+
+test('deleting lines makes captureTwinState throw (mutation, FXT6)', () => {
+  const twin = makeTwin(20, 8);
+  try {
+    const term = twin.term as unknown as {
+      _core: { _bufferService: { buffers: { normal: Record<string, unknown> } } };
+    };
+    const buf = term._core._bufferService.buffers.normal;
+    const saved = buf.lines;
+    delete buf.lines;
+    // Fail-closed: lines (and its length) is load-bearing for the pending
+    // wrap cell and scrollback count, so a missing lines is an internals
+    // change, never a silent default.
+    expect(() => captureTwinState(twin)).toThrow(/seed: xterm internals changed/);
+    buf.lines = saved;
+  } finally {
+    twin.dispose();
+  }
+});
+
+test('deleting the diagnostic charset property still captures (FXT6)', () => {
+  // `_core._charsetService.charset` is diagnostic-only (charsetJson feeds
+  // state comparison, never seed bytes): its absence must not fail the
+  // capture. Pins seed-state.ts's tolerant read against a future
+  // "helpful" fail-closed change.
+  const twin = makeTwin(20, 8);
+  try {
+    const term = twin.term as unknown as {
+      _core: { _charsetService: Record<string, unknown> };
+    };
+    const cs = term._core._charsetService;
+    let saved: unknown;
+    let had = false;
+    if ('charset' in cs) { saved = cs.charset; had = true; delete cs.charset; }
+    const st = captureTwinState(twin);
+    expect(st.charsetJson).toBeNull();
+    if (had) cs.charset = saved;
+  } finally {
+    twin.dispose();
+  }
+});
