@@ -208,8 +208,8 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | GET | `/api/sessions/recollect` | `routes::sessions::recollect` |
 | GET | `/api/sessions/research-rollup` | `routes::sessions::research_rollup` |
 | GET | `/api/sessions/threads` | `routes::sessions::threads` |
-| GET | `/api/sessions/work` | `routes::sessions::work` |
 | POST | `/api/sessions/threads/save` | `routes::sessions::save_thread` |
+| GET | `/api/sessions/work` | `routes::sessions::work` |
 | GET | `/api/sessions/{session_id}` | `routes::sessions::get` |
 | GET | `/api/sessions/{session_id}/card` | `routes::session_card::card` |
 | GET | `/api/sessions/{session_id}/children` | `routes::session_card::children` |
