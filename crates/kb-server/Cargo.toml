@@ -61,6 +61,9 @@ ts-export = ["dep:ts-rs", "kb-core/ts-export"]
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# tests/term_resume_drift.rs — kb-term's pinned resume table must stay
+# in sync with kb-core's ONE table.
+kb-term = { path = "../kb-term" }
 # kb-sibling/1 — the boot-guard test fabricates a `refinery_schema_history`
 # row a NEWER binary would have left (migrations are immutable, so the
 # too-new volume has to be synthesised). Already in the dep graph via
