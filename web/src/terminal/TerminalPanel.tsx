@@ -60,6 +60,17 @@ function readTheme(profile: ProfileFrame): ITheme | undefined {
   return fallback;
 }
 
+/** xterm 6 parser params are `(number | number[])[]` (nested arrays are
+ *  sub-parameters); the reply-guard seam works on a flat `number[]`. */
+function flattenParams(params: (number | number[])[]): number[] {
+  const out: number[] = [];
+  for (const p of params) {
+    if (Array.isArray(p)) out.push(...p);
+    else out.push(p);
+  }
+  return out;
+}
+
 /** Fit by fontSize only (never transform/zoom): ≤4 iterations on the screen width. */
 function fitNow(term: Terminal, host: HTMLElement, cols: number): void {
   const screen = host.querySelector(".xterm-screen");
@@ -148,7 +159,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
       });
       term.open(host);
       term.loadAddon(new UnicodeGraphemesAddon());
-      const key = Object.keys(term.unicode.versions ?? {}).find((k) => /grapheme/i.test(k));
+      const key = term.unicode.versions.find((k) => /grapheme/i.test(k));
       if (!key) {
         sessionRef.current?.block("width table unavailable");
         term.dispose();
@@ -166,12 +177,12 @@ export function TerminalPanel(props: TerminalPanelProps) {
       installReplyGuards({
         registerCsiHandler: (prefix, intermediates, final, handler) =>
           term.parser.registerCsiHandler({ prefix, intermediates, final }, (params) =>
-            handler(params.toArray()),
+            handler(flattenParams(params)),
           ),
         registerOscHandler: (code, handler) => term.parser.registerOscHandler(code, handler),
         registerDcsHandler: (prefix, intermediates, final, handler) =>
-          term.parser.registerDcsHandler({ prefix, intermediates, final }, (params, data) =>
-            handler(params.toArray(), data ?? ""),
+          term.parser.registerDcsHandler({ prefix, intermediates, final }, (data, param) =>
+            handler(flattenParams(param), data),
           ),
       });
       term.parser.registerOscHandler(52, (data) => {
