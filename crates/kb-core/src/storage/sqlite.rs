@@ -4296,10 +4296,13 @@ impl Db {
 
     /// V0047 — fill ONLY NULL `parent_session_id` / `root_session_id` /
     /// `project_slug` on omp rows matching `session_id` or `segment_of`.
-    /// Returns `(would_change, changed, unmatched)` summed over `items`
-    /// (`(session_id, parent, root, slug)` each). `apply=false` writes
-    /// nothing. Never overwrites a non-NULL value; never touches a
-    /// non-omp row. A second apply reports `(0, 0)` once filled.
+    /// Returns `(would_change, changed, unmatched)`: `would_change` and
+    /// `changed` count ROWS (one per row whose NULL columns an item
+    /// would fill — an item can match several rows), while `unmatched`
+    /// counts ITEMS (one per item with no matching row).
+    /// `apply=false` writes nothing. Never overwrites a non-NULL value;
+    /// never touches a non-omp row. A second apply reports `(0, 0)` once
+    /// filled.
     pub fn sessions_backfill_tree(
         &mut self,
         apply: bool,
