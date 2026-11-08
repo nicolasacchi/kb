@@ -478,6 +478,23 @@ done <"$LIN_CASES_FILE"
 else
   bad "shared lineage fixture missing at $LIN_FIXTURE"
 fi
+
+echo
+echo "== A2: cap_lineage splits ancestor dirs literally (no glob expansion) =="
+# A stem-shaped dir whose prefix carries a glob char is not a <ts> stem
+# (its prefix is not timestamp-shaped). With pathname expansion on, the
+# `202?-...` word would expand to the sibling `2022-...` stem and
+# misattribute the root. With `set -f` the split is literal: {}.
+GLOB_ROOT="$TMPROOT/globlineage"
+mkdir -p "$GLOB_ROOT/202?-09-01T10-00-00-000Z_roootG"
+mkdir -p "$GLOB_ROOT/2022-09-01T10-00-00-000Z_roootG"
+printf '%s\n%s\n' '{"type":"session","id":"childG001","timestamp":"2026-09-01T10:00:00.000Z","cwd":"/tmp/kb-omp-fixture"}' '{"type":"message","id":"m1","timestamp":"2026-09-01T10:00:01.000Z","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}' > "$GLOB_ROOT/202?-09-01T10-00-00-000Z_roootG/childG001.jsonl"
+GLOB_OUT="$(cd "$GLOB_ROOT" && bash -c '. "$1"; cap_lineage "$2"' _ "$LIN_LIB" "$GLOB_ROOT/202?-09-01T10-00-00-000Z_roootG/childG001.jsonl" 2>/dev/null || true)"
+if printf '%s' "$GLOB_OUT" | jq -e 'keys == []' >/dev/null 2>&1; then
+  ok "cap_lineage splits glob-char dirs literally (no root from '?')"
+else
+  bad "cap_lineage glob-expanded an ancestor dir: $GLOB_OUT (want {})"
+fi
 # Static wiring pin: --argjson lineage reaches exactly the main transcript
 # and both segment (P1/PN) translations; the sidecar call takes none.
 LIN_NARG="$(grep -c -- '--argjson lineage' "$CAPTURE")"
