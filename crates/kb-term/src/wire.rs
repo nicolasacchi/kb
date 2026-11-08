@@ -62,6 +62,11 @@ impl Harness {
             Harness::Omp => "omp",
         }
     }
+
+    /// The harness named by `s` (its lowercase wire name), or `None`.
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|h| h.as_str() == s)
+    }
 }
 
 /// Whether `s` is a valid terminal session id.

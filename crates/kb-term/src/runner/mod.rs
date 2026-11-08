@@ -160,6 +160,35 @@ impl std::fmt::Display for RunnerError {
 
 impl std::error::Error for RunnerError {}
 
+/// A refcounted per-id lock handle: dropping it removes the id's entry
+/// from the [`Runner`] lock map when the last handle goes away, so the
+/// map stays bounded by live sessions instead of growing one `Arc` per
+/// id forever.
+pub struct IdLock {
+    map: std::sync::Arc<std::sync::Mutex<HashMap<String, (std::sync::Arc<Mutex<()>>, usize)>>>,
+    id: String,
+    mutex: std::sync::Arc<Mutex<()>>,
+}
+
+impl IdLock {
+    /// Lock the per-id mutex (serialises launch vs kill for one session).
+    pub async fn lock(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.mutex.lock().await
+    }
+}
+
+impl Drop for IdLock {
+    fn drop(&mut self) {
+        let mut guard = self.map.lock().unwrap();
+        if let Some((_, count)) = guard.get_mut(&self.id) {
+            *count -= 1;
+            if *count == 0 {
+                guard.remove(&self.id);
+            }
+        }
+    }
+}
+
 /// The runner. Generic over the supervisor so systemd and direct modes
 /// compile without trait-object indirection on the async path.
 pub struct Runner<S: Supervisor> {
@@ -167,7 +196,9 @@ pub struct Runner<S: Supervisor> {
     pub tmux: RealTmux,
     pub supervisor: S,
     anchors: std::sync::Arc<Mutex<HashMap<String, Anchor>>>,
-    locks: Mutex<HashMap<String, std::sync::Arc<Mutex<()>>>>,
+    /// Refcounted per-id locks: `(mutex, live handles)` per id. The map
+    /// holds an entry only while an [`IdLock`] for it exists.
+    locks: std::sync::Arc<std::sync::Mutex<HashMap<String, (std::sync::Arc<Mutex<()>>, usize)>>>,
     viewers: std::sync::Arc<Mutex<HashMap<(String, String), Viewer>>>,
     paste_only: Mutex<HashMap<String, bool>>,
     buffer_seqs: Mutex<HashMap<String, u64>>,
@@ -190,7 +221,7 @@ impl Runner<DirectSupervisor> {
             tmux,
             supervisor,
             anchors: std::sync::Arc::new(Mutex::new(HashMap::new())),
-            locks: Mutex::new(HashMap::new()),
+            locks: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
             viewers: std::sync::Arc::new(Mutex::new(HashMap::new())),
             paste_only: Mutex::new(HashMap::new()),
             buffer_seqs: Mutex::new(HashMap::new()),
@@ -208,7 +239,7 @@ impl Runner<SystemdSupervisor> {
             tmux,
             supervisor: SystemdSupervisor,
             anchors: std::sync::Arc::new(Mutex::new(HashMap::new())),
-            locks: Mutex::new(HashMap::new()),
+            locks: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
             viewers: std::sync::Arc::new(Mutex::new(HashMap::new())),
             paste_only: Mutex::new(HashMap::new()),
             buffer_seqs: Mutex::new(HashMap::new()),
@@ -229,12 +260,23 @@ impl<S: Supervisor> Runner<S> {
     }
 
     /// Acquire the per-id lock serialising launch vs kill for one session.
-    pub async fn id_lock(&self, id: &str) -> std::sync::Arc<Mutex<()>> {
-        let mut guard = self.locks.lock().await;
-        guard
-            .entry(id.to_string())
-            .or_insert_with(|| std::sync::Arc::new(Mutex::new(())))
-            .clone()
+    /// Holding the returned [`IdLock`] keeps the entry; dropping it
+    /// removes the entry, so the map stays bounded by live sessions.
+    pub async fn id_lock(&self, id: &str) -> IdLock {
+        let mutex = {
+            let mut guard = self.locks.lock().unwrap();
+            guard
+                .entry(id.to_string())
+                .and_modify(|(_, count)| *count += 1)
+                .or_insert_with(|| (std::sync::Arc::new(Mutex::new(())), 1))
+                .0
+                .clone()
+        };
+        IdLock {
+            map: self.locks.clone(),
+            id: id.to_string(),
+            mutex,
+        }
     }
 
     /// Insert (or replace) the anchor for a session, and arm the
@@ -578,6 +620,10 @@ pub async fn check_tmux_version<T: tmux::Tmux>(
 
 /// Adopt every live session: an anchor whose pid is dead, or unknown to
 /// `list-clients`, is recreated and `@kb_anchor_pid` rewritten.
+///
+/// One broken session never aborts the boot: its adopt failure is logged
+/// and the loop continues with the next session. Boot fails only on the
+/// layout and tmux-version checks, which run before this.
 pub async fn adopt_anchors<S: Supervisor>(runner: &Runner<S>) -> Result<(), RunnerError> {
     let entries = crate::runner::discovery::list_sessions(runner).await;
     for entry in entries {
@@ -596,13 +642,23 @@ pub async fn adopt_anchors<S: Supervisor>(runner: &Runner<S>) -> Result<(), Runn
         if needs_new {
             let cols = entry.cols.unwrap_or(runner.cfg.default_cols);
             let rows = entry.rows.unwrap_or(runner.cfg.default_rows);
-            crate::runner::launch::spawn_anchor_and_wait(runner, &entry.id, cols, rows).await?;
+            if let Err(e) =
+                crate::runner::launch::spawn_anchor_and_wait(runner, &entry.id, cols, rows).await
+            {
+                tracing::warn!(
+                    error = %e,
+                    id = %entry.id,
+                    "anchor adopt failed; continuing with the next session"
+                );
+            }
         }
     }
     Ok(())
 }
 
-/// Is `pid` a live (non-zombie) process?
+/// Is `pid` a live (non-zombie) process? `EPERM` (another user's process
+/// or a process we may not signal) still means ALIVE: only `ESRCH`
+/// means dead.
 pub fn pid_alive(pid: u32) -> bool {
     // A zombie answers kill(pid, 0) but is not alive for our purposes.
     if let Ok(state) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
@@ -615,7 +671,12 @@ pub fn pid_alive(pid: u32) -> bool {
             return false;
         }
     }
-    unsafe { libc::kill(pid as i32, 0) == 0 }
+    unsafe {
+        if libc::kill(pid as i32, 0) == 0 {
+            return true;
+        }
+        std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
 }
 
 /// Signal a whole process group (the pane child is its own session leader).
@@ -666,5 +727,94 @@ mod tests {
         kill_group(0, libc::SIGTERM);
         kill_group(1, libc::SIGTERM);
         assert!(pid_alive(me), "kill_group(0/1) must be a no-op");
+    }
+
+    /// Dropping the last [`IdLock`] handle removes the id's entry: the
+    /// map is bounded by live sessions, not by every id ever seen.
+    #[tokio::test]
+    async fn id_lock_entries_are_removed_when_handles_drop() {
+        let runner = Runner::direct(RunnerConfig::test_config(
+            std::path::PathBuf::from("/tmp/kb-term-test"),
+            "/bin/true".to_string(),
+            std::path::PathBuf::from("/dev/null"),
+        ));
+        let len = runner.locks.lock().unwrap().len();
+        assert_eq!(len, 0, "map starts empty");
+        let a = runner.id_lock("abcd1234").await;
+        let b = runner.id_lock("abcd1234").await;
+        assert_eq!(
+            runner.locks.lock().unwrap().len(),
+            1,
+            "two handles, one entry"
+        );
+        drop(a);
+        assert_eq!(
+            runner.locks.lock().unwrap().len(),
+            1,
+            "still one live handle"
+        );
+        drop(b);
+        assert_eq!(
+            runner.locks.lock().unwrap().len(),
+            0,
+            "last handle removes the entry"
+        );
+    }
+
+    /// One broken session does not abort the boot: its anchor-adopt
+    /// failure is logged and the next session is still adopted.
+    #[tokio::test]
+    async fn adopt_continues_past_a_broken_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("fake_tmux.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\n\
+             sock=\"\"\n\
+             prev=\"\"\n\
+             for a in \"$@\"; do\n\
+             if [ \"$prev\" = \"-S\" ]; then sock=\"$a\"; fi\n\
+             prev=\"$a\"\n\
+             done\n\
+             case \"$*\" in\n\
+             *attach-session*) echo $$ > \"$(dirname \"$0\")/anchor_pid\"; exit 0 ;;\n\
+             esac\n\
+             case \"$sock\" in\n\
+             *broken*)\n\
+             case \"$*\" in *list-clients*) exit 1 ;; esac\n\
+             ;;\n\
+             esac\n\
+             case \"$*\" in\n\
+             *list-clients*) printf '%s %s\\n' \"$(cat \"$(dirname \"$0\")/anchor_pid\")\" \"kb-term/1\" ;;\n\
+             *set-option*) echo \"$*\" >> \"$(dirname \"$0\")/set_options\" ;;\n\
+             *show-options*) case \"$*\" in *@kb_anchor_pid*) echo 3 ;; esac ;;\n\
+             esac\n\
+             exit 0\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let run_dir = dir.path().join("run");
+        std::fs::create_dir_all(run_dir.join("s")).unwrap();
+        std::fs::create_dir_all(run_dir.join("runner")).unwrap();
+        // Two holder sockets: `broken123` (adopt will fail: list-clients
+        // exits 1, so its anchor never appears) and `good12345` (adopt
+        // succeeds). Entries are processed in sorted order.
+        std::fs::write(run_dir.join("s").join("broken123.sock"), b"").unwrap();
+        std::fs::write(run_dir.join("s").join("good12345.sock"), b"").unwrap();
+        let cfg = RunnerConfig::test_config(
+            run_dir,
+            script.to_string_lossy().into_owned(),
+            std::path::PathBuf::from("/dev/null"),
+        );
+        let runner = Runner::direct(cfg);
+        adopt_anchors(&runner)
+            .await
+            .expect("a broken session must not abort the boot");
+        let recorded = std::fs::read_to_string(dir.path().join("set_options")).unwrap_or_default();
+        assert!(
+            recorded.contains("@kb_anchor_pid"),
+            "the healthy session must still be adopted: {recorded}"
+        );
     }
 }

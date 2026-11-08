@@ -75,6 +75,37 @@ impl Serialize for SessionEntry {
     }
 }
 
+/// Convert one discovered entry into the wire [`SessionInfo`] the list RPC
+/// promises its consumers (`Request::List` answers `SessionInfo`s, whose
+/// harness/cwd/started/pane/grid fields are required).
+///
+/// Stale sockets (which answer nothing, so every `Option` is `None`)
+/// have no `SessionInfo` form and are skipped by the list RPC: emitting
+/// them as null-filled JSON broke `SessionInfo` deserialization downstream.
+pub fn session_entry_to_info(entry: &SessionEntry) -> Option<crate::wire::SessionInfo> {
+    if entry.stale {
+        return None;
+    }
+    let harness = crate::wire::Harness::parse(entry.harness.as_deref()?)?;
+    Some(crate::wire::SessionInfo {
+        id: entry.id.clone(),
+        harness,
+        cwd: entry.cwd.clone()?,
+        started_unix: entry.started_unix?,
+        resume_sid: entry.resume_sid.clone(),
+        pane_pid: entry.pane_pid?,
+        cols: entry.cols?,
+        rows: entry.rows?,
+        bracket_paste_flag: entry.bracket_paste_flag,
+        pane_dead: entry.pane_dead,
+        exit_code: entry.exit_code,
+        grid_owner: entry.grid_owner.clone(),
+        conf_version: entry.conf_version,
+        anchor_pid: entry.anchor_pid,
+        stale: false,
+    })
+}
+
 /// Glob `<run-dir>/s/*.sock` and describe every holder.
 pub async fn list_sessions<S: Supervisor>(runner: &Runner<S>) -> Vec<SessionEntry> {
     let dir = runner.sessions_dir();
@@ -310,5 +341,58 @@ mod tests {
         assert!(json.contains("\"harness\":\"omp\""));
         assert!(json.contains("\"anchor_pid\":99"));
         assert!(json.contains("\"conf_version\":2"));
+    }
+
+    /// The list RPC's `SessionInfo` array parses as `SessionInfo`s: a
+    /// non-stale entry converts (and its JSON deserializes back), while a
+    /// stale socket yields no `SessionInfo` instead of null-filled JSON.
+    #[test]
+    fn list_entries_convert_to_deserializable_session_info() {
+        use crate::wire::SessionInfo;
+        let live = SessionEntry {
+            id: "abcd1234".to_string(),
+            harness: Some("omp".to_string()),
+            cwd: Some("/work/proj".to_string()),
+            started_unix: Some(1_234_567_890),
+            resume_sid: Some("resume-1".to_string()),
+            pane_pid: Some(4242),
+            pane_dead: false,
+            exit_code: None,
+            cols: Some(120),
+            rows: Some(40),
+            bracket_paste_flag: true,
+            grid_owner: None,
+            conf_version: 2,
+            anchor_pid: Some(99),
+            stale: false,
+        };
+        let info = session_entry_to_info(&live).expect("live entry must convert");
+        assert_eq!(info.id, "abcd1234");
+        assert_eq!(info.harness, crate::wire::Harness::Omp);
+        assert_eq!(info.pane_pid, 4242);
+        let json = serde_json::to_string(&info).unwrap();
+        let back: SessionInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, info, "SessionInfo must round-trip");
+        let stale = SessionEntry {
+            id: "deadbeef".to_string(),
+            harness: None,
+            cwd: None,
+            started_unix: None,
+            resume_sid: None,
+            pane_pid: None,
+            pane_dead: false,
+            exit_code: None,
+            cols: None,
+            rows: None,
+            bracket_paste_flag: false,
+            grid_owner: None,
+            conf_version: 0,
+            anchor_pid: None,
+            stale: true,
+        };
+        assert!(
+            session_entry_to_info(&stale).is_none(),
+            "stale entries must be skipped, never emitted"
+        );
     }
 }
