@@ -65,9 +65,14 @@ ci-invariants:
 # citations in source comments; docs/research/** stays a frozen record.
 # The sibling scripts/check-pinned-by.sh resolves every "pinned by `name`" /
 # `file.rs::test_name` citation to a real definition.
+# The sibling scripts/check-kt-amendments.sh asserts the KT (2026-11) carve-outs
+# of invariants #4/#11/#13/#23/#24 and their CLAUDE.md pointers + mobile
+# phone-DRIVE mirrors are still present — deleting/re-labelling/reverting one
+# must fail here, not pass silently (FXT22).
 doc-anchors:
     scripts/check-doc-anchors.sh
     scripts/check-pinned-by.sh
+    scripts/check-kt-amendments.sh
 
 # v0.44 F1 (I3) — compile-free proof that CI cannot pass without running, and
 # that the gates' own self-tests still pass. A step of ci.yml's supply-chain
@@ -87,6 +92,7 @@ ci-selfcheck:
     scripts/ci/run-canaries.sh --check-anchors
     scripts/check-doc-anchors.sh --self-test
     scripts/check-pinned-by.sh --self-test
+    scripts/check-kt-amendments.sh --self-test
     plugins/kb-research/skills/kb-claims/claims.sh --self-test
 
 # rust-toolchain.toml is the single source of the toolchain version. Jobs get
