@@ -255,11 +255,14 @@ say_ok "10 aarch64 aborts"
 # byte copy of the host `sleep`, started in the background between installs;
 # archive 2 changes kb-termd and the unit. The installer replaces both via
 # same-dir temp + mv -f, so it never fails with "text file busy".
+# Newer GNU coreutils ships multicall binaries that dispatch on argv[0], so
+# a sleep binary invoked as "kb-termd" exits with "unknown program"; force
+# argv[0] back to "sleep" via exec -a.
 build_fake_archive "$work/src" "tmux 3.7c" 1 sleep-elf ""
 cp "$work/src/${pkg}.tar.gz" "$work/mirror/"
 cp "$work/src/${pkg}.tar.gz.expected" "$work/mirror/${pkg}.tar.gz.sha256"
 run "$work/p12" || fail "ELF install 1 should succeed"
-"$work/p12/bin/kb-termd" 30 &
+bash -c 'exec -a sleep "$0" 30' "$work/p12/bin/kb-termd" &
 running_pid=$!
 # give the background process a moment to be running
 sleep 1
