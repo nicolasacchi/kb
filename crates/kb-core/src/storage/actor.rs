@@ -1154,6 +1154,9 @@ pub enum StorageMsg {
         /// V0045/seg1 — opt-in `?collapse=logical` (SQL WHERE term; absent =
         /// every part is its own row).
         collapse_logical: bool,
+        /// A3 — `tree=collapsed` (SQL WHERE term; `false` = flat — every
+        /// caller of the `sessions_list` wrapper).
+        tree_collapsed: bool,
         reply: oneshot::Sender<Result<Vec<SessionRow>>>,
     },
     /// V0045/seg1 — the newest-capture parts of one logical session.
@@ -1164,6 +1167,32 @@ pub enum StorageMsg {
     /// V0045/seg1 — part counts per logical session key.
     SessionsSegmentCounts {
         keys: Vec<String>,
+        reply: oneshot::Sender<Result<Vec<(String, u32)>>>,
+    },
+    /// A3 — one page of a session's children (`Db::sessions_children_page`).
+    SessionsChildrenPage {
+        root_of: Option<String>,
+        parent_of: Option<String>,
+        after: Option<(i64, String)>,
+        limit: u32,
+        reply: oneshot::Sender<Result<Vec<SessionRow>>>,
+    },
+    /// A3 — the total number of a session's children
+    /// (`Db::sessions_children_count`).
+    SessionsChildrenCount {
+        root_of: Option<String>,
+        parent_of: Option<String>,
+        reply: oneshot::Sender<Result<u64>>,
+    },
+    /// A3 — resume targets per session id (`Db::sessions_root_of`).
+    SessionsRootOf {
+        ids: Vec<String>,
+        reply: oneshot::Sender<Result<Vec<(String, String)>>>,
+    },
+    /// A3 — children counts per root session id
+    /// (`Db::sessions_child_counts`).
+    SessionsChildCounts {
+        ids: Vec<String>,
         reply: oneshot::Sender<Result<Vec<(String, u32)>>>,
     },
     /// Sessions enrichment — the folder facet (distinct cwd + count + latest).
@@ -1650,6 +1679,10 @@ fn is_read_lane(msg: &StorageMsg) -> bool {
             | StorageMsg::SessionsList { .. }
             | StorageMsg::SessionsChain { .. }
             | StorageMsg::SessionsSegmentCounts { .. }
+            | StorageMsg::SessionsChildrenPage { .. }
+            | StorageMsg::SessionsChildrenCount { .. }
+            | StorageMsg::SessionsRootOf { .. }
+            | StorageMsg::SessionsChildCounts { .. }
             | StorageMsg::SessionsFolders { .. }
             | StorageMsg::SessionsRecallCoverage { .. }
             | StorageMsg::SessionsProjectsStats { .. }
@@ -3479,6 +3512,7 @@ impl StorageActor {
                 substance,
                 harness,
                 collapse_logical,
+                tree_collapsed,
                 reply,
             } => {
                 let _ = reply.send(self.db.sessions_list_with(
@@ -3491,6 +3525,7 @@ impl StorageActor {
                     &substance,
                     &harness,
                     collapse_logical,
+                    tree_collapsed,
                 ));
             }
             StorageMsg::SessionsChain { session_id, reply } => {
@@ -3498,6 +3533,36 @@ impl StorageActor {
             }
             StorageMsg::SessionsSegmentCounts { keys, reply } => {
                 let _ = reply.send(self.db.sessions_segment_counts(&keys));
+            }
+            StorageMsg::SessionsChildrenPage {
+                root_of,
+                parent_of,
+                after,
+                limit,
+                reply,
+            } => {
+                let _ = reply.send(self.db.sessions_children_page(
+                    root_of.as_deref(),
+                    parent_of.as_deref(),
+                    after.as_ref().map(|(a, s)| (*a, s.as_str())),
+                    limit,
+                ));
+            }
+            StorageMsg::SessionsChildrenCount {
+                root_of,
+                parent_of,
+                reply,
+            } => {
+                let _ = reply.send(
+                    self.db
+                        .sessions_children_count(root_of.as_deref(), parent_of.as_deref()),
+                );
+            }
+            StorageMsg::SessionsRootOf { ids, reply } => {
+                let _ = reply.send(self.db.sessions_root_of(&ids));
+            }
+            StorageMsg::SessionsChildCounts { ids, reply } => {
+                let _ = reply.send(self.db.sessions_child_counts(&ids));
             }
             StorageMsg::SessionsFolders { reply } => {
                 let _ = reply.send(self.db.sessions_folders());
@@ -5514,7 +5579,7 @@ impl StorageHandle {
         harness: Vec<String>,
     ) -> Result<Vec<SessionRow>> {
         self.sessions_list_with(
-            limit, before, before_id, folder, q, project, substance, harness, false,
+            limit, before, before_id, folder, q, project, substance, harness, false, false,
         )
         .await
     }
@@ -5533,6 +5598,8 @@ impl StorageHandle {
         substance: Vec<String>,
         harness: Vec<String>,
         collapse_logical: bool,
+        // A3 — `tree=collapsed` (see `Db::sessions_list_with`).
+        tree_collapsed: bool,
     ) -> Result<Vec<SessionRow>> {
         self.send_and_await(|reply| StorageMsg::SessionsList {
             limit,
@@ -5544,6 +5611,7 @@ impl StorageHandle {
             substance,
             harness,
             collapse_logical,
+            tree_collapsed,
             reply,
         })
         .await
@@ -5560,6 +5628,54 @@ impl StorageHandle {
     /// `Db::sessions_segment_counts`).
     pub async fn sessions_segment_counts(&self, keys: Vec<String>) -> Result<Vec<(String, u32)>> {
         self.send_and_await(|reply| StorageMsg::SessionsSegmentCounts { keys, reply })
+            .await
+    }
+    /// A3 — one page of a session's children (see
+    /// `Db::sessions_children_page`). Caller supplies exactly one of
+    /// `root_of` / `parent_of`.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn sessions_children_page(
+        &self,
+        root_of: Option<String>,
+        parent_of: Option<String>,
+        after: Option<(i64, String)>,
+        limit: u32,
+    ) -> Result<Vec<SessionRow>> {
+        self.send_and_await(|reply| StorageMsg::SessionsChildrenPage {
+            root_of,
+            parent_of,
+            after,
+            limit,
+            reply,
+        })
+        .await
+    }
+
+    /// A3 — the total number of a session's children (see
+    /// `Db::sessions_children_count`).
+    pub async fn sessions_children_count(
+        &self,
+        root_of: Option<String>,
+        parent_of: Option<String>,
+    ) -> Result<u64> {
+        self.send_and_await(|reply| StorageMsg::SessionsChildrenCount {
+            root_of,
+            parent_of,
+            reply,
+        })
+        .await
+    }
+
+    /// A3 — resume targets per session id (see `Db::sessions_root_of`).
+    pub async fn sessions_root_of(&self, ids: Vec<String>) -> Result<Vec<(String, String)>> {
+        self.send_and_await(|reply| StorageMsg::SessionsRootOf { ids, reply })
+            .await
+    }
+
+    /// A3 — children counts per root session id (see
+    /// `Db::sessions_child_counts`).
+    pub async fn sessions_child_counts(&self, ids: Vec<String>) -> Result<Vec<(String, u32)>> {
+        self.send_and_await(|reply| StorageMsg::SessionsChildCounts { ids, reply })
             .await
     }
 

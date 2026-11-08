@@ -622,7 +622,7 @@ pub(crate) fn load_for_read(
 /// `spawn_blocking` wrapper — the ledger read is file I/O and must never
 /// run on a tokio worker (the same rule `routes::proposals::
 /// collect_proposals` follows).
-async fn load_for_read_async(
+pub(crate) async fn load_for_read_async(
     paths: Arc<KbPaths>,
     slug: SlateSlug,
     loopback: bool,

@@ -210,6 +210,8 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | GET | `/api/sessions/threads` | `routes::sessions::threads` |
 | POST | `/api/sessions/threads/save` | `routes::sessions::save_thread` |
 | GET | `/api/sessions/{session_id}` | `routes::sessions::get` |
+| GET | `/api/sessions/{session_id}/card` | `routes::session_card::card` |
+| GET | `/api/sessions/{session_id}/children` | `routes::session_card::children` |
 | GET | `/api/sessions/{session_id}/comments` | `routes::sessions::session_comments` |
 | GET | `/api/sessions/{session_id}/commits` | `routes::sessions::commits` |
 | GET | `/api/sessions/{session_id}/commits/{sha}/files` | `routes::sessions::commit_files` |
@@ -256,4 +258,4 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | GET | `/api/users` | `routes::users::list` |
 | GET | `/api/why` | `routes::sessions::why` |
 
-_246 routes._
+_248 routes._

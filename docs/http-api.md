@@ -771,7 +771,7 @@ GET  /api/anchors/stale                     Q1: fleet-wide cold load for the
 GET  /api/sessions[?cursor=<unix>&limit=N   Cross-kb list of captured Claude
      &folder=&q=&project=&substance=         Code transcripts (memory-session
      &harness=&undistilled=1&since=          artifacts), newest-first. Cursor
-     &collapse=logical]
+     &collapse=logical&tree=collapsed|flat]
                                             paginated; default limit 50, cap
                                             1000. Response carries
                                             `next_cursor` (omitted at EOL).
@@ -840,8 +840,28 @@ GET  /api/sessions[?cursor=<unix>&limit=N   Cross-kb list of captured Claude
                                             harness from the same table as
                                             `live-status` and `kb sessions
                                             resume`. A segment part uses its
-                                            raw id. When none is known it is an
+                                            raw id. A3 — a row with a
+                                            `root_session_id` targets the
+                                            ROOT's id (omp resumes only
+                                            top-level sessions), never its
+                                            own. When none is known it is an
                                             honest not-resumable sentence.
+                                            `tree=` (A3) is closed:
+                                            absent/`collapsed` (the default)
+                                            hides subagent children
+                                            (`root_session_id IS NULL` in SQL
+                                            before LIMIT, so the keyset
+                                            cursor stays coherent; NULL-root
+                                            rows stay visible), `flat` shows
+                                            every row; any other value is a
+                                            400. Every row carries
+                                            `child_count`: how many children
+                                            it has by the card predicate
+                                            (a root counts its whole flood,
+                                            any depth; a non-root counts its
+                                            direct children) — the same
+                                            number the card's children lane
+                                            reports. Surfaced, never scored.
                                             `collapse=logical` (opt-in; the
                                             default and `none` show every part
                                             so nothing is hidden silently;
@@ -960,6 +980,46 @@ GET  /api/sessions/{session_id}             Single session + memory_ids list.
                                             `--section a,b,...` to fetch only
                                             some of them) and `kb sessions
                                             resume <id> [--json]`.
+GET  /api/sessions/{session_id}/card        A3 — the ONE read model
+                                            (`kb-session-card/1`): one
+                                            in-process fan-out over the
+                                            existing per-lane readers,
+                                            scoped to the NEWEST capture
+                                            (#11). Every lane degrades on
+                                            its own (`available: false` +
+                                            `reason`, never a 500);
+                                            NO transcript body or raw turns
+                                            ever ride the card; the
+                                            `terminal` lane is the constant
+                                            `{available: false, reason: "no
+                                            terminal runner"}` until the
+                                            kb-term track fills it. The
+                                            daemon fills `text` (plain,
+                                            <= 80-char lines); the CLI
+                                            prints it verbatim and never
+                                            renders. SSE: no new kind —
+                                            A4 will key `["sessions",
+                                            "card", sid]` and invalidate
+                                            on `session.*` and
+                                            `slate.updated`. CLI:
+                                            `kb sessions card <id>`
+                                            (`--json` = this wire
+                                            verbatim). 404 when no kb
+                                            holds the session.
+GET  /api/sessions/{session_id}/children    A3 — paged children of one
+     [?after=&limit=N]                       session, oldest first by
+                                            `(started_at, session_id)`.
+                                            `limit` defaults to 50, clamps
+                                            to 1..=200. `after` is the
+                                            opaque `"<started_at>:<id>"`
+                                            cursor (ids may contain
+                                            `:`); malformed is a 400.
+                                            ONE predicate decides: a root
+                                            sees its whole flood, a
+                                            non-root its direct children —
+                                            the same predicate the card's
+                                            children lane uses. 404 when
+                                            no kb holds the session.
 GET  /api/sessions/{session_id}/memories    Full memory rows for the session
                                             (transcript itself excluded).
 GET  /api/sessions/{session_id}/recalls     MI-W4.2c — the PULL side of

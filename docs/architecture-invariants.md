@@ -1016,6 +1016,39 @@ migrated volume (`refuse_if_volume_ahead`, the same guard that made the
 
 *Evidence amendment (OL IDEA3, 2026-10-30):* `sessions.evidence_json` (V0046) holds the closed-grammar checks a capture ran: which test/lint/build commands the MAIN transcript's Bash calls made (`kb_core::sessions::checks`, no in-daemon LLM; a CLOSED runner table, wrapper strip and shell splitter, an unmatched command is simply not a check), in what order relative to its counted edits (Edit/Write/MultiEdit/NotebookEdit tool calls; edits to agent bookkeeping or scratch paths are counted as ignored, edits made through Bash or by subagents are not seen), and how they ended. An outcome is `pass`/`fail` only when the exit status speaks for the check (a pipe, `||`, `;` or `&` hides it), a harness exit tier exists (claude and codex; the other four fall to the output grammar), a background run was settled by its `<task-notification>`, or a per-runner output marker decides; everything else is `unknown` with a stated `why`, never `passed`. The verdict (`verified`/`failing`/`unconfirmed`/`stale`/`unchecked`/`no_edits`, plus `not_extracted` for a NULL or unreadable column) and its one sentence are DERIVED at read time by `checks::summarize` and are SURFACED, NEVER SCORED: never the R1 digest, the `code` lane, a sort key, a filter, or a recall/recollect/inbox term (pinned by `checks::tests::no_ranking_module_reads_session_evidence`, `sessions_list_order_ignores_evidence` and `digest_ignores_check_tracking`). The column rides the `sessions` row, so the artifact-id lifecycle registries already move and delete it and the newest-capture rule needs no extra scoping. A gh-checks run counts as after the last edit only if a push came between (CI checks the pushed head). *Rollback:* V0046 bumps the refinery epoch — see docs/self-host.md "Rolling back across V0046".
 
+*SESSION CARD (A3):* `GET /api/sessions/{session_id}/card` serves one
+derived read model (`kb-session-card/1`) over the existing per-lane
+readers, scoped to the NEWEST capture via `sessions.is_newest` (PF-R1) —
+never a persistence, never a new reader. Every lane degrades on its own
+with `available: false` + a `reason` and a `tracing::warn!`, never a 500
+(drop-on-error, #28); the card is SURFACED, NEVER SCORED — no ranking
+module reads it and the V0047 lineage columns it carries
+(`parent_session_id`/`root_session_id`/`project_slug`) are display-only,
+never a rank, sort or filter term of any ranking module (pinned by
+`checks::no_ranking_module_reads_session_evidence`'s `card::` /
+`SessionCard` needles). No transcript BODY or raw turns ride the card
+(stored, capped, derived fields only; reading stays in `session-view/1`
+anchors). Lineage turns `collapse` into shape: `GET /api/sessions`
+gains a closed `tree=collapsed|flat` param (collapsed is the default —
+the omp subagent flood hides behind its roots) and a per-row
+`child_count` that uses the ONE card predicate (a root counts its whole
+flood, any depth; a non-root counts its direct children), so list and
+card agree on the number for every row including mid-tree nodes; omp
+resume commands target the tree ROOT (`root_session_id`, else the
+segment head, else the row's own id) on every surface (`GET /api/sessions`,
+the detail route, the card's `summary.resume`, and live-status registry
+rows resolved through `sessions_root_of`). The CLI prints the daemon's
+`text` verbatim and never renders a lane (`kb sessions card`; the
+slate-digest precedent). The `terminal` lane is the constant
+`{available: false, reason: "no terminal runner"}` until the kb-term
+track fills it without changing the shape; the card gives agents and the
+CLI no attach or type surface. Pinned by
+`kb-server/tests/http_extra/session_card.rs` (newest-capture scoping,
+byte-identical repeat reads, per-lane degradation, no transcript body,
+parent/child non-summing, 120-child paging, single-slate reads, tree
+default/cursor/child_count over HTTP) and `kb-cli/tests/cli_http/
+session_card.rs` (verbatim-text CLI contract).
+
 **Episodic-memory retrieval (R0–R5).** Sessions are an *episodic* memory the
 agent PULLS on demand — distinct from the curated *semantic* memory (`kb
 remember`/`recall`), which it pushes every turn. Load-bearing constraints:

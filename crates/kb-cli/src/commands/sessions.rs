@@ -2820,6 +2820,46 @@ pub async fn backfill_project_key(
 pub(crate) fn backfill_project_key_path(apply: bool) -> String {
     format!("/api/sessions/backfill-project-key?apply={apply}")
 }
+/// `kb sessions card <sid> [--json]` — GET the daemon-rendered
+/// `kb-session-card/1` and print its `text` verbatim (human), or the
+/// whole card JSON (`--json`). The CLI NEVER renders card lanes; the
+/// daemon fills `text` and the CLI only prints it. A missing session
+/// aborts with the same not-found error other `kb sessions` verbs use.
+pub async fn session_card(
+    session_id: &str,
+    daemon: Option<&str>,
+    bearer: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let url = require_daemon(daemon, bearer).await?;
+    let client = http::client_with_timeout_and_bearer(10, bearer)?;
+    let card: serde_json::Value = client
+        .get(format!("{url}{}", session_card_path(session_id)))
+        .send()
+        .await?
+        .error_for_status()
+        .with_context(|| format!("session {session_id} not found"))?
+        .json()
+        .await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&card)?);
+        return Ok(());
+    }
+    let text = card
+        .get("text")
+        .and_then(|t| t.as_str())
+        .ok_or_else(|| anyhow!("session card reply has no `text` field"))?;
+    print!("{text}");
+    Ok(())
+}
+
+/// The card route for one session (PURE: pinned by a unit test).
+pub(crate) fn session_card_path(session_id: &str) -> String {
+    format!(
+        "/api/sessions/{}/card",
+        http::encode_path_segment(session_id)
+    )
+}
 
 /// `(would_change, changed)` out of the route's reply.
 pub(crate) fn backfill_totals(body: &serde_json::Value) -> Result<(u64, u64)> {
@@ -2897,6 +2937,14 @@ mod tests {
         let body = serde_json::json!({"apply": true, "would_change": 3, "changed": 2, "kbs": []});
         assert_eq!(backfill_totals(&body).unwrap(), (3, 2));
         assert!(backfill_totals(&serde_json::json!({})).is_err());
+    }
+
+    /// A3 — the card route builder is pure (id verbatim, unreserved ids
+    /// unchanged, segment-escaping for ids with reserved chars).
+    #[test]
+    fn session_card_path_names_the_card_route_of_one_session() {
+        assert_eq!(session_card_path("sess-1"), "/api/sessions/sess-1/card");
+        assert_eq!(session_card_path("a/b"), "/api/sessions/a%2Fb/card");
     }
 
     #[test]
