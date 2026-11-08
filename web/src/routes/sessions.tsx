@@ -1273,20 +1273,17 @@ export function SessionWorkView({
   loading: boolean;
 }) {
   if (loading) return <div className="kb-ses__empty">loading…</div>;
-  if (work.groups.length === 0) {
-    return (
-      <EmptyState
-        icon={<Icon.Terminal />}
-        title="no pieces of work yet"
-        hint="Sessions appear here once a transcript lands in the window."
-      />
-    );
-  }
   return (
     <div className="kb-ses__work" aria-label="pieces of work">
-      {work.groups.map((g) => (
-        <WorkGroupSection key={g.key} group={g} />
-      ))}
+      {work.groups.length === 0 ? (
+        <StateCard
+          kind="empty"
+          title="no pieces of work yet"
+          reason="Sessions appear here once a transcript lands in the window."
+        />
+      ) : (
+        work.groups.map((g) => <WorkGroupSection key={g.key} group={g} />)
+      )}
       {work.skipped.length > 0 && (
         <div className="kb-ses__work-skipped" data-testid="work-skipped">
           {work.skipped.map((s) => `${s.detail} (${s.reason})`).join(" · ")}

@@ -2,11 +2,12 @@
 //
 // A6 — the work view: pieces of work by the fixed named ladder.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
-import { SessionWorkView } from "./sessions";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
+import SessionsRoute, { SessionWorkView } from "./sessions";
 import { sessionsUrl } from "../lib/sessionsUrl";
-import { loadLastSessionsView } from "../api/prefs";
+import { loadLastSessionsView, saveLastSessionsView } from "../api/prefs";
 import type { WorkResponse } from "../api/sessions";
 
 // The route module pulls many hooks; in-memory SSE keeps this suite
@@ -16,6 +17,46 @@ vi.mock("../api/sse", () => ({
     subscribeEvent: () => () => {},
     onResync: () => () => {},
   },
+}));
+
+// Quiet-empty data hooks so the REAL SessionsRoute renders its own
+// view-switching (setView + persisted view) without any network.
+vi.mock("../hooks/useSessions", () => ({
+  useSessions: () => ({
+    rows: [],
+    loading: false,
+    loadingMore: false,
+    error: null,
+    refresh: () => {},
+    loadMore: () => {},
+    hasMore: false,
+  }),
+  useSessionPresence: () => ({ presenceSet: new Set<string>(), enabled: false }),
+  useSessionDetail: () => ({
+    detail: null,
+    memories: [],
+    recalls: [],
+    touches: null,
+    readings: [],
+    files: [],
+    decisions: [],
+    commits: [],
+    research: [],
+    comments: { artifacts: [], total: 0, raised: [] },
+    loading: false,
+  }),
+  useSessionFolders: () => [],
+  useSessionProjects: () => ({ projects: [], loading: false }),
+  useSessionRecollect: () => ({ hits: [], loading: false }),
+  useSessionThreads: () => ({ threads: [], loading: false }),
+  useSessionWork: () => ({
+    work: { schema: "kb-session-work/1", since: 0, scan_capped: false, truncated: false, groups: [], skipped: [] },
+    loading: false,
+  }),
+}));
+
+vi.mock("../hooks/useLiveSessions", () => ({
+  useLiveSessions: () => ({ rows: [] }),
 }));
 
 afterEach(cleanup);
@@ -119,11 +160,25 @@ describe("SessionWorkView", () => {
     expect(sessionsUrl({ view: "work" })).toBe("/sessions?view=work");
   });
 
-  it("the remembered view is never 'work'", () => {
-    // The route's setView persists ONLY projects/list (D3); 'work' (like
-    // 'threads') flows through the same setParams path but leaves the
-    // remembered view untouched.
-    expect(["projects", "list"]).toContain(loadLastSessionsView());
-    expect(loadLastSessionsView()).not.toBe("work");
+  it("clicking the Work toggle leaves loadLastSessionsView() unchanged", () => {
+    // The route's setView persists ONLY projects/list (D3): selecting work
+    // writes ?view=work (and renders the work view) but must not persist it.
+    saveLastSessionsView("projects");
+    expect(loadLastSessionsView()).toBe("projects");
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={["/sessions?view=projects"]}>
+          <Routes>
+            <Route path="/sessions" element={<SessionsRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    fireEvent.click(screen.getByTestId("sessions-view-work"));
+    // The toggle took effect (work view is showing its empty state) …
+    expect(screen.getByText("no pieces of work yet")).toBeTruthy();
+    // … but the remembered landing view did not move.
+    expect(loadLastSessionsView()).toBe("projects");
   });
 });

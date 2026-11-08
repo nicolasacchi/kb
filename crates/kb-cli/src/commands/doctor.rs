@@ -567,9 +567,9 @@ fn decide_trailer_sid_source(env: &TrailerEnv) -> HookCheck {
     }
     if let Some(sid) = present(&env.kb_sid) {
         if is_trailer_token(sid) {
-            let harness = env.kb_harness.as_deref().unwrap_or("unknown");
+            let harness = present(&env.kb_harness).unwrap_or("unknown");
             let mut detail = format!("resolves from KB_SESSION_ID (harness={harness})");
-            if env.kb_harness.as_deref() == Some("omp") {
+            if present(&env.kb_harness) == Some("omp") {
                 detail.push_str(" — set by kb-omp.ts for the main agent");
             }
             return HookCheck::pass("git-trailer-sid-source", detail);
@@ -580,7 +580,7 @@ fn decide_trailer_sid_source(env: &TrailerEnv) -> HookCheck {
         )
         .with_fix("unset it or export the harness session id");
     }
-    if env.kb_harness.as_deref() == Some("omp") {
+    if present(&env.kb_harness) == Some("omp") {
         return HookCheck::warn(
             "git-trailer-sid-source",
             "KB_HARNESS=omp but no KB_SESSION_ID: kb-omp.ts did not publish an identity here (not loaded, or a subagent context); commits fall back to the repo marker",
@@ -3030,6 +3030,16 @@ mod tests {
         let env = trailer_env(Some(""), Some(""), Some(""), Some(""));
         let c = decide_trailer_sid_source(&env);
         assert_eq!(c.status, CheckStatus::Skip, "{}", c.detail);
+    }
+
+    #[test]
+    fn trailer_sid_source_empty_harness_displays_unknown() {
+        // A hand-built env with an empty harness prints harness=unknown,
+        // never harness= (the same empty-as-unset rule as the other rungs).
+        let c = decide_trailer_sid_source(&trailer_env(None, None, Some("sid-1"), Some("")));
+        assert_eq!(c.status, CheckStatus::Pass);
+        assert!(c.detail.contains("harness=unknown"), "{}", c.detail);
+        assert!(!c.detail.contains("harness=)"), "{}", c.detail);
     }
 
     #[test]

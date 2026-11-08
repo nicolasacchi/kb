@@ -159,8 +159,13 @@ fn node_carries_job(i: usize, nodes: &[Node], rows: &[&WorkSession]) -> bool {
         .any(|&ri| !rows[ri].job_ulids.is_empty())
 }
 
-/// A cwd_time candidate: no lineage stamps and no job ulid, so no strong
-/// edge can pull it into a group.
+/// A cwd_time candidate: a single node with no strong edge, read as the
+/// safe under-linking case. Alongside the singleton-component check in
+/// the weak phase, a node carrying lineage stamps (`root`/`parent`) or
+/// a job ulid is excluded even when its strong phase added no edge (for
+/// instance a lone child whose root is outside the window stays alone
+/// instead of joining the weak chain). Covered by the
+/// `lone_stamped_node_stays_out_of_cwd_time` test.
 fn is_cwd_candidate(i: usize, nodes: &[Node], rows: &[&WorkSession]) -> bool {
     nodes[i].root_session_id.is_none()
         && nodes[i].parent_session_id.is_none()
@@ -446,7 +451,13 @@ pub fn group_work(sessions: &[WorkSession], takes: &[TakeEdge]) -> WorkOutcome {
             .take(WORK_MEMBERS_CAP)
             .map(|&i| {
                 let node = &nodes[i];
-                let (role, via) = if node.is_child() {
+                // A lone `alone` component contributed no edge, so its member
+                // must not claim a tree placement (e.g. a single child whose
+                // root is outside the window). Multi-member groups keep the
+                // lineage-derived child/root roles.
+                let (role, via) = if term == "alone" {
+                    ("member", "alone")
+                } else if node.is_child() {
                     ("child", "tree")
                 } else if root_ids.contains(&(node.kb.clone(), node.id.clone())) {
                     ("root", "tree")
@@ -558,22 +569,41 @@ fn component_terms(
         terms.push(TERMS[1]);
     }
 
-    // job: two members share a ulid.
+    // job: two members share a ulid that step 2b actually joined with.
+    // A ulid carried by more than WORK_JOB_FANOUT_CAP nodes added no
+    // edges there (it is a skipped term), so crediting it here would
+    // over-report — the same cap, applied to global carrier counts,
+    // regardless of how the component was otherwise joined.
     {
-        let mut ulid_nodes: HashMap<String, usize> = HashMap::new();
+        let mut global: HashMap<&str, usize> = HashMap::new();
+        for node in nodes {
+            let mut seen: HashSet<&str> = HashSet::new();
+            for &ri in &node.rows {
+                for ulid in &rows[ri].job_ulids {
+                    if seen.insert(ulid.as_str()) {
+                        *global.entry(ulid.as_str()).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+        let mut ulid_nodes: HashMap<&str, usize> = HashMap::new();
         let mut job = false;
         for &i in members {
             let mut seen: HashSet<&str> = HashSet::new();
             for &ri in &nodes[i].rows {
                 for ulid in &rows[ri].job_ulids {
-                    if seen.insert(ulid.as_str()) {
-                        if let Some(&prev) = ulid_nodes.get(ulid) {
-                            if prev != i {
-                                job = true;
-                            }
-                        } else {
-                            ulid_nodes.insert(ulid.clone(), i);
+                    if !seen.insert(ulid.as_str()) {
+                        continue;
+                    }
+                    if global.get(ulid.as_str()).copied().unwrap_or(0) > WORK_JOB_FANOUT_CAP {
+                        continue;
+                    }
+                    if let Some(&prev) = ulid_nodes.get(ulid.as_str()) {
+                        if prev != i {
+                            job = true;
                         }
+                    } else {
+                        ulid_nodes.insert(ulid.as_str(), i);
                     }
                 }
             }
@@ -612,10 +642,12 @@ fn component_terms(
     // cwd_time: 2+ candidate members chained weakly. `cwd_time` never
     // attaches to a group with a strong edge (the weak phase only runs
     // over singleton components), so it is credited only when no strong
-    // term landed inside this component.
-    if terms.is_empty()
-        && members.len() > 1
-        && members.iter().all(|&i| is_cwd_candidate(i, nodes, rows))
+    // term landed inside this component. `segment` is a fold (step 1),
+    // not an edge, so it does not block attribution: two segment chains
+    // joined only by the weak phase attribute as [segment, cwd_time].
+    let has_strong =
+        terms.contains(&TERMS[0]) || terms.contains(&TERMS[2]) || terms.contains(&TERMS[3]);
+    if !has_strong && members.len() > 1 && members.iter().all(|&i| is_cwd_candidate(i, nodes, rows))
     {
         let mut seq: Vec<usize> = members.to_vec();
         seq.sort_by(|&a, &b| node_order(nodes, a, b));
@@ -919,6 +951,86 @@ mod tests {
         assert_eq!(out.groups[0].key, "smoke:b");
         assert_eq!(out.groups[1].key, "smoke:c");
         assert_eq!(out.groups[2].key, "smoke:a");
+    }
+    #[test]
+    fn capped_ulid_overlapping_tree_does_not_report_job() {
+        // 51 carriers of one ulid: step 2b adds no job edges (fanout cap),
+        // so attribution must not credit `job` even where two carriers are
+        // also joined by a tree edge.
+        let mut root = ws("smoke", "root-x", 50, 500);
+        root.job_ulids = vec!["ulid-big".to_string()];
+        let mut child = ws("smoke", "child-a", 100, 200);
+        child.root_session_id = Some("root-x".to_string());
+        child.parent_session_id = Some("root-x".to_string());
+        child.job_ulids = vec!["ulid-big".to_string()];
+        let mut sessions = vec![root, child];
+        for i in 0..49 {
+            let mut s = ws("smoke", &format!("s{i}"), 100 + i as i64, 200 + i as i64);
+            s.job_ulids = vec!["ulid-big".to_string()];
+            sessions.push(s);
+        }
+        let out = group_work(&sessions, &[]);
+        assert!(
+            out.skipped
+                .iter()
+                .any(|s| s.term == "job" && s.reason == "fanout_cap"),
+            "{out:?}"
+        );
+        let tree_groups: Vec<&WorkGroup> = out.groups.iter().filter(|g| g.term == "tree").collect();
+        assert_eq!(tree_groups.len(), 1, "{out:?}");
+        assert_eq!(tree_groups[0].terms, vec!["tree"]);
+        assert_eq!(tree_groups[0].term, "tree");
+        assert!(
+            out.groups.iter().all(|g| !g.terms.contains(&"job")),
+            "{out:?}"
+        );
+    }
+
+    #[test]
+    fn segment_chains_joined_by_cwd_time_report_both_terms() {
+        // `segment` is a fold, not an edge: two chains joined only by the
+        // weak phase attribute [segment, cwd_time], ladder order.
+        let mut x1 = ws("smoke", "x-p01", 1000, 1100);
+        x1.segment_of = Some("x".to_string());
+        let mut x2 = ws("smoke", "x-p02", 1120, 1200);
+        x2.segment_of = Some("x".to_string());
+        let mut y1 = ws("smoke", "y-p01", 1500, 1600);
+        y1.segment_of = Some("y".to_string());
+        let mut y2 = ws("smoke", "y-p02", 1620, 1700);
+        y2.segment_of = Some("y".to_string());
+        let out = group_work(&[x1, x2, y1, y2], &[]);
+        assert_eq!(out.groups.len(), 1, "{out:?}");
+        assert_eq!(out.groups[0].terms, vec!["segment", "cwd_time"], "{out:?}");
+        assert_eq!(out.groups[0].term, "segment");
+    }
+
+    #[test]
+    fn lone_orphan_child_is_alone_not_a_tree_placement() {
+        let mut lone = ws("smoke", "only-child", 100, 200);
+        lone.root_session_id = Some("root-x".to_string());
+        lone.parent_session_id = Some("root-x".to_string());
+        let out = group_work(&[lone], &[]);
+        assert_eq!(out.groups.len(), 1, "{out:?}");
+        let g = &out.groups[0];
+        assert_eq!(g.term, "alone");
+        assert_eq!(g.terms, Vec::<&str>::new());
+        assert_eq!(g.members[0].role, "member");
+        assert_eq!(g.members[0].via, "alone");
+        // The lineage stamp still counts as a subagent.
+        assert_eq!(g.counts.subagents, 1);
+    }
+
+    #[test]
+    fn lone_stamped_node_stays_out_of_cwd_time() {
+        // The candidate predicate under-links on purpose: a lone stamped
+        // node never joins the weak cwd_time chain.
+        let mut lone = ws("smoke", "lone", 1000, 1100);
+        lone.root_session_id = Some("root-x".to_string());
+        lone.parent_session_id = Some("root-x".to_string());
+        let near = ws("smoke", "near", 1200, 1300);
+        let out = group_work(&[lone, near], &[]);
+        assert_eq!(out.groups.len(), 2, "{out:?}");
+        assert!(out.groups.iter().all(|g| g.term != "cwd_time"), "{out:?}");
     }
 
     // invariant:11 work grouping is surfaced, never scored
