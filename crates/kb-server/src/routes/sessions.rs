@@ -8932,6 +8932,11 @@ pub async fn live_status(
                 Some(t) => (Some(t.name.clone()), Some(t.at_unix)),
                 None => (None, None),
             };
+            let term = r
+                .term
+                .take()
+                .filter(|t| term_winners.get(t) == Some(&r.session_id))
+                .filter(|_| terminal_enabled);
             LiveStatusRow {
                 resume: resume_command(&r.harness, &r.session_id, r.cwd.as_deref()),
                 // A3 — resolved to the tree root (or left `None`) by the
@@ -8959,10 +8964,7 @@ pub async fn live_status(
                 last_tool,
                 last_tool_at,
                 background: r.background.filter(|_| background_visible(live_state)),
-                term: r
-                    .term
-                    .filter(|t| term_winners.get(t) == Some(&r.session_id))
-                    .filter(|_| terminal_enabled),
+                term,
             }
         })
         .collect();

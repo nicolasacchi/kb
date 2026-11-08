@@ -526,7 +526,7 @@ impl LiveRegistry {
         let row_term = g
             .get(sid)
             .and_then(|r| r.term.clone().filter(|_| r.term_bound_unix.is_some()))
-            .filter(|t| holds_term(g.get(sid).unwrap(), now_unix, &policy))?;
+            .filter(|_| holds_term(g.get(sid).unwrap(), now_unix, &policy))?;
         let winner = g
             .values()
             .filter(|r| r.term.as_deref() == Some(row_term.as_str()) && r.term_bound_unix.is_some())
