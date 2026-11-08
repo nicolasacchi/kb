@@ -148,4 +148,26 @@ describe("CodeLaneSection", () => {
     });
     await waitFor(() => expect(screen.getByText(/trailer/)).toBeTruthy());
   });
+
+  it("manual_refresh_on_success_refetches", async () => {
+    // Invariant #23's session-card clause promises a manual refresh on the
+    // success path too (finite staleTime, no SSE tie). A mutant that only
+    // renders Refresh inside the error branch passes every other test.
+    const fetchFn = vi.fn(async () =>
+      new Response(JSON.stringify(CARD), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchFn);
+    render(<CodeLaneSection sid="sess-0001" kb="platform" />, {
+      wrapper: wrapper(),
+    });
+    await waitFor(() => expect(screen.getByText(/trailer/)).toBeTruthy());
+    const button = screen.getByRole("button", { name: "Refresh" });
+    expect(button).toBeTruthy();
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    button.click();
+    await waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(2));
+  });
 });

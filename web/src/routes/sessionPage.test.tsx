@@ -167,6 +167,7 @@ function mockFetch(opts: {
   card: unknown;
   cardStatus?: number;
   childrenPage?: (url: string) => unknown;
+  withCode?: boolean;
 }) {
   return vi.fn(async (url: unknown) => {
     const u = String(url);
@@ -200,6 +201,45 @@ function mockFetch(opts: {
         statusText: "OK",
         json: async () => DETAIL,
       } as Response;
+    }
+    if (u.includes("/api/kbs")) {
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        json: async () =>
+          opts.withCode
+            ? [{ name: "demo", code_url: "https://code.example.test" }]
+            : [],
+      } as Response;
+    }
+    if (u.includes("/api/session-card")) {
+      return new Response(
+        JSON.stringify({
+          schema: "kbc-session-card/1",
+          sid: "root-0001",
+          now_unix: 1_700_000_000,
+          commits: {
+            available: true,
+            total: 0,
+            shown: 0,
+            truncated: false,
+            items: [],
+          },
+          reviews: { available: true, total: 0, shown: 0, items: [] },
+          findings: {
+            available: true,
+            total: 0,
+            by_severity: { blocker: 0, concern: 0, ok: 0 },
+            basis: "author",
+          },
+          presence: { available: true, files: 0, newest_age_secs: 0 },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
     }
     return {
       ok: false,
@@ -398,5 +438,40 @@ describe("SessionPage", () => {
     expect(back.querySelector("svg")).toBeTruthy();
     expect(container.textContent).not.toContain("←");
     expect(container.textContent).not.toContain("→");
+  });
+
+  it("passes the root sid (not the child or parent) to the code lane", async () => {
+    // A5 contract: for a subagent child the SPA passes the ROOT sid
+    // (kb-code does no root resolution; trailer attribution stamps the
+    // MAIN sid). A mutant passing the raw page sid, or `treeTarget`'s
+    // parent fallback, queries the wrong session and the commits lane
+    // is empty on every child page.
+    const baseCard = fullCard();
+    const summary = {
+      ...baseCard.summary,
+      root_session_id: "root-0001",
+      parent_session_id: "parent-0001",
+    };
+    const fetchFn = mockFetch({ card: fullCard({ summary }), withCode: true });
+    vi.stubGlobal("fetch", fetchFn);
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("session-sec-resume")).toBeTruthy(),
+    );
+    // Wait until the code-lane query fires, then inspect its URL.
+    await waitFor(() =>
+      expect(
+        fetchFn.mock.calls
+          .map((c) => String(c[0]))
+          .some((u) => u.includes("/api/session-card")),
+      ).toBe(true),
+    );
+    const codeLaneUrls = fetchFn.mock.calls
+      .map((c) => String(c[0]))
+      .filter((u) => u.includes("/api/session-card"));
+    expect(codeLaneUrls.length).toBeGreaterThan(0);
+    expect(codeLaneUrls[0]).toContain("sid=root-0001");
+    expect(codeLaneUrls[0]).not.toContain(`sid=${SID}`);
+    expect(codeLaneUrls[0]).not.toContain("parent-0001");
   });
 });
