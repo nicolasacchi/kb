@@ -573,7 +573,12 @@ fn term_int_reseed_after_long_pause() {
         "--ready",
         ready.to_str().unwrap(),
         "--ref",
-        "file",
+        // The pause drops client output by design, and the full-flood file
+        // differs by exactly the dropped chunk (CI 42443779255: the
+        // reseeded history was 49971 vs 50000 fed-from-byte-0). The
+        // emitted-log reference only contains bytes the client actually
+        // received, which is the same set the reseeded capture reflects.
+        "emitted",
         "--stream",
         flood.to_str().unwrap(),
         "--scenario",
