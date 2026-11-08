@@ -75,6 +75,9 @@ export interface ReseededResult {
   mode: ModeState | null;
   a: ReseedMarker;
   b: ReseedMarker;
+  /** The -a (alternate-screen) capture rejected, but the reseed proceeded
+   * (non-alt pane). Observable so a broken -a capture is not invisible. */
+  altUnsupported: boolean;
 }
 
 export interface ReseedStats {
@@ -84,6 +87,7 @@ export interface ReseedStats {
   interleavedRetries: number;
   abDisagreeRetries: number;
   badMarkerRetries: number;
+  badModeRetries: number;
   overflowRetries: number;
   givesUp: number;
   queuedDroppedBytes: number;
@@ -154,6 +158,35 @@ function parseMode(lines: string[] | undefined): ModeState | null {
     keypad: flag(8),
     origin: flag(9),
   };
+}
+
+/** Render a command rejection for a reason string: keep ControlError
+ * `.lines` (the %error reply lines) alongside the message, which alone
+ * discards tmux's diagnosis. */
+function errorText(err: unknown): string {
+  const base = err instanceof Error ? err.message : String(err);
+  const lines = (err as { lines?: unknown } | null)?.lines;
+  if (Array.isArray(lines) && lines.length > 0) return `${base}: ${lines.join('; ')}`;
+  return base;
+}
+
+/** Offending-line diagnostics for a parse failure: 'empty', or the first
+ * line truncated so a giant capture line cannot bloat the reason. */
+function describeLines(lines: string[] | undefined): string {
+  if (!lines || lines.length === 0) return 'empty';
+  const first = lines[0];
+  return JSON.stringify(first.length > 120 ? `${first.slice(0, 120)}…` : first);
+}
+
+/** A mode line is malformed when parseMode could not extract a complete
+ * state from it (wrong tag, non-numeric fields, partial flags). An empty
+ * reply is missing, not malformed. */
+function modeMalformed(lines: string[] | undefined, mode: ModeState | null): boolean {
+  if (mode === null) return lines !== undefined && lines.length > 0;
+  return (
+    [mode.scrollTop, mode.scrollBottom, mode.wrap, mode.cursor, mode.insert,
+      mode.keypadCursor, mode.keypad, mode.origin].some((v) => v === null)
+  );
 }
 
 /** Mode restore bytes: DECSTBM, origin, other modes, then an absolute CUP
@@ -233,6 +266,7 @@ export class Reseeder {
     interleavedRetries: 0,
     abDisagreeRetries: 0,
     badMarkerRetries: 0,
+    badModeRetries: 0,
     overflowRetries: 0,
     givesUp: 0,
     queuedDroppedBytes: 0,
@@ -318,11 +352,15 @@ export class Reseeder {
     const start = now();
     for (;;) {
       const t = now();
-      // A `?2026l` seen at/after this wait started (or in the previous qms
-      // window) that is ALSO the most recent output proves the parser is back
-      // in ground state; a stale one, or one superseded by fresh output,
-      // falls through to the silence rule instead.
-      if (q.frameEndedAt >= start - qms && q.frameEndedAt >= q.lastOutputAt) return true;
+      // A `?2026l` seen at/after this wait started that is ALSO the most
+      // recent output proves the parser is back in ground state; a stale
+      // one (in particular a frame end that landed BEFORE this wait
+      // started, even within the previous qms) or one superseded by
+      // fresh output falls through to the silence rule instead. There is
+      // deliberately no start-qms grace window: a producer that ended
+      // its burst milliseconds before reseed() must earn quiescence by
+      // the silence rule, not by a frame end it already had.
+      if (q.frameEndedAt >= start && q.frameEndedAt >= q.lastOutputAt) return true;
       if (t - q.lastOutputAt >= qms) return true;
       if (t - start >= max) return false;
       await sleepFn(Math.max(1, Math.min(5, qms)));
@@ -351,7 +389,9 @@ export class Reseeder {
         }
         lastReason = result.reason;
       } catch (err) {
-        lastReason = err instanceof Error ? err.message : String(err);
+        // Preserve ControlError.lines (%error reply lines): the message
+        // alone discards tmux's diagnosis.
+        lastReason = errorText(err);
       } finally {
         this.active = null;
         this.st.queuedDroppedBytes += active.queue.reduce((n, b) => n + b.length, 0);
@@ -386,11 +426,15 @@ export class Reseeder {
         active.bResolved = true;
       },
     );
-    // the -a capture must not abort a non-alt reseed if this tmux lacks it.
+    // the -a capture must not abort a non-alt reseed if this tmux lacks it,
+    // but its rejection is retained (with the %error lines) so an alt
+    // reseed reports the real diagnosis, not an invented reason.
+    let altError: unknown = null;
     const altPromise: Promise<string[] | null> = ps[2].then(
       (lines) => lines,
-      () => {
+      (err: unknown) => {
         this.st.altUnsupported++;
+        altError = err;
         return null;
       },
     );
@@ -409,13 +453,25 @@ export class Reseeder {
     const b = parseMarker(bLines, 'B');
     if (!a || !b) {
       this.st.badMarkerRetries++;
-      return { reason: 'unparseable A/B marker' };
+      // Carry the offending line (or 'empty') so a gives-up is diagnosable.
+      const which = !a ? 'A' : 'B';
+      return { reason: `unparseable ${which} marker: ${describeLines(!a ? aLines : bLines)}` };
     }
     if (a.history !== b.history || a.cursorX !== b.cursorX || a.cursorY !== b.cursorY) {
       this.st.abDisagreeRetries++;
       return { reason: 'A and B disagree' };
     }
     const mode = parseMode(modeLines);
+    if (modeMalformed(modeLines, mode)) {
+      // Malformed-but-present mode line: retry like a bad marker.
+      this.st.badModeRetries++;
+      return { reason: `unparseable mode line: ${describeLines(modeLines)}` };
+    }
+    if (mode === null) {
+      // Empty reply: no evidence to retry on; counted (never thrown away
+      // silently) and the restore proceeds CUP-only.
+      this.st.badModeRetries++;
+    }
     let bytesFed = 0;
     const feed = async (text: string): Promise<void> => {
       bytesFed += new TextEncoder().encode(text).length;
@@ -447,7 +503,7 @@ export class Reseeder {
     this.twin.reset();
     if (mode?.alternateOn) {
       if (altLines === null) {
-        return { reason: 'alternate screen on but -a capture unsupported' };
+        return { reason: `alternate screen on but -a capture failed: ${errorText(altError)}` };
       }
       await feed(joinLines(altLines));
       if (!(await padTo('normal', b.history + this.twin.rows))) {
@@ -483,7 +539,7 @@ export class Reseeder {
       for (const chunk of batch) await feedBytes(chunk);
     }
     active.closed = true;
-    return { ok: { bytesFed, historySize: b.history, mode, a, b } };
+    return { ok: { bytesFed, historySize: b.history, mode, a, b, altUnsupported: altLines === null } };
   }
 }
 
