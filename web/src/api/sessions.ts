@@ -66,6 +66,9 @@ import type { LedgerDayOut } from "./generated/LedgerDayOut";
 import type { LedgerSessionOut } from "./generated/LedgerSessionOut";
 import type { LedgerCommitOut } from "./generated/LedgerCommitOut";
 import type { LedgerTotalsOut } from "./generated/LedgerTotalsOut";
+import type { LiveState } from "./generated/LiveState";
+import type { Holder } from "./generated/Holder";
+import type { Confidence } from "./generated/Confidence";
 
 export type {
   SessionRow,
@@ -165,6 +168,10 @@ export async function fetchSessionsPage(
     /// W5/I — csv over the closed harness set
     /// (claude|codex|opencode|grok|kimi|omp). OK1: an unknown token 400s.
     harness?: string;
+    /// A4 — `tree=flat` shows subagent children as their own rows; the
+    /// collapsed default (omitted) hides them under their root. Sent only
+    /// when flat so the default request is byte-identical to pre-A4.
+    tree?: "collapsed" | "flat";
   } = {},
   signal?: AbortSignal,
 ): Promise<SessionsListResponse> {
@@ -177,12 +184,299 @@ export async function fetchSessionsPage(
   if (opts.project) params.set("project", opts.project);
   if (opts.substance) params.set("substance", opts.substance);
   if (opts.harness) params.set("harness", opts.harness);
+  if (opts.tree === "flat") params.set("tree", "flat");
   const qs = params.toString();
   const r = await fetch(
     `${currentDaemonBase()}/api/sessions${qs ? `?${qs}` : ""}`,
     { headers: { Accept: "application/json" }, signal },
   );
   return jsonOrEmpty<SessionsListResponse>(r, { sessions: [] });
+}
+// A4 — `kb-session-card/1` (`GET /api/sessions/{sid}/card`) + paged
+// children (`…/children`). A3 shipped these as plain serde structs in
+// `kb_core::sessions::card` with NO ts-rs output, so there are no
+// generated bindings to import. The types below are transcribed
+// field-for-field from that module (same serde names, `Option` ->
+// optional, `u64`/`u32`/`i64` -> `number`), cross-checked against A3's
+// HTTP contract tests; the enum vocabularies reuse the generated types
+// (`EvidenceVerdict`, `SessionCheckOut`, `LiveState`, `Holder`,
+// `Confidence`) instead of re-declaring them. `CardCheckOut` is
+// field-identical to the generated `SessionCheckOut`.
+
+export type SessionCard = {
+  schema: string,
+  session_id: string,
+  kb: string,
+  artifact_id: string,
+  text: string,
+  summary: SummaryLane,
+  outcome: OutcomeLane,
+  files: FilesLane,
+  decisions: DecisionsLane,
+  commits: CommitsLane,
+  research: ResearchLane,
+  comments: CommentsLane,
+  readings: ReadingsLane,
+  memory: MemoryLane,
+  live: LiveLane,
+  slate: SlateLane,
+  children: ChildrenLane,
+  terminal: TerminalLane,
+};
+
+export type SummaryLane = {
+  available: boolean,
+  reason?: string,
+  title?: string,
+  display_name: string,
+  harness: string,
+  project_slug?: string,
+  substance?: string,
+  active_secs: number,
+  started_at: number,
+  ended_at: number,
+  segment_chain: string[],
+  root_session_id?: string,
+  parent_session_id?: string,
+  child_total: number,
+  resume: string,
+};
+
+export type OutcomeLane = {
+  available: boolean,
+  reason?: string,
+  last_assistant_text?: string,
+  verdict: EvidenceVerdict,
+  checks: SessionCheckOut[],
+  not_committed: NotCommitted | null,
+};
+
+export type NotCommitted = {
+  files: string[],
+  commits_considered: number,
+  commits_total: number,
+  capped: boolean,
+  unresolved_commits: number,
+  caption?: string,
+};
+
+export type FileItem = {
+  path: string,
+  action: string,
+  via_subagent: boolean,
+};
+
+export type FilesLane = {
+  available: boolean,
+  reason?: string,
+  files: FileItem[],
+  total: number,
+  read: number,
+  edited: number,
+  wrote: number,
+};
+
+export type DecisionItem = {
+  kind: string,
+  prompt: string,
+  answer?: string,
+};
+
+export type DecisionsLane = {
+  available: boolean,
+  reason?: string,
+  decisions: DecisionItem[],
+  total: number,
+};
+
+export type CommitItem = {
+  kind: string,
+  sha?: string,
+  subject?: string,
+  resolved: boolean,
+};
+
+export type CommitsLane = {
+  available: boolean,
+  reason?: string,
+  commits: CommitItem[],
+  total: number,
+};
+
+export type ResearchItem = {
+  kind: string,
+  query: string,
+};
+
+export type ResearchLane = {
+  available: boolean,
+  reason?: string,
+  kind_counts: Record<string, number>,
+  items: ResearchItem[],
+  total: number,
+};
+
+export type CommentItem = {
+  comment_id: string,
+  kb: string,
+  artifact_id: string,
+  title?: string,
+  author: string,
+  body: string,
+  file_label: string,
+  created_at: number,
+  status: string,
+  touched: boolean,
+};
+
+export type CommentsLane = {
+  available: boolean,
+  reason?: string,
+  open_count: number,
+  raised_count: number,
+  open: CommentItem[],
+  raised: CommentItem[],
+};
+
+export type ReadingItem = {
+  kb: string,
+  artifact_id: string,
+  title?: string,
+  source_relative?: string,
+  opened_at: number,
+  read_pct?: number,
+  last_section?: string,
+};
+
+export type ReadingsLane = {
+  available: boolean,
+  reason?: string,
+  items: ReadingItem[],
+  total: number,
+};
+
+export type RecallItem = {
+  kb: string,
+  id: string,
+  title?: string,
+  source_relative?: string,
+  turn_id?: string,
+  recalled_at?: number,
+  used: boolean,
+  pos?: number,
+};
+
+export type MemoryLane = {
+  available: boolean,
+  reason?: string,
+  produced: string[],
+  produced_total: number,
+  recalled: RecallItem[],
+};
+
+export type LiveLane = {
+  available: boolean,
+  reason?: string,
+  state?: LiveState,
+  holder?: Holder,
+  confidence?: Confidence,
+  since_secs?: number,
+  blocked?: boolean,
+};
+
+export type SlatePost = {
+  seq: number,
+  id: string,
+  at: number,
+  kind: string,
+  line: string,
+  topic?: string,
+};
+
+export type SlateLane = {
+  available: boolean,
+  reason?: string,
+  slug?: string,
+  head_seq?: number,
+  posts: SlatePost[],
+  total: number,
+};
+
+export type ChildRow = {
+  session_id: string,
+  display_name: string,
+  started_at: number,
+  ended_at: number,
+  harness: string,
+  substance?: string,
+  files_edited_count: number,
+  tool_calls: number,
+  parent_session_id?: string,
+};
+
+export type ChildrenLane = {
+  available: boolean,
+  reason?: string,
+  total: number,
+  items: ChildRow[],
+  next_after?: string,
+};
+
+export type TerminalLane = {
+  available: boolean,
+  reason: string,
+};
+
+export type ChildrenResponse = {
+  session_id: string,
+  total: number,
+  items: ChildRow[],
+  next_after: string | null,
+};
+
+/// A4 — the full `kb-session-card/1` for one session. Unlike the
+/// `jsonOrEmpty` fetchers above, failures THROW with the server's reason
+/// (problem+json `title: detail`, else `<status> <statusText>`): the
+/// session page has no honest empty fallback, so the hook surfaces the
+/// error and the page renders a `StateCard` instead of a blank page.
+export async function fetchSessionCard(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<SessionCard> {
+  const r = await fetch(
+    `${currentDaemonBase()}/api/sessions/${encodeURIComponent(sessionId)}/card`,
+    { headers: { Accept: "application/json" }, signal },
+  );
+  if (!r.ok) {
+    let reason = `${r.status} ${r.statusText}`;
+    try {
+      const p = (await r.json()) as { title?: string; detail?: string };
+      if (p.title) reason = `${p.title}: ${p.detail ?? ""}`;
+    } catch {
+      // Unparseable body — the status line above is the reason.
+    }
+    throw new Error(reason);
+  }
+  return (await r.json()) as SessionCard;
+}
+
+/// A4 — one page of a session's children (`…/children?after=&limit=`),
+/// oldest first by `(started_at, session_id)`. `next_after` is the opaque
+/// cursor for the following page (null on the last page).
+export async function fetchSessionChildren(
+  sessionId: string,
+  opts: { after?: string; limit?: number } = {},
+  signal?: AbortSignal,
+): Promise<ChildrenResponse> {
+  const params = new URLSearchParams();
+  if (opts.after) params.set("after", opts.after);
+  if (opts.limit !== undefined) params.set("limit", String(opts.limit));
+  const qs = params.toString();
+  const r = await fetch(
+    `${currentDaemonBase()}/api/sessions/${encodeURIComponent(sessionId)}/children${qs ? `?${qs}` : ""}`,
+    { headers: { Accept: "application/json" }, signal },
+  );
+  return jsonOrEmpty<ChildrenResponse>(r, { session_id: sessionId, total: 0, items: [], next_after: null });
 }
 
 // W3.A/P4 — the projects facet: one card per registry entry / auto-project.
