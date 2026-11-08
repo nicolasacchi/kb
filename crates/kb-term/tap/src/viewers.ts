@@ -18,6 +18,7 @@ import { connect, createServer, type Server, type Socket } from 'node:net';
 import { join as pathJoin } from 'node:path';
 import { buildMediaStub, type GfxItem, type ImageDef } from './graphics.ts';
 import { GroundTracker } from './ground.ts';
+import { Withholder } from './withhold.ts';
 import { Ring } from './ring.ts';
 import { buildSeed } from './seed.ts';
 import type { Twin } from './twin.ts';
@@ -166,6 +167,8 @@ export class TapServer {
   readonly ring: Ring;
   readonly withholder = new Withholder();
   epoch: string;
+  readonly sockPath: string;
+  stats = { joins: 0, degradedJoins: 0 };
 
   private readonly session: string;
   private readonly harness: string;
