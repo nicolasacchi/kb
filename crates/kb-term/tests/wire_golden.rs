@@ -5,10 +5,10 @@
 use std::path::{Path, PathBuf};
 
 use kb_term::wire::{
-    decode_binary, decode_text_frame, encode_binary, encode_envelope, is_valid_term_id,
-    parse_s2c_body, s2c_body, ClientFrame, ControlMessage, EnvelopeDecoder, Harness, Profile,
-    Request, Response, ResumeInfo, ServerFrame, SessionInfo, TextFrame, WireError,
-    MAX_ENVELOPE_LEN,
+    decode_binary, decode_text_frame, encode_binary, encode_envelope, is_valid_sha256_hex,
+    is_valid_term_id, parse_s2c_body, s2c_body, ClientFrame, ControlMessage, EnvelopeDecoder,
+    Harness, Profile, Request, Response, ResumeInfo, ServerFrame, SessionInfo, TextFrame,
+    WireError, MAX_ENVELOPE_LEN,
 };
 
 fn golden_dir() -> PathBuf {
@@ -343,6 +343,28 @@ fn term_id_charset() {
     assert!(!is_valid_term_id("abcd.123"));
     assert!(!is_valid_term_id("abcd/123"));
     assert!(!is_valid_term_id(""));
+}
+
+#[test]
+fn sha256_hex_charset() {
+    // The sha256 of the empty string (the Media golden key) is 64 lowercase
+    // hex characters.
+    assert!(is_valid_sha256_hex(
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    ));
+    assert!(!is_valid_sha256_hex(
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85"
+    ));
+    assert!(!is_valid_sha256_hex(
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b8550"
+    ));
+    assert!(!is_valid_sha256_hex(
+        "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    ));
+    assert!(!is_valid_sha256_hex(
+        "g3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    ));
+    assert!(!is_valid_sha256_hex(""));
 }
 
 #[test]
