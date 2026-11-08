@@ -18,7 +18,8 @@ SYNTH = os.path.join(HERE, "synth_omp_kitty_stream.py")
 
 def run(script, *args):
     return subprocess.run([sys.executable, "-I", script, *args],
-                          stdout=subprocess.PIPE, check=True).stdout
+                          stdout=subprocess.PIPE, check=True,
+                          timeout=60).stdout
 
 
 class FakeHarness(unittest.TestCase):
@@ -37,7 +38,8 @@ class FakeHarness(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             out_path = os.path.join(d, "stream.bin")
             subprocess.run([sys.executable, "-I", HARNESS, "--seed", "3",
-                            "--length", "20", "-o", out_path], check=True)
+                            "--length", "20", "-o", out_path], check=True,
+                           timeout=60)
             with open(out_path, "rb") as fh:
                 written = fh.read()
         self.assertEqual(written, run(HARNESS, "--seed", "3", "--length", "20"))
