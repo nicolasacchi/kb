@@ -43,6 +43,23 @@ impl Store {
         Ok(rows)
     }
 
+    /// A5 (`kbc-session-card/1`) — distinct review ids that have at least
+    /// one document revision whose `author_json` names this session
+    /// (`$.session_id`). A full scan by design: no expression index
+    /// (brief decision — these tables are small, and a new migration would
+    /// bump the schema epoch for no query win).
+    pub fn review_ids_authored_by_session(&self, sid: &str) -> Result<Vec<i64>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT review_id FROM review_docs
+             WHERE json_extract(author_json, '$.session_id') = ?1",
+        )?;
+        let rows = stmt
+            .query_map(params![sid], |r| r.get::<_, i64>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// V73-K1 — `kbc-review/1`'s ONE authoring transaction (design D9): the
     /// document revision, findings reconciled by FINGERPRINT (the SAME core
     /// [`Self::reconcile_findings_import`] uses, under

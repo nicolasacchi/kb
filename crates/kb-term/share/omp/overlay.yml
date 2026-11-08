@@ -1,0 +1,5 @@
+tui:
+  maxInlineImages: 0        # 0 = keep every image (default 8). NOT an off switch.
+  resizeScrollback: rebuild # pin of the default (enum append|rebuild|preserve)
+display:
+  collapseCompacted: false  # default true; false => full transcript reprint after compaction

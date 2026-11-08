@@ -381,6 +381,13 @@ export const queryClient = new QueryClient({
 //                                  invalidation (below) already covers that
 //                                  — no dedicated event, same reasoning as
 //                                  `["atlasSimilar", kb, id]` above.
+//   ["sessionCard", "code", sid, repo]  A5 — kb-code's
+//                                  `kbc-session-card/1` for one session
+//                                  (`hooks/useCodeLane.ts`). Joins the
+//                                  doclens no-SSE-tie set (finite staleTime,
+//                                  retry: false, nothing persisted); fetched
+//                                  only when the session's corpus has a
+//                                  code_url.
 
 /// Leading-edge + trailing throttle, per key — preserves the gallery's
 /// 1500 ms cooldown semantics for bursty event types (the daemon's

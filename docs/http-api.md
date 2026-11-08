@@ -518,6 +518,31 @@ GET  /api/kb/presence[?repo=NAME]          OL PRES2: kb's `GET /api/sessions/
                                             caption ("N edits outside
                                             configured repos", "N edits in
                                             ambiguous projects").
+GET  /api/session-card?sid=                kbc-session-card/1: one read
+                                            answering "what did this session do
+                                            on the code side", as four lanes:
+                                            commits (repo name, sha, join-ladder
+                                            confidence and via, attributed_here;
+                                            20 rows max, total + truncated),
+                                            reviews (id, repo name, title, state,
+                                            verdict; 20 max), findings
+                                            (per-severity authored counts),
+                                            presence (file count + newest edit
+                                            age). The one kb-code route on the
+                                            credentialed doc-lens CORS set
+                                            (kb's SPA fetches it cross-origin;
+                                            kb itself never calls kb-code).
+                                            Each lane `{available, caption?,
+                                            ...}`: a failing lane never fails
+                                            the request (`store error`, else
+                                            the shared `kb ...` captions).
+                                            A missing/malformed `sid` (plain
+                                            token, at most 128 bytes) or an
+                                            unknown `repo` is a 400 (never
+                                            echoes the rejected `sid`); any
+                                            well-formed `sid` is a 200, even
+                                            with empty lanes. No paths, no
+                                            file contents, no text.
 GET  /api/kb/ui                            OL S1: kb's `theme_family` +
                                             `theme` from `GET /api/settings`
                                             (malformed values -> null), same
