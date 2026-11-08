@@ -1096,7 +1096,7 @@ async fn term_int_identity_is_the_kb_profile() {
     };
     // DIAGNOSTIC (round 3): without the control-mode tap attached, to
     // isolate whether the tap is stealing tmux's query-client choice.
-    let tr = TestRunner::with_tap(tmux_bin, false, false);
+    let tr = TestRunner::with_tap(tmux_bin.clone(), false, false);
     boot_runner(&tr).await;
     let (id, log) = launch_probe(&tr, "query").await;
     // The anchor answers tmux's startup queries; one viewer joins beside it.
