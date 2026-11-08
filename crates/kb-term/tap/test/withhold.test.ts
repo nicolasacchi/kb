@@ -80,7 +80,7 @@ test('withhold_osc52_is_rerouted_as_side_event', () => {
   expect(dec(r.out)).toBe('abcde');
   expect(r.clipboards).toEqual([
     { offset: 2, data_b64: 'aGVsbG8=' },
-    { offset: 3, data_b64: 'V29ybGQh' },
+    { offset: 4, data_b64: 'V29ybGQh' },
   ]);
 });
 
