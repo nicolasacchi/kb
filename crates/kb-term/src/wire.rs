@@ -299,8 +299,25 @@ pub enum TextFrame {
     Unknown(String),
 }
 
+/// Reject a text-frame `u64` offset/seq at or above 2^53, matching the TS
+/// `reqUint` cap (`Number.MAX_SAFE_INTEGER`): both decoders reject the
+/// same frames. The binary header already enforces this bound; text frames
+/// must too (offsets are JS-safe integers, brief rule 1). Applies only to
+/// known fields; tolerated unknown fields on server frames are ignored by
+/// both sides as well.
+fn check_js_safe(vals: &[u64]) -> Result<(), WireError> {
+    for v in vals {
+        if *v >= MAX_OFFSET {
+            return Err(WireError::OffsetOutOfRange);
+        }
+    }
+    Ok(())
+}
+
 /// Decode one kb-term/1 text frame (any side). Malformed JSON or a missing
-/// string `t` is an error; an unknown `t` is `TextFrame::Unknown`.
+/// string `t` is an error; an unknown `t` is `TextFrame::Unknown`. Known
+/// frames with a `u64` offset/seq at or above 2^53 are
+/// [`WireError::OffsetOutOfRange`], matching the TS side.
 pub fn decode_text_frame(raw: &str) -> Result<TextFrame, WireError> {
     let value: serde_json::Value =
         serde_json::from_str(raw).map_err(|_| WireError::MalformedJson)?;
@@ -313,19 +330,71 @@ pub fn decode_text_frame(raw: &str) -> Result<TextFrame, WireError> {
         | "exit" | "clipboard" | "error" => {
             let frame: ServerFrame =
                 serde_json::from_str(raw).map_err(|_| WireError::MalformedJson)?;
+            check_server_offsets(&frame)?;
             Ok(TextFrame::Server(frame))
         }
         "resumefrom" | "takesize" | "input" | "ping" => {
             let frame: ClientFrame =
                 serde_json::from_str(raw).map_err(|_| WireError::MalformedJson)?;
+            match &frame {
+                ClientFrame::Resumefrom { offset, mseq, .. } => {
+                    check_js_safe(&[*offset, *mseq])?;
+                }
+                _ => {}
+            }
             Ok(TextFrame::Client(frame))
         }
         "viewer-open" | "viewer-close" | "typed" | "stats" => {
             let msg: ControlMessage =
                 serde_json::from_str(raw).map_err(|_| WireError::MalformedJson)?;
+            match &msg {
+                ControlMessage::ViewerOpen { resume, .. } => {
+                    if let Some(r) = resume {
+                        check_js_safe(&[r.offset, r.mseq])?;
+                    }
+                }
+                ControlMessage::Stats {
+                    joins,
+                    degraded_joins,
+                    viewers,
+                } => {
+                    let mut vals = [0u64; 3];
+                    let mut n = 0;
+                    if let Some(v) = joins {
+                        vals[n] = *v;
+                        n += 1;
+                    }
+                    if let Some(v) = degraded_joins {
+                        vals[n] = *v;
+                        n += 1;
+                    }
+                    if let Some(v) = viewers {
+                        vals[n] = *v;
+                        n += 1;
+                    }
+                    check_js_safe(&vals[..n])?;
+                }
+                _ => {}
+            }
             Ok(TextFrame::Control(msg))
         }
         _ => Ok(TextFrame::Unknown(raw.to_string())),
+    }
+}
+
+/// Check every `u64` offset/seq/len on a decoded server frame is JS-safe.
+fn check_server_offsets(frame: &ServerFrame) -> Result<(), WireError> {
+    match frame {
+        ServerFrame::Imagedef { seq, offset, .. } => check_js_safe(&[*seq, *offset]),
+        ServerFrame::Seed { offset, len } => check_js_safe(&[*offset, *len]),
+        ServerFrame::Resize { seq, offset, .. } => check_js_safe(&[*seq, *offset]),
+        ServerFrame::Sizechanged { seq, offset, .. } => check_js_safe(&[*seq, *offset]),
+        ServerFrame::Gfxreset { seq, offset, .. } => check_js_safe(&[*seq, *offset]),
+        ServerFrame::Exit { seq, offset, .. } => check_js_safe(&[*seq, *offset]),
+        ServerFrame::Clipboard { offset, .. } => check_js_safe(&[*offset]),
+        ServerFrame::Hello { .. } | ServerFrame::Profile { .. } | ServerFrame::Error { .. } => {
+            check_js_safe(&[])
+        }
     }
 }
 
@@ -400,10 +469,14 @@ pub const ENV_BINARY: u8 = 1;
 /// tap.sock envelope kind: control JSON.
 pub const ENV_CONTROL: u8 = 2;
 /// Largest legal tap.sock envelope length, in bytes; the u32 length counts
-/// the kind byte plus the body (brief section 6: "Max envelope 1 MiB").
-/// Both language codecs reject anything over it with
-/// [`WireError::BadEnvelope`].
-pub const MAX_ENVELOPE_LEN: usize = 1_048_576;
+/// the kind byte plus the body. The 1 MiB cap was added by round-1 review
+/// (brief section 6 sets no cap of its own), raised by 512 in round 3 so the
+/// largest deliverable clipboard envelope still fits: the withhold OSC 52
+/// budget is 1 MiB of base64 plus the clipboard JSON (~56 bytes), the S->C
+/// id prefix (<= 255 bytes) and the kind byte. Both language codecs reject
+/// anything over it with [`WireError::BadEnvelope`] (the TS twin applies
+/// this identical constant).
+pub const MAX_ENVELOPE_LEN: usize = 1_048_576 + 512;
 
 /// One decoded tap.sock envelope: `[u32 BE length][u8 kind][body]`, where
 /// `length` counts the kind byte plus the body.

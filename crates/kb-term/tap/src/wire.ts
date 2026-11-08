@@ -12,8 +12,13 @@
 
 export const MAX_OFFSET = 1n << 53n;
 /** Largest legal tap.sock envelope length; the u32 length counts the kind
- * byte plus the body (brief section 6: "Max envelope 1 MiB"). */
-export const MAX_ENVELOPE_LEN = 1_048_576;
+ * byte plus the body. The 1 MiB cap was added by round-1 review (brief
+ * section 6 sets no cap of its own), raised by 512 in round 3 so the
+ * largest deliverable clipboard envelope still fits: the withhold OSC 52
+ * budget is 1 MiB of base64 plus the clipboard JSON (~56 bytes), the S->C
+ * id prefix (<= 255 bytes) and the kind byte. Both codecs (this file and
+ * `crates/kb-term/src/wire.rs`) apply this identical constant. */
+export const MAX_ENVELOPE_LEN = 1_048_576 + 512;
 
 /** Protocol error for a malformed kb-term/1 frame (the "bad-frame" code). */
 export class FrameError extends Error {
@@ -375,7 +380,7 @@ export interface Envelope {
 /** Encode one envelope. `kind` is 0 (text JSON), 1 (binary frame), 2 (control). */
 export function encodeEnvelope(kind: number, body: Uint8Array): Uint8Array {
   if (kind !== 0 && kind !== 1 && kind !== 2) throw new FrameError(`bad-frame: bad envelope kind ${String(kind)}`);
-  if (1 + body.length > MAX_ENVELOPE_LEN) throw new FrameError('bad-frame: envelope exceeds 1 MiB');
+  if (1 + body.length > MAX_ENVELOPE_LEN) throw new FrameError('bad-frame: envelope exceeds maximum length');
   const out = new Uint8Array(4 + 1 + body.length);
   new DataView(out.buffer).setUint32(0, 1 + body.length);
   out[4] = kind;
@@ -421,7 +426,7 @@ export class EnvelopeDecoder {
       const dv = new DataView(this.buf.buffer, this.buf.byteOffset);
       const len = dv.getUint32(0);
       if (len === 0) throw new FrameError('bad-frame: zero-length envelope');
-      if (len > MAX_ENVELOPE_LEN) throw new FrameError('bad-frame: envelope exceeds 1 MiB');
+      if (len > MAX_ENVELOPE_LEN) throw new FrameError('bad-frame: envelope exceeds maximum length');
       if (this.buf.length < 4 + len) break;
       const kind = this.buf[4];
       if (kind !== 0 && kind !== 1 && kind !== 2) throw new FrameError(`bad-frame: bad envelope kind ${String(kind)}`);
