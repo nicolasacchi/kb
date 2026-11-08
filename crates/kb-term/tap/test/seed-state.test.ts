@@ -93,8 +93,8 @@ test('pending wrap at the last column is restored', async () => {
     const skipped = Buffer.from(skippedSeed.bytes).toString('latin1');
     // Full tail rewrites the wrapped cell (CUP 1;10 + pen SGR + 'x'); the
     // skipped tail omits the rewrite char.
-    expect(full.includes(`${E}[1;10H${E}[0;31mx`)).toBe(true);
-    expect(skipped.includes(`${E}[1;10H${E}[0;31mx`)).toBe(false);
+    expect(full.includes(`${E}[1;10H${E}[0;1;31mx`)).toBe(true);
+    expect(skipped.includes(`${E}[1;10H${E}[0;1;31mx`)).toBe(false);
   } finally {
     twin.dispose();
   }
@@ -158,10 +158,10 @@ test('DECSCUSR block/underline/bar x blink/steady round-trips', async () => {
 });
 
 test('alt active: normal DECSC slot survives composition (uses ?47h, not ?1049h)', async () => {
-  // Normal slot is saved by ESC7 before the first ?1049h; the live cursor
-  // at the (second) ?1049h differs, and the alt slot is set in-alt, so a
-  // bare body (which replays ?1049h but never ESC7) shows the difference.
-  const twin = await twinWith(40, 12, `${E}[1;32m${E}[2;3H${E}7${E}[5;5H${E}[0m${E}[?1049h${E}[8;8H${E}7${E}[?1049l${E}[3;7H${E}7${E}[?1049h${E}[2J${E}[9;9HALT`);
+  // Enter alt via ?47h (no save) so the normal ESC7 slot stays distinct
+  // from the live main cursor; the alt slot is set in-alt, so a bare body
+  // (which replays ?1049h but never ESC7) shows the difference on both.
+  const twin = await twinWith(40, 12, `${E}[1;32m${E}[2;3H${E}7${E}[5;5H${E}[0m${E}[?47h${E}[8;8H${E}7${E}[2J${E}[9;9HALT`);
   try {
     await expectBareDirty(twin, 'DECSC saved cursor');
     const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1 });
@@ -175,7 +175,7 @@ test('alt active: normal DECSC slot survives composition (uses ?47h, not ?1049h)
 });
 
 test('pen with a curly underline is restored', async () => {
-  const twin = await twinWith(40, 12, `${E}[0;4:3;58;5;42mcurly ${E}[0m`);
+  const twin = await twinWith(40, 12, `${E}[0;4:3;58;5;42mcurly`);
   try {
     // Bare serialize preserves the pen (its body restores _curAttrData),
     // so load-bearingness is pinned via skip + seed-content below.
@@ -255,7 +255,7 @@ test('buildSeed fails closed on a non-default charset/glevel', async () => {
 });
 
 test('skip alt mutation: ?1049h clobbers the normal slot', async () => {
-  const twin = await twinWith(40, 12, `${E}[1;32m${E}[2;3H${E}7${E}[5;5H${E}[0m${E}[?1049h${E}[8;8H${E}7${E}[?1049l${E}[3;7H${E}7${E}[?1049h${E}[2J${E}[9;9HALT`);
+  const twin = await twinWith(40, 12, `${E}[1;32m${E}[2;3H${E}7${E}[5;5H${E}[0m${E}[?47h${E}[8;8H${E}7${E}[2J${E}[9;9HALT`);
   try {
     const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, skip: ['alt'] });
     const classes = await stageClasses(twin, seed.bytes);

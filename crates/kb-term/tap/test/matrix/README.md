@@ -12,9 +12,12 @@ bare `serialize()`.
   fidelity) must be clean within `COSMETIC_RESIDUALS`; Stage B (convergence
   after the remainder) must be clean within `STATE_ALLOWLIST` (starts empty;
   entries need a one-line root cause each, totals within the spike's
-  15/7/6/2). ESC 8 (DECRC) probe must read `same` wherever stage B shows a
-  `DECSC saved cursor` class. A `QuiescentJoinGate` cross-check on a sample
-  of the picks must agree.
+  15/7/6/2) **except** cosmetic cells carried from before the join (spec 6:
+  they never re-render, so they persist at stage B by design) and the
+  visual-same/blank-flag derivations. ESC 8 (DECRC) probe must read `same`
+  at every join. A `QuiescentJoinGate` cross-check on a sample of the picks
+  must agree. Every failing join is enumerated (subjective first-failure
+  hiding is not used).
 - **Raw (informational):** the spike's `pickJoins` offsets (including
   inside-frame) with bare `serialize()`, printed as a
   52/741-style clean count. Not asserted.

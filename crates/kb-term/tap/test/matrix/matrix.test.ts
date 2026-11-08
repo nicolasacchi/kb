@@ -235,7 +235,7 @@ async function runVariantStream(variant: Variant, spec: StreamSpec): Promise<voi
         // stage A
         const aState = diffState(stateOf(twin.term as never), stateOf(viewer.term as never));
         const cellTables: Record<string, number> = {};
-        const aExamples: Record<string, Array<{ a: { fg: number; bg: number }; b: { fg: number; bg: number } }>> = {};
+        const aExamples: Record<string, Array<{ a: { fg: number; bg: number; ch: string; width: number }; b: { fg: number; bg: number; ch: string; width: number } }>> = {};
         for (const which of ['normal', 'alt'] as const) {
           const c = compareBuffers(twin.term as never, viewer.term as never, which);
           const classified = classifyBufferDiff(c.cells, which, which === 'alt' ? stateOf(twin.term as never).activeBuffer === 'alternate' : true);
@@ -260,17 +260,27 @@ async function runVariantStream(variant: Variant, spec: StreamSpec): Promise<voi
         await viewer.feed(bytes.subarray(j.off));
         const bState = diffState(refState, stateOf(viewer.term as never));
         const bCells: Record<string, number> = {};
+        const bExamples: Record<string, Array<{ a: { fg: number; bg: number; ch: string; width: number }; b: { fg: number; bg: number; ch: string; width: number } }>> = {};
         for (const which of ['normal', 'alt'] as const) {
           const c = compareBuffers(ref.term as never, viewer.term as never, which);
-          Object.assign(bCells, classifyBufferDiff(c.cells, which, which === 'alt' ? refState.activeBuffer === 'alternate' : true));
+          const classified = classifyBufferDiff(c.cells, which, which === 'alt' ? refState.activeBuffer === 'alternate' : true);
+          Object.assign(bCells, classified);
+          for (const cls of Object.keys(classified)) {
+            const raw = cls.replace(/^(alt-buffer content \((?:active|inactive, stale)\)): /, '');
+            bExamples[cls] = [...(bExamples[cls] ?? []), ...(c.examples[raw] ?? [])];
+          }
         }
         const bBad: string[] = [];
         for (const d of bState) if (!isStageBAllowed(variant, spec.name, d.cls)) bBad.push(`state:${d.cls}:${d.key}`);
-        for (const cls of Object.keys(bCells)) if (!isStageBAllowed(variant, spec.name, cls)) bBad.push(`cell:${cls}`);
+        for (const cls of Object.keys(bCells)) {
+          if (isStageBAllowed(variant, spec.name, cls)) continue;
+          if (stageBAllowed(cls, bExamples)) continue;
+          bBad.push(`cell:${cls}`);
+        }
         if (bBad.length > 0) {
           throw new Error(
             `stage B ${variant}/${spec.name}@${j.off}: ${bBad.join(', ')}\n` +
-            `bState=${JSON.stringify(bState)}\nbCells=${JSON.stringify(bCells)}\n` +
+            `bState=${JSON.stringify(bState)}\nbCells=${JSON.stringify(bCells)}\nbExamples=${JSON.stringify(bExamples)}\n` +
             `--- ref last rows ---\n${dumpRows(ref.term as never, 'normal', 12).join('\n')}\n` +
             `--- viewer last rows ---\n${dumpRows(viewer.term as never, 'normal', 12).join('\n')}`,
           );
@@ -315,7 +325,7 @@ async function runVariantStream(variant: Variant, spec: StreamSpec): Promise<voi
 function nonCosmetic(
   classes: Set<string>,
   cells: Record<string, number>,
-  examples: Record<string, Array<{ a: { fg: number; bg: number }; b: { fg: number; bg: number } }>> = {},
+  examples: Record<string, Array<{ a: { fg: number; bg: number; ch: string; width: number }; b: { fg: number; bg: number; ch: string; width: number } }>> = {},
 ): string[] {
   const bad: string[] = [];
   const hasLink = (prefix: string) =>
@@ -331,6 +341,10 @@ function nonCosmetic(
     if (ex.length === 0) return false;
     return ex.every((e) => sameVisualColour(e.a[field], e.b[field]));
   };
+  // Blank-flag rule: 'attributes' diffs that are flag-only on empty glyphs
+  // with visual-same colours are invisible (serialize drops flags on
+  // empty cells; e.g. BOLD on a blank cell is dropped).
+  const blank = (ch: string): boolean => ch === '' || ch === ' ';
   for (const c of classes) {
     const raw = c.replace(/^(alt-buffer content \((?:active|inactive, stale)\)): /, '');
     if ((COSMETIC_RESIDUALS as readonly string[]).includes(raw)) continue;
@@ -338,9 +352,32 @@ function nonCosmetic(
     if ((raw === 'fg colour' || raw === 'attributes' || raw === 'bg colour') && linkful(c)) continue;
     if (raw === 'fg colour' && visualSame(c, 'fg')) continue;
     if (raw === 'bg colour' && visualSame(c, 'bg')) continue;
+    if (raw === 'attributes') {
+      const ex = examples[c] ?? [];
+      if (ex.length > 0 && ex.every((e) => blank(e.a.ch) && blank(e.b.ch) && sameVisualColour(e.a.fg, e.b.fg) && sameVisualColour(e.a.bg, e.b.bg))) continue;
+    }
     bad.push(c);
   }
   return bad;
+}
+
+/** Stage-B rule beyond STATE_ALLOWLIST: cosmetic cells at join time stay
+ * lost for rows already in the buffer (spec 6, by design); plus the
+ * visual-same and blank-flag derivations. */
+function stageBAllowed(
+  cls: string,
+  examples: Record<string, Array<{ a: { fg: number; bg: number; ch: string; width: number }; b: { fg: number; bg: number; ch: string; width: number } }>> = {},
+): boolean {
+  const raw = cls.replace(/^(alt-buffer content \((?:active|inactive, stale)\)): /, '');
+  if ((COSMETIC_RESIDUALS as readonly string[]).includes(raw)) return true;
+  const ex = examples[cls] ?? [];
+  if (raw === 'fg colour' && ex.length > 0 && ex.every((e) => sameVisualColour(e.a.fg, e.b.fg))) return true;
+  if (raw === 'bg colour' && ex.length > 0 && ex.every((e) => sameVisualColour(e.a.bg, e.b.bg))) return true;
+  if (raw === 'attributes' && ex.length > 0) {
+    const blank = (ch: string): boolean => ch === '' || ch === ' ';
+    if (ex.every((e) => blank(e.a.ch) && blank(e.b.ch) && sameVisualColour(e.a.fg, e.b.fg) && sameVisualColour(e.a.bg, e.b.bg))) return true;
+  }
+  return false;
 }
 
 /** QuiescentJoinGate cross-check on a sample of the picked offsets. */

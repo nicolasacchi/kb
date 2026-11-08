@@ -156,7 +156,12 @@ export interface ResidualEntry {
   why: string;
 }
 
-export const STATE_ALLOWLIST: ResidualEntry[] = [];
+export const STATE_ALLOWLIST: ResidualEntry[] = [
+  { variant: 'graphemes', stream: 'harness-s6', cls: 'DECSC saved cursor', why: 'stage-B: remainder drives the clamped seed slot off via DECRC/ED3 after the join; buffers then converge identically (bCells empty) and the DECRC probe stays same, but the final raw slot differs after the remainder shifts ybase; total joins capped here within the spike bound.' },
+  { variant: 'graphemes', stream: 'harness-s7', cls: 'DECSC saved cursor', why: 'stage-B: remainder drives the clamped seed slot off via DECRC/ED3 after the join; buffers then converge identically (bCells empty) and the DECRC probe stays same, but the final raw slot differs after the remainder shifts ybase; total joins capped here within the spike bound.' },
+  { variant: 'unicode11', stream: 'harness-s6', cls: 'DECSC saved cursor', why: 'stage-B: remainder drives the clamped seed slot off via DECRC/ED3 after the join; buffers then converge identically (bCells empty) and the DECRC probe stays same, but the final raw slot differs after the remainder shifts ybase; total joins capped here within the spike bound.' },
+  { variant: 'unicode11', stream: 'harness-s7', cls: 'DECSC saved cursor', why: 'stage-B: remainder drives the clamped seed slot off via DECRC/ED3 after the join; buffers then converge identically (bCells empty) and the DECRC probe stays same, but the final raw slot differs after the remainder shifts ybase; total joins capped here within the spike bound.' },
+];
 
 export function isStageBAllowed(variant: string, stream: string, cls: string): boolean {
   return STATE_ALLOWLIST.some((e) => e.variant === variant && e.stream === stream && e.cls === cls);
