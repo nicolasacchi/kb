@@ -155,6 +155,9 @@ fn profiles_unset_prelude_covers_login_reintroduction() {
 /// The exact sorted env every harness shares (`HOME`/`LANG`/`PATH`/
 /// `USER` from `base_env()`, plus `KB_TERM_ID` from `request()`).
 /// Per-harness profile env is inserted in sorted position.
+
+/// One golden case: (harness, exact argv, exact sorted env).
+type GoldenCase = (&'static str, Vec<&'static str>, Vec<(String, String)>);
 fn shared_env() -> Vec<(String, String)> {
     vec![
         ("HOME".to_string(), "/home/x".to_string()),
@@ -177,7 +180,7 @@ fn profiles_golden_plan_per_harness_fresh() {
     let dir = tempfile::tempdir().unwrap();
     let env = base_env();
     let overlay = dir.path().join("omp-overlay.yml");
-    let cases: Vec<(&str, Vec<&str>, Vec<(String, String)>)> = vec![
+    let cases: Vec<GoldenCase> = vec![
         (
             "omp",
             vec!["omp"],
@@ -226,7 +229,7 @@ fn profiles_golden_plan_per_harness_resume() {
     let dir = tempfile::tempdir().unwrap();
     let env = base_env();
     let overlay = dir.path().join("omp-overlay.yml");
-    let cases: Vec<(&str, Vec<&str>, Vec<(String, String)>)> = vec![
+    let cases: Vec<GoldenCase> = vec![
         (
             "omp",
             vec!["omp", "-r", "sid-1"],
