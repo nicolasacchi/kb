@@ -115,7 +115,10 @@ export class Control {
   /** Most recent read/dispatch failure. Recorded and surfaced here instead
    * of silently ending handling (one bad event must not kill the client). */
   lastError: Error | null = null;
-
+  /** The exact reason the attach-time pause-after command failed, if it
+   * did (a %error or exit). Kept so stall failures are diagnosable; null
+   * means the command was accepted. */
+  lastPauseAfterError: string | null = null;
   constructor(deps: ControlDeps) {
     this.deps = deps;
   }
@@ -147,9 +150,14 @@ export class Control {
     void this.readLoop(this.proc);
     const { promise: ackPromise, resolve: ack } = Promise.withResolvers<void>();
     const [pauseAck] = this.write([`refresh-client -f pause-after=${this.deps.pauseAfterSecs ?? PAUSE_AFTER_SECS}`]);
-    // Resolved or rejected (`%error`): the line is on the wire either way and
-    // the pause-after failure surfaces through the RSS lane if at all.
-    pauseAck.then(() => ack(), () => ack());
+    // Resolved or rejected (`%error`): the line is on the wire either way.
+    // A rejection is recorded (not swallowed silently) so a stall after a
+    // failed pause-after is diagnosable; it surfaces through the RSS lane
+    // if at all.
+    pauseAck.then(() => ack(), (err: unknown) => {
+      this.lastPauseAfterError = err instanceof Error ? err.message : String(err);
+      ack();
+    });
     let timer: ReturnType<typeof setTimeout> | null = null;
     const deadline = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => reject(new Error('control attach timed out after 10s')), 10_000);

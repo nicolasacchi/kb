@@ -254,12 +254,24 @@ async function main(): Promise<void> {
         });
         // %pause must arrive within 10s of the resume; if the client never
         // pauses, report that instead of burning the 120s lane budget.
+        // A failed pause-after command (recorded by Control) is quoted in
+        // the error so the lane shows whether the flag was accepted.
         const pauseResult = await Promise.race([
           pausedP.then(() => 'PAUSED' as const),
           sleep(10_000).then(() => 'TIMEOUT' as const),
         ]);
-        if (pauseResult === 'TIMEOUT') throw new Error('no %pause within 10s of resume');
+        if (pauseResult === 'TIMEOUT') {
+          throw new Error(
+            `no %pause within 10s of resume${control.lastPauseAfterError ? ` (pause-after=2 failed: ${control.lastPauseAfterError})` : ''}`,
+          );
+        }
         note('PAUSED');
+        if (control.lastPauseAfterError) note(`WARN pause-after=2 error: ${control.lastPauseAfterError}`);
+        // The flood keeps flowing at a metered rate; the pause dropped one
+        // client copy. Wait until the pane settles (flood done) before the
+        // reseed, so the capture holds the complete state and a partial
+        // tail cannot hide in the post-capture queue.
+        await waitSettled();
         const r = await reseeder.reseed(pane);
         note('RESEEDED');
         out.compare = await compareAt(r);

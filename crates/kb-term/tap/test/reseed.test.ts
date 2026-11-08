@@ -217,8 +217,10 @@ test('reseed_restores_alt_screen_region_and_wrap_modes', async () => {
     expect(r.mode?.scrollTop).toBe(3);
     const state = stateOf(twin.term as never);
     expect(state.activeBuffer).toBe('alternate');
-    expect(state['alt.scrollTop']).toBe(2);
-    expect(state['alt.scrollBottom']).toBe(19);
+    // tmux reports scroll region 0-based ('M 1 3 20' = rows 4..21); the
+    // emitted DECSTBM is 1-based, so the xterm state lands on (3, 20).
+    expect(state['alt.scrollTop']).toBe(3);
+    expect(state['alt.scrollBottom']).toBe(20);
     // normal buffer holds the -a capture. dumpRows returns the LAST n rows,
     // so dump the whole buffer; rows are space-padded to cols width, hence
     // the substring (includes) form rather than exact-element contains.
@@ -226,12 +228,12 @@ test('reseed_restores_alt_screen_region_and_wrap_modes', async () => {
     expect(normal.some((r) => r.includes('normal-1'))).toBe(true);
     expect(normal.some((r) => r.includes('normal-2'))).toBe(true);
     // CUP is the last restore step: its row is relative to the region top.
-    expect(cursorOf(twin).y).toBe(3);
+    expect(cursorOf(twin).y).toBe(4);
     // restore byte order: region first, CUP last.
     const bytes = modeRestoreBytes(r.mode, 2, 1, 24);
-    expect(bytes.startsWith('\x1b[3;20r')).toBe(true);
+    expect(bytes.startsWith('\x1b[4;21r')).toBe(true);
     expect(bytes.endsWith('\x1b[2;3H')).toBe(true);
-    expect(bytes.indexOf('\x1b[3;20r')).toBeLessThan(bytes.indexOf('\x1b[?6h'));
+    expect(bytes.indexOf('\x1b[4;21r')).toBeLessThan(bytes.indexOf('\x1b[?6h'));
     expect(bytes.indexOf('\x1b[?6h')).toBeLessThan(bytes.indexOf('\x1b[2;3H'));
   } finally {
     twin.dispose();

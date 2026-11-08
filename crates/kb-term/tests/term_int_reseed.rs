@@ -348,7 +348,12 @@ fn term_int_reseed_equals_tmux_for_text_workload() {
     let (gdir, stream) = gen_stream(
         "text",
         &[
-            "--seed", "7", "--cols", "100", "--rows", "30", "--length", "800",
+            // ~400 KB: large enough to exercise scrollback/copy paths, small
+            // enough that 12 mid-stream reconstructions stay well inside
+            // the 120 s deadline under nextest parallelism. (At 800 rows
+            // / 1.1 MB the driver blew the deadline even with the O(n)
+            // cumulative reference -- CI 42433387483 -- pure CPU volume.)
+            "--seed", "7", "--cols", "100", "--rows", "30", "--length", "300",
         ],
     );
     let srv = Server::start(&tmux);
@@ -526,6 +531,18 @@ fn term_int_reseed_after_long_pause() {
     }
     bytes.truncate(30_000_000);
     std::fs::write(&flood, &bytes).expect("write flood");
+    // Meter the flood (~4 MB/s over ~7.5 s) so pane output is still flowing
+    // for the whole stall window: tmux's pause-after logic engages on a
+    // sustained lag, and a 30 MB instant burst can finish (and be queued)
+    // before the watch window opens. The driver SIGSTOPs the tap ~10ms
+    // after the ready file appears, so by the time %pause is due the
+    // client is seconds behind a flowing stream.
+    let feed = srv._dir.file("feed2.py");
+    std::fs::write(
+        &feed,
+        "import sys,time\nf=open(sys.argv[1],'rb')\no=sys.stdout.buffer\nwhile True:\n    d=f.read(262144)\n    if not d: break\n    o.write(d)\n    o.flush()\n    time.sleep(0.0625)\no.flush()\ntime.sleep(300)\n",
+    )
+    .expect("write feed2.py");
     let ready = srv._dir.file("ready");
     let pane = srv.new_session(
         "s",
@@ -533,10 +550,9 @@ fn term_int_reseed_after_long_pause() {
         30,
         &ready,
         &[
-            "sh",
-            "-c",
-            "cat \"$1\"; sleep 300",
-            "_",
+            "python3",
+            "-I",
+            feed.to_str().unwrap(),
             flood.to_str().unwrap(),
         ],
     );
@@ -611,7 +627,7 @@ fn term_int_reseed_after_long_pause() {
             (Some(t_ready), None) => t_ready.elapsed() >= Duration::from_millis(5000),
             (None, _) => false,
         };
-        if resume_now && last_cont.map_or(true, |t| t.elapsed() >= Duration::from_millis(500)) {
+        if resume_now && last_cont.is_none_or(|t| t.elapsed() >= Duration::from_millis(500)) {
             let _ = Command::new("kill")
                 .args(["-CONT", &child.id().to_string()])
                 .status();

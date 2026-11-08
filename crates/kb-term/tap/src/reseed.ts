@@ -158,12 +158,13 @@ function parseMode(lines: string[] | undefined): ModeState | null {
 
 /** Mode restore bytes: DECSTBM, origin, other modes, then an absolute CUP
  * LAST (CSI r homes the cursor; with origin mode the row is relative to the
- * region top). A full-screen region (1..rows) is deliberately NOT emitted:
- * it is exactly the twin's default scroll region, and the byte round-trip
- * provably corrupts the state (on term_int_reseed_pending_wrap the extra
- * `CSI 1;30r` left the reseeded twin with a different `scrollBottom` than
- * a byte-faithful reference twin -- CI run 42430279772 -- even though the
- * tmux pane never set a scroll region and reported the full window). */
+ * region top). tmux's scroll_region_upper/lower are 0-BASED: for a full
+ * 30-row pane tmux reports (0, 29), so DECSTBM -- which is 1-based -- needs
+ * +1 on both fields. CI run 42433387483 proved both halves of that: the
+ * reseeded twin's scrollBottom was 28 (the raw 29 written as a 1-based
+ * bottom) while a byte-faithful reference twin had 29. A full-window region
+ * (0..rows-1) is deliberately NOT emitted: it is exactly the twin's default
+ * scroll region and the round-trip only corrupts state. */
 export function modeRestoreBytes(mode: ModeState | null, cursorX: number, cursorY: number, rows: number): string {
   let s = '';
   if (mode) {
@@ -171,9 +172,9 @@ export function modeRestoreBytes(mode: ModeState | null, cursorX: number, cursor
       mode.scrollTop !== null &&
       mode.scrollBottom !== null &&
       mode.scrollTop <= mode.scrollBottom &&
-      !(mode.scrollTop === 1 && mode.scrollBottom === rows)
+      !(mode.scrollTop === 0 && mode.scrollBottom === rows - 1)
     ) {
-      s += `${ESC}[${mode.scrollTop};${mode.scrollBottom}r`;
+      s += `${ESC}[${mode.scrollTop + 1};${mode.scrollBottom + 1}r`;
     }
     if (mode.origin !== null) s += `${ESC}[?6${mode.origin ? 'h' : 'l'}`;
     if (mode.wrap !== null) s += `${ESC}[?7${mode.wrap ? 'h' : 'l'}`;
