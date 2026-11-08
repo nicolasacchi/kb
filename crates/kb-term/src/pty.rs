@@ -174,7 +174,16 @@ pub fn drop_kill(pid: u32) {
         return;
     }
     // Liveness check first: never signal a reaped/reused pid blindly.
-    // A zombie answers kill(pid, 0) but is already dead for our purposes.
+    // A zombie answers kill(pid, 0) but is already dead for our purposes;
+    // EPERM (another user's process) still means ALIVE.
+    if !crate::runner::pid_alive(pid) {
+        return;
+    }
+    // Re-check the zombie state immediately before signalling: between
+    // two checks the pid could have died and been recycled, so the second
+    // /proc read narrows the race to the single instruction between it
+    // and the kill (the pid-only API cannot close it entirely; callers
+    // holding a Child should `try_wait` instead, as the supervisor does).
     if let Ok(state) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
         if state
             .rsplit(')')
@@ -182,11 +191,6 @@ pub fn drop_kill(pid: u32) {
             .and_then(|s| s.split_whitespace().next())
             == Some("Z")
         {
-            return;
-        }
-    }
-    unsafe {
-        if libc::kill(pid as i32, 0) != 0 {
             return;
         }
     }
