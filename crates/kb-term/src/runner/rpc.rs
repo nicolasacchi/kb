@@ -68,13 +68,11 @@ async fn dispatch_inner<S: Supervisor>(
         Request::Ping {} => Ok(json!({"pong": true})),
         Request::List {} => {
             // The contract promises `SessionInfo`s (`Response::Ok` `data`
-            // is an array of them); stale entries cannot form one and
-            // are skipped, never emitted with nulls.
+            // is an array of them); stale sockets are included with
+            // null facts and `stale: true`.
             let entries = discovery::list_sessions(runner).await;
-            let infos: Vec<crate::wire::SessionInfo> = entries
-                .iter()
-                .filter_map(discovery::session_entry_to_info)
-                .collect();
+            let infos: Vec<crate::wire::SessionInfo> =
+                entries.iter().map(discovery::session_entry_info).collect();
             Ok(serde_json::to_value(infos).map_err(|e| RunnerError::Internal(e.to_string()))?)
         }
         Request::Launch { .. } => {

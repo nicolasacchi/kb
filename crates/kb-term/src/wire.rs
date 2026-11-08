@@ -441,24 +441,35 @@ pub struct GridData {
 pub struct EmptyData {}
 
 /// Session facts returned by `Request::List` inside `Response::Ok` `data`.
+///
+/// Every fact is `Option` and serializes `None` as an explicit `null`:
+/// a stale socket (which answers nothing) appears with all facts null
+/// and `stale: true`, so ONE type covers live and stale sessions (the
+/// kb-server mirror spells the same shape).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionInfo {
     /// Session id.
     pub id: String,
     /// Harness running in the session.
-    pub harness: Harness,
+    #[serde(default)]
+    pub harness: Option<Harness>,
     /// Working directory.
-    pub cwd: String,
+    #[serde(default)]
+    pub cwd: Option<String>,
     /// Start time as unix seconds.
-    pub started_unix: i64,
+    #[serde(default)]
+    pub started_unix: Option<i64>,
     /// Resume session id, if any.
     pub resume_sid: Option<String>,
     /// Pane pid.
-    pub pane_pid: u32,
+    #[serde(default)]
+    pub pane_pid: Option<u32>,
     /// Grid columns.
-    pub cols: u16,
+    #[serde(default)]
+    pub cols: Option<u16>,
     /// Grid rows.
-    pub rows: u16,
+    #[serde(default)]
+    pub rows: Option<u16>,
     /// Whether bracketed paste is enabled in the pane.
     pub bracket_paste_flag: bool,
     /// Whether the pane is dead.
