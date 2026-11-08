@@ -322,10 +322,10 @@ async fn parent_files_are_not_summed_with_children() {
     );
 }
 
-/// Test 7 — 120 children page 50/50/20 with no gaps/dups, `next_after`
-/// null on the last page, a colon-bearing id round-trips through the
-/// cursor, a malformed cursor 400s, and a non-root uses the
-/// parent predicate.
+/// Test 7 — 120 children + 2 grandchildren (the root's flood is 122
+/// rows) page 50/50/22 with no gaps/dups, `next_after` null on the
+/// last page, a colon-bearing id round-trips through the cursor, a
+/// malformed cursor 400s, and a non-root uses the parent predicate.
 #[tokio::test]
 async fn children_are_paged_by_started_at_then_session_id_without_gaps_or_dups() {
     let (_tmp, addr, paths) = boot().await;
@@ -368,7 +368,7 @@ async fn children_are_paged_by_started_at_then_session_id_without_gaps_or_dups()
         let items = v["items"].as_array().unwrap();
         assert_eq!(
             items.len(),
-            if page < 2 { 50 } else { 20 },
+            if page < 2 { 50 } else { 22 },
             "page {page} size"
         );
         for it in items {
@@ -383,8 +383,8 @@ async fn children_are_paged_by_started_at_then_session_id_without_gaps_or_dups()
     let mut dedup = seen.clone();
     dedup.sort();
     dedup.dedup();
-    assert_eq!(seen.len(), 120, "no gaps, no dups across 50/50/20");
-    assert_eq!(dedup.len(), 120);
+    assert_eq!(seen.len(), 122, "no gaps, no dups across 50/50/22");
+    assert_eq!(dedup.len(), 122);
     assert!(
         seen.contains(&"page-child:with:colons".to_string()),
         "{seen:?}"
