@@ -134,11 +134,13 @@ test('viewers_atomic_join_no_loss_no_duplicate', async () => {
   openViewer(server, t, 'v1');
   await waitUntil(() => kinds(t).includes('hello'), 'join hello');
   // Push a chunk once the join has landed: the viewer sees it exactly once.
+  // (The pre-join 'AAAA' is embodied in the seed -- here empty -- and is
+  // never replayed; live bytes start at exactly the seed offset.)
   server.feed([{ kind: 'bytes', data: enc('BBBB') }]);
   const frames = collect(t);
   const payload = frames.filter((f) => f.binary).map((f) => Buffer.from(f.binary!.payload).toString('utf-8')).join('');
-  expect(payload).toBe('AAAABBBB');
-  expect(frames.filter((f) => f.binary).map((f) => f.binary!.offset)).toEqual([4, 4]);
+  expect(payload).toBe('BBBB');
+  expect(frames.filter((f) => f.binary).map((f) => f.binary!.offset)).toEqual([4]);
   await server.close();
   twin.dispose();
 });
@@ -158,7 +160,7 @@ test('viewers_join_waits_inside_synchronized_frame_then_gets_post_frame_head', a
   server.feed([{ kind: 'bytes', data: enc(`${E}[?2026lFRAME`) }]);
   await waitUntil(() => kinds(t).includes('seed'), 'post-frame join');
   const seed = collect(t).find((f) => f.text?.t === 'seed')?.text as Extract<ServerFrame, { t: 'seed' }>;
-  expect(seed.offset).toBe(7 + 8 + 5);
+  expect(seed.offset).toBe(8 + 8 + 5);
   await server.close();
   twin.dispose();
 });
@@ -170,6 +172,10 @@ test('viewers_degraded_join_when_never_quiet_and_busy_when_sync_stuck', async ()
   const t1 = new MockTransport();
   noisy.feed([{ kind: 'bytes', data: enc('x') }]);
   openViewer(noisy, t1, 'v1');
+  // The fake clock never moves on its own: advance past joinWaitMs so the
+  // join loop's deadline fires and the join lands degraded (100 ms of
+  // quiet still fails the 5000 ms quiesce window).
+  clock.advance(100);
   await waitUntil(() => noisy.stats.joins >= 1, 'degraded join lands');
   expect(noisy.stats.degradedJoins).toBe(1);
   await noisy.close();
@@ -179,6 +185,8 @@ test('viewers_degraded_join_when_never_quiet_and_busy_when_sync_stuck', async ()
   const t2 = new MockTransport();
   stuck.feed([{ kind: 'bytes', data: enc(`${E}[?2026h`) }]);
   openViewer(stuck, t2, 'v1');
+  // Same fake-clock deadline discipline as the degraded case above.
+  clock2.advance(100);
   await waitUntil(() => collect(t2).some((f) => f.text?.t === 'error' && f.text.code === 'busy'), 'busy error');
   expect(stuck.viewerCount).toBe(0);
   await stuck.close();
