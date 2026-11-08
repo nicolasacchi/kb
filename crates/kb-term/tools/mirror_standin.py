@@ -24,6 +24,7 @@ PLACEHOLDER = "\U0010EEEE"  # what omp's kitty placeholder cells look like
 NUM_RE = re.compile(r"^(?:\x1b\[[0-9;?]*[A-Za-z])*L(\d{6})\b")
 
 COLORS = [31, 32, 33, 34, 35, 36, 91, 92, 93, 94]
+MAX_EXPECT_TOTAL = 1000000
 WIDE = ["日本語", "中文", "한글", "\U0001f600"]  # CJK, hangul, emoji
 
 
@@ -144,7 +145,7 @@ def analyze_dump(lines, expect_total):
     numbers (list[int], file order), highest (int, 0 if none), duplicates (sorted list),
     missing (list, 1..highest), in_order (bool), expect_total (int),
     tail_missing (list: highest+1..expect_total when highest < expect_total, else []),
-    overrun (sorted unique list of numbers > expect_total), problems (list[str]), ok (bool)."""
+    overrun (sorted unique list of numbers > expect_total), below (sorted unique list of numbers < 1), problems (list[str]), ok (bool)."""
     numbers = []
     for raw in lines:
         m = NUM_RE.match(raw.rstrip("\r\n").lstrip())
@@ -161,6 +162,7 @@ def analyze_dump(lines, expect_total):
     missing = [n for n in range(1, highest + 1) if n not in seen]
     in_order = numbers == sorted(numbers)
     overrun = sorted(n for n in seen if n > expect_total)
+    below = sorted(n for n in seen if n < 1)
     if highest < expect_total:
         tail_missing = list(range(highest + 1, expect_total + 1))
     else:
@@ -175,6 +177,8 @@ def analyze_dump(lines, expect_total):
             problems.append("missing in 1..%d: %d" % (highest, len(missing)))
         if not in_order:
             problems.append("out of order")
+        if below:
+            problems.append("numbers below L000001: %s" % below[:10])
         if overrun:
             problems.append("overrun: numbers beyond the expected total")
         if highest < expect_total:
@@ -189,16 +193,18 @@ def analyze_dump(lines, expect_total):
         "expect_total": expect_total,
         "tail_missing": tail_missing,
         "overrun": overrun,
+        "below": below,
         "problems": problems,
         "ok": ok,
     }
 
 
-def check_dump(path, expect_total, out=sys.stdout):
+def check_dump(path, expect_total, out=None):
     """Read path (utf-8, errors='replace'), call analyze_dump, print the report, return 0 or 1."""
+    if out is None:
+        out = sys.stdout
     with open(path, encoding="utf-8", errors="replace") as f:
-        lines = list(f)
-    result = analyze_dump(lines, expect_total)
+        result = analyze_dump(f, expect_total)
     numbers = result["numbers"]
     highest = result["highest"]
     duplicates = result["duplicates"]
@@ -219,6 +225,8 @@ def check_dump(path, expect_total, out=sys.stdout):
     print("in order               : %s" % in_order, file=out)
     if numbers and highest < expect_total:
         print("tail                   : truncated: highest L%06d < expected L%06d (%d tail lines absent: L%06d..L%06d)" % (highest, expect_total, len(tail_missing), tail_missing[0], tail_missing[-1]), file=out)
+    elif not numbers:
+        print("tail                   : FAIL (no numbered lines)", file=out)
     else:
         print("tail                   : OK", file=out)
     if ok:
@@ -272,6 +280,8 @@ def main():
         ap.error("--expect-total requires --check-dump FILE")
     if args.expect_total is not None and args.expect_total < 1:
         ap.error("--expect-total must be >= 1")
+    if args.expect_total is not None and args.expect_total > MAX_EXPECT_TOTAL:
+        ap.error("--expect-total must be <= %d (a dump can only be judged complete against a total the run wrote; larger values almost certainly come from a typo and would materialize the whole tail)" % MAX_EXPECT_TOTAL)
 
     if args.check_dump:
         try:
