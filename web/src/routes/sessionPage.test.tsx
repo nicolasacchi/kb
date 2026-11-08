@@ -303,7 +303,9 @@ describe("SessionPage", () => {
       expect(screen.getByTestId("session-children-total")).toBeTruthy(),
     );
     expect(screen.getByTestId("session-children-total").textContent).toBe("2 total");
-    expect(screen.getByText("Child one")).toBeTruthy();
+    // The rows come from the children query, which resolves after mount;
+    // `session-children-total` renders immediately from the card lane.
+    await screen.findByText("Child one");
     screen.getByTestId("session-children-more").click();
     await waitFor(() => expect(screen.getByText("Child two")).toBeTruthy());
     const childrenUrl = fetchFn.mock.calls
@@ -321,7 +323,9 @@ describe("SessionPage", () => {
       expect(screen.getByTestId("session-files-total")).toBeTruthy(),
     );
     expect(screen.getByTestId("session-files-total").textContent).toContain("3 files");
-    const childRow = screen.getByTestId("session-child-row");
+    // The child row comes from the children query, which resolves after
+    // mount; the files total renders immediately from the card lane.
+    const childRow = await screen.findByTestId("session-child-row");
     expect(childRow.textContent).toContain("5 edited");
     expect(screen.getByTestId("session-files-total").textContent).not.toContain("8");
   });
@@ -345,10 +349,12 @@ describe("SessionPage", () => {
       }),
     );
     const { container } = renderPage();
-    await waitFor(() => expect(
-      container.querySelector(".kb-statecard"),
-    ).toBeTruthy());
-    expect(container.textContent).toContain("Could not load session");
+    // The loading StateCard matches `.kb-statecard` immediately, so wait
+    // for the degraded card's title, which only renders once the failed
+    // card fetch has rejected (retry is disabled on this client).
+    await waitFor(() =>
+      expect(container.textContent).toContain("Could not load session"),
+    );
     expect(container.textContent).toContain("Not Found: session missing");
   });
 });
