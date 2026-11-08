@@ -366,8 +366,10 @@ fn term_int_reseed_equals_tmux_for_text_workload() {
         30,
         &ready,
         &[
-            "python3",
-            "-I",
+            "sh",
+            "-c",
+            "python3 -I \"$1\" \"$2\"; sleep 300",
+            "_",
             feed.to_str().unwrap(),
             stream.to_str().unwrap(),
         ],

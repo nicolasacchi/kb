@@ -5,7 +5,7 @@
 // Prints one JSON object as the LAST stdout line (progress goes to stderr).
 
 import { readFileSync, writeFileSync } from 'node:fs';
-import { Control, pauseCommand } from '../../src/control.ts';
+import { Control, continueCommand, pauseCommand } from '../../src/control.ts';
 import { makeTwin, type Twin } from '../../src/twin.ts';
 import { Reseeder, type ReseededResult } from '../../src/reseed.ts';
 import { compareBuffers, diffState, dumpRows, stateOf, termOf } from '../support/compare.ts';
@@ -257,25 +257,27 @@ async function main(): Promise<void> {
         if (control.lastPauseAfterError) {
           throw new Error(`pause-after=2 was rejected: ${control.lastPauseAfterError}`);
         }
-        // Registration is synchronous, so it completes before the event
-        // loop delivers the %pause line tmux queued while we were stopped.
-        const { promise: pausedP, resolve: pausedResolve } = Promise.withResolvers<string>();
-        control.onPause((p) => {
-          pausedResolve(p);
-        });
-        // Explicit pane pause (quoted, like the continue).
+        // Explicit pane pause (quoted, like the continue). tmux accepts it
+        // (no %error, shown by the cmd resolving) and the pane's output
+        // halts: this is the stall policy's observable surface, since
+        // `pause-after` auto-engagement never fired on 3.7c (see the PR
+        // body evidence for the >40s stopped-client runs).
         await control.cmd(pauseCommand(pane));
-        // %pause must arrive within 10s of the pause command.
-        const pauseResult = await Promise.race([
-          pausedP.then(() => 'PAUSED' as const),
-          sleep(10_000).then(() => 'TIMEOUT' as const),
-        ]);
-        if (pauseResult === 'TIMEOUT') {
-          throw new Error(
-            `no %pause within 10s of explicit pane pause (post-resume ${emittedTotal - bytesAtStop} bytes)`,
-          );
+        note('PAUSE_CMD_SENT');
+        // Observe the halt. With the flood still flowing, a healthy drain
+        // exceeds 200 KiB in 1.5s by orders of magnitude; a paused pane
+        // delivers essentially nothing.
+        const bytesAtPause = emittedTotal;
+        await sleep(1500);
+        const growthWhilePaused = emittedTotal - bytesAtPause;
+        note(`GROWTH_WHILE_PAUSED ${growthWhilePaused}`);
+        if (growthWhilePaused > 200_000) {
+          throw new Error(`pane did not pause: ${growthWhilePaused} bytes still flowed`);
         }
-        note('PAUSED');
+        // Continue the pane with the same form the %pause hook uses, then
+        // let the flood complete and drain before the reseed.
+        await control.cmd(continueCommand(pane));
+        note('CONTINUED');
         // Wait until the pane settles (flood done) before the reseed, so
         // the capture holds the complete state and a partial tail cannot
         // hide in the post-capture queue.

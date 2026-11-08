@@ -1,7 +1,7 @@
 // Control-mode client tests (T5 tests 6-8). Unit level: a fake spawn whose
 // stdout is pushed by hand, so no tmux runs.
 import { test, expect } from 'bun:test';
-import { Control, ControlError, attachArgv, continueCommand, exitNeedsReseed, type SpawnedProcess } from '../src/control.ts';
+import { Control, ControlError, attachArgv, continueCommand, exitNeedsReseed, pauseCommand, type SpawnedProcess } from '../src/control.ts';
 import { PAUSE_AFTER_SECS } from '../src/control.ts';
 
 class FakeStdout implements AsyncIterable<Uint8Array> {
