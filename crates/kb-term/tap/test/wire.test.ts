@@ -17,7 +17,7 @@ import {
   ENV_BINARY,
   ENV_CONTROL,
   ENV_TEXT,
-  FrameError,
+  MAX_ENVELOPE_LEN,
   type ServerFrame,
 } from '../src/wire.ts';
 
@@ -140,4 +140,38 @@ test('wire_control_and_stats_encode_shapes', () => {
 
 test('wire_environment_envelope_kinds_numbered', () => {
   expect([ENV_TEXT, ENV_BINARY, ENV_CONTROL]).toEqual([0, 1, 2]);
+});
+
+test('wire_known_frames_validate_required_fields_and_types', () => {
+  // Missing fields reject (lock-step with Rust decode_text_frame).
+  expect(() => decodeTextFrame('{"t":"hello","proto":"kb-term/1","session":"s"}')).toThrow(FrameError);
+  expect(() => decodeTextFrame('{"t":"seed","offset":1000}')).toThrow(FrameError);
+  expect(() => decodeTextFrame('{"t":"resumefrom","offset":1000,"epoch":"e"}')).toThrow(FrameError);
+  expect(() => decodeTextFrame('{"t":"hello","proto":"kb-term/1","session":"s","epoch":"e","harness":"future","bound_sid":null}')).toThrow(FrameError);
+  // Wrong types reject (no silent coercion).
+  expect(() => decodeTextFrame('{"t":"seed","offset":1000,"len":"4"}')).toThrow(FrameError);
+  expect(() => decodeTextFrame('{"t":"seed","offset":1000.5,"len":4}')).toThrow(FrameError);
+  expect(() => decodeTextFrame('{"t":"resumefrom","offset":"1000","mseq":0,"epoch":"e"}')).toThrow(FrameError);
+  // Client + control frames reject unknown fields (deny_unknown_fields).
+  expect(() => decodeTextFrame('{"t":"resumefrom","offset":1000,"mseq":0,"epoch":"e","extra":1}')).toThrow(FrameError);
+  expect(() => decodeTextFrame('{"t":"ping","extra":1}')).toThrow(FrameError);
+  // Server frames tolerate unknown fields (Rust ServerFrame has no deny).
+  expect(decodeTextFrame('{"t":"hello","proto":"kb-term/1","session":"s","epoch":"e","harness":"omp","bound_sid":null,"extra":1}').kind).toBe('known');
+});
+
+test('wire_envelope_length_capped_at_1_mib_in_both_directions', () => {
+  const ok = encodeEnvelope(ENV_TEXT, new Uint8Array(MAX_ENVELOPE_LEN - 1));
+  expect(ok.length).toBe(4 + MAX_ENVELOPE_LEN);
+  expect(() => encodeEnvelope(ENV_TEXT, new Uint8Array(MAX_ENVELOPE_LEN))).toThrow(FrameError);
+  // Streaming: a header claiming 1 MiB + 1 fails on the header alone.
+  const dec = new EnvelopeDecoder();
+  const hdr = new Uint8Array(4);
+  new DataView(hdr.buffer).setUint32(0, MAX_ENVELOPE_LEN + 1);
+  expect(() => dec.push(hdr)).toThrow(FrameError);
+  // A length-exact 1 MiB envelope split across pushes still decodes.
+  const dec2 = new EnvelopeDecoder();
+  expect(dec2.push(ok.subarray(0, 10))).toEqual([]);
+  const done = dec2.push(ok.subarray(10));
+  expect(done.length).toBe(1);
+  expect(done[0].body.length).toBe(MAX_ENVELOPE_LEN - 1);
 });
