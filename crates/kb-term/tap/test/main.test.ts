@@ -156,10 +156,11 @@ test('seam_control_to_viewer_end_to_end', async () => {
     // bytes, and a kitty image transmission (must become an imagedef).
     const png = makePng(8, 8, 33);
     const b64 = Buffer.from(png).toString('base64');
-    const image = `q=1,f=32,i=7;${b64}`;
+    const image = `a=t,f=100,i=7;${b64}`;
     const lines =
       octal('%0', '\x1b[6nhello') +
       octal('%0', `\x1b_G${image}\x1b\\`) +
+      octal('%0', '\x1b_Ga=p,i=7,c=8,r=8\x1b\\') +
       octal('%0', '\x1b[1;31mworld\x1b[0m');
     fake.stdout.push(lines);
 
