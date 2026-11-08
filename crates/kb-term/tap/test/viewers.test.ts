@@ -13,7 +13,7 @@ import { connect } from 'node:net';
 import { RefViewer } from '../src/client_ref.ts';
 import { makeTwin, type Twin } from '../src/twin.ts';
 import { TapServer, type Transport } from '../src/viewers.ts';
-import { EnvelopeDecoder, decodeBinaryFrame, decodeTextFrame, encodeBinaryFrame, encodeControlMessage, encodeEnvelope, ENV_CONTROL, ENV_TEXT, parseS2C, wrapS2C, type ServerFrame } from '../src/wire.ts';
+import { EnvelopeDecoder, decodeBinaryFrame, decodeTextFrame, encodeBinaryFrame, encodeControlMessage, encodeEnvelope, ENV_CONTROL, ENV_TEXT, MAX_ENVELOPE_LEN, parseS2C, wrapS2C, type ServerFrame } from '../src/wire.ts';
 
 const E = '\x1b';
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -25,10 +25,17 @@ class MockTransport implements Transport {
   private drainCbs: (() => void)[] = [];
   private closeCbs: (() => void)[] = [];
   alwaysBlock = false;
+  /** Return false for the next N writes (bytes still handed off, as Node). */
+  blockNextWrites = 0;
 
   write(bytes: Uint8Array): boolean {
     this.written.push(bytes);
-    return !this.alwaysBlock;
+    if (this.alwaysBlock) return false;
+    if (this.blockNextWrites > 0) {
+      this.blockNextWrites--;
+      return false;
+    }
+    return true;
   }
   close(): void {
     this.closed = true;
@@ -477,11 +484,11 @@ test('viewers_bad_frames_close_only_the_offending_connection', async () => {
   openViewer(server, good, 'good');
   await waitUntil(() => kinds(good).includes('hello'), 'good viewer join');
   good.clear();
-  // Oversize envelope header (claimed length 1 MiB + 1) closes its connection.
+  // Oversize envelope header (claimed length MAX_ENVELOPE_LEN + 1) closes its connection.
   const evil = new MockTransport();
   const evilConn = server.attachTransport(evil);
   const hdr = new Uint8Array(4);
-  new DataView(hdr.buffer).setUint32(0, 1_048_577);
+  new DataView(hdr.buffer).setUint32(0, MAX_ENVELOPE_LEN + 1);
   server.feedTransport(evilConn, hdr);
   expect(evil.closed).toBe(true);
   // resumefrom with a string offset (never park a viewer at NaN).
@@ -586,18 +593,22 @@ test('viewers_cumulative_accepted_writes_never_count_as_backlog', async () => {
 });
 
 // A join still waiting on quiescence must not run when the viewer has gone
-// away or become live in the meantime (one guard pins both cases). Real
-// wall-clock time is unavoidable here: the quiescence loop's deadline is
-// measured on the platform clock, so a frozen fake clock would never reach
-// it (deterministic time control cannot drive this wait).
+// away or become live in the meantime (one guard pins both cases). The
+// interleave is deadline-driven, not sleep-driven: the fake clock freezes the
+// quiescence deadline (the loop cannot expire it on its own), so the
+// close/resume fed right after `pendingJoinCount` proves the join started is
+// guaranteed in-flight regardless of wall-clock stalls, and advancing the
+// clock past the deadline then lets the guard fire deterministically.
 test('viewers_join_aborts_when_viewer_closes_during_quiescence_wait', async () => {
+  const clock = fakeClock();
   const stubTwin = { feed: async () => {}, serialize: { serialize: () => '' } } as unknown as Twin;
-  const server = new TapServer({ session: 'join00001', harness: 'omp', epoch: 'e'.repeat(32), twin: stubTwin, quiesceMs: 10_000, joinWaitMs: 200, makeSeed: () => new Uint8Array(0) });
+  const server = new TapServer({ session: 'join00001', harness: 'omp', epoch: 'e'.repeat(32), twin: stubTwin, now: clock.now, quiesceMs: 10_000, joinWaitMs: 200, makeSeed: () => new Uint8Array(0) });
   const t = new MockTransport();
   const conn = openViewer(server, t, 'v1');
-  await Bun.sleep(50);
+  await waitUntil(() => server.pendingJoinCount === 1, 'join in flight');
   server.feedTransport(conn, encodeEnvelope(ENV_CONTROL, enc(encodeControlMessage({ t: 'viewer-close', viewer: 'v1' }))));
-  await Bun.sleep(600); // past the join deadline; the guard must have fired
+  clock.advance(1000); // past the join deadline; the guard must fire
+  await waitUntil(() => server.pendingJoinCount === 0, 'join settled');
   expect(server.viewerCount).toBe(0);
   expect(server.stats.joins).toBe(0);
   expect(kinds(t)).toEqual([]);
@@ -605,16 +616,18 @@ test('viewers_join_aborts_when_viewer_closes_during_quiescence_wait', async () =
 });
 
 test('viewers_join_aborts_when_resume_makes_viewer_live_during_wait', async () => {
+  const clock = fakeClock();
   const stubTwin = { feed: async () => {}, serialize: { serialize: () => '' } } as unknown as Twin;
-  const server = new TapServer({ session: 'join00002', harness: 'omp', epoch: 'e'.repeat(32), twin: stubTwin, quiesceMs: 10_000, joinWaitMs: 200, makeSeed: () => new Uint8Array(0) });
+  const server = new TapServer({ session: 'join00002', harness: 'omp', epoch: 'e'.repeat(32), twin: stubTwin, now: clock.now, quiesceMs: 10_000, joinWaitMs: 200, makeSeed: () => new Uint8Array(0) });
   server.feed([{ kind: 'bytes', data: enc('0123456789') }]);
   const t = new MockTransport();
   const conn = openViewer(server, t, 'v1');
-  await Bun.sleep(50);
+  await waitUntil(() => server.pendingJoinCount === 1, 'join in flight');
   // A resumefrom for the same viewer converts it to 'live' (hello + replay).
   server.feedTransport(conn, encodeEnvelope(ENV_TEXT, wrapS2C('v1', enc('{"t":"resumefrom","offset":0,"mseq":0,"epoch":"' + 'e'.repeat(32) + '"}'))));
   await waitUntil(() => kinds(t).includes('hello'), 'resume hello');
-  await Bun.sleep(600); // past the join deadline; the guard must have fired
+  clock.advance(1000); // past the join deadline; the guard must fire
+  await waitUntil(() => server.pendingJoinCount === 0, 'join settled');
   expect(server.stats.joins).toBe(0);
   expect(kinds(t).filter((k) => k === 'hello').length).toBe(1);
   expect(kinds(t)).not.toContain('profile');
@@ -634,4 +647,88 @@ test('viewers_viewer_open_without_resume_joins_fresh', async () => {
   await waitUntil(() => kinds(t).includes('seed'), 'join without resume');
   await server.close();
   twin.dispose();
+});
+
+// A `false` write has already been handed to the transport (Node semantics):
+// serviceViewer must commit sentOffset before honouring the drain pause, or
+// the same [sentOffset, sentOffset+len) range is written twice after drain.
+test('viewers_backpressure_false_write_handed_off_not_duplicated', async () => {
+  const clock = fakeClock();
+  const stubTwin = { feed: async () => {}, serialize: { serialize: () => '' } } as unknown as Twin;
+  const server = new TapServer({ session: 'bp000001', harness: 'omp', epoch: 'e'.repeat(32), twin: stubTwin, now: clock.now, quiesceMs: 0, joinWaitMs: 5000, makeSeed: () => new Uint8Array(0) });
+  const t = new MockTransport();
+  openViewer(server, t, 'v1');
+  await waitUntil(() => kinds(t).includes('seed'), 'join before backpressure');
+  const seed = collect(t).find((f) => f.text?.t === 'seed')?.text as Extract<ServerFrame, { t: 'seed' }>;
+  const X = seed.offset;
+  const stream = new Uint8Array(1000).fill(0x41);
+  t.blockNextWrites = 1; // exactly one false write, then drain
+  server.feed([{ kind: 'bytes', data: stream }]);
+  expect(collect(t).filter((f) => f.binary).length).toBe(1); // handed off, not lost
+  t.drain();
+  const frames = collect(t);
+  const binaries = frames.filter((f) => f.binary);
+  expect(binaries.length).toBe(1); // drain must not rewrite the range
+  expect(binaries[0].binary?.offset).toBe(X);
+  expect(sha(binaries[0].binary!.payload)).toBe(sha(stream));
+  const ref = new RefViewer({ epoch: 'e'.repeat(32) });
+  for (const f of frames) {
+    if (f.text !== undefined) ref.onText(JSON.stringify(f.text));
+    if (f.binary !== undefined) ref.onBinary(encodeBinaryFrame(f.binary.offset, f.binary.payload));
+  }
+  expect(ref.closed).toBe(false);
+  expect(ref.gaps).toBe(0);
+  expect(ref.dupBytes).toBe(0);
+  expect(ref.applied).toBe(X + stream.length);
+  const recovered = Buffer.concat(ref.bytes.map((b) => Buffer.from(b)));
+  expect(sha(recovered)).toBe(sha(stream));
+  await server.close();
+});
+
+// The largest deliverable clipboard envelope (OSC 52 data just under the old
+// 1 MiB envelope cap) must deliver without throwing: the withhold OSC 52
+// budget is 1 MiB of base64 plus JSON/id overhead, so the envelope cap is
+// 1 MiB + 512 on both codecs.
+test('viewers_clipboard_near_osc52_cap_delivers_without_throwing', async () => {
+  const clock = fakeClock(1_000_000);
+  const stubTwin = { feed: async () => {}, serialize: { serialize: () => '' } } as unknown as Twin;
+  const server = new TapServer({ session: 'clip00002', harness: 'omp', epoch: 'e'.repeat(32), twin: stubTwin, now: clock.now, quiesceMs: 0, joinWaitMs: 5000, makeSeed: () => new Uint8Array(0) });
+  const t = new MockTransport();
+  const conn = openViewer(server, t, 'v1');
+  await waitUntil(() => kinds(t).includes('hello'), 'near-cap clipboard join');
+  server.feedTransport(conn, encodeEnvelope(ENV_CONTROL, enc(encodeControlMessage({ t: 'typed', viewer: 'v1' }))));
+  t.clear();
+  // data_b64 within ~40 bytes of the old 1 MiB cap (still under the 1 MiB
+  // OSC 52 budget): the old cap threw FrameError from feed() here.
+  const dataB64 = 'A'.repeat(1_048_560);
+  server.feed([{ kind: 'bytes', data: enc(`${E}]52;c;${dataB64}\x07`) }]);
+  const got = collect(t).filter((f) => f.text?.t === 'clipboard');
+  expect(got.length).toBe(1);
+  expect((got[0].text as Extract<ServerFrame, { t: 'clipboard' }>).data_b64).toBe(dataB64);
+  expect(encodeEnvelope(ENV_TEXT, wrapS2C('v1', enc(JSON.stringify(got[0].text)))).length).toBeLessThanOrEqual(MAX_ENVELOPE_LEN + 4);
+  await server.close();
+});
+
+// Production parsing goes through wire.decodeTextFrame (deny_unknown_fields
+// for client/control): an unknown field closes the offender, matching Rust.
+test('viewers_unknown_fields_in_control_and_text_close_offender', async () => {
+  const clock = fakeClock();
+  const stubTwin = { feed: async () => {}, serialize: { serialize: () => '' } } as unknown as Twin;
+  const server = new TapServer({ session: 'unk000001', harness: 'omp', epoch: 'e'.repeat(32), twin: stubTwin, now: clock.now, quiesceMs: 0, joinWaitMs: 5000, makeSeed: () => new Uint8Array(0) });
+  const evil = new MockTransport();
+  const evilConn = server.attachTransport(evil);
+  server.feedTransport(evilConn, encodeEnvelope(ENV_CONTROL, enc(`{"t":"viewer-open","viewer":"bad","profile":"desktop","resume":null,"mystery":1}`)));
+  expect(evil.closed).toBe(true);
+  expect(server.viewerCount).toBe(0);
+  // Same for a C->S text resumefrom carrying trailing junk.
+  const good = new MockTransport();
+  openViewer(server, good, 'good');
+  await waitUntil(() => kinds(good).includes('hello'), 'good join');
+  const evil2 = new MockTransport();
+  const evil2Conn = server.attachTransport(evil2);
+  server.feedTransport(evil2Conn, encodeEnvelope(ENV_TEXT, wrapS2C('good', enc(`{"t":"resumefrom","offset":0,"mseq":0,"epoch":"${'e'.repeat(32)}","extra":1}`))));
+  expect(evil2.closed).toBe(true);
+  expect(good.closed).toBe(false);
+  expect(server.viewerCount).toBe(1);
+  await server.close();
 });
