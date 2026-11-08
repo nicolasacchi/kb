@@ -27,7 +27,7 @@
 //! trailing line instead, since JSON parse failure already IS the "skip
 //! it" signal here). A valid suffix is not recovered.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
@@ -73,7 +73,7 @@ pub enum Holder {
 /// the registry too in this phase — see `kb-server/src/live_registry.rs`'s
 /// module docs.
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LiveState {
     Working,
