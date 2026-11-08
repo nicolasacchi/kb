@@ -12,10 +12,12 @@
 //! serde mirror of the runner JSON types.
 
 pub mod binding;
+pub mod events;
 pub mod gate;
 pub mod runner_client;
 pub mod ticket;
 pub mod wire;
+pub mod ws;
 
 /// The in-memory terminal relay state on [`KbHandles`](crate::state::KbHandles).
 /// One field here, not on `KbHandles`, so T12/T13 extend this struct
@@ -30,4 +32,9 @@ pub struct TerminalState {
     pub(crate) refresh_inflight: std::sync::atomic::AtomicBool,
     /// T13 — the minimum interval between directory-refresh spawns.
     pub(crate) refresh_min: std::sync::Mutex<Option<std::time::Instant>>,
+    /// T12 — live WebSocket socket count (`ws::MAX_TERM_SOCKETS`) and
+    /// the `term.ended` id dedup set (`events::EndedSet`). In memory
+    /// only (LF-7).
+    pub(crate) sockets: std::sync::atomic::AtomicUsize,
+    pub(crate) ended: events::EndedSet,
 }

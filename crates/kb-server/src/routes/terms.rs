@@ -341,6 +341,22 @@ pub async fn launch(
     match call(&state, &req).await {
         Err(e) => e,
         Ok(RunnerReply::Ok { data }) => {
+            // T12: the runner confirmed the launch — the SPA's
+            // `term.created` (harness/cols/rows come from the launch
+            // body: the relay's own record of what it asked for).
+            let new_id = data
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("").to_string();
+            if !new_id.is_empty() {
+                crate::terminal::events::emit_created(
+                    &state,
+                    &new_id,
+                    &parsed.harness,
+                    parsed.cols.unwrap_or(80),
+                    parsed.rows.unwrap_or(24),
+                );
+            }
             no_store((StatusCode::CREATED, axum::Json(data)).into_response())
         }
         Ok(RunnerReply::Err { code, message }) => runner_err(&code, &message),
@@ -611,7 +627,19 @@ pub async fn kill(
     };
     match call(&state, &req).await {
         Err(e) => e,
-        Ok(reply) => relay(reply),
+        Ok(reply) => {
+            // T12: the runner confirmed the kill — `term.ended` (once
+            // per id; the relay's `exit`-frame path claims the same
+            // slot and loses gracefully).
+            if let RunnerReply::Ok { ref data } = reply {
+                let exit_code = data
+                    .get("exit_code")
+                    .and_then(|v| v.as_i64())
+                    .map(|c| c as i32);
+                crate::terminal::events::emit_ended(&state, &id, exit_code);
+            }
+            relay(reply)
+        }
     }
 }
 

@@ -1480,6 +1480,52 @@ POST   /api/terms/{id}/take-size            Body `{cols,rows}`. Takes
                                             (or reports) the grid.
 GET    /api/terms/{id}/read                 Relay the runner read.
 GET    /api/terms/{id}/history              Relay the runner history.
+GET    /api/terms/{id}/ws                    SPA-only terminal byte
+                                            stream upgrade (T12).
+                                            `?ticket=<t>&from=<offset>`
+                                            (both optional except
+                                            ticket). Handler-side gate
+                                            order: enabled (bodiless
+                                            404) -> exact Origin
+                                            (absent fails closed) ->
+                                            caller class -> single-use
+                                            ticket (bound to `{id}` and
+                                            the caller; every failure
+                                            is the same 403) -> socket
+                                            cap 16 (503) -> `from`
+                                            parse (400) -> upstream
+                                            stream (404 no such
+                                            terminal, 502/503 runner
+                                            errors) -> upgrade. The
+                                            ticket is consumed at the
+                                            upgrade, is never logged,
+                                            and the loopback bypass does
+                                            NOT apply. The socket
+                                            relays the tap's frames
+                                            byte-for-byte (binary frames
+                                            keep their 8-byte BE offset
+                                            header; text frames pass
+                                            through verbatim, in order);
+                                            it closes 1012 on daemon
+                                            restart, 1013 for a slow
+                                            consumer, 1011 when the
+                                            upstream ends (1000 after
+                                            an `exit` frame), and 1001
+                                            after 75 s of browser
+                                            silence.
+                                            SSE (low rate, never per
+                                            data frame): `term.created`
+                                            `{id, harness, cols, rows}`
+                                            on a confirmed launch;
+                                            `term.ended` `{id, exit_code?}`
+                                            exactly once per id (kill
+                                            or an `exit` frame through
+                                            the relay); `term.state`
+                                            `{id, state, cols?, rows?,
+                                            grid_owner?}` with `state`
+                                            `"live" | "ended"` only on
+                                            a `sizechanged` frame or on
+                                            ended.
                                             Error table: unreachable or
                                             timed-out runner → 503
                                             `terminal-runner-unavailable`

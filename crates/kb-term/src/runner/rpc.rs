@@ -297,9 +297,12 @@ async fn dispatch_inner<S: Supervisor>(
             })
             .map_err(|e| RunnerError::Internal(e.to_string()))?)
         }
-        // Later units own media; an honest bad-request, not a silent no-op.
-        Request::Media { .. } => Err(RunnerError::BadRequest(
-            "op not implemented by this unit".to_string(),
+        // The stream op never returns as an ordinary RPC: dispatch()
+        // must not answer it (the server connection turns into a relay
+        // — see server.rs). An ok-shape here would desync the splice,
+        // so refuse loudly when reached through dispatch().
+        Request::Stream { .. } => Err(RunnerError::BadRequest(
+            "stream is a connection splice, not an RPC".to_string(),
         )),
     }
 }

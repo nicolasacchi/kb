@@ -194,6 +194,16 @@ pub enum RunnerRequest {
         /// sha256 of the media bytes.
         sha256: String,
     },
+    /// Open a byte-stream relay to a session's tap (the WS upstream).
+    /// The server answers the request line with `RunnerReply::Ok` and
+    /// then splices tap.sock envelopes on the same connection.
+    Stream {
+        /// Session id.
+        id: String,
+        /// Resume offset, if any.
+        #[serde(default)]
+        from: Option<u64>,
+    },
 }
 
 /// Key input for the `keys` RPC (kind-tagged; unknown fields rejected).
@@ -314,6 +324,10 @@ mod tests {
             (
                 "req_history",
                 include_str!("../../../kb-term/tests/golden/req_history.json"),
+            ),
+            (
+                "req_stream",
+                include_str!("../../../kb-term/tests/golden/req_stream.json"),
             ),
             (
                 "req_take_size",

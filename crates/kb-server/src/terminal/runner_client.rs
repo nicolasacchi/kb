@@ -118,6 +118,282 @@ impl UnixRunner {
     }
 }
 
+/// What the upstream relay hands to the WebSocket layer, one decoded
+/// tap.sock envelope. `Binary` bodies are the raw frame bytes (the
+/// 8-byte BE offset header + payload, exactly as the tap emitted
+/// them); `Text` bodies are the frame's UTF-8 text. Both are relayed
+/// byte-for-byte — kb-server never re-chunks, re-orders or inspects
+/// the payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum StreamItem {
+    Binary(Vec<u8>),
+    Text(String),
+}
+
+/// Why opening the upstream stream failed. `NotFound` is the runner's
+/// refusal ("no such session"); `Unavailable` is any connect/IO
+/// failure (the socket path never leaks into either arm's message).
+#[derive(Debug)]
+pub(crate) enum StreamError {
+    NotFound(String),
+    Unavailable,
+    BadReply,
+}
+
+impl StreamError {
+    pub(crate) fn message(&self) -> &'static str {
+        match self {
+            StreamError::NotFound(_) => "no such terminal",
+            StreamError::Unavailable => "runner unavailable",
+            StreamError::BadReply => "bad runner reply",
+        }
+    }
+}
+
+/// The upstream relay stream: the `stream` RPC connection after its
+/// ok reply. [`TermStream::recv`] decodes tap.sock envelopes off the
+/// wire; [`TermStream::send`] frames raw items back (each in its own
+/// envelope).
+pub(crate) struct TermStream {
+    read: tokio::net::unix::OwnedReadHalf,
+    write: tokio::net::unix::OwnedWriteHalf,
+    /// Decoded envelopes not yet consumed (one `push` can yield many).
+    pending: std::collections::VecDeque<StreamItem>,
+}
+
+/// tap.sock envelope constants — the ONE framing on this connection
+/// (`[u32 BE length][u8 kind][body]`, length counts kind+body). kb-term
+/// pins the same numbers in `crates/kb-term/src/wire.rs`; the mirror
+/// below is local so kb-server grows no kb-term edge.
+pub(crate) const ENV_TEXT: u8 = 0;
+pub(crate) const ENV_BINARY: u8 = 1;
+pub(crate) const ENV_CONTROL: u8 = 2;
+pub(crate) const MAX_ENVELOPE_LEN: usize = 1_048_576 + 512;
+
+/// Decode one envelope from the front of `buf`, appending every
+/// complete envelope found to `out`. Returns `Err` on a malformed
+/// envelope (zero/oversize length, bad kind); a trailing partial
+/// envelope stays buffered.
+fn decode_envelopes(
+    buf: &mut std::collections::VecDeque<u8>,
+    out: &mut Vec<(u8, Vec<u8>)>,
+) -> Result<(), String> {
+    loop {
+        if buf.len() < 4 {
+            return Ok(());
+        }
+        let mut hdr = [0u8; 4];
+        for (i, &b) in buf.iter().take(4).enumerate() {
+            hdr[i] = b;
+        }
+        let len = u32::from_be_bytes(hdr) as usize;
+        if len == 0 || len > MAX_ENVELOPE_LEN {
+            return Err("bad envelope length".to_string());
+        }
+        if buf.len() < 4 + len {
+            return Ok(());
+        }
+        let kind = *buf.get(4).unwrap_or(&0);
+        if kind != ENV_TEXT && kind != ENV_BINARY && kind != ENV_CONTROL {
+            return Err("bad envelope kind".to_string());
+        }
+        let body: Vec<u8> = (0..len - 1).filter_map(|i| buf.get(5 + i).copied()).collect();
+        buf.drain(..4 + len);
+        out.push((kind, body));
+    }
+}
+
+/// Frame one item for the splice: the body is the item's bytes; the
+/// envelope kind is text or binary per the variant.
+fn encode_item(item: &StreamItem) -> Result<Vec<u8>, String> {
+    let (kind, body) = match item {
+        StreamItem::Binary(bytes) => (ENV_BINARY, bytes.clone()),
+        StreamItem::Text(text) => (ENV_TEXT, text.clone().into_bytes()),
+    };
+    if 1 + body.len() > MAX_ENVELOPE_LEN {
+        return Err("item exceeds the envelope cap".to_string());
+    }
+    let mut out = Vec::with_capacity(4 + 1 + body.len());
+    out.extend_from_slice(&((1 + body.len()) as u32).to_be_bytes());
+    out.push(kind);
+    out.extend_from_slice(&body);
+    Ok(out)
+}
+
+fn strip_s2c_id(body: &[u8]) -> Option<&[u8]> {
+    if body.is_empty() {
+        return None;
+    }
+    let id_len = usize::from(body[0]);
+    if body.len() < 1 + id_len {
+        return None;
+    }
+    Some(&body[1 + id_len..])
+}
+
+impl TermStream {
+    /// Read the next decoded item, or `None` at a clean EOF. Buffering
+    /// is bounded by the envelope cap plus one chunk; a malformed
+    /// envelope is treated as a closed stream (the relay closes).
+    pub(crate) async fn recv(&mut self) -> Option<StreamItem> {
+        if let Some(item) = self.pending.pop_front() {
+            return Some(item);
+        }
+        let mut buf = std::collections::VecDeque::new();
+        let mut chunk = [0u8; 16 * 1024];
+        loop {
+            let n = match self.read.read(&mut chunk).await {
+                Ok(0) | Err(_) => return None,
+                Ok(n) => n,
+            };
+            buf.extend(&chunk[..n]);
+            let mut decoded = Vec::new();
+            if decode_envelopes(&mut buf, &mut decoded).is_err() {
+                return None;
+            }
+            for (kind, body) in decoded {
+                // The runner forwards S->C bodies with their viewer-id
+                // prefix; the WebSocket frame is the inner frame alone.
+                // Control envelopes are not tap frames — skip them.
+                let frame = match strip_s2c_id(&body) {
+                    Some(f) => f.to_vec(),
+                    None => body,
+                };
+                let item = match kind {
+                    ENV_BINARY => StreamItem::Binary(frame),
+                    ENV_TEXT => match String::from_utf8(frame) {
+                        Ok(text) => StreamItem::Text(text),
+                        Err(_) => continue,
+                    },
+                    _ => continue,
+                };
+                self.pending.push_back(item);
+            }
+            if let Some(item) = self.pending.pop_front() {
+                return Some(item);
+            }
+        }
+    }
+
+    /// Write one item back towards the tap as a single envelope.
+    pub(crate) async fn send(&mut self, item: StreamItem) -> Result<(), StreamError> {
+        let bytes = encode_item(&item).map_err(|_| StreamError::BadReply)?;
+        self.write
+            .write_all(&bytes)
+            .await
+            .map_err(|_| StreamError::Unavailable)
+    }
+}
+
+impl UnixRunner {
+    /// Open the relay stream for `id` (optional resume offset): sends
+    /// the `stream` request line, reads the ok reply, and returns the
+    /// live spliced connection. The runner answers the request line
+    /// first, so a runner refusal surfaces here as `NotFound` (or
+    /// `BadReply`) rather than mid-relay.
+    pub(crate) async fn open_stream(
+        &self,
+        id: &str,
+        from: Option<u64>,
+    ) -> Result<TermStream, StreamError> {
+        let req = RunnerRequest::Stream {
+            id: id.to_string(),
+            from,
+        };
+        let line = serde_json::to_string(&req).map_err(|_| StreamError::BadReply)?;
+        let mut stream = tokio::net::UnixStream::connect(&self.path)
+            .await
+            .map_err(|_| StreamError::Unavailable)?;
+        stream
+            .write_all(line.as_bytes())
+            .await
+            .map_err(|_| StreamError::Unavailable)?;
+        stream
+            .write_all(b"\n")
+            .await
+            .map_err(|_| StreamError::Unavailable)?;
+        // Read exactly one reply line (bounded like `round_trip`).
+        let (reply, rest) = read_reply_line(&mut stream).await?;
+        let text = String::from_utf8(reply).map_err(|_| StreamError::BadReply)?;
+        match serde_json::from_str::<RunnerReply>(text.trim()).map_err(|_| StreamError::BadReply)? {
+            RunnerReply::Ok { .. } => {}
+            RunnerReply::Err { code, message } if code == "not-found" || code == "no-session" => {
+                return Err(StreamError::NotFound(message));
+            }
+            RunnerReply::Err { .. } => return Err(StreamError::BadReply),
+        }
+        // Any bytes the reply read buffered past the newline are the
+        // first spliced envelopes; seed the stream with them.
+        let (read, write) = stream.into_split();
+        Ok(TermStream {
+            read,
+            write,
+            pending: decode_seed(rest),
+        })
+    }
+}
+
+/// Read one bounded reply line off the stream; returns the line and
+/// any bytes already buffered past it.
+async fn read_reply_line(
+    stream: &mut tokio::net::UnixStream,
+) -> Result<(Vec<u8>, Vec<u8>), StreamError> {
+    let mut line = Vec::new();
+    let mut rest = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        let n = tokio::time::timeout(Duration::from_secs(30), stream.read(&mut chunk))
+            .await
+            .map_err(|_| StreamError::Unavailable)?
+            .map_err(|_| StreamError::Unavailable)?;
+        if n == 0 {
+            return Err(StreamError::BadReply);
+        }
+        let read = &chunk[..n];
+        match read.iter().position(|&b| b == b'\n') {
+            Some(pos) => {
+                line.extend_from_slice(&read[..=pos]);
+                rest.extend_from_slice(&read[pos + 1..]);
+                if line.len() > MAX_REPLY_BYTES {
+                    return Err(StreamError::BadReply);
+                }
+                return Ok((line, rest));
+            }
+            None => {
+                line.extend_from_slice(read);
+                if line.len() > MAX_REPLY_BYTES {
+                    return Err(StreamError::BadReply);
+                }
+            }
+        }
+    }
+}
+
+/// Decode any envelopes already buffered past the reply line.
+fn decode_seed(rest: Vec<u8>) -> std::collections::VecDeque<StreamItem> {
+    let mut out = std::collections::VecDeque::new();
+    if rest.is_empty() {
+        return out;
+    }
+    let mut buf: std::collections::VecDeque<u8> = rest.iter().copied().collect();
+    let mut decoded = Vec::new();
+    if decode_envelopes(&mut buf, &mut decoded).is_ok() {
+        for (kind, body) in decoded {
+            let frame = strip_s2c_id(&body).map(<[u8]>::to_vec).unwrap_or(body);
+            let item = match kind {
+                ENV_BINARY => StreamItem::Binary(frame),
+                ENV_TEXT => match String::from_utf8(frame) {
+                    Ok(text) => StreamItem::Text(text),
+                    Err(_) => continue,
+                },
+                _ => continue,
+            };
+            out.push_back(item);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,5 +479,124 @@ mod tests {
             runner.call(&RunnerRequest::List {}).await,
             Err(RunnerError::BadReply)
         ));
+    }
+
+    /// Encode one envelope exactly as the tap would (for the fake
+    /// runner below): `[u32 BE length][kind][idlen, id, frame]`.
+    fn fake_envelope(kind: u8, viewer: &str, frame: &[u8]) -> Vec<u8> {
+        let mut body = Vec::new();
+        body.push(viewer.len() as u8);
+        body.extend_from_slice(viewer.as_bytes());
+        body.extend_from_slice(frame);
+        let mut out = Vec::new();
+        out.extend_from_slice(&((1 + body.len()) as u32).to_be_bytes());
+        out.push(kind);
+        out.extend_from_slice(&body);
+        out
+    }
+
+    #[tokio::test]
+    async fn stream_open_and_recv_decode_tap_envelopes() {
+        // A fake runner that answers the `stream` line with ok, then
+        // splices two tap envelopes (text / binary). The framing is the
+        // tap's own: S->C bodies carry a viewer-id prefix (handed off
+        // to `strip_s2c_id`) and the binary frame carries its 8-byte
+        // BE offset header inside the frame bytes.
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("runner.sock");
+        let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 4096];
+            let _ = stream.read(&mut buf).await;
+            let _ = stream.write_all(b"{\"status\":\"ok\",\"data\":{}}\n").await;
+            let text = fake_envelope(0, "v", br#"{"t":"ping"}"#);
+            let _ = stream.write_all(&text).await;
+            let binary = fake_envelope(1, "v", &[0, 0, 0, 0, 0, 0, 0, 3, b'a', b'b', b'c']);
+            let _ = stream.write_all(&binary).await;
+        });
+        let runner = UnixRunner::new(sock, Duration::from_secs(5));
+        let mut stream = runner
+            .open_stream("abcd1234", None)
+            .await
+            .expect("open stream");
+        let first = tokio::time::timeout(Duration::from_secs(5), stream.recv())
+            .await
+            .expect("recv 1 deadline")
+            .expect("first item");
+        assert_eq!(first, StreamItem::Text(r#"{"t":"ping"}"#.to_string()));
+        let second = tokio::time::timeout(Duration::from_secs(5), stream.recv())
+            .await
+            .expect("recv 2 deadline")
+            .expect("second item");
+        assert_eq!(second, StreamItem::Binary(vec![0, 0, 0, 0, 0, 0, 0, 3, b'a', b'b', b'c']));
+    }
+
+    #[tokio::test]
+    async fn stream_open_not_found_surfaces_as_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("runner.sock");
+        let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 4096];
+            let _ = stream.read(&mut buf).await;
+            let _ = stream
+                .write_all(b"{\"status\":\"err\",\"code\":\"not-found\",\"message\":\"no session\"}\n")
+                .await;
+        });
+        let runner = UnixRunner::new(sock, Duration::from_secs(5));
+        match runner.open_stream("abcd1234", None).await {
+            Err(StreamError::NotFound(_)) => {}
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stream_framing_mirrors_t7_golden_envelope_bytes() {
+        // Byte-level pin against the upstream goldens: the tap's
+        // `env_ssc_text.hex` / `env_ssc_binary.hex` decode through this
+        // module's decoder, with the viewer id singled out by
+        // `strip_s2c_id`.
+        let decode = |hex: &str| {
+            let hex = hex.trim();
+            assert_eq!(hex.len() % 2, 0, "hex golden must be even-length");
+            let mut bytes = Vec::new();
+            for i in (0..hex.len()).step_by(2) {
+                bytes.push(u8::from_str_radix(&hex[i..i + 2], 16).unwrap());
+            }
+            let mut buf: std::collections::VecDeque<u8> = bytes.iter().copied().collect();
+            let mut out = Vec::new();
+            decode_envelopes(&mut buf, &mut out).unwrap();
+            out
+        };
+        let text = decode(include_str!("../../../kb-term/tests/golden/env_ssc_text.hex"));
+        assert_eq!(text.len(), 1);
+        assert_eq!(text[0].0, ENV_TEXT);
+        let frame = strip_s2c_id(&text[0].1).unwrap();
+        assert_eq!(frame, br#"{"t":"ping"}"#);
+        let binary = decode(include_str!("../../../kb-term/tests/golden/env_ssc_binary.hex"));
+        assert_eq!(binary.len(), 1);
+        assert_eq!(binary[0].0, ENV_BINARY);
+        // The 8-byte BE offset header rides inside the frame bytes.
+        let frame = strip_s2c_id(&binary[0].1).unwrap();
+        assert_eq!(frame.len(), 8 + 3);
+        assert_eq!(u64::from_be_bytes(frame[..8].try_into().unwrap()), 3);
+    }
+
+    #[test]
+    fn stream_send_frames_each_item_as_one_envelope() {
+        let binary = StreamItem::Binary(vec![1, 2, 3]);
+        let bytes = encode_item(&binary).unwrap();
+        let mut buf: std::collections::VecDeque<u8> = bytes.iter().copied().collect();
+        let mut out = Vec::new();
+        decode_envelopes(&mut buf, &mut out).unwrap();
+        assert_eq!(out, vec![(ENV_BINARY, vec![1, 2, 3])]);
+        let text = StreamItem::Text("hello".to_string());
+        let bytes = encode_item(&text).unwrap();
+        let mut buf: std::collections::VecDeque<u8> = bytes.iter().copied().collect();
+        let mut out = Vec::new();
+        decode_envelopes(&mut buf, &mut out).unwrap();
+        assert_eq!(out, vec![(ENV_TEXT, b"hello".to_vec())]);
     }
 }

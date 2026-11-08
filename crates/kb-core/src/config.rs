@@ -258,6 +258,28 @@ impl TerminalSection {
             .unwrap_or_else(|| PathBuf::from(Self::DEFAULT_RUNNER_SOCKET))
     }
 
+    /// The kb-term run dir the runner socket lives under
+    /// (`<run-dir>/runner/runner.sock` -> `<run-dir>`). T12's WS relay
+    /// derives it from [`Self::resolved_runner_socket`] because
+    /// kb-server's config carries no run-dir key: the per-session
+    /// tap sockets the runner splices to live at
+    /// `<run-dir>/s/<id>/tap.sock`, and the runner itself derives them
+    /// from the same base. A socket path that is not
+    /// `<run-dir>/runner/runner.sock` yields the default run dir
+    /// (`/run/kb-term`) rather than a wrong base.
+    pub fn resolved_run_dir(&self) -> PathBuf {
+        let socket = self.resolved_runner_socket();
+        // `<run-dir>/runner/runner.sock` -> `<run-dir>`.
+        if socket.file_name().and_then(|n| n.to_str()) == Some("runner.sock")
+            && socket.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()) == Some("runner")
+        {
+            if let Some(dir) = socket.parent().and_then(|p| p.parent()) {
+                return dir.to_path_buf();
+            }
+        }
+        PathBuf::from("/run/kb-term")
+    }
+
     /// Ticket TTL in seconds: the configured value filtered for `> 0`,
     /// defaulted to 30s, then clamped into `1..=120`.
     pub fn ticket_ttl_secs(&self) -> u64 {
@@ -5070,6 +5092,33 @@ mod tests {
         assert_eq!(back.ticket_ttl_secs(), 45);
         assert_eq!(back.runner_timeout_secs(), 9);
         assert!(!back.refuse_token_callers());
+    }
+
+    #[test]
+    fn terminal_run_dir_derives_from_runner_socket_layout() {
+        // The WS relay derives the run dir from the runner socket
+        // path (`<run-dir>/runner/runner.sock` -> `<run-dir>`); a
+        // non-layout path falls back to the production default rather
+        // than a wrong base.
+        let nested = TerminalSection {
+            runner_socket: Some(PathBuf::from("/run/kb-term/runner/runner.sock")),
+            ..Default::default()
+        };
+        assert_eq!(nested.resolved_run_dir(), PathBuf::from("/run/kb-term"));
+        let shuffled = TerminalSection {
+            runner_socket: Some(PathBuf::from("/tmp/x/runner/runner.sock")),
+            ..Default::default()
+        };
+        assert_eq!(shuffled.resolved_run_dir(), PathBuf::from("/tmp/x"));
+        let flat = TerminalSection {
+            runner_socket: Some(PathBuf::from("/tmp/runner.sock")),
+            ..Default::default()
+        };
+        assert_eq!(flat.resolved_run_dir(), PathBuf::from("/run/kb-term"));
+        assert_eq!(
+            TerminalSection::default().resolved_run_dir(),
+            PathBuf::from("/run/kb-term")
+        );
     }
 
     #[test]

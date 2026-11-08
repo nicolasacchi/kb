@@ -14,6 +14,7 @@ use crate::middleware::{
 };
 use crate::routes;
 use crate::state::KbHandles;
+use crate::terminal;
 use axum::{
     extract::DefaultBodyLimit,
     http::Method,
@@ -485,6 +486,7 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
         .route("/terms/{id}/take-size", post(routes::terms::take_size))
         .route("/terms/{id}/read", get(routes::terms::read))
         .route("/terms/{id}/history", get(routes::terms::history))
+        .route("/terms/{id}/ws", get(terminal::ws::upgrade))
         .route("/sessions/beat", post(routes::sessions::beat))
         .route("/sessions/live-status", get(routes::sessions::live_status))
         // OL PRES1 — which files live agent sessions are touching. Same

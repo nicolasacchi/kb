@@ -26,6 +26,7 @@ pub mod rpc;
 pub mod server;
 pub mod supervisor;
 pub mod tmux;
+pub mod stream;
 
 pub use config::RunnerConfig;
 
