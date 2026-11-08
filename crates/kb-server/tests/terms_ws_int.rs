@@ -19,15 +19,14 @@
 
 mod common;
 
-use futures::StreamExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
-use futures::{SinkExt, StreamExt};
+use futures::StreamExt;
 use kb_term::runner::config::RunnerConfig;
 use kb_term::runner::rpc::dispatch;
 use kb_term::runner::server::serve;
-use kb_term::runner::supervisor::DirectSupervisor;
 use kb_term::runner::Runner;
 use kb_term::wire::{Harness, Request};
 use tokio::sync::broadcast;
