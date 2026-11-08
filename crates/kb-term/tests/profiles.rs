@@ -77,9 +77,8 @@ fn profiles_extra_passthrough_rejects_forbidden_names() {
         let mut req = request("claude", dir.path(), &env);
         let names = vec![bad.to_string()];
         req.extra_passthrough = &names;
-        assert_eq!(
-            profiles::plan(&req),
-            Err(PlanError::ForbiddenEnvName(bad.to_string())),
+        assert!(
+            matches!(profiles::plan(&req), Err(PlanError::ForbiddenEnvName(name)) if name == bad),
             "passthrough {bad}"
         );
     }
@@ -283,7 +282,7 @@ fn profiles_omp_overlay_written_0600_absolute() {
 fn profiles_rejects_bad_inputs() {
     let dir = tempfile::tempdir().unwrap();
     let env = base_env();
-    let mut req = request("zzz", dir.path(), &env);
+    let req = request("zzz", dir.path(), &env);
     assert!(matches!(
         profiles::plan(&req),
         Err(PlanError::UnknownHarness)
