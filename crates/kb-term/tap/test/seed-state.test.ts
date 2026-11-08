@@ -161,7 +161,7 @@ test('captureTwinState fails closed when an internal is missing', async () => {
 });
 
 test('skip mutations: every tail item is load-bearing', async () => {
-  const seq = `${E}[1;31m${E}[3;10r${E}[?6h${E}7${E}[0;32m${E}[2;2Hhi${'x'.repeat(40)}`;
+  const seq = `${E}[1;31m${E}[3;10r${E}[?6h${E}[5 q${E}7${E}[0;32m${E}[2;2Hhi${E}[3;1H${'x'.repeat(40)}`;
   const twin = await twinWith(40, 12, seq);
   try {
     const cases: Array<[TailItem, string]> = [
@@ -169,7 +169,9 @@ test('skip mutations: every tail item is load-bearing', async () => {
       ['decsc', 'DECSC saved cursor'],
       ['pen', 'pen (current SGR)'],
       ['pendingWrap', 'pending wrap'],
-      ['modes', 'modes'],
+      // Body re-emits ?1/?66/?4/?6/?2004/?1004, so modes-skip is observable
+      // via DECSCUSR (cursor style class) and ?25 (cursor visibility).
+      ['modes', 'cursor style'],
     ];
     for (const [item, cls] of cases) {
       const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, skip: [item] });
