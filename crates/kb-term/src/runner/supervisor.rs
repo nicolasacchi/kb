@@ -426,7 +426,10 @@ mod tests {
         for needle in [
             "PartOf=kb-term@%i.service",
             "After=kb-term@%i.service",
-            "ExecStart=%h/.local/bin/kb-tap --session %i --run-dir /run/kb-term",
+            // The tap needs the pinned tmux and the session's harness,
+            // discovered from the holder's `@kb_harness` at start.
+            "Environment=KB_TMUX_BIN=%h/.local/libexec/kb-term/tmux",
+            "ExecStart=/bin/sh -c 'h=$(%h/.local/libexec/kb-term/tmux -S /run/kb-term/s/%i.sock show-options -gqv @kb_harness); exec %h/.local/bin/kb-tap --session %i --run-dir /run/kb-term --harness \"$h\"'",
             "Restart=on-failure",
             "RestartSec=1",
         ] {
@@ -435,9 +438,14 @@ mod tests {
 
         let runner_unit = include_str!("../../share/systemd/kb-termd.service");
         for needle in [
+            // Config flows into kb-termd via the unit invocation.
+            "Environment=KB_TMUX_BIN=%h/.local/libexec/kb-term/tmux",
+            "Environment=KB_TERM_RUN_DIR=/run/kb-term",
             "ExecStart=%h/.local/bin/kb-termd --supervisor systemd",
             "Restart=on-failure",
             "KillMode=process",
+            // No tmpfiles dirs, no start (and no silent Restart loop).
+            "ConditionPathExists=/run/kb-term",
         ] {
             assert!(
                 runner_unit.contains(needle),
