@@ -227,14 +227,18 @@ test('reseed_restores_alt_screen_region_and_wrap_modes', async () => {
     const normal = dumpRows(twin.term as never, 'normal', 1000);
     expect(normal.some((r) => r.includes('normal-1'))).toBe(true);
     expect(normal.some((r) => r.includes('normal-2'))).toBe(true);
-    // CUP is the last restore step: its row is relative to the region top.
-    expect(cursorOf(twin).y).toBe(4);
+    // CUP is the last restore step. With DECOM on the CUP row is
+    // region-relative while tmux's cursor_y is viewport-absolute, so the
+    // restore emits cursor_y - scrollTop + 1 (clamped >= 1): here y=1 with
+    // scrollTop=3 emits row 1 and the cursor lands on the region top
+    // (absolute 0-based 3).
+    expect(cursorOf(twin)).toEqual({ x: 2, y: 3 });
     // restore byte order: region first, CUP last.
     const bytes = modeRestoreBytes(r.mode, 2, 1, 24);
     expect(bytes.startsWith('\x1b[4;21r')).toBe(true);
-    expect(bytes.endsWith('\x1b[2;3H')).toBe(true);
+    expect(bytes.endsWith('\x1b[1;3H')).toBe(true);
     expect(bytes.indexOf('\x1b[4;21r')).toBeLessThan(bytes.indexOf('\x1b[?6h'));
-    expect(bytes.indexOf('\x1b[?6h')).toBeLessThan(bytes.indexOf('\x1b[2;3H'));
+    expect(bytes.indexOf('\x1b[?6h')).toBeLessThan(bytes.indexOf('\x1b[1;3H'));
   } finally {
     twin.dispose();
   }
@@ -361,6 +365,53 @@ test('reseed_pads_blank_tail_and_does_not_slice_joined_wrapped_lines', async () 
     expect(rows[2].trimEnd()).toBe('X'.repeat(40));
     const s: ReseedStats = reseeder.stats();
     expect(s.overflowRetries).toBe(0);
+  } finally {
+    twin.dispose();
+  }
+});
+
+test('reseed_feeds_post_B_output_after_restore', async () => {
+  const { control, twin, reseeder } = setup();
+  try {
+    // Spec §3 step 5: %output arriving after B's %end is queued and fed
+    // after the mode restore, in order, with no gap, and nothing lands in
+    // queuedDroppedBytes. If the drain loop were deleted, the post-B
+    // marker would never reach the twin and this test would fail.
+    const done = reseeder.reseed('%0', { quiescentMs: 0 });
+    await tick();
+    control.resolveNext(['A 0 2 1']); // A
+    control.resolveNext(['base-two']); // capture
+    control.resolveNext([]); // -a capture
+    control.resolveNext(['B 0 2 1']); // B
+    await tick(); // let the .then handlers mark aResolved/bResolved
+    control.emitOutput('%0', new TextEncoder().encode('\r\npost-B-tail'));
+    control.resolveNext([]); // mode query
+    const r = await done;
+    expect(r.attempts).toBe(1);
+    const rows = dumpRows(twin.term as never, 'normal', 24);
+    expect(rows.some((row) => row.includes('base-two'))).toBe(true);
+    expect(rows.some((row) => row.includes('post-B-tail'))).toBe(true);
+    expect(reseeder.stats().queuedDroppedBytes).toBe(0);
+  } finally {
+    twin.dispose();
+  }
+});
+
+test('reseed_restores_absolute_cursor_row_when_origin_off', async () => {
+  const { control, twin, reseeder } = setup();
+  try {
+    // Same region as the origin-on test but DECOM off: CUP is absolute,
+    // so the emitted row stays cursorY+1 and the cursor lands at y=1.
+    const mode = ['M 0 3 20 0 1 0 1 1 0'];
+    const done = reseeder.reseed('%0', { quiescentMs: 0 });
+    await tick();
+    await resolveAttempt(control, ['plain-1'], ['A 0 2 1'], ['B 0 2 1'], mode);
+    const r = await done;
+    expect(r.mode?.origin).toBe(false);
+    expect(cursorOf(twin)).toEqual({ x: 2, y: 1 });
+    const bytes = modeRestoreBytes(r.mode, 2, 1, 24);
+    expect(bytes.startsWith('\x1b[4;21r')).toBe(true);
+    expect(bytes.endsWith('\x1b[2;3H')).toBe(true);
   } finally {
     twin.dispose();
   }

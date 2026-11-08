@@ -286,16 +286,20 @@ async function main(): Promise<void> {
         note('RESEEDED');
         out.compare = await compareAt(r);
         note('COMPARED');
-        // NOT gated on the seed comparison: `pause-after` auto-engagement
-        // is UNVERIFIED on tmux 3.7c (never fired even after a verified
-        // 40s stopped-client lag; CI 42439069928 drained the whole 30MB
-        // flood undropped), and the pane pause drops output by design, so
-        // a full-flood reference cannot equal the reseeded seed (the 29
-        // dropped rows showed up in CI 42443779255). The observable stall
-        // policy surface -- pause-after accepted, pane pause halts output
-        // (asserted inline above), continue + a successful reseed
-        // (attempts >= 1) -- is asserted instead. See the PR body.
-        out.ok = r.attempts >= 1;
+        // GATED on the emitted-reference comparison (spec item 18: final
+        // twin == reference). The emitted log is the correct reference
+        // here: the pane pause drops output BY DESIGN, so the reseeded
+        // capture can only match the bytes the client actually received
+        // (a full-flood file reference would differ by the dropped chunk --
+        // CI 42443779255). Gating is sound only with the drain race closed:
+        // late %output landing after the drain used to count as
+        // queuedDroppedBytes while the emitted log kept growing, so the
+        // emitted comparison could never hold under live flow. What
+        // remains UNVERIFIED is `pause-after` auto-engagement on tmux
+        // 3.7c (see the PR body); the asserted surface is: pause-after
+        // accepted (inline above), pane pause halts output (inline
+        // above), continue + a successful reseed, and seed == emitted ref.
+        out.ok = (out.compare as CompareOut).ok && r.attempts >= 1;
         break;
       }
       case 'midseq': {
