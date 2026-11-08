@@ -154,9 +154,8 @@ fn doctor_hooks_reports_the_kb_session_id_rung() {
             .env_remove("GROK_SESSION_ID")
             .env_remove("KB_SESSION_ID")
             .env_remove("KB_HARNESS");
-        match kb_sid {
-            Some(sid) => cmd = cmd.env("KB_SESSION_ID", sid).env("KB_HARNESS", "omp"),
-            None => {}
+        if let Some(sid) = kb_sid {
+            cmd = cmd.env("KB_SESSION_ID", sid).env("KB_HARNESS", "omp");
         }
         cmd.assert().get_output().stdout.clone()
     };

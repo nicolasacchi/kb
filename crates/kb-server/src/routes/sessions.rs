@@ -2902,7 +2902,7 @@ pub fn take_edges_from_posts(
         ) {
             continue;
         }
-        let (Some(from), Some(to)) = (
+        let (Some(to), Some(from)) = (
             post.prov.session_id.as_deref(),
             target.prov.session_id.as_deref(),
         ) else {
