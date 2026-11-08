@@ -3,9 +3,9 @@
 // OL R4 — the worklog row: title + time, closure line, ONE facts line.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
-import { cleanup, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { SessionListRow } from "./sessions";
 import { useSessions } from "../hooks/useSessions";
 import type { SessionEvidenceOut, SessionRow } from "../api/sessions";
@@ -161,6 +161,46 @@ describe("SessionListRow (worklog)", () => {
   it("no chip for child_count 0", () => {
     renderRow(mk({ child_count: 0 }));
     expect(screen.queryByTestId("session-subagents-chip")).toBeNull();
+  });
+  it("clicking the +N chip jumps to the session page without selecting the row", () => {
+    const onSelect = vi.fn();
+    let nav: { pathname: string; search: string; hash: string } | null = null;
+    const Probe = () => {
+      const loc = useLocation();
+      nav = { pathname: loc.pathname, search: loc.search, hash: loc.hash };
+      return null;
+    };
+    render(
+      <MemoryRouter initialEntries={["/sessions"]}>
+        <Routes>
+          <Route
+            path="*"
+            element={
+              <ul>
+                <SessionListRow
+                  row={mk({ child_count: 3 })}
+                  isSelected={false}
+                  onSelect={onSelect}
+                  onPrefetch={() => {}}
+                  onCancelPrefetch={() => {}}
+                  presenceSet={new Set()}
+                  now={1_800_000_000_000}
+                />
+              </ul>
+            }
+          />
+        </Routes>
+        <Probe />
+      </MemoryRouter>,
+    );
+    fireEvent.click(screen.getByTestId("session-subagents-chip"));
+    // The row must not select (`?focus=`); the chip owns the click.
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(nav).toEqual({
+      pathname: "/sessions/abcdef0123456789",
+      search: "",
+      hash: "#sec-children",
+    });
   });
 });
 

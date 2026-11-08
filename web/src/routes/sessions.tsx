@@ -1319,6 +1319,10 @@ export function SessionListRow({
                 className="kb-ses__row-subagents"
                 data-testid="session-subagents-chip"
                 title="open this session's subagents"
+                // The chip lives inside the row <button>: stop the click
+                // from bubbling into onSelect (`?focus=`), which would
+                // race this Link's jump to the session page.
+                onClick={(e) => e.stopPropagation()}
               >
                 +{row.child_count} subagents
               </Link>

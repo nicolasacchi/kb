@@ -20,6 +20,10 @@ export function useSessionCard(sid: string): {
     queryKey: SESSION_CARD_KEY(sid),
     queryFn: ({ signal }) => fetchSessionCard(sid, signal),
     staleTime: Infinity,
+    // A caller that reaches the hook without a sid (the page calls it
+    // before its own `!sid` early return) must not fire
+    // `GET /api/sessions//card`.
+    enabled: !!sid,
   });
   return {
     card: q.data ?? null,
