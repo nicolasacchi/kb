@@ -218,6 +218,7 @@ export function captureTwinState(twin: Twin): TwinState {
   const curAttrData = need<AttrDataLike>(inputHandler, '_curAttrData', 'twin.term._core._inputHandler');
   const coreService = need(core, 'coreService', 'twin.term._core');
   const decPrivateModes = need(coreService, 'decPrivateModes', 'twin.term._core.coreService');
+  const charsetService = need(core, '_charsetService', 'twin.term._core');
   const charset = needMaybe<Record<string, unknown> | null | undefined>(charsetService, 'charset', 'twin.term._core._charsetService');
   const charsets = need<unknown[]>(charsetService, '_charsets', 'twin.term._core._charsetService');
   const buffer = need(term, 'buffer', 'twin.term');
