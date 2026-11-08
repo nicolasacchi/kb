@@ -379,8 +379,9 @@ async fn run_one_join(
     // take-size BEFORE expecting the seed (runner socket, unless watch).
     let mut last_taken = ctx.local_size;
     if !ctx.is_watch() {
-        match runner_takesize(&mut ctx.runner, &ctx.args.id, ctx.local_size, &ctx.viewer).await {
-            Ok(()) => {}
+        let args_id = ctx.args.id.clone();
+        let viewer = ctx.viewer.clone();
+        match runner_takesize(&mut ctx.runner, &args_id, ctx.local_size, &viewer).await {
             Err(RunnerClientError::Code { code, message }) if code == "grid-owned" => {
                 let owner = message
                     .strip_prefix("grid is owned by ")
@@ -448,7 +449,9 @@ async fn run_one_join(
                 if size != last_taken {
                     last_taken = size;
                     ctx.local_size = size;
-                    let _ = runner_takesize(&mut ctx.runner, &ctx.args.id, size, &ctx.viewer).await;
+                    let args_id = ctx.args.id.clone();
+                    let viewer = ctx.viewer.clone();
+                    let _ = runner_takesize(&mut ctx.runner, &args_id, size, &viewer).await;
                 }
             }
             _ = async { match sig_int.as_mut() { Some(s) => s.recv().await, None => std::future::pending::<()>().await } } => {
