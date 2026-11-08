@@ -4,8 +4,9 @@
 // with a fake control spawn (no tmux) and a real unix-socket viewer. Plus the
 // --pins/--version/validation surface and the compiled-binary smoke.
 import { test, expect } from 'bun:test';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { PINS_JSON, SESSION_RE, createTapStack, parseArgs } from '../src/main.ts';
 import { connect, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
