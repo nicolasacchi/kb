@@ -4,6 +4,7 @@
 // `available:false` until the kb-term track fills it. No xterm, no
 // WebSocket, no ticket, no `/api/terms` call lives here; T13/T14 own those.
 
+import type { ReactElement } from "react";
 import type { TerminalLane } from "../api/sessions";
 
 export type TerminalSlotProps = {
@@ -22,7 +23,7 @@ export type TerminalSlotProps = {
   };
 };
 
-export function TerminalSlot(_props: TerminalSlotProps): JSX.Element | null {
+export function TerminalSlot(_props: TerminalSlotProps): ReactElement | null {
   // the kb-term TerminalPanel mounts here (React.lazy, explicit click)
   return null;
 }

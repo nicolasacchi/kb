@@ -18,7 +18,6 @@ import {
   type ChildRow,
   type ChildrenLane,
   type ChildrenResponse,
-  type SessionCard,
 } from "../api/sessions";
 import { TerminalSlot } from "../components/TerminalSlot";
 import { ChecksSection, CommitsSection, ResumeCommand } from "./sessions";

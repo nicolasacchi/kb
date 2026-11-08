@@ -1432,7 +1432,7 @@
 .kb-sp__chip {
   font: 600 11px/1.4 var(--font-mono, ui-monospace);
   color: var(--ink-mute, #999);
-  border: 1px solid var(--line, #333);
+  border: 1px solid var(--rule, #2a2a2a);
   border-radius: 999px;
   padding: 2px 8px;
 }
@@ -1442,7 +1442,7 @@
   font-size: var(--fs-md);
 }
 .kb-sp__sec {
-  border-top: 1px solid var(--line, #333);
+  border-top: 1px solid var(--rule, #2a2a2a);
   padding: 8px 0;
 }
 .kb-sp__sum {
@@ -1485,7 +1485,7 @@
   font-size: var(--fs-sm);
 }
 .kb-sp__entry {
-  border-left: 2px solid var(--line, #333);
+  border-left: 2px solid var(--rule, #2a2a2a);
   padding-left: 8px;
 }
 .kb-sp__entry-kind {
@@ -1501,7 +1501,7 @@
   align-self: flex-start;
   background: transparent;
   color: var(--accent, #b9a6ff);
-  border: 1px solid var(--line, #333);
+  border: 1px solid var(--rule, #2a2a2a);
   border-radius: 4px;
   padding: 4px 12px;
   cursor: pointer;
