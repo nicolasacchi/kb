@@ -145,7 +145,8 @@ function reqUint(o: FieldObj, t: string, key: string, max: number): number {
 
 function reqI32(o: FieldObj, t: string, key: string, nullable: boolean): number | null {
   const v = o[key];
-  if (nullable && v === null) return null;
+  // A missing nullable field decodes as None, matching serde's Option<i32>.
+  if (nullable && (v === null || v === undefined)) return null;
   if (typeof v !== 'number' || !Number.isInteger(v) || v < -0x80000000 || v > 0x7fffffff) {
     badField(t, key, 'a 32-bit integer');
   }
@@ -154,10 +155,12 @@ function reqI32(o: FieldObj, t: string, key: string, nullable: boolean): number 
 
 function reqNullableStr(o: FieldObj, t: string, key: string): string | null {
   const v = o[key];
-  if (v === null) return null;
+  // A missing nullable field decodes as None, matching serde's Option<String>.
+  if (v === null || v === undefined) return null;
   if (typeof v !== 'string') badField(t, key, 'a string or null');
   return v as string;
 }
+
 
 /** deny_unknown_fields mirror (Rust ClientFrame/ControlMessage); server frames tolerate extras. */
 function onlyKeys(o: FieldObj, t: string, allowed: Record<string, true>): void {
@@ -191,8 +194,7 @@ function validateServerFrame(o: FieldObj, t: string): void {
       reqBool(o, t, 'scroll_on_erase_in_display');
       u16('cell_px_w');
       u16('cell_px_h');
-      // theme is Rust Option<Value>: any JSON value (null until a theme ships).
-      if (!('theme' in o)) throw new FrameError('bad-frame: profile.theme is missing');
+      // theme is Rust Option<Value>: any JSON value, absent = None.
       return;
     }
     case 'imagedef': {
@@ -286,7 +288,8 @@ function validateControlMessage(o: FieldObj, t: string): void {
         throw new FrameError('bad-frame: viewer-open.profile must be desktop|phone');
       }
       const resume = o['resume'];
-      if (resume !== null) {
+      // A missing resume decodes as None, matching serde's Option<ResumeInfo>.
+      if (resume !== null && resume !== undefined) {
         if (typeof resume !== 'object' || resume === null || Array.isArray(resume)) {
           throw new FrameError('bad-frame: viewer-open.resume must be null or an object');
         }

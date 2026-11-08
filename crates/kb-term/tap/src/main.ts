@@ -8,6 +8,8 @@ import { randomUUID } from 'node:crypto';
 import { makeTwin } from './twin.ts';
 import { TapServer } from './viewers.ts';
 
+const HARNESSES = ['claude', 'codex', 'opencode', 'grok', 'kimi', 'omp'] as const;
+
 function parseArgs(argv: string[]): { session?: string; runDir?: string; harness?: string } {
   const out: { session?: string; runDir?: string; harness?: string } = {};
   for (let i = 0; i < argv.length; i++) {
@@ -19,6 +21,12 @@ function parseArgs(argv: string[]): { session?: string; runDir?: string; harness
 }
 
 const args = parseArgs(process.argv.slice(2));
+// Reject an unknown harness up front: it would otherwise be emitted in hello
+// frames that both decoders refuse (a closed set in Rust and in wire.ts).
+if (args.harness !== undefined && !(HARNESSES as readonly string[]).includes(args.harness)) {
+  console.error(`usage: kb-tap --session <id> --run-dir <dir> --harness <${HARNESSES.join('|')}>`);
+  process.exit(2);
+}
 if (args.session === undefined) {
   console.log('kb-tap placeholder');
 } else {
