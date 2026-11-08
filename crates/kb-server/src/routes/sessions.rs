@@ -8375,13 +8375,10 @@ fn maybe_refresh_term_dir(state: Arc<KbHandles>) {
                 return;
             }
         };
-        match reply {
-            Ok(crate::terminal::wire::RunnerReply::Ok { data }) => {
-                let now = chrono::Utc::now().timestamp();
-                let items: Vec<(String, i64)> = parse_term_items(&data);
-                state2.terminals.term_dir.replace(items, now);
-            }
-            _ => {}
+        if let Ok(crate::terminal::wire::RunnerReply::Ok { data }) = reply {
+            let now = chrono::Utc::now().timestamp();
+            let items: Vec<(String, i64)> = parse_term_items(&data);
+            state2.terminals.term_dir.replace(items, now);
         }
         state2
             .terminals
