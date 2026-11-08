@@ -186,8 +186,8 @@ test('pen with a curly underline is restored', async () => {
     const skippedSeed = buildSeed(twin, { scrollback: 50000, atOffset: 1, skip: ['pen'] });
     const skipped = Buffer.from(skippedSeed.bytes).toString('latin1');
     console.log(`curly skipped tail=${JSON.stringify(skipped.slice(-80))}`);
-    expect(full.includes(`${E}[0;4:3;58;5;42m`)).toBe(true);
-    expect(skipped.includes(`${E}[0;4:3;58;5;42m`)).toBe(false);
+    expect(full.includes(`${E}[0;4:3;58:5:42m`)).toBe(true);
+    expect(skipped.includes(`${E}[0;4:3;58:5:42m`)).toBe(false);
   } finally {
     twin.dispose();
   }
