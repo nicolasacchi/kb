@@ -1,0 +1,575 @@
+{
+ "schema": "kbt-glyphs/1",
+ "glyphs": [
+  {
+   "id": "narrow/a",
+   "cls": "narrow",
+   "text": "a",
+   "cps": "U+0061"
+  },
+  {
+   "id": "narrow/tilde",
+   "cls": "narrow",
+   "text": "~",
+   "cps": "U+007E"
+  },
+  {
+   "id": "narrow/space",
+   "cls": "narrow",
+   "text": " ",
+   "cps": "U+0020"
+  },
+  {
+   "id": "narrow/digit",
+   "cls": "narrow",
+   "text": "7",
+   "cps": "U+0037"
+  },
+  {
+   "id": "narrow/box",
+   "cls": "narrow",
+   "text": "\u2500",
+   "cps": "U+2500"
+  },
+  {
+   "id": "narrow/block",
+   "cls": "narrow",
+   "text": "\u2588",
+   "cps": "U+2588"
+  },
+  {
+   "id": "narrow/pm-ambiguous",
+   "cls": "narrow",
+   "text": "\u00b1",
+   "cps": "U+00B1"
+  },
+  {
+   "id": "narrow/greek",
+   "cls": "narrow",
+   "text": "\u03a9",
+   "cps": "U+03A9"
+  },
+  {
+   "id": "wide/han",
+   "cls": "wide",
+   "text": "\u6f22",
+   "cps": "U+6F22"
+  },
+  {
+   "id": "wide/hiragana",
+   "cls": "wide",
+   "text": "\u3072",
+   "cps": "U+3072"
+  },
+  {
+   "id": "wide/hangul",
+   "cls": "wide",
+   "text": "\ud55c",
+   "cps": "U+D55C"
+  },
+  {
+   "id": "wide/fullwidth-A",
+   "cls": "wide",
+   "text": "\uff21",
+   "cps": "U+FF21"
+  },
+  {
+   "id": "wide/halfwidth-kata",
+   "cls": "wide",
+   "text": "\uff71",
+   "cps": "U+FF71"
+  },
+  {
+   "id": "wide/ideographic-space",
+   "cls": "wide",
+   "text": "\u3000",
+   "cps": "U+3000"
+  },
+  {
+   "id": "wide/cjk-ext-b",
+   "cls": "wide",
+   "text": "\ud840\udc00",
+   "cps": "U+20000"
+  },
+  {
+   "id": "combining/e-acute-comb",
+   "cls": "combining",
+   "text": "e\u0301",
+   "cps": "U+0065 U+0301"
+  },
+  {
+   "id": "combining/a-two-marks",
+   "cls": "combining",
+   "text": "a\u0308\u0323",
+   "cps": "U+0061 U+0308 U+0323"
+  },
+  {
+   "id": "combining/lone-combining",
+   "cls": "combining",
+   "text": "\u0301",
+   "cps": "U+0301"
+  },
+  {
+   "id": "combining/lone-combining-enclosing",
+   "cls": "combining",
+   "text": "\u20dd",
+   "cps": "U+20DD"
+  },
+  {
+   "id": "combining/devanagari-ksi",
+   "cls": "combining",
+   "text": "\u0915\u094d\u0937\u093f",
+   "cps": "U+0915 U+094D U+0937 U+093F"
+  },
+  {
+   "id": "combining/thai-mai-taikhu",
+   "cls": "combining",
+   "text": "\u0e01\u0e47",
+   "cps": "U+0E01 U+0E47"
+  },
+  {
+   "id": "combining/arabic-fatha",
+   "cls": "combining",
+   "text": "\u0628\u064e",
+   "cps": "U+0628 U+064E"
+  },
+  {
+   "id": "combining/hangul-jamo",
+   "cls": "combining",
+   "text": "\u1112\u1161\u11ab",
+   "cps": "U+1112 U+1161 U+11AB"
+  },
+  {
+   "id": "vs15/heart-vs15",
+   "cls": "vs15",
+   "text": "\u2764\ufe0e",
+   "cps": "U+2764 U+FE0E"
+  },
+  {
+   "id": "vs15/smile-vs15",
+   "cls": "vs15",
+   "text": "\u263a\ufe0e",
+   "cps": "U+263A U+FE0E"
+  },
+  {
+   "id": "vs15/watch-vs15",
+   "cls": "vs15",
+   "text": "\u231a\ufe0e",
+   "cps": "U+231A U+FE0E"
+  },
+  {
+   "id": "vs15/sun-vs15",
+   "cls": "vs15",
+   "text": "\u2600\ufe0e",
+   "cps": "U+2600 U+FE0E"
+  },
+  {
+   "id": "vs15/one-vs15",
+   "cls": "vs15",
+   "text": "1\ufe0e",
+   "cps": "U+0031 U+FE0E"
+  },
+  {
+   "id": "vs15/grin-vs15",
+   "cls": "vs15",
+   "text": "\ud83d\ude00\ufe0e",
+   "cps": "U+1F600 U+FE0E"
+  },
+  {
+   "id": "vs16/heart-vs16",
+   "cls": "vs16",
+   "text": "\u2764\ufe0f",
+   "cps": "U+2764 U+FE0F"
+  },
+  {
+   "id": "vs16/smile-vs16",
+   "cls": "vs16",
+   "text": "\u263a\ufe0f",
+   "cps": "U+263A U+FE0F"
+  },
+  {
+   "id": "vs16/check-vs16",
+   "cls": "vs16",
+   "text": "\u2714\ufe0f",
+   "cps": "U+2714 U+FE0F"
+  },
+  {
+   "id": "vs16/copyright-vs16",
+   "cls": "vs16",
+   "text": "\u00a9\ufe0f",
+   "cps": "U+00A9 U+FE0F"
+  },
+  {
+   "id": "vs16/keycap-1",
+   "cls": "vs16",
+   "text": "1\ufe0f\u20e3",
+   "cps": "U+0031 U+FE0F U+20E3"
+  },
+  {
+   "id": "vs16/heart-bare",
+   "cls": "vs16",
+   "text": "\u2764",
+   "cps": "U+2764"
+  },
+  {
+   "id": "vs16/smile-bare",
+   "cls": "vs16",
+   "text": "\u263a",
+   "cps": "U+263A"
+  },
+  {
+   "id": "vs16/arrow-vs16",
+   "cls": "vs16",
+   "text": "\u2194\ufe0f",
+   "cps": "U+2194 U+FE0F"
+  },
+  {
+   "id": "vs16/digit-vs16",
+   "cls": "vs16",
+   "text": "7\ufe0f",
+   "cps": "U+0037 U+FE0F"
+  },
+  {
+   "id": "zwj/family-mfg",
+   "cls": "zwj",
+   "text": "\ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67",
+   "cps": "U+1F468 U+200D U+1F469 U+200D U+1F467"
+  },
+  {
+   "id": "zwj/family-4",
+   "cls": "zwj",
+   "text": "\ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67\u200d\ud83d\udc66",
+   "cps": "U+1F468 U+200D U+1F469 U+200D U+1F467 U+200D U+1F466"
+  },
+  {
+   "id": "zwj/technologist",
+   "cls": "zwj",
+   "text": "\ud83d\udc69\u200d\ud83d\udcbb",
+   "cps": "U+1F469 U+200D U+1F4BB"
+  },
+  {
+   "id": "zwj/couple-heart",
+   "cls": "zwj",
+   "text": "\ud83d\udc69\u200d\u2764\ufe0f\u200d\ud83d\udc68",
+   "cps": "U+1F469 U+200D U+2764 U+FE0F U+200D U+1F468"
+  },
+  {
+   "id": "zwj/rainbow-flag",
+   "cls": "zwj",
+   "text": "\ud83c\udff3\ufe0f\u200d\ud83c\udf08",
+   "cps": "U+1F3F3 U+FE0F U+200D U+1F308"
+  },
+  {
+   "id": "zwj/black-cat",
+   "cls": "zwj",
+   "text": "\ud83d\udc08\u200d\u2b1b",
+   "cps": "U+1F408 U+200D U+2B1B"
+  },
+  {
+   "id": "zwj/lone-zwj",
+   "cls": "zwj",
+   "text": "\u200d",
+   "cps": "U+200D"
+  },
+  {
+   "id": "zwj/zwj-between-latin",
+   "cls": "zwj",
+   "text": "a\u200db",
+   "cps": "U+0061 U+200D U+0062"
+  },
+  {
+   "id": "skin/thumb-medium",
+   "cls": "skin",
+   "text": "\ud83d\udc4d\ud83c\udffd",
+   "cps": "U+1F44D U+1F3FD"
+  },
+  {
+   "id": "skin/wave-dark",
+   "cls": "skin",
+   "text": "\ud83d\udc4b\ud83c\udfff",
+   "cps": "U+1F44B U+1F3FF"
+  },
+  {
+   "id": "skin/handshake-2tone",
+   "cls": "skin",
+   "text": "\ud83e\udec1\ud83c\udffb",
+   "cps": "U+1FAC1 U+1F3FB"
+  },
+  {
+   "id": "skin/lone-modifier",
+   "cls": "skin",
+   "text": "\ud83c\udffd",
+   "cps": "U+1F3FD"
+  },
+  {
+   "id": "skin/people-holding-hands",
+   "cls": "skin",
+   "text": "\ud83e\uddd1\ud83c\udffb\u200d\ud83e\udd1d\u200d\ud83e\uddd1\ud83c\udfff",
+   "cps": "U+1F9D1 U+1F3FB U+200D U+1F91D U+200D U+1F9D1 U+1F3FF"
+  },
+  {
+   "id": "skin/raised-hand-vs16-tone",
+   "cls": "skin",
+   "text": "\u270b\ud83c\udffc",
+   "cps": "U+270B U+1F3FC"
+  },
+  {
+   "id": "flag/IT",
+   "cls": "flag",
+   "text": "\ud83c\uddee\ud83c\uddf9",
+   "cps": "U+1F1EE U+1F1F9"
+  },
+  {
+   "id": "flag/JP",
+   "cls": "flag",
+   "text": "\ud83c\uddef\ud83c\uddf5",
+   "cps": "U+1F1EF U+1F1F5"
+  },
+  {
+   "id": "flag/single-RI",
+   "cls": "flag",
+   "text": "\ud83c\uddee",
+   "cps": "U+1F1EE"
+  },
+  {
+   "id": "flag/three-RI",
+   "cls": "flag",
+   "text": "\ud83c\uddee\ud83c\uddf9\ud83c\uddfa",
+   "cps": "U+1F1EE U+1F1F9 U+1F1FA"
+  },
+  {
+   "id": "flag/four-RI",
+   "cls": "flag",
+   "text": "\ud83c\uddee\ud83c\uddf9\ud83c\uddef\ud83c\uddf5",
+   "cps": "U+1F1EE U+1F1F9 U+1F1EF U+1F1F5"
+  },
+  {
+   "id": "flag/england-tag",
+   "cls": "flag",
+   "text": "\ud83c\udff4\udb40\udc67\udb40\udc62\udb40\udc65\udb40\udc6e\udb40\udc67\udb40\udc7f",
+   "cps": "U+1F3F4 U+E0067 U+E0062 U+E0065 U+E006E U+E0067 U+E007F"
+  },
+  {
+   "id": "flag/pirate-zwj",
+   "cls": "flag",
+   "text": "\ud83c\udff4\u200d\u2620\ufe0f",
+   "cps": "U+1F3F4 U+200D U+2620 U+FE0F"
+  },
+  {
+   "id": "emoji-pre11/grin-u6.1",
+   "cls": "emoji-pre11",
+   "text": "\ud83d\ude00",
+   "cps": "U+1F600"
+  },
+  {
+   "id": "emoji-pre11/rocket-u6.0",
+   "cls": "emoji-pre11",
+   "text": "\ud83d\ude80",
+   "cps": "U+1F680"
+  },
+  {
+   "id": "emoji-post11/partying-u11",
+   "cls": "emoji-post11",
+   "text": "\ud83e\udd73",
+   "cps": "U+1F973"
+  },
+  {
+   "id": "emoji-post11/ballet-shoes-u12",
+   "cls": "emoji-post11",
+   "text": "\ud83e\ude70",
+   "cps": "U+1FA70"
+  },
+  {
+   "id": "emoji-post11/smiling-tear-u13",
+   "cls": "emoji-post11",
+   "text": "\ud83e\udd72",
+   "cps": "U+1F972"
+  },
+  {
+   "id": "emoji-post11/melting-u14",
+   "cls": "emoji-post11",
+   "text": "\ud83e\udee0",
+   "cps": "U+1FAE0"
+  },
+  {
+   "id": "emoji-post11/hand-heart-u14",
+   "cls": "emoji-post11",
+   "text": "\ud83e\udef6",
+   "cps": "U+1FAF6"
+  },
+  {
+   "id": "emoji-post11/wheel-u14",
+   "cls": "emoji-post11",
+   "text": "\ud83d\udede",
+   "cps": "U+1F6DE"
+  },
+  {
+   "id": "emoji-post11/hamsa-u14",
+   "cls": "emoji-post11",
+   "text": "\ud83e\udeac",
+   "cps": "U+1FAAC"
+  },
+  {
+   "id": "emoji-post11/disco-ball-u14",
+   "cls": "emoji-post11",
+   "text": "\ud83e\udea9",
+   "cps": "U+1FAA9"
+  },
+  {
+   "id": "emoji-post11/shaking-face-u15",
+   "cls": "emoji-post11",
+   "text": "\ud83e\udee8",
+   "cps": "U+1FAE8"
+  },
+  {
+   "id": "emoji-post11/pink-heart-u15",
+   "cls": "emoji-post11",
+   "text": "\ud83e\ude77",
+   "cps": "U+1FA77"
+  },
+  {
+   "id": "emoji-post11/wireless-u15",
+   "cls": "emoji-post11",
+   "text": "\ud83d\udedc",
+   "cps": "U+1F6DC"
+  },
+  {
+   "id": "emoji-post11/goose-u15",
+   "cls": "emoji-post11",
+   "text": "\ud83e\udebf",
+   "cps": "U+1FABF"
+  },
+  {
+   "id": "emoji-post11/face-bags-u16",
+   "cls": "emoji-post11",
+   "text": "\ud83e\udee9",
+   "cps": "U+1FAE9"
+  },
+  {
+   "id": "emoji-post11/fingerprint-u16",
+   "cls": "emoji-post11",
+   "text": "\ud83e\udec6",
+   "cps": "U+1FAC6"
+  },
+  {
+   "id": "emoji-post11/trombone-u16",
+   "cls": "emoji-post11",
+   "text": "\ud83e\ude8a",
+   "cps": "U+1FA8A"
+  },
+  {
+   "id": "emoji-post11/harp-u16",
+   "cls": "emoji-post11",
+   "text": "\ud83e\ude89",
+   "cps": "U+1FA89"
+  },
+  {
+   "id": "placeholder/bare",
+   "cls": "placeholder",
+   "text": "\udbfb\udeee",
+   "cps": "U+10EEEE"
+  },
+  {
+   "id": "placeholder/row0",
+   "cls": "placeholder",
+   "text": "\udbfb\udeee\u0305",
+   "cps": "U+10EEEE U+0305"
+  },
+  {
+   "id": "placeholder/row0col0",
+   "cls": "placeholder",
+   "text": "\udbfb\udeee\u0305\u0305",
+   "cps": "U+10EEEE U+0305 U+0305"
+  },
+  {
+   "id": "placeholder/row1col2",
+   "cls": "placeholder",
+   "text": "\udbfb\udeee\u030d\u030e",
+   "cps": "U+10EEEE U+030D U+030E"
+  },
+  {
+   "id": "placeholder/three-in-a-row",
+   "cls": "placeholder",
+   "text": "\udbfb\udeee\u0305\u0305\udbfb\udeee\u0305\u0305\udbfb\udeee\u0305\u0305",
+   "cps": "U+10EEEE U+0305 U+0305 U+10EEEE U+0305 U+0305 U+10EEEE U+0305 U+0305"
+  },
+  {
+   "id": "placeholder/lone-diacritic",
+   "cls": "placeholder",
+   "text": "\u0305",
+   "cps": "U+0305"
+  },
+  {
+   "id": "misc/zwsp",
+   "cls": "misc",
+   "text": "\u200b",
+   "cps": "U+200B"
+  },
+  {
+   "id": "misc/soft-hyphen",
+   "cls": "misc",
+   "text": "\u00ad",
+   "cps": "U+00AD"
+  },
+  {
+   "id": "misc/nbsp",
+   "cls": "misc",
+   "text": "\u00a0",
+   "cps": "U+00A0"
+  },
+  {
+   "id": "misc/bom",
+   "cls": "misc",
+   "text": "\ufeff",
+   "cps": "U+FEFF"
+  },
+  {
+   "id": "misc/wj",
+   "cls": "misc",
+   "text": "\u2060",
+   "cps": "U+2060"
+  },
+  {
+   "id": "misc/bel-free-del",
+   "cls": "misc",
+   "text": "\u007f",
+   "cps": "U+007F"
+  },
+  {
+   "id": "misc/tag-letter",
+   "cls": "misc",
+   "text": "\udb40\udc67",
+   "cps": "U+E0067"
+  },
+  {
+   "id": "misc/private-use",
+   "cls": "misc",
+   "text": "\ue000",
+   "cps": "U+E000"
+  },
+  {
+   "id": "misc/noncharacter",
+   "cls": "misc",
+   "text": "\ufdd0",
+   "cps": "U+FDD0"
+  },
+  {
+   "id": "misc/replacement",
+   "cls": "misc",
+   "text": "\ufffd",
+   "cps": "U+FFFD"
+  },
+  {
+   "id": "misc/circled-digit-ambig",
+   "cls": "misc",
+   "text": "\u2460",
+   "cps": "U+2460"
+  },
+  {
+   "id": "misc/black-star-ambig",
+   "cls": "misc",
+   "text": "\u2605",
+   "cps": "U+2605"
+  }
+ ]
+}

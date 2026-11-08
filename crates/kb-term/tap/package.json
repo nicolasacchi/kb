@@ -1,1 +1,1 @@
-{"name":"kb-tap","private":true,"type":"module","version":"0.0.0"}
+{"name":"kb-tap","private":true,"type":"module","version":"0.0.0","dependencies":{"@xterm/addon-serialize":"0.14.0","@xterm/addon-unicode-graphemes":"0.4.0","@xterm/headless":"6.0.0"},"devDependencies":{"@xterm/addon-unicode11":"0.9.0"}}
