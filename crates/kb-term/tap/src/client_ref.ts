@@ -139,7 +139,16 @@ export class RefViewer {
         break;
       }
       case 'seed': {
-        this.seed = { offset: frame.offset, remaining: frame.len };
+        // A zero-length seed ends immediately: the viewer is at the seed
+        // offset with no seed bytes to consume (without this the viewer
+        // would stay in the seed branch and the first live frame would
+        // look like a seed straddle).
+        if (frame.len === 0) {
+          this.applied = frame.offset;
+          this.seed = null;
+        } else {
+          this.seed = { offset: frame.offset, remaining: frame.len };
+        }
         break;
       }
       case 'imagedef':
