@@ -160,7 +160,7 @@ test('seam_control_to_viewer_end_to_end', async () => {
     const lines =
       octal('%0', '\x1b[6nhello') +
       octal('%0', `\x1b_G${image}\x1b\\`) +
-      octal('%0', '\x1b_Ga=p,i=7,c=8,r=8\x1b\\') +
+      octal('%0', '\x1b_Ga=p,U=1,q=2,i=7,p=7,c=8,r=8\x1b\\') +
       octal('%0', '\x1b[1;31mworld\x1b[0m');
     fake.stdout.push(lines);
 
