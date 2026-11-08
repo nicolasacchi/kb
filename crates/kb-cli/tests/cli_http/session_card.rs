@@ -86,6 +86,20 @@ impl Fixture {
         cmd
     }
 
+    fn cmd_no_daemon(&self, args: &[&str]) -> Command {
+        let mut full = vec!["sessions"];
+        full.extend_from_slice(args);
+        Command::cargo_bin("kb")
+            .unwrap()
+            .env("KB_TEST_HTTP_TIMEOUT_SECS", common::http_timeout_secs())
+            .env("XDG_CACHE_HOME", &self.cache)
+            .env_remove("KB_SESSION_ID")
+            .env_remove("KB_HARNESS")
+            .env_remove("CLAUDE_CODE_SESSION_ID")
+            .env_remove("GROK_SESSION_ID")
+            .args(&full)
+    }
+
     fn ok(&self, args: &[&str]) -> String {
         let out = self
             .cmd(args)
@@ -184,4 +198,18 @@ async fn kb_sessions_card_missing_session_fails() {
         .assert()
         .failure()
         .stderr(predicates::str::contains("session ghost-404 not found"));
+}
+
+/// `kb sessions card` with no daemon is a clear daemon-not-found error
+/// (brief S4). Without this pin, replacing `require_daemon` with a
+/// fallback URL would break the contract while staying green. (The
+/// default-daemon probe misses in CI: nothing listens on 4000 there by
+/// construction.)
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kb_sessions_card_no_daemon_is_a_clear_error() {
+    let fx = boot().await;
+    fx.cmd_no_daemon(&["card", "cli-1"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("daemon not reachable"));
 }
