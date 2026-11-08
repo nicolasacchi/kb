@@ -574,6 +574,25 @@ async fn backfill_tree_route_dry_run_then_apply() {
     assert_eq!(again["unmatched"], 3, "{again}");
     let final_row = get_detail(sid.to_string()).await;
     assert_eq!(final_row["parent_session_id"], "par1", "{final_row}");
+    // An unsafe project_slug 400s the whole apply (check_slug) and
+    // writes nothing: the row's project_slug stays NULL even though
+    // this apply would have matched it.
+    let bad_slug = client
+        .post(url(addr, "/api/sessions/backfill-tree?apply=true"))
+        .json(&serde_json::json!({"items": [
+            {"session_id": "sid-tree-1", "parent_session_id": "parX", "project_slug": "UPPER"}
+        ]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        bad_slug.status().as_u16(),
+        400,
+        "unsafe project_slug must 400"
+    );
+    let still = get_detail(sid.to_string()).await;
+    assert!(still.get("project_slug").is_none(), "{still}");
+    assert_eq!(still["parent_session_id"], "par1", "{still}");
 }
 
 #[tokio::test]
@@ -604,6 +623,31 @@ async fn backfill_tree_rejects_over_cap_and_unsafe_ids() {
         .await
         .unwrap();
     assert_eq!(bad2.status().as_u16(), 400, "unsafe parent must 400");
+    // project_slug is held to the capture slug charset
+    // ([a-z0-9._-]{1,64}): uppercase and over-cap slugs 400 the whole
+    // request.
+    let bad_slug = client
+        .post(url(addr, "/api/sessions/backfill-tree"))
+        .json(&serde_json::json!({"items": [{"session_id": "s1", "project_slug": "UPPER"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        bad_slug.status().as_u16(),
+        400,
+        "unsafe project_slug must 400"
+    );
+    let long_slug = client
+        .post(url(addr, "/api/sessions/backfill-tree"))
+        .json(&serde_json::json!({"items": [{"session_id": "s1", "project_slug": "a".repeat(65)}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        long_slug.status().as_u16(),
+        400,
+        "over-cap project_slug must 400"
+    );
 }
 
 /// v044-F6 — `/api/turn` takes `project`/`visible_to`/`lanes`: an unknown
