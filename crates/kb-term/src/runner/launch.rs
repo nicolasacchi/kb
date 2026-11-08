@@ -18,6 +18,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::profiles::{self, PlanRequest};
 use crate::runner::anchor::Anchor;
 use crate::runner::ids::{generate_id, valid_harness, valid_id};
 use crate::runner::supervisor::{StopCtx, Supervisor};
@@ -49,6 +50,7 @@ pub fn gate_argv(
     rows: u16,
     env: &BTreeMap<String, String>,
     argv: &[String],
+    script: &str,
 ) -> Vec<String> {
     let mut out = vec![
         "new-session".to_string(),
@@ -71,7 +73,7 @@ pub fn gate_argv(
     out.push("--".to_string());
     out.push("/bin/sh".to_string());
     out.push("-c".to_string());
-    out.push(GATE_SCRIPT.to_string());
+    out.push(script.to_string());
     out.push("kbterm-gate".to_string());
     out.push(tmux_bin.to_string());
     out.push(sock.to_string_lossy().into_owned());
@@ -285,7 +287,16 @@ async fn launch_locked<S: Supervisor>(
             "holder for {id} did not answer"
         )));
     }
-    // Step 3: create the session (the pane command is the gate).
+    // Step 3: build the launch plan (per-harness profiles) and create
+    // the session (the pane command is the gate).
+    let plan = build_launch_plan(runner, id, spec)?;
+    let plan_env: BTreeMap<String, String> = plan.env.iter().cloned().collect();
+    let prelude = profiles::env::shell_unset_prelude(&plan.unset_after_login)
+        .map_err(|bad| RunnerError::Internal(format!("bad env name in unset prelude: {bad}")))?;
+    let script = format!(
+        "{prelude}{} {GATE_SCRIPT}",
+        profiles::env::shell_unset_prefixes_snippet()
+    );
     let args = gate_argv(
         &runner.cfg.tmux_bin,
         &sock,
@@ -293,8 +304,9 @@ async fn launch_locked<S: Supervisor>(
         &spec.cwd,
         spec.cols,
         spec.rows,
-        &spec.env,
-        &spec.argv,
+        &plan_env,
+        &plan.argv,
+        &script,
     );
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let out = runner.tmux.run(&sock, &arg_refs, None).await?;
@@ -308,7 +320,8 @@ async fn launch_locked<S: Supervisor>(
     let started = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
-    set_user_options(runner, &sock, id, spec, started).await?;
+    let exit_keys = effective_exit_keys(spec, &plan);
+    set_user_options(runner, &sock, id, spec, &exit_keys, started).await?;
     // The pane already exists (the gate holds the harness); name its pid
     // in the tap-timeout error so diagnostics can confirm the teardown.
     let pane_pid_early: u32 = read_pane_pid(runner, &sock).await.unwrap_or_default();
@@ -398,6 +411,7 @@ async fn set_user_options<S: Supervisor>(
     sock: &Path,
     id: &str,
     spec: &ValidatedLaunch,
+    exit_keys: &[String],
     started: u64,
 ) -> Result<(), RunnerError> {
     let mut opts: Vec<(&str, String)> = vec![
@@ -406,8 +420,7 @@ async fn set_user_options<S: Supervisor>(
         ("@kb_started", started.to_string()),
         (
             "@kb_exit_keys",
-            serde_json::to_string(&spec.exit_keys)
-                .map_err(|e| RunnerError::Internal(e.to_string()))?,
+            serde_json::to_string(exit_keys).map_err(|e| RunnerError::Internal(e.to_string()))?,
         ),
     ];
     if let Some(sid) = &spec.resume_sid {
@@ -432,6 +445,54 @@ async fn set_user_options<S: Supervisor>(
     }
     let _ = id;
     Ok(())
+}
+/// Build the launch profile for one launch from the runner's own env
+/// (held implicitly: `profiles::plan` filters it through the allowlist).
+fn build_launch_plan<S: Supervisor>(
+    runner: &Runner<S>,
+    id: &str,
+    spec: &ValidatedLaunch,
+) -> Result<profiles::LaunchPlan, RunnerError> {
+    let base_env: Vec<(String, String)> = std::env::vars().collect();
+    let run_dir = runner.sessions_dir().join(id);
+    let cwd = spec.cwd.to_string_lossy().into_owned();
+    profiles::plan(&PlanRequest {
+        harness: &spec.harness,
+        term_id: id,
+        resume_sid: spec.resume_sid.as_deref(),
+        cwd: &cwd,
+        job_ulid: None,
+        run_dir: &run_dir,
+        base_env: &base_env,
+        extra_passthrough: &[],
+    })
+    .map_err(|e| RunnerError::BadRequest(format!("launch profile: {e}")))
+}
+
+/// The effective exit keys for a launch: the caller's explicit keys
+/// win; otherwise the harness profile's exit steps (flattened to the
+/// key strings the kill RPC sends).
+fn effective_exit_keys(spec: &ValidatedLaunch, plan: &profiles::LaunchPlan) -> Vec<String> {
+    let default: Vec<String> = DEFAULT_EXIT_KEYS.iter().map(ToString::to_string).collect();
+    if spec.exit_keys == default {
+        flattened_exit_keys(plan.exit_steps)
+    } else {
+        spec.exit_keys.clone()
+    }
+}
+
+/// Flatten exit steps to the strings the kill RPC sends one by one
+/// (waits are implicit: the kill path sleeps between keys).
+fn flattened_exit_keys(steps: &[profiles::ExitStep]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for step in steps {
+        match step {
+            profiles::ExitStep::Keys(keys) => out.extend(keys.iter().map(|k| k.to_string())),
+            profiles::ExitStep::Text(text) => out.push(text.to_string()),
+            profiles::ExitStep::WaitMs(_) => {}
+        }
+    }
+    out
 }
 
 /// Poll `f` until it returns true or the deadline passes.
@@ -621,6 +682,8 @@ mod tests {
             "semi;colon".to_string(),
             "quo\"te".to_string(),
         ];
+        let script =
+            "unset FOO; T=$1; S=$2; shift 2; \"$T\" -S \"$S\" wait-for kbterm-go; exec \"$@\"";
         let got = gate_argv(
             "/pinned/tmux",
             Path::new("/run/s/abc12345.sock"),
@@ -630,6 +693,7 @@ mod tests {
             40,
             &env,
             &argv,
+            script,
         );
         assert_eq!(
             got,
@@ -653,7 +717,7 @@ mod tests {
                 "--",
                 "/bin/sh",
                 "-c",
-                "T=$1; S=$2; shift 2; \"$T\" -S \"$S\" wait-for kbterm-go; exec \"$@\"",
+                "unset FOO; T=$1; S=$2; shift 2; \"$T\" -S \"$S\" wait-for kbterm-go; exec \"$@\"",
                 "kbterm-gate",
                 "/pinned/tmux",
                 "/run/s/abc12345.sock",
