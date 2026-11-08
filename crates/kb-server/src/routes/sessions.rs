@@ -3041,8 +3041,11 @@ pub async fn work(
         takes.extend(take_edges_from_posts(slug, posts));
     }
 
-    // Row → core input. Titles come from the ledger's display-name source
-    // (`SessionOut::from_row`): the persisted `title` column.
+    // Row → core input. Member titles use the sessions display-name
+    // ladder (`display_name_of`, the same one `SessionOut::from_row`
+    // uses): persisted title, then first user prompt, then
+    // `session <8>`. Every member keeps a title, so the SPA never has
+    // to fall back to a raw id.
     let work_sessions: Vec<kb_core::sessions::work::WorkSession> = scanned
         .into_iter()
         .map(|(kb, row, ulids)| kb_core::sessions::work::WorkSession {
@@ -3056,7 +3059,11 @@ pub async fn work(
             active_secs: row.active_secs,
             harness: row.harness.clone(),
             cwd: row.cwd.clone(),
-            title: row.title.clone(),
+            title: Some(display_name_of(
+                row.title.as_deref(),
+                row.first_user_prompt.as_deref(),
+                &row.session_id,
+            )),
             job_ulids: ulids,
         })
         .collect();
@@ -3315,6 +3322,20 @@ mod work_tests {
         let text = serde_json::to_string(&resp).unwrap();
         assert!(!text.contains("LEAK-MARKER"), "slate text leaked: {text}");
         assert!(!text.contains("takeover body"), "slate text leaked: {text}");
+    }
+    #[test]
+    fn work_member_titles_use_display_name_ladder() {
+        // `display_name_of` is the sessions-wide ladder; the work route
+        // maps rows through it, so a NULL-title row shows its first
+        // user prompt (then `session <8>`), never a raw id.
+        use super::display_name_of;
+        assert_eq!(display_name_of(Some("T"), Some("P"), "sid-12345678"), "T");
+        assert_eq!(display_name_of(Some("  "), Some("P"), "sid-12345678"), "P");
+        assert_eq!(display_name_of(None, Some("P"), "sid-12345678"), "P");
+        assert_eq!(
+            display_name_of(None, None, "sid-12345678"),
+            "session sid-123"
+        );
     }
 }
 
