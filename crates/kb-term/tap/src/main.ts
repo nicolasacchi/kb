@@ -147,6 +147,7 @@ export function createTapStack(opts: TapStackOpts): TapStack {
   };
 
   const server = new TapServer({
+    runDir: opts.runDir,
     session: opts.session,
     harness: opts.harness,
     boundSid: opts.boundSid,
