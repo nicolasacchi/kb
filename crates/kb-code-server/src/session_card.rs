@@ -864,6 +864,7 @@ mod tests {
                         via: "commit-trailer".to_string(),
                         attributed_here: true,
                     },
+                    Some(other) => panic!("test fixture has one repo (index 0), got {other}"),
                 })
                 .collect(),
             None,

@@ -57,7 +57,7 @@ describe("useCodeLane", () => {
   });
 
   it("key_includes_sid_and_repo", async () => {
-    const fetchFn = vi.fn(async () =>
+    const fetchFn = vi.fn(async (_input: string) =>
       new Response(JSON.stringify({ schema: "kbc-session-card/1" }), {
         status: 200,
         headers: { "Content-Type": "application/json" },

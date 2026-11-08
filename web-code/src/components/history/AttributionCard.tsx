@@ -80,6 +80,7 @@ export default function AttributionCard({ attribution, compact }: AttributionCar
           href={sessionHref}
           target="_blank"
           rel="noreferrer"
+          {...(attribution.kb ? { "data-kbc-attrib-session-kb": attribution.kb } : {})}
         >
           Open session in kb <Icon.External width={12} height={12} aria-hidden />
         </a>

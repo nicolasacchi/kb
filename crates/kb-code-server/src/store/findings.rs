@@ -825,7 +825,7 @@ pub const SEVERITIES: [&str; 3] = [SEVERITY_BLOCKER, SEVERITY_CONCERN, SEVERITY_
 /// Findings authored by one author, grouped by severity (A5,
 /// `kbc-session-card/1`'s findings lane). Plain counts; an unknown severity
 /// string in the table is simply not counted into any bucket.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
 pub struct SeverityCounts {
     pub blocker: usize,
     pub concern: usize,

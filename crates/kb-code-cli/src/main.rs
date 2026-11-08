@@ -11518,7 +11518,10 @@ async fn session_card_cmd(daemon: &str, sid: &str, repo: Option<&str>, json: boo
         }
     }
     let findings = &body["findings"];
-    println!("findings:   {} authored", findings["total"].as_u64().unwrap_or(0));
+    println!(
+        "findings:   {} authored",
+        findings["total"].as_u64().unwrap_or(0)
+    );
     if let Some(caption) = findings["caption"].as_str() {
         println!("  caption:    {caption}");
     }
