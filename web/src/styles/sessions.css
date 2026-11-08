@@ -1388,9 +1388,9 @@
    page's children section. Same mono-mute vocabulary as the husk badge. */
 .kb-ses__row-subagents {
   font: 600 11px/1 var(--font-mono, ui-monospace);
-  color: var(--ink-mute, #999);
+  color: var(--ink-mute);
   text-decoration: none;
-  border-bottom: 1px dotted var(--ink-mute, #999);
+  border-bottom: 1px dotted var(--ink-mute);
 }
 
 /* A4 — one session's page at /sessions/:sid. One column at every width;
@@ -1411,7 +1411,7 @@
 .kb-sp__back a,
 .kb-sp__links a,
 .kb-sp__chain a {
-  color: var(--accent, #b9a6ff);
+  color: var(--accent);
   text-decoration: none;
 }
 .kb-sp__title {
@@ -1420,7 +1420,7 @@
 }
 .kb-sp__sub {
   margin: 0;
-  color: var(--ink-mute, #999);
+  color: var(--ink-mute);
   font-size: var(--fs-sm);
 }
 .kb-sp__chips {
@@ -1431,18 +1431,18 @@
 }
 .kb-sp__chip {
   font: 600 11px/1.4 var(--font-mono, ui-monospace);
-  color: var(--ink-mute, #999);
-  border: 1px solid var(--rule, #2a2a2a);
+  color: var(--ink-mute);
+  border: 1px solid var(--rule);
   border-radius: 999px;
   padding: 2px 8px;
 }
 .kb-sp__lead {
   margin: 0;
-  color: var(--ink, #eee);
+  color: var(--ink);
   font-size: var(--fs-md);
 }
 .kb-sp__sec {
-  border-top: 1px solid var(--rule, #2a2a2a);
+  border-top: 1px solid var(--rule);
   padding: 8px 0;
 }
 .kb-sp__sum {
@@ -1459,17 +1459,17 @@
 }
 .kb-sp__empty {
   margin: 0;
-  color: var(--ink-mute, #999);
+  color: var(--ink-mute);
   font-size: var(--fs-sm);
 }
 .kb-sp__total {
   margin: 0;
-  color: var(--ink-mute, #999);
+  color: var(--ink-mute);
   font-size: var(--fs-sm);
 }
 .kb-sp__caption {
   margin: 0;
-  color: var(--ink-mute, #999);
+  color: var(--ink-mute);
   font-size: var(--fs-sm);
   font-style: italic;
 }
@@ -1481,27 +1481,27 @@
   gap: 3px;
 }
 .kb-sp__meta {
-  color: var(--ink-mute, #999);
+  color: var(--ink-mute);
   font-size: var(--fs-sm);
 }
 .kb-sp__entry {
-  border-left: 2px solid var(--rule, #2a2a2a);
+  border-left: 2px solid var(--rule);
   padding-left: 8px;
 }
 .kb-sp__entry-kind {
   font: 600 11px/1.4 var(--font-mono, ui-monospace);
-  color: var(--ink-mute, #999);
+  color: var(--ink-mute);
   margin: 0;
 }
 .kb-sp__marker {
-  color: var(--accent, #b9a6ff);
+  color: var(--accent);
   font-size: var(--fs-sm);
 }
 .kb-sp__more {
   align-self: flex-start;
   background: transparent;
-  color: var(--accent, #b9a6ff);
-  border: 1px solid var(--rule, #2a2a2a);
+  color: var(--accent);
+  border: 1px solid var(--rule);
   border-radius: 4px;
   padding: 4px 12px;
   cursor: pointer;
