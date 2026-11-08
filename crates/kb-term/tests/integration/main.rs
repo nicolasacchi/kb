@@ -1470,7 +1470,7 @@ async fn term_int_take_size_moves_the_window_and_a_foreign_owner_is_refused() {
     let Some(tmux_bin) = require_tmux() else {
         return;
     };
-    let tr = TestRunner::new(tmux_bin);
+    let tr = TestRunner::new(tmux_bin.clone());
     boot_runner(&tr).await;
     let (id, _log) = launch_probe(&tr, "raw").await;
     let sock = tr.sock(&id);
@@ -1847,7 +1847,7 @@ async fn term_int_anchor_death_closes_viewers_promptly_without_an_rpc() {
     let Some(tmux_bin) = require_tmux() else {
         return;
     };
-    let tr = TestRunner::new(tmux_bin);
+    let tr = TestRunner::new(tmux_bin.clone());
     boot_runner(&tr).await;
     let (id, _log) = launch_probe(&tr, "raw").await;
     dispatch_ok(
