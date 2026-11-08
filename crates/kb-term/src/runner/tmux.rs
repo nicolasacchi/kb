@@ -2,7 +2,8 @@
 //!
 //! The environment is cleared (only `LANG` and `HOME` are set) so an id,
 //! a path or user text can never be reinterpreted by a shell. Set-option
-//! values go after `--`.
+//! values pass as plain arguments (tmux 3.7c rejects `set-option` values
+//! after `--`, so no separator is ever emitted).
 
 use std::path::Path;
 use std::time::Duration;

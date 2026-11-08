@@ -14,6 +14,11 @@
 //! `{"status":"ok","data":...}` / `{"status":"err","code","message"}` with
 //! unknown fields tolerated (additive-reader rule), and every field
 //! serializes `None` as an explicit `null` (no `skip_serializing_if`).
+//!
+//! Post-merge reconciliation (FXT8): this mirror deliberately crosses the
+//! kb-server boundary that T8's brief kept closed — the relay needs the
+//! shared wire shapes to type its JSON, so the mirror is justified, kept
+//! in lock-step by the golden round-trip below (not a second contract).
 
 use serde::{Deserialize, Serialize};
 
@@ -392,5 +397,24 @@ mod tests {
             "{\"op\":\"kill\",\"id\":\"abcd1234\",\"future_field\":true}"
         )
         .is_err());
+    }
+
+    /// The runner's `list` reply `data` is an array of `SessionInfo`s
+    /// (the runner skips stale sockets; it never emits null-filled
+    /// entries), and this mirror must deserialize that array.
+    #[test]
+    fn list_data_array_parses_as_session_infos() {
+        let golden = include_str!("../../../kb-term/tests/golden/session_info.json").trim_end();
+        let reply: RunnerReply =
+            serde_json::from_str(&format!("{{\"status\":\"ok\",\"data\":[{}]}}", golden)).unwrap();
+        match &reply {
+            RunnerReply::Ok { data } => {
+                let infos: Vec<SessionInfo> = serde_json::from_value(data.clone()).unwrap();
+                assert_eq!(infos.len(), 1);
+                assert_eq!(infos[0].id, "abcd1234");
+                assert_eq!(infos[0].harness, Harness::Omp);
+            }
+            RunnerReply::Err { .. } => panic!("must not err"),
+        }
     }
 }
