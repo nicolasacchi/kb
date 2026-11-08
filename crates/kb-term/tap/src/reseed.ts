@@ -164,17 +164,27 @@ function parseMode(lines: string[] | undefined): ModeState | null {
  * reseeded twin's scrollBottom was 28 (the raw 29 written as a 1-based
  * bottom) while a byte-faithful reference twin had 29. A full-window region
  * (0..rows-1) is deliberately NOT emitted: it is exactly the twin's default
- * scroll region and the round-trip only corrupts state. */
+ * scroll region and the round-trip only corrupts state.
+ *
+ * Under origin mode (DECOM), tmux's cursor_y is still the viewport-absolute
+ * 0-based row, but the emitted CUP row is region-relative, so the restore
+ * subtracts the region top (scrollTop) and clamps to row 1 (a cursor whose
+ * row was outside the region homes to the region top under CUP); with
+ * origin off the emitted row stays the absolute cursorY+1. */
 export function modeRestoreBytes(mode: ModeState | null, cursorX: number, cursorY: number, rows: number): string {
   let s = '';
+  let cupRow = cursorY + 1; // 1-based absolute row (tmux cursor_y is 0-based)
   if (mode) {
+    const top = mode.scrollTop;
+    const bottom = mode.scrollBottom;
     if (
-      mode.scrollTop !== null &&
-      mode.scrollBottom !== null &&
-      mode.scrollTop <= mode.scrollBottom &&
-      !(mode.scrollTop === 0 && mode.scrollBottom === rows - 1)
+      top !== null &&
+      bottom !== null &&
+      top <= bottom &&
+      !(top === 0 && bottom === rows - 1)
     ) {
-      s += `${ESC}[${mode.scrollTop + 1};${mode.scrollBottom + 1}r`;
+      s += `${ESC}[${top + 1};${bottom + 1}r`;
+      if (mode.origin === true) cupRow = Math.max(1, cursorY - top + 1);
     }
     if (mode.origin !== null) s += `${ESC}[?6${mode.origin ? 'h' : 'l'}`;
     if (mode.wrap !== null) s += `${ESC}[?7${mode.wrap ? 'h' : 'l'}`;
@@ -183,7 +193,7 @@ export function modeRestoreBytes(mode: ModeState | null, cursorX: number, cursor
     if (mode.keypadCursor !== null) s += `${ESC}[?1${mode.keypadCursor ? 'h' : 'l'}`;
     if (mode.keypad !== null) s += mode.keypad ? `${ESC}=` : `${ESC}>`;
   }
-  s += `${ESC}[${cursorY + 1};${cursorX + 1}H`;
+  s += `${ESC}[${cupRow};${cursorX + 1}H`;
   return s;
 }
 
@@ -235,6 +245,7 @@ export class Reseeder {
     interleaved: boolean;
     aResolved: boolean;
     bResolved: boolean;
+    closed: boolean;
   } | null = null;
 
   constructor(control: ControlLike, twin: Twin, opts?: ReseedOpts) {
@@ -264,7 +275,10 @@ export class Reseeder {
     q.frameEnded = frameNow;
     const a = this.active;
     if (a && (pane === '' || pane === a.pane)) {
-      if (!a.aResolved) {
+      if (a.closed) {
+        // The reseed slot is closed: the normal pipeline feeds the twin
+        // now; nothing is queued (and nothing is silently counted away).
+      } else if (!a.aResolved) {
         // already inside the capture: drop silently, but count it.
         this.st.preABytes += bytes.length;
       } else if (!a.bResolved) {
@@ -326,7 +340,7 @@ export class Reseeder {
     let lastReason = 'no attempt';
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       this.st.totalAttempts++;
-      const active = { pane: paneId, queue: [] as Uint8Array[], interleaved: false, aResolved: false, bResolved: false };
+      const active = { pane: paneId, queue: [] as Uint8Array[], interleaved: false, aResolved: false, bResolved: false, closed: false };
       this.active = active;
       try {
         const result = await this.attempt(paneId, active);
@@ -348,7 +362,7 @@ export class Reseeder {
   }
   private async attempt(
     pane: string,
-    active: { pane: string; queue: Uint8Array[]; interleaved: boolean; aResolved: boolean; bResolved: boolean },
+    active: { pane: string; queue: Uint8Array[]; interleaved: boolean; aResolved: boolean; bResolved: boolean; closed: boolean },
   ): Promise<{ ok?: Omit<ReseededResult, 'attempts' | 'quiescent'>; reason?: string }> {
     const aCmd = `display-message -p -t ${pane} 'A #{history_size} #{cursor_x} #{cursor_y}'`;
     const capture = `capture-pane -p -e -J -S - -t ${pane}`;
@@ -454,10 +468,21 @@ export class Reseeder {
       }
     }
     await feed(modeRestoreBytes(mode, b.cursorX, b.cursorY, this.twin.rows));
-    for (const chunk of active.queue) {
-      await feedBytes(chunk);
+    // Drain until the queue is empty, then close the slot in the same
+    // synchronous turn: per spec §3 step 5, every %output after B's %end
+    // is fed, in order, with no gap. A single for-of durably loses bytes
+    // that land after its final length check (they were counted as
+    // queuedDroppedBytes by the finally in reseed()), which makes the
+    // emitted-reference comparison unwinnable under live flow. The
+    // final empty check and the close have no await between them, so no
+    // %output can land in the queue after the check: JS code runs
+    // atomically between awaits. Anything arriving after the close is
+    // post-reseed stream and feeds the twin via the normal pipeline.
+    while (active.queue.length > 0) {
+      const batch = active.queue.splice(0, active.queue.length);
+      for (const chunk of batch) await feedBytes(chunk);
     }
-    active.queue = [];
+    active.closed = true;
     return { ok: { bytesFed, historySize: b.history, mode, a, b } };
   }
 }
