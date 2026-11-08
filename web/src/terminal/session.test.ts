@@ -142,6 +142,7 @@ describe("TermSession", () => {
     const h = setup();
     const s = await goLive(h);
     s.pushBinary(105, "x");
+    await flush();
     expect(h.session.getState().applied).toBe(106);
     expect(h.calls.at(-1)).toEqual(["write", [120]]);
   });
@@ -152,6 +153,7 @@ describe("TermSession", () => {
     // applied = 105; rewind 37 -> off 68, 50-byte payload.
     const payload = new TextEncoder().encode("A".repeat(50));
     s.pushBinary(68, payload);
+    await flush();
     expect(h.session.getState().applied).toBe(105 + 13);
     expect(h.calls.at(-1)).toEqual(["write", Array.from(payload.subarray(37))]);
     expect(h.session.getState().gaps).toBe(0);
