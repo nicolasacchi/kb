@@ -1383,3 +1383,130 @@
   color: var(--ink-mute);
   font-size: var(--fs-sm);
 }
+
+/* A4 — the collapsed-tree readout: "+N subagents" linking to the session
+   page's children section. Same mono-mute vocabulary as the husk badge. */
+.kb-ses__row-subagents {
+  font: 600 11px/1 var(--font-mono, ui-monospace);
+  color: var(--ink-mute, #999);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--ink-mute, #999);
+}
+
+/* A4 — one session's page at /sessions/:sid. One column at every width;
+   sections are <details> (collapsed by JS at mobile widths, open above). */
+.kb-sp {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: var(--pad-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+}
+.kb-sp__head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.kb-sp__back a,
+.kb-sp__links a,
+.kb-sp__chain a {
+  color: var(--accent, #b9a6ff);
+  text-decoration: none;
+}
+.kb-sp__title {
+  font-size: var(--fs-lg);
+  margin: 0;
+}
+.kb-sp__sub {
+  margin: 0;
+  color: var(--ink-mute, #999);
+  font-size: var(--fs-sm);
+}
+.kb-sp__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+}
+.kb-sp__chip {
+  font: 600 11px/1.4 var(--font-mono, ui-monospace);
+  color: var(--ink-mute, #999);
+  border: 1px solid var(--line, #333);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+.kb-sp__lead {
+  margin: 0;
+  color: var(--ink, #eee);
+  font-size: var(--fs-md);
+}
+.kb-sp__sec {
+  border-top: 1px solid var(--line, #333);
+  padding: 8px 0;
+}
+.kb-sp__sum {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: var(--fs-md);
+  padding: 2px 0;
+}
+.kb-sp__body {
+  padding: 6px 0 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.kb-sp__empty {
+  margin: 0;
+  color: var(--ink-mute, #999);
+  font-size: var(--fs-sm);
+}
+.kb-sp__total {
+  margin: 0;
+  color: var(--ink-mute, #999);
+  font-size: var(--fs-sm);
+}
+.kb-sp__caption {
+  margin: 0;
+  color: var(--ink-mute, #999);
+  font-size: var(--fs-sm);
+  font-style: italic;
+}
+.kb-sp__list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.kb-sp__meta {
+  color: var(--ink-mute, #999);
+  font-size: var(--fs-sm);
+}
+.kb-sp__entry {
+  border-left: 2px solid var(--line, #333);
+  padding-left: 8px;
+}
+.kb-sp__entry-kind {
+  font: 600 11px/1.4 var(--font-mono, ui-monospace);
+  color: var(--ink-mute, #999);
+  margin: 0;
+}
+.kb-sp__marker {
+  color: var(--accent, #b9a6ff);
+  font-size: var(--fs-sm);
+}
+.kb-sp__more {
+  align-self: flex-start;
+  background: transparent;
+  color: var(--accent, #b9a6ff);
+  border: 1px solid var(--line, #333);
+  border-radius: 4px;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+.kb-sp__outcome-text {
+  margin: 0;
+  white-space: pre-wrap;
+}
