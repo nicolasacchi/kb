@@ -52,23 +52,28 @@ test('ring_read_matches_naive_reference_across_wrap', () => {
     const parts: Uint8Array[] = [];
     let head = 0;
     for (let i = 0; i < 200; i++) {
-      const chunk = fill(rnd, Math.floor(rnd() * 96));
       if (rnd() < 0.3 && head > 0) {
-        // Read a random retained window and compare with the reference.
+        const tail = ring.tail;
+        // A read strictly below the tail ages out to null.
+        if (tail > 0) expect(ring.read(tail - 1, 8)).toBeNull();
+        // Any in-window read matches the naive reference byte-for-byte.
         const choice = Math.floor(rnd() * 3);
+        const span = Math.min(head, 80);
+        const from = Math.max(tail, head - Math.floor(rnd() * span));
+        const maxLen = Math.floor(rnd() * 40);
         if (choice === 0) {
-          expect(ring.read(head - 1, 8)).toBeNull();
+          expect(ring.read(from, maxLen)).toEqual(concat(parts).subarray(from, Math.min(head, from + maxLen)));
+        } else if (choice === 1) {
+          expect(ring.read(from, 0)).toEqual(new Uint8Array(0));
         } else {
-          const from = Math.max(ring.tail, head - Math.floor(rnd() * Math.min(head, 80)));
-          const want = concat(parts).subarray(from, Math.min(head, from + Math.floor(rnd() * 40)));
-          const got = ring.read(from, 40);
+          const got = ring.read(from, maxLen);
           expect(got).not.toBeNull();
-          expect(Array.from(got!)).toEqual(Array.from(want));
+          expect(Array.from(got!)).toEqual(Array.from(concat(parts).subarray(from, Math.min(head, from + maxLen))));
         }
         continue;
       }
-      const start = ring.push(chunk);
-      expect(start).toBe(head);
+      const chunk = fill(rnd, Math.floor(rnd() * 96));
+      expect(ring.push(chunk)).toBe(head);
       parts.push(chunk);
       head += chunk.length;
       expect(ring.head).toBe(head);
@@ -91,9 +96,11 @@ test('ring_wrap_boundary_reads_are_exact', () => {
   const ring = new Ring(10);
   ring.push(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]));
   ring.push(new Uint8Array([9, 10, 11, 12]));
-  expect(ring.read(0, 12)).toEqual(Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]));
-  expect(ring.read(2, 10)).toBeNull();
-  expect(ring.read(2, 4)?.length).toBe(8);
+  // head 12, tail 2: offsets 0-1 are aged out.
+  expect(ring.read(0, 12)).toBeNull();
+  expect(ring.read(1, 12)).toBeNull();
+  expect(ring.read(2, 10)).toEqual(Uint8Array.from([3, 4, 5, 6, 7, 8, 9, 10, 11, 12]));
+  expect(ring.read(2, 4)).toEqual(Uint8Array.from([3, 4, 5, 6]));
   expect(ring.read(12, 4)).toEqual(new Uint8Array(0));
   expect(ring.read(99, 4)).toEqual(new Uint8Array(0));
 });

@@ -471,7 +471,7 @@ impl EnvelopeDecoder {
             }
             let mut hdr = [0u8; 4];
             hdr.copy_from_slice(&self.buf[..4]);
-            let len = usize::from(u32::from_be_bytes(hdr));
+            let len = u32::from_be_bytes(hdr) as usize;
             if len == 0 {
                 return Err(WireError::BadEnvelope);
             }

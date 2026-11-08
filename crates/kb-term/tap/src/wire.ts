@@ -74,10 +74,6 @@ export type TextFrame =
   | { kind: 'known'; frame: ServerFrame | ClientFrame | ControlMessage }
   | { kind: 'unknown'; raw: string };
 
-const SERVER_T = new Set(['hello', 'profile', 'imagedef', 'seed', 'resize', 'sizechanged', 'gfxreset', 'exit', 'clipboard', 'error']);
-const CLIENT_T = new Set(['resumefrom', 'takesize', 'input', 'ping']);
-const CONTROL_T = new Set(['viewer-open', 'viewer-close', 'typed', 'stats']);
-
 /** Encode a server frame to its exact golden bytes. */
 export function encodeServerFrame(frame: ServerFrame): string {
   return JSON.stringify(frame);
