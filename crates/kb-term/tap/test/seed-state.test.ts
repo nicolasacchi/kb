@@ -68,12 +68,12 @@ test('DECSC slot (position and pen) is restored', async () => {
     await expectBareDirty(twin, 'DECSC saved cursor');
     const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1 });
     await expectClean(twin, seed.bytes, 'decsc seed');
-    // probe: ESC 8 restores the twin slot position in the viewer too.
+    // probe: ESC 8 restores the twin slot position (4;7 -> x=6) in the viewer.
     const viewer = makeTwin(40, 12);
     try {
       await viewer.feed(seed.bytes);
       await viewer.feed(enc(`${E}8`));
-      expect(stateOf(viewer.term as never)['normal.x']).toBe(stateOf(twin.term as never)['normal.x']);
+      expect(stateOf(viewer.term as never)['normal.x']).toBe(captureTwinState(twin).normal.savedX);
     } finally {
       viewer.dispose();
     }
