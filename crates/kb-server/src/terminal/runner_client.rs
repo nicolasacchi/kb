@@ -197,7 +197,9 @@ fn decode_envelopes(
         if kind != ENV_TEXT && kind != ENV_BINARY && kind != ENV_CONTROL {
             return Err("bad envelope kind".to_string());
         }
-        let body: Vec<u8> = (0..len - 1).filter_map(|i| buf.get(5 + i).copied()).collect();
+        let body: Vec<u8> = (0..len - 1)
+            .filter_map(|i| buf.get(5 + i).copied())
+            .collect();
         buf.drain(..4 + len);
         out.push((kind, body));
     }
@@ -529,7 +531,10 @@ mod tests {
             .await
             .expect("recv 2 deadline")
             .expect("second item");
-        assert_eq!(second, StreamItem::Binary(vec![0, 0, 0, 0, 0, 0, 0, 3, b'a', b'b', b'c']));
+        assert_eq!(
+            second,
+            StreamItem::Binary(vec![0, 0, 0, 0, 0, 0, 0, 3, b'a', b'b', b'c'])
+        );
     }
 
     #[tokio::test]
@@ -542,7 +547,9 @@ mod tests {
             let mut buf = vec![0u8; 4096];
             let _ = stream.read(&mut buf).await;
             let _ = stream
-                .write_all(b"{\"status\":\"err\",\"code\":\"not-found\",\"message\":\"no session\"}\n")
+                .write_all(
+                    b"{\"status\":\"err\",\"code\":\"not-found\",\"message\":\"no session\"}\n",
+                )
                 .await;
         });
         let runner = UnixRunner::new(sock, Duration::from_secs(5));
@@ -570,12 +577,16 @@ mod tests {
             decode_envelopes(&mut buf, &mut out).unwrap();
             out
         };
-        let text = decode(include_str!("../../../kb-term/tests/golden/env_ssc_text.hex"));
+        let text = decode(include_str!(
+            "../../../kb-term/tests/golden/env_ssc_text.hex"
+        ));
         assert_eq!(text.len(), 1);
         assert_eq!(text[0].0, ENV_TEXT);
         let frame = strip_s2c_id(&text[0].1).unwrap();
         assert_eq!(frame, br#"{"t":"ping"}"#);
-        let binary = decode(include_str!("../../../kb-term/tests/golden/env_ssc_binary.hex"));
+        let binary = decode(include_str!(
+            "../../../kb-term/tests/golden/env_ssc_binary.hex"
+        ));
         assert_eq!(binary.len(), 1);
         assert_eq!(binary[0].0, ENV_BINARY);
         // The 8-byte BE offset header rides inside the frame bytes.

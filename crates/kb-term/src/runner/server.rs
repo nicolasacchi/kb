@@ -151,9 +151,7 @@ async fn handle_connection<S: Supervisor + 'static>(runner: Arc<Runner<S>>, stre
         // answered with the standard ok envelope, then the connection
         // becomes a tap relay (see `crate::runner::stream`). An open
         // failure is an ordinary error reply and the connection closes.
-        if let Ok(crate::wire::Request::Stream { id, from }) =
-            rpc::parse_request(line.as_bytes())
-        {
+        if let Ok(crate::wire::Request::Stream { id, from }) = rpc::parse_request(line.as_bytes()) {
             if !crate::runner::ids::valid_id(&id) {
                 let err = crate::wire::Response::Err {
                     code: "invalid-id".to_string(),
@@ -184,7 +182,8 @@ async fn handle_connection<S: Supervisor + 'static>(runner: Arc<Runner<S>>, stre
                 return;
             }
             let (tap_read, tap_write) = tap.into_split();
-            let _ = crate::runner::stream::splice(tap_read, tap_write, client_read, write_half).await;
+            let _ =
+                crate::runner::stream::splice(tap_read, tap_write, client_read, write_half).await;
             return;
         }
         let resp = match rpc::parse_request(line.as_bytes()) {
@@ -199,7 +198,6 @@ async fn handle_connection<S: Supervisor + 'static>(runner: Arc<Runner<S>>, stre
         }
     }
 }
-
 
 fn request_id(line: &str) -> Option<Value> {
     serde_json::from_str::<Value>(line)

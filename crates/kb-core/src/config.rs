@@ -271,7 +271,11 @@ impl TerminalSection {
         let socket = self.resolved_runner_socket();
         // `<run-dir>/runner/runner.sock` -> `<run-dir>`.
         if socket.file_name().and_then(|n| n.to_str()) == Some("runner.sock")
-            && socket.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()) == Some("runner")
+            && socket
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+                == Some("runner")
         {
             if let Some(dir) = socket.parent().and_then(|p| p.parent()) {
                 return dir.to_path_buf();

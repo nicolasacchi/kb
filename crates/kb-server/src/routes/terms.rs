@@ -347,7 +347,8 @@ pub async fn launch(
             let new_id = data
                 .get("id")
                 .and_then(|v| v.as_str())
-                .unwrap_or("").to_string();
+                .unwrap_or("")
+                .to_string();
             if !new_id.is_empty() {
                 crate::terminal::events::emit_created(
                     &state,

@@ -24,9 +24,9 @@ pub mod launch;
 pub mod paste;
 pub mod rpc;
 pub mod server;
+pub mod stream;
 pub mod supervisor;
 pub mod tmux;
-pub mod stream;
 
 pub use config::RunnerConfig;
 

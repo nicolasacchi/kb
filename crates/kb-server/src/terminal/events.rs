@@ -97,16 +97,11 @@ pub(crate) fn term_state_payload(
 }
 
 /// Emit `term.created` for a launch the runner confirmed.
-pub(crate) fn emit_created(
-    state: &KbHandles,
-    id: &str,
-    harness: &str,
-    cols: u16,
-    rows: u16,
-) {
-    state
-        .bus
-        .emit("term.created", term_created_payload(id, harness, cols, rows));
+pub(crate) fn emit_created(state: &KbHandles, id: &str, harness: &str, cols: u16, rows: u16) {
+    state.bus.emit(
+        "term.created",
+        term_created_payload(id, harness, cols, rows),
+    );
 }
 
 /// Emit `term.ended` exactly once per id (the dedup claim is the
@@ -131,9 +126,10 @@ pub(crate) fn emit_state(
     grid_owner: Option<&str>,
 ) {
     let state = if live { "live" } else { "ended" };
-    state
-        .bus
-        .emit("term.state", term_state_payload(id, state, cols, rows, grid_owner));
+    state.bus.emit(
+        "term.state",
+        term_state_payload(id, state, cols, rows, grid_owner),
+    );
 }
 
 #[cfg(test)]
@@ -142,9 +138,7 @@ mod payload_tests {
     //! in `routes::schema` (the `session_state_payload` tie test's
     //! shape): keys == consts modulo `?`.
     use super::*;
-    use crate::routes::schema::{
-        TERM_CREATED_KEYS, TERM_ENDED_KEYS, TERM_STATE_KEYS,
-    };
+    use crate::routes::schema::{TERM_CREATED_KEYS, TERM_ENDED_KEYS, TERM_STATE_KEYS};
 
     fn keys_of(v: &serde_json::Value) -> Vec<String> {
         v.as_object()
@@ -155,7 +149,10 @@ mod payload_tests {
     }
 
     fn declared(consts: &[&str]) -> Vec<String> {
-        consts.iter().map(|s| s.trim_end_matches('?').to_string()).collect()
+        consts
+            .iter()
+            .map(|s| s.trim_end_matches('?').to_string())
+            .collect()
     }
 
     #[test]
