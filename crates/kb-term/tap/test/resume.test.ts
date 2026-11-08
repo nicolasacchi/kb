@@ -229,6 +229,48 @@ test('client_ref_backoff_series_and_reset', () => {
   expect(b2.nominal()).toBe(200);
 });
 
+test('client_ref_backoff_fake_clock_attempt_schedule', () => {
+  // Drive the backoff from a fake clock: attempts are scheduled at the
+  // actual (jittered) delays; the 100 ms tight loop from the spike must
+  // never recur.
+  for (const r of [0, 0.5, 0.999999]) {
+    const backoff = new Backoff();
+    let t = 0;
+    let attempts = 1; // the first attempt is at t=0
+    for (let i = 0; i < 30; i++) {
+      const d = backoff.delay(() => r);
+      expect(d).toBeGreaterThanOrEqual(75);
+      backoff.onFailure();
+      t += d;
+      if (t <= 1000) attempts++;
+    }
+    expect(attempts).toBeLessThanOrEqual(6);
+  }
+  // Deterministic edge: rand=0 lands the first 1000 ms of attempts at
+  // 0, 75, 225, 525 (the fifth would land at 1125).
+  const backoff = new Backoff();
+  let t = 0;
+  let attempts = 1;
+  for (let i = 0; i < 30; i++) {
+    t += backoff.delay(() => 0);
+    backoff.onFailure();
+    if (t <= 1000) attempts++;
+  }
+  expect(attempts).toBe(4);
+});
+
+test('client_ref_seed_missing_len_is_bad_frame_not_a_nan_park', () => {
+  const ref = new RefViewer({ epoch: 'e'.repeat(32) });
+  ref.onText('{"t":"seed","offset":1000}');
+  expect(ref.closed).toBe(true);
+  expect(ref.badFrame).toContain('bad-frame');
+  expect(ref.applied).toBe(0);
+  const ref2 = new RefViewer({ epoch: 'e'.repeat(32) });
+  ref2.onText('{"t":"hello","epoch":"' + 'e'.repeat(32) + '"}');
+  expect(ref2.closed).toBe(true);
+  expect(ref2.badFrame).toContain('bad-frame');
+});
+
 test('client_ref_watchdog_fake_clock', () => {
   let now = 1000;
   const ref = new RefViewer({ epoch: 'e'.repeat(32), now: () => now, watchdogMs: 1500 });
