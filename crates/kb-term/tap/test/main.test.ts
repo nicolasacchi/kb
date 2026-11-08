@@ -96,7 +96,7 @@ function openViewer(sockPath: string, cap: Captured): Promise<Socket> {
     socket.on('error', reject);
     socket.on('connect', () => {
       resolve(socket);
-      socket.write(encodeEnvelope(ENV_CONTROL, enc(encodeControlMessage({ t: 'viewer-open', viewer: 'v1', profile: 'desktop', resume: null })))));
+      socket.write(encodeEnvelope(ENV_CONTROL, enc(encodeControlMessage({ t: 'viewer-open', viewer: 'v1', profile: 'desktop', resume: null }))));
     });
     socket.on('data', (chunk: Buffer) => {
       for (const env of dec.push(new Uint8Array(chunk))) {
