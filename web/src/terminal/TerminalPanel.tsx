@@ -97,6 +97,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
     blockedReason: null,
   });
   const [grid, setGrid] = useState<{ cols: number; rows: number } | null>(null);
+  const gridRef = useRef<{ cols: number; rows: number } | null>(null);
   const [scrollback, setScrollback] = useState(0);
   const [widthActive, setWidthActive] = useState(false);
   const [transient, setTransient] = useState<string | null>(null);
@@ -204,7 +205,8 @@ export function TerminalPanel(props: TerminalPanelProps) {
       fitNow(term, host, profile.cols);
       termRef.current = term;
       (host as TermSeam).__kbTerm = term;
-      setGrid({ cols: profile.cols, rows: profile.rows });
+      gridRef.current = { cols: profile.cols, rows: profile.rows };
+      setGrid(gridRef.current);
       setScrollback(profile.scrollback);
       setWidthActive(true);
       return true;
@@ -305,7 +307,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
       if (fitTimer !== null) window.clearTimeout(fitTimer);
       fitTimer = window.setTimeout(() => {
         const term = termRef.current;
-        if (term && grid) fitNow(term, host, grid.cols);
+        if (term && gridRef.current) fitNow(term, host, gridRef.current.cols);
       }, 100);
     });
     observer.observe(host);

@@ -208,6 +208,9 @@ export class TermSession {
     if (this.disposed || this.phase === "ended" || this.phase === "blocked") return;
     this.applied = 0;
     this.clearAllTimers();
+    // Bump the generation so the old socket's close handler is ignored
+    // (it must not schedule a competing reconnect after rejoin).
+    this.socketGen += 1;
     const s = this.socket;
     this.socket = null;
     if (s) s.close(1000);
