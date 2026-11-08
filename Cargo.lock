@@ -4704,6 +4704,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-stream",
+ "tokio-tungstenite",
  "tower",
  "tower-http 0.6.10",
  "tracing",
