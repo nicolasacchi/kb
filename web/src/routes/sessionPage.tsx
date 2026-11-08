@@ -3,7 +3,8 @@
 // the panel (filled into `<TerminalSlot>` later). Every number comes from
 // the card (surfaced, never scored); the SPA builds no command string and
 // no transcript excerpt. One column at every width; sections are
-// `<details>` — collapsed at 390px (useIsMobile), open at >=1280px.
+// `<details>` — open on desktop (viewport wider than useIsMobile's 860px
+// MOBILE_MAX_WIDTH), collapsed on mobile.
 
 import { useMemo, type ReactNode } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
@@ -77,7 +78,7 @@ function Unavailable({ reason }: { reason?: string }) {
   );
 }
 
-function ChildrenSection({
+export function ChildrenSection({
   sid,
   lane,
   open,
@@ -95,8 +96,13 @@ function ChildrenSection({
     }),
     [sid, lane],
   );
+  // FXA4 — the key carries a lane generation (total + next cursor + first
+  // row id) so a bridge-invalidated card with a NEW lane resets the paged
+  // query instead of keeping stale pageParams and skipping/duplicating
+  // children on the next "load more".
+  const generation = `${lane.total}:${lane.next_after ?? ""}:${lane.items[0]?.session_id ?? ""}`;
   const q = useInfiniteQuery({
-    queryKey: ["sessions", "card", sid, "children"] as const,
+    queryKey: ["sessions", "card", sid, "children", generation] as const,
     enabled: lane.available,
     initialPageParam: null as string | null,
     queryFn: ({ pageParam, signal }): Promise<ChildrenResponse> =>
@@ -137,6 +143,25 @@ function ChildrenSection({
               </li>
             ))}
           </ul>
+          {q.error && (
+            <>
+              <p
+                className="kb-sp__caption"
+                data-testid="session-children-error"
+                role="alert"
+              >
+                {q.error instanceof Error ? q.error.message : "could not load more children"}
+              </p>
+              <button
+                type="button"
+                className="kb-sp__more"
+                data-testid="session-children-retry"
+                onClick={() => void q.refetch()}
+              >
+                retry
+              </button>
+            </>
+          )}
           {q.hasNextPage && (
             <button
               type="button"
@@ -163,7 +188,7 @@ export default function SessionPage() {
   // The outcome section reuses the inspector's ChecksSection, which needs
   // the row+detail pair — the card summary is not a SessionRow, so the
   // page fetches the existing detail hook for it.
-  const { detail } = useSessionDetail(sid ?? null);
+  const { detail, loading: detailLoading } = useSessionDetail(sid ?? null);
 
   if (!sid) {
     return (
@@ -261,7 +286,9 @@ export default function SessionPage() {
           <div className="kb-sp__body">
             <TerminalSlot
               sid={sid}
+              termId={card.terminal.term_id}
               harness={sum.harness}
+              state={card.terminal.state}
               lane={card.terminal}
             />
           </div>
@@ -279,17 +306,22 @@ export default function SessionPage() {
               </p>
             )}
             {detail && <ChecksSection row={detail} detail={detail} />}
-            {notCommitted && notCommitted.files.length > 0 && (
+            {notCommitted &&
+              (notCommitted.files.length > 0 || notCommitted.caption) && (
               <div className="kb-sp__notcommitted" data-testid="session-page-notcommitted">
-                <ul className="kb-sp__list">
-                  {notCommitted.files.map((f) => (
-                    <li key={f}>
-                      <code>{f}</code>
-                    </li>
-                  ))}
-                </ul>
+                {notCommitted.files.length > 0 && (
+                  <ul className="kb-sp__list">
+                    {notCommitted.files.map((f) => (
+                      <li key={f}>
+                        <code>{f}</code>
+                      </li>
+                    ))}
+                  </ul>
+                )}
                 {notCommitted.caption && (
-                  <p className="kb-sp__caption">{notCommitted.caption}</p>
+                  <p className="kb-sp__caption" data-testid="session-page-notcommitted-caption">
+                    {notCommitted.caption}
+                  </p>
                 )}
               </div>
             )}
@@ -308,6 +340,19 @@ export default function SessionPage() {
               <Link to={transcriptHref} data-testid="session-transcript-reader">
                 open transcript <Icon.Arrow aria-hidden="true" />
               </Link>
+            </>
+          )}
+          {!transcriptHref && (
+            <>
+              {" · "}
+              <span
+                className="kb-sp__meta"
+                data-testid="session-transcript-unavailable"
+              >
+                {detailLoading
+                  ? "transcript loading…"
+                  : "transcript unavailable"}
+              </span>
             </>
           )}
         </p>
@@ -376,14 +421,12 @@ export default function SessionPage() {
       >
         {!card.commits.available ? (
           <Unavailable reason={card.commits.reason} />
+        ) : card.commits.commits.length === 0 ? (
+          <p className="kb-sp__empty" data-testid="session-commits-empty">
+            no commits
+          </p>
         ) : (
-          <CommitsSection
-            commits={card.commits.commits.map((c) => ({
-              ...c,
-              trailers: [],
-            }))}
-            loading={false}
-          />
+          <CommitsSection commits={card.commits.commits} loading={false} />
         )}
       </Section>
 
@@ -391,6 +434,12 @@ export default function SessionPage() {
           cross-origin through the doclens client. Renders nothing when
           the corpus has no code_url. */}
       <CodeLaneSection sid={sid} kb={card.kb} />
+      {/* FXA4 — the card's `research` and `live` lanes are fetched but
+          intentionally not rendered as sections on A4: brief §3's section
+          list omits them (the inspector already surfaces research via its
+          own section, and live state is the /sessions Now band's job). No
+          `sec-research`/`sec-live` testid exists by design; the page test
+          pins the omission. Later units may add a seam here. */}
 
       <Section name="memory" title="Memory" open={open}>
         {!card.memory.available ? (

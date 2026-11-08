@@ -199,9 +199,8 @@ export async function fetchSessionsPage(
 // field-for-field from that module (same serde names, `Option` ->
 // optional, `u64`/`u32`/`i64` -> `number`), cross-checked against A3's
 // HTTP contract tests; the enum vocabularies reuse the generated types
-// (`EvidenceVerdict`, `SessionCheckOut`, `LiveState`, `Holder`,
-// `Confidence`) instead of re-declaring them. `CardCheckOut` is
-// field-identical to the generated `SessionCheckOut`.
+// (`EvidenceVerdict`, `LiveState`, `Holder`,
+// `Confidence`) instead of re-declaring them.
 
 export type SessionCard = {
   schema: string,
@@ -471,7 +470,11 @@ export async function fetchSessionCard(
 
 /// A4 — one page of a session's children (`…/children?after=&limit=`),
 /// oldest first by `(started_at, session_id)`. `next_after` is the opaque
-/// cursor for the following page (null on the last page).
+/// cursor for the following page (null on the last page). FXA4: failures
+/// THROW with the server's reason (problem+json `title: detail`, else
+/// `<status> <statusText>`), mirroring `fetchSessionCard` — swallowing a
+/// non-2xx into an empty fallback left the page showing the card lane's
+/// "N total" header with zero rows and no error caption.
 export async function fetchSessionChildren(
   sessionId: string,
   opts: { after?: string; limit?: number } = {},
@@ -485,7 +488,17 @@ export async function fetchSessionChildren(
     `${currentDaemonBase()}/api/sessions/${encodeURIComponent(sessionId)}/children${qs ? `?${qs}` : ""}`,
     { headers: { Accept: "application/json" }, signal },
   );
-  return jsonOrEmpty<ChildrenResponse>(r, { session_id: sessionId, total: 0, items: [], next_after: null });
+  if (!r.ok) {
+    let reason = `${r.status} ${r.statusText}`;
+    try {
+      const p = (await r.json()) as { title?: string; detail?: string };
+      if (p.title) reason = `${p.title}: ${p.detail ?? ""}`;
+    } catch {
+      // Unparseable body — the status line above is the reason.
+    }
+    throw new Error(reason);
+  }
+  return (await r.json()) as ChildrenResponse;
 }
 
 // W3.A/P4 — the projects facet: one card per registry entry / auto-project.

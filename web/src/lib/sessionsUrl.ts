@@ -19,6 +19,11 @@
 // Empty / null / undefined axes are omitted, exactly like `galleryUrl`, so a
 // bare `sessionsUrl()` is `/sessions` and the landing URL only ever carries
 // the axes the caller actually set.
+/// FXA4 — the `/sessions` route's scroll-restoration ephemeral params
+/// (the single source of truth; `routes/sessions.tsx` imports it).
+/// `tree` is deliberately ABSENT: flat vs collapsed is a different list,
+/// so `tree=flat` must change the scroll key (brief A4 §4).
+export const SESSIONS_SCROLL_EPHEMERAL: readonly string[] = ["focus", "follow"];
 
 export type SessionsView = "projects" | "list" | "threads" | "work";
 

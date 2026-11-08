@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import SessionPage from "./sessionPage";
+import SessionPage, { ChildrenSection } from "./sessionPage";
 import type { SessionDetail } from "../api/sessions";
 const SID = "abcdef0123456789";
 
@@ -398,5 +398,309 @@ describe("SessionPage", () => {
     expect(back.querySelector("svg")).toBeTruthy();
     expect(container.textContent).not.toContain("←");
     expect(container.textContent).not.toContain("→");
+  });
+
+  it("FXA4: renders no terminal section for an available+admitted live lane", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        card: fullCard({
+          terminal: { available: true, admitted: true, term_id: "abc123", state: "working" },
+        }),
+      }),
+    );
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("session-sec-resume")).toBeTruthy(),
+    );
+    expect(screen.queryByTestId("session-sec-terminal")).toBeNull();
+  });
+
+  it("FXA4: capped-scan caption renders verbatim when the file list is empty", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        card: fullCard({
+          outcome: {
+            available: true,
+            last_assistant_text: "Shipped.",
+            verdict: "verified",
+            checks: [],
+            not_committed: {
+              files: [],
+              commits_considered: 20,
+              commits_total: 25,
+              capped: true,
+              unresolved_commits: 0,
+              caption: "checked the newest 20 of 25 commits",
+            },
+          },
+        }),
+      }),
+    );
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("session-sec-outcome")).toBeTruthy(),
+    );
+    expect(screen.getByTestId("session-page-notcommitted-caption").textContent).toBe(
+      "checked the newest 20 of 25 commits",
+    );
+  });
+
+  it("FXA4: a children load-more failure shows an error caption, not silence", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown) => {
+        const u = String(url);
+        if (u.endsWith("/card")) {
+          return { ok: true, status: 200, statusText: "OK", json: async () => fullCard() } as Response;
+        }
+        if (u.includes("/children")) {
+          return {
+            ok: false,
+            status: 500,
+            statusText: "Internal Server Error",
+            json: async () => ({ title: "Boom", detail: "children down" }),
+          } as Response;
+        }
+        if (u.endsWith(`/api/sessions/${SID}`)) {
+          return { ok: true, status: 200, statusText: "OK", json: async () => DETAIL } as Response;
+        }
+        return { ok: false, status: 404, statusText: "Not Found", json: async () => ({}) } as Response;
+      }),
+    );
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("session-children-total")).toBeTruthy(),
+    );
+    await screen.findByText("Child one");
+    screen.getByTestId("session-children-more").click();
+    await waitFor(() =>
+      expect(screen.getByTestId("session-children-error")).toBeTruthy(),
+    );
+    expect(screen.getByTestId("session-children-error").textContent).toContain(
+      "Boom: children down",
+    );
+  });
+
+  it("FXA4: load-more sends limit=50 alongside the after cursor", async () => {
+    const fetchFn = mockFetch({
+      card: fullCard(),
+      childrenPage: () => ({
+        session_id: SID,
+        total: 2,
+        items: [
+          {
+            session_id: "child-2",
+            display_name: "Child two",
+            started_at: 1_700_000_200,
+            ended_at: 1_700_000_300,
+            harness: "claude",
+            files_edited_count: 1,
+            tool_calls: 2,
+          },
+        ],
+        next_after: null,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchFn);
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("session-children-total")).toBeTruthy(),
+    );
+    await screen.findByText("Child one");
+    screen.getByTestId("session-children-more").click();
+    await waitFor(() => expect(screen.getByText("Child two")).toBeTruthy());
+    const childrenUrl = fetchFn.mock.calls
+      .map((c) => String(c[0]))
+      .find((u) => u.includes("/children"));
+    const params = new URL(childrenUrl!, "http://x").searchParams;
+    expect(params.get("after")).toBe("1700000010:child-1");
+    expect(params.get("limit")).toBe("50");
+  });
+
+  it("FXA4: a lane change after page 2 resets pagination (no stale cursor)", async () => {
+    // Direct ChildrenSection test: load page 2, then swap the lane object
+    // (as a bridge-invalidated card refetch does) and assert page 0 re-seeds
+    // with the new first page instead of keeping the stale cursor.
+    const lane1 = fullCard().children as {
+      available: boolean; total: number;
+      items: { session_id: string; display_name: string; started_at: number; ended_at: number; harness: string; files_edited_count: number; tool_calls: number }[];
+      next_after: string;
+    };
+    const lane2 = {
+      available: true,
+      total: 3,
+      items: [{
+        session_id: "child-9",
+        display_name: "Child nine",
+        started_at: 1_700_000_900,
+        ended_at: 1_700_001_000,
+        harness: "claude",
+        files_edited_count: 1,
+        tool_calls: 1,
+      }],
+      next_after: undefined as string | undefined,
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown) => {
+        const u = String(url);
+        if (u.includes("/children")) {
+          return {
+            ok: true, status: 200, statusText: "OK",
+            json: async () => ({
+              session_id: SID, total: 2,
+              items: [{
+                session_id: "child-2", display_name: "Child two",
+                started_at: 1_700_000_200, ended_at: 1_700_000_300,
+                harness: "claude", files_edited_count: 1, tool_calls: 2,
+              }],
+              next_after: null,
+            }),
+          } as Response;
+        }
+        return { ok: false, status: 404, statusText: "Not Found", json: async () => ({}) } as Response;
+      }),
+    );
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { rerender } = render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={[`/sessions/${SID}`]}>
+          <Routes>
+            <Route path="/sessions/:sid" element={<ChildrenSection sid={SID} lane={lane1} open />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await screen.findByText("Child one");
+    screen.getByTestId("session-children-more").click();
+    await waitFor(() => expect(screen.getByText("Child two")).toBeTruthy());
+    // Lane changes: the generation in the query key must reset pagination.
+    rerender(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={[`/sessions/${SID}`]}>
+          <Routes>
+            <Route path="/sessions/:sid" element={<ChildrenSection sid={SID} lane={lane2 as never} open />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(screen.getByText("Child nine")).toBeTruthy());
+    expect(screen.queryByText("Child two")).toBeNull();
+  });
+
+  it("FXA4: zero-commits card shows an explicit caption, not an empty section", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        card: fullCard({
+          commits: { available: true, commits: [], total: 0 },
+        }),
+      }),
+    );
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("session-sec-commits")).toBeTruthy(),
+    );
+    expect(screen.getByTestId("session-commits-empty").textContent).toContain(
+      "no commits",
+    );
+  });
+
+  it("FXA4: research and live lanes are intentionally not sections", async () => {
+    vi.stubGlobal("fetch", mockFetch({ card: fullCard() }));
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("session-sec-resume")).toBeTruthy(),
+    );
+    expect(screen.queryByTestId("session-sec-research")).toBeNull();
+    expect(screen.queryByTestId("session-sec-live")).toBeNull();
+  });
+
+  it("FXA4: a failed detail fetch still shows the replay link plus an unavailable caption", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown) => {
+        const u = String(url);
+        if (u.endsWith("/card")) {
+          return { ok: true, status: 200, statusText: "OK", json: async () => fullCard() } as Response;
+        }
+        // Detail endpoint fails (500 -> fetchSession returns null).
+        if (u.endsWith(`/api/sessions/${SID}`)) {
+          return {
+            ok: false,
+            status: 500,
+            statusText: "Internal Server Error",
+            json: async () => ({}),
+          } as Response;
+        }
+        if (u.includes("/children")) {
+          return {
+            ok: true, status: 200, statusText: "OK",
+            json: async () => ({ session_id: SID, total: 0, items: [], next_after: null }),
+          } as Response;
+        }
+        return { ok: false, status: 404, statusText: "Not Found", json: async () => ({}) } as Response;
+      }),
+    );
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("session-sec-transcript")).toBeTruthy(),
+    );
+    expect(screen.getByTestId("session-transcript-replay")).toBeTruthy();
+    await waitFor(() =>
+      expect(screen.getByTestId("session-transcript-unavailable")).toBeTruthy(),
+    );
+    expect(screen.queryByTestId("session-transcript-reader")).toBeNull();
+  });
+
+  it("FXA4: non-JSON 500 card surfaces the status line as the StateCard reason", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown) => {
+        const u = String(url);
+        if (u.endsWith("/card")) {
+          return {
+            ok: false,
+            status: 500,
+            statusText: "Internal Server Error",
+            json: async () => {
+              throw new SyntaxError("Unexpected token <");
+            },
+          } as Response;
+        }
+        return { ok: false, status: 404, statusText: "Not Found", json: async () => ({}) } as Response;
+      }),
+    );
+    const { container } = renderPage();
+    await waitFor(() =>
+      expect(container.textContent).toContain("Could not load session"),
+    );
+    expect(container.textContent).toContain("500 Internal Server Error");
+  });
+
+  it("FXA4: invalid-JSON success card surfaces an error StateCard (no crash)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown) => {
+        const u = String(url);
+        if (u.endsWith("/card")) {
+          return {
+            ok: true,
+            status: 200,
+            statusText: "OK",
+            json: async () => {
+              throw new SyntaxError("Unexpected token <");
+            },
+          } as Response;
+        }
+        return { ok: false, status: 404, statusText: "Not Found", json: async () => ({}) } as Response;
+      }),
+    );
+    const { container } = renderPage();
+    await waitFor(() =>
+      expect(container.textContent).toContain("Could not load session"),
+    );
   });
 });
