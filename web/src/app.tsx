@@ -51,6 +51,7 @@ const ListsRoute = lazy(() => import("./routes/lists"));
 const ListDetailRoute = lazy(() => import("./routes/listDetail"));
 const BoardRoute = lazy(() => import("./routes/board"));
 const SessionsRoute = lazy(() => import("./routes/sessions"));
+const SessionPageRoute = lazy(() => import("./routes/sessionPage"));
 const NotesRoute = lazy(() => import("./routes/notes"));
 const SearchRoute = lazy(() => import("./routes/search"));
 const InboxRoute = lazy(() => import("./routes/inbox"));
@@ -331,6 +332,16 @@ export default function App() {
           element={
             <RailShell rail={false}>
               <SessionsRoute />
+            </RailShell>
+          }
+        />
+        {/* A4 — one session's page (`kb-session-card/1`). Full page, not a
+            sheet; no hotkey — `g s` stays on /sessions. */}
+        <Route
+          path="/sessions/:sid"
+          element={
+            <RailShell rail={false}>
+              <SessionPageRoute />
             </RailShell>
           }
         />

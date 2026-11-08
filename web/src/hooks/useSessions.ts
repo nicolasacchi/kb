@@ -88,7 +88,9 @@ export type UseSessions = {
 // `sessionsUrl.ts` is the ONLY emitter, `folder` stays legacy-inbound) and
 // `substance` (S1's csv triage filter). The query key carries every axis so
 // each view is a distinct cache entry, and the SSE refresh below
-// invalidates them all.
+// invalidates them all. A4 adds the trailing `tree`: only `"flat"` joins the
+// key (a seventh slot, so flat vs collapsed are distinct cache entries);
+// the collapsed default keeps the existing key byte-identical.
 export function useSessions(
   folder?: string,
   query?: string,
@@ -98,11 +100,12 @@ export function useSessions(
   project?: string,
   substance?: string,
   harness?: string,
+  tree?: "collapsed" | "flat",
 ): UseSessions {
   const queryClient = useQueryClient();
   const key =
-    folder || query || project || substance || harness
-      ? ([...KEY, folder ?? "", query ?? "", project ?? "", substance ?? "", harness ?? ""] as const)
+    folder || query || project || substance || harness || tree === "flat"
+      ? ([...KEY, folder ?? "", query ?? "", project ?? "", substance ?? "", harness ?? "", ...(tree === "flat" ? ["flat"] : [])] as const)
       : KEY;
   const q = useInfiniteQuery({
     queryKey: key,
@@ -110,7 +113,7 @@ export function useSessions(
     initialPageParam: {} as PageParam,
     queryFn: ({ pageParam, signal }) =>
       fetchSessionsPage(
-        { ...pageParam, limit: PAGE_SIZE, folder, q: query, project, substance, harness },
+        { ...pageParam, limit: PAGE_SIZE, folder, q: query, project, substance, harness, tree },
         signal,
       ),
     getNextPageParam: (last: SessionsListResponse): PageParam | undefined =>
