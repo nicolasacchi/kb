@@ -55,6 +55,20 @@ pub struct RunnerConfig {
     pub default_rows: u16,
     /// Pixel size per cell, as `WxH` (for winsize pixel fields).
     pub cell_px: String,
+    /// Responder foreground `#RRGGBB` (OSC 10 reply).
+    pub responder_fg: String,
+    /// Responder background `#RRGGBB` (OSC 11 reply).
+    pub responder_bg: String,
+    /// Whether the profile is dark (theme report).
+    pub responder_dark: bool,
+    /// Cap on hidden viewers per session.
+    pub max_viewers_per_session: usize,
+    /// Cap on paste bytes per call.
+    pub paste_max_bytes: usize,
+    /// Enter gate: output must be quiet this long (ms).
+    pub enter_quiet_ms: u64,
+    /// Enter gate: give up after this long (ms).
+    pub enter_max_wait_ms: u64,
     /// Shell the harness runs under (launch profiles land in T10).
     pub pane_shell: PathBuf,
     /// Args for `pane_shell` (the T10 launch profiles consume both).
@@ -100,6 +114,27 @@ struct Cli {
     /// Pixel size per cell, as `WxH`.
     #[arg(long, default_value = "9x18")]
     cell_px: String,
+    /// Responder foreground colour.
+    #[arg(long, default_value = "#d4d4d4")]
+    responder_fg: String,
+    /// Responder background colour.
+    #[arg(long, default_value = "#1e1e1e")]
+    responder_bg: String,
+    /// Dark profile (theme report).
+    #[arg(long, value_parser = clap::value_parser!(bool), default_value = "true")]
+    responder_dark: bool,
+    /// Cap on hidden viewers per session.
+    #[arg(long, default_value_t = 8)]
+    max_viewers_per_session: usize,
+    /// Cap on paste bytes per call.
+    #[arg(long, default_value_t = 65536)]
+    paste_max_bytes: usize,
+    /// Enter gate: quiet window (ms).
+    #[arg(long, default_value_t = 400)]
+    enter_quiet_ms: u64,
+    /// Enter gate: max wait (ms).
+    #[arg(long, default_value_t = 5000)]
+    enter_max_wait_ms: u64,
 }
 
 fn home() -> String {
@@ -135,6 +170,13 @@ impl RunnerConfig {
             default_cols: cli.default_cols,
             default_rows: cli.default_rows,
             cell_px: cli.cell_px,
+            responder_fg: cli.responder_fg,
+            responder_bg: cli.responder_bg,
+            responder_dark: cli.responder_dark,
+            max_viewers_per_session: cli.max_viewers_per_session,
+            paste_max_bytes: cli.paste_max_bytes,
+            enter_quiet_ms: cli.enter_quiet_ms,
+            enter_max_wait_ms: cli.enter_max_wait_ms,
             pane_shell: PathBuf::from("/bin/sh"),
             pane_shell_args: vec!["-c".to_string()],
         }
@@ -155,8 +197,23 @@ impl RunnerConfig {
             default_cols: 120,
             default_rows: 40,
             cell_px: "9x18".to_string(),
+            responder_fg: "#d4d4d4".to_string(),
+            responder_bg: "#1e1e1e".to_string(),
+            responder_dark: true,
+            max_viewers_per_session: 8,
+            paste_max_bytes: 65536,
+            enter_quiet_ms: 400,
+            enter_max_wait_ms: 5000,
             pane_shell: PathBuf::from("/bin/sh"),
             pane_shell_args: vec!["-c".to_string()],
+        }
+    }
+    /// The responder profile for the anchor and every hidden client.
+    pub fn responder_cfg(&self) -> crate::responder::ResponderCfg {
+        crate::responder::ResponderCfg {
+            fg: self.responder_fg.clone(),
+            bg: self.responder_bg.clone(),
+            dark: self.responder_dark,
         }
     }
 
@@ -229,5 +286,33 @@ mod tests {
             PathBuf::from("/dev/null"),
         );
         assert_eq!(cfg.cell_px_dims(), (9, 18));
+    }
+
+    #[test]
+    fn runner_config_defaults_and_unknown_keys() {
+        let cfg = RunnerConfig::test_config(
+            PathBuf::from("/tmp/kb-term-test"),
+            "/bin/true".to_string(),
+            PathBuf::from("/dev/null"),
+        );
+        assert_eq!(cfg.responder_fg, "#d4d4d4");
+        assert_eq!(cfg.responder_bg, "#1e1e1e");
+        assert!(cfg.responder_dark);
+        assert_eq!(cfg.cell_px, "9x18");
+        assert_eq!(cfg.max_viewers_per_session, 8);
+        assert_eq!(cfg.paste_max_bytes, 65536);
+        assert_eq!(cfg.enter_quiet_ms, 400);
+        assert_eq!(cfg.enter_max_wait_ms, 5000);
+        // An unknown flag is rejected by the parser (deny-unknown).
+        let bad = Cli::try_parse_from(["kb-termd", "--bogus-flag"]);
+        assert!(bad.is_err(), "unknown flags must be rejected");
+        let ok = Cli::try_parse_from(["kb-termd"]).expect("defaults must parse");
+        assert_eq!(ok.responder_fg, "#d4d4d4");
+        assert_eq!(ok.responder_bg, "#1e1e1e");
+        assert!(ok.responder_dark);
+        assert_eq!(ok.max_viewers_per_session, 8);
+        assert_eq!(ok.paste_max_bytes, 65536);
+        assert_eq!(ok.enter_quiet_ms, 400);
+        assert_eq!(ok.enter_max_wait_ms, 5000);
     }
 }

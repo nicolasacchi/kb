@@ -12,6 +12,13 @@
 //! and the runner RPC; it is pinned by golden JSON files under `tests/golden`
 //! and mirrored in TypeScript by later units, so later changes there are
 //! additive only (with the goldens updated in the same change).
+//!
+//! `pty` is the unix pty helper, `responder` answers tmux's outer-client
+//! queries on every hidden client (anchor + viewers), and `viewer` owns the
+//! one `spawn_tmux_client` both of those share.
 
+pub mod pty;
+pub mod responder;
 pub mod runner;
+pub mod viewer;
 pub mod wire;

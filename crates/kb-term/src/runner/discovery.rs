@@ -144,6 +144,7 @@ async fn describe<S: Supervisor>(runner: &Runner<S>, id: &str, _dir: &Path) -> S
         .await
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
+    entry.grid_owner = show_option(runner, &sock, "@kb_owner_grid").await;
     // Pane facts.
     let out = runner
         .tmux
@@ -154,7 +155,7 @@ async fn describe<S: Supervisor>(runner: &Runner<S>, id: &str, _dir: &Path) -> S
                 "-p",
                 "-t",
                 "kb",
-                "#{pane_pid} #{pane_dead} #{pane_dead_status} #{window_width} #{window_height}",
+                "#{pane_pid} #{pane_dead} #{pane_dead_status} #{window_width} #{window_height} #{bracket_paste_flag}",
             ],
             None,
         )
@@ -170,6 +171,7 @@ async fn describe<S: Supervisor>(runner: &Runner<S>, id: &str, _dir: &Path) -> S
                 }
                 entry.cols = parts[3].parse().ok();
                 entry.rows = parts[4].parse().ok();
+                entry.bracket_paste_flag = parts.get(5) == Some(&"1");
             }
         }
     }

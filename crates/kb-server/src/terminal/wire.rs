@@ -103,23 +103,42 @@ pub enum RunnerRequest {
     Paste {
         /// Session id.
         id: String,
+        /// Viewer the paste is attributed to.
+        viewer: String,
         /// Text to paste.
         text: String,
     },
-    /// Mark a session as entered (caller supplies the beat-derived flag).
+    /// Enter on a viewer's hidden client (caller supplies beat state).
     Enter {
         /// Session id.
         id: String,
+        /// Viewer.
+        viewer: String,
         /// Currently blocked.
         blocked: bool,
+        /// The Enter comes from the composer.
+        from_composer: bool,
     },
-    /// Send keys to a session.
+    /// Send input to a viewer's hidden client.
     Keys {
         /// Session id.
         id: String,
-        /// Key names.
-        keys: Vec<String>,
+        /// Viewer.
+        viewer: String,
+        /// Input payload.
+        input: KeyInput,
     },
+    /// Resize the session grid.
+    Resize {
+        /// Session id.
+        id: String,
+        /// Grid columns.
+        cols: u16,
+        /// Grid rows.
+        rows: u16,
+    },
+    /// Liveness probe.
+    Ping {},
     /// Read session history.
     History {
         /// Session id.
@@ -130,7 +149,7 @@ pub enum RunnerRequest {
         /// Session id.
         id: String,
     },
-    /// Take (or report) the grid size for a session.
+    /// Take the grid size for a session.
     TakeSize {
         /// Session id.
         id: String,
@@ -139,7 +158,58 @@ pub enum RunnerRequest {
         /// Grid rows.
         rows: u16,
         /// Who is taking the grid.
-        by: String,
+        owner: String,
+        /// Override a foreign owner.
+        #[serde(default)]
+        force: bool,
+    },
+    /// Release the grid size for a session.
+    ReleaseSize {
+        /// Session id.
+        id: String,
+        /// The owner releasing the grid.
+        owner: String,
+    },
+    /// Report the grid size and owner for a session.
+    Grid {
+        /// Session id.
+        id: String,
+    },
+    /// Open a hidden input client for a viewer.
+    ViewerOpen {
+        /// Session id.
+        id: String,
+        /// Viewer id.
+        viewer: String,
+    },
+    /// Close a viewer's hidden client.
+    ViewerClose {
+        /// Session id.
+        id: String,
+        /// Viewer id.
+        viewer: String,
+    },
+    /// Fetch media by sha256.
+    Media {
+        /// sha256 of the media bytes.
+        sha256: String,
+    },
+}
+
+/// Key input for the `keys` RPC (kind-tagged; unknown fields rejected).
+/// Mirrors `kb-term`'s `KeyInput`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+pub enum KeyInput {
+    /// Raw bytes, base64-encoded (written verbatim).
+    Bytes {
+        /// Base64 of the bytes.
+        bytes_b64: String,
+    },
+    /// Named keys from the closed table.
+    Named {
+        /// Key names.
+        named: Vec<String>,
     },
 }
 

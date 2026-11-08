@@ -97,6 +97,8 @@ pub async fn kill_session<S: Supervisor>(
     // them for the process-group signals); systemd ignores them.
     let (pane_pid, server_pid) = discovery::pane_and_server_pids(runner, id).await;
     runner.take_anchor(id).await;
+    // Hidden viewers go with the session.
+    runner.close_viewers_for(id).await;
     runner
         .supervisor
         .stop(

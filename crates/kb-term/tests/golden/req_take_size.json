@@ -1,1 +1,1 @@
-{"op":"take_size","id":"abcd1234","cols":120,"rows":40,"by":"kb-term"}
+{"op":"take_size","id":"abcd1234","cols":120,"rows":40,"owner":"kb-term","force":false}
