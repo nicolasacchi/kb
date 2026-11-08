@@ -577,16 +577,45 @@ fn term_int_reseed_after_long_pause() {
         .spawn()
         .expect("spawn driver");
     let mut max_rss: u64 = 0;
-    let mut stalled = false;
+    let mut stalled_at: Option<Instant> = None;
+    let mut stopped_at: Option<Instant> = None;
+    let mut last_cont: Option<Instant> = None;
     let deadline = Instant::now() + Duration::from_secs(120);
     loop {
-        if ready.exists() {
-            stalled = true;
+        if stalled_at.is_none() && ready.exists() {
+            stalled_at = Some(Instant::now());
         }
-        if stalled {
+        if let Some(_t0) = stalled_at {
             if let Some(r) = rss_bytes(pid) {
                 max_rss = max_rss.max(r);
             }
+        }
+        // The driver SIGSTOPs itself once the ready file appears; resume it
+        // only after it has verifiably stopped for >pause-after (2s)
+        // (/proc State poll), so pause-after's timer elapses under the
+        // stopped process. Repeated SIGCONTs: a SIGCONT to a running
+        // process is a no-op; fallback resumes 5s after ready anyway,
+        // covering a /proc poll failure.
+        if stalled_at.is_some() && stopped_at.is_none() {
+            let st =
+                std::fs::read_to_string(format!("/proc/{}/status", child.id())).unwrap_or_default();
+            if st
+                .lines()
+                .any(|l| l.starts_with("State:") && l.contains("(stopped)"))
+            {
+                stopped_at = Some(Instant::now());
+            }
+        }
+        let resume_now = match (stalled_at, stopped_at) {
+            (Some(_), Some(t_stop)) => t_stop.elapsed() >= Duration::from_millis(2500),
+            (Some(t_ready), None) => t_ready.elapsed() >= Duration::from_millis(5000),
+            (None, _) => false,
+        };
+        if resume_now && last_cont.map_or(true, |t| t.elapsed() >= Duration::from_millis(500)) {
+            let _ = Command::new("kill")
+                .args(["-CONT", &child.id().to_string()])
+                .status();
+            last_cont = Some(Instant::now());
         }
         match child.try_wait() {
             Ok(Some(_)) => break,

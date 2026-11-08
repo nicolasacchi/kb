@@ -228,7 +228,7 @@ test('reseed_restores_alt_screen_region_and_wrap_modes', async () => {
     // CUP is the last restore step: its row is relative to the region top.
     expect(cursorOf(twin).y).toBe(3);
     // restore byte order: region first, CUP last.
-    const bytes = modeRestoreBytes(r.mode, 2, 1);
+    const bytes = modeRestoreBytes(r.mode, 2, 1, 24);
     expect(bytes.startsWith('\x1b[3;20r')).toBe(true);
     expect(bytes.endsWith('\x1b[2;3H')).toBe(true);
     expect(bytes.indexOf('\x1b[3;20r')).toBeLessThan(bytes.indexOf('\x1b[?6h'));

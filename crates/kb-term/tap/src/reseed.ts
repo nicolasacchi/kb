@@ -158,11 +158,21 @@ function parseMode(lines: string[] | undefined): ModeState | null {
 
 /** Mode restore bytes: DECSTBM, origin, other modes, then an absolute CUP
  * LAST (CSI r homes the cursor; with origin mode the row is relative to the
- * region top). */
-export function modeRestoreBytes(mode: ModeState | null, cursorX: number, cursorY: number): string {
+ * region top). A full-screen region (1..rows) is deliberately NOT emitted:
+ * it is exactly the twin's default scroll region, and the byte round-trip
+ * provably corrupts the state (on term_int_reseed_pending_wrap the extra
+ * `CSI 1;30r` left the reseeded twin with a different `scrollBottom` than
+ * a byte-faithful reference twin -- CI run 42430279772 -- even though the
+ * tmux pane never set a scroll region and reported the full window). */
+export function modeRestoreBytes(mode: ModeState | null, cursorX: number, cursorY: number, rows: number): string {
   let s = '';
   if (mode) {
-    if (mode.scrollTop !== null && mode.scrollBottom !== null && mode.scrollTop <= mode.scrollBottom) {
+    if (
+      mode.scrollTop !== null &&
+      mode.scrollBottom !== null &&
+      mode.scrollTop <= mode.scrollBottom &&
+      !(mode.scrollTop === 1 && mode.scrollBottom === rows)
+    ) {
       s += `${ESC}[${mode.scrollTop};${mode.scrollBottom}r`;
     }
     if (mode.origin !== null) s += `${ESC}[?6${mode.origin ? 'h' : 'l'}`;
@@ -442,7 +452,7 @@ export class Reseeder {
         return { reason: 'normal-buffer line count overflow' };
       }
     }
-    await feed(modeRestoreBytes(mode, b.cursorX, b.cursorY));
+    await feed(modeRestoreBytes(mode, b.cursorX, b.cursorY, this.twin.rows));
     for (const chunk of active.queue) {
       await feedBytes(chunk);
     }

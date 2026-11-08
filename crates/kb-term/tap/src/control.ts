@@ -161,9 +161,11 @@ export class Control {
     }
   }
 
-  /** Hold/resume the read loop. While held, unread output accumulates in
-   * tmux's client buffer so tmux pauses it after pause-after seconds; this
-   * is what term_int_reseed_after_long_pause uses to stall the tap. */
+  /** Hold/resume the read loop. The integration driver stalls the tap with
+   * SIGSTOP now (a userspace hold does not stop Bun's stream from
+   * prefetching the pipe, so tmux never saw the stall -- CI run
+   * 42430279772); this remains a shutdown helper: stop() clears any hold
+   * before killing the process. */
   setHeld(held: boolean): void {
     this.held = held;
     if (!held && this.resumeWait) {
