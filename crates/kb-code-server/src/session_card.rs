@@ -462,7 +462,10 @@ pub async fn session_card_route(
     State(state): State<SharedState>,
     Query(p): Query<SessionCardParams>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let sid = p.sid.as_deref().unwrap_or("").trim();
+    // The raw sid is validated: no trim. A padded " s-p01" is a malformed
+    // token (first char is a space, not alphanumeric), not a lenient alias.
+    // The raw repo filter is matched exactly, untrimmed.
+    let sid = p.sid.as_deref().unwrap_or("");
     if !is_plain_session_token(sid) {
         // Never echo a rejected sid (untrusted input, no consumer needs it).
         return Err(ApiError::bad_request(
@@ -470,17 +473,16 @@ pub async fn session_card_route(
         ));
     }
     let now_unix = chrono::Utc::now().timestamp();
-    let repo_filter: Option<usize> =
-        match p.repo.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
-            Some(name) => Some(
-                state
-                    .repos
-                    .iter()
-                    .position(|r| r.name == name)
-                    .ok_or_else(|| ApiError::bad_request("unknown repo"))?,
-            ),
-            None => None,
-        };
+    let repo_filter: Option<usize> = match p.repo.as_deref().filter(|r| !r.is_empty()) {
+        Some(name) => Some(
+            state
+                .repos
+                .iter()
+                .position(|r| r.name == name)
+                .ok_or_else(|| ApiError::bad_request("unknown repo"))?,
+        ),
+        None => None,
+    };
 
     // Commits and presence run concurrently; both are kb reads through the
     // one client. Store readers go through `run_blocking` (the store
@@ -642,10 +644,20 @@ async fn commits_lane_fetch(
                 .iter()
                 .map(|it| (it.repo.clone(), it.sha.clone()))
                 .collect();
+            // Unmirrored kb items carry an empty repo label (""); a cache
+            // row for the same sha under its real repo name must still
+            // dedupe (sha alone). Mirrored items dedupe by (repo, sha) as
+            // the spec letters; wire output keeps the empty label.
+            let unmirrored_shas: HashSet<String> = items
+                .iter()
+                .filter(|it| it.repo.is_empty())
+                .map(|it| it.sha.clone())
+                .collect();
             let mut extras: Vec<(String, String, CommitSessionRow)> = cache
                 .into_iter()
                 .filter(|(repo, sha, _)| {
                     !seen.contains(&(repo.clone(), sha.clone()))
+                        && !unmirrored_shas.contains(sha)
                         && repo_filter.is_none_or(|f| state.repos[f].name == *repo)
                 })
                 .collect();
@@ -685,7 +697,13 @@ async fn reviews_lane_fetch(
     let fetched = state
         .store
         .run_blocking(move |s| {
-            let a = s.reviews_for_session(&sid, repo_name.as_deref(), MAX_REVIEWS);
+            // Unbounded scan (`usize::MAX` => SQLite LIMIT -1 = no limit):
+            // `reviews_lane` does the only capping, so `ReviewsLane.total`
+            // is the full count past MAX_REVIEWS, and the doc-author union
+            // dedupes against the FULL session_id id set (basis (a) wins
+            // even for rows older than the newest MAX_REVIEWS). Mirrors the
+            // commits cache scan above.
+            let a = s.reviews_for_session(&sid, repo_name.as_deref(), usize::MAX);
             let doc_ids = s.review_ids_authored_by_session(&sid);
             match (a, doc_ids) {
                 (Ok(a), Ok(doc_ids)) => {
@@ -1099,6 +1117,43 @@ mod tests {
         }
     }
 
+    fn touch(project: &str, worktree: Option<&str>, rel: &str, sid: &str, age: i64) -> LiveTouch {
+        LiveTouch {
+            project: project.to_string(),
+            worktree: worktree.map(str::to_string),
+            rel: rel.to_string(),
+            session_id: sid.to_string(),
+            harness: "fixture".to_string(),
+            state: "idle".to_string(),
+            age_secs: age,
+        }
+    }
+
+    #[test]
+    fn presence_counts_distinct_repo_worktree_rel_once() {
+        // Two touches sharing (repo, worktree, rel) count as ONE file; a
+        // different worktree or a different rel counts again. A mutant that
+        // counts one per touch (dropping the HashSet) yields 4 here.
+        let repos = vec![repo_entry("fixture")];
+        let touches = vec![
+            touch("fixture", None, "src/lib.rs", SID, 5),
+            touch("fixture", None, "src/lib.rs", SID, 7), // duplicate pair
+            touch("fixture", Some("wt1"), "src/lib.rs", SID, 9), // other worktree
+            touch("fixture", None, "docs/readme.md", SID, 11), // other rel
+        ];
+        let lane = presence_lane(&touches, &repos, SID, false);
+        assert!(lane.available);
+        assert_eq!(lane.files, 3, "distinct (repo, worktree, rel) pairs only");
+        assert_eq!(lane.newest_age_secs, 5);
+        assert_eq!(lane.caption, None);
+
+        // Another session's touches never count toward this sid.
+        let other = vec![touch("fixture", None, "src/lib.rs", "sess-other", 3)];
+        let lane = presence_lane(&other, &repos, SID, false);
+        assert_eq!(lane.files, 0);
+        assert_eq!(lane.newest_age_secs, 0);
+    }
+
     #[test]
     fn card_serialization_has_no_path_or_text_fields() {
         let card = SessionCardOut {
@@ -1106,16 +1161,30 @@ mod tests {
             sid: SID.to_string(),
             now_unix: 1,
             commits: cap_commits(
-                vec![CommitItem {
-                    repo: "fixture".to_string(),
-                    sha: SHA_A.to_string(),
-                    subject: Some("subject line".to_string()),
-                    visible: true,
-                    caption: None,
-                    confidence: Confidence::Trailer,
-                    via: "commit-trailer".to_string(),
-                    attributed_here: true,
-                }],
+                vec![
+                    CommitItem {
+                        repo: "fixture".to_string(),
+                        sha: SHA_A.to_string(),
+                        subject: Some("subject line".to_string()),
+                        visible: true,
+                        caption: None,
+                        confidence: Confidence::Trailer,
+                        via: "commit-trailer".to_string(),
+                        attributed_here: true,
+                    },
+                    // A caption-carrying item so the collected key set
+                    // covers `caption` exactly like the golden fixture.
+                    CommitItem {
+                        repo: "fixture".to_string(),
+                        sha: SHA_C.to_string(),
+                        subject: Some("hidden commit".to_string()),
+                        visible: false,
+                        caption: Some("commit not in this checkout".to_string()),
+                        confidence: Confidence::None,
+                        via: "not-in-checkout".to_string(),
+                        attributed_here: false,
+                    },
+                ],
                 None,
             ),
             reviews: reviews_lane(vec![ReviewItem {
@@ -1150,6 +1219,18 @@ mod tests {
                 "key set must not contain {banned:?}: {keys:?}"
             );
         }
+        // Recursive key-set equality against the golden fixture: any new,
+        // renamed or dropped wire field fails here, not only the banned
+        // literals above (a stray `foo` field would otherwise pass).
+        let golden: serde_json::Value =
+            serde_json::from_str(include_str!("../../../tests/fixtures/session-card-v1.json"))
+                .unwrap();
+        let mut golden_keys = std::collections::BTreeSet::new();
+        key_set(&golden, &mut golden_keys);
+        assert_eq!(
+            keys, golden_keys,
+            "wire key set must equal the golden fixture key set"
+        );
     }
 
     #[test]
