@@ -43,10 +43,29 @@ async fn boot() -> Fixture {
     let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths.clone())
         .await
         .expect("serve");
-    tokio::time::sleep(Duration::from_millis(600)).await;
+    let url = format!("http://{addr}");
+    {
+        let client = reqwest::Client::new();
+        let probe = url.clone();
+        common::poll_until("daemon /api/identity", move || {
+            let client = client.clone();
+            let probe = probe.clone();
+            async move {
+                client
+                    .get(format!("{probe}/api/identity"))
+                    .send()
+                    .await
+                    .ok()?
+                    .status()
+                    .is_success()
+                    .then_some(())
+            }
+        })
+        .await;
+    }
     Fixture {
         _tmp: tmp,
-        url: format!("http://{addr}"),
+        url,
         cache,
         paths,
     }
@@ -135,7 +154,7 @@ impl Fixture {
 
 /// Test 14 — `kb sessions card` prints the daemon `text` verbatim;
 /// `--json` carries the same `text`.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn kb_sessions_card_prints_the_daemon_text_verbatim() {
     let fx = boot().await;
     fx.seed();
@@ -159,7 +178,7 @@ async fn kb_sessions_card_prints_the_daemon_text_verbatim() {
 
 /// A missing session is the not-found error other `kb sessions` verbs
 /// use — a failure, not an empty card.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn kb_sessions_card_missing_session_fails() {
     let fx = boot().await;
     fx.cmd(&["card", "ghost-404"])
