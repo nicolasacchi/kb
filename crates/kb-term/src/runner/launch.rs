@@ -5,8 +5,10 @@
 //! 3. create the session (the pane command is the gate: it waits on the
 //!    `kbterm-go` channel so the harness emits no byte before the tap hears)
 //! 4. `set-option -g` the `@kb_*` user options (never env/argv/secrets)
-//! 5. start the tap and wait for a control-mode client
-//! 6. spawn the anchor and wait for its pid in `list-clients`
+//! 5. spawn the anchor (first client: tmux answers pane OSC 10/11 from
+//!    the first client's recorded colours, so the anchor attaches
+//!    before the tap) and wait for its pid in `list-clients`
+//! 6. start the tap and wait for a control-mode client
 //! 7. `wait-for -S kbterm-go` releases the harness; read `pane_pid`
 //!
 //! After step 2, any failure runs a best-effort teardown and returns the
@@ -310,7 +312,16 @@ async fn launch_locked<S: Supervisor>(
     // The pane already exists (the gate holds the harness); name its pid
     // in the tap-timeout error so diagnostics can confirm the teardown.
     let pane_pid_early: u32 = read_pane_pid(runner, &sock).await.unwrap_or_default();
-    // Step 5: tap stage.
+    // Step 5: anchor FIRST (it is the first client in tmux's list, and
+    // tmux answers a pane's OSC 10/11 from the first attached client's
+    // recorded colours — a later control-mode tap client carries a
+    // zeroed bg that would otherwise shadow the anchor's responder
+    // answers with black). The anchor must be visible (and have
+    // answered tmux's startup queries) in list-clients before release.
+    spawn_anchor_and_wait(runner, id, spec.cols, spec.rows).await?;
+    // Step 6: tap stage. The tap still attaches before the harness is
+    // released (step 7), so it observes output from the first byte
+    // exactly as before; only the client order changes.
     if runner.cfg.require_tap {
         runner.supervisor.start_tap(id).await?;
         let ready = wait_for_control_client(
@@ -325,8 +336,6 @@ async fn launch_locked<S: Supervisor>(
             )));
         }
     }
-    // Step 6: anchor (must be visible in list-clients before release).
-    spawn_anchor_and_wait(runner, id, spec.cols, spec.rows).await?;
     // Step 7: release the harness.
     let out = runner
         .tmux

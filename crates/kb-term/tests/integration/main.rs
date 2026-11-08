@@ -304,11 +304,13 @@ async fn term_int_wait_for_signal_before_wait_returns() {
     let _ = child.wait();
 }
 
-// 4. Start order: tap, then anchor, then release. The harness observes
-//    exactly one control-mode (tap) and one non-control (anchor) client,
-//    and its first instruction runs after the tap attach.
+// 4. Start order: anchor first (it is the colour source for the pane),
+//    then the tap, then release. The harness observes exactly one
+//    control-mode (tap) and one non-control (anchor) client, its first
+//    instruction runs after the tap attach, and the anchor precedes the
+//    tap in list-clients order.
 #[tokio::test(flavor = "multi_thread")]
-async fn term_int_start_order_tap_then_anchor_then_release() {
+async fn term_int_start_order_anchor_then_tap_then_release() {
     let Some(tmux_bin) = require_tmux() else {
         return;
     };
@@ -352,6 +354,14 @@ async fn term_int_start_order_tap_then_anchor_then_release() {
         flags.iter().filter(|f| **f == "0").count(),
         1,
         "exactly one non-control client (the anchor): {text}"
+    );
+    // The anchor must precede the tap in list-clients order: tmux
+    // answers a pane's OSC 10/11 from the first attached client's
+    // recorded colours, and the control-mode tap carries a zeroed bg.
+    assert_eq!(
+        flags.first(),
+        Some(&"0"),
+        "anchor (non-control) must be the first client: {text}"
     );
     // The tap's attach timestamp (fake_tap.sh) precedes the harness.
     let tap_ts = std::fs::read_to_string(
@@ -1126,8 +1136,11 @@ async fn term_int_identity_is_the_kb_profile() {
     // Every non-control client is the kb profile: TERM xterm-256color,
     // termtype kb-term, no sixel. (The fake tap is a control client.)
     let sock = tr.sock(&id);
-    // The viewer client takes a moment to attach; poll until two
-    // non-control clients are visible, then read the identity below.
+    // The viewer client takes a moment to attach; also wait until tmux
+    // has processed both hidden clients' startup answers (their
+    // termtype is the kb profile only after tmux consumed the
+    // XTVERSION/OSC replies), so the pane-log assertions below run
+    // against the responder's confirmed state, not a raced one.
     let tmux_bin2 = tmux_bin.clone();
     let appeared = poll_until(Duration::from_secs(10), || {
         let tmux_bin2 = tmux_bin2.clone();
@@ -1138,22 +1151,27 @@ async fn term_int_identity_is_the_kb_profile() {
                 .arg(&sock)
                 .arg("list-clients")
                 .arg("-F")
-                .arg("#{client_control_mode}")
+                .arg("#{client_control_mode} #{client_termtype}")
                 .output();
             match out {
                 Ok(o) if o.status.success() => {
-                    String::from_utf8_lossy(&o.stdout)
-                        .lines()
-                        .filter(|l| l.trim() == "0")
-                        .count()
-                        >= 2
+                    let text = String::from_utf8_lossy(&o.stdout);
+                    let answered = text.lines().filter(|l| {
+                        let mut p = l.split_whitespace();
+                        p.next() == Some("0")
+                            && p.next().unwrap_or("").starts_with("kb-term")
+                    });
+                    answered.count() >= 2
                 }
                 _ => false,
             }
         }
     })
     .await;
-    assert!(appeared, "two non-control clients must appear");
+    assert!(
+        appeared,
+        "two non-control clients must answer with the kb profile"
+    );
     let (_, out) = tr.tmux(
         &sock,
         &[
