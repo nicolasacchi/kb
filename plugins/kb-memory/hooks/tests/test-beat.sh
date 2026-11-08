@@ -1026,9 +1026,10 @@ fi
 # --- 55. KB_TERM_ID_echoes_as_term ------------------------------------------
 p='{"session_id":"s-term-1","cwd":"/tmp/proj-a","source":"startup"}'
 g_with="$(beat_dryrun claude start "$p" KB_TERM_ID=abc123)"
-g_without="$(beat_dryrun claude start "$p")"
+# Each run spawns its own process, so the echoed pid differs between the
+# two runs; it is not part of the term contract and is ignored here.
 if [ "$(jget "$g_with" '.term')" = "abc123" ] \
-   && [ "$(printf '%s' "$g_with" | jq -c 'del(.at, .term)')" = "$(printf '%s' "$g_without" | jq -c 'del(.at, .term)')" ]; then
+   && [ "$(printf '%s' "$g_with" | jq -c 'del(.at, .term, .pid)')" = "$(printf '%s' "$g_without" | jq -c 'del(.at, .term, .pid)')" ]; then
   ok "KB_TERM_ID_echoes_as_term"
 else
   bad "KB_TERM_ID_echoes_as_term (got: $g_with)"
