@@ -177,8 +177,12 @@ async function main(): Promise<void> {
   // this promise (with a manual-continue fallback if tmux never emits
   // %pause for the explicit pause in this run).
   let hookReseed: Promise<ReseededResult> | null = null;
+  let fallbackTaken = false;
   control.onPause((p) => {
     if (scenario !== 'pause' || p !== pane) return;
+    // If the manual fallback already took charge, do not race it with a
+    // second reseed on the same twin.
+    if (fallbackTaken) return;
     hookReseed = (async () => {
       await waitSettled();
       return reseeder.reseed(pane);
@@ -336,6 +340,7 @@ async function main(): Promise<void> {
           // Fallback: tmux did not emit %pause for the explicit pause in
           // this run. The metric records it; the manual continue and
           // reseed keep the recovery path exercised either way.
+          fallbackTaken = true;
           note('HOOK_PAUSE_MISSED_FALLBACK');
           await control.cmd(continueCommand(pane));
           note('CONTINUED');
