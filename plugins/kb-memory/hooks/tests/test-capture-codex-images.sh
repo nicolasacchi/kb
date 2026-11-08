@@ -61,5 +61,33 @@ else
 fi
 
 echo
+echo "== T20: codex image-only user message writes no record =="
+ONLY_OUTDIR="$TMPROOT/sessions-only"
+mkdir -p "$ONLY_OUTDIR"
+PATH="$REAL_PATH" KB_SESSIONS_DIR="$ONLY_OUTDIR" bash "$CAPTURE" \
+  "$SCRIPT_DIR/fixtures/codex-rollout-images-only.jsonl" >/dev/null 2>&1
+only_out="$(find "$ONLY_OUTDIR" -name 'session-*.html' | head -1)"
+if [ -n "$only_out" ]; then
+  ok "image-only rollout still lands its adapter-meta capture"
+else
+  bad "image-only rollout wrote nothing (expected the adapter-meta capture)"
+fi
+if [ -n "$only_out" ]; then
+  only_body="$(sed -n '/<pre>/,/<\/pre>/p' "$only_out" | sed '1d;$s|</pre>$||')"
+else
+  only_body=""
+fi
+if printf '%s\n' "$only_body" | jq -e 'select(.type == "user")' >/dev/null 2>&1; then
+  bad "image-only codex message leaked a user record: $only_body"
+else
+  ok "image-only codex message writes no user record"
+fi
+if printf '%s\n' "$only_body" | jq -e '[.. | objects | select(.type == "image")] | length == 0' >/dev/null 2>&1; then
+  ok "no image block survives from an image-only message"
+else
+  bad "image block leaked from an image-only message: $only_body"
+fi
+
+echo
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]
