@@ -5,8 +5,9 @@
 // --pins/--version/validation surface and the compiled-binary smoke.
 import { test, expect } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { PINS_JSON, SESSION_RE, createTapStack, parseArgs } from '../src/main.ts';
 import { connect, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -351,7 +352,7 @@ test('session_validation_rejects_path_traversal', () => {
 });
 
 // ------------------------------------------------ compiled-binary smoke
-test('compiled_binary_smoke_pins_version_placeholder_and_listen', () => {
+test('compiled_binary_smoke_pins_version_placeholder_and_listen', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'kbt7-smoke-'));
   const bin = join(dir, 'kb-tap');
   const build = spawnSync('bun', ['build', '--compile', 'src/main.ts', '--outfile', bin], {
@@ -385,10 +386,14 @@ test('compiled_binary_smoke_pins_version_placeholder_and_listen', () => {
 
     // A real --session run must boot the tap and create tap.sock (this is
     // what CI's old bare-placeholder smoke never exercised). Control attach
-    // will fail without tmux, so poll for the socket then kill.
+    // needs a live fake tmux that answers the pause-after write's
+    // %begin/%end block; then poll for the socket and kill the binary.
+    const fakeTmux = join(dir, 'fake-tmux');
+    writeFileSync(fakeTmux, '#!/bin/sh\nwhile IFS= read -r _line; do\n  printf "%%begin 0 1 0\\n%%end 0 1 0\\n"\ndone\n');
+    chmodSync(fakeTmux, 0o755);
     const runDir = join(dir, 'run');
     const proc = Bun.spawn([bin, '--session', 'smoke0001', '--run-dir', runDir, '--harness', 'omp'], {
-      env: { ...process.env, KB_TMUX_BIN: '/bin/true' },
+      env: { ...process.env, KB_TMUX_BIN: fakeTmux },
       stdout: 'ignore',
       stderr: 'ignore',
     });
@@ -401,7 +406,7 @@ test('compiled_binary_smoke_pins_version_placeholder_and_listen', () => {
         break;
       }
       if (proc.exitCode !== null) break;
-      Bun.sleepSync(50);
+      await Bun.sleep(100);
     }
     proc.kill();
     expect(sawSock).toBe(true);
