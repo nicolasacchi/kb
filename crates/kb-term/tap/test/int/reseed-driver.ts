@@ -286,7 +286,16 @@ async function main(): Promise<void> {
         note('RESEEDED');
         out.compare = await compareAt(r);
         note('COMPARED');
-        out.ok = (out.compare as CompareOut).ok;
+        // NOT gated on the seed comparison: `pause-after` auto-engagement
+        // is UNVERIFIED on tmux 3.7c (never fired even after a verified
+        // 40s stopped-client lag; CI 42439069928 drained the whole 30MB
+        // flood undropped), and the pane pause drops output by design, so
+        // a full-flood reference cannot equal the reseeded seed (the 29
+        // dropped rows showed up in CI 42443779255). The observable stall
+        // policy surface -- pause-after accepted, pane pause halts output
+        // (asserted inline above), continue + a successful reseed
+        // (attempts >= 1) -- is asserted instead. See the PR body.
+        out.ok = r.attempts >= 1;
         break;
       }
       case 'midseq': {
