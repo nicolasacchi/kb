@@ -67,7 +67,7 @@ describe("useCodeLane", () => {
     const { result } = renderHook(() => useCodeLane(CODE_URL, "sess-0001", "fixture"), {
       wrapper: wrapper(),
     });
-    await waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(result.current.data).toBeDefined());
     expect(String(fetchFn.mock.calls[0][0])).toContain("sid=sess-0001");
     expect(String(fetchFn.mock.calls[0][0])).toContain("repo=fixture");
     expect(result.current.data?.schema).toBe("kbc-session-card/1");

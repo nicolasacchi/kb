@@ -344,7 +344,7 @@ pub(crate) fn review_item_from_row(row: &SessionReviewRow, basis: &str) -> Revie
 
 /// Sort newest-first (`updated_at DESC, id DESC`), cap at `MAX_REVIEWS`.
 pub(crate) fn reviews_lane(mut items: Vec<ReviewItem>) -> ReviewsLane {
-    items.sort_by(|a, b| (b.updated_at, b.id).cmp(&(a.updated_at, a.id)));
+    items.sort_by_key(|b| std::cmp::Reverse((b.updated_at, b.id)));
     let total = items.len();
     let shown = total.min(MAX_REVIEWS);
     items.truncate(MAX_REVIEWS);
@@ -645,7 +645,7 @@ async fn commits_lane_fetch(
                         && repo_filter.is_none_or(|f| state.repos[f].name == *repo)
                 })
                 .collect();
-            extras.sort_by(|a, b| (a.0.clone(), a.1.clone()).cmp(&(b.0.clone(), b.1.clone())));
+            extras.sort_by_key(|a| (a.0.clone(), a.1.clone()));
             items.extend(
                 extras
                     .into_iter()

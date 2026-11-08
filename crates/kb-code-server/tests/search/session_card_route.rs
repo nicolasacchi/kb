@@ -75,7 +75,6 @@ struct Boot {
     _repo: tempfile::TempDir,
     base: String,
     store_path: PathBuf,
-    repo_dir: PathBuf,
     tip_sha: String,
     _task: tokio::task::JoinHandle<anyhow::Result<()>>,
 }
@@ -122,7 +121,6 @@ async fn boot_with_trailer(kb: KbDaemonSection, trailer: &str) -> Boot {
         _repo: repo,
         base: format!("http://{addr}"),
         store_path,
-        repo_dir: dir,
         tip_sha,
         _task: task,
     }
