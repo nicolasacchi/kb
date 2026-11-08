@@ -73,6 +73,7 @@ which builds and publishes **both halves** from one workflow:
 |---|---|---|
 | **kb** | `kb-<ver>-<triple>.tar.gz` + `.sha256` — `kb`, `kb-embedder`, `INSTALL` | `ghcr.io/nicolasacchi/kb:<ver>` + `:latest` |
 | **kb-code** | `kb-code-<ver>-<triple>.tar.gz` + `.sha256` — `kb-code-server`, `kb-code`, `kb-lip`, `INSTALL` | `ghcr.io/nicolasacchi/kb-code:<ver>` + `:latest` |
+| **kb-term** | `kb-term-<ver>-x86_64-unknown-linux-gnu.tar.gz` + `.sha256` — `kb-termd`, `kb-term`, `kb-tap`, tmux 3.7c, `share/kb-term` (x86_64 only, no image) |
 
 `<triple>` is `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu` —
 the aarch64 leg runs on a **native** `ubuntu-24.04-arm` GitHub-hosted
@@ -84,7 +85,13 @@ container images use. Both daemons resolve it relative to their own
 executable (`<prefix>/bin/kb` beside `<prefix>/share/kb/web/dist`) when
 `KB_SPA_DIST`/`KB_CODE_SPA_DIST` is unset and there is no `./web/dist`;
 `install.sh` copies `share/` to `$PREFIX/share`. The images bake the SPAs in
-and additionally the embedding model. Versioning stays git-tag-derived
+and additionally the embedding model.
+
+A third archive, `kb-term-<ver>-x86_64-unknown-linux-gnu.tar.gz`, ships the
+host-side kb-term release (the `kb-termd` runner, the `kb-term` client, the
+compiled `kb-tap` and the pinned tmux 3.7c under `libexec/kb-term/`, plus
+`share/kb-term`). It is installed by `scripts/install-kb-term.sh`, verified
+the same way as the others (`gh attestation verify` with `-R nicolasacchi/kb`). Versioning stays git-tag-derived
 (the workspace pins `version = "0.0.0"`; `VERSION="${GITHUB_REF_NAME#v}"`
 in the workflow, matching the `KB_GIT_DESCRIBE` build stamp — see
 `routes/identity.rs`), so there is no crate-version bump to keep in sync

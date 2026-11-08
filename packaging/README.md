@@ -24,6 +24,7 @@ One tag, two shipping surfaces, one workflow. `release.yml` publishes:
 |---|---|---|
 | **kb** | `kb-<ver>-<triple>.tar.gz` + `.sha256` — `kb`, `kb-embedder`, `INSTALL` | `ghcr.io/nicolasacchi/kb:<ver>` + `:latest` |
 | **kb-code** | `kb-code-<ver>-<triple>.tar.gz` + `.sha256` — `kb-code-server`, `kb-code`, `kb-lip`, `INSTALL` | `ghcr.io/nicolasacchi/kb-code:<ver>` + `:latest` |
+| **kb-term** | `kb-term-<ver>-x86_64-unknown-linux-gnu.tar.gz` + `.sha256` — `kb-termd`, `kb-term`, `kb-tap`, tmux 3.7c, `share/kb-term` (x86_64 only, no image) |
 
 `<triple>` is `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu` —
 four tarballs per release, each with a checksum sidecar. **kb-code** is the
