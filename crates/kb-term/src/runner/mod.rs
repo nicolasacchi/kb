@@ -6,10 +6,13 @@
 //! reads the `@kb_*` user options each holder carries, so a runner restart
 //! re-lists and re-adopts (re-anchoring) sessions it did not launch.
 //!
-//! Per-session runtime state (in memory only, recreated on restart):
+//! Per-session runtime state (in memory, plus durable tmux options):
 //! the anchor client (with responder pump), the viewers map
 //! (`(id, viewer) -> Viewer`), the `paste_only` flag that gates the
-//! composer Enter, and a paste-buffer sequence number. The grid owner
+//! composer Enter, and a paste-buffer sequence number. The viewer set
+//! and `paste_only` are also recorded in the `@kb_viewers` /
+//! `@kb_paste_only` holder options (see [`persist`]) so a runner
+//! restart re-opens viewers and forgets no guard. The grid owner
 //! lives in the tmux `@kb_owner_grid` option, so it survives restarts.
 
 pub mod anchor;
@@ -22,6 +25,7 @@ pub mod keys;
 pub mod kill;
 pub mod launch;
 pub mod paste;
+pub mod persist;
 pub mod rpc;
 pub mod server;
 pub mod supervisor;
@@ -416,22 +420,55 @@ impl<S: Supervisor> Runner<S> {
             .entry((id.to_string(), viewer.to_string()))
             .or_insert(Viewer { client });
         drop(viewers);
+        // The per-id lock is still held here on purpose: the durable
+        // write is serialized with other opens/closes for this session.
+        self.persist_viewers(id).await;
         drop(lock);
         Ok(())
     }
 
-    /// Close one viewer's hidden client (SIGHUP + reap, drop the pump).
-    pub async fn viewer_close(&self, id: &str, viewer: &str) -> Result<(), RunnerError> {
-        let mut viewers = self.viewers.lock().await;
-        match viewers.remove(&(id.to_string(), viewer.to_string())) {
-            Some(_) => Ok(()),
-            None => Err(RunnerError::NoViewer(format!(
-                "no viewer `{viewer}` for {id}"
-            ))),
+    /// Snapshot the session's viewer set into the durable `@kb_viewers`
+    /// option (best-effort). Callers hold no locks.
+    async fn persist_viewers(&self, id: &str) {
+        let set: Vec<String> = {
+            let viewers = self.viewers.lock().await;
+            viewers
+                .keys()
+                .filter(|(sid, _)| sid == id)
+                .map(|(_, w)| w.clone())
+                .collect()
+        };
+        if let Err(e) = persist::write_viewers(&self.tmux, &self.holder_socket(id), &set).await {
+            tracing::warn!(id, %e, "could not persist viewer set");
         }
     }
 
+    /// Close one viewer's hidden client (SIGHUP + reap, drop the pump).
+    /// Deregisters: the durable `@kb_viewers` is rewritten.
+    pub async fn viewer_close(&self, id: &str, viewer: &str) -> Result<(), RunnerError> {
+        {
+            let mut viewers = self.viewers.lock().await;
+            match viewers.remove(&(id.to_string(), viewer.to_string())) {
+                Some(_) => {}
+                None => {
+                    return Err(RunnerError::NoViewer(format!(
+                        "no viewer `{viewer}` for {id}"
+                    )));
+                }
+            }
+        }
+        self.persist_viewers(id).await;
+        Ok(())
+    }
+
     /// Close every viewer of a session (kill; anchor-closed cleanup).
+    ///
+    /// The durable `@kb_viewers` is left untouched on purpose: the set
+    /// is a registration of opened viewers, and anchor-close/shutdown
+    /// teardown must not deregister it (the anchor-closed watcher fires
+    /// at shutdown, before a restart re-opens the registered set). Only
+    /// `viewer_close` deregisters. A killed session's holder is
+    /// destroyed with it, so its option dies too.
     pub async fn close_viewers_for(&self, id: &str) {
         let mut viewers = self.viewers.lock().await;
         viewers.retain(|(sid, _), _| sid != id);
@@ -463,6 +500,11 @@ impl<S: Supervisor> Runner<S> {
     }
 
     /// Close every viewer of every session (runner shutdown).
+    ///
+    /// The durable `@kb_viewers` is left intact on purpose: shutdown
+    /// must not deregister the set, so a restart re-opens it (the
+    /// anchor-closed watcher would otherwise clear it via
+    /// `close_viewers_for`).
     pub async fn close_viewers_for_all(&self) {
         let mut viewers = self.viewers.lock().await;
         viewers.clear();
@@ -500,9 +542,16 @@ impl<S: Supervisor> Runner<S> {
         Ok(())
     }
 
-    /// The current `paste_only` flag for a session.
+    /// The current `paste_only` flag for a session (lazily hydrated
+    /// from the durable `@kb_paste_only` option after a restart).
     pub async fn paste_only(&self, id: &str) -> bool {
-        *self.paste_only.lock().await.get(id).unwrap_or(&false)
+        let cached = self.paste_only.lock().await.get(id).copied();
+        if let Some(value) = cached {
+            return value;
+        }
+        let value = persist::read_paste_only(&self.tmux, &self.holder_socket(id)).await;
+        self.paste_only.lock().await.insert(id.to_string(), value);
+        value
     }
 
     /// Why the anchor pump closed, for tests/diagnostics:
@@ -520,9 +569,14 @@ impl<S: Supervisor> Runner<S> {
         })
     }
 
-    /// Record the `paste_only` flag for a session (in memory only).
+    /// Record the `paste_only` flag: memory plus the durable option
+    /// (best-effort; a failed write warns but never fails the RPC).
     pub async fn set_paste_only(&self, id: &str, value: bool) {
         self.paste_only.lock().await.insert(id.to_string(), value);
+        if let Err(e) = persist::write_paste_only(&self.tmux, &self.holder_socket(id), value).await
+        {
+            tracing::warn!(id, %e, "could not persist paste_only");
+        }
     }
 
     /// Next paste-buffer sequence number for the session (monotonic).
@@ -607,7 +661,11 @@ pub async fn check_tmux_version<T: tmux::Tmux>(
 }
 
 /// Adopt every live session: an anchor whose pid is dead, or unknown to
-/// `list-clients`, is recreated and `@kb_anchor_pid` rewritten.
+/// `list-clients`, is recreated and `@kb_anchor_pid` rewritten. The
+/// durable `@kb_viewers` set is then replayed: every recorded viewer is
+/// re-opened (best-effort, so a failing spawn warns instead of failing
+/// boot), restoring the T9 typing path after a restart. `paste_only`
+/// needs no boot work: it hydrates lazily from `@kb_paste_only`.
 pub async fn adopt_anchors<S: Supervisor>(runner: &Runner<S>) -> Result<(), RunnerError> {
     let entries = crate::runner::discovery::list_sessions(runner).await;
     for entry in entries {
@@ -623,10 +681,15 @@ pub async fn adopt_anchors<S: Supervisor>(runner: &Runner<S>) -> Result<(), Runn
             }
             None => true,
         };
+        let cols = entry.cols.unwrap_or(runner.cfg.default_cols);
+        let rows = entry.rows.unwrap_or(runner.cfg.default_rows);
         if needs_new {
-            let cols = entry.cols.unwrap_or(runner.cfg.default_cols);
-            let rows = entry.rows.unwrap_or(runner.cfg.default_rows);
             crate::runner::launch::spawn_anchor_and_wait(runner, &entry.id, cols, rows).await?;
+        }
+        for viewer in persist::read_viewers(&runner.tmux, &runner.holder_socket(&entry.id)).await {
+            if let Err(e) = runner.viewer_open(&entry.id, &viewer, cols, rows).await {
+                tracing::warn!(id = %entry.id, %viewer, %e, "could not re-open viewer on adoption");
+            }
         }
     }
     Ok(())

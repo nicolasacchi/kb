@@ -1901,6 +1901,131 @@ async fn term_int_runner_restart_readopts_a_responder_anchor() {
         .arg("kill-server")
         .output();
 }
+#[tokio::test(flavor = "multi_thread")]
+async fn term_int_restart_restores_viewers_and_paste_only() {
+    // The viewer set and paste_only flag are durable (holder options),
+    // so a runner restart re-opens the recorded viewers and forgets no
+    // guard. Proves: after a restart with NO ViewerOpen RPC, the
+    // viewer exists and keys work; paste_only still gates composer
+    // Enter. Without persistence this fails (no-viewer / paste-only
+    // forgotten).
+    let Some(tmux_bin) = require_tmux() else {
+        return;
+    };
+    let dir = tempfile::TempDir::new_in("/tmp").unwrap();
+    let run_dir = dir.path().join("run");
+    std::fs::create_dir_all(run_dir.join("s")).unwrap();
+    std::fs::create_dir_all(run_dir.join("runner")).unwrap();
+    let mk_cfg = || {
+        let mut cfg = kb_term::runner::RunnerConfig::test_config(
+            run_dir.clone(),
+            tmux_bin.clone(),
+            common::conf_path(),
+        );
+        cfg.tap_bin = Some(fixture("fake_tap.sh"));
+        cfg.require_tap = true;
+        cfg
+    };
+    let a = kb_term::runner::Runner::direct(mk_cfg());
+    ensure_layout(&a.cfg).await.unwrap();
+    check_tmux_version(&a.tmux, "3.7c").await.unwrap();
+    adopt_anchors(&a).await.unwrap();
+    let log = dir.path().join("paste.log");
+    let argv = vec![
+        python3_bin(),
+        "-I".to_string(),
+        fixture("pane_probe.py").to_string_lossy().into_owned(),
+        "paste-on".to_string(),
+        log.to_string_lossy().into_owned(),
+    ];
+    let cwd = dir.path().to_string_lossy().into_owned();
+    let req = common::launch_req(argv, cwd);
+    let id = match rpc::dispatch(&a, &req).await {
+        Response::Ok { data } => data["id"].as_str().unwrap().to_string(),
+        Response::Err { code, message } => panic!("launch failed ({code}): {message}"),
+    };
+    match rpc::dispatch(
+        &a,
+        &Request::ViewerOpen {
+            id: id.clone(),
+            viewer: "web".to_string(),
+        },
+    )
+    .await
+    {
+        Response::Ok { .. } => {}
+        Response::Err { code, message } => panic!("viewer_open failed ({code}): {message}"),
+    }
+    match rpc::dispatch(
+        &a,
+        &Request::Paste {
+            id: id.clone(),
+            viewer: "web".to_string(),
+            text: "/help".to_string(),
+        },
+    )
+    .await
+    {
+        Response::Ok { data } => assert_eq!(data["paste_only"], true),
+        Response::Err { code, message } => panic!("paste failed ({code}): {message}"),
+    }
+    assert!(a.has_viewer(&id, "web").await);
+    assert!(a.paste_only(&id).await);
+    // Stop the runner (drop everything it owns, closing the masters).
+    drop(a);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    // Start the runner again: adoption re-opens the recorded viewers
+    // and the paste_only guard is still there — no ViewerOpen RPC.
+    let b = kb_term::runner::Runner::direct(mk_cfg());
+    ensure_layout(&b.cfg).await.unwrap();
+    check_tmux_version(&b.tmux, "3.7c").await.unwrap();
+    adopt_anchors(&b).await.unwrap();
+    assert!(
+        b.has_viewer(&id, "web").await,
+        "the recorded viewer must be re-opened by adoption"
+    );
+    assert!(
+        b.paste_only(&id).await,
+        "paste_only must survive the restart"
+    );
+    // Composer Enter is still paste-gated.
+    match rpc::dispatch(
+        &b,
+        &Request::Enter {
+            id: id.clone(),
+            viewer: "web".to_string(),
+            blocked: false,
+            from_composer: true,
+        },
+    )
+    .await
+    {
+        Response::Err { code, .. } => assert_eq!(code, "paste-only"),
+        Response::Ok { .. } => panic!("composer enter must stay paste-only after restart"),
+    }
+    // The re-opened viewer types (bounded; the probe logs raw input).
+    let b64 = base64::engine::general_purpose::STANDARD.encode([b'x']);
+    match rpc::dispatch(
+        &b,
+        &Request::Keys {
+            id: id.clone(),
+            viewer: "web".to_string(),
+            input: kb_term::wire::KeyInput::Bytes { bytes_b64: b64 },
+        },
+    )
+    .await
+    {
+        Response::Ok { .. } => {}
+        Response::Err { code, message } => {
+            panic!("keys through the re-opened viewer must work ({code}): {message}")
+        }
+    }
+    let _ = std::process::Command::new(&tmux_bin)
+        .arg("-S")
+        .arg(b.holder_socket(&id))
+        .arg("kill-server")
+        .output();
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn term_int_viewers_are_drained_and_never_slow_the_pane() {
