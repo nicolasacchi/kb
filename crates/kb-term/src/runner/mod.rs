@@ -282,17 +282,39 @@ impl<S: Supervisor> Runner<S> {
     }
 
     /// The anchor's current pty winsize: (cols, rows, pixel_w, pixel_h).
-    pub async fn anchor_winsize(&self, id: &str) -> Option<(u16, u16, u16, u16)> {
+    pub async fn anchor_winsize(
+        &self,
+        id: &str,
+    ) -> Option<Result<(u16, u16, u16, u16), RunnerError>> {
         let anchors = self.anchors.lock().await;
         anchors.get(id).map(Anchor::winsize)
     }
 
     /// Apply a new winsize to the anchor pty (resize RPC).
-    pub async fn anchor_set_winsize(&self, id: &str, cols: u16, rows: u16) {
+    pub async fn anchor_set_winsize(
+        &self,
+        id: &str,
+        cols: u16,
+        rows: u16,
+    ) -> Result<(), RunnerError> {
         let anchors = self.anchors.lock().await;
         if let Some(anchor) = anchors.get(id) {
-            anchor.set_winsize(cols, rows);
+            anchor.set_winsize(cols, rows)?;
         }
+        Ok(())
+    }
+
+    /// The viewer's hidden-client pty winsize:
+    /// (cols, rows, pixel_w, pixel_h), for tests/diagnostics.
+    pub async fn viewer_winsize(
+        &self,
+        id: &str,
+        viewer: &str,
+    ) -> Option<Result<(u16, u16, u16, u16), RunnerError>> {
+        let viewers = self.viewers.lock().await;
+        viewers
+            .get(&(id.to_string(), viewer.to_string()))
+            .map(|v| v.client.winsize())
     }
 
     /// Whether the runner owns a live anchor master for `id`.
@@ -455,19 +477,27 @@ impl<S: Supervisor> Runner<S> {
     }
 
     /// Apply a new winsize to the anchor and every hidden client.
-    pub async fn apply_client_winsizes(&self, id: &str, cols: u16, rows: u16) {
+    pub async fn apply_client_winsizes(
+        &self,
+        id: &str,
+        cols: u16,
+        rows: u16,
+    ) -> Result<(), RunnerError> {
         {
             let anchors = self.anchors.lock().await;
             if let Some(anchor) = anchors.get(id) {
-                anchor.set_winsize(cols, rows);
+                anchor.set_winsize(cols, rows)?;
             }
         }
-        let viewers = self.viewers.lock().await;
-        for ((sid, _), viewer) in viewers.iter() {
-            if sid == id {
-                viewer.client.set_winsize(cols, rows);
+        {
+            let viewers = self.viewers.lock().await;
+            for ((sid, _), viewer) in viewers.iter() {
+                if sid == id {
+                    viewer.client.set_winsize(cols, rows)?;
+                }
             }
         }
+        Ok(())
     }
 
     /// The current `paste_only` flag for a session.
