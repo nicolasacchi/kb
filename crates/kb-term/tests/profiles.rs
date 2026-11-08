@@ -155,7 +155,6 @@ fn profiles_unset_prelude_covers_login_reintroduction() {
 /// The exact sorted env every harness shares (`HOME`/`LANG`/`PATH`/
 /// `USER` from `base_env()`, plus `KB_TERM_ID` from `request()`).
 /// Per-harness profile env is inserted in sorted position.
-
 /// One golden case: (harness, exact argv, exact sorted env).
 type GoldenCase = (&'static str, Vec<&'static str>, Vec<(String, String)>);
 fn shared_env() -> Vec<(String, String)> {
