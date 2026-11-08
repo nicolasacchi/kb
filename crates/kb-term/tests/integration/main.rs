@@ -1094,9 +1094,7 @@ async fn term_int_identity_is_the_kb_profile() {
     let Some(tmux_bin) = require_tmux() else {
         return;
     };
-    // DIAGNOSTIC (round 3): without the control-mode tap attached, to
-    // isolate whether the tap is stealing tmux's query-client choice.
-    let tr = TestRunner::with_tap(tmux_bin.clone(), false, false);
+    let tr = TestRunner::new(tmux_bin.clone());
     boot_runner(&tr).await;
     let (id, log) = launch_probe(&tr, "query").await;
     // The anchor answers tmux's startup queries; one viewer joins beside it.
@@ -1105,24 +1103,6 @@ async fn term_int_identity_is_the_kb_profile() {
         Request::ViewerOpen {
             id: id.clone(),
             viewer: "web".to_string(),
-        },
-    )
-    .await;
-    // tmux answers pane-issued queries (OSC 10/11, CSI 14t/16t/18t) via
-    // the client it considers primary: the attached client with the
-    // greatest client_activity (the brief's gap analysis). The control
-    // tap never bumps activity and the anchor's startup replies do not,
-    // so until a hidden viewer types, tmux has no colour/pixel source
-    // at all (black + synthetic 32x16 cells). One keystroke busts the
-    // viewer's activity so the responder's colours and 9x18 pixels are
-    // adopted from the kb profile.
-    let b64 = base64::engine::general_purpose::STANDARD.encode([b'x']);
-    dispatch_ok(
-        &tr,
-        Request::Keys {
-            id: id.clone(),
-            viewer: "web".to_string(),
-            input: kb_term::wire::KeyInput::Bytes { bytes_b64: b64 },
         },
     )
     .await;
