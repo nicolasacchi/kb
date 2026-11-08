@@ -344,7 +344,10 @@ time.sleep(300)\n";
 
 #[test]
 fn term_int_reseed_equals_tmux_for_text_workload() {
-    let Some(tmux) = tmux_bin() else { return };
+    let Some(tmux) = tmux_bin() else {
+        eprintln!("SKIP: tmux absent (workspace-test)");
+        return;
+    };
     let (gdir, stream) = gen_stream(
         "text",
         &[
@@ -416,7 +419,10 @@ fn term_int_reseed_equals_tmux_for_text_workload() {
 
 #[test]
 fn term_int_ten_concurrent_reseeds() {
-    let Some(tmux) = tmux_bin() else { return };
+    let Some(tmux) = tmux_bin() else {
+        eprintln!("SKIP: tmux absent (workspace-test)");
+        return;
+    };
     let (gdir, stream) = gen_stream(
         "conc",
         &[
@@ -525,7 +531,10 @@ fn term_int_ten_concurrent_reseeds() {
 
 #[test]
 fn term_int_reseed_after_long_pause() {
-    let Some(tmux) = tmux_bin() else { return };
+    let Some(tmux) = tmux_bin() else {
+        eprintln!("SKIP: tmux absent (workspace-test)");
+        return;
+    };
     let srv = Server::start(&tmux);
     // 30 MB flood file: repeated copy of one synthetic line.
     let flood = srv._dir.file("flood.bin");
@@ -667,10 +676,21 @@ fn term_int_reseed_after_long_pause() {
     let json: serde_json::Value = serde_json::from_str(stdout.lines().last().unwrap_or("{}"))
         .unwrap_or_else(|_| panic!("driver JSON unparseable: {stdout}\nstderr: {stderr}"));
     assert_json_ok(&json, &stderr);
-    // The seed comparison is RUN and recorded as a metric but NOT asserted
-    // ('seed == reference' is UNVERIFIED here -- see the driver comment and
-    // the PR body: the pause drops output by design). Assert only that the
-    // metric is present.
+    // Bounded equality: the pause drops output by design, so exact
+    // emitted-ref equality is structurally unwinnable. The gate is (a)
+    // history proximity vs the byte-0 file reference within 2%, and (b)
+    // exact determinism (a second reseed of the idle pane reproduces the
+    // identical twin). The emitted-ref comparison still runs as a metric.
+    assert_eq!(
+        json["metric"]["historyClose"],
+        serde_json::json!(true),
+        "reseeded history must be within 2% of the byte-0 file reference: {json}"
+    );
+    assert_eq!(
+        json["metric"]["deterministic"],
+        serde_json::json!(true),
+        "a second reseed of the idle pane must reproduce the identical twin: {json}"
+    );
     assert!(
         json["metric"]["seedEqualsEmittedRef"].is_boolean(),
         "pause driver must record the seed-vs-emitted-ref comparison as a metric: {json}"
@@ -679,7 +699,10 @@ fn term_int_reseed_after_long_pause() {
 
 #[test]
 fn term_int_reseed_mid_line_cursor() {
-    let Some(tmux) = tmux_bin() else { return };
+    let Some(tmux) = tmux_bin() else {
+        eprintln!("SKIP: tmux absent (workspace-test)");
+        return;
+    };
     let srv = Server::start(&tmux);
     let stream = srv._dir.file("stream.bin");
     std::fs::write(&stream, b"HELLO\r\nWORLD").expect("write stream");
@@ -732,7 +755,10 @@ fn term_int_reseed_mid_line_cursor() {
 
 #[test]
 fn term_int_reseed_pending_wrap() {
-    let Some(tmux) = tmux_bin() else { return };
+    let Some(tmux) = tmux_bin() else {
+        eprintln!("SKIP: tmux absent (workspace-test)");
+        return;
+    };
     let srv = Server::start(&tmux);
     let stream = srv._dir.file("stream.bin");
     let mut bytes = Vec::with_capacity(100);
@@ -793,7 +819,10 @@ fn term_int_reseed_pending_wrap() {
 
 #[test]
 fn term_int_reseed_wrapped_lines_and_blank_tail() {
-    let Some(tmux) = tmux_bin() else { return };
+    let Some(tmux) = tmux_bin() else {
+        eprintln!("SKIP: tmux absent (workspace-test)");
+        return;
+    };
     let srv = Server::start(&tmux);
     let stream = srv._dir.file("stream.bin");
     let mut bytes = Vec::new();
@@ -845,7 +874,10 @@ fn term_int_reseed_wrapped_lines_and_blank_tail() {
 
 #[test]
 fn term_int_reseed_alt_screen() {
-    let Some(tmux) = tmux_bin() else { return };
+    let Some(tmux) = tmux_bin() else {
+        eprintln!("SKIP: tmux absent (workspace-test)");
+        return;
+    };
     let srv = Server::start(&tmux);
     let stream = srv._dir.file("stream.bin");
     std::fs::write(
@@ -898,7 +930,10 @@ fn term_int_reseed_alt_screen() {
 
 #[test]
 fn term_int_mode_formats_exist_on_pinned_tmux() {
-    let Some(tmux) = tmux_bin() else { return };
+    let Some(tmux) = tmux_bin() else {
+        eprintln!("SKIP: tmux absent (workspace-test)");
+        return;
+    };
     let srv = Server::start(&tmux);
     let ready = srv._dir.file("ready");
     let pane = srv.new_session("s", 100, 30, &ready, &["sleep", "300"]);
@@ -926,7 +961,10 @@ fn term_int_mode_formats_exist_on_pinned_tmux() {
 
 #[test]
 fn term_int_placeholder_rows_survive_capture_pane() {
-    let Some(tmux) = tmux_bin() else { return };
+    let Some(tmux) = tmux_bin() else {
+        eprintln!("SKIP: tmux absent (workspace-test)");
+        return;
+    };
     let srv = Server::start(&tmux);
     // Synthetic omp kitty stream (placeholder rows, SGR truecolour + diacritics).
     let gen = tap_dir().join("fixtures/synth_omp_kitty_stream.py");
@@ -980,7 +1018,10 @@ fn term_int_placeholder_rows_survive_capture_pane() {
 
 #[test]
 fn term_int_partial_sequence_quiescent_wait() {
-    let Some(tmux) = tmux_bin() else { return };
+    let Some(tmux) = tmux_bin() else {
+        eprintln!("SKIP: tmux absent (workspace-test)");
+        return;
+    };
     let srv = Server::start(&tmux);
     let midseq = tap_dir().join("fixtures/midseq.py");
     let stream = srv._dir.file("stream.bin");
