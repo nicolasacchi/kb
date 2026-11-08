@@ -1158,8 +1158,7 @@ async fn term_int_identity_is_the_kb_profile() {
                     let text = String::from_utf8_lossy(&o.stdout);
                     let answered = text.lines().filter(|l| {
                         let mut p = l.split_whitespace();
-                        p.next() == Some("0")
-                            && p.next().unwrap_or("").starts_with("kb-term")
+                        p.next() == Some("0") && p.next().unwrap_or("").starts_with("kb-term")
                     });
                     answered.count() >= 2
                 }
