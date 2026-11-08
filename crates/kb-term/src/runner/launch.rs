@@ -38,13 +38,14 @@ pub const DEFAULT_EXIT_KEYS: [&str; 3] = ["C-c", "C-c", "C-d"];
 /// Build the exact `new-session` argv for a launch. Pure (no IO) so the
 /// gate shape is pinned by a unit test.
 ///
-/// The eight parameters are the documented argv pieces in order; bundling
-/// them into a struct would obscure the exact-vector test.
+/// The `-e` entries come from the caller `env` map alone: `KB_TERM_ID`
+/// is NOT hardcoded here because the plan env already carries it (one
+/// source), so the argv never repeats it.
 #[allow(clippy::too_many_arguments)]
 pub fn gate_argv(
     tmux_bin: &str,
     sock: &Path,
-    id: &str,
+    _id: &str,
     cwd: &Path,
     cols: u16,
     rows: u16,
@@ -63,8 +64,6 @@ pub fn gate_argv(
         rows.to_string(),
         "-c".to_string(),
         cwd.to_string_lossy().into_owned(),
-        "-e".to_string(),
-        format!("KB_TERM_ID={id}"),
     ];
     for (k, v) in env {
         out.push("-e".to_string());
@@ -86,7 +85,9 @@ pub fn gate_argv(
 pub struct ValidatedLaunch {
     /// Harness name (wire enum; for the `@kb_harness` option).
     pub harness: String,
-    /// The argv to run (first item an absolute path).
+    /// The argv to run (first item an absolute path). The plan argv
+    /// governs the launch; verbatim caller argv is honoured only under
+    /// the term-int probe flag (see `validate_launch`).
     pub argv: Vec<String>,
     /// Resume session id, if any.
     pub resume_sid: Option<String>,
@@ -96,10 +97,13 @@ pub struct ValidatedLaunch {
     pub cols: u16,
     /// Grid rows.
     pub rows: u16,
-    /// Extra environment for the harness pane.
+    /// Extra environment for the pane, merged on top of the profile
+    /// env (see `merge_caller_env`).
     pub env: BTreeMap<String, String>,
-    /// Exit keys used by the kill RPC.
-    pub exit_keys: Vec<String>,
+    /// Exit keys used by the kill RPC. `None` means "no opinion": the
+    /// harness profile's exit steps win. `Some` always wins, even when
+    /// it equals the default the wire protocol folds `None` into.
+    pub exit_keys: Option<Vec<String>>,
 }
 
 /// The outcome of a successful launch.
@@ -143,6 +147,32 @@ pub fn validate_launch(req: &Request, cfg: &RunnerConfig) -> Result<ValidatedLau
         return Err(RunnerError::BadRequest(
             "argv[0] must be an absolute path".to_string(),
         ));
+    }
+    // The profile argv governs the launch: the caller's argv[0] must
+    // name the harness binary (its basename must equal the harness
+    // name). The only exception is the term-int probe flag, which lets
+    // integration fixtures run verbatim; production (kb-termd without
+    // the flag) always uses the plan argv, so a wire caller cannot run
+    // an alternate program. Forbidden argv elements never pass, under
+    // either mode: a probe argv cannot smuggle `--kb-off` or a bare
+    // continue past the profile.
+    if let Some(bad) = argv
+        .iter()
+        .find(|a| profiles::table::FORBIDDEN_ARGV.contains(&a.as_str()))
+    {
+        return Err(RunnerError::BadRequest(format!(
+            "argv element `{bad}` is forbidden"
+        )));
+    }
+    let names_harness = std::path::Path::new(&argv[0])
+        .file_name()
+        .is_some_and(|f| f.to_str() == Some(harness.as_str()));
+    let probe = std::env::var("KB_TERM_TEST_PROBE").is_ok_and(|v| v == "1");
+    if !names_harness && !probe {
+        return Err(RunnerError::BadRequest(format!(
+            "argv[0] must name the harness binary ({})",
+            harness.as_str()
+        )));
     }
     let total: usize = argv.iter().map(String::len).sum();
     if total > 32 * 1024 {
@@ -193,18 +223,18 @@ pub fn validate_launch(req: &Request, cfg: &RunnerConfig) -> Result<ValidatedLau
             ));
         }
     }
-    let exit_keys = exit_keys.clone().unwrap_or_else(|| {
-        DEFAULT_EXIT_KEYS
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-    });
-    if exit_keys.len() > 8 {
-        return Err(RunnerError::BadRequest("at most 8 exit keys".to_string()));
-    }
-    for key in &exit_keys {
-        if !valid_exit_key(key) {
-            return Err(RunnerError::BadRequest(format!("bad exit key `{key}`")));
+    // `None` is kept as `None` (the profile exit steps win); only
+    // caller-supplied keys are validated and stored, so explicit keys
+    // that happen to equal the wire default still win downstream.
+    let exit_keys = exit_keys.clone();
+    if let Some(keys) = &exit_keys {
+        if keys.len() > 8 {
+            return Err(RunnerError::BadRequest("at most 8 exit keys".to_string()));
+        }
+        for key in keys {
+            if !valid_exit_key(key) {
+                return Err(RunnerError::BadRequest(format!("bad exit key `{key}`")));
+            }
         }
     }
     Ok(ValidatedLaunch {
@@ -297,11 +327,14 @@ async fn launch_locked<S: Supervisor>(
         "{prelude}{} {GATE_SCRIPT}",
         profiles::env::shell_unset_prefixes_snippet()
     );
-    // The profile argv governs launches of the profile binary (the
-    // common case: argv[0] names the harness, e.g. /usr/bin/omp); any
-    // other argv[0] is an explicit alternate program (test probes)
-    // that runs verbatim, still with the profile env and exit keys.
-    let launch_argv = if is_profile_binary(&spec.argv, &plan.argv) {
+    // The plan argv governs the launch: `validate_launch` rejects any
+    // caller argv[0] that does not name the harness binary unless the
+    // term-int probe flag is set, in which case an integration fixture
+    // runs verbatim (still under the profile env and exit keys). Caller
+    // extras are otherwise discarded, so no wire-supplied argv can
+    // smuggle `--kb-off` or a bare continue past the profile.
+    let probe = std::env::var("KB_TERM_TEST_PROBE").is_ok_and(|v| v == "1");
+    let launch_argv = if is_profile_binary(&spec.argv, &plan.argv) || !probe {
         plan.argv.clone()
     } else {
         spec.argv.clone()
@@ -456,7 +489,10 @@ async fn set_user_options<S: Supervisor>(
     Ok(())
 }
 /// Build the launch profile for one launch from the runner's own env
-/// (held implicitly: `profiles::plan` filters it through the allowlist).
+/// (held implicitly: `profiles::plan` filters it through the allowlist),
+/// then merge the validated caller env on top (`merge_caller_env`). The
+/// plan env stays authoritative: the profile env and the kb-term
+/// identity pair are never overridden by caller entries.
 fn build_launch_plan<S: Supervisor>(
     runner: &Runner<S>,
     id: &str,
@@ -465,7 +501,7 @@ fn build_launch_plan<S: Supervisor>(
     let base_env: Vec<(String, String)> = std::env::vars().collect();
     let run_dir = runner.sessions_dir().join(id);
     let cwd = spec.cwd.to_string_lossy().into_owned();
-    profiles::plan(&PlanRequest {
+    let plan = profiles::plan(&PlanRequest {
         harness: &spec.harness,
         term_id: id,
         resume_sid: spec.resume_sid.as_deref(),
@@ -475,18 +511,53 @@ fn build_launch_plan<S: Supervisor>(
         base_env: &base_env,
         extra_passthrough: &[],
     })
-    .map_err(|e| RunnerError::BadRequest(format!("launch profile: {e}")))
+    .map_err(|e| match e {
+        profiles::PlanError::Io(msg) => RunnerError::Internal(format!("launch profile: {msg}")),
+        other => RunnerError::BadRequest(format!("launch profile: {other}")),
+    })?;
+    merge_caller_env(plan, &spec.env)
 }
 
-/// The effective exit keys for a launch: the caller's explicit keys
-/// win; otherwise the harness profile's exit steps (flattened to the
-/// key strings the kill RPC sends).
+/// Merge validated caller env (`Request::Launch.env`) into an
+/// already-built plan. The plan env (allowlist + profile env + kb-term
+/// identity) is authoritative for the pane: caller entries are added
+/// (re-sorted) but never override the identity pair, never name a
+/// tmux-owned or never-forward name, and never reintroduce a forbidden
+/// outer-terminal name — those are `bad-request`, not silently dropped.
+fn merge_caller_env(
+    mut plan: profiles::LaunchPlan,
+    extra: &BTreeMap<String, String>,
+) -> Result<profiles::LaunchPlan, RunnerError> {
+    for (k, v) in extra {
+        if !profiles::env::is_valid_env_identifier(k)
+            || profiles::env::is_forbidden_name(k)
+            || profiles::env::TMUX_OWNED.contains(&k.as_str())
+            || profiles::env::NEVER_FORWARD.contains(&k.as_str())
+        {
+            return Err(RunnerError::BadRequest(format!(
+                "env key `{k}` may not be forwarded"
+            )));
+        }
+        if let Some(pos) = plan.env.iter().position(|(n, _)| n == k) {
+            plan.env[pos].1 = v.clone();
+        } else {
+            plan.env.push((k.clone(), v.clone()));
+        }
+    }
+    plan.env.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(plan)
+}
+
+/// The effective exit keys for a launch: explicit caller keys always
+/// win; only `None` (no caller opinion) falls back to the harness
+/// profile's exit steps (flattened to the key strings the kill RPC
+/// sends). Branching on `Option::is_some` — not on equality with the
+/// wire default — means explicit keys that happen to equal the default
+/// still win.
 fn effective_exit_keys(spec: &ValidatedLaunch, plan: &profiles::LaunchPlan) -> Vec<String> {
-    let default: Vec<String> = DEFAULT_EXIT_KEYS.iter().map(ToString::to_string).collect();
-    if spec.exit_keys == default {
-        flattened_exit_keys(plan.exit_steps)
-    } else {
-        spec.exit_keys.clone()
+    match &spec.exit_keys {
+        None => flattened_exit_keys(plan.exit_steps),
+        Some(keys) => keys.clone(),
     }
 }
 
@@ -715,9 +786,12 @@ mod tests {
 
     #[test]
     fn gate_argv_is_exactly_the_documented_shape() {
+        // `KB_TERM_ID` rides in the env map (the plan env); gate_argv
+        // never hardcodes it, so the vector carries it exactly once.
         let env: BTreeMap<String, String> = HashMap::from([
             ("FOO".to_string(), "bar".to_string()),
             ("A_B".to_string(), "x y".to_string()),
+            ("KB_TERM_ID".to_string(), "abc12345".to_string()),
         ])
         .into_iter()
         .collect();
@@ -754,11 +828,11 @@ mod tests {
                 "-c",
                 "/work/proj",
                 "-e",
-                "KB_TERM_ID=abc12345",
-                "-e",
                 "A_B=x y",
                 "-e",
                 "FOO=bar",
+                "-e",
+                "KB_TERM_ID=abc12345",
                 "--",
                 "/bin/sh",
                 "-c",
@@ -783,7 +857,7 @@ mod tests {
         );
         let base = || Request::Launch {
             harness: Harness::Omp,
-            argv: Some(vec!["/bin/cat".to_string()]),
+            argv: Some(vec!["/usr/bin/omp".to_string()]),
             resume_sid: None,
             cwd: "/tmp".to_string(),
             cols: Some(120),
@@ -882,5 +956,151 @@ mod tests {
             .flatten()
             .collect();
         assert!(entries.is_empty(), "no holder may be spawned");
+    }
+
+    /// Serialises the tests that observe `KB_TERM_TEST_PROBE`. Every
+    /// other launch test's verdict is unchanged whether the flag is set
+    /// (all its bad cases fail on other grounds), so this only needs to
+    /// keep the two flag-observing tests apart.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn cfg() -> RunnerConfig {
+        RunnerConfig::test_config(
+            PathBuf::from("/tmp/kb-term-test"),
+            "/pinned/tmux".to_string(),
+            PathBuf::from("/dev/null"),
+        )
+    }
+
+    fn launch_with(argv: &[&str]) -> Request {
+        Request::Launch {
+            harness: Harness::Omp,
+            argv: Some(argv.iter().map(ToString::to_string).collect()),
+            resume_sid: None,
+            cwd: "/tmp".to_string(),
+            cols: Some(120),
+            rows: Some(40),
+            env: None,
+            exit_keys: None,
+        }
+    }
+
+    /// The profile governs the launch: a caller argv that does not
+    /// name the harness binary is `bad-request`, and forbidden argv
+    /// elements never pass — even under the probe flag, so a probe
+    /// argv cannot smuggle `--kb-off` or `-c` through validation.
+    #[test]
+    fn validate_rejects_argv_not_naming_the_harness() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("KB_TERM_TEST_PROBE");
+        let err = validate_launch(&launch_with(&["/tmp/copy-of-omp"]), &cfg()).unwrap_err();
+        assert_eq!(err.code(), "bad-request");
+        let err = validate_launch(&launch_with(&["/usr/bin/omp", "--kb-off"]), &cfg()).unwrap_err();
+        assert_eq!(err.code(), "bad-request");
+        assert!(
+            validate_launch(&launch_with(&["/usr/bin/omp"]), &cfg()).is_ok(),
+            "an argv[0] naming the harness binary validates"
+        );
+    }
+
+    /// Only the term-int probe flag lets a fixture program run
+    /// verbatim, and the forbidden scan applies there too.
+    #[test]
+    fn validate_probe_flag_allows_fixtures_but_not_forbidden_argv() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::set_var("KB_TERM_TEST_PROBE", "1");
+        let ok = validate_launch(
+            &launch_with(&["/usr/bin/python3", "-I", "/fixtures/probe.py"]),
+            &cfg(),
+        );
+        assert!(ok.is_ok(), "probe argv validates under the flag");
+        let err =
+            validate_launch(&launch_with(&["/usr/bin/python3", "--kb-off"]), &cfg()).unwrap_err();
+        assert_eq!(err.code(), "bad-request");
+        let err =
+            validate_launch(&launch_with(&["/usr/bin/python3", "-c", "x"]), &cfg()).unwrap_err();
+        assert_eq!(err.code(), "bad-request");
+        std::env::remove_var("KB_TERM_TEST_PROBE");
+    }
+
+    /// Explicit caller exit keys always win — even when they equal the
+    /// wire default the protocol folds `None` into. Only `None` falls
+    /// back to the harness profile's exit steps.
+    #[test]
+    fn effective_exit_keys_explicit_default_still_wins() {
+        let plan = profiles::plan(&PlanRequest {
+            harness: "claude",
+            term_id: "abc123",
+            resume_sid: None,
+            cwd: "/tmp",
+            job_ulid: None,
+            run_dir: std::path::Path::new("/tmp/kb-term-test"),
+            base_env: &[],
+            extra_passthrough: &[],
+        })
+        .unwrap();
+        let spec = ValidatedLaunch {
+            harness: "claude".to_string(),
+            argv: vec!["claude".to_string()],
+            resume_sid: None,
+            cwd: PathBuf::from("/tmp"),
+            cols: 120,
+            rows: 40,
+            env: BTreeMap::new(),
+            exit_keys: None,
+        };
+        assert_eq!(
+            effective_exit_keys(&spec, &plan),
+            vec!["/exit".to_string(), "Enter".to_string()],
+            "None falls back to the claude profile steps"
+        );
+        let explicit = ValidatedLaunch {
+            exit_keys: Some(DEFAULT_EXIT_KEYS.iter().map(ToString::to_string).collect()),
+            ..spec
+        };
+        assert_eq!(
+            effective_exit_keys(&explicit, &plan),
+            vec!["C-c".to_string(), "C-c".to_string(), "C-d".to_string()],
+            "explicit default-equal keys still win over the profile"
+        );
+    }
+
+    /// The plan env is authoritative: caller env merges on top but can
+    /// never override the identity pair or forward a forbidden,
+    /// tmux-owned, or identity name.
+    #[test]
+    fn merge_caller_env_keeps_plan_authoritative() {
+        let plan = || {
+            profiles::plan(&PlanRequest {
+                harness: "claude",
+                term_id: "abc123",
+                resume_sid: None,
+                cwd: "/tmp",
+                job_ulid: None,
+                run_dir: std::path::Path::new("/tmp/kb-term-test"),
+                base_env: &[],
+                extra_passthrough: &[],
+            })
+            .unwrap()
+        };
+        let mut extra = BTreeMap::new();
+        extra.insert("FOO".to_string(), "bar".to_string());
+        let merged = merge_caller_env(plan(), &extra).unwrap();
+        assert!(merged.env.contains(&("FOO".to_string(), "bar".to_string())));
+        assert!(merged
+            .env
+            .contains(&("KB_TERM_ID".to_string(), "abc123".to_string())));
+        let mut sorted = merged.env.clone();
+        sorted.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(merged.env, sorted, "merged env stays sorted by name");
+        for bad_key in ["KB_TERM_ID", "KITTY_WINDOW_ID", "TERM", "KB_SESSION_ID"] {
+            let mut extra = BTreeMap::new();
+            extra.insert(bad_key.to_string(), "x".to_string());
+            assert_eq!(
+                merge_caller_env(plan(), &extra).unwrap_err().code(),
+                "bad-request",
+                "key {bad_key}"
+            );
+        }
     }
 }

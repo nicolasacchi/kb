@@ -96,6 +96,11 @@ impl TestRunner {
     }
 
     pub fn with_tap(tmux_bin: String, require_tap: bool, with_fake_tap: bool) -> Self {
+        // Integration fixtures run through the production dispatch
+        // path, so enable the term-int probe flag that lets a probe
+        // argv run verbatim (production kb-termd never sets it and
+        // always launches the profile argv).
+        std::env::set_var("KB_TERM_TEST_PROBE", "1");
         let dir = tempfile::Builder::new()
             .prefix("kb-term-test-")
             .tempdir_in("/tmp")
