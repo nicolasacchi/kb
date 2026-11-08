@@ -32,6 +32,9 @@ export type SessionsFilters = {
   /// W3.A/S1 — csv over `trivial|routine|substantive`. Order-preserved.
   substance?: string[];
   focus?: string | null;
+  /// A4 — `tree=flat` shows subagent children as their own rows; the
+  /// collapsed default is omitted from the URL (absent = collapsed).
+  tree?: "collapsed" | "flat";
 };
 
 /// The `/sessions` URL for a given filter set. A bare `sessionsUrl()` is the
@@ -45,8 +48,20 @@ export function sessionsUrl(f: SessionsFilters = {}): string {
     p.set("substance", f.substance.join(","));
   }
   if (f.focus) p.set("focus", f.focus);
+  if (f.tree === "flat") p.set("tree", "flat");
   const qs = p.toString();
   return qs ? `/sessions?${qs}` : "/sessions";
+}
+
+/// A4 — parse the `tree` param: only the literal `flat` selects the flat
+/// list; absent and unknown values both mean collapsed (the server's own
+/// default), so junk deep links degrade to the default view.
+export function sessionsTreeFromSearch(
+  search: string | URLSearchParams,
+): "collapsed" | "flat" {
+  const params =
+    typeof search === "string" ? new URLSearchParams(search) : search;
+  return params.get("tree") === "flat" ? "flat" : "collapsed";
 }
 
 /// `/sessions?project=<id>` — the projects-home card → project-scoped list

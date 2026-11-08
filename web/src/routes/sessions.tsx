@@ -64,6 +64,7 @@ import {
   replayUrl,
   sessionsProjectsHomeUrl,
   sessionsProjectUrl,
+  sessionsTreeFromSearch,
   sessionsWorklogUrl,
 } from "../lib/sessionsUrl";
 import {
@@ -136,6 +137,10 @@ export default function SessionsRoute() {
   const rawView = params.get("view");
   const view: "list" | "threads" | "projects" =
     rawView === "threads" ? "threads" : rawView === "projects" ? "projects" : "list";
+  // A4 — collapsed (default, param absent — subagent children hide under
+  // their root) vs flat (`?tree=flat` — every capture row shows). Unknown
+  // values degrade to collapsed via the ONE parser (sessionsUrl.ts).
+  const tree = sessionsTreeFromSearch(location.search);
 
   // D3 — a TRULY bare `/sessions` (no query string at all) promotes to the
   // remembered view (projects home, if the operator chose it before) — any
@@ -161,6 +166,7 @@ export default function SessionsRoute() {
     project || undefined,
     hideTrivial ? "routine,substantive" : undefined,
     harness || undefined,
+    tree,
   );
   // W7 (R15/LF-1) — Tier-1 presence, polled while this page is mounted (the
   // "/sessions page" half of LF-1's "ONLY from /sessions or an open session
@@ -439,8 +445,31 @@ export default function SessionsRoute() {
     onSelect: () => setView(v),
     attrs: { "data-testid": `sessions-view-${v}` },
   });
+  // A4 — flat vs collapsed tree toggle. Writes `?tree=flat` (absent =
+  // collapsed default); the other filters ride along untouched.
+  const setTree = (next: "collapsed" | "flat") => {
+    const p = new URLSearchParams(params);
+    if (next === "flat") p.set("tree", "flat");
+    else p.delete("tree");
+    setParams(p, { replace: true });
+  };
   const clusters: Cluster[] = [
-    { label: "View", controls: [viewControl("list"), viewControl("threads"), viewControl("projects")] },
+    {
+      label: "View",
+      controls: [
+        viewControl("list"),
+        viewControl("threads"),
+        viewControl("projects"),
+        {
+          id: "tree-flat",
+          label: "flat",
+          kind: "toggle" as const,
+          active: tree === "flat",
+          onSelect: () => setTree(tree === "flat" ? "collapsed" : "flat"),
+          attrs: { "data-testid": "sessions-tree-flat" },
+        },
+      ],
+    },
     {
       label: "Filters",
       controls: [
@@ -1280,6 +1309,24 @@ export function SessionListRow({
                 {husk}
               </span>
             )}
+            {/* A4 — collapsed tree readout: the A3 child count, linking to
+                the session page's children section. Nothing for 0. Rows with
+                an unresolved parent stay visible (the server's collapsed
+                default hides children, never orphans). */}
+            {row.child_count > 0 && (
+              <Link
+                to={`/sessions/${encodeURIComponent(row.session_id)}#sec-children`}
+                className="kb-ses__row-subagents"
+                data-testid="session-subagents-chip"
+                title="open this session's subagents"
+                // The chip lives inside the row <button>: stop the click
+                // from bubbling into onSelect (`?focus=`), which would
+                // race this Link's jump to the session page.
+                onClick={(e) => e.stopPropagation()}
+              >
+                +{row.child_count} subagents
+              </Link>
+            )}
             {presence.status !== "idle" && (
               <>
                 <span
@@ -1520,7 +1567,7 @@ function DecisionsSection({
 }
 
 // P5 — the commits this session produced. Hidden when none.
-function CommitsSection({
+export function CommitsSection({
   commits,
   loading,
 }: {
@@ -1789,6 +1836,7 @@ function SessionInspector(props: {
     asSheet = false,
     onMobileClose,
   } = props;
+  const location = useLocation();
   const transcriptHref = `/a/${encodeURIComponent(row.kb)}/${row.source_relative
     .split("/")
     .map(encodeURIComponent)
@@ -1879,6 +1927,17 @@ function SessionInspector(props: {
           data-testid="session-replay-link"
         >
           replay this session →
+        </Link>
+        {/* A4 — the per-session page at `/sessions/:sid`. The `from`
+            state carries the originating list URL so the page's back link
+            returns here. */}
+        <Link
+          to={`/sessions/${encodeURIComponent(row.session_id)}`}
+          state={{ from: location.pathname + location.search }}
+          className="kb-ses__ins-actions-page"
+          data-testid="session-open-page"
+        >
+          open page
         </Link>
         {row.memory_count > 0 && (
           <Link

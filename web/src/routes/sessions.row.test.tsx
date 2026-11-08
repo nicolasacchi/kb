@@ -1,11 +1,23 @@
 // @vitest-environment jsdom
 //
 // OL R4 — the worklog row: title + time, closure line, ONE facts line.
-import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
+import { cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { SessionListRow } from "./sessions";
+import { useSessions } from "../hooks/useSessions";
 import type { SessionEvidenceOut, SessionRow } from "../api/sessions";
+
+// The tree-key test below mounts useSessions, whose SSE subscription must
+// be in-memory in tests (same facade mock as queryClient.test.ts).
+vi.mock("../api/sse", () => ({
+  sse: {
+    subscribeEvent: () => () => {},
+    onResync: () => () => {},
+  },
+}));
 
 function mk(over: Partial<SessionRow>): SessionRow {
   return {
@@ -134,5 +146,103 @@ describe("SessionListRow (worklog)", () => {
     const stats = document.querySelector(".kb-ses__row-stats")!;
     expect(stats.textContent).toBe("edited, no checks ran");
     expect(screen.getByTestId("session-row-evidence").getAttribute("title")).toBeNull();
+  });
+  // A4 — collapsed tree readout: child count > 0 links to the session
+  // page's children section; 0 shows nothing.
+  it("links +N subagents to the session page children for child_count > 0", () => {
+    renderRow(mk({ child_count: 3 }));
+    const chip = screen.getByTestId("session-subagents-chip");
+    expect(chip.textContent).toBe("+3 subagents");
+    expect(chip.getAttribute("href")).toBe(
+      "/sessions/abcdef0123456789#sec-children",
+    );
+  });
+
+  it("no chip for child_count 0", () => {
+    renderRow(mk({ child_count: 0 }));
+    expect(screen.queryByTestId("session-subagents-chip")).toBeNull();
+  });
+  it("clicking the +N chip jumps to the session page without selecting the row", () => {
+    const onSelect = vi.fn();
+    let nav: { pathname: string; search: string; hash: string } | null = null;
+    const Probe = () => {
+      const loc = useLocation();
+      nav = { pathname: loc.pathname, search: loc.search, hash: loc.hash };
+      return null;
+    };
+    render(
+      <MemoryRouter initialEntries={["/sessions"]}>
+        <Routes>
+          <Route
+            path="*"
+            element={
+              <ul>
+                <SessionListRow
+                  row={mk({ child_count: 3 })}
+                  isSelected={false}
+                  onSelect={onSelect}
+                  onPrefetch={() => {}}
+                  onCancelPrefetch={() => {}}
+                  presenceSet={new Set()}
+                  now={1_800_000_000_000}
+                />
+              </ul>
+            }
+          />
+        </Routes>
+        <Probe />
+      </MemoryRouter>,
+    );
+    fireEvent.click(screen.getByTestId("session-subagents-chip"));
+    // The row must not select (`?focus=`); the chip owns the click.
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(nav).toEqual({
+      pathname: "/sessions/abcdef0123456789",
+      search: "",
+      hash: "#sec-children",
+    });
+  });
+});
+
+// A4 (test 12) — flat and collapsed are distinct useSessions cache entries:
+// the bare pre-A4 key is untouched for collapsed, while flat appends the
+// seventh "flat" slot. The fetch URL is the wire proxy (`tree=flat` sent
+// only when flat).
+describe("useSessions tree key (A4)", () => {
+  it("tree=flat gets a different query key than collapsed", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown) => {
+        urls.push(String(url));
+        return { ok: true, json: async () => ({ sessions: [] }) } as Response;
+      }),
+    );
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    );
+    const collapsed = renderHook(
+      () =>
+        useSessions(undefined, undefined, true, undefined, undefined, undefined, undefined),
+      { wrapper },
+    );
+    await waitFor(() => expect(collapsed.result.current.loading).toBe(false));
+    const flat = renderHook(
+      () => useSessions(undefined, undefined, true, undefined, undefined, undefined, "flat"),
+      { wrapper },
+    );
+    await waitFor(() => expect(flat.result.current.loading).toBe(false));
+    const keyStrings = qc
+      .getQueryCache()
+      .getAll()
+      .map((q) => JSON.stringify(q.queryKey));
+    expect(keyStrings).toContain('["sessions"]');
+    expect(keyStrings).toContain('["sessions","","","","","","flat"]');
+    expect(urls.some((u) => u.includes("tree=flat"))).toBe(true);
+    expect(urls.filter((u) => !u.includes("tree=flat")).length).toBeGreaterThan(0);
+    vi.unstubAllGlobals();
   });
 });

@@ -6,7 +6,9 @@ import {
   sessionsProjectUrl,
   sessionsUrl,
   sessionsWorklogUrl,
+  sessionsTreeFromSearch,
 } from "./sessionsUrl";
+import { normalizeScrollKey } from "../hooks/useScrollRestoration";
 
 describe("sessionsUrl", () => {
   it("bare call is the unfiltered list landing", () => {
@@ -75,5 +77,36 @@ describe("sessionsUrl", () => {
   it("formatSessionTurn stringifies N or passes through 'end'", () => {
     expect(formatSessionTurn(12)).toBe("12");
     expect(formatSessionTurn("end")).toBe("end");
+  });
+
+  // A4 — `tree=flat` shows subagent children; absent means collapsed.
+  it("tree=flat is emitted only for flat; collapsed omits the param", () => {
+    expect(sessionsUrl({ tree: "flat" })).toBe("/sessions?tree=flat");
+    expect(sessionsUrl({ tree: "collapsed" })).toBe("/sessions");
+    expect(sessionsUrl({})).toBe("/sessions");
+  });
+
+  it("sessionsTreeFromSearch round-trips flat and ignores junk", () => {
+    expect(sessionsTreeFromSearch("?tree=flat")).toBe("flat");
+    expect(sessionsTreeFromSearch("")).toBe("collapsed");
+    expect(sessionsTreeFromSearch("?tree=collapsed")).toBe("collapsed");
+    expect(sessionsTreeFromSearch("?tree=banana")).toBe("collapsed");
+    expect(sessionsTreeFromSearch(new URLSearchParams({ tree: "flat" }))).toBe("flat");
+    // Round-trip: what the builder writes, the parser reads back.
+    expect(sessionsTreeFromSearch(sessionsUrl({ tree: "flat" }).split("?")[1] ?? "")).toBe("flat");
+  });
+});
+
+// A4 — the scroll-restoration key must DIFFER between flat and collapsed
+// (different lists), while `focus`/`follow` stay ephemeral. `tree` is
+// deliberately NOT in the route's ephemeralParams set.
+describe("tree scroll key", () => {
+  it("tree=flat changes the scroll key; focus does not", () => {
+    const ephemeral = ["focus", "follow"];
+    const collapsed = normalizeScrollKey("/sessions", ephemeral);
+    const flat = normalizeScrollKey("/sessions?tree=flat", ephemeral);
+    expect(flat).toBe("/sessions?tree=flat");
+    expect(flat).not.toBe(collapsed);
+    expect(normalizeScrollKey("/sessions?focus=sid-1", ephemeral)).toBe(collapsed);
   });
 });

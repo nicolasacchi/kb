@@ -242,7 +242,7 @@ describe("SSE → TanStack invalidation bridge (invariant #23)", () => {
   // is enough — no burst gate, unlike the bursty artifact-churn kinds above.
   it("session.state directly invalidates the live-sessions cockpit query", () => {
     emit("session.state", { session_id: "sid-1", kb: "demo" });
-    expect(keys()).toEqual([["sessions", "live"]]);
+    expect(keys()).toEqual([["sessions", "live"], ["sessions", "card"]]);
   });
 
   // SL4 — the slate bridge. These four cases pin the EXACT key set: a fifth
@@ -251,7 +251,7 @@ describe("SSE → TanStack invalidation bridge (invariant #23)", () => {
   // exact key set" line is guarding against.
   it("slate.updated directly invalidates the list and the named slate's board", () => {
     emit("slate.updated", { slug: "kb", seq: 66, kind: "found" });
-    expect(keys()).toEqual([["slates"], ["slate", "kb"], ["changes"]]);
+    expect(keys()).toEqual([["slates"], ["slate", "kb"], ["sessions", "card"], ["changes"]]);
   });
 
   // ["slate", slug, "history"] is a strict EXTENSION of ["slate", slug], so
@@ -270,7 +270,7 @@ describe("SSE → TanStack invalidation bridge (invariant #23)", () => {
 
   it("a slate event with no slug falls back to the whole slate prefix", () => {
     emit("slate.updated", {});
-    expect(keys()).toEqual([["slates"], ["slate"], ["changes"]]);
+    expect(keys()).toEqual([["slates"], ["slate"], ["sessions", "card"], ["changes"]]);
   });
 
   it("slate.updated is NOT burst-gated — two appends invalidate twice", () => {
@@ -281,10 +281,41 @@ describe("SSE → TanStack invalidation bridge (invariant #23)", () => {
     expect(keys()).toEqual([
       ["slates"],
       ["slate", "kb"],
+      ["sessions", "card"],
       ["changes"],
       ["slates"],
       ["slate", "kb"],
+      ["sessions", "card"],
     ]);
+  });
+
+  // A4 — the session card's own invalidation: a cached
+  // ["sessions","card","s1"] becomes invalidated after session.state and
+  // after slate.updated. The spy captures the bridge's invalidateQueries
+  // queryKey args; TanStack invalidates by PREFIX, so the emitted
+  // ["sessions","card"] prefix reaches the sid-scoped key.
+  it("a cached session card is invalidated by session.state", () => {
+    emit("session.state", { session_id: "s1", kb: "demo" });
+    const cardKey = ["sessions", "card", "s1"];
+    const hit = keys().some(
+      (k) =>
+        Array.isArray(k) &&
+        k.length <= cardKey.length &&
+        k.every((seg, i) => seg === cardKey[i]),
+    );
+    expect(hit).toBe(true);
+  });
+
+  it("a cached session card is invalidated by slate.updated", () => {
+    emit("slate.updated", { slug: "kb", seq: 7 });
+    const cardKey = ["sessions", "card", "s1"];
+    const hit = keys().some(
+      (k) =>
+        Array.isArray(k) &&
+        k.length <= cardKey.length &&
+        k.every((seg, i) => seg === cardKey[i]),
+    );
+    expect(hit).toBe(true);
   });
 
   // OL IDEA5 — the "since you left" strip's ["changes", since] entries.
