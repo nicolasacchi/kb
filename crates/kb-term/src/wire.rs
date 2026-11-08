@@ -100,6 +100,8 @@ pub enum ServerFrame {
         serialize: String,
         /// Width table, e.g. `"unicode-graphemes@0.4.0"`.
         width: String,
+        /// Image protocol version, e.g. `"0.9.0"`.
+        image: String,
         /// Grid columns.
         cols: u16,
         /// Grid rows.
@@ -112,9 +114,13 @@ pub enum ServerFrame {
         cell_px_w: u16,
         /// Cell height in pixels.
         cell_px_h: u16,
+        /// Viewer theme, if any (null until a theme ships).
+        theme: Option<serde_json::Value>,
     },
     /// A stored image definition.
     Imagedef {
+        /// Per-epoch marker sequence (0 for join-time defs).
+        seq: u64,
         /// Image id.
         id: u32,
         /// Image generation.
@@ -131,6 +137,8 @@ pub enum ServerFrame {
         cols: u16,
         /// Image height in cells.
         rows: u16,
+        /// Stream position after which this definition applies.
+        offset: u64,
     },
     /// Seed marker: buffered bytes from `offset` for `len` bytes.
     Seed {
@@ -141,6 +149,8 @@ pub enum ServerFrame {
     },
     /// Grid resize at a stream offset.
     Resize {
+        /// Per-epoch marker sequence.
+        seq: u64,
         /// Absolute offset of this event.
         offset: u64,
         /// Grid columns.
@@ -150,6 +160,8 @@ pub enum ServerFrame {
     },
     /// Grid size change with the giver and offset.
     Sizechanged {
+        /// Per-epoch marker sequence.
+        seq: u64,
         /// Grid columns.
         cols: u16,
         /// Grid rows.
@@ -161,15 +173,28 @@ pub enum ServerFrame {
     },
     /// Graphics reset at a generation.
     Gfxreset {
+        /// Per-epoch marker sequence.
+        seq: u64,
         /// Image generation.
         gen: u32,
+        /// Stream position after which this reset applies.
+        offset: u64,
     },
     /// Session exit.
     Exit {
+        /// Per-epoch marker sequence.
+        seq: u64,
         /// Exit code, if any.
         code: Option<i32>,
         /// Absolute offset of this event.
         offset: u64,
+    },
+    /// Clipboard write from OSC 52, delivered per-viewer (never replayed).
+    Clipboard {
+        /// Stream position the write applies at.
+        offset: u64,
+        /// base64 payload.
+        data_b64: String,
     },
     /// Frame-level error.
     Error {
@@ -189,6 +214,10 @@ pub enum ClientFrame {
     Resumefrom {
         /// Absolute offset to resume from.
         offset: u64,
+        /// Highest marker seq the client applied (0 if none).
+        mseq: u64,
+        /// Stream epoch the offset belongs to.
+        epoch: String,
     },
     /// Request grid size.
     Takesize {
@@ -206,12 +235,24 @@ pub enum ClientFrame {
     Ping {},
 }
 
-/// Error decoding a binary frame.
+/// Largest legal stream offset: offsets are JS-safe integers (< 2^53).
+pub const MAX_OFFSET: u64 = 1 << 53;
+
+/// Error decoding a kb-term/1 frame (protocol error "bad-frame").
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum WireError {
     /// The frame is shorter than the 8-byte offset header.
     #[error("short binary frame")]
     ShortBinaryFrame,
+    /// Malformed JSON or a frame without a string `t` discriminator.
+    #[error("bad-frame: malformed frame")]
+    MalformedJson,
+    /// A header offset at or above 2^53.
+    #[error("bad-frame: offset out of range")]
+    OffsetOutOfRange,
+    /// A malformed tap.sock envelope (zero length, bad kind, bad id).
+    #[error("bad-frame: malformed envelope")]
+    BadEnvelope,
 }
 
 /// Encode a binary frame: an 8-byte big-endian offset, then the payload.
@@ -224,14 +265,231 @@ pub fn encode_binary(offset: u64, payload: &[u8]) -> Vec<u8> {
 
 /// Decode a binary frame into its offset and payload.
 ///
-/// An empty payload is valid; a frame under 8 bytes is an error.
+/// An empty payload is valid; a frame under 8 bytes is an error, as is any
+/// header offset at or above 2^53 (the wire protocol error "bad-frame").
 pub fn decode_binary(frame: &[u8]) -> Result<(u64, &[u8]), WireError> {
     if frame.len() < 8 {
         return Err(WireError::ShortBinaryFrame);
     }
     let mut header = [0u8; 8];
     header.copy_from_slice(&frame[..8]);
-    Ok((u64::from_be_bytes(header), &frame[8..]))
+    let offset = u64::from_be_bytes(header);
+    if offset >= MAX_OFFSET {
+        return Err(WireError::OffsetOutOfRange);
+    }
+    Ok((offset, &frame[8..]))
+}
+
+/// A decoded kb-term/1 text frame, any side, or an unknown `t`.
+///
+/// The decode is hand-written: parse to `serde_json::Value`, match on `t`,
+/// deserialize the known variant. An unknown `t` yields `Unknown` holding
+/// the raw input string; re-encode returns that exact string (internally
+/// tagged enums cannot express this, and `Value` maps sort keys, so frames
+/// are never re-serialised through `Value`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TextFrame {
+    /// A server-to-client frame.
+    Server(ServerFrame),
+    /// A client-to-server frame.
+    Client(ClientFrame),
+    /// A tap.sock control message (envelope kind 2).
+    Control(ControlMessage),
+    /// An unknown `t`: the raw input, re-encoded verbatim.
+    Unknown(String),
+}
+
+/// Decode one kb-term/1 text frame (any side). Malformed JSON or a missing
+/// string `t` is an error; an unknown `t` is `TextFrame::Unknown`.
+pub fn decode_text_frame(raw: &str) -> Result<TextFrame, WireError> {
+    let value: serde_json::Value =
+        serde_json::from_str(raw).map_err(|_| WireError::MalformedJson)?;
+    let t = value
+        .get("t")
+        .and_then(serde_json::Value::as_str)
+        .ok_or(WireError::MalformedJson)?;
+    match t {
+        "hello" | "profile" | "imagedef" | "seed" | "resize" | "sizechanged" | "gfxreset"
+        | "exit" | "clipboard" | "error" => {
+            let frame: ServerFrame =
+                serde_json::from_str(raw).map_err(|_| WireError::MalformedJson)?;
+            Ok(TextFrame::Server(frame))
+        }
+        "resumefrom" | "takesize" | "input" | "ping" => {
+            let frame: ClientFrame =
+                serde_json::from_str(raw).map_err(|_| WireError::MalformedJson)?;
+            Ok(TextFrame::Client(frame))
+        }
+        "viewer-open" | "viewer-close" | "typed" | "stats" => {
+            let msg: ControlMessage =
+                serde_json::from_str(raw).map_err(|_| WireError::MalformedJson)?;
+            Ok(TextFrame::Control(msg))
+        }
+        _ => Ok(TextFrame::Unknown(raw.to_string())),
+    }
+}
+
+/// Resume coordinates in a `viewer-open` control message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResumeInfo {
+    /// Absolute offset to resume from.
+    pub offset: u64,
+    /// Highest marker seq the viewer applied (0 if none).
+    pub mseq: u64,
+    /// Stream epoch the offset belongs to.
+    pub epoch: String,
+}
+
+/// tap.sock control messages (envelope kind 2), relay <-> tap.
+/// Unknown fields are rejected so a misspelled field never silently drops.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "t", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum ControlMessage {
+    /// Open (or resume) a viewer session on the connection.
+    ViewerOpen {
+        /// Viewer id (the S->C bodies carry it as a prefix).
+        viewer: String,
+        /// Requested profile.
+        profile: Profile,
+        /// Resume coordinates, if any.
+        resume: Option<ResumeInfo>,
+    },
+    /// Close a viewer session.
+    ViewerClose {
+        /// Viewer id.
+        viewer: String,
+    },
+    /// Keystroke notification (no key content ever crosses here).
+    Typed {
+        /// Viewer id.
+        viewer: String,
+    },
+    /// Test-mode stats request, or (with fields) the stats response.
+    Stats {
+        /// Completed joins, if a response.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        joins: Option<u64>,
+        /// Degraded joins, if a response.
+        #[serde(
+            default,
+            rename = "degradedJoins",
+            skip_serializing_if = "Option::is_none"
+        )]
+        degraded_joins: Option<u64>,
+        /// Live viewers, if a response.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        viewers: Option<u64>,
+    },
+}
+
+/// Viewer profile requested at `viewer-open` time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Profile {
+    /// Desktop profile (50k-line scrollback).
+    Desktop,
+    /// Phone profile (20k-line scrollback).
+    Phone,
+}
+
+/// tap.sock envelope kind: text JSON.
+pub const ENV_TEXT: u8 = 0;
+/// tap.sock envelope kind: binary frame (with its 8-byte header).
+pub const ENV_BINARY: u8 = 1;
+/// tap.sock envelope kind: control JSON.
+pub const ENV_CONTROL: u8 = 2;
+
+/// One decoded tap.sock envelope: `[u32 BE length][u8 kind][body]`, where
+/// `length` counts the kind byte plus the body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Envelope {
+    /// Envelope kind (0, 1, or 2).
+    pub kind: u8,
+    /// Envelope body.
+    pub body: Vec<u8>,
+}
+
+/// Encode one tap.sock envelope.
+pub fn encode_envelope(kind: u8, body: &[u8]) -> Result<Vec<u8>, WireError> {
+    if kind != ENV_TEXT && kind != ENV_BINARY && kind != ENV_CONTROL {
+        return Err(WireError::BadEnvelope);
+    }
+    let mut buf = Vec::with_capacity(4 + 1 + body.len());
+    buf.extend_from_slice(&((1 + body.len()) as u32).to_be_bytes());
+    buf.push(kind);
+    buf.extend_from_slice(body);
+    Ok(buf)
+}
+
+/// S->C body: `[u8 idlen][id utf8][frame]`.
+pub fn s2c_body(id: &str, frame: &[u8]) -> Result<Vec<u8>, WireError> {
+    let id_bytes = id.as_bytes();
+    if id_bytes.len() > 255 {
+        return Err(WireError::BadEnvelope);
+    }
+    let mut buf = Vec::with_capacity(1 + id_bytes.len() + frame.len());
+    buf.push(id_bytes.len() as u8);
+    buf.extend_from_slice(id_bytes);
+    buf.extend_from_slice(frame);
+    Ok(buf)
+}
+
+/// Parse an S->C body into the viewer id and the frame bytes.
+pub fn parse_s2c_body(body: &[u8]) -> Result<(&str, &[u8]), WireError> {
+    if body.is_empty() {
+        return Err(WireError::BadEnvelope);
+    }
+    let id_len = usize::from(body[0]);
+    if body.len() < 1 + id_len {
+        return Err(WireError::BadEnvelope);
+    }
+    let id = std::str::from_utf8(&body[1..1 + id_len]).map_err(|_| WireError::BadEnvelope)?;
+    Ok((id, &body[1 + id_len..]))
+}
+
+/// Streaming tap.sock envelope decoder. Feed bytes; get back every complete
+/// envelope. A zero length or a bad kind is `BadEnvelope`.
+#[derive(Debug, Default)]
+pub struct EnvelopeDecoder {
+    buf: Vec<u8>,
+}
+
+impl EnvelopeDecoder {
+    /// Create an empty decoder.
+    pub fn new() -> Self {
+        Self { buf: Vec::new() }
+    }
+
+    /// Push bytes; return every complete envelope now decodable.
+    pub fn push(&mut self, chunk: &[u8]) -> Result<Vec<Envelope>, WireError> {
+        self.buf.extend_from_slice(chunk);
+        let mut out = Vec::new();
+        loop {
+            if self.buf.len() < 5 {
+                break;
+            }
+            let mut hdr = [0u8; 4];
+            hdr.copy_from_slice(&self.buf[..4]);
+            let len = usize::from(u32::from_be_bytes(hdr));
+            if len == 0 {
+                return Err(WireError::BadEnvelope);
+            }
+            if self.buf.len() < 4 + len {
+                break;
+            }
+            let kind = self.buf[4];
+            if kind != ENV_TEXT && kind != ENV_BINARY && kind != ENV_CONTROL {
+                return Err(WireError::BadEnvelope);
+            }
+            out.push(Envelope {
+                kind,
+                body: self.buf[5..4 + len].to_vec(),
+            });
+            self.buf.drain(..4 + len);
+        }
+        Ok(out)
+    }
 }
 
 /// Runner RPC request over runner.sock (tag `op`, snake_case).
