@@ -29,6 +29,28 @@ test('xterm package versions are the T6 pins', () => {
   expect(pkgVersion('@xterm/addon-unicode-graphemes')).toBe('0.4.0');
 });
 
+/** Wrap-cell line fields read by readWrapCell (seed-state.ts): instance
+ * fields on lines.get(i), asserted on a content line since they are not
+ * static paths in INTERNALS_PATHS. */
+test('wrap-cell line fields exist on a content line', async () => {
+  const twin = makeTwin(40, 12);
+  try {
+    await twin.feed(new TextEncoder().encode(`${'\x1b'}[1;31mx`));
+    const term = twin.term as unknown as Record<string, unknown>;
+    const core = term._core as Record<string, unknown>;
+    const bs = core._bufferService as Record<string, unknown>;
+    const buffers = bs.buffers as Record<string, Record<string, unknown>>;
+    const line = (buffers.normal.lines as { get(i: number): Record<string, unknown> }).get(0);
+    for (const field of ['_data', '_combined', '_extendedAttrs']) {
+      expect(field in line).toBe(true);
+    }
+    const data = line._data;
+    expect(data instanceof Uint32Array).toBe(true);
+  } finally {
+    twin.dispose();
+  }
+});
+
 test('every internal path captureTwinState reads exists', () => {
   const twin = makeTwin(40, 12);
   try {

@@ -11,9 +11,10 @@ import { enc } from './helpers.ts';
 
 const E = '\x1b';
 
-// sha256 of buildSeed bytes for the fixed stream+offset below, pinned after
-// the first CI run (the determinism print in this test emits it).
-const GOLDEN_SHA256: string | null = null;
+// sha256 of buildSeed bytes for the fixed stream+offset below, pinned from
+// the CI print; the determinism test re-emits it on every run. A seed-byte
+// change must re-pin this value deliberately, never to make it pass.
+const GOLDEN_SHA256: string | null = '02fc8a833f1d6f3f048d1c80568378263fcad03ad26e8eedadce1ea8262a391b';
 
 async function gatePair(cols = 40, rows = 12): Promise<{ twin: Twin; gate: QuiescentJoinGate; ground: GroundTracker }> {
   const twin = makeTwin(cols, rows);

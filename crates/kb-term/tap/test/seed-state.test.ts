@@ -34,8 +34,7 @@ function bareBody(twin: Twin): Uint8Array {
   const ser = twin.serialize as unknown as { serialize(o: { scrollback?: number }): string };
   return enc(ser.serialize.call(twin.serialize, { scrollback: 50000 }));
 }
-async function expectClean(twin: Twin, seedBytes: Uint8Array, _note: string): Promise<void> {
-  void _note;
+async function expectClean(twin: Twin, seedBytes: Uint8Array): Promise<void> {
   const classes = await stageClasses(twin, seedBytes);
   expect([...classes]).toEqual([]);
 }
@@ -56,7 +55,7 @@ test('DECSTBM scroll region is restored', async () => {
   try {
     await expectBareDirty(twin, 'scroll region');
     const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground: groundOf(enc('')) });
-    await expectClean(twin, seed.bytes, 'region seed');
+    await expectClean(twin, seed.bytes);
   } finally {
     twin.dispose();
   }
@@ -67,7 +66,7 @@ test('DECSC slot (position and pen) is restored', async () => {
   try {
     await expectBareDirty(twin, 'DECSC saved cursor');
     const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1 });
-    await expectClean(twin, seed.bytes, 'decsc seed');
+    await expectClean(twin, seed.bytes);
     // probe: ESC 8 restores the twin slot position (4;7 -> x=6) in the viewer.
     const viewer = makeTwin(40, 12);
     try {
@@ -85,9 +84,17 @@ test('DECSC slot (position and pen) is restored', async () => {
 test('pending wrap at the last column is restored', async () => {
   const twin = await twinWith(10, 5, `${E}[1;31m${'x'.repeat(10)}`);
   try {
-    await expectBareDirty(twin, 'pending wrap');
+    // Bare serialize already reproduces pending wrap (x === cols), so
+    // load-bearingness is pinned via skip + seed-content, not bare-dirty.
     const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1 });
-    await expectClean(twin, seed.bytes, 'pending-wrap seed');
+    await expectClean(twin, seed.bytes);
+    const full = Buffer.from(seed.bytes).toString('latin1');
+    const skippedSeed = buildSeed(twin, { scrollback: 50000, atOffset: 1, skip: ['pendingWrap'] });
+    const skipped = Buffer.from(skippedSeed.bytes).toString('latin1');
+    // Full tail rewrites the wrapped cell (CUP 1;10 + pen SGR + 'x'); the
+    // skipped tail omits the rewrite char.
+    expect(full.includes(`${E}[1;10H${E}[0;31mx`)).toBe(true);
+    expect(skipped.includes(`${E}[1;10H${E}[0;31mx`)).toBe(false);
   } finally {
     twin.dispose();
   }
@@ -98,7 +105,7 @@ test('origin mode with a scroll region is restored', async () => {
   try {
     await expectBareDirty(twin, 'scroll region');
     const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1 });
-    await expectClean(twin, seed.bytes, 'origin seed');
+    await expectClean(twin, seed.bytes);
   } finally {
     twin.dispose();
   }
@@ -129,8 +136,18 @@ test('DECSCUSR block/underline/bar x blink/steady round-trips', async () => {
         await viewer.feed(seed.bytes);
         const a = stateOf(twin.term as never);
         const b = stateOf(viewer.term as never);
-        expect(b['decCursorStyle']).toBe(a['decCursorStyle']);
-        expect(b['decCursorBlink']).toBe(a['decCursorBlink']);
+        const tail = Buffer.from(seed.bytes).toString('latin1').slice(-60);
+        try {
+          expect(b['decCursorStyle']).toBe(a['decCursorStyle']);
+          expect(b['decCursorBlink']).toBe(a['decCursorBlink']);
+        } catch (err) {
+          // On failure print the trailing seed bytes (the 'q' sequence
+          // and everything after it) plus the observed values, so the
+          // CI log shows what follows the DECSCUSR sequence.
+          console.log(`DECSCUSR n=${n} twin=${JSON.stringify(a['decCursorStyle'])}/${JSON.stringify(a['decCursorBlink'])} viewer=${JSON.stringify(b['decCursorStyle'])}/${JSON.stringify(b['decCursorBlink'])} tail=${JSON.stringify(tail)}`);
+          throw err;
+        }
+        console.log(`DECSCUSR n=${n} style=${String(a['decCursorStyle'])} blink=${String(a['decCursorBlink'])} tail=${JSON.stringify(tail)}`);
       } finally {
         viewer.dispose();
       }
@@ -141,16 +158,17 @@ test('DECSCUSR block/underline/bar x blink/steady round-trips', async () => {
 });
 
 test('alt active: normal DECSC slot survives composition (uses ?47h, not ?1049h)', async () => {
-  // Live cursor moves away from the saved slot before ?1049h, so a bare
-  // ?1049h save would clobber the slot (proven dirty below).
-  const twin = await twinWith(40, 12, `${E}[1;32m${E}[2;3H${E}7${E}[5;5H${E}[0m${E}[?1049h${E}[2J${E}[9;9HALT`);
+  // Normal slot is saved by ESC7 before the first ?1049h; the live cursor
+  // at the (second) ?1049h differs, and the alt slot is set in-alt, so a
+  // bare body (which replays ?1049h but never ESC7) shows the difference.
+  const twin = await twinWith(40, 12, `${E}[1;32m${E}[2;3H${E}7${E}[5;5H${E}[0m${E}[?1049h${E}[8;8H${E}7${E}[?1049l${E}[3;7H${E}7${E}[?1049h${E}[2J${E}[9;9HALT`);
   try {
     await expectBareDirty(twin, 'DECSC saved cursor');
     const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1 });
     const text = Buffer.from(seed.bytes).toString('latin1');
     expect(text.includes(`${E}[?47h`)).toBe(true);
     expect(text.includes(`${E}[?1049h`)).toBe(false);
-    await expectClean(twin, seed.bytes, 'alt seed');
+    await expectClean(twin, seed.bytes);
   } finally {
     twin.dispose();
   }
@@ -159,9 +177,15 @@ test('alt active: normal DECSC slot survives composition (uses ?47h, not ?1049h)
 test('pen with a curly underline is restored', async () => {
   const twin = await twinWith(40, 12, `${E}[0;4:3;58;5;42mcurly ${E}[0m`);
   try {
-    await expectBareDirty(twin, 'pen (current SGR)');
+    // Bare serialize preserves the pen (its body restores _curAttrData),
+    // so load-bearingness is pinned via skip + seed-content below.
     const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1 });
-    await expectClean(twin, seed.bytes, 'curly pen seed');
+    await expectClean(twin, seed.bytes);
+    const full = Buffer.from(seed.bytes).toString('latin1');
+    const skippedSeed = buildSeed(twin, { scrollback: 50000, atOffset: 1, skip: ['pen'] });
+    const skipped = Buffer.from(skippedSeed.bytes).toString('latin1');
+    expect(full.includes(`${E}[0;4:3;58;5;42m`)).toBe(true);
+    expect(skipped.includes(`${E}[0;4:3;58;5;42m`)).toBe(false);
   } finally {
     twin.dispose();
   }
@@ -181,15 +205,17 @@ test('captureTwinState fails closed when an internal is missing', async () => {
   }
 });
 
-test('skip mutations: every tail item is load-bearing', async () => {
+test('skip mutations: region/DECSC/modes tail items are load-bearing', async () => {
   const seq = `${E}[1;31m${E}[3;10r${E}[?6h${E}[5 q${E}7${E}[0;32m${E}[2;2Hhi${E}[3;1H${'x'.repeat(40)}`;
   const twin = await twinWith(40, 12, seq);
   try {
+    // 'pen' and 'pendingWrap' skips produce no stage-A class (bare
+    // serialize already preserves them) so they are pinned by content
+    // in their dedicated tests; only cases that actually produce a
+    // class stay here.
     const cases: Array<[TailItem, string]> = [
       ['decstbm', 'scroll region'],
       ['decsc', 'DECSC saved cursor'],
-      ['pen', 'pen (current SGR)'],
-      ['pendingWrap', 'pending wrap'],
       // Body re-emits ?1/?66/?4/?6/?2004/?1004, so modes-skip is observable
       // via DECSCUSR (cursor style class) and ?25 (cursor visibility).
       ['modes', 'cursor style'],
@@ -204,8 +230,32 @@ test('skip mutations: every tail item is load-bearing', async () => {
   }
 });
 
+test('buildSeed fails closed on a non-default charset/glevel', async () => {
+  const plain = makeTwin(20, 8);
+  try {
+    await plain.feed(enc('hello'));
+    expect(() => buildSeed(plain, { scrollback: 50000, atOffset: 1 })).not.toThrow();
+  } finally {
+    plain.dispose();
+  }
+  const glevel = await twinWith(40, 12, `${E}n${E}[1;1Hhi`);
+  try {
+    expect(() => buildSeed(glevel, { scrollback: 50000, atOffset: 1 }))
+      .toThrow(/seed: non-default charset\/glevel/);
+  } finally {
+    glevel.dispose();
+  }
+  const charset = await twinWith(40, 12, `${E}(0${E}7${E}[1;1Hhi`);
+  try {
+    expect(() => buildSeed(charset, { scrollback: 50000, atOffset: 1 }))
+      .toThrow(/seed: non-default charset\/glevel/);
+  } finally {
+    charset.dispose();
+  }
+});
+
 test('skip alt mutation: ?1049h clobbers the normal slot', async () => {
-  const twin = await twinWith(40, 12, `${E}[1;32m${E}[2;3H${E}7${E}[5;5H${E}[0m${E}[?1049h${E}[2J${E}[9;9HALT`);
+  const twin = await twinWith(40, 12, `${E}[1;32m${E}[2;3H${E}7${E}[5;5H${E}[0m${E}[?1049h${E}[8;8H${E}7${E}[?1049l${E}[3;7H${E}7${E}[?1049h${E}[2J${E}[9;9HALT`);
   try {
     const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, skip: ['alt'] });
     const classes = await stageClasses(twin, seed.bytes);

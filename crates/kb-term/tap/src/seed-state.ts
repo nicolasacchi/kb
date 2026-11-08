@@ -4,11 +4,14 @@
 // live references). It FAILS CLOSED: every internal path read is asserted,
 // and any missing path throws Error('seed: xterm internals changed: <path>').
 // The matrix uses the spike's safe(..., default) diagnostics instead; the
-// seed builder never returns defaults. INTERNALS_PATHS lists every path this
-// module reads (and the wrap-cell line fields); test/matrix/pins.test.ts
-// asserts each one exists on a fresh terminal, so an xterm upgrade that
-// renames an internal breaks the pinned build loudly instead of silently
-// producing wrong seeds.
+// seed builder never returns defaults. INTERNALS_PATHS lists every static
+// path this module reads; test/matrix/pins.test.ts asserts each one
+// exists on a fresh terminal, so an xterm upgrade that renames an internal
+// breaks the pinned build loudly instead of silently producing wrong
+// seeds. The wrap-cell line fields (_data, _combined, _extendedAttrs) are
+// instance fields read via lines.get(i) (readWrapCell, which throws
+// fail-closed when they go missing) rather than static paths: the pin
+// test asserts them on a content line instead.
 //
 // Charset note: designation characters are not retained by xterm's
 // CharsetService (only the built character maps), so designations cannot
@@ -218,8 +221,8 @@ export function captureTwinState(twin: Twin): TwinState {
   const coreService = need(core, 'coreService', 'twin.term._core');
   const decPrivateModes = need(coreService, 'decPrivateModes', 'twin.term._core.coreService');
   const charsetService = need(core, '_charsetService', 'twin.term._core');
-  // Charset is diagnostic-only: xterm 6.0.0 CharsetService has no
-  // `charset` property (verified in CI), so read tolerantly as null.
+  // Charset is diagnostic-only: read the charset service's records
+  // directly; never fail on a missing diagnostic `charset` property.
   const charset = (charsetService as Record<string, unknown>).charset as Record<string, unknown> | undefined;
   const charsets = need<unknown[]>(charsetService, '_charsets', 'twin.term._core._charsetService');
   const buffer = need(term, 'buffer', 'twin.term');

@@ -61,12 +61,21 @@ function attrSig(a: AttrLike | null): unknown {
   };
 }
 
-/** stateOf with correct pen/savedAttr underline signatures (see header). */
+/** stateOf with correct pen/savedAttr underline signatures (see header),
+ * and DECRC-equivalence for the DECSC slot: the raw savedY is an absolute
+ * buffer coordinate that CUP cannot name once ybase has moved (scroll or
+ * ED3 trim), so raw comparison can never hold for out-of-viewport slots.
+ * xterm's DECRC restores y = max(savedY - ybase, 0) and _restrictCursor
+ * clamps to [0, rows-1] (x to [0, cols-1]); we compare that restored
+ * position instead of the raw absolute value. See README. */
 export function stateOf(t: Term): Record<string, unknown> {
   const s = baseStateOf(t as never);
   const core = t._core as {
     _inputHandler: { _curAttrData: AttrLike | null; _eraseAttrData?: () => AttrLike };
-    _bufferService: { buffers: Record<string, { savedCurAttrData: AttrLike | null }> };
+    _bufferService: {
+      rows?: number;
+      buffers: Record<string, { savedCurAttrData: AttrLike | null; savedX?: number; savedY?: number; ybase?: number }>;
+    };
   };
   s['pen'] = attrSig(core._inputHandler._curAttrData);
   try {
@@ -74,11 +83,29 @@ export function stateOf(t: Term): Record<string, unknown> {
   } catch {
     // keep the base value
   }
+  const rows = core._bufferService.rows;
   for (const name of ['normal', 'alt']) {
     const b = core._bufferService.buffers[name];
     s[`${name}.savedAttr`] = attrSig(b ? b.savedCurAttrData : null);
+    if (b && typeof b.savedX === 'number' && typeof b.savedY === 'number' && typeof b.ybase === 'number' && typeof rows === 'number') {
+      s[`${name}.savedX`] = Math.min(Math.max(b.savedX, 0), Math.max(0, t.cols - 1));
+      s[`${name}.savedY`] = Math.min(Math.max(b.savedY - b.ybase, 0), Math.max(0, rows - 1));
+    }
   }
   return s;
+}
+
+/** Visual colour equality for masked fg/bg words (bits 0-25, mode bits
+ * 24-25): P16 vs P256 palette indices < 16 carry the same colour, only
+ * xterm's mode bits differ. SerializeAddon 0.14.0 emits P256 indices
+ * 0-15 as P16 codes (30-37/90-97), so its replayed word differs while
+ * the displayed colour is identical. */
+export function sameVisualColour(a: number, b: number): boolean {
+  const mode = (w: number): number => (w >>> 24) & 3;
+  const val = (w: number): number => w & 0xffffff;
+  if (val(a) !== val(b)) return false;
+  if (mode(a) === mode(b)) return true;
+  return (mode(a) === 1 || mode(a) === 2) && (mode(b) === 1 || mode(b) === 2) && val(a) < 16;
 }
 
 export function diffState(a: Record<string, unknown>, b: Record<string, unknown>): StateDiff[] {

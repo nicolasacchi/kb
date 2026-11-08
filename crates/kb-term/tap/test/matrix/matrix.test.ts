@@ -22,6 +22,7 @@ import {
   dumpRows,
   isStageBAllowed,
   COSMETIC_RESIDUALS,
+  sameVisualColour,
   type StateDiff,
 } from './lib.ts';
 
@@ -205,6 +206,7 @@ async function runVariantStream(variant: Variant, spec: StreamSpec): Promise<voi
   const { cols, rows } = spec;
   const mk = () => makeTwin(cols, rows, { variant });
 
+  const failures: string[] = [];
   try {
     const buildRef = async (): Promise<Twin> => {
       const r = mk();
@@ -225,72 +227,96 @@ async function runVariantStream(variant: Variant, spec: StreamSpec): Promise<voi
         ref = await buildRef();
         refDirty = false;
       }
-      const seed = buildSeed(twin, { scrollback: 50000, atOffset: j.off });
-      if (seed.withheld.mouse !== 0) throw new Error(`withheld.mouse=${seed.withheld.mouse}`);
       const viewer = mk();
-      await viewer.feed(seed.bytes);
-      // stage A
-      const aState = diffState(stateOf(twin.term as never), stateOf(viewer.term as never));
-      const cellTables: Record<string, number> = {};
-      for (const which of ['normal', 'alt'] as const) {
-        const c = compareBuffers(twin.term as never, viewer.term as never, which);
-        Object.assign(cellTables, classifyBufferDiff(c.cells, which, which === 'alt' ? stateOf(twin.term as never).activeBuffer === 'alternate' : true));
-      }
-      const aClasses = new Set<string>([...aState.map((d) => d.cls), ...Object.keys(cellTables)]);
-      const aBad = nonCosmetic(aClasses, cellTables);
-      if (aBad.length > 0) {
-        throw new Error(
-          `stage A ${variant}/${spec.name}@${j.off}: ${aBad.join(', ')}\n` +
-          `state=${JSON.stringify(aState)}\ncells=${JSON.stringify(cellTables)}\n` +
-          `--- twin last rows ---\n${dumpRows(twin.term as never, 'normal', 12).join('\n')}\n` +
-          `--- viewer last rows ---\n${dumpRows(viewer.term as never, 'normal', 12).join('\n')}`,
-        );
-      }
-      // stage B
-      await viewer.feed(bytes.subarray(j.off));
-      const bState = diffState(refState, stateOf(viewer.term as never));
-      const bCells: Record<string, number> = {};
-      for (const which of ['normal', 'alt'] as const) {
-        const c = compareBuffers(ref.term as never, viewer.term as never, which);
-        Object.assign(bCells, classifyBufferDiff(c.cells, which, which === 'alt' ? refState.activeBuffer === 'alternate' : true));
-      }
-      const bBad: string[] = [];
-      for (const d of bState) if (!isStageBAllowed(variant, spec.name, d.cls)) bBad.push(`state:${d.cls}:${d.key}`);
-      for (const cls of Object.keys(bCells)) if (!isStageBAllowed(variant, spec.name, cls)) bBad.push(`cell:${cls}`);
-      if (bBad.length > 0) {
-        throw new Error(
-          `stage B ${variant}/${spec.name}@${j.off}: ${bBad.join(', ')}\n` +
-          `bState=${JSON.stringify(bState)}\nbCells=${JSON.stringify(bCells)}\n` +
-          `--- ref last rows ---\n${dumpRows(ref.term as never, 'normal', 12).join('\n')}\n` +
-          `--- viewer last rows ---\n${dumpRows(viewer.term as never, 'normal', 12).join('\n')}`,
-        );
-      }
-      // ESC 8 probe (only when stage B shows a DECSC class).
-      let probe: string | undefined;
-      if (bState.some((d) => d.cls === 'DECSC saved cursor')) {
+      try {
+        const seed = buildSeed(twin, { scrollback: 50000, atOffset: j.off });
+        if (seed.withheld.mouse !== 0) throw new Error(`withheld.mouse=${seed.withheld.mouse}`);
+        await viewer.feed(seed.bytes);
+        // stage A
+        const aState = diffState(stateOf(twin.term as never), stateOf(viewer.term as never));
+        const cellTables: Record<string, number> = {};
+        const aExamples: Record<string, Array<{ a: { fg: number; bg: number }; b: { fg: number; bg: number } }>> = {};
+        for (const which of ['normal', 'alt'] as const) {
+          const c = compareBuffers(twin.term as never, viewer.term as never, which);
+          const classified = classifyBufferDiff(c.cells, which, which === 'alt' ? stateOf(twin.term as never).activeBuffer === 'alternate' : true);
+          Object.assign(cellTables, classified);
+          for (const [cls, n] of Object.entries(classified)) {
+            const raw = cls.replace(/^(alt-buffer content \((?:active|inactive, stale)\)): /, '');
+            aExamples[cls] = [...(aExamples[cls] ?? []), ...(c.examples[raw] ?? [])];
+          }
+        }
+        const aClasses = new Set<string>([...aState.map((d) => d.cls), ...Object.keys(cellTables)]);
+        const aBad = nonCosmetic(aClasses, cellTables, aExamples);
+        if (aBad.length > 0) {
+          throw new Error(
+            `stage A ${variant}/${spec.name}@${j.off}: ${aBad.join(', ')}\n` +
+            `state=${JSON.stringify(aState)}\ncells=${JSON.stringify(cellTables)}\n` +
+            `examples=${JSON.stringify(aExamples)}\n` +
+            `--- twin last rows ---\n${dumpRows(twin.term as never, 'normal', 12).join('\n')}\n` +
+            `--- viewer last rows ---\n${dumpRows(viewer.term as never, 'normal', 12).join('\n')}`,
+          );
+        }
+        // stage B
+        await viewer.feed(bytes.subarray(j.off));
+        const bState = diffState(refState, stateOf(viewer.term as never));
+        const bCells: Record<string, number> = {};
+        for (const which of ['normal', 'alt'] as const) {
+          const c = compareBuffers(ref.term as never, viewer.term as never, which);
+          Object.assign(bCells, classifyBufferDiff(c.cells, which, which === 'alt' ? refState.activeBuffer === 'alternate' : true));
+        }
+        const bBad: string[] = [];
+        for (const d of bState) if (!isStageBAllowed(variant, spec.name, d.cls)) bBad.push(`state:${d.cls}:${d.key}`);
+        for (const cls of Object.keys(bCells)) if (!isStageBAllowed(variant, spec.name, cls)) bBad.push(`cell:${cls}`);
+        if (bBad.length > 0) {
+          throw new Error(
+            `stage B ${variant}/${spec.name}@${j.off}: ${bBad.join(', ')}\n` +
+            `bState=${JSON.stringify(bState)}\nbCells=${JSON.stringify(bCells)}\n` +
+            `--- ref last rows ---\n${dumpRows(ref.term as never, 'normal', 12).join('\n')}\n` +
+            `--- viewer last rows ---\n${dumpRows(viewer.term as never, 'normal', 12).join('\n')}`,
+          );
+        }
+        // ESC 8 probe at EVERY join (spec 9.3): DECRC must restore ref and
+        // viewer to the same cursor/pen even when stage A/B are clean.
         const pr = await probeDecrc(ref.term as never);
         const pv = await probeDecrc(viewer.term as never);
-        const same = JSON.stringify([pr.x, pr.y, pr.pen, pr.charset]) === JSON.stringify([pv.x, pv.y, pv.pen, pv.charset]);
-        probe = same ? 'same' : 'DIFFERENT';
-        if (!same) throw new Error(`probeDecrc DIFFERENT at ${variant}/${spec.name}@${j.off}: ref=${JSON.stringify(pr)} viewer=${JSON.stringify(pv)}`);
         refDirty = true;
+        const same = JSON.stringify([pr.x, pr.y, pr.pen, pr.charset]) === JSON.stringify([pv.x, pv.y, pv.pen, pv.charset]);
+        const probe = same ? 'same' : 'DIFFERENT';
+        if (!same) throw new Error(`probeDecrc DIFFERENT at ${variant}/${spec.name}@${j.off}: ref=${JSON.stringify(pr)} viewer=${JSON.stringify(pv)}`);
+        rec.joins.push({
+          off: j.off, seedBytes: seed.bytes.length, probe,
+          aClasses: [...aClasses], bClasses: [...bState.map((d) => d.cls), ...Object.keys(bCells)],
+        });
+      } catch (e) {
+        failures.push(String((e as Error).message ?? e));
+      } finally {
+        viewer.dispose();
       }
-      rec.joins.push({
-        off: j.off, seedBytes: seed.bytes.length, probe,
-        aClasses: [...aClasses], bClasses: [...bState.map((d) => d.cls), ...Object.keys(bCells)],
-      });
-      viewer.dispose();
     }
     twin.dispose();
     ref.dispose();
   } catch (e) {
-    rec.error = String(e);
+    failures.push(String((e as Error).message ?? e));
+    rec.error = failures.join('\n');
     throw e;
+  }
+  if (failures.length > 0) {
+    rec.error = failures.join('\n');
+    const msg = `${variant}/${spec.name}: ${failures.length} failing join(s)\n${failures.join('\n')}`;
+    console.log(msg);
+    throw new Error(msg);
   }
 }
 
-/** Stage-A allow rule: cosmetic classes (and derived link-cell colours). */
-function nonCosmetic(classes: Set<string>, cells: Record<string, number>): string[] {
+/** Stage-A allow rule: cosmetic classes (and derived link-cell colours,
+ * plus fg/bg diffs proven visual-same: a P16/P256 palette < 16 downgrade,
+ * which SerializeAddon 0.14.0 emits for every styled cell with such an fg,
+ * reproduces the exact displayed colour with different xterm mode bits). */
+function nonCosmetic(
+  classes: Set<string>,
+  cells: Record<string, number>,
+  examples: Record<string, Array<{ a: { fg: number; bg: number }; b: { fg: number; bg: number } }>> = {},
+): string[] {
   const bad: string[] = [];
   const hasLink = (prefix: string) =>
     Object.keys(cells).some((k) => k === `${prefix}OSC 8 hyperlink` || (!prefix && k === 'OSC 8 hyperlink'));
@@ -300,11 +326,18 @@ function nonCosmetic(classes: Set<string>, cells: Record<string, number>): strin
       : '';
     return p === '' ? hasLink('') : hasLink(p);
   };
+  const visualSame = (cls: string, field: 'fg' | 'bg'): boolean => {
+    const ex = examples[cls] ?? [];
+    if (ex.length === 0) return false;
+    return ex.every((e) => sameVisualColour(e.a[field], e.b[field]));
+  };
   for (const c of classes) {
     const raw = c.replace(/^(alt-buffer content \((?:active|inactive, stale)\)): /, '');
     if ((COSMETIC_RESIDUALS as readonly string[]).includes(raw)) continue;
     // derived 'fg colour'/'attributes'/'bg colour' on cells that carry a link
     if ((raw === 'fg colour' || raw === 'attributes' || raw === 'bg colour') && linkful(c)) continue;
+    if (raw === 'fg colour' && visualSame(c, 'fg')) continue;
+    if (raw === 'bg colour' && visualSame(c, 'bg')) continue;
     bad.push(c);
   }
   return bad;
@@ -438,6 +471,37 @@ test('raw-family baseline (informational, spike 52/741-style count)', async () =
 function encStr(s: string): Uint8Array {
   return new TextEncoder().encode(s);
 }
+
+test('minimal repro: P256<16 fg on a curly+58 cell serializes as P16 (visual-same)', async () => {
+  // Regression pin for the harness-s2 stage-A 'fg colour' class: feeding
+  // '4:3;58:5;42;38;5;9' gives a cell whose fg word is P256 index 9.
+  // SerializeAddon 0.14.0 emits palette indices < 16 as P16 codes, so
+  // the viewer's word differs in mode bits while the displayed colour
+  // is identical. This test proves the damage is exactly that and
+  // nothing else (sameVisualColour); if serialize is ever fixed to
+  // preserve P256 < 16, update this pin with T6b.
+  const twin = makeTwin(40, 12);
+  const viewer = makeTwin(40, 12);
+  try {
+    await twin.feed(encStr('\x1b[0;4:3;58:5;42;38;5;9mX'));
+    const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1 });
+    await viewer.feed(seed.bytes);
+    const c = compareBuffers(twin.term as never, viewer.term as never, 'normal');
+    const ex = c.examples['fg colour']?.[0];
+    if (ex) {
+      console.log(`fg repro words: twin=${ex.a.fg.toString(16)} viewer=${ex.b.fg.toString(16)} visualSame=${sameVisualColour(ex.a.fg, ex.b.fg)}`);
+    }
+    expect(c.cells['fg colour']).toBeGreaterThan(0);
+    expect(ex).toBeDefined();
+    if (ex) {
+      expect(ex.a.fg).not.toBe(ex.b.fg);
+      expect(sameVisualColour(ex.a.fg, ex.b.fg)).toBe(true);
+    }
+  } finally {
+    twin.dispose();
+    viewer.dispose();
+  }
+}, 900_000);
 
 test('writes matrix.json to the witness dir (schema kbt-twin-matrix/1)', async () => {
   const dir = process.env.KB_WITNESS_DIR ?? process.env.RUNNER_TEMP ?? tmpdir();

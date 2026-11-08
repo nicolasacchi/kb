@@ -180,11 +180,13 @@ function sgrEscape(params: string): string {
   return `${ESC}[${params}m`;
 }
 
-/** DECSCUSR parameter from captured cursor style/blink (inverse of setCursorStyle). */
+/** DECSCUSR parameter from captured cursor style/blink (xterm 6.0.0
+ * InputHandler.setCursorStyle: 0 resets to the option (undefined),
+ * 1/2 block (blink/steady), 3/4 underline, 5/6 bar; blink == odd). */
 function decscusr(st: TwinState): string {
   if (st.cursorStyle === undefined) return `${ESC}[0 q`;
-  const base = st.cursorStyle === 'block' ? 0 : st.cursorStyle === 'underline' ? 3 : 5;
-  return `${ESC}[${base + (st.cursorBlink ? 0 : 1)} q`;
+  const idx = st.cursorStyle === 'block' ? 0 : st.cursorStyle === 'underline' ? 1 : 2;
+  return `${ESC}[${idx * 2 + (st.cursorBlink ? 1 : 2)} q`;
 }
 
 /** Mode byte for `?N` set/reset from a captured mode value. */
@@ -230,12 +232,24 @@ export function buildSeed(
     s += `${ESC}[?6l`;
     // (iii) DECSC slot: savedY is absolute (ybase + viewport row); CUP is
     // viewport-relative, so convert via ybase. savedX may equal cols after
-    // a pending wrap; CUP clamps to cols-1 (documented). No glevel slot:
-    // xterm 6.0.0 buffers carry no savedGlevel, so ESC 7 records none.
+    // a pending wrap; CUP clamps to cols-1 (documented, restores the same
+    // after _restrictCursor clamps DECRC). No glevel slot: xterm 6.0.0
+    // buffers carry no savedGlevel, so ESC 7 records none.
     // A null savedAttr means never saved: leave the viewer default (no
-    // ESC7) instead of clobbering it. A saved line in scrollback
-    // (viewport < 0) cannot be CUP-addressed after the body; the early
-    // prefix below saved it while ybase was 0, so skip the late save.
+    // ESC7) instead of clobbering it. Two out-of-viewport regimes:
+    // - viewportY < 0 (slot scrolled into scrollback above): the live
+    //   CUP below cannot address it after the body; the early prefix
+    //   already saved it while ybase was 0, so skip the late save.
+    // - viewportY >= rows (post-ED3 stale slot: ED3 trims lines and
+    //   ybase drops, leaving savedY beyond the buffer): DECRC restores
+    //   y = clamp(savedY - ybase, 0, rows - 1) via restoreCursor +
+    //   _restrictCursor, so the viewer MUST re-save the clamped row
+    //   here; the early prefix alone sits at min(savedY, rows-1), which
+    //   after the body's ybase shift restores to a different row.
+    //   `min(viewportY, rows - 1)` is exactly that clamp.
+    // Equivalence is therefore in DECRC-restored coordinates, not in
+    // raw savedY (see test/matrix/README.md). Abs comparison of the raw
+    // value is unreachable for these regimes: no CUP can name them.
     if (!skip.has('decsc') && bs.savedAttr !== null) {
       const viewportY = bs.savedY - bs.ybase;
       if (viewportY >= 0) {
