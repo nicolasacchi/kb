@@ -8922,7 +8922,7 @@ pub async fn live_status(
     let known_ids = state.live_registry.known_session_ids();
     let mut rows: Vec<LiveStatusRow> = snap
         .into_iter()
-        .map(|(r, live_state, confidence)| {
+        .map(|(mut r, live_state, confidence)| {
             let since_secs = (now_unix - r.last_activity_unix).max(0);
             let evidence = r
                 .last_tool
