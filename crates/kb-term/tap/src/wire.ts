@@ -88,6 +88,10 @@ export function encodeClientFrame(frame: ClientFrame): string {
 export function encodeControlMessage(msg: ControlMessage): string {
   return JSON.stringify(msg);
 }
+/** Encode a stats response to its exact golden bytes (joins, degradedJoins, viewers in field order). */
+export function encodeStatsResponse(resp: StatsResponse): string {
+  return JSON.stringify(resp);
+}
 const SERVER_T: Record<string, true> = {
   hello: true,
   profile: true,
