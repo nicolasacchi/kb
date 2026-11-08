@@ -73,19 +73,19 @@ pub(crate) fn terminal_intent(headers: &HeaderMap) -> bool {
         .is_some_and(|v| v.trim().eq_ignore_ascii_case("terminal"))
 }
 
-/// Whether a caller class is admitted without the Origin/intent parts (T13).
+/// The gate's caller-class step as a pure predicate (T13), shared with
+/// the per-request `terminal_admitted` probes on identity and the card.
 ///
-/// Exposes the loopback classification the full gate's caller-class step
-/// builds on, for the per-request `terminal_admitted` probe: the SPA is
-/// authenticated by loopback or a trusted hop, and `is_loopback_origin`
-/// resolves exactly that (fail-closed on a missing peer). No behaviour
-/// change: [`gate`] still performs its own Token/Legacy refusal.
-pub(crate) fn caller_class_admitted(
-    peer: Option<std::net::IpAddr>,
-    headers: &HeaderMap,
-    trusted_proxies: &[std::net::IpAddr],
-) -> bool {
-    crate::middleware::is_loopback_origin(peer, headers, trusted_proxies)
+/// This is the identity-based step [`gate`] performs: the SPA is
+/// authenticated by `Loopback` or the trusted-hop `Header`, while
+/// scripts and agents carry `Token`/`Legacy` registry secrets.
+/// `refuse_token_callers` (default `true`) is the operator escape hatch
+/// for proxies that inject the shared token into every request — it is
+/// the same flag the full gate reads from the terminal config. The
+/// probe additionally fails closed on a missing peer (invariant #3);
+/// the peer's network location plays no part here.
+pub(crate) fn caller_class_admitted(source: IdentitySource, refuse_token_callers: bool) -> bool {
+    !(refuse_token_callers && matches!(source, IdentitySource::Token | IdentitySource::Legacy))
 }
 
 /// Whether `origin` is acceptable for the terminal tier.
@@ -262,13 +262,9 @@ pub(crate) async fn gate(
 
     // 4. Caller class. The SPA is authenticated by loopback or the
     //    trusted-hop identity header (`Loopback`/`Header`); scripts
-    //    and agents carry bearer or registry tokens.
-    if terminal.refuse_token_callers()
-        && matches!(
-            identity.source,
-            IdentitySource::Token | IdentitySource::Legacy
-        )
-    {
+    //    and agents carry bearer or registry tokens. Shared with the
+    //    `terminal_admitted` probes via [`caller_class_admitted`].
+    if !caller_class_admitted(identity.source, terminal.refuse_token_callers()) {
         return Err(Problem::refusal(GateRefusal::Token));
     }
     Ok(())

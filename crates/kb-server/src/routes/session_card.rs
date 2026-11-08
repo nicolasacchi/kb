@@ -10,14 +10,14 @@
 //! turns (stored, capped, derived facts only), and there is no attach or
 //! type surface for agents or the CLI.
 
-use crate::middleware::error_to_problem_json;
+use crate::middleware::{error_to_problem_json, Identity};
 use crate::routes::sessions::{
     check_out, find_session, session_chain_parts, touched_files_for_commit, widen_session_ids,
     SessionOut,
 };
 use crate::state::KbHandles;
 use axum::{
-    extract::{ConnectInfo, Path, Query, State},
+    extract::{ConnectInfo, Extension, Path, Query, State},
     http::HeaderMap,
     response::{IntoResponse, Response},
     Json,
@@ -1041,23 +1041,17 @@ fn live_lane(state: &Arc<KbHandles>, session_id: &str) -> LiveLane {
 /// in-memory state.
 fn terminal_lane(
     state: &Arc<KbHandles>,
-    peer_ip: std::net::IpAddr,
-    headers: &axum::http::HeaderMap,
-    trusted_proxies: &[std::net::IpAddr],
+    peer: Option<std::net::IpAddr>,
+    source: crate::middleware::IdentitySource,
     session_id: &str,
     root_session_id: Option<&str>,
 ) -> TerminalLane {
-    let enabled = state
+    let (enabled, refuse) = state
         .config
         .try_read()
-        .map(|c| c.terminal.enabled())
-        .unwrap_or(false);
-    let admitted = crate::routes::identity::terminal_admitted_for(
-        enabled,
-        Some(peer_ip),
-        headers,
-        trusted_proxies,
-    );
+        .map(|c| (c.terminal.enabled(), c.terminal.refuse_token_callers()))
+        .unwrap_or((false, true));
+    let admitted = crate::routes::identity::terminal_admitted_for(enabled, peer, source, refuse);
     if !enabled {
         return TerminalLane::unavailable("terminal disabled", admitted);
     }
@@ -1238,6 +1232,7 @@ async fn compute_not_committed(files_rows: &[FileRow], commit_rows: &[CommitRow]
 /// (drop-on-error). 404 when no kb holds the session row.
 pub async fn card(
     State(state): State<Arc<KbHandles>>,
+    Extension(identity): Extension<Identity>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Path(session_id): Path<String>,
@@ -1282,12 +1277,10 @@ pub async fn card(
     // Compute the terminal lane BEFORE moving `summary` into the card:
     // the child case resolves through the summary's root_session_id.
     let root_sid = summary.root_session_id.clone();
-    let trusted = state.origin.trusted_proxies.load();
     let terminal = terminal_lane(
         &state,
-        peer_ip,
-        &headers,
-        &trusted,
+        Some(peer_ip),
+        identity.source,
         &session_id,
         root_sid.as_deref(),
     );

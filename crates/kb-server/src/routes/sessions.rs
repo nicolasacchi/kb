@@ -8473,8 +8473,9 @@ pub async fn beat(State(state): State<Arc<KbHandles>>, Json(body): Json<BeatBody
     );
     if terminal_enabled && term.is_none() {
         if let Some(raw) = body.term.as_deref() {
+            let known = state.terminals.term_dir.pane_pid(raw);
             if crate::terminal::binding::is_valid_term_id(raw)
-                && state.terminals.term_dir.pane_pid(raw) != body.pid
+                && (known.is_none() || known != body.pid)
             {
                 maybe_refresh_term_dir(state.clone());
             }

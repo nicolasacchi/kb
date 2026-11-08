@@ -26269,6 +26269,39 @@ async fn enter_returns_409_term_blocked_when_the_bound_session_is_blocked() {
         fake.conns.load(std::sync::atomic::Ordering::SeqCst) == 1,
         "a blocked binding refuses before the runner relay"
     );
+    // After an unblocked beat the same bound terminal relays again.
+    post_term_beat(
+        &client,
+        addr,
+        "main-1",
+        "unblocked",
+        Some("abc123"),
+        Some(4242),
+        serde_json::json!({}),
+    )
+    .await;
+    let resp = enter(true).await;
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "unblocked enter relays: {:?}",
+        resp.text().await
+    );
+    assert!(
+        resp.headers().get("x-kb-term-state").is_none(),
+        "a bound enter carries no unbound header"
+    );
+    // Re-block for the rest of the test: the bound-blocked 409 still applies.
+    post_term_beat(
+        &client,
+        addr,
+        "main-1",
+        "blocked",
+        Some("abc123"),
+        Some(4242),
+        serde_json::json!({"reason": "needs approval", "tool": "Bash"}),
+    )
+    .await;
     // An unbound terminal is NOT blocked: the enter relays and carries the header.
     post_term_beat(
         &client,

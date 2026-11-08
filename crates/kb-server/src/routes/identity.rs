@@ -8,11 +8,11 @@
 //! its first real call. Every field here is ADDITIVE; `/healthz` stays pure
 //! liveness and learns nothing about schema or protocol.
 
-use crate::middleware::Identity;
+use crate::middleware::{Identity, IdentitySource};
 use crate::state::KbHandles;
 use axum::{
     extract::{ConnectInfo, Extension, State},
-    http::{header, HeaderMap},
+    http::header,
     response::IntoResponse,
     Json,
 };
@@ -79,32 +79,40 @@ pub struct IdentityResponse {
 
 /// T13 — whether THIS request's caller may use the terminal surface at all.
 ///
-/// Pure: `enabled` AND the caller class T11's gate admits, WITHOUT the
-/// Origin/intent parts. Computed per request, never cached. NOT a grant:
-/// Origin + intent header + ticket still apply.
+/// Pure: `enabled` AND the gate's caller-class step ([`caller_class_admitted`]),
+/// WITHOUT the Origin/intent parts. Computed per request, never cached. NOT a
+/// grant: Origin + intent header + ticket still apply. The peer's network
+/// location plays no part beyond fail-closed on a missing peer (invariant #3):
+/// a `Token` caller on loopback is refused exactly as the gate refuses it,
+/// and a trusted-proxy `Header` caller is admitted exactly as the gate admits it.
 pub(crate) fn terminal_admitted_for(
     enabled: bool,
     peer: Option<IpAddr>,
-    headers: &HeaderMap,
-    trusted_proxies: &[IpAddr],
+    source: IdentitySource,
+    refuse_token_callers: bool,
 ) -> bool {
-    enabled && crate::terminal::gate::caller_class_admitted(peer, headers, trusted_proxies)
+    enabled
+        && peer.is_some()
+        && crate::terminal::gate::caller_class_admitted(source, refuse_token_callers)
 }
 
 pub async fn get(
     State(state): State<Arc<KbHandles>>,
     Extension(identity): Extension<Identity>,
-    headers: HeaderMap,
     peer: Option<Extension<ConnectInfo<SocketAddr>>>,
 ) -> impl IntoResponse {
     let host = std::env::var("HOSTNAME").unwrap_or_else(|_| "localhost".to_string());
     let stamp = crate::build_stamp();
     // T13 — terminal admission, per request (invariant #3: read the peer
-    // from the extension, fail closed when missing).
-    let enabled = state.config.read().await.terminal.enabled();
+    // from the extension, fail closed when missing). The probe shares the
+    // gate's caller-class step, so it equals what the gate would admit
+    // (Origin/intent aside).
+    let (enabled, refuse) = {
+        let cfg = state.config.read().await;
+        (cfg.terminal.enabled(), cfg.terminal.refuse_token_callers())
+    };
     let peer_ip = peer.as_ref().map(|Extension(ConnectInfo(addr))| addr.ip());
-    let trusted = state.origin.trusted_proxies.load();
-    let terminal_admitted = terminal_admitted_for(enabled, peer_ip, &headers, &trusted);
+    let terminal_admitted = terminal_admitted_for(enabled, peer_ip, identity.source, refuse);
     let body = Json(IdentityResponse {
         name: state.daemon_name.clone(),
         version: stamp.version,
@@ -135,17 +143,79 @@ mod tests {
     #[test]
     fn terminal_admitted_is_false_when_disabled_even_on_loopback() {
         let peer = Some(IpAddr::from([127, 0, 0, 1]));
-        assert!(!terminal_admitted_for(false, peer, &HeaderMap::new(), &[]));
+        assert!(!terminal_admitted_for(
+            false,
+            peer,
+            IdentitySource::Loopback,
+            true
+        ));
     }
 
     #[test]
     fn terminal_admitted_is_true_for_an_admitted_caller_when_enabled() {
         let peer = Some(IpAddr::from([127, 0, 0, 1]));
-        assert!(terminal_admitted_for(true, peer, &HeaderMap::new(), &[]));
+        assert!(terminal_admitted_for(
+            true,
+            peer,
+            IdentitySource::Loopback,
+            true
+        ));
     }
 
     #[test]
     fn terminal_admitted_fails_closed_without_connect_info() {
-        assert!(!terminal_admitted_for(true, None, &HeaderMap::new(), &[]));
+        assert!(!terminal_admitted_for(
+            true,
+            None,
+            IdentitySource::Loopback,
+            true
+        ));
+    }
+
+    #[test]
+    fn terminal_admitted_refuses_token_on_loopback() {
+        // The gate refuses Token/Legacy callers ahead of the loopback
+        // classification, so the probe must refuse them too even when
+        // the peer is loopback.
+        let peer = Some(IpAddr::from([127, 0, 0, 1]));
+        assert!(!terminal_admitted_for(
+            true,
+            peer,
+            IdentitySource::Token,
+            true
+        ));
+        assert!(!terminal_admitted_for(
+            true,
+            peer,
+            IdentitySource::Legacy,
+            true
+        ));
+    }
+
+    #[test]
+    fn terminal_admitted_admits_header_via_proxy() {
+        // The trusted-hop `Header` SPA arrives from a non-loopback peer
+        // address, but the gate admits it by identity source — the probe
+        // must admit it too.
+        let peer = Some(IpAddr::from([10, 0, 0, 1]));
+        assert!(terminal_admitted_for(
+            true,
+            peer,
+            IdentitySource::Header,
+            true
+        ));
+    }
+
+    #[test]
+    fn terminal_admitted_token_escape_hatch() {
+        // With `refuse_token_callers = false` the gate admits token
+        // callers, so the probe does too.
+        let peer = Some(IpAddr::from([127, 0, 0, 1]));
+        assert!(terminal_admitted_for(
+            true,
+            peer,
+            IdentitySource::Token,
+            false
+        ));
     }
 }
