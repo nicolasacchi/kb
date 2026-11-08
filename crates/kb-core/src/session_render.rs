@@ -39,7 +39,9 @@
 //! renderer-version-scoped from the start; the stable `t-<uuid12>` form is
 //! the fix going forward.
 
-use crate::sessions::view::{self, Item, MinimapKind, Role, SessionView, TailBlocks, ViewOptions};
+use crate::sessions::view::{
+    self, image_label, Item, MinimapKind, Role, SessionView, TailBlocks, ViewOptions,
+};
 
 const STYLE: &str = include_str!("session_render.css");
 const RUNTIME_JS: &str = include_str!("session_render_runtime.js");
@@ -691,6 +693,7 @@ fn item_byte_estimate(i: &Item) -> usize {
             prompt.len() + answer.as_deref().map(str::len).unwrap_or(0) + 40
         }
         Item::Raw { .. } => 80,
+        Item::Image { .. } => 80,
     }
 }
 
@@ -762,11 +765,34 @@ fn render_item(item: &Item) -> String {
             r#"<details class="ses-raw"><summary>{}</summary></details>"#,
             esc(reason)
         ),
+        Item::Image {
+            mime,
+            sha256,
+            inline_bytes,
+            ..
+        } => render_image(mime, sha256.as_deref(), *inline_bytes),
     }
 }
 
 fn render_chip(label: &str) -> String {
     format!(r#"<aside class="ses-chip">{}</aside>"#, esc(label))
+}
+
+/// A picture REFERENCE (never pixels: there is no media route until T21,
+/// so no `<img>` and no URL). The label is the wire's one label; the
+/// machine-readable mirror is `data-kb-image-mime`/`data-kb-image-sha`.
+/// Deliberately `ses-img`, not `ses-chip`: `data-hide-system` hides chips.
+fn render_image(mime: &str, sha256: Option<&str>, inline_bytes: Option<u32>) -> String {
+    let label = image_label(mime, sha256, inline_bytes);
+    let sha_attr = sha256
+        .map(|sha| format!(r#" data-kb-image-sha="{}""#, esc_attr(sha)))
+        .unwrap_or_default();
+    format!(
+        r#"<figure class="ses-img" data-kb-image-mime="{}"{}><figcaption>{}</figcaption></figure>"#,
+        esc_attr(mime),
+        sha_attr,
+        esc_attr(&label)
+    )
 }
 
 fn render_prose(text: &str) -> String {
@@ -1168,6 +1194,13 @@ fn esc(s: &str) -> String {
         }
     }
     out
+}
+/// Escape for a double-quoted HTML attribute value. Same as `esc` plus
+/// `"` → `&quot;` so a transcript-controlled value (e.g. an image `mime`
+/// placed in `data-kb-image-mime`) cannot end the attribute early and
+/// inject sibling attributes. Mirrors `push_attr`.
+fn esc_attr(s: &str) -> String {
+    esc(s).replace('"', "&quot;")
 }
 
 fn push_esc(out: &mut String, s: &str) {

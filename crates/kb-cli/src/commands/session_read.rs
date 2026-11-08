@@ -1060,6 +1060,17 @@ fn render_item(it: &serde_json::Value) -> Option<String> {
             "? unparsed ({})",
             it["reason"].as_str().unwrap_or("?")
         )),
+        "Image" => {
+            let mime = it["mime"].as_str().unwrap_or("image/*");
+            let sha = it["sha256"].as_str();
+            let inline = it["inline_bytes"]
+                .as_u64()
+                .map(|n| u32::try_from(n).unwrap_or(u32::MAX));
+            Some(format!(
+                "▣ {}",
+                kb_core::sessions::view::image_label(mime, sha, inline)
+            ))
+        }
         _ => None,
     }
 }
@@ -1408,6 +1419,74 @@ mod tests {
         assert!(
             !capture_mtime_advanced(Some(now), Some(now)),
             "unchanged mtime should not trigger print"
+        );
+    }
+
+    #[test]
+    fn read_renders_an_image_line_for_each_label_form() {
+        let wire = view_wire_for_fixture("synthetic-images");
+        let out = render_view(&wire, &opts());
+        // blob form (a content-addressed ref)
+        assert!(out.contains("[image image/png blob:abababababab]"), "{out}");
+        assert!(
+            out.contains("[image image/jpeg blob:cdcdcdcdcdcd]"),
+            "{out}"
+        );
+        // inline form (pixels inside this transcript, length only)
+        assert!(
+            out.contains("[image image/png inline 4 b64 chars]"),
+            "{out}"
+        );
+        assert!(
+            out.contains("[image image/png inline 12 b64 chars]"),
+            "{out}"
+        );
+        // bare form (mime only)
+        assert!(out.contains("[image image/webp]"), "{out}");
+    }
+
+    #[test]
+    fn image_label_is_identical_in_html_cli_and_wire() {
+        use kb_core::sessions::view::image_label;
+        let jsonl = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../kb-core/tests/session_fixtures/synthetic-images.jsonl"),
+        )
+        .unwrap();
+        let wire = view_wire_for_fixture("synthetic-images");
+        // Pick the blob-ref image off the wire and re-derive its label
+        // from the wire fields alone.
+        let image = wire["turns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|t| t["items"].as_array().unwrap().iter())
+            .find(|i| i["item"].as_str() == Some("Image") && i["sha256"].as_str().is_some())
+            .cloned()
+            .expect("a blob Image on the wire");
+        let label = image_label(
+            image["mime"].as_str().unwrap(),
+            image["sha256"].as_str(),
+            image["inline_bytes"]
+                .as_u64()
+                .map(|n| u32::try_from(n).unwrap_or(u32::MAX)),
+        );
+        // CLI renders the same label behind the ▣ glyph…
+        let cli = render_view(&wire, &opts());
+        assert!(cli.contains(&format!("▣ {label}")), "{cli}");
+        // …and so does the HTML figcaption.
+        let esc = jsonl
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;");
+        let html = format!(
+            r#"<html><head><meta name="kb-category" content="memory-session"><meta name="kb-session" content="abc"><title>T</title></head><body><pre>{esc}</pre></body></html>"#
+        );
+        let rendered =
+            kb_core::session_render::render_if_session(&html, "sessions").expect("renders");
+        assert!(
+            rendered.contains(&format!("<figcaption>{label}</figcaption>")),
+            "{rendered}"
         );
     }
 }
