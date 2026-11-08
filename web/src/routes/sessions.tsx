@@ -45,7 +45,6 @@ import {
   type ThreadOut,
   type WorkGroupOut,
   type WorkResponse,
-  type WorkSkippedOut,
 } from "../api/sessions";
 import { useState } from "react";
 import { sessionDisplayName } from "../lib/sessionDisplayName";

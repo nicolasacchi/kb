@@ -697,7 +697,7 @@
   min-width: 0;
 }
 .kb-ses__work-group {
-  border-bottom: 1px solid var(--rule, #2a2a2a);
+  border-bottom: 1px solid var(--rule);
 }
 .kb-ses__work-head {
   display: flex;
@@ -708,14 +708,14 @@
   min-width: 0;
 }
 .kb-ses__work-title {
-  font: 650 13.5px/1.3 var(--font-sans, system-ui);
+  font: 650 13.5px/1.3 var(--font-sans);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .kb-ses__work-meta {
-  font: 500 11px/1.3 var(--font-mono, ui-monospace);
-  color: var(--ink-mute, #999);
+  font: 500 11px/1.3 var(--font-mono);
+  color: var(--ink-mute);
 }
 .kb-ses__work-members {
   margin: 0;
@@ -727,17 +727,17 @@
   text-decoration: none;
 }
 .kb-ses__work-members a:hover {
-  color: var(--accent, #b9a6ff);
+  color: var(--accent);
 }
 .kb-ses__work-more {
   padding: 0 16px 10px;
-  font: 500 11px/1.3 var(--font-mono, ui-monospace);
-  color: var(--ink-mute, #999);
+  font: 500 11px/1.3 var(--font-mono);
+  color: var(--ink-mute);
 }
 .kb-ses__work-skipped {
   padding: 8px 16px;
-  font: 500 11px/1.3 var(--font-mono, ui-monospace);
-  color: var(--ink-mute, #999);
+  font: 500 11px/1.3 var(--font-mono);
+  color: var(--ink-mute);
 }
 
 /* P6 — sessions search input + per-project timeline header. */

@@ -792,7 +792,7 @@ mod tests {
         let out = group_work(&[p1, b], &edges);
         assert_eq!(out.groups.len(), 1, "{out:?}");
         assert_eq!(out.groups[0].counts.logical_sessions, 2);
-        assert_eq!(out.groups[0].terms, vec!["segment", "slate_take"]);
+        assert_eq!(out.groups[0].terms, vec!["slate_take"]);
     }
 
     #[test]

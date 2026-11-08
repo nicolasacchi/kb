@@ -2727,6 +2727,11 @@ const WORK_SCAN_CAP: u32 = 2000;
 /// Distinct slate slugs read per work request (structure only).
 const WORK_SLATE_CAP: usize = 8;
 
+/// One per-kb scanned row for the work route: the session row plus its
+/// job ulids, and whether that kb hit the scan cap.
+type WorkScanned =
+    (String, Vec<(kb_core::storage::sqlite::SessionRow, Vec<String>)>, bool);
+
 #[derive(Debug, Deserialize)]
 pub struct WorkParams {
     pub project: Option<String>,
@@ -2930,18 +2935,8 @@ pub async fn work(
 
     // One scanned row per kb: (row fields, job ulids, project slug).
     // `sessions_list` is `started_at DESC` — break at the first row older
-    // than `since`; exactly `WORK_SCAN_CAP` rows means more may exist.
     let project_filter_ref = &project_filter;
-    let mut futs: Vec<
-        super::CorpusFut<
-            '_,
-            (
-                String,
-                Vec<(kb_core::storage::sqlite::SessionRow, Vec<String>)>,
-                bool,
-            ),
-        >,
-    > = Vec::new();
+    let mut futs: Vec<super::CorpusFut<'_, WorkScanned>> = Vec::new();
     for (kb_name, ctx) in state.kbs.iter() {
         futs.push(Box::pin(async move {
             let rows = match ctx
@@ -3242,7 +3237,7 @@ mod work_tests {
     fn work_takes_edges_from_slate_structure_only() {
         use kb_core::slate::{parse_ledger, to_ledger_line, Kind};
         // Build a ledger through the crate's own serializer/parser.
-        let posts = vec![
+        let posts = [
             post(1, Kind::Take, None, "sess-a", "LEAK-MARKER take"),
             post(
                 2,
