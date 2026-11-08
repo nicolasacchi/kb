@@ -435,7 +435,9 @@ fn decode_text_frame_rejects_offsets_at_2pow53() {
         Err(WireError::OffsetOutOfRange)
     );
     assert_eq!(
-        decode_text_frame(r#"{"t":"viewer-open","viewer":"v1","profile":"desktop","resume":{"offset":9007199254740992,"mseq":0,"epoch":"e"}}"#),
+        decode_text_frame(
+            r#"{"t":"viewer-open","viewer":"v1","profile":"desktop","resume":{"offset":9007199254740992,"mseq":0,"epoch":"e"}}"#
+        ),
         Err(WireError::OffsetOutOfRange)
     );
     assert_eq!(
@@ -443,4 +445,3 @@ fn decode_text_frame_rejects_offsets_at_2pow53() {
         Err(WireError::OffsetOutOfRange)
     );
 }
-
