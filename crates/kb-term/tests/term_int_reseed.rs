@@ -385,7 +385,11 @@ fn term_int_reseed_equals_tmux_for_text_workload() {
         scenario: "text",
         expect_bytes: 1,
         quiescent: None,
-        deadline_secs: 120,
+        // 300 s: a hard liveness bound, not a performance target. Twelve
+        // reconstructions plus compares are CPU volume that stretches
+        // under nextest thread parallelism (CI 42435649464 blew 120 s
+        // even at ~400 KB); the O(n) reference fix shipped in 81e3774b.
+        deadline_secs: 300,
     });
     assert_json_ok(&json, &stderr);
     let comps = json
@@ -607,11 +611,12 @@ fn term_int_reseed_after_long_pause() {
             }
         }
         // The driver SIGSTOPs itself once the ready file appears; resume it
-        // only after it has verifiably stopped for >pause-after (2s)
-        // (/proc State poll), so pause-after's timer elapses under the
-        // stopped process. Repeated SIGCONTs: a SIGCONT to a running
-        // process is a no-op; fallback resumes 5s after ready anyway,
-        // covering a /proc poll failure.
+        // only after it has verifiably stopped for well over pause-after
+        // (2s) per the /proc State poll, so pause-after's timer elapses
+        // under the stopped process. Repeated SIGCONTs: a SIGCONT to a
+        // running process is a no-op; fallback resumes 5s after ready
+        // anyway, covering a /proc poll failure. The eprintln markers land
+        // in this test's stderr, so a failure log shows which stage ran.
         if stalled_at.is_some() && stopped_at.is_none() {
             let st =
                 std::fs::read_to_string(format!("/proc/{}/status", child.id())).unwrap_or_default();
@@ -619,12 +624,13 @@ fn term_int_reseed_after_long_pause() {
                 .lines()
                 .any(|l| l.starts_with("State:") && l.contains("(stopped)"))
             {
+                eprintln!("pause: driver SIGSTOP confirmed (State stopped)");
                 stopped_at = Some(Instant::now());
             }
         }
         let resume_now = match (stalled_at, stopped_at) {
-            (Some(_), Some(t_stop)) => t_stop.elapsed() >= Duration::from_millis(2500),
-            (Some(t_ready), None) => t_ready.elapsed() >= Duration::from_millis(5000),
+            (Some(_), Some(t_stop)) => t_stop.elapsed() >= Duration::from_millis(5000),
+            (Some(t_ready), None) => t_ready.elapsed() >= Duration::from_millis(7000),
             (None, _) => false,
         };
         if resume_now && last_cont.is_none_or(|t| t.elapsed() >= Duration::from_millis(500)) {

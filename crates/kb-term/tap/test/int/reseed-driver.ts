@@ -244,25 +244,29 @@ async function main(): Promise<void> {
         // OS-level stall -- no userspace buffering can drain the pipe.
         note('STALLED');
         touchReady();
+        const bytesAtStop = emittedTotal;
         proc.kill(proc.pid, 'SIGSTOP');
-        // Resumed by Rust's SIGCONT. Registration below is synchronous, so
-        // it completes before the event loop delivers the %pause line tmux
-        // queued while we were stopped.
+        // Resumed by Rust's SIGCONT (Rust verifies /proc State stopped).
+        note('RESUMED');
+        // Registration is synchronous, so it completes before the event
+        // loop delivers the %pause line tmux queued while we were stopped.
         const { promise: pausedP, resolve: pausedResolve } = Promise.withResolvers<string>();
         control.onPause((p) => {
           pausedResolve(p);
         });
-        // %pause must arrive within 10s of the resume; if the client never
+        // %pause must arrive within 30s of the resume; if the client never
         // pauses, report that instead of burning the 120s lane budget.
         // A failed pause-after command (recorded by Control) is quoted in
-        // the error so the lane shows whether the flag was accepted.
+        // the error so the lane shows whether the flag was accepted, and so
+        // is how much output flowed after the resume (a flowing stream with
+        // no %pause means pause-after never engaged).
         const pauseResult = await Promise.race([
           pausedP.then(() => 'PAUSED' as const),
-          sleep(10_000).then(() => 'TIMEOUT' as const),
+          sleep(30_000).then(() => 'TIMEOUT' as const),
         ]);
         if (pauseResult === 'TIMEOUT') {
           throw new Error(
-            `no %pause within 10s of resume${control.lastPauseAfterError ? ` (pause-after=2 failed: ${control.lastPauseAfterError})` : ''}`,
+            `no %pause within 30s of resume (post-resume ${emittedTotal - bytesAtStop} bytes${control.lastPauseAfterError ? `; pause-after=2 failed: ${control.lastPauseAfterError}` : ''})`,
           );
         }
         note('PAUSED');
