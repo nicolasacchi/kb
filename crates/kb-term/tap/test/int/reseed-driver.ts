@@ -49,6 +49,8 @@ interface CompareOut {
   b: { history: number; cursorX: number; cursorY: number };
   rowsRef: string[];
   rowsGot: string[];
+  examples: unknown;
+  altExamples: unknown;
 }
 
 function cursorOf(twin: Twin): { x: number; y: number } {
@@ -96,6 +98,8 @@ function compareTwins(reseeded: Twin, ref: Twin, result: ReseededResult, stats: 
     hash: stateHash(reseeded),
     a: result.a,
     b: result.b,
+    examples: normal.examples,
+    altExamples: alt?.examples ?? null,
     rowsRef: dumpRows(b, 'normal', 100000),
     rowsGot: dumpRows(a, 'normal', 100000),
   };
@@ -221,7 +225,13 @@ async function main(): Promise<void> {
           pausedResolve(p);
         });
         control.setHeld(false);
-        await pausedP;
+        // %pause must arrive within 10s of the unhold; if the client never
+        // pauses, report that instead of burning the 120s lane budget.
+        const pauseResult = await Promise.race([
+          pausedP.then(() => 'PAUSED' as const),
+          sleep(10_000).then(() => 'TIMEOUT' as const),
+        ]);
+        if (pauseResult === 'TIMEOUT') throw new Error('no %pause within 10s of unhold');
         note('PAUSED');
         const r = await reseeder.reseed(pane);
         note('RESEEDED');

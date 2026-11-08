@@ -416,7 +416,19 @@ fn term_int_ten_concurrent_reseeds() {
     let stream_len = std::fs::metadata(&stream).map(|m| m.len()).unwrap_or(0) as usize;
     // One shared pane running the whole stream.
     let ready = srv._dir.file("ready");
-    let pane = srv.new_session("s", 100, 30, &ready, &["cat", stream.to_str().unwrap()]);
+    let pane = srv.new_session(
+        "s",
+        100,
+        30,
+        &ready,
+        &[
+            "sh",
+            "-c",
+            "cat \"$1\"; sleep 300",
+            "_",
+            stream.to_str().unwrap(),
+        ],
+    );
     // 10 staggered driver processes, each with its own control client + twin.
     let mut hashes: Vec<String> = Vec::new();
     let mut children: Vec<Child> = Vec::new();
@@ -515,7 +527,19 @@ fn term_int_reseed_after_long_pause() {
     bytes.truncate(30_000_000);
     std::fs::write(&flood, &bytes).expect("write flood");
     let ready = srv._dir.file("ready");
-    let pane = srv.new_session("s", 100, 30, &ready, &["cat", flood.to_str().unwrap()]);
+    let pane = srv.new_session(
+        "s",
+        100,
+        30,
+        &ready,
+        &[
+            "sh",
+            "-c",
+            "cat \"$1\"; sleep 300",
+            "_",
+            flood.to_str().unwrap(),
+        ],
+    );
     let pid = srv.server_pid();
     // Run the driver (pause-after=2, stall, continue, reseed) and poll RSS.
     let driver = tap_dir().join("tap/test/int/reseed-driver.ts");
@@ -603,7 +627,19 @@ fn term_int_reseed_mid_line_cursor() {
     let stream = srv._dir.file("stream.bin");
     std::fs::write(&stream, b"HELLO\r\nWORLD").expect("write stream");
     let ready = srv._dir.file("ready");
-    let pane = srv.new_session("s", 100, 30, &ready, &["cat", stream.to_str().unwrap()]);
+    let pane = srv.new_session(
+        "s",
+        100,
+        30,
+        &ready,
+        &[
+            "sh",
+            "-c",
+            "cat \"$1\"; sleep 300",
+            "_",
+            stream.to_str().unwrap(),
+        ],
+    );
     let (json, stderr) = run_driver(&DriverParams {
         sock: &srv.sock,
         session: "s",
@@ -646,7 +682,19 @@ fn term_int_reseed_pending_wrap() {
     bytes.extend(std::iter::repeat_n(b'X', 100));
     std::fs::write(&stream, &bytes).expect("write stream");
     let ready = srv._dir.file("ready");
-    let pane = srv.new_session("s", 100, 30, &ready, &["cat", stream.to_str().unwrap()]);
+    let pane = srv.new_session(
+        "s",
+        100,
+        30,
+        &ready,
+        &[
+            "sh",
+            "-c",
+            "cat \"$1\"; sleep 300",
+            "_",
+            stream.to_str().unwrap(),
+        ],
+    );
     let (json, stderr) = run_driver(&DriverParams {
         sock: &srv.sock,
         session: "s",
@@ -701,7 +749,19 @@ fn term_int_reseed_wrapped_lines_and_blank_tail() {
     bytes.extend_from_slice(b"END\r\n");
     std::fs::write(&stream, &bytes).expect("write stream");
     let ready = srv._dir.file("ready");
-    let pane = srv.new_session("s", 100, 30, &ready, &["cat", stream.to_str().unwrap()]);
+    let pane = srv.new_session(
+        "s",
+        100,
+        30,
+        &ready,
+        &[
+            "sh",
+            "-c",
+            "cat \"$1\"; sleep 300",
+            "_",
+            stream.to_str().unwrap(),
+        ],
+    );
     let len = bytes.len();
     let (json, stderr) = run_driver(&DriverParams {
         sock: &srv.sock,
@@ -737,7 +797,19 @@ fn term_int_reseed_alt_screen() {
     )
     .expect("write stream");
     let ready = srv._dir.file("ready");
-    let pane = srv.new_session("s", 100, 30, &ready, &["cat", stream.to_str().unwrap()]);
+    let pane = srv.new_session(
+        "s",
+        100,
+        30,
+        &ready,
+        &[
+            "sh",
+            "-c",
+            "cat \"$1\"; sleep 300",
+            "_",
+            stream.to_str().unwrap(),
+        ],
+    );
     let (json, stderr) = run_driver(&DriverParams {
         sock: &srv.sock,
         session: "s",
@@ -811,7 +883,19 @@ fn term_int_placeholder_rows_survive_capture_pane() {
         .expect("synth_omp_kitty_stream spawn");
     assert!(status.success(), "synth stream failed");
     let ready = srv._dir.file("ready");
-    let pane = srv.new_session("s", 100, 30, &ready, &["cat", stream.to_str().unwrap()]);
+    let pane = srv.new_session(
+        "s",
+        100,
+        30,
+        &ready,
+        &[
+            "sh",
+            "-c",
+            "cat \"$1\"; sleep 300",
+            "_",
+            stream.to_str().unwrap(),
+        ],
+    );
     let len = std::fs::metadata(&stream).map(|m| m.len()).unwrap_or(0) as usize;
     let (json, stderr) = run_driver(&DriverParams {
         sock: &srv.sock,
@@ -851,7 +935,13 @@ fn term_int_partial_sequence_quiescent_wait() {
         100,
         30,
         &ready,
-        &["python3", "-I", midseq.to_str().unwrap(), "--gap", "1"],
+        &[
+            "sh",
+            "-c",
+            "python3 -I \"$1\" --gap 1; sleep 300",
+            "_",
+            midseq.to_str().unwrap(),
+        ],
     );
     // ON case: both quiescent joins must be clean.
     let (json, stderr) = run_driver(&DriverParams {
@@ -883,7 +973,13 @@ fn term_int_partial_sequence_quiescent_wait() {
         100,
         30,
         &ready,
-        &["python3", "-I", midseq.to_str().unwrap(), "--gap", "1"],
+        &[
+            "sh",
+            "-c",
+            "python3 -I \"$1\" --gap 1; sleep 300",
+            "_",
+            midseq.to_str().unwrap(),
+        ],
     );
     let _ = std::fs::remove_file(&ready);
     let (json2, stderr2) = run_driver(&DriverParams {
