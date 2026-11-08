@@ -21,7 +21,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::profiles::{self, PlanRequest};
 use crate::runner::anchor::Anchor;
 use crate::runner::ids::{generate_id, valid_harness, valid_id};
-use crate::runner::supervisor::{StopCtx, Supervisor};
+use crate::runner::supervisor::Supervisor;
 use crate::runner::tmux::Tmux;
 use crate::runner::{Runner, RunnerConfig, RunnerError};
 use crate::wire::{Harness, Request};
@@ -34,6 +34,9 @@ pub const GATE_SCRIPT: &str =
 
 /// The default exit keys (the omp sequence; per-harness tables are T10).
 pub const DEFAULT_EXIT_KEYS: [&str; 3] = ["C-c", "C-c", "C-d"];
+
+/// Maximum `resume_sid` byte length (validation `bad-request` above this).
+pub const MAX_RESUME_SID_LEN: usize = 256;
 
 /// Build the exact `new-session` argv for a launch. Pure (no IO) so the
 /// gate shape is pinned by a unit test.
@@ -185,6 +188,20 @@ pub fn validate_launch(req: &Request, cfg: &RunnerConfig) -> Result<ValidatedLau
             ));
         }
     }
+    // `resume_sid` is written verbatim into `@kb_resume_sid` and echoed in
+    // list; bound it (~256 B) so it can never grow past the line cap.
+    if let Some(sid) = resume_sid {
+        if sid.len() > MAX_RESUME_SID_LEN {
+            return Err(RunnerError::BadRequest(format!(
+                "resume_sid exceeds {MAX_RESUME_SID_LEN} bytes"
+            )));
+        }
+        if sid.contains('\0') {
+            return Err(RunnerError::BadRequest(
+                "resume_sid contains a NUL byte".to_string(),
+            ));
+        }
+    }
     let cwd_path = std::path::Path::new(cwd);
     if !cwd_path.is_absolute() {
         return Err(RunnerError::BadRequest("cwd must be absolute".to_string()));
@@ -281,13 +298,31 @@ pub async fn launch_session<S: Supervisor>(
         }
         Err(e) => {
             drop(lock);
-            // Best-effort teardown: stop the units, wait the holder, drop
-            // the anchor, remove `s/<id>*`.
+            // Best-effort teardown: read the pane/server pids BEFORE
+            // stopping (the server must still answer), then stop the
+            // units, drop the anchor, remove `s/<id>*`. An empty StopCtx
+            // would leave a stubborn pane alive (its SIGTERMs would go
+            // to nobody); the pids let direct mode SIGKILL it.
             runner.take_anchor(&id).await;
-            let _ = runner.supervisor.stop(&id, StopCtx::default()).await;
+            let ctx = teardown_stop_ctx(runner, &id).await;
+            let _ = runner.supervisor.stop(&id, ctx).await;
             remove_session_files(runner, &id).await;
             Err(e)
         }
+    }
+}
+
+/// The supervisor stop context for a teardown: the pane and server pids
+/// read best-effort from the holder (each `None` when the server no
+/// longer answers).
+pub async fn teardown_stop_ctx<S: Supervisor>(
+    runner: &Runner<S>,
+    id: &str,
+) -> crate::runner::supervisor::StopCtx {
+    let (pane_pid, server_pid) = crate::runner::discovery::pane_and_server_pids(runner, id).await;
+    crate::runner::supervisor::StopCtx {
+        pane_pid,
+        server_pid,
     }
 }
 
@@ -918,6 +953,67 @@ mod tests {
             let err = validate_launch(&req, &cfg).unwrap_err();
             assert_eq!(err.code(), "bad-request", "request {req:?}");
         }
+    }
+
+    /// `resume_sid` is bounded at 256 B: a 257-B sid is `bad-request`
+    /// (not silently truncated and not written to `@kb_resume_sid`),
+    /// while exactly 256 B validates.
+    #[test]
+    fn validate_rejects_overlong_resume_sid() {
+        let cfg = cfg();
+        let mut req = launch_with(&["/usr/bin/omp"]);
+        if let Request::Launch { resume_sid, .. } = &mut req {
+            *resume_sid = Some("s".repeat(257));
+        }
+        let err = validate_launch(&req, &cfg).unwrap_err();
+        assert_eq!(err.code(), "bad-request");
+        let mut req = launch_with(&["/usr/bin/omp"]);
+        if let Request::Launch { resume_sid, .. } = &mut req {
+            *resume_sid = Some("s".repeat(256));
+        }
+        assert!(
+            validate_launch(&req, &cfg).is_ok(),
+            "exactly 256 B must validate"
+        );
+    }
+
+    /// The launch teardown context carries the pane and server pids read
+    /// best-effort (a stubborn pane is then SIGKILLable); an empty
+    /// StopCtx would send SIGTERMs to nobody and leak it.
+    #[tokio::test]
+    async fn teardown_stop_ctx_reads_pane_and_server_pids() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("fake_tmux.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\n\
+             case \"$*\" in\n\
+             *'#{pane_pid}'*) printf '4242\\n' ;;\n\
+             *'#{pid}'*) printf '5151\\n' ;;\n\
+             esac\n\
+             exit 0\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let run_dir = dir.path().join("run");
+        let cfg = RunnerConfig::test_config(
+            run_dir,
+            script.to_string_lossy().into_owned(),
+            PathBuf::from("/dev/null"),
+        );
+        let runner = crate::runner::Runner::direct(cfg);
+        let ctx = teardown_stop_ctx(&runner, "abcd1234").await;
+        assert_eq!(
+            ctx.pane_pid,
+            Some(4242),
+            "teardown ctx must carry the pane pid"
+        );
+        assert_eq!(
+            ctx.server_pid,
+            Some(5151),
+            "teardown ctx must carry the server pid"
+        );
     }
 
     /// Validation precedes ANY tmux/process interaction: with a tmux
