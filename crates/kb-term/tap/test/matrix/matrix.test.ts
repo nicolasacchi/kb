@@ -120,15 +120,15 @@ interface StreamSpec {
 }
 
 function genToFile(args: string[], out: string): Uint8Array {
-  spawnInto(args, out);
-  return new Uint8Array(readFileSync(out));
-}
-
-function spawnInto(args: string[], out: string): void {
-  const p = spawnSync('python3', ['-I', ...args, '-o', out], { maxBuffer: 1 << 28 });
+  // fake_harness.py writes to -o or stdout; synth_omp_kitty_stream.py only
+  // to stdout. Capture stdout uniformly and persist it to the temp file.
+  const p = spawnSync('python3', ['-I', ...args], { maxBuffer: 1 << 28 });
   if (p.status !== 0) {
-    throw new Error(`generator failed: python3 -I ${args.join(' ')} -o ${out}: ${p.stderr?.toString()}`);
+    throw new Error(`generator failed: python3 -I ${args.join(' ')}: ${p.stderr?.toString()}`);
   }
+  const bytes = new Uint8Array(p.stdout);
+  writeFileSync(out, bytes);
+  return bytes;
 }
 
 let streamsCache: Promise<StreamSpec[]> | null = null;
@@ -375,8 +375,8 @@ test('harness seed 3 determinism: byte-equal regen, sha256 reported', async () =
   expect(a).toEqual(b);
   harnessSeed3Sha = createHash('sha256').update(a).digest('hex');
   console.log(`harness-s3 sha256: ${harnessSeed3Sha}`);
-  const PINNED: string | null = null; // pinned after first CI run
-  if (PINNED !== null) expect(harnessSeed3Sha).toBe(PINNED);
+  const PINNED = '3a2a4a3f0e97754d39a09b7860e9c7494c1fb0c4a87a4d0e5b1ae641b6b75849';
+  expect(harnessSeed3Sha).toBe(PINNED);
 }, 900_000);
 
 test('raw-family baseline (informational, spike 52/741-style count)', async () => {

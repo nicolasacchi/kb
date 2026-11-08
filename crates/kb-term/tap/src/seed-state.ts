@@ -91,11 +91,11 @@ export const INTERNALS_PATHS: readonly string[] = [
   '_core._bufferService.buffers.alt.lines.get',
   '_core._inputHandler',
   '_core._inputHandler._curAttrData',
-  '_core._coreService',
-  '_core._coreService.decPrivateModes',
-  '_core._coreService.decPrivateModes.cursorStyle',
-  '_core._coreService.decPrivateModes.cursorBlink',
-  '_core._coreService.isCursorHidden',
+  '_core.coreService',
+  '_core.coreService.decPrivateModes',
+  '_core.coreService.decPrivateModes.cursorStyle',
+  '_core.coreService.decPrivateModes.cursorBlink',
+  '_core.coreService.isCursorHidden',
   '_core._charsetService',
   '_core._charsetService.glevel',
   '_core._charsetService._charsets',
@@ -212,8 +212,8 @@ export function captureTwinState(twin: Twin): TwinState {
   const altBuf = need(buffers, 'alt', 'twin.term._core._bufferService.buffers');
   const inputHandler = need(core, '_inputHandler', 'twin.term._core');
   const curAttrData = need<AttrDataLike>(inputHandler, '_curAttrData', 'twin.term._core._inputHandler');
-  const coreService = need(core, '_coreService', 'twin.term._core');
-  const decPrivateModes = need(coreService, 'decPrivateModes', 'twin.term._core._coreService');
+  const coreService = need(core, 'coreService', 'twin.term._core');
+  const decPrivateModes = need(coreService, 'decPrivateModes', 'twin.term._core.coreService');
   const charsetService = need(core, '_charsetService', 'twin.term._core');
   const charsets = need<unknown[]>(charsetService, '_charsets', 'twin.term._core._charsetService');
   const charset = (charsetService as Record<string, unknown>).charset as Record<string, unknown> | undefined;
@@ -229,9 +229,9 @@ export function captureTwinState(twin: Twin): TwinState {
     alt: captureBuffer(altBuf, '._core._bufferService.buffers.alt', cols),
     pen: attrCopy(curAttrData, '._core._inputHandler._curAttrData') as AttrCopy,
     modes: { ...modes },
-    cursorStyle: needMaybe<string | undefined>(decPrivateModes, 'cursorStyle', '._core._coreService.decPrivateModes'),
-    cursorBlink: needMaybe<boolean | undefined>(decPrivateModes, 'cursorBlink', '._core._coreService.decPrivateModes'),
-    isCursorHidden: need<boolean>(coreService, 'isCursorHidden', '._core._coreService'),
+    cursorStyle: needMaybe<string | undefined>(decPrivateModes, 'cursorStyle', '._core.coreService.decPrivateModes'),
+    cursorBlink: needMaybe<boolean | undefined>(decPrivateModes, 'cursorBlink', '._core.coreService.decPrivateModes'),
+    isCursorHidden: need<boolean>(coreService, 'isCursorHidden', '._core.coreService'),
     glevel: num(charsetService, 'glevel', '._core._charsetService'),
     charsetSets: charsets.map((c) => (c && typeof c === 'object' ? Object.keys(c).length : 0)),
     charsetActiveLen: charset && typeof charset === 'object' ? Object.keys(charset).length : null,

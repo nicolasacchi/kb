@@ -42,7 +42,8 @@ test('every internal path captureTwinState reads exists', () => {
         }
         obj = (obj as Record<string, unknown>)[part];
       }
-      expect(obj).not.toBeUndefined();
+      // cursorStyle/cursorBlink are legitimately undefined until DECSCUSR.
+      if (!path.endsWith('cursorStyle') && !path.endsWith('cursorBlink')) expect(obj).not.toBeUndefined();
     }
   } finally {
     twin.dispose();
