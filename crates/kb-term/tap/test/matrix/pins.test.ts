@@ -1,0 +1,82 @@
+// Pins test (T6 Spec 10): xterm versions, grapheme activation, and the full
+// internal-path list captureTwinState depends on. The mutation check deletes
+// a buffer field and requires captureTwinState to throw (fail closed).
+import { test, expect } from 'bun:test';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { makeTwin } from '../../src/twin.ts';
+import { captureTwinState, INTERNALS_PATHS } from '../../src/seed-state.ts';
+
+const require = createRequire(import.meta.url);
+
+/** Read package.json by walking up from a resolved main entry (no exports map). */
+function pkgVersion(spec: string): string {
+  let dir = dirname(require.resolve(spec));
+  for (let i = 0; i < 8; i++) {
+    try {
+      const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf-8')) as { name?: string; version?: string };
+      if (pkg.name === spec && typeof pkg.version === 'string') return pkg.version;
+    } catch { /* keep walking */ }
+    dir = dirname(dir);
+  }
+  throw new Error(`cannot find package.json for ${spec}`);
+}
+
+test('xterm package versions are the T6 pins', () => {
+  expect(pkgVersion('@xterm/headless')).toBe('6.0.0');
+  expect(pkgVersion('@xterm/addon-serialize')).toBe('0.14.0');
+  expect(pkgVersion('@xterm/addon-unicode-graphemes')).toBe('0.4.0');
+});
+
+test('every internal path captureTwinState reads exists', () => {
+  const twin = makeTwin(40, 12);
+  try {
+    const term = twin.term as unknown as Record<string, unknown>;
+    for (const path of INTERNALS_PATHS) {
+      let obj: unknown = term;
+      const parts = path.split('.');
+      for (const part of parts) {
+        if (obj === null || typeof obj !== 'object' || !(part in (obj as Record<string, unknown>))) {
+          throw new Error(`internal path missing: ${path} (at ${part})`);
+        }
+        obj = (obj as Record<string, unknown>)[part];
+      }
+      expect(obj).not.toBeUndefined();
+    }
+  } finally {
+    twin.dispose();
+  }
+});
+
+test('graphemes variant activates a grapheme width version', () => {
+  const twin = makeTwin(40, 12);
+  try {
+    expect(twin.term.unicode.activeVersion).toMatch(/grapheme/i);
+    expect(twin.widthPin.activeVersion).toMatch(/grapheme/i);
+  } finally {
+    twin.dispose();
+  }
+  const u11 = makeTwin(40, 12, { variant: 'unicode11' });
+  try {
+    expect(u11.term.unicode.activeVersion).toBe('11');
+  } finally {
+    u11.dispose();
+  }
+});
+
+test('deleting savedX makes captureTwinState throw (mutation)', () => {
+  const twin = makeTwin(20, 8);
+  try {
+    const term = twin.term as unknown as {
+      _core: { _bufferService: { buffers: { normal: Record<string, unknown> } } };
+    };
+    const buf = term._core._bufferService.buffers.normal;
+    const saved = buf.savedX;
+    delete buf.savedX;
+    expect(() => captureTwinState(twin)).toThrow(/seed: xterm internals changed/);
+    buf.savedX = saved;
+  } finally {
+    twin.dispose();
+  }
+});
