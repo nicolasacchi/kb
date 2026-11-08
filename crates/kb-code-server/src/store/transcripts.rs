@@ -82,9 +82,9 @@ impl Store {
     /// session, newest resolution first, with the repo NAME joined for the
     /// wire (`repo_id` alone cannot name a repo to a reader that does not
     /// hold the config). The session-card lane unions these cache-only
-    /// rows with kb's own `session_commits` feed; `limit` bounds the scan so
-    /// a pathological cache cannot bloat the card (the lane caps at
-    /// `MAX_COMMITS` anyway).
+    /// rows with kb's own `session_commits` feed; `limit` bounds the scan,
+    /// so a caller wanting the full count passes an unbounded limit and
+    /// caps the display itself (the session-card lane does exactly that).
     pub fn commit_sessions_for_session(
         &self,
         sid: &str,

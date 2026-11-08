@@ -526,7 +526,11 @@ async fn commits_lane_fetch(
         .store
         .run_blocking({
             let sid = sid.to_string();
-            move |s| s.commit_sessions_for_session(&sid, MAX_COMMITS)
+            // Unbounded scan: `cap_commits` does the only capping, so
+            // `CommitsLane.total` is the full count even past
+            // MAX_COMMITS cache rows. `usize::MAX as i64` is -1, which
+            // SQLite treats as an unlimited LIMIT.
+            move |s| s.commit_sessions_for_session(&sid, usize::MAX)
         })
         .await;
     let cache_failed = cache_result.is_err();

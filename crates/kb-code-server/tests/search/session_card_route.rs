@@ -571,3 +571,43 @@ async fn doc_author_basis_is_found_through_review_docs() {
     assert_eq!(by_title("Doc authored review")["basis"], "doc_author");
     assert_eq!(by_title("Doc authored review")["verdict"], "approve");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cache_extras_beyond_max_commits_count_toward_total() {
+    // 25 cache-only rows for one session, kb feed empty: the cache scan
+    // must not pre-cap at MAX_COMMITS, or `total` undercounts (20 not
+    // 25). `cap_commits` alone caps the shown items.
+    let commits_body = Arc::new(Mutex::new(
+        serde_json::to_string(&json!({ "commits": [] })).unwrap(),
+    ));
+    let kb = spawn_mock(hello_ok(), commits_body).await;
+    let b = boot(enabled(kb)).await;
+    {
+        let store = open_store(&b.store_path);
+        let repo_id = store.repo_id("fixture").unwrap().unwrap();
+        for i in 0..25 {
+            let sha = format!("{i:040}");
+            let row = kb_code_server::store::CommitSessionRow {
+                confidence: "exact".to_string(),
+                via: "by-commit".to_string(),
+                session_id: Some(SID.to_string()),
+                kb: Some("platform".to_string()),
+                display_name: Some("fixture".to_string()),
+                started_at: Some(1_700_000_000),
+                resolved_at: 1_700_000_100 + i as i64,
+            };
+            store.upsert_commit_session(repo_id, &sha, &row).unwrap();
+        }
+    }
+    let (status, body) = get_json(&b.base, &format!("/api/session-card?sid={SID}")).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["commits"]["available"], true, "{body}");
+    assert_eq!(body["commits"]["total"], 25, "{body}");
+    assert_eq!(body["commits"]["shown"], 20, "{body}");
+    assert_eq!(body["commits"]["truncated"], true, "{body}");
+    assert_eq!(
+        body["commits"]["items"].as_array().unwrap().len(),
+        20,
+        "{body}"
+    );
+}
