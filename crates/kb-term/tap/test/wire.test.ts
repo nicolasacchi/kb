@@ -82,7 +82,7 @@ test('wire_envelope_split_frame_needs_all_bytes', () => {
 
 test('wire_golden_directory_is_complete', () => {
   const actual = readdirSync(GOLDEN).sort();
-  const expected = [...SERVER.map((n) => `${n}.json`), ...CLIENT.map((n) => `${n}.json`), ...CONTROL.map((n) => `${n}.json`), ...REQUEST.map((n) => `${n}.json`), 'resp_ok.json', 'resp_err.json', 'session_info.json', ...ENVELOPE.map((n) => `${n}.hex`)].sort();
+  const expected = [...SERVER.map((n) => `${n}.json`), ...CLIENT.map((n) => `${n}.json`), ...CONTROL.map((n) => `${n}.json`), ...REQUEST.map((n) => `${n}.json`), 'resp_ok.json', 'resp_err.json', 'resp_list.json', 'session_info.json', ...ENVELOPE.map((n) => `${n}.hex`)].sort();
   expect(actual).toEqual(expected);
 });
 
