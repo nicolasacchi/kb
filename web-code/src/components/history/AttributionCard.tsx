@@ -24,7 +24,7 @@ export default function AttributionCard({ attribution, compact }: AttributionCar
   // (V76-R4f, `[kb_daemon]` disabled/unconfigured) — degrade to the SAME
   // plain-text rendering already used when there is no session id at all,
   // rather than a dead/misleading link.
-  const sessionHref = attribution.session_id ? sessionUrl(attribution.session_id) : null;
+  const sessionHref = attribution.session_id ? sessionUrl(attribution.session_id, attribution.kb ?? undefined) : null;
 
   const badge = (
     <span
@@ -42,6 +42,7 @@ export default function AttributionCard({ attribution, compact }: AttributionCar
       target="_blank"
       rel="noreferrer"
       data-kbc-attrib-session-link
+      {...(attribution.kb ? { "data-kbc-attrib-session-kb": attribution.kb } : {})}
     >
       {who}
     </a>
