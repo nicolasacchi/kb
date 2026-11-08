@@ -160,16 +160,16 @@ test('wire_known_frames_validate_required_fields_and_types', () => {
   expect(decodeTextFrame('{"t":"hello","proto":"kb-term/1","session":"s","epoch":"e","harness":"omp","bound_sid":null,"extra":1}').kind).toBe('known');
 });
 
-test('wire_envelope_length_capped_at_1_mib_in_both_directions', () => {
+test('wire_envelope_length_capped_at_max_envelope_len_in_both_directions', () => {
   const ok = encodeEnvelope(ENV_TEXT, new Uint8Array(MAX_ENVELOPE_LEN - 1));
   expect(ok.length).toBe(4 + MAX_ENVELOPE_LEN);
   expect(() => encodeEnvelope(ENV_TEXT, new Uint8Array(MAX_ENVELOPE_LEN))).toThrow(FrameError);
-  // Streaming: a header claiming 1 MiB + 1 fails on the header alone.
+  // Streaming: a header claiming MAX_ENVELOPE_LEN + 1 fails on the header alone.
   const dec = new EnvelopeDecoder();
   const hdr = new Uint8Array(4);
   new DataView(hdr.buffer).setUint32(0, MAX_ENVELOPE_LEN + 1);
   expect(() => dec.push(hdr)).toThrow(FrameError);
-  // A length-exact 1 MiB envelope split across pushes still decodes.
+  // A length-exact maximum envelope split across pushes still decodes.
   const dec2 = new EnvelopeDecoder();
   expect(dec2.push(ok.subarray(0, 10))).toEqual([]);
   const done = dec2.push(ok.subarray(10));
@@ -191,4 +191,18 @@ test('wire_missing_optional_fields_accepted_like_rust', () => {
   expect(() => decodeTextFrame('{"t":"hello","proto":"kb-term/1","session":"s","epoch":"e","harness":"omp","bound_sid":5}')).toThrow(FrameError);
   expect(() => decodeTextFrame('{"t":"exit","seq":10,"code":"1","offset":1234}')).toThrow(FrameError);
   expect(() => decodeTextFrame('{"t":"viewer-open","viewer":"v1","profile":"desktop","resume":"x"}')).toThrow(FrameError);
+});
+
+// Text-frame u64 offsets/seqs at or above 2^53 reject in both decoders
+// (the Rust `decode_text_frame` post-deserialize cap mirrors this test).
+test('wire_text_offsets_at_2pow53_rejected_like_rust', () => {
+  const twoPow53 = 2 ** 53;
+  expect(twoPow53).toBeGreaterThan(Number.MAX_SAFE_INTEGER);
+  expect(() => decodeTextFrame(`{"t":"seed","offset":${twoPow53},"len":1}`)).toThrow(FrameError);
+  expect(() => decodeTextFrame(`{"t":"seed","offset":0,"len":${twoPow53}}`)).toThrow(FrameError);
+  expect(() => decodeTextFrame(`{"t":"resumefrom","offset":0,"mseq":${twoPow53},"epoch":"e"}`)).toThrow(FrameError);
+  expect(() =>
+    decodeTextFrame(`{"t":"viewer-open","viewer":"v1","profile":"desktop","resume":{"offset":${twoPow53},"mseq":0,"epoch":"e"}}`),
+  ).toThrow(FrameError);
+  expect(() => decodeTextFrame(`{"t":"clipboard","offset":${twoPow53},"data_b64":""}`)).toThrow(FrameError);
 });
