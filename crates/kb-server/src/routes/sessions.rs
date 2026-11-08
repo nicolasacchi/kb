@@ -692,8 +692,11 @@ async fn annotate_child_counts(state: &Arc<KbHandles>, rows: &mut [SessionOut]) 
     }
     let mut counts: HashMap<String, u32> = HashMap::new();
     for per_kb in super::buffered_join(futs, state.fanout_cap).await {
+        // First-wins by session id: the same parent captured in two kbs
+        // (per-kb `is_newest` cannot see across DBs) contributes its
+        // count once — summing would double-count its children.
         for (k, n) in per_kb {
-            *counts.entry(k).or_insert(0) += n;
+            counts.entry(k).or_insert(n);
         }
     }
     apply_child_counts(rows, &counts);
@@ -719,10 +722,12 @@ fn parse_collapse(raw: Option<&str>) -> Result<bool, Response> {
         )))),
     }
 }
-/// A3 — `?tree=` grammar: absent | `collapsed` = only rows with no tree
-/// root (the DEFAULT — subagent children hide and trees read as their
+/// A3 — `?tree=` grammar: absent | empty | `collapsed` = only rows with no
+/// tree root (the DEFAULT — subagent children hide and trees read as their
 /// roots); `flat` = every row; anything else is a 400 naming the allowed
-/// values.
+/// values. An empty value (`?tree=`) is an alias for `collapsed`
+/// (matches `?collapse=` treating empty as its default), pinned by
+/// `parse_tree(Some("")) == Ok(true)`.
 #[allow(clippy::result_large_err)]
 fn parse_tree(raw: Option<&str>) -> Result<bool, Response> {
     match raw.map(str::trim) {
@@ -3381,16 +3386,19 @@ pub async fn threads(State(state): State<Arc<KbHandles>>) -> impl IntoResponse {
     }
     // PF-R1 — the operator-configurable `[server] fanout_cap` (default 8,
     // byte-identical to the old hardcoded `super::FANOUT_CAP`).
-    let all: Vec<SessionOut> = super::buffered_join(futs, state.fanout_cap)
+    let mut all: Vec<SessionOut> = super::buffered_join(futs, state.fanout_cap)
         .await
         .into_iter()
         .flatten()
         .collect();
+    // Every serialized row carries `child_count` (same derivation as the
+    // list and detail routes) — `from_row` leaves it at 0, so annotate
+    // before clustering, exactly like `list_page`/`get` do.
+    annotate_child_counts(&state, &mut all).await;
     Json(ThreadsResponse {
         threads: cluster_threads(all),
     })
 }
-
 /// Cluster sessions into threads: group by `cwd`, sort each group ascending,
 /// split on gaps via `kb_core::sessions::thread_boundaries`, emit newest-first.
 fn cluster_threads(sessions: Vec<SessionOut>) -> Vec<ThreadOut> {

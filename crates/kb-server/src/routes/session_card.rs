@@ -58,12 +58,25 @@ const PER_SESSION_MEMORY_LIMIT: u32 = 100;
 // Children: one predicate helper for the card lane AND /children.
 // ---------------------------------------------------------------------------
 
+/// The per-lane degrade rule (brief S1 / #28 drop-on-error): a federated
+/// reader family that failed in EVERY kb has no source of truth left —
+/// the lane must report `available:false` with a reason, never
+/// `available:true` with empty/zero invented data. A family that
+/// answered in at least one kb keeps the lane available with that data
+/// (partial is honest; all-dark is a lie). Zero kbs is vacuously
+/// available: there was no reader to fail.
 #[derive(Debug, Clone)]
 enum ChildrenPredicate {
     /// The whole subagent flood under a root (any depth).
     Root(String),
     /// A non-root session's direct children.
     Parent(String),
+}
+
+/// The degrade decision, as a pure rule: `failures`/`total` are the
+/// per-kb read outcomes of one reader family of one lane.
+fn reader_family_dark(failures: usize, total: usize) -> bool {
+    total > 0 && failures == total
 }
 
 impl ChildrenPredicate {
@@ -89,42 +102,75 @@ fn children_predicate(target: &SessionOut) -> ChildrenPredicate {
     }
 }
 
-/// Federated children total, summed across kbs (per-kb failure folds to 0
-/// with a warn, never a 500). Sessions are single-kb artifacts (V0040 /
-/// PF-R1: one newest capture per session id, in one kb's `sessions`
-/// table), so per-kb counts are disjoint and no cross-kb session-id
-/// dedup is needed — the sum can never double-count a child.
-async fn children_total(state: &Arc<KbHandles>, pred: &ChildrenPredicate) -> u64 {
+/// Federated children total as a UNION of child session ids across kbs
+/// (held in [`children_total_from`]). Returns `Err` only when every kb's
+/// reader failed, so the summary/children lanes can degrade honestly
+/// (`available:false`) instead of reporting 0. A partial failure keeps the
+/// healthy kbs' ids: at least one source of truth answered.
+async fn children_total(
+    state: &Arc<KbHandles>,
+    pred: &ChildrenPredicate,
+) -> Result<u64, kb_core::Error> {
+    let sources: Vec<(String, kb_core::storage::StorageHandle)> = state
+        .kbs
+        .iter()
+        .map(|(name, ctx)| (name.as_str().to_string(), ctx.storage.clone()))
+        .collect();
+    children_total_from(&sources, state.fanout_cap, pred).await
+}
+
+/// The total's testable core: over `(kb name, storage)` sources, report
+/// how many DISTINCT child session ids the predicate matches anywhere.
+/// Per-kb failure folds to no rows with a warn (never a 500); if every
+/// source failed the whole call is `Err` so callers degrade rather than
+/// invent a total. A session id captured in two kbs (the `commit_files`
+/// fan-out posture — V0040's UNIQUE index is per-DB, not global)
+/// counts once: ids are unioned by session id, first wins.
+async fn children_total_from(
+    sources: &[(String, kb_core::storage::StorageHandle)],
+    fanout_cap: usize,
+    pred: &ChildrenPredicate,
+) -> Result<u64, kb_core::Error> {
     let (root_of, parent_of) = pred.args();
-    let mut futs: Vec<super::CorpusFut<'_, u64>> = Vec::new();
-    for (kb_name, ctx) in state.kbs.iter() {
+    let mut futs: Vec<super::CorpusFut<'_, Result<Vec<String>, kb_core::Error>>> = Vec::new();
+    for (kb_name, storage) in sources {
+        let kb_name = kb_name.clone();
+        let storage = storage.clone();
         let root_of = root_of.clone();
         let parent_of = parent_of.clone();
         futs.push(Box::pin(async move {
-            ctx.storage
-                .sessions_children_count(root_of, parent_of)
-                .await
-                .unwrap_or_else(|e| {
-                    tracing::warn!(kb = %kb_name, error = %e, "sessions_children_count failed");
-                    0
-                })
+            match storage.sessions_children_ids(root_of, parent_of).await {
+                Ok(ids) => Ok(ids),
+                Err(e) => {
+                    tracing::warn!(kb = %kb_name, error = %e, "sessions_children_ids failed");
+                    Err(kb_core::Error::Storage(format!("{kb_name}: {e}")))
+                }
+            }
         }));
     }
-    super::buffered_join(futs, state.fanout_cap)
-        .await
-        .into_iter()
-        .sum()
+    let joined = super::buffered_join(futs, fanout_cap).await;
+    if !joined.is_empty() && joined.iter().all(|r| r.is_err()) {
+        return Err(kb_core::Error::Storage(
+            "sessions children unreadable in every kb".to_string(),
+        ));
+    }
+    let mut ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for r in joined.into_iter().flatten() {
+        for id in r {
+            ids.insert(id);
+        }
+    }
+    Ok(ids.len() as u64)
 }
 
 /// Federated one-page children fetch: over-fetches `limit + 1` per kb,
 /// then merges by `(started_at, session_id)` and truncates. `after` is
 /// `(started_at, session_id)`; the caller derives `next_after` from the
-/// overflow. Like [`children_total`], results are not deduplicated across
-/// kbs: sessions are single-kb by construction (V0040/PF-R1), so two kbs
-/// can never hold the same child id — the merge keeps the deterministic
-/// `(started_at, session_id)` total order and the total stays consistent
-/// with [`children_total`]'s `children_total_matches_card_children_total`
-/// pin.
+/// overflow. A session id captured in two kbs (the `commit_files`
+/// fan-out posture: V0040's UNIQUE index is per-DB, not global) is kept
+/// once, first kb wins, so the page never shows the same child twice and
+/// stays consistent with [`children_total`]'s id union (and the
+/// `children_total_matches_card_children_total` pin).
 async fn children_page(
     state: &Arc<KbHandles>,
     pred: &ChildrenPredicate,
@@ -160,11 +206,20 @@ async fn children_page(
             }
         }));
     }
-    let mut rows: Vec<SessionOut> = super::buffered_join(futs, state.fanout_cap)
+    // First-wins dedup by session id: the same child captured in two
+    // kbs arrives twice (per-kb `is_newest` cannot see across DBs);
+    // keep the first kb's row (kbs iterate in name order).
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut rows: Vec<SessionOut> = Vec::new();
+    for out in super::buffered_join(futs, state.fanout_cap)
         .await
         .into_iter()
         .flatten()
-        .collect();
+    {
+        if seen.insert(out.session_id.clone()) {
+            rows.push(out);
+        }
+    }
     rows.sort_by(|a, b| {
         a.started_at
             .cmp(&b.started_at)
@@ -249,6 +304,15 @@ pub async fn children(
             limit
         )
     );
+    // The paged route has no `available` shape to degrade into (unlike the
+    // card lanes): when every kb's children reader failed, the honest
+    // answer is a storage-failure problem+json — never a fabricated zero
+    // total beside a page drained from the same dead readers.
+    let Ok(total) = total else {
+        return error_to_problem_json(&kb_core::Error::Storage(
+            "sessions children unreadable".to_string(),
+        ));
+    };
     let (items, next_after) = page_overfetch_into(page, limit);
     Json(ChildrenResponse {
         session_id: target.session_id.clone(),
@@ -431,26 +495,35 @@ async fn commits_lane(
 
 async fn research_lane(state: &Arc<KbHandles>, session_id: &str) -> ResearchLane {
     let session_id = session_id.to_string();
-    let mut futs: Vec<super::CorpusFut<'_, Vec<kb_core::storage::sqlite::SessionResearchRow>>> =
-        Vec::new();
+    let mut futs: Vec<
+        super::CorpusFut<
+            '_,
+            Result<Vec<kb_core::storage::sqlite::SessionResearchRow>, kb_core::Error>,
+        >,
+    > = Vec::new();
     for (kb_name, ctx) in state.kbs.iter() {
         let session_id = session_id.clone();
         futs.push(Box::pin(async move {
-            ctx.storage
+            match ctx
+                .storage
                 .session_research_for_session(session_id)
                 .await
-                .unwrap_or_else(|e| {
+            {
+                Ok(v) => Ok(v),
+                Err(e) => {
                     tracing::warn!(kb = %kb_name, error = %e, "session_research_for_session failed in card");
-                    Vec::new()
-                })
+                    Err(kb_core::Error::Storage(format!("{kb_name}: {e}")))
+                }
+            }
         }));
     }
+    let joined = super::buffered_join(futs, state.fanout_cap).await;
+    let failures = joined.iter().filter(|r| r.is_err()).count();
+    if reader_family_dark(failures, joined.len()) {
+        return ResearchLane::unavailable("research unreadable");
+    }
     let mut rows: Vec<kb_core::storage::sqlite::SessionResearchRow> =
-        super::buffered_join(futs, state.fanout_cap)
-            .await
-            .into_iter()
-            .flatten()
-            .collect();
+        joined.into_iter().flatten().flatten().collect();
     // Explicit total order (seq, query, kind): cross-kb seq ties resolve
     // without depending on storage walk order.
     rows.sort_by(|a, b| {
@@ -489,26 +562,32 @@ async fn research_lane(state: &Arc<KbHandles>, session_id: &str) -> ResearchLane
 /// the session's own kb; a per-kb failure folds to no rows with a warn.
 async fn comments_lane(state: &Arc<KbHandles>, session: &SessionOut) -> CommentsLane {
     let sid = session.session_id.clone();
-    let mut file_futs: Vec<super::CorpusFut<'_, Vec<kb_core::storage::sqlite::SessionFileRow>>> =
-        Vec::new();
+    let mut file_futs: Vec<
+        super::CorpusFut<'_, Result<Vec<kb_core::storage::sqlite::SessionFileRow>, kb_core::Error>>,
+    > = Vec::new();
     for (kb_name, ctx) in state.kbs.iter() {
         let sid = sid.clone();
         file_futs.push(Box::pin(async move {
-            ctx.storage
+            match ctx
+                .storage
                 .session_files_for_session(sid)
                 .await
-                .unwrap_or_else(|e| {
+            {
+                Ok(v) => Ok(v),
+                Err(e) => {
                     tracing::warn!(kb = %kb_name, error = %e, "session_files_for_session failed in card comments");
-                    Vec::new()
-                })
+                    Err(kb_core::Error::Storage(format!("{kb_name}: {e}")))
+                }
+            }
         }));
     }
+    let file_joined = super::buffered_join(file_futs, state.fanout_cap).await;
+    let file_failures = file_joined.iter().filter(|r| r.is_err()).count();
+    if reader_family_dark(file_failures, file_joined.len()) {
+        return CommentsLane::unavailable("comments unreadable");
+    }
     let rows: Vec<kb_core::storage::sqlite::SessionFileRow> =
-        super::buffered_join(file_futs, state.fanout_cap)
-            .await
-            .into_iter()
-            .flatten()
-            .collect();
+        file_joined.into_iter().flatten().flatten().collect();
     let touched: std::collections::HashSet<(String, String)> = rows
         .iter()
         .filter(|r| r.in_corpus)
@@ -587,18 +666,23 @@ async fn comments_lane(state: &Arc<KbHandles>, session: &SessionOut) -> Comments
         session.started_at + RAISED_WINDOW_FALLBACK_SECS
     };
     let touched_ref = &touched;
-    let mut raised_futs: Vec<super::CorpusFut<'_, Vec<CommentItem>>> = Vec::new();
+    let mut raised_futs: Vec<super::CorpusFut<'_, Result<Vec<CommentItem>, kb_core::Error>>> =
+        Vec::new();
     for (kb_name, kb_ctx) in state.kbs.iter() {
         let review_dir = state.paths.kb_review_dir(kb_name);
+        let kb_name = kb_name.clone();
         raised_futs.push(Box::pin(async move {
-            let rows = kb_ctx
+            let rows = match kb_ctx
                 .storage
                 .history_comments_in_window(raised_from, raised_to, RAISED_SCAN_CAP)
                 .await
-                .unwrap_or_else(|e| {
+            {
+                Ok(v) => v,
+                Err(e) => {
                     tracing::warn!(kb = %kb_name, error = %e, "history_comments_in_window failed in card");
-                    Vec::new()
-                });
+                    return Err(kb_core::Error::Storage(format!("{kb_name}: {e}")));
+                }
+            };
             let mut out = Vec::new();
             let mut review_cache: std::collections::HashMap<String, Option<kb_core::review::ReviewFile>> =
                 std::collections::HashMap::new();
@@ -658,14 +742,15 @@ async fn comments_lane(state: &Arc<KbHandles>, session: &SessionOut) -> Comments
                     touched: touched_ref.contains(&(kb_name.as_str().to_string(), aid)),
                 });
             }
-            out
+            Ok(out)
         }));
     }
-    let mut raised: Vec<CommentItem> = super::buffered_join(raised_futs, state.fanout_cap)
-        .await
-        .into_iter()
-        .flatten()
-        .collect();
+    let raised_joined = super::buffered_join(raised_futs, state.fanout_cap).await;
+    let raised_failures = raised_joined.iter().filter(|r| r.is_err()).count();
+    if reader_family_dark(raised_failures, raised_joined.len()) {
+        return CommentsLane::unavailable("comments unreadable");
+    }
+    let mut raised: Vec<CommentItem> = raised_joined.into_iter().flatten().flatten().collect();
     raised.sort_by(|a, b| {
         b.created_at
             .cmp(&a.created_at)
@@ -688,7 +773,7 @@ async fn comments_lane(state: &Arc<KbHandles>, session: &SessionOut) -> Comments
 async fn readings_lane(state: &Arc<KbHandles>, session: &SessionOut) -> ReadingsLane {
     let (from, to) = (session.started_at, session.ended_at);
     let operator = state.operator_user().to_string();
-    let mut futs: Vec<super::CorpusFut<'_, Vec<ReadingItem>>> = Vec::new();
+    let mut futs: Vec<super::CorpusFut<'_, Result<Vec<ReadingItem>, kb_core::Error>>> = Vec::new();
     for (kb_name, ctx) in state.kbs.iter() {
         let operator = operator.clone();
         futs.push(Box::pin(async move {
@@ -700,7 +785,7 @@ async fn readings_lane(state: &Arc<KbHandles>, session: &SessionOut) -> Readings
                 Ok(v) => v,
                 Err(e) => {
                     tracing::warn!(kb = %kb_name, error = %e, "history_opens_in_window failed in card");
-                    return Vec::new();
+                    return Err(kb_core::Error::Storage(format!("{kb_name}: {e}")));
                 }
             };
             let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -742,14 +827,15 @@ async fn readings_lane(state: &Arc<KbHandles>, session: &SessionOut) -> Readings
                     last_section,
                 });
             }
-            rows
+            Ok(rows)
         }));
     }
-    let mut rows: Vec<ReadingItem> = super::buffered_join(futs, state.fanout_cap)
-        .await
-        .into_iter()
-        .flatten()
-        .collect();
+    let joined = super::buffered_join(futs, state.fanout_cap).await;
+    let failures = joined.iter().filter(|r| r.is_err()).count();
+    if reader_family_dark(failures, joined.len()) {
+        return ReadingsLane::unavailable("readings unreadable");
+    }
+    let mut rows: Vec<ReadingItem> = joined.into_iter().flatten().flatten().collect();
     // Explicit total order (opened_at desc, artifact_id, kb): same-second
     // opens resolve without depending on storage walk order.
     rows.sort_by(|a, b| {
@@ -777,63 +863,89 @@ async fn memory_lane(
     session: &SessionOut,
     read_ids: &[String],
 ) -> MemoryLane {
-    let mut futs: Vec<super::CorpusFut<'_, Vec<String>>> = Vec::new();
-    for (_, ctx) in state.kbs.iter() {
+    let mut futs: Vec<super::CorpusFut<'_, Result<Vec<String>, kb_core::Error>>> = Vec::new();
+    for (kb_name, ctx) in state.kbs.iter() {
         let read_ids = read_ids.to_vec();
+        let kb_name = kb_name.clone();
         futs.push(Box::pin(async move {
-            let mut id_futs: Vec<super::CorpusFut<'_, Vec<String>>> = Vec::new();
+            let mut id_futs: Vec<super::CorpusFut<'_, Result<Vec<String>, kb_core::Error>>> = Vec::new();
             for sid in &read_ids {
                 let sid = sid.clone();
                 id_futs.push(Box::pin(async move {
-                    ctx.storage
+                    match ctx
+                        .storage
                         .list_docs_with_kb_session(sid, PER_SESSION_MEMORY_LIMIT)
                         .await
-                        .map(|rows| rows.into_iter().map(|r| r.id).collect::<Vec<_>>())
-                        .unwrap_or_default()
+                    {
+                        Ok(rows) => Ok(rows.into_iter().map(|r| r.id).collect::<Vec<_>>()),
+                        Err(e) => {
+                            tracing::warn!(kb = %kb_name, error = %e, "list_docs_with_kb_session failed in card");
+                            Err(kb_core::Error::Storage(format!("{kb_name}: {e}")))
+                        }
+                    }
                 }));
             }
+            let joined = super::buffered_join(id_futs, state.fanout_cap).await;
+            // This kb fails the produced family only when every one of its
+            // reads failed (an empty read-id set is not a failure).
+            if !read_ids.is_empty()
+                && !joined.is_empty()
+                && joined.iter().all(|r| r.is_err())
+            {
+                return Err(
+                    joined
+                        .into_iter()
+                        .find_map(|r| r.err())
+                        .unwrap(),
+                );
+            }
             let mut ids: Vec<String> = Vec::new();
-            for v in super::buffered_join(id_futs, state.fanout_cap).await {
+            for v in joined.into_iter().flatten() {
                 ids.extend(v);
             }
-            ids
+            Ok(ids)
         }));
     }
-    let mut produced: Vec<String> = super::buffered_join(futs, state.fanout_cap)
-        .await
-        .into_iter()
-        .flatten()
-        .collect();
+    let produced_joined = super::buffered_join(futs, state.fanout_cap).await;
+    let produced_failures = produced_joined.iter().filter(|r| r.is_err()).count();
+    if reader_family_dark(produced_failures, produced_joined.len()) {
+        return MemoryLane::unavailable("memory unreadable");
+    }
+    let mut produced: Vec<String> = produced_joined.into_iter().flatten().flatten().collect();
     produced.sort();
     produced.dedup();
     let produced_total = produced.len() as u32;
     let produced: Vec<String> = produced.into_iter().take(CARD_PRODUCED_CAP).collect();
 
     let Some(ctx) = session_ctx(state, &session.kb) else {
-        return MemoryLane {
-            available: true,
-            reason: None,
-            produced,
-            produced_total,
-            recalled: Vec::new(),
-        };
+        return MemoryLane::unavailable("unknown kb");
     };
     let mut rows = Vec::new();
-    let mut id_futs: Vec<super::CorpusFut<'_, Vec<kb_core::storage::sqlite::MemoryRecallRow>>> =
-        Vec::new();
+    let mut id_futs: Vec<
+        super::CorpusFut<
+            '_,
+            Result<Vec<kb_core::storage::sqlite::MemoryRecallRow>, kb_core::Error>,
+        >,
+    > = Vec::new();
     for sid in read_ids {
         let sid = sid.clone();
+        let session_kb = session.kb.clone();
         id_futs.push(Box::pin(async move {
-            ctx.storage
-                .memory_recalls_for_session(sid)
-                .await
-                .unwrap_or_else(|e| {
-                    tracing::warn!(kb = %session.kb, error = %e, "memory_recalls_for_session failed in card");
-                    Vec::new()
-                })
+            match ctx.storage.memory_recalls_for_session(sid).await {
+                Ok(v) => Ok(v),
+                Err(e) => {
+                    tracing::warn!(kb = %session_kb, error = %e, "memory_recalls_for_session failed in card");
+                    Err(kb_core::Error::Storage(format!("{session_kb}: {e}")))
+                }
+            }
         }));
     }
-    for v in super::buffered_join(id_futs, state.fanout_cap).await {
+    let recalled_joined = super::buffered_join(id_futs, state.fanout_cap).await;
+    let recalled_failures = recalled_joined.iter().filter(|r| r.is_err()).count();
+    if !read_ids.is_empty() && reader_family_dark(recalled_failures, recalled_joined.len()) {
+        return MemoryLane::unavailable("memory unreadable");
+    }
+    for v in recalled_joined.into_iter().flatten() {
         rows.extend(v);
     }
     // Explicit total order (recalled_at with NULL last, memory_id,
@@ -905,17 +1017,17 @@ async fn memory_lane(
     }
 }
 
-async fn summary_lane(
-    state: &Arc<KbHandles>,
+/// Pure half of [`summary_lane`]: the lane for a resolved children total.
+/// `Err` (every kb's children reader failed) degrades the whole summary —
+/// `child_total` cannot be invented and hiding that would lie about the
+/// tree the summary describes.
+fn summary_from(
+    total: Result<u64, kb_core::Error>,
     session: &SessionOut,
-    session_id: &str,
+    segment_chain: Vec<String>,
 ) -> SummaryLane {
-    let total = children_total(state, &children_predicate(session)).await;
-    let chain_parts = session_chain_parts(state, session_id).await;
-    let segment_chain = if chain_parts.len() >= 2 {
-        chain_parts.iter().map(|p| p.session_id.clone()).collect()
-    } else {
-        Vec::new()
+    let Ok(total) = total else {
+        return SummaryLane::unavailable("children unreadable");
     };
     SummaryLane {
         available: true,
@@ -936,12 +1048,33 @@ async fn summary_lane(
     }
 }
 
+async fn summary_lane(
+    state: &Arc<KbHandles>,
+    session: &SessionOut,
+    session_id: &str,
+) -> SummaryLane {
+    let total = children_total(state, &children_predicate(session)).await;
+    let chain_parts = session_chain_parts(state, session_id).await;
+    let segment_chain = if chain_parts.len() >= 2 {
+        chain_parts.iter().map(|p| p.session_id.clone()).collect()
+    } else {
+        Vec::new()
+    };
+    summary_from(total, session, segment_chain)
+}
+
 async fn children_lane(state: &Arc<KbHandles>, session: &SessionOut) -> ChildrenLane {
     let pred = children_predicate(session);
     let (total, page) = tokio::join!(
         children_total(state, &pred),
         children_page(state, &pred, None, CARD_CHILDREN_CAP)
     );
+    // The total is the lane's headline number; when every kb's children
+    // reader failed it cannot be invented — degrade rather than report 0
+    // beside a page drained from the same dead readers.
+    let Ok(total) = total else {
+        return ChildrenLane::unavailable("children unreadable");
+    };
     let (items, next_after) = page_overfetch_into(page, CARD_CHILDREN_CAP);
     ChildrenLane {
         available: true,
@@ -1105,6 +1238,7 @@ async fn outcome_lane(
     commit_rows: &[CommitRow],
     files_ok: bool,
     commits_ok: bool,
+    fanout_cap: usize,
 ) -> OutcomeLane {
     let verdict = session
         .evidence
@@ -1139,7 +1273,7 @@ async fn outcome_lane(
         return base;
     }
     OutcomeLane {
-        not_committed: Some(compute_not_committed(files_rows, commit_rows).await),
+        not_committed: Some(compute_not_committed(files_rows, commit_rows, fanout_cap).await),
         ..base
     }
 }
@@ -1150,7 +1284,11 @@ async fn outcome_lane(
 /// compared as absolute: a touched file's repo-relative path joins its
 /// commit's own `repo_root`. The set difference and the partial-coverage
 /// caption live in `kb_core::sessions::card`.
-async fn compute_not_committed(files_rows: &[FileRow], commit_rows: &[CommitRow]) -> NotCommitted {
+async fn compute_not_committed(
+    files_rows: &[FileRow],
+    commit_rows: &[CommitRow],
+    fanout_cap: usize,
+) -> NotCommitted {
     let edited: Vec<String> = files_rows
         .iter()
         .filter(|r| r.action == "edit" || r.action == "write")
@@ -1184,7 +1322,7 @@ async fn compute_not_committed(files_rows: &[FileRow], commit_rows: &[CommitRow]
                 .map(|(files, _)| (repo_root, files))
         }));
     }
-    let results = super::buffered_join(futs, 20).await;
+    let results = super::buffered_join(futs, fanout_cap).await;
     for res in &results {
         match res {
             Some((root, files)) => {
@@ -1272,7 +1410,15 @@ pub async fn card(
         children_lane(&state, &session)
     );
 
-    let outcome = outcome_lane(&session, &files_rows, &commit_rows, files_ok, commits_ok).await;
+    let outcome = outcome_lane(
+        &session,
+        &files_rows,
+        &commit_rows,
+        files_ok,
+        commits_ok,
+        state.fanout_cap,
+    )
+    .await;
 
     // Compute the terminal lane BEFORE moving `summary` into the card:
     // the child case resolves through the summary's root_session_id.
@@ -1382,5 +1528,106 @@ mod tests {
         let (items, next) = page_overfetch_into(page, 50);
         assert_eq!(items.len(), 1);
         assert_eq!(next, None);
+    }
+
+    #[test]
+    fn reader_family_dark_only_when_every_kb_failed() {
+        // Zero kbs: no reader to fail, never dark.
+        assert!(!reader_family_dark(0, 0));
+        // One kb, failed: dark. One kb, answered: not dark.
+        assert!(reader_family_dark(1, 1));
+        assert!(!reader_family_dark(0, 1));
+        // Two kbs, one answered: partial is honest, not dark.
+        assert!(!reader_family_dark(1, 2));
+        // Two kbs, both failed: dark.
+        assert!(reader_family_dark(2, 2));
+    }
+
+    #[test]
+    fn summary_marks_unavailable_when_children_unreadable() {
+        let out = SessionOut::from_row(
+            "smoke",
+            SqliteRow {
+                artifact_id: "a1".into(),
+                session_id: "root-1".into(),
+                title: Some("synthetic title".into()),
+                ..Default::default()
+            },
+        );
+        let lane = summary_from(Err(kb_core::Error::Storage("x".into())), &out, Vec::new());
+        assert_eq!(lane.available, false);
+        assert_eq!(lane.reason.as_deref(), Some("children unreadable"));
+        let lane = summary_from(Ok(3), &out, Vec::new());
+        assert_eq!(lane.available, true);
+        assert_eq!(lane.child_total, 3);
+        assert_eq!(lane.title.as_deref(), Some("synthetic title"));
+    }
+
+    #[tokio::test]
+    async fn children_total_from_unions_ids_and_degrades_when_all_kbs_fail() {
+        use kb_core::storage::actor::StorageActor;
+        // Two sources: a healthy one and one whose `sessions` table is
+        // dropped out from under its actor (a real storage failure).
+        let tmp_ok = tempfile::tempdir().unwrap();
+        let ok_sqlite = tmp_ok.path().join("ok.db");
+        let ok_handle = StorageActor::spawn(tmp_ok.path().join("lance"), ok_sqlite.clone(), None)
+            .await
+            .expect("spawn healthy storage actor");
+        {
+            let mut db = kb_core::storage::sqlite::Db::open(&ok_sqlite).expect("open healthy db");
+            let mut root = SqliteRow {
+                artifact_id: "a-root".into(),
+                session_id: "ut-root".into(),
+                started_at: 1_000,
+                ..Default::default()
+            };
+            db.sessions_upsert(&root).unwrap();
+            let mut c = SqliteRow {
+                artifact_id: "a-c".into(),
+                session_id: "ut-child".into(),
+                started_at: 1_100,
+                ..Default::default()
+            };
+            c.root_session_id = Some("ut-root".into());
+            c.parent_session_id = Some("ut-root".into());
+            db.sessions_upsert(&c).unwrap();
+            root.session_id = "ut-root".into();
+        }
+        let tmp_bad = tempfile::tempdir().unwrap();
+        let bad_sqlite = tmp_bad.path().join("bad.db");
+        let bad_handle =
+            StorageActor::spawn(tmp_bad.path().join("lance"), bad_sqlite.clone(), None)
+                .await
+                .expect("spawn failing storage actor");
+        {
+            // A real storage failure: drop the `sessions` table the actor's
+            // connection reads through. Every later query misses with
+            // "no such table: sessions".
+            let raw = rusqlite::Connection::open(&bad_sqlite).expect("raw open");
+            raw.execute_batch("DROP TABLE sessions")
+                .expect("drop sessions");
+        }
+        // Healthy alone: the union counts the one child.
+        let pred_root = ChildrenPredicate::Root("ut-root".to_string());
+        let n = children_total_from(&[("smoke".to_string(), ok_handle.clone())], 8, &pred_root)
+            .await
+            .expect("healthy total");
+        assert_eq!(n, 1);
+        // Healthy + dropped-table: partial success keeps the count.
+        let n = children_total_from(
+            &[
+                ("smoke".to_string(), ok_handle.clone()),
+                ("broken".to_string(), bad_handle.clone()),
+            ],
+            8,
+            &pred_root,
+        )
+        .await
+        .expect("partial failure keeps the healthy count");
+        assert_eq!(n, 1);
+        // Dropped-table alone: every source failed, so the total is an
+        // Err — the summary/children lanes degrade instead of reporting 0.
+        let err = children_total_from(&[("broken".to_string(), bad_handle)], 8, &pred_root).await;
+        assert!(err.is_err(), "all-failed total must be Err, got {err:?}");
     }
 }
