@@ -2729,8 +2729,11 @@ const WORK_SLATE_CAP: usize = 8;
 
 /// One per-kb scanned row for the work route: the session row plus its
 /// job ulids, and whether that kb hit the scan cap.
-type WorkScanned =
-    (String, Vec<(kb_core::storage::sqlite::SessionRow, Vec<String>)>, bool);
+type WorkScanned = (
+    String,
+    Vec<(kb_core::storage::sqlite::SessionRow, Vec<String>)>,
+    bool,
+);
 
 #[derive(Debug, Deserialize)]
 pub struct WorkParams {

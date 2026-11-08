@@ -6084,10 +6084,9 @@ async fn sessions_work_groups_a_root_and_its_children_and_leaves_collapsed_listi
     let _ = work_seed_row(&paths, "art-work-lone", "work-lone", now - 3000);
     std::fs::create_dir_all(&paths.config).unwrap();
     std::fs::write(paths.token_file(), FIXTURE_TOKEN).unwrap();
-    let (addr, _task) =
-        kb_server::serve_on_random_port_with_paths(cfg, paths.clone())
-            .await
-            .expect("serve");
+    let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths.clone())
+        .await
+        .expect("serve");
     common::wait_docs_listed(addr, "smoke", 4).await;
     let client = reqwest::Client::new();
 

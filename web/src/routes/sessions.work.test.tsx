@@ -66,11 +66,10 @@ describe("SessionWorkView", () => {
       ],
     };
     renderWork(work);
-    expect(screen.getByText("Root work")).toBeTruthy();
+    expect(screen.getAllByText("Root work").length).toBeGreaterThan(0);
     expect(screen.getByText(/subagent tree · 3 sessions · 2 subagents/)).toBeTruthy();
-    const link = screen.getByText("Root work").closest("a");
-    expect(link).toBeTruthy();
-    expect(link!.getAttribute("href")).toBe("/sessions/root-x");
+    const link = screen.getByRole("link", { name: "Root work" });
+    expect(link.getAttribute("href")).toBe("/sessions/root-x");
     // members_total 3 vs 1 shown member.
     expect(screen.getByText("+2 more")).toBeTruthy();
   });

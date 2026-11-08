@@ -609,9 +609,14 @@ fn component_terms(
         }
     }
 
-    // cwd_time: 2+ candidate members chained weakly (the only way a
-    // no-strong-edge component exceeds one node).
-    if members.len() > 1 && members.iter().all(|&i| is_cwd_candidate(i, nodes, rows)) {
+    // cwd_time: 2+ candidate members chained weakly. `cwd_time` never
+    // attaches to a group with a strong edge (the weak phase only runs
+    // over singleton components), so it is credited only when no strong
+    // term landed inside this component.
+    if terms.is_empty()
+        && members.len() > 1
+        && members.iter().all(|&i| is_cwd_candidate(i, nodes, rows))
+    {
         let mut seq: Vec<usize> = members.to_vec();
         seq.sort_by(|&a, &b| node_order(nodes, a, b));
         let mut chained = false;
