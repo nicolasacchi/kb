@@ -350,11 +350,8 @@ pub fn decode_text_frame(raw: &str) -> Result<TextFrame, WireError> {
         "resumefrom" | "takesize" | "input" | "ping" => {
             let frame: ClientFrame =
                 serde_json::from_str(raw).map_err(|_| WireError::MalformedJson)?;
-            match &frame {
-                ClientFrame::Resumefrom { offset, mseq, .. } => {
-                    check_js_safe(&[*offset, *mseq])?;
-                }
-                _ => {}
+            if let ClientFrame::Resumefrom { offset, mseq, .. } = &frame {
+                check_js_safe(&[*offset, *mseq])?;
             }
             Ok(TextFrame::Client(frame))
         }
@@ -362,10 +359,10 @@ pub fn decode_text_frame(raw: &str) -> Result<TextFrame, WireError> {
             let msg: ControlMessage =
                 serde_json::from_str(raw).map_err(|_| WireError::MalformedJson)?;
             match &msg {
-                ControlMessage::ViewerOpen { resume, .. } => {
-                    if let Some(r) = resume {
-                        check_js_safe(&[r.offset, r.mseq])?;
-                    }
+                ControlMessage::ViewerOpen {
+                    resume: Some(r), ..
+                } => {
+                    check_js_safe(&[r.offset, r.mseq])?;
                 }
                 ControlMessage::Stats {
                     joins,
