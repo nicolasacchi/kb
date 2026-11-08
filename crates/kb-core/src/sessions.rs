@@ -3719,6 +3719,35 @@ mod tests {
         }
     }
 
+    // T20/FXT20 — an image reference is surfaced (Item::Image) but never
+    // scored: it enters neither the index digest nor the closure.
+    #[test]
+    fn image_refs_are_never_in_the_digest_or_the_closure() {
+        let prose =
+            "The header moved down by one row, and the search box stayed put exactly where it was.";
+        let jsonl = [
+            r#"{"type":"user","uuid":"00000001-0000-4000-8000-000000000001","timestamp":"2026-06-04T09:00:10.000Z","message":{"role":"user","content":"look at the screenshot"}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"The header moved down by one row, and the search box stayed put exactly where it was."}]}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"image","source":{"type":"blob_ref","media_type":"image/png","sha256":"abababababababababababababababababababababababababababababababab"}}]}}"#,
+        ]
+        .join("\n");
+        let parse = parse_session_html_full(
+            &wrapper("s1", &jsonl),
+            "session-20260524T100000Z-s1.html",
+            0,
+        );
+        let dig = session_digest(&parse);
+        for noise in ["[image", "blob:", "abababab", "inline"] {
+            assert!(
+                !dig.contains(noise),
+                "digest must not carry image {noise:?}: {dig}"
+            );
+        }
+        let closed = closing_assistant_text(&jsonl).expect("a closure from the prose turn");
+        assert_eq!(closed, prose);
+        assert!(!closed.contains("blob:"), "{closed}");
+    }
+
     #[test]
     fn recollect_order_lets_a_stronger_match_beat_a_committing_session() {
         // The documented #1 failure mode to avoid: a high-error, no-commit

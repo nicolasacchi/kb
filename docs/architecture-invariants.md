@@ -1282,7 +1282,7 @@ W7's live-tail panel (memo R15/LF-4), unconsumed by any shipped presenter
 yet. Extending interpretation (a new card shape, a new wrapper kind) is a
 `view.rs`-only change; a presenter that starts re-deriving interpretation
 locally reintroduces the exact drift this wave closed.
-`Item::Image` carries a mime and an optional content-address (`sha256`) or inline size, never pixels — surfaced, never scored, never in the digest, the `code` lane, or the closure heuristic.
+`Item::Image` carries a mime and an optional content-address (`sha256`) or inline size, never pixels — surfaced, never scored, never in the digest or the closure heuristic.
 
 **W1/M2 amendment — stable `t-<uuid12>` turn identity (moonshots M2, memo
 R2).** A turn's id is `"t-"` + the first 12 hex chars (dashes stripped) of
