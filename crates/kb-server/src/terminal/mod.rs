@@ -11,6 +11,7 @@
 //! unix-socket client built from the live config; [`wire`] is the
 //! serde mirror of the runner JSON types.
 
+pub mod binding;
 pub mod gate;
 pub mod runner_client;
 pub mod ticket;
@@ -22,4 +23,11 @@ pub mod wire;
 #[derive(Debug, Default)]
 pub struct TerminalState {
     pub(crate) tickets: ticket::TicketStore,
+    /// T13 — the terminal <-> session directory (id -> pane_pid) refreshed
+    /// from the runner's `list` reply. In memory only (LF-7).
+    pub(crate) term_dir: binding::TermDirectory,
+    /// T13 — at most one detached directory-refresh task at a time.
+    pub(crate) refresh_inflight: std::sync::atomic::AtomicBool,
+    /// T13 — the minimum interval between directory-refresh spawns.
+    pub(crate) refresh_min: std::sync::Mutex<Option<std::time::Instant>>,
 }

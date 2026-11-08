@@ -11,12 +11,13 @@
 use crate::middleware::Identity;
 use crate::state::KbHandles;
 use axum::{
-    extract::{Extension, State},
-    http::header,
+    extract::{ConnectInfo, Extension, State},
+    http::{header, HeaderMap},
     response::IntoResponse,
     Json,
 };
 use serde::Serialize;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
@@ -69,14 +70,41 @@ pub struct IdentityResponse {
     /// operator can read "which binary is this" off the wire without
     /// shelling into the container.
     pub schema_epoch: u32,
+    /// T13 — whether THIS request's caller may use the terminal surface at all: `[terminal] enabled`
+    /// AND the caller class T11's gate admits. Computed per request, never cached, so the SPA can
+    /// hide/disable-with-caption BEFORE a refused attach (same pattern as kb-code's
+    /// `review_mutations_admitted`). NOT a grant: Origin + intent header + ticket still apply.
+    pub terminal_admitted: bool,
+}
+
+/// T13 — whether THIS request's caller may use the terminal surface at all.
+///
+/// Pure: `enabled` AND the caller class T11's gate admits, WITHOUT the
+/// Origin/intent parts. Computed per request, never cached. NOT a grant:
+/// Origin + intent header + ticket still apply.
+pub(crate) fn terminal_admitted_for(
+    enabled: bool,
+    peer: Option<IpAddr>,
+    headers: &HeaderMap,
+    trusted_proxies: &[IpAddr],
+) -> bool {
+    enabled && crate::terminal::gate::caller_class_admitted(peer, headers, trusted_proxies)
 }
 
 pub async fn get(
     State(state): State<Arc<KbHandles>>,
     Extension(identity): Extension<Identity>,
+    headers: HeaderMap,
+    peer: Option<Extension<ConnectInfo<SocketAddr>>>,
 ) -> impl IntoResponse {
     let host = std::env::var("HOSTNAME").unwrap_or_else(|_| "localhost".to_string());
     let stamp = crate::build_stamp();
+    // T13 — terminal admission, per request (invariant #3: read the peer
+    // from the extension, fail closed when missing).
+    let enabled = state.config.read().await.terminal.enabled();
+    let peer_ip = peer.as_ref().map(|Extension(ConnectInfo(addr))| addr.ip());
+    let trusted = state.origin.trusted_proxies.load();
+    let terminal_admitted = terminal_admitted_for(enabled, peer_ip, &headers, &trusted);
     let body = Json(IdentityResponse {
         name: state.daemon_name.clone(),
         version: stamp.version,
@@ -92,9 +120,32 @@ pub async fn get(
         sibling_protocol: kb_core::sibling::SIBLING_PROTOCOL,
         sibling_major: kb_core::sibling::SIBLING_MAJOR,
         schema_epoch: kb_core::storage::sqlite::schema_epoch(),
+        terminal_admitted,
     });
     // `no-store`: the SPA cross-checks this against window.location to
     // detect a mis-wired proxy — a cached response from a different
     // origin would defeat the check.
     ([(header::CACHE_CONTROL, "no-store")], body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_admitted_is_false_when_disabled_even_on_loopback() {
+        let peer = Some(IpAddr::from([127, 0, 0, 1]));
+        assert!(!terminal_admitted_for(false, peer, &HeaderMap::new(), &[]));
+    }
+
+    #[test]
+    fn terminal_admitted_is_true_for_an_admitted_caller_when_enabled() {
+        let peer = Some(IpAddr::from([127, 0, 0, 1]));
+        assert!(terminal_admitted_for(true, peer, &HeaderMap::new(), &[]));
+    }
+
+    #[test]
+    fn terminal_admitted_fails_closed_without_connect_info() {
+        assert!(!terminal_admitted_for(true, None, &HeaderMap::new(), &[]));
+    }
 }

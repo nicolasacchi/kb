@@ -39,6 +39,8 @@ export KB_BEAT_CALLS="$TMPROOT/calls.log"
 export KB_CAPTURE_CALLS="$TMPROOT/capture.log"
 export KB_PUSH_CALLS="$TMPROOT/push.log"
 export KB_INJECT_CALLS="$TMPROOT/inject.log"
+export KB_BEAT_PPID_LOG="$TMPROOT/ppid.log"
+: >"$KB_BEAT_PPID_LOG"
 : >"$KB_BEAT_CALLS"
 : >"$KB_CAPTURE_CALLS"
 : >"$KB_PUSH_CALLS"
@@ -67,6 +69,7 @@ for h in kb-beat.sh kb-beat-throttle.sh; do
 # one atomic append: two stubs run concurrently and piecewise writes interleave
 body="$(cat | tr -d '\n')"
 printf 'CALL %s %s %s\n' "$(basename "$0")" "$*" "$body" >>"$KB_BEAT_CALLS"
+printf 'PPID=%s TERM=%s\n' "$PPID" "${KB_TERM_ID:-}" >>"$KB_BEAT_PPID_LOG"
 exit 0
 STUB
   chmod +x "$TMPROOT/hooks/$h"
@@ -359,6 +362,27 @@ test("the kb-code omp twins only publish identity for the main agent", async () 
     expect(process.env.KB_SESSION_ID).toBe("omp-main-9");
     expect(JSON.stringify(mainRes)).toContain(marker);
     expect(JSON.stringify(mainRes)).toContain(sentinel);
+  }
+});
+
+test("omp_beat_ppid_is_the_host_process_pid", async () => {
+  const PPID_LOG = process.env.KB_BEAT_PPID_LOG!;
+  const prev = process.env.KB_TERM_ID;
+  process.env.KB_TERM_ID = "t13a";
+  try {
+    writeFileSync(PPID_LOG, "");
+    const h = makePi();
+    await h.get("tool_approval_requested")({ type: "tool_approval_requested", toolName: "bash", reason: "needs approval" }, ctx);
+    await Bun.sleep(600); // matches the existing 600 ms fire-and-forget wait
+    const text = readFileSync(PPID_LOG, "utf8");
+    const lines = text.split("\n").filter((l) => l.startsWith("PPID="));
+    expect(lines.length).toBeGreaterThanOrEqual(1);
+    const m = lines[lines.length - 1].match(/^PPID=(\d+) TERM=(.*)$/);
+    expect(m![1]).toBe(String(process.pid));
+    expect(m![2]).toBe("t13a");
+  } finally {
+    if (prev === undefined) delete process.env.KB_TERM_ID;
+    else process.env.KB_TERM_ID = prev;
   }
 });
 TS

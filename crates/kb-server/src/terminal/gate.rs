@@ -53,6 +53,8 @@ pub(crate) const ERR_TERMINAL_TICKET_FULL: &str = "urn:kb:errors:terminal-ticket
 /// failed in the daemon (500).
 pub(crate) const ERR_TERMINAL_TICKET_UNAVAILABLE: &str =
     "urn:kb:errors:terminal-ticket-unavailable";
+/// `urn:kb:errors:term-blocked` — the bound session is blocked (409) (T13).
+pub(crate) const ERR_TERM_BLOCKED: &str = "urn:kb:errors:term-blocked";
 
 /// The SPA-only intent header. An INTENT marker, not an authorization:
 /// kb has one trust tier and a local non-browser client can forge both
@@ -69,6 +71,21 @@ pub(crate) fn terminal_intent(headers: &HeaderMap) -> bool {
         .get(TERMINAL_INTENT_HEADER)
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.trim().eq_ignore_ascii_case("terminal"))
+}
+
+/// Whether a caller class is admitted without the Origin/intent parts (T13).
+///
+/// Exposes the loopback classification the full gate's caller-class step
+/// builds on, for the per-request `terminal_admitted` probe: the SPA is
+/// authenticated by loopback or a trusted hop, and `is_loopback_origin`
+/// resolves exactly that (fail-closed on a missing peer). No behaviour
+/// change: [`gate`] still performs its own Token/Legacy refusal.
+pub(crate) fn caller_class_admitted(
+    peer: Option<std::net::IpAddr>,
+    headers: &HeaderMap,
+    trusted_proxies: &[std::net::IpAddr],
+) -> bool {
+    crate::middleware::is_loopback_origin(peer, headers, trusted_proxies)
 }
 
 /// Whether `origin` is acceptable for the terminal tier.

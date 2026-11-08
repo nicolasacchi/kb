@@ -573,21 +573,40 @@ impl ChildrenLane {
     }
 }
 
-/// The constant terminal lane: always unavailable until the kb-term track
-/// fills it from the live registry. `available` and `reason` are
-/// identical on every read, on every config — there is no `[terminal]`
-/// key to consult and no `term_id`/`admitted` to surface.
+/// The terminal lane (T13): whether this session is bound to a kb-term
+/// terminal, filled from the live registry. Display only — no ticket,
+/// URL, socket path or bytes. `admitted` is the `terminal_admitted`
+/// probe; `via: "root"` marks a child resolved to its tree root's terminal.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct TerminalLane {
     pub available: bool,
-    pub reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub term_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<LiveState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocked: Option<bool>,
+    pub admitted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
 }
 
 impl TerminalLane {
-    pub fn constant() -> Self {
+    /// The registry-derived lane for a terminal-less session.
+    pub fn unavailable(reason: impl Into<String>, admitted: bool) -> Self {
         Self {
             available: false,
-            reason: "no terminal runner".to_string(),
+            reason: Some(reason.into()),
+            term_id: None,
+            harness: None,
+            state: None,
+            blocked: None,
+            admitted,
+            via: None,
         }
     }
 }
@@ -988,7 +1007,28 @@ pub fn render_text(card: &SessionCard) -> String {
             )));
         }
     }
-    push("terminal: unavailable (no terminal runner)".to_string());
+    let t = &card.terminal;
+    if t.available {
+        let state = match t.state {
+            Some(LiveState::Working) => "working",
+            Some(LiveState::Stalled) => "stalled",
+            Some(LiveState::Waiting) => "waiting",
+            Some(LiveState::Cold) => "cold",
+            Some(LiveState::Finished) => "finished",
+            Some(LiveState::PresumedEnded) => "presumed_ended",
+            None => "unknown",
+        };
+        push(sanitize_line(&format!(
+            "terminal: {} ({})",
+            t.term_id.as_deref().unwrap_or("—"),
+            state
+        )));
+    } else {
+        push(sanitize_line(&format!(
+            "terminal: unavailable ({})",
+            t.reason.as_deref().unwrap_or("unreadable")
+        )));
+    }
     out
 }
 
@@ -1026,7 +1066,7 @@ mod tests {
             live: LiveLane::unavailable("not live"),
             slate: SlateLane::unavailable("no slate"),
             children: ChildrenLane::default(),
-            terminal: TerminalLane::constant(),
+            terminal: TerminalLane::unavailable("terminal disabled", false),
         }
     }
 
@@ -1051,7 +1091,7 @@ mod tests {
     }
 
     #[test]
-    fn card_lanes_cover_every_declared_lane_and_terminal_is_constant_unavailable() {
+    fn card_lanes_cover_every_declared_lane_and_terminal_lane_is_registry_derived() {
         let mut card = empty_card();
         card.summary = available_summary();
         card.outcome = OutcomeLane {
@@ -1151,17 +1191,19 @@ mod tests {
                 "lane {key} has no explicit available flag"
             );
         }
-        // The terminal lane is constant: false + the fixed reason.
+        // The terminal lane is registry-derived: unavailable with the
+        // disabled reason until a beat binds a terminal.
         assert_eq!(v["terminal"]["available"], false);
-        assert_eq!(v["terminal"]["reason"], "no terminal runner");
-        assert_eq!(TerminalLane::constant(), TerminalLane::constant());
+        assert_eq!(v["terminal"]["reason"], "terminal disabled");
+        assert_eq!(v["terminal"]["admitted"], false);
+        assert!(v["terminal"].get("term_id").is_none());
         // An unavailable lane carries its reason and default payloads.
         assert_eq!(v["live"]["available"], false);
         assert_eq!(v["live"]["reason"], "not live");
         // The rendered text always carries the terminal line.
         let text = render_text(&card);
         assert!(
-            text.contains("terminal: unavailable (no terminal runner)"),
+            text.contains("terminal: unavailable (terminal disabled)"),
             "term lane line missing: {text:?}"
         );
     }
