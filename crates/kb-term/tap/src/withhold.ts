@@ -125,13 +125,19 @@ export class Withholder {
     switch (this.state) {
       case 'ground': {
         if (c === ESC) {
-          this.state = 'esc';
+          this.state = 'esc'; // held: the escape completes before anything emits
+          return false;
         }
         out.push(c);
         return false;
       }
       case 'esc': {
-        // The ESC byte itself was already emitted when we left ground.
+        // The ESC byte is held, never emitted until its sequence decides.
+        if (c === ESC) {
+          // ESC aborts the held ESC: the first drops, this one re-arms.
+          this.state = 'esc';
+          return false;
+        }
         if (c === 0x5b) {
           this.state = 'csi';
           this.csi = [];
@@ -145,7 +151,7 @@ export class Withholder {
         }
         if (c === 0x50 || c === 0x5f || c === 0x58 || c === 0x5e) {
           this.state = 'str';
-          out.push(c);
+          out.push(ESC, c);
           return false;
         }
         if (c === CAN || c === SUB) {
@@ -161,7 +167,7 @@ export class Withholder {
         }
         // Single-byte escape or nF-style escape: the whole 2 bytes pass.
         this.state = 'ground';
-        out.push(c);
+        out.push(ESC, c);
         return false;
       }
       case 'csi': {
@@ -264,19 +270,22 @@ export class Withholder {
       }
       case 'oscEsc': {
         if (c === BS) {
+          const kind = this.oscKind;
           this.finishOsc(ctx);
-          out.push(ESC, BS);
+          // The ST belongs to the OSC: streamed OSCs carry it out, withheld
+          // ones take it with them.
+          if (kind === 2 || kind === 0) out.push(ESC, BS);
           this.state = 'ground';
           this.osc = [];
           this.oscKind = 0;
           return false;
         }
-        // Non-ST ESC aborted the OSC: its partial bytes are dropped and the
-        // ESC starts a new escape (it was inside the OSC, so not emitted yet).
+        // Non-ST ESC aborted the OSC. A forwarded (streamed) OSC needs a
+        // CAN so the receiver leaves it; a withheld one's partial drops.
+        if (this.oscKind === 2) out.push(CAN);
         this.state = 'esc';
         this.osc = [];
         this.oscKind = 0;
-        out.push(ESC);
         return true; // reprocess c in the esc state
       }
       case 'str': {
@@ -298,9 +307,11 @@ export class Withholder {
           this.state = 'ground';
           return false;
         }
+        // Forwarded DCS/APC/SOS/PM aborted by an ESC: CAN terminates the
+        // string, then the byte is reprocessed as the new escape's input.
         this.state = 'esc';
-        out.push(ESC);
-        return true; // reprocess c in the esc state
+        out.push(CAN);
+        return true;
       }
     }
     return false;
