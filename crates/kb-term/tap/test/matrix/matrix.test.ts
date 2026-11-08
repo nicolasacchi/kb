@@ -646,14 +646,27 @@ test('stage A DECSC: a one-row in-viewport wrong slot fails (FXT6 raw compare)',
 }, 900_000);
 
 test('stage-B residual totals stay within the spike bound (15+7+6+2)', async () => {
-  // Runs after every matrix (variant, stream) test above in file order? Bun
-  // runs tests in declaration order within a file, so residualTotals is
-  // populated by then. Any allowlisted cell-chars/wide/extra/lost totals
-  // beyond the T1 spike's budgets fail -- a new residual class with no
-  // budget entry fails too (no silent wildcard).
+  // Runs after the matrix (variant, stream) tests above in file order (Bun
+  // runs tests in declaration order within a file), so residualTotals is
+  // populated by then. Only the spike-budget classes are bounded; the
+  // spec-6 cosmetic classes and the named visual-same/blank-flag residuals
+  // are exempt (documented loss, counted for visibility only). Any residual
+  // class that is neither bound-covered nor a named residual fails: no
+  // silent wildcard may newly classify a class clean.
   console.log(`stage-B residual totals: ${JSON.stringify(residualTotals)}`);
+  const namedResiduals = new Set<string>([
+    ...COSMETIC_RESIDUALS,
+    'fg colour',
+    'bg colour',
+    'attributes',
+  ]);
   for (const [cls, n] of Object.entries(residualTotals)) {
-    expect(SPIKE_BOUNDS[cls] === undefined ? -1 : SPIKE_BOUNDS[cls]).toBeGreaterThanOrEqual(n);
+    const bound = SPIKE_BOUNDS[cls];
+    if (bound !== undefined) {
+      expect(bound).toBeGreaterThanOrEqual(n);
+    } else {
+      expect(namedResiduals.has(cls)).toBe(true);
+    }
   }
   expect(residualTotals['cell chars'] ?? 0).toBeLessThanOrEqual(15);
   expect(residualTotals['wide-char boundary'] ?? 0).toBeLessThanOrEqual(7);
