@@ -180,7 +180,8 @@ mod tests {
     #[tokio::test]
     async fn silent_server_times_out_within_one_second() {
         // The only runner-client test allowed to wait: the deadline
-        // must fire.
+        // must fire. Paste rides the base budget (heavy ops have
+        // per-op floors above 1s in op_budget).
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("runner.sock");
         let listener = tokio::net::UnixListener::bind(&sock).unwrap();
@@ -191,7 +192,13 @@ mod tests {
         });
         let runner = UnixRunner::new(sock, Duration::from_secs(1));
         let started = std::time::Instant::now();
-        let err = runner.call(&RunnerRequest::List {}).await;
+        let err = runner
+            .call(&RunnerRequest::Paste {
+                id: "abcd1234".to_string(),
+                viewer: "spa".to_string(),
+                text: "hi".to_string(),
+            })
+            .await;
         assert!(matches!(err, Err(RunnerError::Timeout)), "got {err:?}");
         assert!(started.elapsed() < Duration::from_secs(5));
     }
