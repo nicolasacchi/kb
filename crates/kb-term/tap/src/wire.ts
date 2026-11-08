@@ -11,6 +11,9 @@
 // re-encode returns that exact string; malformed JSON is an error.
 
 export const MAX_OFFSET = 1n << 53n;
+/** Largest legal tap.sock envelope length; the u32 length counts the kind
+ * byte plus the body (brief section 6: "Max envelope 1 MiB"). */
+export const MAX_ENVELOPE_LEN = 1_048_576;
 
 /** Protocol error for a malformed kb-term/1 frame (the "bad-frame" code). */
 export class FrameError extends Error {
@@ -112,6 +115,205 @@ function hasStringT(value: unknown): value is { t: string } {
   return value !== null && typeof value === 'object' && 't' in value && typeof (value as { t: unknown }).t === 'string';
 }
 
+type FieldObj = Record<string, unknown>;
+
+const HARNESSES = new Set(['claude', 'codex', 'opencode', 'grok', 'kimi', 'omp']);
+
+function badField(t: string, key: string, want: string): never {
+  throw new FrameError(`bad-frame: ${t}.${key} must be ${want}`);
+}
+
+function reqStr(o: FieldObj, t: string, key: string): string {
+  const v = o[key];
+  if (typeof v !== 'string') badField(t, key, 'a string');
+  return v as string;
+}
+
+function reqBool(o: FieldObj, t: string, key: string): boolean {
+  const v = o[key];
+  if (typeof v !== 'boolean') badField(t, key, 'a boolean');
+  return v as boolean;
+}
+
+function reqUint(o: FieldObj, t: string, key: string, max: number): number {
+  const v = o[key];
+  if (typeof v !== 'number' || !Number.isSafeInteger(v) || v < 0 || v > max) {
+    badField(t, key, `a safe unsigned integer <= ${String(max)}`);
+  }
+  return v as number;
+}
+
+function reqI32(o: FieldObj, t: string, key: string, nullable: boolean): number | null {
+  const v = o[key];
+  if (nullable && v === null) return null;
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < -0x80000000 || v > 0x7fffffff) {
+    badField(t, key, 'a 32-bit integer');
+  }
+  return v as number;
+}
+
+function reqNullableStr(o: FieldObj, t: string, key: string): string | null {
+  const v = o[key];
+  if (v === null) return null;
+  if (typeof v !== 'string') badField(t, key, 'a string or null');
+  return v as string;
+}
+
+/** deny_unknown_fields mirror (Rust ClientFrame/ControlMessage); server frames tolerate extras. */
+function onlyKeys(o: FieldObj, t: string, allowed: Record<string, true>): void {
+  for (const k of Object.keys(o)) {
+    if (!Object.hasOwn(allowed, k)) throw new FrameError(`bad-frame: ${t} has unknown field ${k}`);
+  }
+}
+
+function validateServerFrame(o: FieldObj, t: string): void {
+  const u64 = (k: string): number => reqUint(o, t, k, Number.MAX_SAFE_INTEGER);
+  const u32 = (k: string): number => reqUint(o, t, k, 0xffffffff);
+  const u16 = (k: string): number => reqUint(o, t, k, 0xffff);
+  switch (t) {
+    case 'hello': {
+      reqStr(o, t, 'proto');
+      reqStr(o, t, 'session');
+      reqStr(o, t, 'epoch');
+      const h = reqStr(o, t, 'harness');
+      if (!HARNESSES.has(h)) throw new FrameError('bad-frame: hello.harness is not a known harness');
+      reqNullableStr(o, t, 'bound_sid');
+      return;
+    }
+    case 'profile': {
+      reqStr(o, t, 'xterm');
+      reqStr(o, t, 'serialize');
+      reqStr(o, t, 'width');
+      reqStr(o, t, 'image');
+      u16('cols');
+      u16('rows');
+      u32('scrollback');
+      reqBool(o, t, 'scroll_on_erase_in_display');
+      u16('cell_px_w');
+      u16('cell_px_h');
+      // theme is Rust Option<Value>: any JSON value (null until a theme ships).
+      if (!('theme' in o)) throw new FrameError('bad-frame: profile.theme is missing');
+      return;
+    }
+    case 'imagedef': {
+      u64('seq');
+      u32('id');
+      u32('gen');
+      reqStr(o, t, 'sha256');
+      reqStr(o, t, 'mime');
+      u32('w');
+      u32('h');
+      u16('cols');
+      u16('rows');
+      u64('offset');
+      return;
+    }
+    case 'seed':
+      u64('offset');
+      u64('len');
+      return;
+    case 'resize':
+      u64('seq');
+      u64('offset');
+      u16('cols');
+      u16('rows');
+      return;
+    case 'sizechanged':
+      u64('seq');
+      u16('cols');
+      u16('rows');
+      reqStr(o, t, 'by');
+      u64('offset');
+      return;
+    case 'gfxreset':
+      u64('seq');
+      u32('gen');
+      u64('offset');
+      return;
+    case 'exit':
+      u64('seq');
+      reqI32(o, t, 'code', true);
+      u64('offset');
+      return;
+    case 'clipboard':
+      u64('offset');
+      reqStr(o, t, 'data_b64');
+      return;
+    case 'error':
+      reqStr(o, t, 'code');
+      reqStr(o, t, 'msg');
+      return;
+    default:
+      throw new FrameError(`bad-frame: unexpected server kind ${t}`);
+  }
+}
+
+function validateClientFrame(o: FieldObj, t: string): void {
+  const u64 = (k: string): number => reqUint(o, t, k, Number.MAX_SAFE_INTEGER);
+  const u16 = (k: string): number => reqUint(o, t, k, 0xffff);
+  switch (t) {
+    case 'resumefrom':
+      onlyKeys(o, t, { t: true, offset: true, mseq: true, epoch: true });
+      u64('offset');
+      u64('mseq');
+      reqStr(o, t, 'epoch');
+      return;
+    case 'takesize':
+      onlyKeys(o, t, { t: true, cols: true, rows: true });
+      u16('cols');
+      u16('rows');
+      return;
+    case 'input':
+      onlyKeys(o, t, { t: true, data: true });
+      reqStr(o, t, 'data');
+      return;
+    case 'ping':
+      onlyKeys(o, t, { t: true });
+      return;
+    default:
+      throw new FrameError(`bad-frame: unexpected client kind ${t}`);
+  }
+}
+
+function validateControlMessage(o: FieldObj, t: string): void {
+  const u64 = (k: string): number => reqUint(o, t, k, Number.MAX_SAFE_INTEGER);
+  switch (t) {
+    case 'viewer-open': {
+      onlyKeys(o, t, { t: true, viewer: true, profile: true, resume: true });
+      reqStr(o, t, 'viewer');
+      const profile = reqStr(o, t, 'profile');
+      if (profile !== 'desktop' && profile !== 'phone') {
+        throw new FrameError('bad-frame: viewer-open.profile must be desktop|phone');
+      }
+      const resume = o['resume'];
+      if (resume !== null) {
+        if (typeof resume !== 'object' || resume === null || Array.isArray(resume)) {
+          throw new FrameError('bad-frame: viewer-open.resume must be null or an object');
+        }
+        const r = resume as FieldObj;
+        onlyKeys(r, `${t}.resume`, { offset: true, mseq: true, epoch: true });
+        reqUint(r, `${t}.resume`, 'offset', Number.MAX_SAFE_INTEGER);
+        reqUint(r, `${t}.resume`, 'mseq', Number.MAX_SAFE_INTEGER);
+        reqStr(r, `${t}.resume`, 'epoch');
+      }
+      return;
+    }
+    case 'viewer-close':
+    case 'typed':
+      onlyKeys(o, t, { t: true, viewer: true });
+      reqStr(o, t, 'viewer');
+      return;
+    case 'stats':
+      onlyKeys(o, t, { t: true, joins: true, degradedJoins: true, viewers: true });
+      for (const k of ['joins', 'degradedJoins', 'viewers']) {
+        if (k in o) u64(k);
+      }
+      return;
+    default:
+      throw new FrameError(`bad-frame: unexpected control kind ${t}`);
+  }
+}
+
 /** Decode one text frame; unknown `t` yields the raw string; malformed JSON throws. */
 export function decodeTextFrame(raw: string): TextFrame {
   let value: unknown;
@@ -124,8 +326,18 @@ export function decodeTextFrame(raw: string): TextFrame {
     throw new FrameError('bad-frame: frame has no string discriminator');
   }
   const t = value.t;
-  if (SERVER_T[t] || CLIENT_T[t] || CONTROL_T[t]) {
-    return { kind: 'known', frame: value as ServerFrame | ClientFrame | ControlMessage };
+  const obj = value as FieldObj;
+  if (SERVER_T[t]) {
+    validateServerFrame(obj, t);
+    return { kind: 'known', frame: obj as unknown as ServerFrame };
+  }
+  if (CLIENT_T[t]) {
+    validateClientFrame(obj, t);
+    return { kind: 'known', frame: obj as unknown as ClientFrame };
+  }
+  if (CONTROL_T[t]) {
+    validateControlMessage(obj, t);
+    return { kind: 'known', frame: obj as unknown as ControlMessage };
   }
   return { kind: 'unknown', raw };
 }
@@ -160,6 +372,7 @@ export interface Envelope {
 /** Encode one envelope. `kind` is 0 (text JSON), 1 (binary frame), 2 (control). */
 export function encodeEnvelope(kind: number, body: Uint8Array): Uint8Array {
   if (kind !== 0 && kind !== 1 && kind !== 2) throw new FrameError(`bad-frame: bad envelope kind ${String(kind)}`);
+  if (1 + body.length > MAX_ENVELOPE_LEN) throw new FrameError('bad-frame: envelope exceeds 1 MiB');
   const out = new Uint8Array(4 + 1 + body.length);
   new DataView(out.buffer).setUint32(0, 1 + body.length);
   out[4] = kind;
@@ -202,6 +415,7 @@ export class EnvelopeDecoder {
       const dv = new DataView(this.buf.buffer, this.buf.byteOffset);
       const len = dv.getUint32(0);
       if (len === 0) throw new FrameError('bad-frame: zero-length envelope');
+      if (len > MAX_ENVELOPE_LEN) throw new FrameError('bad-frame: envelope exceeds 1 MiB');
       if (this.buf.length < 4 + len) break;
       const kind = this.buf[4];
       if (kind !== 0 && kind !== 1 && kind !== 2) throw new FrameError(`bad-frame: bad envelope kind ${String(kind)}`);

@@ -399,6 +399,11 @@ pub const ENV_TEXT: u8 = 0;
 pub const ENV_BINARY: u8 = 1;
 /// tap.sock envelope kind: control JSON.
 pub const ENV_CONTROL: u8 = 2;
+/// Largest legal tap.sock envelope length, in bytes; the u32 length counts
+/// the kind byte plus the body (brief section 6: "Max envelope 1 MiB").
+/// Both language codecs reject anything over it with
+/// [`WireError::BadEnvelope`].
+pub const MAX_ENVELOPE_LEN: usize = 1_048_576;
 
 /// One decoded tap.sock envelope: `[u32 BE length][u8 kind][body]`, where
 /// `length` counts the kind byte plus the body.
@@ -413,6 +418,9 @@ pub struct Envelope {
 /// Encode one tap.sock envelope.
 pub fn encode_envelope(kind: u8, body: &[u8]) -> Result<Vec<u8>, WireError> {
     if kind != ENV_TEXT && kind != ENV_BINARY && kind != ENV_CONTROL {
+        return Err(WireError::BadEnvelope);
+    }
+    if 1 + body.len() > MAX_ENVELOPE_LEN {
         return Err(WireError::BadEnvelope);
     }
     let mut buf = Vec::with_capacity(4 + 1 + body.len());
@@ -449,7 +457,8 @@ pub fn parse_s2c_body(body: &[u8]) -> Result<(&str, &[u8]), WireError> {
 }
 
 /// Streaming tap.sock envelope decoder. Feed bytes; get back every complete
-/// envelope. A zero length or a bad kind is `BadEnvelope`.
+/// envelope. A zero length, an oversize length (over
+/// [`MAX_ENVELOPE_LEN`]), or a bad kind is `BadEnvelope`.
 #[derive(Debug, Default)]
 pub struct EnvelopeDecoder {
     buf: Vec<u8>,
@@ -473,6 +482,9 @@ impl EnvelopeDecoder {
             hdr.copy_from_slice(&self.buf[..4]);
             let len = u32::from_be_bytes(hdr) as usize;
             if len == 0 {
+                return Err(WireError::BadEnvelope);
+            }
+            if len > MAX_ENVELOPE_LEN {
                 return Err(WireError::BadEnvelope);
             }
             if self.buf.len() < 4 + len {

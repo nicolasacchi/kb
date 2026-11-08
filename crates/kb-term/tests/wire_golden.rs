@@ -8,6 +8,7 @@ use kb_term::wire::{
     decode_binary, decode_text_frame, encode_binary, encode_envelope, is_valid_term_id,
     parse_s2c_body, s2c_body, ClientFrame, ControlMessage, EnvelopeDecoder, Harness, Profile,
     Request, Response, ResumeInfo, ServerFrame, SessionInfo, TextFrame, WireError,
+    MAX_ENVELOPE_LEN,
 };
 
 fn golden_dir() -> PathBuf {
@@ -369,5 +370,45 @@ fn golden_files_are_complete() {
     assert_eq!(
         actual, expected,
         "golden directory must match the pinned set"
+    );
+}
+
+#[test]
+fn envelope_length_capped_at_1_mib() {
+    // Boundary: a body of MAX_ENVELOPE_LEN - 1 bytes (length == 1 MiB) is fine.
+    let ok = vec![0u8; MAX_ENVELOPE_LEN - 1];
+    let env = encode_envelope(0, &ok).expect("boundary envelope must encode");
+    assert_eq!(env.len(), 4 + MAX_ENVELOPE_LEN);
+    // One byte more fails the encoder.
+    let too_big = vec![0u8; MAX_ENVELOPE_LEN];
+    assert_eq!(encode_envelope(0, &too_big), Err(WireError::BadEnvelope));
+    // A decoder fed only a header claiming MAX+1 fails immediately,
+    // without waiting for the body.
+    let mut dec = EnvelopeDecoder::new();
+    let hdr = (MAX_ENVELOPE_LEN as u32 + 1).to_be_bytes();
+    assert_eq!(dec.push(&hdr), Err(WireError::BadEnvelope));
+    // The boundary envelope split across pushes still decodes.
+    let mut dec2 = EnvelopeDecoder::new();
+    assert!(dec2.push(&env[..10]).expect("partial").is_empty());
+    let done = dec2.push(&env[10..]).expect("rest");
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].body.len(), MAX_ENVELOPE_LEN - 1);
+}
+
+#[test]
+fn decode_text_frame_rejects_missing_required_fields() {
+    // Lock-step with the TS decoder: a known `t` without its required
+    // fields is MalformedJson, never a half-populated frame.
+    assert_eq!(
+        decode_text_frame(r#"{"t":"seed","offset":1000}"#),
+        Err(WireError::MalformedJson)
+    );
+    assert_eq!(
+        decode_text_frame(r#"{"t":"hello","proto":"kb-term/1","session":"s"}"#),
+        Err(WireError::MalformedJson)
+    );
+    assert_eq!(
+        decode_text_frame(r#"{"t":"resumefrom","offset":1000,"epoch":"e"}"#),
+        Err(WireError::MalformedJson)
     );
 }
