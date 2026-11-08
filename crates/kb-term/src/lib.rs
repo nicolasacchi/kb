@@ -16,7 +16,11 @@
 //! `pty` is the unix pty helper, `responder` answers tmux's outer-client
 //! queries on every hidden client (anchor + viewers), and `viewer` owns the
 //! one `spawn_tmux_client` both of those share.
+//! `profiles` plans per-harness launches (argv, allowlist pane env, omp
+//! overlay, exit steps) and `doctor` is the host-local diagnostic.
 
+pub mod doctor;
+pub mod profiles;
 pub mod pty;
 pub mod responder;
 pub mod runner;
