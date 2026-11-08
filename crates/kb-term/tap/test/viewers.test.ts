@@ -13,7 +13,7 @@ import { connect } from 'node:net';
 import { RefViewer } from '../src/client_ref.ts';
 import { makeTwin, type Twin } from '../src/twin.ts';
 import { TapServer, type Transport } from '../src/viewers.ts';
-import { EnvelopeDecoder, decodeBinaryFrame, decodeTextFrame, encodeBinaryFrame, encodeControlMessage, encodeEnvelope, ENV_CONTROL, ENV_TEXT, parseS2C, type ServerFrame } from '../src/wire.ts';
+import { EnvelopeDecoder, decodeBinaryFrame, decodeTextFrame, encodeBinaryFrame, encodeControlMessage, encodeEnvelope, ENV_CONTROL, ENV_TEXT, parseS2C, wrapS2C, type ServerFrame } from '../src/wire.ts';
 
 const E = '\x1b';
 const enc = (s: string) => new TextEncoder().encode(s);
