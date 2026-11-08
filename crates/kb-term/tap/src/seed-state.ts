@@ -31,7 +31,6 @@ export interface BufferState {
   savedY: number;
   savedAttr: AttrCopy | null;
   savedCharset: string | null;
-  savedGlevel: number;
   pendingWrap: boolean;
   tabs: number[];
   length: number;
@@ -72,7 +71,6 @@ export const INTERNALS_PATHS: readonly string[] = [
   '_core._bufferService.buffers.normal.savedY',
   '_core._bufferService.buffers.normal.savedCurAttrData',
   '_core._bufferService.buffers.normal.savedCharset',
-  '_core._bufferService.buffers.normal.savedGlevel',
   '_core._bufferService.buffers.normal.tabs',
   '_core._bufferService.buffers.normal.lines',
   '_core._bufferService.buffers.normal.lines.get',
@@ -85,7 +83,6 @@ export const INTERNALS_PATHS: readonly string[] = [
   '_core._bufferService.buffers.alt.savedY',
   '_core._bufferService.buffers.alt.savedCurAttrData',
   '_core._bufferService.buffers.alt.savedCharset',
-  '_core._bufferService.buffers.alt.savedGlevel',
   '_core._bufferService.buffers.alt.tabs',
   '_core._bufferService.buffers.alt.lines',
   '_core._bufferService.buffers.alt.lines.get',
@@ -192,7 +189,6 @@ function captureBuffer(buf: unknown, at: string, cols: number): BufferState {
     savedY: num(buf, 'savedY', at),
     savedAttr: attrCopy(savedAttrData, `${at}.savedCurAttrData`),
     savedCharset: savedCharset === null || savedCharset === undefined ? null : JSON.stringify(savedCharset),
-    savedGlevel: num(buf, 'savedGlevel', at),
     pendingWrap: x >= cols,
     tabs: Object.keys(tabsRec).map(Number).sort((p, q) => p - q),
     length: lines.length,

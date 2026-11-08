@@ -192,14 +192,6 @@ function modeSeq(n: number, on: boolean | string | number): string {
   return `${ESC}[?${n}${on ? 'h' : 'l'}`;
 }
 
-/** Single-shift bytes moving xterm's glevel to `g` (setgLevel args per InputHandler). */
-function glevelShift(g: number): string {
-  if (g === 0) return '\x0f'; // SI
-  if (g === 1) return `${ESC}~`;
-  if (g === 2) return `${ESC}n`;
-  if (g === 3) return `${ESC}o`;
-  throw new Error(`seed: unknown glevel ${g}`);
-}
 
 export function buildSeed(
   twin: Twin,
@@ -235,16 +227,13 @@ export function buildSeed(
     s += `${ESC}[?6l`;
     // (iii) DECSC slot: position (clamped -- savedX may equal cols after a
     // pending wrap; a slot with x=cols cannot be re-saved by CUP alone and
-    // degrades to cols-1, documented here) + pen + glevel + ESC 7.
+    // No glevel slot: xterm 6.0.0 buffers carry no savedGlevel, so ESC 7
+    // records none; the live glevel is captured for state only.
     if (!skip.has('decsc')) {
       const sy = Math.min(bs.savedY, st.rows - 1);
       const sx = Math.min(bs.savedX, st.cols - 1);
       s += `${ESC}[${sy + 1};${sx + 1}H`;
       s += sgrEscape(sgrFromAttr(bs.savedAttr));
-      if (bs.savedGlevel !== liveGlevel) {
-        s += glevelShift(bs.savedGlevel);
-        liveGlevel = bs.savedGlevel;
-      }
       s += `${ESC}7`;
     }
     // (iv) live cursor / pending wrap.
@@ -290,10 +279,9 @@ export function buildSeed(
     appended += modeSeq(66, st.modes.applicationKeypadMode);
   }
 
-  // Final trailer: glevel restore, then absolute cursor placement (origin
-  // re-asserted after CUP because CUP is region-relative under origin mode)
-  // and the live pen LAST, so viewer cursor and pen equal the twin's.
-  if (liveGlevel !== st.glevel) appended += glevelShift(st.glevel);
+  // Final trailer: absolute cursor placement (origin re-asserted after CUP
+  // because CUP is region-relative under origin mode) and the live pen
+  // LAST, so viewer cursor and pen equal the twin's.
   const ab = st.active === 'alternate' ? st.alt : st.normal;
   appended += `${ESC}[?6l`;
   if (ab.pendingWrap) {

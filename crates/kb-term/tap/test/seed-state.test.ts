@@ -96,7 +96,7 @@ test('pending wrap at the last column is restored', async () => {
 test('origin mode with a scroll region is restored', async () => {
   const twin = await twinWith(40, 12, `${E}[3;10r${E}[?6h${E}[2;2Hhi${E}[1;1H`);
   try {
-    await expectBareDirty(twin, 'modes');
+    await expectBareDirty(twin, 'scroll region');
     const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1 });
     await expectClean(twin, seed.bytes, 'origin seed');
   } finally {
