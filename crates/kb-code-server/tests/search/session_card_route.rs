@@ -341,7 +341,6 @@ async fn boot_with_repo(
         _repo: tempfile::tempdir().unwrap(),
         base: format!("http://{addr}"),
         store_path,
-        repo_dir: repo_dir.to_path_buf(),
         tip_sha: sha.to_string(),
         _task: task,
     }
