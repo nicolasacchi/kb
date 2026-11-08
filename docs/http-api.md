@@ -1542,7 +1542,9 @@ POST /api/sessions/backfill-tree             V0047 — fill NULL
                                             would_change, changed,
                                             unmatched, kbs[{kb,
                                             would_change, changed,
-                                            unmatched}], degraded[]}.
+                                            unmatched}], degraded[]}:
+                                            the counts are rows (would_change/
+                                            changed) and items (unmatched).
 GET  /api/why?path=<file>                   R2 — the WHY assembler: the past
                                             sessions that touched a file + their
                                             prompt/decisions/commits. Basename-

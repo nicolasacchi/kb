@@ -595,6 +595,8 @@ pub enum StorageMsg {
     /// V0047 — fill NULL lineage columns from the CLI's tree walk
     /// (`Db::sessions_backfill_tree`). Items are
     /// `(session_id, parent, root, slug)`; bumps only on change.
+    /// Returns `(would_change, changed, unmatched)`: rows; rows; items
+    /// (see `Db::sessions_backfill_tree` for the units).
     SessionsBackfillTree {
         apply: bool,
         items: Vec<crate::storage::sqlite::BackfillTreeItem>,
@@ -4626,8 +4628,8 @@ impl StorageHandle {
             .await
     }
 
-    /// V0047 — `(would_change, changed, unmatched)` of the tree backfill;
-    /// `apply = false` writes nothing. See
+    /// V0047 — `(would_change, changed, unmatched)` of the tree backfill
+    /// (rows; rows; items); `apply = false` writes nothing. See
     /// [`StorageMsg::SessionsBackfillTree`].
     pub async fn sessions_backfill_tree(
         &self,
