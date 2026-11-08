@@ -119,11 +119,32 @@ test('cursor style and visibility are restored', async () => {
     twin.dispose();
   }
 });
+test('DECSCUSR block/underline/bar x blink/steady round-trips', async () => {
+  for (const n of [0, 1, 2, 3, 4, 5, 6]) {
+    const twin = await twinWith(40, 12, `${E}[${n} q`);
+    try {
+      const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1 });
+      const viewer = makeTwin(40, 12);
+      try {
+        await viewer.feed(seed.bytes);
+        const a = stateOf(twin.term as never);
+        const b = stateOf(viewer.term as never);
+        expect(b['decCursorStyle']).toBe(a['decCursorStyle']);
+        expect(b['decCursorBlink']).toBe(a['decCursorBlink']);
+      } finally {
+        viewer.dispose();
+      }
+    } finally {
+      twin.dispose();
+    }
+  }
+});
 
 test('alt active: normal DECSC slot survives composition (uses ?47h, not ?1049h)', async () => {
-  const twin = await twinWith(40, 12, `${E}[1;32m${E}[2;3H${E}7${E}[0m${E}[?1049h${E}[2J${E}[5;5HALT`);
+  // Live cursor moves away from the saved slot before ?1049h, so a bare
+  // ?1049h save would clobber the slot (proven dirty below).
+  const twin = await twinWith(40, 12, `${E}[1;32m${E}[2;3H${E}7${E}[5;5H${E}[0m${E}[?1049h${E}[2J${E}[9;9HALT`);
   try {
-    // Bare serialize composes with ?1049h, clobbering the slot: proven dirty.
     await expectBareDirty(twin, 'DECSC saved cursor');
     const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1 });
     const text = Buffer.from(seed.bytes).toString('latin1');
@@ -184,7 +205,7 @@ test('skip mutations: every tail item is load-bearing', async () => {
 });
 
 test('skip alt mutation: ?1049h clobbers the normal slot', async () => {
-  const twin = await twinWith(40, 12, `${E}[1;32m${E}[2;3H${E}7${E}[0m${E}[?1049h${E}[2J${E}[5;5HALT`);
+  const twin = await twinWith(40, 12, `${E}[1;32m${E}[2;3H${E}7${E}[5;5H${E}[0m${E}[?1049h${E}[2J${E}[9;9HALT`);
   try {
     const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, skip: ['alt'] });
     const classes = await stageClasses(twin, seed.bytes);

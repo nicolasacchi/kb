@@ -183,7 +183,7 @@ function sgrEscape(params: string): string {
 /** DECSCUSR parameter from captured cursor style/blink (inverse of setCursorStyle). */
 function decscusr(st: TwinState): string {
   if (st.cursorStyle === undefined) return `${ESC}[0 q`;
-  const base = st.cursorStyle === 'block' ? 1 : st.cursorStyle === 'underline' ? 3 : 5;
+  const base = st.cursorStyle === 'block' ? 0 : st.cursorStyle === 'underline' ? 3 : 5;
   return `${ESC}[${base + (st.cursorBlink ? 0 : 1)} q`;
 }
 
@@ -200,7 +200,7 @@ export function buildSeed(
   const st = captureTwinState(twin);
   const quiescent = opts.ground ? isQuiescent(twin, opts.ground) : !syncOn(twin);
   if (!quiescent) {
-    throw new Error(`seed: refusing non-quiescent join at offset ${opts.atOffset}`);
+    throw new Error(`seed: refusing not quiescent join at offset ${opts.atOffset}`);
   }
   const skip = new Set<TailItem>(opts.skip ?? []);
 
@@ -213,9 +213,12 @@ export function buildSeed(
   const normalPart = parts[0];
   const altPart = parts[1] ?? '';
 
-  // Live glevel tracking: the DECSC slot steps switch glevel; the trailer
-  // restores the twin's live glevel. Starts at the live value.
-  let liveGlevel = st.glevel;
+  // Charset/glevel fail-closed: designations cannot be re-emitted from
+  // captured state (xterm keeps only the built maps), so a non-default
+  // charset or nonzero live glevel is a hard error, never silently dropped.
+  if (st.glevel !== 0 || st.normal.savedCharset !== null || st.alt.savedCharset !== null) {
+    throw new Error('seed: non-default charset/glevel not supported');
+  }
 
   const tailFor = (bs: BufferState): string => {
     let s = '';
@@ -225,16 +228,23 @@ export function buildSeed(
     }
     // (ii) origin off while positioning.
     s += `${ESC}[?6l`;
-    // (iii) DECSC slot: position (clamped -- savedX may equal cols after a
-    // pending wrap; a slot with x=cols cannot be re-saved by CUP alone and
-    // No glevel slot: xterm 6.0.0 buffers carry no savedGlevel, so ESC 7
-    // records none; the live glevel is captured for state only.
-    if (!skip.has('decsc')) {
-      const sy = Math.min(bs.savedY, st.rows - 1);
-      const sx = Math.min(bs.savedX, st.cols - 1);
-      s += `${ESC}[${sy + 1};${sx + 1}H`;
-      s += sgrEscape(sgrFromAttr(bs.savedAttr));
-      s += `${ESC}7`;
+    // (iii) DECSC slot: savedY is absolute (ybase + viewport row); CUP is
+    // viewport-relative, so convert via ybase. savedX may equal cols after
+    // a pending wrap; CUP clamps to cols-1 (documented). No glevel slot:
+    // xterm 6.0.0 buffers carry no savedGlevel, so ESC 7 records none.
+    // A null savedAttr means never saved: leave the viewer default (no
+    // ESC7) instead of clobbering it. A saved line in scrollback
+    // (viewport < 0) cannot be CUP-addressed after the body; the early
+    // prefix below saved it while ybase was 0, so skip the late save.
+    if (!skip.has('decsc') && bs.savedAttr !== null) {
+      const viewportY = bs.savedY - bs.ybase;
+      if (viewportY >= 0) {
+        const sy = Math.min(viewportY, st.rows - 1);
+        const sx = Math.min(bs.savedX, st.cols - 1);
+        s += `${ESC}[${sy + 1};${sx + 1}H`;
+        s += sgrEscape(sgrFromAttr(bs.savedAttr));
+        s += `${ESC}7`;
+      }
     }
     // (iv) live cursor / pending wrap.
     if (bs.pendingWrap) {
@@ -251,8 +261,23 @@ export function buildSeed(
     return s;
   };
 
+  // Early normal DECSC prefix: savedY is absolute, so a slot in scrollback
+  // (savedY < ybase) or the default slot (savedY=0 with ybase>0) can only
+  // be saved while the fresh viewer still has ybase=0. Save it here, then
+  // home + reset so the body replays from the fresh home/default pen. The
+  // body contains no ESC7 (serialize emits none; the ?1049h is split out
+  // and replaced by ?47h), so the early slot survives the body. If the slot
+  // is in the viewport at join time, the late tail re-saves it correctly.
+  let early = '';
+  if (!skip.has('decsc') && st.normal.savedAttr !== null) {
+    const ey = Math.min(st.normal.savedY, st.rows - 1);
+    const ex = Math.min(st.normal.savedX, st.cols - 1);
+    early += `${ESC}[?6l${ESC}[${ey + 1};${ex + 1}H`;
+    early += sgrEscape(sgrFromAttr(st.normal.savedAttr));
+    early += `${ESC}7${ESC}[1;1H${ESC}[0m`;
+  }
   let appended = '';
-  let out = normalPart;
+  let out = early + normalPart;
   if (st.active === 'alternate') {
     appended += tailFor(st.normal);
     // ?47h, never ?1049h: 1049 saves the cursor and would overwrite the
@@ -316,7 +341,7 @@ export function buildSeed(
     bytes,
     offset: opts.atOffset,
     scrollbackLines: Math.max(0, st.normal.length - st.rows),
-    tailBytes: encoder.encode(appended).length,
+    tailBytes: encoder.encode(early + appended).length,
     withheld: { mouse: withheld },
   };
 }

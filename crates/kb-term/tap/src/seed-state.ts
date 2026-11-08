@@ -11,13 +11,12 @@
 // producing wrong seeds.
 //
 // Charset note: designation characters are not retained by xterm's
-// CharsetService (only the built character maps), so designations cannot be
-// re-emitted from captured state -- the spec's "charset designations/glevel
-// if non-default" is therefore implemented for glevel (single shifts) with
-// the maps' lengths captured for state comparison only. The synthetic
-// streams in this unit never designate a non-default charset (the spike
-// measured no 'charsets' class over 741 joins), and the matrix is the
-// arbiter. A future stream that designates a charset would show up there.
+// CharsetService (only the built character maps), so designations cannot
+// be re-emitted from captured state. glevel is captured for state
+// comparison only; not re-emitted (xterm 6.0.0 buffers carry no
+// savedGlevel; the synthetic streams never set a nonzero glevel). The
+// matrix is the arbiter. buildSeed fails closed on a non-default charset
+// or nonzero glevel instead of silently dropping them.
 import type { Twin } from './twin.ts';
 import type { AttrCopy } from './sgr.ts';
 
@@ -96,6 +95,7 @@ export const INTERNALS_PATHS: readonly string[] = [
   '_core._charsetService',
   '_core._charsetService.glevel',
   '_core._charsetService._charsets',
+  '_core._charsetService.charset',
   'modes',
   'buffer',
   'buffer.active',
@@ -147,18 +147,26 @@ const HAS_EXTENDED = 0x10000000;
 /** The cell at absolute line/column, for pending-wrap rewrites. */
 function readWrapCell(buf: unknown, bufAt: string, lineIdx: number, col: number): BufferState['wrap'] {
   const lines = need(buf, 'lines', bufAt);
-  const get = need<(i: number) => unknown>(lines, 'get', `${bufAt}.lines`);
-  const line = get(lineIdx);
+  // CircularList.get must be called as a method: detaching it loses `this`
+  // and crashes with "undefined is not an object (evaluating this._array)".
+  const line = (lines as { get(i: number): unknown }).get(lineIdx);
   if (line === null || typeof line !== 'object') return undefined;
   const data = need(line, '_data', `${bufAt}.lines`);
   if (!(data instanceof Uint32Array)) return undefined;
+  const lineRec = line as Record<string, unknown>;
+  if (!('_combined' in lineRec)) {
+    throw new Error(`seed: xterm internals changed: ${bufAt}.lines._combined`);
+  }
+  if (!('_extendedAttrs' in lineRec)) {
+    throw new Error(`seed: xterm internals changed: ${bufAt}.lines._extendedAttrs`);
+  }
+  const combined = lineRec._combined as Record<number, string> | undefined;
+  const exts = lineRec._extendedAttrs as
+    | Record<number, { underlineStyle: number; underlineColor: number }>
+    | undefined;
   const w0 = data[col * 3] >>> 0;
   const w1 = data[col * 3 + 1] >>> 0;
   const w2 = data[col * 3 + 2] >>> 0;
-  const combined = (line as Record<string, unknown>)._combined as Record<number, string> | undefined;
-  const exts = (line as Record<string, unknown>)._extendedAttrs as
-    | Record<number, { underlineStyle: number; underlineColor: number }>
-    | undefined;
   const code = w0 & 0x1fffff;
   let char: string;
   if (w0 & 0x200000) char = combined?.[col] ?? ' ';
@@ -210,9 +218,8 @@ export function captureTwinState(twin: Twin): TwinState {
   const curAttrData = need<AttrDataLike>(inputHandler, '_curAttrData', 'twin.term._core._inputHandler');
   const coreService = need(core, 'coreService', 'twin.term._core');
   const decPrivateModes = need(coreService, 'decPrivateModes', 'twin.term._core.coreService');
-  const charsetService = need(core, '_charsetService', 'twin.term._core');
+  const charset = needMaybe<Record<string, unknown> | null | undefined>(charsetService, 'charset', 'twin.term._core._charsetService');
   const charsets = need<unknown[]>(charsetService, '_charsets', 'twin.term._core._charsetService');
-  const charset = (charsetService as Record<string, unknown>).charset as Record<string, unknown> | undefined;
   const buffer = need(term, 'buffer', 'twin.term');
   const active = need(buffer, 'active', 'twin.term.buffer');
   const activeType = need<string>(active, 'type', 'twin.term.buffer.active');

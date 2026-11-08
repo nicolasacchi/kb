@@ -364,6 +364,27 @@ test('inside-frame joins: 0 allowed (gate resolves only after ?2026l)', async ()
       const lastL = before.lastIndexOf('\x1b[?2026l');
       expect(lastH < lastL || lastL === -1 && lastH === -1).toBe(true);
     }
+    // Drive the real gate on a chunk end inside a frame: it must not
+    // resolve until the chunk end after ?2026l has been fed.
+    const h = s.indexOf('\x1b[?2026h');
+    const l = h >= 0 ? s.indexOf('\x1b[?2026l', h) : -1;
+    if (h >= 0 && l >= 0) {
+      const inside = h + 4;
+      const after = l + '\x1b[?2026l'.length;
+      const twin = makeTwin(spec.cols, spec.rows);
+      const ground = new GroundTracker();
+      const gate = new QuiescentJoinGate(twin, ground);
+      try {
+        await gate.feed(bytes.subarray(0, inside));
+        const jpInside = await gate.nextQuiescent(50);
+        expect(jpInside.quiescent).toBe(false);
+        await gate.feed(bytes.subarray(inside, after));
+        const jpAfter = await gate.nextQuiescent(500);
+        if (jpAfter.quiescent) expect(jpAfter.offset).toBe(after);
+      } finally {
+        twin.dispose();
+      }
+    }
   }
 }, 900_000);
 
