@@ -13,7 +13,7 @@
 //! responder, and hands replies to one writer task per client (through an
 //! mpsc), so a reply can never land inside a key sequence.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
