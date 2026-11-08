@@ -220,7 +220,7 @@ export type DocLensPinOut = {
 
 const DOCLENS_TIMEOUT_MS = 8_000;
 
-function trimBase(url: string): string {
+export function trimBase(url: string): string {
   return url.replace(/\/+$/, "");
 }
 
@@ -249,7 +249,7 @@ function requestSignal(signal?: AbortSignal): AbortSignal {
   return signal ? AbortSignal.any([timeout, signal]) : timeout;
 }
 
-async function getCrossOrigin<T>(url: string, signal?: AbortSignal): Promise<T> {
+export async function getCrossOrigin<T>(url: string, signal?: AbortSignal): Promise<T> {
   const r = await fetch(url, {
     headers: { Accept: "application/json" },
     credentials: "include", // D-A: same-site Authelia session cookie rides

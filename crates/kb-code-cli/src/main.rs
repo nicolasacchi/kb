@@ -605,6 +605,22 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// `kb-code session-card <SID>` — A5: one read answering "what did this
+    /// session do on the code side" (`GET /api/session-card?sid=`,
+    /// `kb_code_server::session_card`). Daemon-only; the human view prints
+    /// one block per lane and always prints a lane's caption when present.
+    SessionCard {
+        /// The kb session id (a plain token; the daemon rejects anything
+        /// else).
+        sid: String,
+        /// Restrict the card to one configured repo NAME.
+        #[arg(long)]
+        repo: Option<String>,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// `kb-code why <PATH>[:<LINE>]` — W3.4: line-grade ("which session
     /// produced this line") or (no `:LINE`) file-grade ("which sessions
     /// dominate this file") attribution (`GET /api/why`,
@@ -5533,6 +5549,12 @@ async fn run(cli: Cli) -> Result<()> {
             daemon,
             json,
         } => join_cmd(&daemon, &repo, &sha, json).await,
+        Cmd::SessionCard {
+            sid,
+            repo,
+            daemon,
+            json,
+        } => session_card_cmd(&daemon, &sid, repo.as_deref(), json).await,
         Cmd::Why {
             target,
             repo,
@@ -11417,6 +11439,107 @@ async fn join_cmd(daemon: &str, repo: &str, sha: &str, json: bool) -> Result<()>
     }
     if let Some(v) = body["started_at"].as_i64() {
         println!("started_at: {v}");
+    }
+    Ok(())
+}
+
+/// `kb-code session-card <SID>` — `GET /api/session-card`. The human view
+/// prints one block per lane and ALWAYS prints a lane's caption when
+/// present (a lane section never hides its own degrade reason).
+async fn session_card_cmd(daemon: &str, sid: &str, repo: Option<&str>, json: bool) -> Result<()> {
+    let client = http_client()?;
+    let mut q: Vec<(&str, &str)> = vec![("sid", sid)];
+    if let Some(repo) = repo {
+        q.push(("repo", repo));
+    }
+    let body = get_json(&client, daemon, "/api/session-card", &q).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    println!("sid:        {}", body["sid"].as_str().unwrap_or("?"));
+    println!("schema:     {}", body["schema"].as_str().unwrap_or("?"));
+    let commits = &body["commits"];
+    println!(
+        "commits:    {}/{} shown (truncated: {})",
+        commits["shown"].as_u64().unwrap_or(0),
+        commits["total"].as_u64().unwrap_or(0),
+        commits["truncated"].as_bool().unwrap_or(false),
+    );
+    if let Some(caption) = commits["caption"].as_str() {
+        println!("  caption:    {caption}");
+    }
+    if let Some(items) = commits["items"].as_array() {
+        for item in items {
+            let sha = item["sha"].as_str().unwrap_or("?");
+            println!(
+                "  {} {} {} {}",
+                item["repo"].as_str().unwrap_or(""),
+                &sha[..sha.len().min(12)],
+                item["confidence"].as_str().unwrap_or("?"),
+                item["via"].as_str().unwrap_or("?"),
+            );
+            if let Some(subject) = item["subject"].as_str() {
+                println!("    subject:    {subject}");
+            }
+            if item["attributed_here"].as_bool().unwrap_or(false) {
+                println!("    attributed: here");
+            }
+            if let Some(caption) = item["caption"].as_str() {
+                println!("    caption:    {caption}");
+            }
+        }
+    }
+    let reviews = &body["reviews"];
+    println!(
+        "reviews:    {}/{} shown",
+        reviews["shown"].as_u64().unwrap_or(0),
+        reviews["total"].as_u64().unwrap_or(0),
+    );
+    if let Some(caption) = reviews["caption"].as_str() {
+        println!("  caption:    {caption}");
+    }
+    if let Some(items) = reviews["items"].as_array() {
+        for item in items {
+            println!(
+                "  #{} {} {} {} [{}]",
+                item["id"].as_i64().unwrap_or(0),
+                item["repo"].as_str().unwrap_or(""),
+                item["state"].as_str().unwrap_or("?"),
+                item["title"].as_str().unwrap_or(""),
+                item["basis"].as_str().unwrap_or("?"),
+            );
+            if let Some(verdict) = item["verdict"].as_str() {
+                println!("    verdict:    {verdict}");
+            }
+            if let Some(pr_number) = item["pr_number"].as_i64() {
+                println!("    pr_number:  {pr_number}");
+            }
+        }
+    }
+    let findings = &body["findings"];
+    println!(
+        "findings:   {} authored",
+        findings["total"].as_u64().unwrap_or(0)
+    );
+    if let Some(caption) = findings["caption"].as_str() {
+        println!("  caption:    {caption}");
+    }
+    let by = &findings["by_severity"];
+    println!(
+        "  blocker:    {} concern: {} ok: {}",
+        by["blocker"].as_u64().unwrap_or(0),
+        by["concern"].as_u64().unwrap_or(0),
+        by["ok"].as_u64().unwrap_or(0),
+    );
+    let presence = &body["presence"];
+    println!(
+        "presence:   {} files (newest {}s ago)",
+        presence["files"].as_u64().unwrap_or(0),
+        presence["newest_age_secs"].as_i64().unwrap_or(0),
+    );
+    if let Some(caption) = presence["caption"].as_str() {
+        println!("  caption:    {caption}");
     }
     Ok(())
 }

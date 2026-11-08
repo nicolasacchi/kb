@@ -2153,6 +2153,10 @@ The reader's Header Code chip (OL-SIBL2) reads these SAME two queries under the
 same keys (enabled where the Links tab enables them), so it adds no request, no
 store and no breaker; an unreachable kb-code costs the one failed request the
 Links tab already makes, and the chip then stays hint-worded.
+The session-card query `["sessionCard", "code", sid, repo]` joins the same
+category under the same rules (`staleTime` 30 s, `retry: false`, manual
+refresh): kb's SPA fetches kb-code cross-origin, so there is likewise no
+bridge invalidation to forward.
 
 Neither category is a licence to skip the bridge: a same-origin, same-daemon
 query whose invalidation the bridge CAN express belongs on the bridge with

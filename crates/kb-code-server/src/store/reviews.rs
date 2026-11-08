@@ -1012,6 +1012,41 @@ impl Store {
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
     }
+
+    /// A5 (`kbc-session-card/1`) — reviews whose `session_id` column names
+    /// this session, newest first. Selects `pr_number` explicitly (V0024
+    /// added it to the row; [`ReviewRow`] still predates it). The card's
+    /// doc-authored union half joins separately through `review_docs`.
+    pub fn reviews_for_session(
+        &self,
+        sid: &str,
+        repo: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<SessionReviewRow>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, repo, title, state, verdict, verdict_ps, pr_number, updated_at
+             FROM reviews
+             WHERE session_id = ?1 AND (?2 IS NULL OR repo = ?2)
+             ORDER BY updated_at DESC, id DESC
+             LIMIT ?3",
+        )?;
+        let rows = stmt
+            .query_map(params![sid, repo, limit as i64], |r| {
+                Ok(SessionReviewRow {
+                    id: r.get(0)?,
+                    repo: r.get(1)?,
+                    title: r.get(2)?,
+                    state: r.get(3)?,
+                    verdict: r.get(4)?,
+                    verdict_ps: r.get(5)?,
+                    pr_number: r.get(6)?,
+                    updated_at: r.get(7)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
 }
 
 /// One `reviews` row (V3.R1 / V0014; V4.C1 / V0023 adds the four
@@ -1032,6 +1067,21 @@ pub struct ReviewRow {
     pub verdict_note: Option<String>,
     pub verdict_at: Option<i64>,
     pub verdict_ps: Option<i64>,
+}
+
+/// The session-card subset of a `reviews` row (A5, `kbc-session-card/1`):
+/// everything the card wire carries, including `pr_number` (V0024), which
+/// [`ReviewRow`] does not have.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionReviewRow {
+    pub id: i64,
+    pub repo: String,
+    pub title: Option<String>,
+    pub state: String,
+    pub verdict: Option<String>,
+    pub verdict_ps: Option<i64>,
+    pub pr_number: Option<i64>,
+    pub updated_at: i64,
 }
 
 /// One `review_patchsets` row (V3.R1 / V0014).

@@ -462,6 +462,7 @@ pub async fn paste(
     }
     let req = RunnerRequest::Paste {
         id: id.clone(),
+        viewer: "spa".to_string(),
         text: parsed.text,
     };
     match call(&state, &req).await {
@@ -512,7 +513,9 @@ pub async fn enter(
     let unbound = term_gate.bound.is_none();
     let req = RunnerRequest::Enter {
         id: id.clone(),
+        viewer: "spa".to_string(),
         blocked: false,
+        from_composer: false,
     };
     match call(&state, &req).await {
         Err(e) => e,
@@ -572,7 +575,8 @@ pub async fn keys(
     }
     let req = RunnerRequest::Keys {
         id: id.clone(),
-        keys: parsed.keys,
+        viewer: "spa".to_string(),
+        input: crate::terminal::wire::KeyInput::Named { named: parsed.keys },
     };
     match call(&state, &req).await {
         Err(e) => e,
@@ -644,7 +648,8 @@ pub async fn take_size(
         id: id.clone(),
         cols: parsed.cols,
         rows: parsed.rows,
-        by: "kb-term".to_string(),
+        owner: "kb-term".to_string(),
+        force: true,
     };
     match call(&state, &req).await {
         Err(e) => e,

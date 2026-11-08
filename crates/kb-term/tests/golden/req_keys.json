@@ -1,1 +1,1 @@
-{"op":"keys","id":"abcd1234","keys":["C-c"]}
+{"op":"keys","id":"abcd1234","viewer":"web","input":{"kind":"named","named":["C-c"]}}
