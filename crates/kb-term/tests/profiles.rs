@@ -1,8 +1,9 @@
-//! Launch-profile tests (`profiles_*`) plus the term-int login-defence
-//! test (`term_int_*`). No harness is ever run; all fixtures synthetic.
+//! Launch-profile tests (`profiles_*`). No harness is ever run; all
+//! fixtures synthetic. The tmux-needing login-defence test lives in
+//! the `integration` binary (`term_int_login_profile_...`), the only
+//! test binary the term-int CI job runs with a real tmux.
 
 use kb_term::profiles::{self, PlanError, PlanRequest};
-use std::path::PathBuf;
 
 fn base_env() -> Vec<(String, String)> {
     vec![
@@ -151,64 +152,113 @@ fn profiles_unset_prelude_covers_login_reintroduction() {
     assert!(snippet.contains("unset \"$v\""));
 }
 
+/// The exact sorted env every harness shares (`HOME`/`LANG`/`PATH`/
+/// `USER` from `base_env()`, plus `KB_TERM_ID` from `request()`).
+/// Per-harness profile env is inserted in sorted position.
+fn shared_env() -> Vec<(String, String)> {
+    vec![
+        ("HOME".to_string(), "/home/x".to_string()),
+        ("KB_TERM_ID".to_string(), "abc123".to_string()),
+        ("LANG".to_string(), "C.UTF-8".to_string()),
+        ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+        ("USER".to_string(), "u".to_string()),
+    ]
+}
+
+/// Insert `(k, v)` into a sorted env vector (test helper).
+fn with_entry(mut env: Vec<(String, String)>, k: &str, v: String) -> Vec<(String, String)> {
+    env.push((k.to_string(), v));
+    env.sort_by(|a, b| a.0.cmp(&b.0));
+    env
+}
+
 #[test]
 fn profiles_golden_plan_per_harness_fresh() {
     let dir = tempfile::tempdir().unwrap();
     let env = base_env();
-    let cases: Vec<(&str, Vec<&str>)> = vec![
-        ("omp", vec!["omp"]),
-        ("claude", vec!["claude"]),
-        ("codex", vec!["codex", "--no-alt-screen"]),
-        ("kimi", vec!["kimi"]),
-        ("grok", vec!["grok", "--minimal", "--no-alt-screen"]),
-        ("opencode", vec!["opencode", "--mini"]),
-    ];
-    for (harness, want) in cases {
-        let plan = profiles::plan(&request(harness, dir.path(), &env)).unwrap();
-        let want: Vec<String> = want.iter().map(|s| s.to_string()).collect();
-        assert_eq!(plan.argv, want, "fresh argv for {harness}");
-    }
-    // Exact sorted env for omp fresh.
-    let plan = profiles::plan(&request("omp", dir.path(), &env)).unwrap();
     let overlay = dir.path().join("omp-overlay.yml");
-    assert_eq!(
-        plan.env,
-        vec![
-            ("HOME".to_string(), "/home/x".to_string()),
-            ("KB_TERM_ID".to_string(), "abc123".to_string()),
-            ("LANG".to_string(), "C.UTF-8".to_string()),
-            ("PATH".to_string(), "/usr/bin:/bin".to_string()),
-            (
-                "PI_CONFIG_FILES".to_string(),
-                overlay.to_string_lossy().into_owned()
+    let cases: Vec<(&str, Vec<&str>, Vec<(String, String)>)> = vec![
+        (
+            "omp",
+            vec!["omp"],
+            with_entry(
+                with_entry(
+                    shared_env(),
+                    "PI_CONFIG_FILES",
+                    overlay.to_string_lossy().into_owned(),
+                ),
+                "PI_FORCE_IMAGE_PROTOCOL",
+                "kitty".to_string(),
             ),
-            ("PI_FORCE_IMAGE_PROTOCOL".to_string(), "kitty".to_string()),
-            ("USER".to_string(), "u".to_string()),
-        ]
-    );
-    // Exact argv + profile env spot-locks per harness.
-    let claude = profiles::plan(&request("claude", dir.path(), &env)).unwrap();
-    assert!(claude.env.contains(&(
-        "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN".to_string(),
-        "1".to_string()
-    )));
-    let kimi = profiles::plan(&request("kimi", dir.path(), &env)).unwrap();
-    assert!(kimi
-        .env
-        .contains(&("PI_IMAGE_PROTOCOL".to_string(), "iterm2".to_string())));
-    let codex = profiles::plan(&request("codex", dir.path(), &env)).unwrap();
-    assert!(!codex.env.iter().any(|(k, _)| k.starts_with("PI_")));
+        ),
+        (
+            "claude",
+            vec!["claude"],
+            with_entry(
+                shared_env(),
+                "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN",
+                "1".to_string(),
+            ),
+        ),
+        ("codex", vec!["codex", "--no-alt-screen"], shared_env()),
+        (
+            "kimi",
+            vec!["kimi"],
+            with_entry(shared_env(), "PI_IMAGE_PROTOCOL", "iterm2".to_string()),
+        ),
+        (
+            "grok",
+            vec!["grok", "--minimal", "--no-alt-screen"],
+            shared_env(),
+        ),
+        ("opencode", vec!["opencode", "--mini"], shared_env()),
+    ];
+    for (harness, want_argv, want_env) in cases {
+        let plan = profiles::plan(&request(harness, dir.path(), &env)).unwrap();
+        let want: Vec<String> = want_argv.iter().map(|s| s.to_string()).collect();
+        assert_eq!(plan.argv, want, "fresh argv for {harness}");
+        assert_eq!(plan.env, want_env, "fresh env for {harness}");
+    }
 }
 
 #[test]
 fn profiles_golden_plan_per_harness_resume() {
     let dir = tempfile::tempdir().unwrap();
     let env = base_env();
-    let cases: Vec<(&str, Vec<&str>)> = vec![
-        ("omp", vec!["omp", "-r", "sid-1"]),
-        ("claude", vec!["claude", "-r", "sid-1"]),
-        ("codex", vec!["codex", "--no-alt-screen", "resume", "sid-1"]),
-        ("kimi", vec!["kimi", "-S", "sid-1"]),
+    let overlay = dir.path().join("omp-overlay.yml");
+    let cases: Vec<(&str, Vec<&str>, Vec<(String, String)>)> = vec![
+        (
+            "omp",
+            vec!["omp", "-r", "sid-1"],
+            with_entry(
+                with_entry(
+                    shared_env(),
+                    "PI_CONFIG_FILES",
+                    overlay.to_string_lossy().into_owned(),
+                ),
+                "PI_FORCE_IMAGE_PROTOCOL",
+                "kitty".to_string(),
+            ),
+        ),
+        (
+            "claude",
+            vec!["claude", "-r", "sid-1"],
+            with_entry(
+                shared_env(),
+                "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN",
+                "1".to_string(),
+            ),
+        ),
+        (
+            "codex",
+            vec!["codex", "--no-alt-screen", "resume", "sid-1"],
+            shared_env(),
+        ),
+        (
+            "kimi",
+            vec!["kimi", "-S", "sid-1"],
+            with_entry(shared_env(), "PI_IMAGE_PROTOCOL", "iterm2".to_string()),
+        ),
         (
             "grok",
             vec![
@@ -220,15 +270,21 @@ fn profiles_golden_plan_per_harness_resume() {
                 "--cwd",
                 "/w/x",
             ],
+            shared_env(),
         ),
-        ("opencode", vec!["opencode", "--mini", "--session", "sid-1"]),
+        (
+            "opencode",
+            vec!["opencode", "--mini", "--session", "sid-1"],
+            shared_env(),
+        ),
     ];
-    for (harness, want) in cases {
+    for (harness, want_argv, want_env) in cases {
         let mut req = request(harness, dir.path(), &env);
         req.resume_sid = Some("sid-1");
         let plan = profiles::plan(&req).unwrap();
-        let want: Vec<String> = want.iter().map(|s| s.to_string()).collect();
+        let want: Vec<String> = want_argv.iter().map(|s| s.to_string()).collect();
         assert_eq!(plan.argv, want, "resume argv for {harness}");
+        assert_eq!(plan.env, want_env, "resume env for {harness}");
     }
 }
 
@@ -316,6 +372,25 @@ fn profiles_rejects_bad_inputs() {
     }
 }
 
+/// Overlay write failures are host state (`PlanError::Io`), not a bad
+/// request: an unwritable run dir (here: a run dir under a plain file,
+/// so `create_dir_all` fails) yields `Io` and creates no file.
+#[test]
+fn profiles_overlay_io_failure_is_io_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let blocker = dir.path().join("blocker");
+    std::fs::write(&blocker, b"x").unwrap();
+    let run_dir = blocker.join("run");
+    let env = base_env();
+    let req = request("omp", &run_dir, &env);
+    let result = profiles::plan(&req);
+    assert!(
+        matches!(result, Err(PlanError::Io(_))),
+        "unwritable run dir must be Io, not BadCwd: {result:?}"
+    );
+    assert!(!run_dir.join("omp-overlay.yml").exists());
+}
+
 #[test]
 fn profiles_experimental_marker() {
     let dir = tempfile::tempdir().unwrap();
@@ -399,174 +474,4 @@ fn profiles_harness_set_is_the_pinned_six() {
         profiles::HARNESSES,
         ["claude", "codex", "opencode", "grok", "kimi", "omp"]
     );
-}
-
-// ------------------------------------------------------------------ term-int
-
-/// Term-int lane convention: `KB_TMUX_BIN` provides the pinned tmux;
-/// with `KB_REQUIRE_TMUX=1` an absent tmux FAILS (same shape as the
-/// reseed tests), otherwise the test early-returns.
-fn tmux_bin() -> Option<PathBuf> {
-    let require = std::env::var("KB_REQUIRE_TMUX").is_ok_and(|v| v == "1");
-    match std::env::var("KB_TMUX_BIN") {
-        Ok(v) if !v.is_empty() && std::path::Path::new(&v).exists() => Some(PathBuf::from(v)),
-        _ => {
-            if require {
-                panic!("KB_REQUIRE_TMUX=1 but KB_TMUX_BIN is unset or missing");
-            }
-            None
-        }
-    }
-}
-
-fn unique_tag() -> String {
-    format!("{}-{}", std::process::id(), {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        static N: AtomicUsize = AtomicUsize::new(0);
-        N.fetch_add(1, Ordering::SeqCst)
-    })
-}
-
-fn run_tmux(
-    tmux: &std::path::Path,
-    sock: &str,
-    args: &[&str],
-) -> Result<(bool, String, String), ()> {
-    let out = std::process::Command::new(tmux)
-        .args(["-S", sock])
-        .args(args)
-        .env_clear()
-        .env("LANG", "C.UTF-8")
-        .output()
-        .map_err(|_| ())?;
-    Ok((
-        out.status.success(),
-        String::from_utf8_lossy(&out.stdout).into_owned(),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
-    ))
-}
-
-#[test]
-fn term_int_login_profile_cannot_reintroduce_forbidden_env() {
-    let Some(tmux) = tmux_bin() else { return };
-    use kb_term::runner::launch::{gate_argv, GATE_SCRIPT};
-    let tag = unique_tag();
-    let sock = format!("/tmp/kbt-t10-{tag}.sock");
-    let dir = tempfile::tempdir().unwrap();
-    // A temp HOME whose login profile reintroduces forbidden vars.
-    let home = dir.path().join("home");
-    std::fs::create_dir_all(&home).unwrap();
-    std::fs::write(
-        home.join(".bash_profile"),
-        "export KITTY_WINDOW_ID=1 TERM_PROGRAM=x GHOSTTY_FOO=1\n",
-    )
-    .unwrap();
-    // The plan env (from profiles::plan itself): KB_TERM_ID + allowlist
-    // only.
-    let base: Vec<(String, String)> = vec![
-        ("HOME".into(), home.to_string_lossy().into_owned()),
-        ("SHELL".into(), "/bin/bash".into()),
-        ("PATH".into(), "/usr/bin:/bin".into()),
-    ];
-    let plan = profiles::plan(&PlanRequest {
-        harness: "omp",
-        term_id: "tid01x",
-        resume_sid: None,
-        cwd: "/tmp",
-        job_ulid: None,
-        run_dir: dir.path(),
-        base_env: &base,
-        extra_passthrough: &[],
-    })
-    .unwrap();
-    let env: std::collections::BTreeMap<String, String> = plan.env.iter().cloned().collect();
-    let argv = vec![
-        "/bin/sh".to_string(),
-        "-c".to_string(),
-        "/usr/bin/env; exec sleep 300".to_string(),
-    ];
-    for with_defence in [true, false] {
-        let script = if with_defence {
-            let prelude = profiles::env::shell_unset_prelude(&plan.unset_after_login).unwrap();
-            format!(
-                "{prelude}{} {GATE_SCRIPT}",
-                profiles::env::shell_unset_prefixes_snippet()
-            )
-        } else {
-            GATE_SCRIPT.to_string()
-        };
-        let args = gate_argv(
-            tmux.to_str().unwrap(),
-            std::path::Path::new(&sock),
-            "tid01x",
-            std::path::Path::new("/tmp"),
-            120,
-            40,
-            &env,
-            &argv,
-            &script,
-        );
-        // Dirty server env: simulates a login profile having reintroduced
-        // the forbidden vars into the pane environment.
-        let mut cmd = std::process::Command::new(&tmux);
-        cmd.args(["-S", &sock]).args(&args[1..]);
-        cmd.env_clear();
-        cmd.env("LANG", "C.UTF-8");
-        cmd.env("KITTY_WINDOW_ID", "1");
-        cmd.env("TERM_PROGRAM", "x");
-        cmd.env("GHOSTTY_FOO", "1");
-        cmd.env("HOME", &home);
-        let out = cmd.output().expect("spawn tmux new-session");
-        assert!(
-            out.status.success(),
-            "new-session failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        // Release the gate, then capture the pane.
-        let released = run_tmux(&tmux, &sock, &["wait-for", "-S", "kbterm-go"]);
-        assert!(matches!(released, Ok((true, _, _))), "wait-for -S failed");
-        let mut captured = String::new();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while std::time::Instant::now() < deadline {
-            if let Ok((true, stdout, _)) =
-                run_tmux(&tmux, &sock, &["capture-pane", "-p", "-t", "kb"])
-            {
-                captured = stdout;
-                if captured.contains("KB_TERM_ID") || captured.contains("GHOSTTY_FOO") {
-                    break;
-                }
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-        let _ = run_tmux(&tmux, &sock, &["kill-server"]);
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        if with_defence {
-            for name in ["KITTY_WINDOW_ID=", "TERM_PROGRAM=", "GHOSTTY_FOO="] {
-                assert!(
-                    !captured.contains(name),
-                    "defence leaked {name}; pane env:\n{captured}"
-                );
-            }
-            assert!(
-                captured.contains("KB_TERM_ID=tid01x"),
-                "KB_TERM_ID present; pane env:\n{captured}"
-            );
-            // tmux-supplied vars ARE present.
-            assert!(
-                captured.contains("TMUX="),
-                "TMUX present; pane env:\n{captured}"
-            );
-            assert!(
-                captured.contains("TERM="),
-                "TERM present; pane env:\n{captured}"
-            );
-        } else {
-            for name in ["KITTY_WINDOW_ID=", "TERM_PROGRAM=", "GHOSTTY_FOO="] {
-                assert!(
-                    captured.contains(name),
-                    "control run must show {name}; pane env:\n{captured}"
-                );
-            }
-        }
-    }
 }

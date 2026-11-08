@@ -54,6 +54,10 @@ fn doctor_tap_binary() {
     assert_eq!(check.status, CheckStatus::Pass);
     let check = doctor::decide_tap_binary(false, None);
     assert_eq!(check.status, CheckStatus::Fail);
+    // Executable but `--version` yields nothing (or fails): not a pass.
+    let check = doctor::decide_tap_binary(true, None);
+    assert_eq!(check.status, CheckStatus::Warn);
+    assert!(check.detail.contains("--version"));
 }
 
 #[test]
@@ -89,6 +93,14 @@ fn doctor_harness() {
     let check = doctor::decide_harness("omp", None, Some("18.17.0"), false);
     assert_eq!(check.status, CheckStatus::Skip);
     assert_eq!(check.id, "harness_omp");
+    // Exact version-token comparison, not substring: lookalikes warn,
+    // a `binary version` line passes.
+    let check = doctor::decide_harness("omp", Some("18.17.0.1"), Some("18.17.0"), false);
+    assert_eq!(check.status, CheckStatus::Warn);
+    let check = doctor::decide_harness("omp", Some("18.17.0-extra"), Some("18.17.0"), false);
+    assert_eq!(check.status, CheckStatus::Warn);
+    let check = doctor::decide_harness("omp", Some("omp 18.17.0"), Some("18.17.0"), false);
+    assert_eq!(check.status, CheckStatus::Pass);
 }
 
 #[test]
@@ -98,6 +110,14 @@ fn doctor_omp_overlay() {
     assert_eq!(check.status, CheckStatus::Pass);
     let bad = "tui:\n  maxInlineImages: 8\n  resizeScrollback: rebuild\ndisplay:\n  collapseCompacted: false\n";
     let check = doctor::decide_omp_overlay(Some(bad));
+    assert_eq!(check.status, CheckStatus::Fail);
+    // Keys under the wrong top-level section do not satisfy the pins.
+    let wrong_section =
+        "tui:\n  collapseCompacted: false\ndisplay:\n  maxInlineImages: 0\n  resizeScrollback: rebuild\n";
+    let check = doctor::decide_omp_overlay(Some(wrong_section));
+    assert_eq!(check.status, CheckStatus::Fail);
+    let missing_display = "tui:\n  maxInlineImages: 0\n  resizeScrollback: rebuild\n";
+    let check = doctor::decide_omp_overlay(Some(missing_display));
     assert_eq!(check.status, CheckStatus::Fail);
     let check = doctor::decide_omp_overlay(None);
     assert_eq!(check.status, CheckStatus::Skip);
@@ -173,6 +193,41 @@ fn doctor_run_layout() {
     assert_eq!(check.status, CheckStatus::Pass);
 }
 
+/// The probe reads the socket at the real production path
+/// (`<run-dir>/runner/runner.sock`), so a world-readable socket file
+/// there FAILS instead of being invisible to a stale path probe.
+#[test]
+fn doctor_run_layout_probes_the_real_socket() {
+    assert_eq!(
+        doctor::runner_socket_path(std::path::Path::new("/run/kb-term")),
+        std::path::PathBuf::from("/run/kb-term/runner/runner.sock")
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("s")).unwrap();
+    std::fs::create_dir_all(root.join("runner")).unwrap();
+    for (path, mode) in [
+        (root.to_path_buf(), 0o755),
+        (root.join("s"), 0o700),
+        (root.join("runner"), 0o750),
+    ] {
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+    let sock = root.join("runner").join("runner.sock");
+    std::fs::write(&sock, b"").unwrap();
+    std::fs::set_permissions(&sock, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let probe = doctor::probe_run_layout_at(root);
+    let check = doctor::decide_run_layout(&probe);
+    assert_eq!(
+        check.status,
+        CheckStatus::Fail,
+        "0644 sock at the real path fails"
+    );
+    std::fs::set_permissions(&sock, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let probe = doctor::probe_run_layout_at(root);
+    assert_eq!(doctor::decide_run_layout(&probe).status, CheckStatus::Pass);
+}
+
 #[test]
 fn doctor_login_env() {
     // Clean: nothing forbidden, POSIX shell.
@@ -189,24 +244,81 @@ fn doctor_login_env() {
     // Unset shell skips.
     let check = doctor::decide_login_env(None, &[], false);
     assert_eq!(check.status, CheckStatus::Skip);
+    // A failed probe (`None`) is SKIP, never a false PASS.
+    let check = doctor::login_env_check("/bin/bash", None);
+    assert_eq!(check.status, CheckStatus::Skip);
+    // A clean probe passes.
+    let check = doctor::login_env_check("/bin/bash", Some(&[]));
+    assert_eq!(check.status, CheckStatus::Pass);
+    // A probe showing a forbidden name warns (names only).
+    let names = vec!["HOME".to_string(), "GHOSTTY_FOO".to_string()];
+    let check = doctor::login_env_check("/bin/bash", Some(&names));
+    assert_eq!(check.status, CheckStatus::Warn);
 }
 
 #[test]
 fn doctor_json_never_contains_env_values() {
-    // A fake secret in the probe env must never appear in JSON output.
+    // The probe child receives an allowlisted env value (here an
+    // allowlisted `XDG_CACHE_HOME` sentinel) and ECHOES it on output
+    // line 2; only line 1 is the version line, so neither the JSON nor
+    // the human render may carry the value.
     let secret = "fake-secret-value-12345";
     let dir = tempfile::tempdir().unwrap();
     let fake = fake_exe(
         dir.path(),
         "tmux",
-        &format!("#!/bin/sh\necho 'tmux 3.7c' # {secret}\n"),
+        "#!/bin/sh\necho 'tmux 3.7c'\necho \"$XDG_CACHE_HOME\"\n",
     );
+    let prev = std::env::var("XDG_CACHE_HOME").ok();
+    std::env::set_var("XDG_CACHE_HOME", secret);
     let out = doctor::probe_tmux_version(&fake).unwrap();
+    match prev {
+        Some(v) => std::env::set_var("XDG_CACHE_HOME", v),
+        None => std::env::remove_var("XDG_CACHE_HOME"),
+    }
+    assert_eq!(out, "tmux 3.7c", "only the version line is kept");
     let checks = vec![doctor::decide_tmux_version(Some(&out))];
     let json = doctor::to_json(&checks);
+    let human = doctor::render_human(&checks);
     assert!(!json.contains(secret), "secret leaked into JSON: {json}");
+    assert!(
+        !human.contains(secret),
+        "secret leaked into human output: {human}"
+    );
     assert!(json.contains("tmux_version"));
     assert!(json.contains("pass"));
+}
+
+/// A hanging binary is killed near the probe deadline instead of
+/// blocking doctor: `run_with_timeout` and the probes return `None`
+/// after the (3 s / 5 s) timeout, well under the test deadline.
+#[test]
+fn doctor_probe_timeout_kills_hanging_binary() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = fake_exe(dir.path(), "sleeper", "#!/bin/sh\nexec sleep 30\n");
+    let start = std::time::Instant::now();
+    assert!(
+        doctor::probe_tap_version(&fake).is_none(),
+        "a hanging tap must yield None"
+    );
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "tap probe must kill near its 3 s deadline, took {elapsed:?}"
+    );
+    let start = std::time::Instant::now();
+    let got = doctor::run_with_timeout(
+        &fake,
+        &["--version"],
+        &[],
+        std::time::Duration::from_secs(2),
+    );
+    assert!(got.is_none(), "a hanging binary must yield None");
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(8),
+        "run_with_timeout must kill near its own deadline, took {elapsed:?}"
+    );
 }
 
 #[test]
