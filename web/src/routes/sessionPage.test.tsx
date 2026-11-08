@@ -665,10 +665,10 @@ describe("SessionPage", () => {
             ok: false,
             status: 500,
             statusText: "Internal Server Error",
-            json: async () => {
+            json: async (): Promise<never> => {
               throw new SyntaxError("Unexpected token <");
             },
-          } as Response;
+          } as unknown as Response;
         }
         return { ok: false, status: 404, statusText: "Not Found", json: async () => ({}) } as Response;
       }),
@@ -690,10 +690,10 @@ describe("SessionPage", () => {
             ok: true,
             status: 200,
             statusText: "OK",
-            json: async () => {
+            json: async (): Promise<never> => {
               throw new SyntaxError("Unexpected token <");
             },
-          } as Response;
+          } as unknown as Response;
         }
         return { ok: false, status: 404, statusText: "Not Found", json: async () => ({}) } as Response;
       }),
