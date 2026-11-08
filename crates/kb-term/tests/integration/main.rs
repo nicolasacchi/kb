@@ -1203,17 +1203,25 @@ async fn term_int_identity_is_the_kb_profile() {
     assert!(noncontrol >= 2, "anchor + viewer expected: {out}");
     // The pane got an OSC 11 reply equal to the cfg colour: the bytes
     // `rgb:1e1e/1e1e/1e1e` (the bg #1e1e1e) appear in the log as hex.
-    // CSI 16t answers `6;18;9t` (cell pixel size 9x18, the verified
-    // shape), whose hex is `363b31383b3974`.
+    // Under the binding grid policy (`window-size manual` + explicit
+    // `resize-window`) tmux 3.7c never reads client pixel winsizes: the
+    // manual branch of clients_calculate_size ignores client pixels and
+    // recalculate passes 0, so the pane is answered with tmux's default
+    // 16x32 cell forever, not the profile cell 9x18. Hence CSI 16t
+    // answers `6;32;16t` (hex `363b33323b313674`) and CSI 14t carries
+    // the pane pixel size rows*32 x cols*16 for the session grid
+    // (30x100 -> 960 x 1600 below), never cols*9 x rows*18.
     let osc11 = "7267623a31653165312f31653165312f31653165";
-    let t16 = "363b31383b3974";
+    let t16 = "363b33323b313674";
+    let t14_w = "3136303030";
+    let t14_h = "393630";
     let ok = poll_log(&log, Duration::from_secs(10), |text| {
-        text.contains(osc11) && text.contains(t16)
+        text.contains(osc11) && text.contains(t16) && text.contains(t14_w) && text.contains(t14_h)
     })
     .await;
     assert!(
         ok,
-        "pane log must carry the OSC 11 bg reply and the 16t answer: {}",
+        "pane log must carry the OSC 11 bg reply, the 16t answer 6;32;16t and the 14t pixel size 960x1600: {}",
         read_log(&log)
     );
     // Winsize pin (behavioral): the take above moved the session to the
