@@ -17,7 +17,7 @@
 use crate::common;
 
 use kb_core::config::{
-    DaemonSection, DefaultsSection, KbConfig, KbSection, ServerSection, UiSection,
+    DaemonSection, DefaultsSection, KbConfig, KbSection, ServerSection, TerminalSection, UiSection,
 };
 use kb_core::paths::KbPaths;
 use kb_core::storage::sqlite::{
@@ -224,8 +224,10 @@ async fn card_repeat_reads_are_byte_identical_for_a_non_live_session() {
     let (s2, _, b2) = get_json(&client, addr, "/api/sessions/rep-1/card").await;
     assert_eq!((s1, s2), (200, 200));
     assert_eq!(b1, b2, "two card reads must be byte-identical");
-    // The terminal lane is the constant in both reads.
-    assert!(b1.contains(r#""terminal":{"available":false,"reason":"no terminal runner"}"#));
+    // The terminal lane is registry-derived in both reads (disabled here).
+    assert!(b1.contains(
+        r#""terminal":{"available":false,"reason":"terminal disabled","admitted":false}"#
+    ));
 }
 
 /// Test 4 — a failing lane degrades that lane only: an invalid
@@ -746,4 +748,241 @@ async fn research_and_decisions_lanes_ride_the_card() {
     assert_eq!(status, 404);
     let (status, _, _) = get_json(&client, addr, "/api/sessions/nope/children").await;
     assert_eq!(status, 404);
+}
+
+// ===== T13: the registry-derived terminal lane ===============================
+
+/// The fake runner: a `UnixListener` in the test tempdir answering
+/// scripted `list`/`enter` replies, with a connection counter.
+struct FakeRunner {
+    conns: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    socket: std::path::PathBuf,
+}
+
+fn spawn_fake_runner(
+    dir: &std::path::Path,
+    replies: std::collections::HashMap<String, String>,
+) -> FakeRunner {
+    use std::sync::atomic::Ordering;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    let sock = dir.join("runner.sock");
+    let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+    let conns = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = conns.clone();
+    tokio::spawn(async move {
+        loop {
+            let (stream, _) = match listener.accept().await {
+                Ok(v) => v,
+                Err(_) => return,
+            };
+            counter.fetch_add(1, Ordering::SeqCst);
+            let replies = replies.clone();
+            tokio::spawn(async move {
+                let mut line = String::new();
+                let mut reader = tokio::io::BufReader::new(stream);
+                if reader.read_line(&mut line).await.is_err() {
+                    return;
+                }
+                let op = serde_json::from_str::<serde_json::Value>(line.trim())
+                    .ok()
+                    .and_then(|v| v.get("op").and_then(|v| v.as_str()).map(String::from))
+                    .unwrap_or_default();
+                let reply = replies.get(&op).cloned().unwrap_or_else(|| {
+                    "{\"status\":\"err\",\"code\":\"not_found\",\"message\":\"no script\"}"
+                        .to_string()
+                });
+                let mut stream = reader.into_inner();
+                let _ = stream.write_all(reply.as_bytes()).await;
+                let _ = stream.write_all(b"\n").await;
+            });
+        }
+    });
+    FakeRunner {
+        conns,
+        socket: sock,
+    }
+}
+
+fn runner_list_reply(ids: &[&str]) -> String {
+    let items: Vec<Value> = ids
+        .iter()
+        .map(|id| {
+            json!({
+                "id": id,
+                "harness": "omp",
+                "cwd": "/work/proj",
+                "started_unix": 1234567890,
+                "resume_sid": null,
+                "pane_pid": 4242,
+                "cols": 120,
+                "rows": 40,
+                "bracket_paste_flag": true,
+                "pane_dead": false,
+                "exit_code": null,
+                "grid_owner": null,
+            })
+        })
+        .collect();
+    json!({"status":"ok","data":items}).to_string()
+}
+
+fn origin_header(addr: std::net::SocketAddr) -> String {
+    format!("http://{addr}")
+}
+
+async fn boot_terminal(
+    runner_socket: std::path::PathBuf,
+) -> (tempfile::TempDir, std::net::SocketAddr, KbPaths) {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = tmp.path().join("corpus");
+    std::fs::create_dir_all(&source).unwrap();
+    let daemon_name = format!(
+        "test-session-card-term-{}",
+        tmp.path().file_name().unwrap().to_string_lossy()
+    );
+    let mut kb_map: BTreeMap<KbName, KbSection> = BTreeMap::new();
+    kb_map.insert(
+        KbName::new("smoke").unwrap(),
+        KbSection {
+            path: source,
+            reconcile_secs: None,
+            skip_patterns: Vec::new(),
+            ui: UiSection::default(),
+            embedding_model: None,
+            reranker_model: None,
+            chunked_embeddings: false,
+            graph_boost: None,
+            outbound: None,
+            atlas: None,
+            templates: std::collections::BTreeMap::new(),
+            memory_scope: None,
+            project_slugs: Vec::new(),
+            default_search_category: None,
+            code_url: None,
+            decay_policy: None,
+            versions: None,
+            git_dir: None,
+            git_prefix: None,
+            reading_progress: None,
+            search: Default::default(),
+            indexable_extensions: None,
+            capture_dir: None,
+            resurface: None,
+            slo: None,
+            id_patterns: Vec::new(),
+        },
+    );
+    let cfg = KbConfig {
+        daemon: DaemonSection {
+            name: Some(daemon_name.clone()),
+        },
+        server: ServerSection::default(),
+        ui: UiSection::default(),
+        indexer: Default::default(),
+        storage: Default::default(),
+        share: Default::default(),
+        webhooks: None,
+        defaults: DefaultsSection {
+            embedding_model: None,
+            disable_embedder_fallback: true,
+        },
+        retention: Default::default(),
+        backup: Default::default(),
+        identity: Default::default(),
+        memory: Default::default(),
+        kb: kb_map,
+        projects: Default::default(),
+        sessions: Default::default(),
+        terminal: TerminalSection {
+            enabled: Some(true),
+            runner_socket: Some(runner_socket),
+            ticket_ttl_secs: None,
+            refuse_token_callers: None,
+            runner_timeout_secs: None,
+        },
+    };
+    let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
+    std::fs::create_dir_all(&paths.config).unwrap();
+    std::fs::write(paths.token_file(), FIXTURE_TOKEN).unwrap();
+    let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths.clone())
+        .await
+        .expect("serve");
+    common::wait_http_up(addr).await;
+    (tmp, addr, paths)
+}
+
+/// A child whose root is bound to a kb-term terminal resolves the card's
+/// `terminal` lane to that root's terminal with `via: "root"`; the root
+/// itself carries no `via`.
+#[tokio::test]
+async fn card_terminal_lane_for_a_child_resolves_to_the_root_terminal() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("list".to_string(), runner_list_reply(&["abc123"]));
+    let fake_dir = tempfile::tempdir().unwrap();
+    let fake = spawn_fake_runner(fake_dir.path(), replies);
+    let (_tmp, addr, paths) = boot_terminal(fake.socket.clone()).await;
+    let client = reqwest::Client::new();
+    // Deterministic directory refresh: the list reply populates it.
+    let resp = client
+        .get(url(addr, "/api/terms"))
+        .header("Origin", origin_header(addr))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "terms list: {:?}",
+        resp.text().await
+    );
+    {
+        let mut db = open_db(&paths);
+        let mut root = row("art-root", "tree-root", 1_000);
+        root.harness = "omp".into();
+        db.sessions_upsert(&root).unwrap();
+        let mut child = row("art-child", "child-1", 1_100);
+        child.harness = "omp".into();
+        child.root_session_id = Some("tree-root".into());
+        child.parent_session_id = Some("tree-root".into());
+        db.sessions_upsert(&child).unwrap();
+    }
+    let resp = client
+        .post(url(addr, "/api/sessions/beat"))
+        .json(&json!({
+            "v": 1,
+            "session_id": "tree-root",
+            "harness": "omp",
+            "event": "start",
+            "at": chrono::Utc::now().to_rfc3339(),
+            "term": "abc123",
+            "pid": 4242,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "root beat: {:?}",
+        resp.text().await
+    );
+    let (status, card, _) = get_json(&client, addr, "/api/sessions/child-1/card").await;
+    assert_eq!(status, 200, "{card}");
+    assert_eq!(card["terminal"]["available"], true, "{card}");
+    assert_eq!(card["terminal"]["term_id"], "abc123", "{card}");
+    assert_eq!(card["terminal"]["harness"], "omp", "{card}");
+    assert_eq!(card["terminal"]["state"], "working", "{card}");
+    assert_eq!(card["terminal"]["blocked"], false, "{card}");
+    assert_eq!(card["terminal"]["admitted"], true, "{card}");
+    assert_eq!(card["terminal"]["via"], "root", "{card}");
+    assert!(card["terminal"].get("reason").is_none(), "{card}");
+    let (status, card, _) = get_json(&client, addr, "/api/sessions/tree-root/card").await;
+    assert_eq!(status, 200, "{card}");
+    assert_eq!(card["terminal"]["available"], true, "{card}");
+    assert_eq!(card["terminal"]["term_id"], "abc123", "{card}");
+    assert!(card["terminal"].get("via").is_none(), "{card}");
+    assert!(
+        fake.conns.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+        "the directory refresh must have dialed the runner"
+    );
 }

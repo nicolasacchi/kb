@@ -390,11 +390,11 @@ impl LiveRegistry {
             } else {
                 "other"
             };
-            let same = g
-                .get(&row.session_id)
-                .and_then(|o| {
-                    (o.term.as_deref() == Some(term.as_str())).then_some(o.term_bound_unix).flatten()
-                });
+            let same = g.get(&row.session_id).and_then(|o| {
+                (o.term.as_deref() == Some(term.as_str()))
+                    .then_some(o.term_bound_unix)
+                    .flatten()
+            });
             let other_holds = g.values().any(|r| {
                 r.session_id != row.session_id
                     && r.term.as_deref() == Some(term.as_str())
@@ -1215,7 +1215,10 @@ mod tests {
         assert_eq!(r.session_id, "main-1");
         assert_eq!(state, LiveState::Working);
         assert_eq!(conf, Confidence::Observed);
-        assert_eq!(reg.term_for_session("main-1", now).as_deref(), Some("abc123"));
+        assert_eq!(
+            reg.term_for_session("main-1", now).as_deref(),
+            Some("abc123")
+        );
     }
 
     #[test]
@@ -1238,7 +1241,13 @@ mod tests {
             assert_eq!(out.row.term, None, "prompt/tool beat must not steal");
             assert_eq!(out.row.term_bound_unix, None);
         }
-        assert_eq!(reg.session_for_term("abc123", now + 1).unwrap().0.session_id, "main-1");
+        assert_eq!(
+            reg.session_for_term("abc123", now + 1)
+                .unwrap()
+                .0
+                .session_id,
+            "main-1"
+        );
         assert_eq!(reg.term_for_session("sub-1", now + 1), None);
     }
 

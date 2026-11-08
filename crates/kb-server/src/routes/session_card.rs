@@ -1047,7 +1047,11 @@ fn terminal_lane(
     session_id: &str,
     root_session_id: Option<&str>,
 ) -> TerminalLane {
-    let enabled = state.config.try_read().map(|c| c.terminal.enabled()).unwrap_or(false);
+    let enabled = state
+        .config
+        .try_read()
+        .map(|c| c.terminal.enabled())
+        .unwrap_or(false);
     let admitted = crate::routes::identity::terminal_admitted_for(
         enabled,
         Some(peer_ip),

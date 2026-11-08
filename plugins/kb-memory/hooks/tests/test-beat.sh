@@ -1061,8 +1061,12 @@ fi
 
 # --- 58. KB_TERM_ID_present_on_turn_end_and_tool ------------------------------
 g1="$(beat_dryrun omp turn_end "$p" KB_TERM_ID=abc123)"
+g1n="$(beat_dryrun omp turn_end "$p")"
 g2="$(beat_dryrun claude tool "$p" KB_TERM_ID=abc123)"
-if [ "$(jget "$g1" '.term')" = "abc123" ] && [ "$(jget "$g2" '.term')" = "abc123" ]; then
+g2n="$(beat_dryrun claude tool "$p")"
+if [ "$(jget "$g1" '.term')" = "abc123" ] && [ "$(jget "$g2" '.term')" = "abc123" ] \
+   && [ "$(printf '%s' "$g1" | jq -c '.detail')" = "$(printf '%s' "$g1n" | jq -c '.detail')" ] \
+   && [ "$(printf '%s' "$g2" | jq -c '.detail')" = "$(printf '%s' "$g2n" | jq -c '.detail')" ]; then
   ok "KB_TERM_ID_present_on_turn_end_and_tool"
 else
   bad "KB_TERM_ID_present_on_turn_end_and_tool (got: $g1 / $g2)"

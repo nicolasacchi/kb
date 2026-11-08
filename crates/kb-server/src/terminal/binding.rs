@@ -17,17 +17,28 @@ pub const TERM_ID_MAX: usize = 32;
 
 /// `^[a-z0-9]{1,32}$` — the ONE grammar (hook, intake, redaction floor, SPA all agree).
 pub fn is_valid_term_id(s: &str) -> bool {
-    !s.is_empty() && s.len() <= TERM_ID_MAX && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+    !s.is_empty()
+        && s.len() <= TERM_ID_MAX
+        && s.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
 }
 
 /// Verified iff the terminal is known to the runner AND the beat's pid is
 /// exactly that pane's pid.
 pub fn claim_verified(term: &str, beat_pid: Option<i64>, pane_pid: Option<i64>) -> bool {
-    is_valid_term_id(term) && beat_pid.is_some() && beat_pid == pane_pid && pane_pid.is_some_and(|p| p > 0)
+    is_valid_term_id(term)
+        && beat_pid.is_some()
+        && beat_pid == pane_pid
+        && pane_pid.is_some_and(|p| p > 0)
 }
 
 /// What a verified claim does to the row's `term_bound_unix` (None = the claim is dropped).
-pub fn bound_at(event: &str, same_row_bound_at: Option<i64>, another_row_holds: bool, now: i64) -> Option<i64> {
+pub fn bound_at(
+    event: &str,
+    same_row_bound_at: Option<i64>,
+    another_row_holds: bool,
+    now: i64,
+) -> Option<i64> {
     match event {
         "start" => Some(now),
         "end" => same_row_bound_at,
@@ -69,7 +80,11 @@ impl TermDirectory {
 
     /// The pane pid known for `id`, if any.
     pub fn pane_pid(&self, id: &str) -> Option<i64> {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).get(id).copied()
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(id)
+            .copied()
     }
 
     /// Replace the directory with one runner `list` result. Call only on

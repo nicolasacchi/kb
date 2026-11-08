@@ -230,11 +230,16 @@ fn enrich_terms(state: &KbHandles, data: &mut serde_json::Value, now_unix: i64) 
             if let Some(obj) = item.as_object_mut() {
                 obj.insert(
                     "session_id".to_string(),
-                    gate.bound.clone().map(serde_json::Value::String).unwrap_or(serde_json::Value::Null),
+                    gate.bound
+                        .clone()
+                        .map(serde_json::Value::String)
+                        .unwrap_or(serde_json::Value::Null),
                 );
                 obj.insert(
                     "state".to_string(),
-                    gate.state.map(|s| serde_json::to_value(s).unwrap_or(serde_json::Value::Null)).unwrap_or(serde_json::Value::Null),
+                    gate.state
+                        .map(|s| serde_json::to_value(s).unwrap_or(serde_json::Value::Null))
+                        .unwrap_or(serde_json::Value::Null),
                 );
                 obj.insert("blocked".to_string(), serde_json::Value::Bool(gate.blocked));
             }
