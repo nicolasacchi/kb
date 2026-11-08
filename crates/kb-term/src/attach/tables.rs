@@ -360,3 +360,10 @@ pub const DIACRITICS: &[u32] = &[
     65056, 65057, 65058, 65059, 65060, 65061, 65062, 68111, 68152, 119173, 119174, 119175, 119176,
     119177, 119210, 119211, 119212, 119213, 119362, 119363, 119364,
 ];
+
+/// Index of a row/column diacritic codepoint in the 297-entry table, if
+/// it is one of the kitty diacritics.
+#[must_use]
+pub fn diacritic_index(cp: u32) -> Option<usize> {
+    DIACRITICS.iter().position(|&d| d == cp)
+}

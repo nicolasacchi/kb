@@ -115,7 +115,7 @@ fn jitter_ms() -> u64 {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos() as u64);
-    nanos ^ u64::from(std::process::id()) * 0x9E37_79B9_7F4A_7C15
+    nanos ^ (u64::from(std::process::id()) * 0x9E37_79B9_7F4A_7C15)
 }
 
 // ---------------------------------------------------------- stream state
@@ -210,10 +210,9 @@ impl AttachContext {
 }
 
 pub async fn run_attach(args: AttachArgs) -> u8 {
+    let env_sock = std::env::var("KB_TERM_RUNNER_SOCK").ok();
     let runner_sock = crate::runner_client::resolve_runner_socket(
-        args.runner_sock
-            .as_deref()
-            .or_else(|| std::env::var("KB_TERM_RUNNER_SOCK").ok().as_deref()),
+        args.runner_sock.as_deref().or_else(|| env_sock.as_deref()),
     );
     let mut runner = match RunnerClient::connect(&runner_sock).await {
         Ok(c) => c,
@@ -426,7 +425,7 @@ async fn run_one_join(
                     Err(_) => return SessionResult::Error("tap read"),
                 }
             }
-            data = stdin_rx.recv(), if stdin_rx.is_some() => {
+            data = async { match stdin_rx.as_mut() { Some(rx) => rx.recv().await, None => std::future::pending::<Option<Vec<u8>>>().await } } => {
                 let Some(data) = data else {
                     return SessionResult::Detached;
                 };
@@ -454,13 +453,13 @@ async fn run_one_join(
                     let _ = runner_takesize(&mut ctx.runner, &args_id, size, &viewer).await;
                 }
             }
-            _ = async { match sig_int.as_mut() { Some(s) => s.recv().await, None => std::future::pending::<()>().await } } => {
+            _ = async { match sig_int.as_mut() { Some(s) => s.recv().await, None => std::future::pending::<Option<()>>().await } } => {
                 return SessionResult::Detached;
             }
-            _ = async { match sig_term.as_mut() { Some(s) => s.recv().await, None => std::future::pending::<()>().await } } => {
+            _ = async { match sig_term.as_mut() { Some(s) => s.recv().await, None => std::future::pending::<Option<()>>().await } } => {
                 return SessionResult::Detached;
             }
-            _ = async { match sig_winch.as_mut() { Some(s) => s.recv().await, None => std::future::pending::<()>().await } }, if !ctx.is_watch() => {
+            _ = async { match sig_winch.as_mut() { Some(s) => s.recv().await, None => std::future::pending::<Option<()>>().await } }, if !ctx.is_watch() => {
                 winch_deadline = Some(tokio::time::Instant::now() + Duration::from_millis(100));
             }
         }
@@ -762,7 +761,11 @@ impl TapConn {
         if n == 0 {
             return Ok(None);
         }
-        for e in self.decoder.push(&buf[..n])? {
+        for e in self
+            .decoder
+            .push(&buf[..n])
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?
+        {
             self.queue.push_back(e);
         }
         Ok(self.queue.pop_front())
@@ -797,10 +800,9 @@ async fn connect_tap(
 // ------------------------------------------------------------------- new/ls
 
 pub async fn run_ls(args: LsArgs) -> u8 {
+    let env_sock = std::env::var("KB_TERM_RUNNER_SOCK").ok();
     let runner_sock = crate::runner_client::resolve_runner_socket(
-        args.runner_sock
-            .as_deref()
-            .or_else(|| std::env::var("KB_TERM_RUNNER_SOCK").ok().as_deref()),
+        args.runner_sock.as_deref().or_else(|| env_sock.as_deref()),
     );
     let mut runner = match RunnerClient::connect(&runner_sock).await {
         Ok(c) => c,
@@ -902,10 +904,9 @@ fn render_ls_rows(rows: &[serde_json::Value]) -> Vec<String> {
 }
 
 pub async fn run_new(args: NewArgs) -> u8 {
+    let env_sock = std::env::var("KB_TERM_RUNNER_SOCK").ok();
     let runner_sock = crate::runner_client::resolve_runner_socket(
-        args.runner_sock
-            .as_deref()
-            .or_else(|| std::env::var("KB_TERM_RUNNER_SOCK").ok().as_deref()),
+        args.runner_sock.as_deref().or_else(|| env_sock.as_deref()),
     );
     let mut runner = match RunnerClient::connect(&runner_sock).await {
         Ok(c) => c,
