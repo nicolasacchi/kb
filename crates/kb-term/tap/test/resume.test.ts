@@ -168,7 +168,7 @@ test('resume_offline_longer_than_ring_full_join', async () => {
   const runDir = mkdtempSync(join(tmpdir(), 'kbt7-'));
   const epoch = 'e'.repeat(32);
   const stubTwin = { feed: async () => {}, serialize: { serialize: () => '' } } as unknown as Twin;
-  const server = new TapServer({ session: 'resume002', harness: 'omp', epoch, twin: stubTwin, runDir, quiesceMs: 0, joinWaitMs: 10_000 });
+  const server = new TapServer({ session: 'resume002', harness: 'omp', epoch, twin: stubTwin, runDir, quiesceMs: 0, joinWaitMs: 10_000, makeSeed: () => new Uint8Array(0) });
   await server.listen();
   try {
     for (let i = 0; i < 40; i++) {
