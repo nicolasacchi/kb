@@ -320,11 +320,16 @@ impl Responder {
             Terminator::Bel => b"\x07",
             Terminator::St => b"\x1b\\",
         };
-        if self.buf == b"10;?" {
+        // Query payloads to answer, plus the spaced spelling `10 ; ?` /
+        // `11 ; ?` (terminals vary in spacing around the separator; the
+        // brief's byte strings are proposals). Sets stay ignored.
+        let q10 = self.buf == b"10;?" || self.buf == b"10 ; ?";
+        let q11 = self.buf == b"11;?" || self.buf == b"11 ; ?";
+        if q10 {
             let mut reply = self.cfg.osc10_head().into_bytes();
             reply.extend_from_slice(terminator);
             self.answer(out, "osc10", &reply);
-        } else if self.buf == b"11;?" {
+        } else if q11 {
             let mut reply = self.cfg.osc11_head().into_bytes();
             reply.extend_from_slice(terminator);
             self.answer(out, "osc11", &reply);
@@ -573,6 +578,15 @@ mod tests {
         );
         assert_eq!(
             feed_all(dark.clone(), b"\x1b]11;?\x1b\\"),
+            b"\x1b]11;rgb:1e1e/1e1e/1e1e\x1b\\"
+        );
+        // Spaced spelling some terminals use.
+        assert_eq!(
+            feed_all(dark.clone(), b"\x1b]10 ; ?\x07"),
+            b"\x1b]10;rgb:d4d4/d4d4/d4d4\x07"
+        );
+        assert_eq!(
+            feed_all(dark.clone(), b"\x1b]11 ; ?\x1b\\"),
             b"\x1b]11;rgb:1e1e/1e1e/1e1e\x1b\\"
         );
     }
