@@ -320,6 +320,53 @@ fn doctor_probe_timeout_kills_hanging_binary() {
         "run_with_timeout must kill near its own deadline, took {elapsed:?}"
     );
 }
+/// A child emitting >64 KiB does not block on a full pipe: output is
+/// drained incrementally and each stream is capped at 64 KiB, so the
+/// probe returns promptly with a truncated (not full) capture.
+#[test]
+fn doctor_probe_caps_output_and_never_blocks_on_pipe() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = fake_exe(
+        dir.path(),
+        "loud",
+        "#!/bin/sh\nhead -c 200000 /dev/zero | tr '\\000' 'x'\n",
+    );
+    let start = std::time::Instant::now();
+    let got = doctor::run_with_timeout(&fake, &[], &[], std::time::Duration::from_secs(10))
+        .expect("loud binary exits");
+    assert!(got.0, "loud binary exits zero");
+    assert!(
+        got.1.len() <= 64 * 1024,
+        "stdout capped at 64 KiB, got {} bytes",
+        got.1.len()
+    );
+    assert_eq!(got.1.len(), 64 * 1024, "loud output truncated at cap");
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(10),
+        "must not block on a full pipe"
+    );
+}
+
+/// A grandchild holding stdout past the deadline must not hold the
+/// probe past the deadline: the process group is killed, not just
+/// the direct child.
+#[test]
+fn doctor_probe_timeout_kills_process_group() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = fake_exe(
+        dir.path(),
+        "forker",
+        "#!/bin/sh\nsh -c 'sleep 30' &\nexec sleep 30\n",
+    );
+    let start = std::time::Instant::now();
+    let got = doctor::run_with_timeout(&fake, &[], &[], std::time::Duration::from_secs(2));
+    assert!(got.is_none(), "forked sleeper must yield None at deadline");
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(8),
+        "process-group kill must return near the deadline, took {:?}",
+        start.elapsed()
+    );
+}
 
 #[test]
 fn doctor_exit_codes() {
