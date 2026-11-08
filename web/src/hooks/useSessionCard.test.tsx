@@ -47,7 +47,7 @@ describe("useSessionCard", () => {
   });
 
   it("fetches the card for a sid", async () => {
-    const fetchFn = vi.fn(async () => ({
+    const fetchFn = vi.fn(async (_url: unknown) => ({
       ok: true,
       status: 200,
       statusText: "OK",
