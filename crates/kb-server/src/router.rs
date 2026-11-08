@@ -574,6 +574,9 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
         // W6 — the project ledger (moonshots M4): a view over existing
         // primitives grouped by UTC day. Static, before `/{session_id}`.
         .route("/sessions/ledger", get(routes::sessions::ledger))
+        // A6 — sessions grouped into pieces of work by a fixed named
+        // ladder (kb-session-work/1). Static, before `/{session_id}`.
+        .route("/sessions/work", get(routes::sessions::work))
         // kb-code Wave 0 (W0.6) — the sha→session reverse lookup + the flat
         // bulk commit-map feed. Static segments, registered before
         // `/{session_id}` so they win over the dynamic capture.

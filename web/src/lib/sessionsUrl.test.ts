@@ -20,6 +20,7 @@ describe("sessionsUrl", () => {
     expect(sessionsUrl({ view: "list" })).toBe("/sessions");
     expect(sessionsUrl({ view: "projects" })).toBe("/sessions?view=projects");
     expect(sessionsUrl({ view: "threads" })).toBe("/sessions?view=threads");
+    expect(sessionsUrl({ view: "work" })).toBe("/sessions?view=work");
   });
 
   // R12 — this builder ONLY ever emits `project=`, never `folder=`.

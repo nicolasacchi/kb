@@ -5,7 +5,7 @@
 //
 // Grammar (designs/projects.md P6, synthesis-memo R12):
 //
-//   /sessions?view=projects|list|threads
+//   /sessions?view=projects|list|threads|work
 //            &project=<registry-id|project_key>   (folder= accepted INBOUND
 //                                                    as legacy — C-17 — but
 //                                                    never EMITTED by this
@@ -20,7 +20,7 @@
 // bare `sessionsUrl()` is `/sessions` and the landing URL only ever carries
 // the axes the caller actually set.
 
-export type SessionsView = "projects" | "list" | "threads";
+export type SessionsView = "projects" | "list" | "threads" | "work";
 
 export type SessionsFilters = {
   view?: SessionsView;

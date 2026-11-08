@@ -37,6 +37,7 @@ import {
   fetchSessionsPage,
   fetchSessionTouches,
   fetchWhy,
+  fetchSessionWork,
   type ArtifactSessionOut,
   type ByArtifactResponse,
   type CommitFilesResponse,
@@ -203,6 +204,42 @@ export function useSessionThreads(enabled: boolean): {
     return () => offs.forEach((off) => off());
   }, [queryClient, enabled]);
   return { threads: q.data ?? EMPTY_THREADS, loading: enabled && q.isPending };
+}
+
+const EMPTY_WORK: WorkResponse = {
+  schema: "kb-session-work/1",
+  since: 0,
+  scan_capped: false,
+  truncated: false,
+  groups: [],
+  skipped: [],
+};
+
+// A6 — the work view: pieces of work by the fixed named ladder. Refreshes
+// on the SAME session SSE events + resync as the threads view (#23); no
+// new SSE kind, no poll.
+export function useSessionWork(
+  enabled: boolean,
+  project?: string,
+): {
+  work: WorkResponse;
+  loading: boolean;
+} {
+  const queryClient = useQueryClient();
+  const q = useQuery({
+    queryKey: ["sessions", "work", project ?? ""] as const,
+    enabled,
+    queryFn: ({ signal }) => fetchSessionWork(project, signal),
+  });
+  useEffect(() => {
+    if (!enabled) return;
+    const refresh = () =>
+      void queryClient.invalidateQueries({ queryKey: ["sessions", "work", project ?? ""] });
+    const offs = SESSION_EVENTS.map((t) => sse.subscribeEvent(t, refresh));
+    offs.push(sse.onResync(refresh));
+    return () => offs.forEach((off) => off());
+  }, [queryClient, enabled, project]);
+  return { work: q.data ?? EMPTY_WORK, loading: enabled && q.isPending };
 }
 
 // A1 — the folder facet for the /sessions filter dropdown. Refreshes on the

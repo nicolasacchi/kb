@@ -2713,6 +2713,575 @@ mod ledger_tests {
     }
 }
 
+/// A6 — `GET /api/sessions/work` (kb-session-work/1): sessions grouped
+/// into pieces of work by a FIXED ladder of named terms
+/// (`kb_core::sessions::work::TERMS`). A pure VIEW over existing
+/// primitives — the daycard/ledger precedent: no new tables, nothing
+/// persisted, derived per request. Newest-capture-scoped (#11),
+/// federated (#28). Recency order only; no score, rank, weight,
+/// confidence or relevance anywhere on the wire.
+const WORK_DEFAULT_DAYS: i64 = 7;
+const WORK_MAX_DAYS: i64 = 90;
+const WORK_DEFAULT_LIMIT: u32 = 50;
+const WORK_SCAN_CAP: u32 = 2000;
+/// Distinct slate slugs read per work request (structure only).
+const WORK_SLATE_CAP: usize = 8;
+
+#[derive(Debug, Deserialize)]
+pub struct WorkParams {
+    pub project: Option<String>,
+    pub since: Option<i64>,
+    pub limit: Option<u32>,
+}
+
+/// The single place that clamps the `since`/`limit` params: `since`
+/// defaults to now-minus-`WORK_DEFAULT_DAYS` and never reaches further back
+/// than now-minus-`WORK_MAX_DAYS`; `limit` defaults to 50 and clamps into
+/// [1, 200]. Pure so the clamping is unit-testable without a handler.
+fn work_params_clamp(p: &WorkParams, now: i64) -> (i64, u32) {
+    let since = p
+        .since
+        .unwrap_or(now - WORK_DEFAULT_DAYS * 86_400)
+        .max(now - WORK_MAX_DAYS * 86_400);
+    let limit = p.limit.unwrap_or(WORK_DEFAULT_LIMIT).clamp(1, 200);
+    (since, limit)
+}
+
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Serialize)]
+pub struct WorkResponse {
+    pub schema: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub project: Option<String>,
+    pub since: i64,
+    pub scan_capped: bool,
+    pub truncated: bool,
+    pub groups: Vec<WorkGroupOut>,
+    pub skipped: Vec<WorkSkippedOut>,
+}
+
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Serialize)]
+pub struct WorkGroupOut {
+    pub key: String,
+    pub term: &'static str,
+    pub terms: Vec<String>,
+    pub started_at: i64,
+    pub last_activity: i64,
+    pub members: Vec<WorkMemberOut>,
+    pub members_total: u32,
+    pub counts: WorkCountsOut,
+}
+
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Serialize)]
+pub struct WorkMemberOut {
+    pub kb: String,
+    pub session_id: String,
+    pub role: &'static str,
+    pub via: &'static str,
+    pub started_at: i64,
+    pub ended_at: i64,
+    pub harness: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub title: Option<String>,
+}
+
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Serialize)]
+pub struct WorkCountsOut {
+    pub logical_sessions: u32,
+    pub subagents: u32,
+    pub parts: u32,
+    pub active_secs: i64,
+}
+
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Serialize)]
+pub struct WorkSkippedOut {
+    pub term: String,
+    pub reason: String,
+    pub detail: String,
+}
+
+/// The core → wire mapping, in one place so the golden test pins the
+/// route's own mapping (field set, `terms` order, JSON shape).
+pub fn work_outcome_to_response(
+    outcome: kb_core::sessions::work::WorkOutcome,
+    project: Option<String>,
+    since: i64,
+    scan_capped: bool,
+    limit: u32,
+) -> WorkResponse {
+    let total = outcome.groups.len();
+    let groups: Vec<WorkGroupOut> = outcome
+        .groups
+        .into_iter()
+        .take(limit as usize)
+        .map(|g| WorkGroupOut {
+            key: g.key,
+            term: g.term,
+            terms: g.terms.iter().map(|t| (*t).to_string()).collect(),
+            started_at: g.started_at,
+            last_activity: g.last_activity,
+            members: g
+                .members
+                .into_iter()
+                .map(|m| WorkMemberOut {
+                    kb: m.kb,
+                    session_id: m.session_id,
+                    role: m.role,
+                    via: m.via,
+                    started_at: m.started_at,
+                    ended_at: m.ended_at,
+                    harness: m.harness,
+                    title: m.title,
+                })
+                .collect(),
+            members_total: g.members_total,
+            counts: WorkCountsOut {
+                logical_sessions: g.counts.logical_sessions,
+                subagents: g.counts.subagents,
+                parts: g.counts.parts,
+                active_secs: g.counts.active_secs,
+            },
+        })
+        .collect();
+    WorkResponse {
+        schema: "kb-session-work/1",
+        project,
+        since,
+        scan_capped,
+        truncated: total > groups.len(),
+        groups,
+        skipped: outcome
+            .skipped
+            .into_iter()
+            .map(|s| WorkSkippedOut {
+                term: s.term,
+                reason: s.reason,
+                detail: s.detail,
+            })
+            .collect(),
+    }
+}
+
+/// Derive slate-takeover edges from slate STRUCTURE only — never from a
+/// post's `line`, `body`, `topic` or `subject`. A `take` post replying
+/// (`re == Some(n)`) to a `take`/`hand` post, both carrying a provenance
+/// `session_id`, and the two ids differing, yields one `[TakeEdge]`.
+/// Text fields are never read or emitted.
+pub fn take_edges_from_posts(slug: &str, posts: &[kb_core::slate::Post]) -> Vec<kb_core::sessions::work::TakeEdge> {
+    let by_seq: std::collections::HashMap<u64, &kb_core::slate::Post> =
+        posts.iter().map(|p| (p.seq, p)).collect();
+    let mut edges: Vec<kb_core::sessions::work::TakeEdge> = Vec::new();
+    for post in posts {
+        if post.kind != kb_core::slate::Kind::Take {
+            continue;
+        }
+        let Some(n) = post.re else { continue };
+        let Some(target) = by_seq.get(&n) else { continue };
+        if !matches!(target.kind, kb_core::slate::Kind::Take | kb_core::slate::Kind::Hand) {
+            continue;
+        }
+        let (Some(from), Some(to)) = (
+            post.prov.session_id.as_deref(),
+            target.prov.session_id.as_deref(),
+        ) else {
+            continue;
+        };
+        if from == to {
+            continue;
+        }
+        edges.push(kb_core::sessions::work::TakeEdge {
+            slug: slug.to_string(),
+            from_session: from.to_string(),
+            to_session: to.to_string(),
+        });
+    }
+    edges
+}
+
+/// `GET /api/sessions/work?project=&since=&limit=` — pieces of work by
+/// the named ladder (see the module note above). Modelled on `ledger`:
+/// same `auth_bearer` tree posture, same fan-out, same drop-on-error
+/// posture (#28). No new admission rule (#4), no SSE kind (#24).
+pub async fn work(
+    State(state): State<Arc<KbHandles>>,
+    Query(p): Query<WorkParams>,
+) -> impl IntoResponse {
+    let now = chrono::Utc::now().timestamp();
+    let (since, limit) = work_params_clamp(&p, now);
+    let project_filter = p
+        .project
+        .as_deref()
+        .map(kb_core::sessions::resolve_project_filter)
+        .unwrap_or_default();
+
+    // One scanned row per kb: (row fields, job ulids, project slug).
+    // `sessions_list` is `started_at DESC` — break at the first row older
+    // than `since`; exactly `WORK_SCAN_CAP` rows means more may exist.
+    let project_filter_ref = &project_filter;
+    let mut futs: Vec<super::CorpusFut<'_, (String, Vec<(kb_core::storage::sqlite::SessionRow, Vec<String>)>, bool)>> =
+        Vec::new();
+    for (kb_name, ctx) in state.kbs.iter() {
+        futs.push(Box::pin(async move {
+            let rows = match ctx
+                .storage
+                .sessions_list(
+                    WORK_SCAN_CAP,
+                    None,
+                    None,
+                    None,
+                    None,
+                    project_filter_ref.clone(),
+                    Vec::new(),
+                    Vec::new(),
+                )
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!(kb = %kb_name, error = %e, "sessions_list failed in work");
+                    return (kb_name.as_str().to_string(), Vec::new(), false);
+                }
+            };
+            let scan_capped = rows.len() as u32 == WORK_SCAN_CAP;
+            let mut window_rows = Vec::new();
+            for row in rows {
+                if row.started_at < since {
+                    break;
+                }
+                window_rows.push(row);
+            }
+            let session_ids: Vec<String> = window_rows
+                .iter()
+                .map(|r| r.session_id.clone())
+                .collect();
+            // Job ulids: one batch research read per kb (ledger pattern);
+            // keep `grok_job` rows only, the ulid being the row's `query`.
+            let research_map = ctx
+                .storage
+                .session_research_for_sessions(session_ids)
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!(kb = %kb_name, error = %e, "session_research_for_sessions failed in work");
+                    Default::default()
+                });
+            let mut out = Vec::with_capacity(window_rows.len());
+            for row in window_rows {
+                let ulids: Vec<String> = research_map
+                    .get(&row.session_id)
+                    .map(|rs| {
+                        rs.iter()
+                            .filter(|r| r.kind == "grok_job")
+                            .map(|r| r.query.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                out.push((row, ulids));
+            }
+            (kb_name.as_str().to_string(), out, scan_capped)
+        }));
+    }
+
+    let mut scanned: Vec<(String, kb_core::storage::sqlite::SessionRow, Vec<String>)> = Vec::new();
+    let mut scan_capped = false;
+    for (kb, per_kb, capped) in super::buffered_join(futs, state.fanout_cap).await {
+        scan_capped |= capped;
+        for (row, ulids) in per_kb {
+            scanned.push((kb.clone(), row, ulids));
+        }
+    }
+
+    // Slate takeover edges: distinct non-empty project slugs of the
+    // scanned rows, capped and sorted; structure only, read inside
+    // `spawn_blocking` (slate file reads are blocking FS I/O).
+    let mut slugs: Vec<String> = scanned
+        .iter()
+        .filter_map(|(_, row, _)| row.project_slug.clone())
+        .filter(|s| !s.is_empty())
+        .collect();
+    slugs.sort();
+    slugs.dedup();
+    slugs.truncate(WORK_SLATE_CAP);
+    let paths = state.paths.clone();
+    let slate_posts: Vec<(String, Vec<kb_core::slate::Post>)> =
+        tokio::task::spawn_blocking(move || {
+            let mut out = Vec::new();
+            for slug in slugs {
+                let parsed = kb_core::slate::SlateSlug::new(slug.clone());
+                let Ok(parsed) = parsed else { continue };
+                if let Ok(posts) = crate::routes::slates::load_posts(&paths, &parsed) {
+                    out.push((slug, posts));
+                }
+            }
+            out
+        })
+        .await
+        .unwrap_or_default();
+    let mut takes: Vec<kb_core::sessions::work::TakeEdge> = Vec::new();
+    for (slug, posts) in &slate_posts {
+        takes.extend(take_edges_from_posts(slug, posts));
+    }
+
+    // Row → core input. Titles come from the ledger's display-name source
+    // (`SessionOut::from_row`): the persisted `title` column.
+    let work_sessions: Vec<kb_core::sessions::work::WorkSession> = scanned
+        .into_iter()
+        .map(|(kb, row, ulids)| kb_core::sessions::work::WorkSession {
+            kb,
+            session_id: row.session_id.clone(),
+            segment_of: row.segment_of.clone(),
+            root_session_id: row.root_session_id.clone(),
+            parent_session_id: row.parent_session_id.clone(),
+            started_at: row.started_at,
+            ended_at: row.ended_at,
+            active_secs: row.active_secs,
+            harness: row.harness.clone(),
+            cwd: row.cwd.clone(),
+            title: row.title.clone(),
+            job_ulids: ulids,
+        })
+        .collect();
+
+    let outcome = kb_core::sessions::work::group_work(&work_sessions, &takes);
+    Json(work_outcome_to_response(outcome, p.project.clone(), since, scan_capped, limit))
+}
+
+#[cfg(test)]
+mod work_tests {
+    use super::{take_edges_from_posts, work_outcome_to_response, work_params_clamp, WorkParams};
+    use kb_core::sessions::work::{
+        group_work, TakeEdge, WorkOutcome, WorkSession, WorkGroup, WorkMember, WorkCounts,
+        SkippedTerm,
+    };
+
+    fn params(since: Option<i64>, limit: Option<u32>) -> WorkParams {
+        WorkParams { project: None, since, limit }
+    }
+
+    #[test]
+    fn work_params_clamp_since_and_limit() {
+        let now = 1_800_000_000;
+        // Defaults: now-7d, 50.
+        let (since, limit) = work_params_clamp(&params(None, None), now);
+        assert_eq!(since, now - 7 * 86_400);
+        assert_eq!(limit, 50);
+        // since older than 90d clamps to now-90d.
+        let (since, _) = work_params_clamp(&params(Some(0), None), now);
+        assert_eq!(since, now - 90 * 86_400);
+        // limit clamps into [1, 200].
+        let (_, limit) = work_params_clamp(&params(None, Some(0)), now);
+        assert_eq!(limit, 1);
+        let (_, limit) = work_params_clamp(&params(None, Some(500)), now);
+        assert_eq!(limit, 200);
+        let (_, limit) = work_params_clamp(&params(None, Some(10)), now);
+        assert_eq!(limit, 10);
+    }
+
+    #[test]
+    fn work_wire_golden() {
+        let outcome = WorkOutcome {
+            groups: vec![WorkGroup {
+                key: "smoke:root-x".into(),
+                term: "tree",
+                terms: vec!["tree", "cwd_time"],
+                members: vec![WorkMember {
+                    kb: "smoke".into(),
+                    session_id: "root-x".into(),
+                    role: "root",
+                    via: "tree",
+                    started_at: 100,
+                    ended_at: 500,
+                    harness: "omp".into(),
+                    title: Some("Root work".into()),
+                }],
+                members_total: 1,
+                counts: WorkCounts {
+                    logical_sessions: 1,
+                    subagents: 0,
+                    parts: 1,
+                    active_secs: 400,
+                },
+                started_at: 100,
+                last_activity: 500,
+            }],
+            skipped: vec![SkippedTerm {
+                term: "job".into(),
+                reason: "fanout_cap".into(),
+                detail: "ulid-big on 51 sessions".into(),
+            }],
+        };
+        let resp = work_outcome_to_response(outcome, Some("smoke".into()), 50, false, 50);
+        let v = serde_json::to_value(&resp).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "schema": "kb-session-work/1",
+                "project": "smoke",
+                "since": 50,
+                "scan_capped": false,
+                "truncated": false,
+                "groups": [{
+                    "key": "smoke:root-x",
+                    "term": "tree",
+                    "terms": ["tree", "cwd_time"],
+                    "started_at": 100,
+                    "last_activity": 500,
+                    "members": [{
+                        "kb": "smoke",
+                        "session_id": "root-x",
+                        "role": "root",
+                        "via": "tree",
+                        "started_at": 100,
+                        "ended_at": 500,
+                        "harness": "omp",
+                        "title": "Root work",
+                    }],
+                    "members_total": 1,
+                    "counts": {"logical_sessions": 1, "subagents": 0, "parts": 1, "active_secs": 400},
+                }],
+                "skipped": [{
+                    "term": "job",
+                    "reason": "fanout_cap",
+                    "detail": "ulid-big on 51 sessions",
+                }],
+            })
+        );
+        // The wire carries no scoring vocabulary.
+        let text = serde_json::to_string(&resp).unwrap();
+        for banned in ["score", "rank", "weight", "confidence", "relevance"] {
+            assert!(!text.contains(banned), "wire contains `{banned}`: {text}");
+        }
+        // Key-set assertion: no score-like key anywhere in the structure.
+        fn keys(v: &serde_json::Value, out: &mut Vec<String>) {
+            if let serde_json::Value::Object(m) = v {
+                for (k, val) in m {
+                    out.push(k.clone());
+                    keys(val, out);
+                }
+            } else if let serde_json::Value::Array(a) = v {
+                for item in a {
+                    keys(item, out);
+                }
+            }
+        }
+        let mut all_keys = Vec::new();
+        keys(&v, &mut all_keys);
+        for k in &all_keys {
+            for banned in ["score", "rank", "weight", "confidence", "relevance"] {
+                assert!(!k.contains(banned), "key `{k}` contains `{banned}`");
+            }
+        }
+    }
+
+    fn post(seq: u64, kind: kb_core::slate::Kind, re: Option<u64>, sid: &str, line: &str) -> kb_core::slate::Post {
+        kb_core::slate::Post {
+            seq,
+            id: format!("e_{seq:012}"),
+            at: seq as i64,
+            kind,
+            line: line.to_string(),
+            body: None,
+            topic: None,
+            subject: None,
+            refs: Vec::new(),
+            re,
+            supersedes: None,
+            pin: None,
+            anyway: false,
+            over: None,
+            abandoned: None,
+            failed: None,
+            to: None,
+            prov: kb_core::slate::Prov {
+                harness: "omp".into(),
+                session_id: Some(sid.to_string()),
+                model: None,
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn work_takes_edges_from_slate_structure_only() {
+        use kb_core::slate::{parse_ledger, to_ledger_line, Kind};
+        // Build a ledger through the crate's own serializer/parser.
+        let posts = vec![
+            post(1, Kind::Take, None, "sess-a", "LEAK-MARKER take"),
+            post(2, Kind::Take, Some(1), "sess-b", "takeover body LEAK-MARKER"),
+            post(3, Kind::Hand, None, "sess-c", "hand LEAK-MARKER"),
+            post(4, Kind::Take, Some(3), "sess-d", "takes over the hand"),
+            post(5, Kind::Take, Some(2), "sess-b", "self-take is ignored"),
+        ];
+        let ledger = posts
+            .iter()
+            .map(|p| to_ledger_line(p).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        let parsed = parse_ledger(&ledger).unwrap();
+        let edges = take_edges_from_posts("proj", &parsed);
+        assert_eq!(edges.len(), 2, "{edges:?}");
+        assert!(
+            edges.contains(&TakeEdge {
+                slug: "proj".into(),
+                from_session: "sess-a".into(),
+                to_session: "sess-b".into(),
+            }),
+            "{edges:?}"
+        );
+        assert!(
+            edges.contains(&TakeEdge {
+                slug: "proj".into(),
+                from_session: "sess-c".into(),
+                to_session: "sess-d".into(),
+            }),
+            "{edges:?}"
+        );
+        // No slate text ever reaches the serialized response: run the same
+        // edges through the wire mapping and assert the marker is absent.
+        let sessions = vec![
+            WorkSession {
+                kb: "smoke".into(),
+                session_id: "sess-a".into(),
+                segment_of: None,
+                root_session_id: None,
+                parent_session_id: None,
+                started_at: 100,
+                ended_at: 200,
+                active_secs: 100,
+                harness: "omp".into(),
+                cwd: None,
+                title: None,
+                job_ulids: Vec::new(),
+            },
+            WorkSession {
+                kb: "smoke".into(),
+                session_id: "sess-b".into(),
+                segment_of: None,
+                root_session_id: None,
+                parent_session_id: None,
+                started_at: 300,
+                ended_at: 400,
+                active_secs: 100,
+                harness: "omp".into(),
+                cwd: None,
+                title: None,
+                job_ulids: Vec::new(),
+            },
+        ];
+        let outcome = group_work(&sessions, &edges);
+        let resp = work_outcome_to_response(outcome, None, 0, false, 50);
+        let text = serde_json::to_string(&resp).unwrap();
+        assert!(!text.contains("LEAK-MARKER"), "slate text leaked: {text}");
+        assert!(!text.contains("takeover body"), "slate text leaked: {text}");
+    }
+}
+
 /// A narrative thread (P7) — a run of sessions in one folder that form a
 /// continued effort (no gap larger than `THREAD_GAP_SECS`). Read-only +
 /// deterministic; auto-clustered, a suggestion not a stored entity.
