@@ -94,9 +94,46 @@ function serializeBody(twin: Twin, scrollback: number): string {
 }
 
 /** Point-in-time quiescence: twin parsed (caller guarantees), frame off, ground. */
-export function isQuiescent(twin: Twin, ground: GroundTracker): boolean {
+export function isQuiescent(twin: Twin, ground: GroundTracker, pending = 0): boolean {
+  if (pending > 0) return false;
   if (syncOn(twin)) return false;
   return ground.atGround();
+}
+
+/**
+ * Why a join at the current offset is not quiescent, for diagnostics and for
+ * the buildSeed refusal. Returns null when the offset IS quiescent.
+ * `pending` is the QuiescentJoinGate's in-flight feed count: non-zero means
+ * the twin has not parsed through the candidate offset yet (twin-behind).
+ */
+export function quiescentReason(twin: Twin, ground: GroundTracker, pending = 0): JoinPoint['reason'] {
+  if (pending > 0) return 'twin-behind';
+  if (syncOn(twin)) return 'sync-frame';
+  if (!ground.atGround()) return 'mid-sequence';
+  return null;
+}
+
+/** Throw (fail-closed) unless the join offset is quiescent. */
+export function assertQuiescent(twin: Twin, ground: GroundTracker, pending = 0): void {
+  const reason = quiescentReason(twin, ground, pending);
+  if (reason !== null) throw new Error(`seed: refusing not quiescent join (reason: ${reason})`);
+}
+
+/**
+ * Fail-closed charset/glevel refusal (FXT6): a DEC-designation stream is a
+ * REJECTED join class. xterm 6.0.0 buffers carry no savedGlevel and the
+ * CharsetService keeps only built maps, so designations/glevel cannot be
+ * re-emitted faithfully; buildSeed refuses with this typed error (code
+ * `seed/charset-unsupported`) instead of silently dropping them. T7 surfaces
+ * `code` on the join path; the matrix keeps DEC-charset streams out of the
+ * quiescent family and pins the refusal here.
+ */
+export class SeedCharsetError extends Error {
+  readonly code = 'seed/charset-unsupported';
+  constructor() {
+    super('seed: non-default charset/glevel not supported');
+    this.name = 'SeedCharsetError';
+  }
 }
 
 export class QuiescentJoinGate {
@@ -197,12 +234,24 @@ function modeSeq(n: number, on: boolean | string | number): string {
 
 export function buildSeed(
   twin: Twin,
-  opts: { scrollback: 50000 | 20000; atOffset: number; skip?: TailItem[]; ground?: GroundTracker },
+  opts: {
+    scrollback: 50000 | 20000;
+    atOffset: number;
+    skip?: TailItem[];
+    /** Required (FXT6): the join-quiescence ground tracker, fed the exact
+     * bytes the twin parsed through atOffset. There is deliberately NO
+     * ground-less fallback: the old `!syncOn(twin)`-only branch let any
+     * caller join mid-sequence with no check. */
+    ground: GroundTracker;
+    /** QuiescentJoinGate in-flight feeds; non-zero = twin-behind. */
+    pending?: number;
+  },
 ): Seed {
   const st = captureTwinState(twin);
-  const quiescent = opts.ground ? isQuiescent(twin, opts.ground) : !syncOn(twin);
-  if (!quiescent) {
-    throw new Error(`seed: refusing not quiescent join at offset ${opts.atOffset}`);
+  try {
+    assertQuiescent(twin, opts.ground, opts.pending ?? 0);
+  } catch (e) {
+    throw new Error(`seed: refusing not quiescent join at offset ${opts.atOffset}: ${(e as Error).message}`);
   }
   const skip = new Set<TailItem>(opts.skip ?? []);
 
@@ -215,11 +264,13 @@ export function buildSeed(
   const normalPart = parts[0];
   const altPart = parts[1] ?? '';
 
-  // Charset/glevel fail-closed: designations cannot be re-emitted from
-  // captured state (xterm keeps only the built maps), so a non-default
-  // charset or nonzero live glevel is a hard error, never silently dropped.
+  // Charset/glevel fail-closed (typed, see SeedCharsetError): designations
+  // cannot be re-emitted from captured state (xterm keeps only the built
+  // maps, buffers carry no savedGlevel), so a non-default charset or nonzero
+  // live glevel is a hard error, never silently dropped. Rejected join
+  // class: matrix streams never set a DEC charset (pinned in seed tests).
   if (st.glevel !== 0 || st.normal.savedCharset !== null || st.alt.savedCharset !== null) {
-    throw new Error('seed: non-default charset/glevel not supported');
+    throw new SeedCharsetError();
   }
 
   const tailFor = (bs: BufferState): string => {
