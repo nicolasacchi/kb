@@ -166,14 +166,12 @@ export class TapServer {
   readonly ring: Ring;
   readonly withholder = new Withholder();
   epoch: string;
-  readonly sockPath: string;
-  stats = { joins: 0, degradedJoins: 0 };
 
   private readonly session: string;
   private readonly harness: string;
   private readonly boundSid: string | null;
-  private readonly cols: number;
-  private readonly rows: number;
+  private cols: number;
+  private rows: number;
   private readonly twin: Twin | null;
   private readonly makeSeed: SeedMaker;
   private readonly testMode: boolean;
@@ -340,6 +338,15 @@ export class TapServer {
       this.twinGate = null;
     }
   }
+  /** Apply a grid change (audit F6): resize the twin and stamp a resize
+   * marker at the current head; later profiles carry the new grid. */
+  setGrid(cols: number, rows: number): void {
+    this.cols = cols;
+    this.rows = rows;
+    this.twin?.resize(cols, rows);
+    this.recordMarker((seq, offset) => encodeServerFrame({ t: 'resize', seq, offset, cols, rows }));
+  }
+
 
   // ---------------------------------------------------------- join / resume
 

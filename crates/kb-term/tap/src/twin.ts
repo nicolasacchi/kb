@@ -49,9 +49,12 @@ interface TerminalLike {
   _core: unknown;
   buffer: unknown;
 }
+interface SerializeOpts {
+  scrollback?: number;
+}
 
 interface SerializeLike {
-  serialize(): string;
+  serialize(opts?: SerializeOpts): string;
 }
 
 export interface Twin {
