@@ -134,6 +134,23 @@ test('withhold_flush_emits_held_partial_verbatim', () => {
   expect(dec(tail.bytes)).toBe(`${E}[?10`);
 });
 
+test('withhold_flush_overcap_csi_adds_nothing', () => {
+  // Over-cap bytes already streamed out; flush must not append a stray ESC[.
+  const w = new Withholder();
+  const part = `${E}[?1000${';1'.repeat(40)}`;
+  const r = w.push(enc(part));
+  expect(dec(r.bytes)).toBe(part);
+  expect(w.flush().bytes.length).toBe(0);
+});
+
+test('withhold_flush_partial_osc52_passes_verbatim', () => {
+  // Its docstring promises verbatim: a truncated OSC 52 is still held in
+  // full and goes out as-is.
+  const w = new Withholder();
+  w.push(enc(`${E}]52;c;aGk`));
+  expect(dec(w.flush().bytes)).toBe(`${E}]52;c;aGk`);
+});
+
 const SPLIT_CORPUS = `hi${E}[?1000hX${E}[?1000;25hY${E}[>1uZ${E}]52;c;aGk=${BEL}W${E}[?1049h${E}[?1000hV${E}[?1049l${E}[?2026h${E}[?2026l${E}[>4;2m${E}[?1000l${E}]0;title${BEL}end`;
 
 test('withhold_exhaustive_1cut_splits_equal_unsplit', () => {

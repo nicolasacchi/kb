@@ -9,10 +9,11 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { connect } from 'node:net';
 import { RefViewer } from '../src/client_ref.ts';
 import { makeTwin, type Twin } from '../src/twin.ts';
 import { TapServer, type Transport } from '../src/viewers.ts';
-import { EnvelopeDecoder, decodeBinaryFrame, decodeTextFrame, encodeBinaryFrame, encodeControlMessage, encodeEnvelope, ENV_CONTROL, ENV_TEXT, type ServerFrame } from '../src/wire.ts';
+import { EnvelopeDecoder, decodeBinaryFrame, decodeTextFrame, encodeBinaryFrame, encodeControlMessage, encodeEnvelope, ENV_CONTROL, ENV_TEXT, parseS2C, type ServerFrame } from '../src/wire.ts';
 
 const E = '\x1b';
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -129,18 +130,34 @@ test('viewers_atomic_join_no_loss_no_duplicate', async () => {
   const twin = makeTwin(120, 40);
   const clock = fakeClock();
   const server = new TapServer({ session: 'atom00001', harness: 'omp', epoch: 'e'.repeat(32), twin, now: clock.now, quiesceMs: 0, joinWaitMs: 5000, makeSeed: () => new Uint8Array(0) });
-  const t = new MockTransport();
+  const t1 = new MockTransport();
+  const t2 = new MockTransport();
   server.feed([{ kind: 'bytes', data: enc('AAAA') }]);
-  openViewer(server, t, 'v1');
-  await waitUntil(() => kinds(t).includes('hello'), 'join hello');
-  // Push a chunk once the join has landed: the viewer sees it exactly once.
-  // (The pre-join 'AAAA' is embodied in the seed -- here empty -- and is
-  // never replayed; live bytes start at exactly the seed offset.)
+  // Synchronized output on: both joins queue concurrently behind quiescence.
+  server.feed([{ kind: 'bytes', data: enc(`${E}[?2026h`) }]);
+  openViewer(server, t1, 'v1');
+  openViewer(server, t2, 'v2');
+  await waitUntil(() => server.withholder.syncOn, 'sync on');
+  expect(kinds(t1).includes('hello')).toBe(false);
+  expect(kinds(t2).includes('hello')).toBe(false);
+  const preX = server.head;
+  server.feed([{ kind: 'bytes', data: enc(`${E}[?2026l`) }]);
+  await waitUntil(() => kinds(t1).includes('seed') && kinds(t2).includes('seed'), 'both joins land');
+  const X = preX + enc(`${E}[?2026l`).length;
+  for (const t of [t1, t2]) {
+    const seed = collect(t).find((f) => f.text?.t === 'seed')?.text as Extract<ServerFrame, { t: 'seed' }>;
+    expect(seed.offset).toBe(X);
+    expect(seed.len).toBe(0);
+  }
+  // Push immediately after the joins return: both viewers see BBBB exactly
+  // once at X, and no pre-X byte is replayed as live data.
   server.feed([{ kind: 'bytes', data: enc('BBBB') }]);
-  const frames = collect(t);
-  const payload = frames.filter((f) => f.binary).map((f) => Buffer.from(f.binary!.payload).toString('utf-8')).join('');
-  expect(payload).toBe('BBBB');
-  expect(frames.filter((f) => f.binary).map((f) => f.binary!.offset)).toEqual([4]);
+  for (const t of [t1, t2]) {
+    const binaries = collect(t).filter((f) => f.binary);
+    expect(binaries.length).toBe(1);
+    expect(binaries[0].binary?.offset).toBe(X);
+    expect(Buffer.from(binaries[0].binary!.payload).toString('utf-8')).toBe('BBBB');
+  }
   await server.close();
   twin.dispose();
 });
@@ -362,6 +379,188 @@ test('viewers_stats_counters_answer_in_test_mode', async () => {
   const envs = dec.push(all);
   expect(envs.length).toBe(1);
   expect(Buffer.from(envs[0].body).toString('utf-8')).toBe('{"t":"stats","joins":1,"degradedJoins":0,"viewers":1}');
+  await server.close();
+  twin.dispose();
+});
+
+test('viewers_seed_from_real_twin_omits_withheld_mouse_enable', async () => {
+  const twin = makeTwin(120, 40);
+  const clock = fakeClock();
+  // Default seed maker (real serialize): the test pins that the twin is fed
+  // the post-withhold stream (brief rule 7).
+  const server = new TapServer({ session: 'seed00001', harness: 'omp', epoch: 'e'.repeat(32), twin, now: clock.now, quiesceMs: 0, joinWaitMs: 5000 });
+  const t = new MockTransport();
+  server.feed([{ kind: 'bytes', data: enc(`${E}[?1000hX${E}[?1000l`) }]);
+  openViewer(server, t, 'v1');
+  await waitUntil(() => kinds(t).includes('seed'), 'join with real twin');
+  const frames = collect(t);
+  const seedPayload = Buffer.concat(frames.filter((f) => f.binary).map((f) => Buffer.from(f.binary!.payload)));
+  expect(seedPayload.includes(Buffer.from('?1000h'))).toBe(false);
+  expect(seedPayload.includes(Buffer.from('X'))).toBe(true);
+  const ringBack = server.ring.read(0, server.head);
+  expect(ringBack).not.toBeNull();
+  expect(Buffer.from(ringBack!).includes(Buffer.from('?1000h'))).toBe(false);
+  await server.close();
+  twin.dispose();
+});
+
+test('viewers_resume_replays_marker_before_resume_offset', async () => {
+  const clock = fakeClock();
+  const twin = makeTwin(120, 40);
+  const server = new TapServer({ session: 'mrk000001', harness: 'omp', epoch: 'e'.repeat(32), twin, now: clock.now, quiesceMs: 0, joinWaitMs: 5000, makeSeed: () => new Uint8Array(0) });
+  server.feed([{ kind: 'bytes', data: enc('0123456789') }]);
+  const digest = sha(enc('fakepng'));
+  server.feed([{ kind: 'imagedef', def: { id: 5, gen: 1, sha256: digest, mime: 'image/png', w: 8, h: 8, cols: 1, rows: 1 } }]);
+  server.feed([{ kind: 'bytes', data: enc('abcdefghij') }]);
+  // The marker's offset is 10; resume from 15 with mseq 0: the viewer never
+  // applied the marker, so replay must still deliver it exactly once.
+  const t = new MockTransport();
+  openViewer(server, t, 'v1', 'desktop', { offset: 15, mseq: 0, epoch: 'e'.repeat(32) });
+  await waitUntil(() => kinds(t).includes('binary'), 'resume replay');
+  const frames = collect(t);
+  expect(frames.map((f) => (f.text?.t ?? 'binary'))).toEqual(['hello', 'imagedef', 'binary']);
+  const markers = frames.filter((f) => f.text?.t === 'imagedef');
+  expect(markers.length).toBe(1);
+  expect(markers[0].text).toMatchObject({ t: 'imagedef', seq: 1, id: 5 });
+  expect(frames[2].binary?.offset).toBe(15);
+  expect(Buffer.from(frames[2].binary!.payload).toString('utf-8')).toBe('fghij');
+  await server.close();
+  twin.dispose();
+});
+
+test('viewers_twin_feed_survives_chunk_larger_than_ring_cap', async () => {
+  const twin = makeTwin(120, 40);
+  const clock = fakeClock();
+  const server = new TapServer({ session: 'big000001', harness: 'omp', epoch: 'e'.repeat(32), twin, now: clock.now, quiesceMs: 0, joinWaitMs: 5000, ringCap: 64 * 1024 });
+  const chunk = new Uint8Array(200 * 1024).fill(0x61);
+  server.feed([{ kind: 'bytes', data: chunk }]);
+  expect(server.head).toBe(chunk.length);
+  const t = new MockTransport();
+  openViewer(server, t, 'v1');
+  // The seed arriving at all proves twinOffset drained to head; its content
+  // proves the twin parsed the whole chunk (a ring re-read of the aged-out
+  // start would have fed it nothing).
+  await waitUntil(() => kinds(t).includes('seed'), 'join after oversize chunk');
+  const seedPayload = Buffer.concat(collect(t).filter((f) => f.binary).map((f) => Buffer.from(f.binary!.payload)));
+  expect(seedPayload.includes(Buffer.from('a'))).toBe(true);
+  await server.close();
+  twin.dispose();
+});
+
+test('viewers_join_emits_only_latest_image_gen_per_id', async () => {
+  const clock = fakeClock();
+  const twin = makeTwin(120, 40);
+  const server = new TapServer({ session: 'gen000001', harness: 'omp', epoch: 'e'.repeat(32), twin, now: clock.now, quiesceMs: 0, joinWaitMs: 5000, makeSeed: () => new Uint8Array(0) });
+  const digest = sha(enc('fakepng'));
+  server.feed([
+    { kind: 'imagedef', def: { id: 3, gen: 1, sha256: digest, mime: 'image/png', w: 8, h: 8, cols: 1, rows: 1 } },
+    { kind: 'imagedef', def: { id: 3, gen: 2, sha256: digest, mime: 'image/png', w: 8, h: 8, cols: 1, rows: 1 } },
+    { kind: 'imagedef', def: { id: 4, gen: 1, sha256: digest, mime: 'image/png', w: 8, h: 8, cols: 1, rows: 1 } },
+  ]);
+  const t = new MockTransport();
+  openViewer(server, t, 'v1');
+  await waitUntil(() => kinds(t).includes('seed'), 'join with imagedefs');
+  const imgDefs = collect(t).filter((f) => f.text?.t === 'imagedef').map((f) => f.text as Extract<ServerFrame, { t: 'imagedef' }>);
+  expect(imgDefs.length).toBe(2);
+  expect(imgDefs.map((d) => `${d.id}:${d.gen}`)).toEqual(['3:2', '4:1']);
+  expect(imgDefs.every((d) => d.seq === 0)).toBe(true);
+  await server.close();
+  twin.dispose();
+});
+
+test('viewers_bad_frames_close_only_the_offending_connection', async () => {
+  const clock = fakeClock();
+  const twin = makeTwin(120, 40);
+  const server = new TapServer({ session: 'bad000001', harness: 'omp', epoch: 'e'.repeat(32), twin, now: clock.now, quiesceMs: 0, joinWaitMs: 5000, makeSeed: () => new Uint8Array(0) });
+  server.feed([{ kind: 'bytes', data: enc('0123456789') }]);
+  const good = new MockTransport();
+  openViewer(server, good, 'good');
+  await waitUntil(() => kinds(good).includes('hello'), 'good viewer join');
+  good.clear();
+  // Oversize envelope header (claimed length 1 MiB + 1) closes its connection.
+  const evil = new MockTransport();
+  const evilConn = server.attachTransport(evil);
+  const hdr = new Uint8Array(4);
+  new DataView(hdr.buffer).setUint32(0, 1_048_577);
+  server.feedTransport(evilConn, hdr);
+  expect(evil.closed).toBe(true);
+  // resumefrom with a string offset (never park a viewer at NaN).
+  const evil2 = new MockTransport();
+  const evil2Conn = server.attachTransport(evil2);
+  server.feedTransport(evil2Conn, encodeEnvelope(ENV_CONTROL, enc(`{"t":"viewer-open","viewer":"evil","profile":"desktop","resume":{"offset":"abc","mseq":0,"epoch":"${'e'.repeat(32)}"}}`)));
+  expect(evil2.closed).toBe(true);
+  // Viewer id longer than 255 bytes (never leave a zombie joining viewer).
+  const evil3 = new MockTransport();
+  const evil3Conn = server.attachTransport(evil3);
+  server.feedTransport(evil3Conn, encodeEnvelope(ENV_CONTROL, enc(encodeControlMessage({ t: 'viewer-open', viewer: 'x'.repeat(300), profile: 'desktop', resume: null }))));
+  expect(evil3.closed).toBe(true);
+  expect(server.viewerCount).toBe(1);
+  // The healthy connection still receives live bytes.
+  server.feed([{ kind: 'bytes', data: enc('Z') }]);
+  const got = collect(good).filter((f) => f.binary);
+  expect(got.length).toBe(1);
+  expect(Buffer.from(got[0].binary!.payload).toString('utf-8')).toBe('Z');
+  expect(good.closed).toBe(false);
+  await server.close();
+  twin.dispose();
+});
+
+test('viewers_second_local_listen_on_live_socket_refuses', async () => {
+  const runDir = mkdtempSync(join(tmpdir(), 'kbt7-'));
+  const twin = makeTwin(120, 40);
+  const first = new TapServer({ session: 'live00001', harness: 'omp', epoch: 'e'.repeat(32), twin, runDir, testMode: true });
+  await first.listen();
+  try {
+    const twin2 = makeTwin(120, 40);
+    const second = new TapServer({ session: 'live00001', harness: 'omp', epoch: 'f'.repeat(32), twin: twin2, runDir, testMode: true });
+    let refused = false;
+    try {
+      await second.listen();
+    } catch {
+      refused = true;
+    }
+    expect(refused).toBe(true);
+    await second.close();
+    twin2.dispose();
+    // The socket still belongs to the first server: a real viewer-open over
+    // it gets the first server's epoch in its hello.
+    const socket = connect(first.sockPath);
+    const dec = new EnvelopeDecoder();
+    const hellos: string[] = [];
+    socket.on('error', () => socket.destroy());
+    socket.on('connect', () => {
+      socket.write(encodeEnvelope(ENV_CONTROL, enc(encodeControlMessage({ t: 'viewer-open', viewer: 'probe', profile: 'desktop', resume: null }))));
+    });
+    socket.on('data', (chunk: Buffer) => {
+      for (const env of dec.push(new Uint8Array(chunk))) {
+        if (env.kind !== ENV_TEXT) continue;
+        const { frame } = parseS2C(env.body);
+        const text = Buffer.from(frame).toString('utf-8');
+        const decoded = decodeTextFrame(text);
+        if (decoded.kind === 'known' && (decoded.frame as ServerFrame).t === 'hello') {
+          hellos.push((decoded.frame as Extract<ServerFrame, { t: 'hello' }>).epoch);
+        }
+      }
+    });
+    await waitUntil(() => hellos.length > 0, 'hello from first server');
+    socket.destroy();
+    expect(hellos[0]).toBe('e'.repeat(32));
+  } finally {
+    await first.close();
+    twin.dispose();
+  }
+});
+
+test('viewers_clipboard_never_reaches_a_viewer_that_never_typed', async () => {
+  const clock = fakeClock(0);
+  const twin = makeTwin(120, 40);
+  const server = new TapServer({ session: 'clip00002', harness: 'omp', epoch: 'e'.repeat(32), twin, now: clock.now, quiesceMs: 0, joinWaitMs: 5000, makeSeed: () => new Uint8Array(0) });
+  const t = new MockTransport();
+  openViewer(server, t, 'v1');
+  await waitUntil(() => kinds(t).includes('hello'), 'clipboard viewer join');
+  t.clear();
+  server.feed([{ kind: 'bytes', data: enc(`${E}]52;c;aGk=\x07`) }]);
+  expect(collect(t).filter((f) => f.text?.t === 'clipboard').length).toBe(0);
   await server.close();
   twin.dispose();
 });
