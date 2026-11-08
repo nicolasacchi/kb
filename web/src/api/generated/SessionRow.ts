@@ -98,15 +98,6 @@ harness: string,
  */
 resume: string, 
 /**
- * A3 — how many children this row has, by the card predicate — the
- * ONE definition both this list and the card use: a root counts its
- * whole flood (`root_session_id = this id`, any depth); a non-root
- * counts its direct children (`parent_session_id = this id`).
- * Always present (0 for a leaf); filled per page by one batched
- * read, surfaced never scored.
- */
-child_count: number, 
-/**
  * V0029/P1 — the derived project key (`claude_project_slug(root)`).
  * `None` when the derivation ladder found neither a resolved commit's
  * repo root nor a cwd.
@@ -175,6 +166,15 @@ parent_session_id?: string,
  * root's session id; roots are NOT self-referenced.
  */
 root_session_id?: string, 
+/**
+ * A3 — how many children this row has, by the card predicate — the
+ * ONE definition both this list and the card use: a root counts its
+ * whole flood (`root_session_id = this id`, any depth); a non-root
+ * counts its direct children (`parent_session_id = this id`).
+ * Always present (0 for a leaf); filled per page by one batched
+ * read, surfaced never scored.
+ */
+child_count: number, 
 /**
  * V0047 — lineage, SURFACED never scored (invariant #11). The capture
  * cwd's repo slug; `None` when the cwd is gone.

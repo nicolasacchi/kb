@@ -24,7 +24,6 @@ struct Fixture {
     url: String,
     cache: PathBuf,
     paths: KbPaths,
-    daemon_name: String,
 }
 
 async fn boot() -> Fixture {
@@ -50,7 +49,6 @@ async fn boot() -> Fixture {
         url: format!("http://{addr}"),
         cache,
         paths,
-        daemon_name,
     }
 }
 
