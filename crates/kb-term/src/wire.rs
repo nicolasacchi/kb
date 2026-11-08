@@ -100,7 +100,9 @@ pub enum ServerFrame {
         serialize: String,
         /// Width table, e.g. `"unicode-graphemes@0.4.0"`.
         width: String,
-        /// Image protocol version, e.g. `"0.9.0"`.
+        /// Image protocol version, e.g. `"0.9.0"`. Additive (T7): a frame
+        /// without it decodes as "" (absent).
+        #[serde(default)]
         image: String,
         /// Grid columns.
         cols: u16,
@@ -119,7 +121,9 @@ pub enum ServerFrame {
     },
     /// A stored image definition.
     Imagedef {
-        /// Per-epoch marker sequence (0 for join-time defs).
+        /// Per-epoch marker sequence (0 for join-time defs). Additive (T7):
+        /// a frame without it decodes as 0 (absent).
+        #[serde(default)]
         seq: u64,
         /// Image id.
         id: u32,
@@ -137,7 +141,9 @@ pub enum ServerFrame {
         cols: u16,
         /// Image height in cells.
         rows: u16,
-        /// Stream position after which this definition applies.
+        /// Stream position after which this definition applies. Additive
+        /// (T7): a frame without it decodes as 0 (absent).
+        #[serde(default)]
         offset: u64,
     },
     /// Seed marker: buffered bytes from `offset` for `len` bytes.
@@ -149,9 +155,11 @@ pub enum ServerFrame {
     },
     /// Grid resize at a stream offset.
     Resize {
-        /// Per-epoch marker sequence.
+        /// Per-epoch marker sequence. Additive (T7): absent decodes as 0.
+        #[serde(default)]
         seq: u64,
-        /// Absolute offset of this event.
+        /// Absolute offset of this event. Additive (T7): absent decodes as 0.
+        #[serde(default)]
         offset: u64,
         /// Grid columns.
         cols: u16,
@@ -160,7 +168,8 @@ pub enum ServerFrame {
     },
     /// Grid size change with the giver and offset.
     Sizechanged {
-        /// Per-epoch marker sequence.
+        /// Per-epoch marker sequence. Additive (T7): absent decodes as 0.
+        #[serde(default)]
         seq: u64,
         /// Grid columns.
         cols: u16,
@@ -168,30 +177,38 @@ pub enum ServerFrame {
         rows: u16,
         /// Who took the grid.
         by: String,
-        /// Absolute offset of this event.
+        /// Absolute offset of this event. Additive (T7): absent decodes as 0.
+        #[serde(default)]
         offset: u64,
     },
     /// Graphics reset at a generation.
     Gfxreset {
-        /// Per-epoch marker sequence.
+        /// Per-epoch marker sequence. Additive (T7): absent decodes as 0.
+        #[serde(default)]
         seq: u64,
         /// Image generation.
         gen: u32,
-        /// Stream position after which this reset applies.
+        /// Stream position after which this reset applies. Additive (T7):
+        /// absent decodes as 0.
+        #[serde(default)]
         offset: u64,
     },
     /// Session exit.
     Exit {
-        /// Per-epoch marker sequence.
+        /// Per-epoch marker sequence. Additive (T7): absent decodes as 0.
+        #[serde(default)]
         seq: u64,
         /// Exit code, if any.
         code: Option<i32>,
-        /// Absolute offset of this event.
+        /// Absolute offset of this event. Additive (T7): absent decodes as 0.
+        #[serde(default)]
         offset: u64,
     },
     /// Clipboard write from OSC 52, delivered per-viewer (never replayed).
     Clipboard {
-        /// Stream position the write applies at.
+        /// Stream position the write applies at. Additive (T7): absent
+        /// decodes as 0.
+        #[serde(default)]
         offset: u64,
         /// base64 payload.
         data_b64: String,
@@ -212,11 +229,16 @@ pub enum ServerFrame {
 pub enum ClientFrame {
     /// Resume the stream from an absolute offset.
     Resumefrom {
-        /// Absolute offset to resume from.
+        /// Absolute offset to resume from. Additive (T7): absent decodes as 0.
+        #[serde(default)]
         offset: u64,
-        /// Highest marker seq the client applied (0 if none).
+        /// Highest marker seq the client applied (0 if none). Additive
+        /// (T7): absent decodes as 0.
+        #[serde(default)]
         mseq: u64,
-        /// Stream epoch the offset belongs to.
+        /// Stream epoch the offset belongs to. Additive (T7): absent
+        /// decodes as "".
+        #[serde(default)]
         epoch: String,
     },
     /// Request grid size.
@@ -399,11 +421,16 @@ fn check_server_offsets(frame: &ServerFrame) -> Result<(), WireError> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResumeInfo {
-    /// Absolute offset to resume from.
+    /// Absolute offset to resume from. Additive (T7): absent decodes as 0.
+    #[serde(default)]
     pub offset: u64,
-    /// Highest marker seq the viewer applied (0 if none).
+    /// Highest marker seq the viewer applied (0 if none). Additive (T7):
+    /// absent decodes as 0.
+    #[serde(default)]
     pub mseq: u64,
-    /// Stream epoch the offset belongs to.
+    /// Stream epoch the offset belongs to. Additive (T7): absent decodes
+    /// as "".
+    #[serde(default)]
     pub epoch: String,
 }
 
