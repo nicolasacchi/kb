@@ -1292,7 +1292,7 @@ mod tests {
         );
         assert_eq!(end.row.term.as_deref(), Some("abc123"));
         assert_eq!(end.row.term_bound_unix, Some(now));
-        assert_eq!(reg.session_for_term("abc123", now + 10), None);
+        assert!(reg.session_for_term("abc123", now + 10).is_none());
         let out = reg.record_beat_term(
             with_term(row("main-2", Holder::Agent, now + 11, now + 11), "abc123"),
             now + 11,
@@ -1309,7 +1309,7 @@ mod tests {
             true,
         );
         let far = now + 30 * 24 * 3600;
-        assert_eq!(reg2.session_for_term("abc123", far), None);
+        assert!(reg2.session_for_term("abc123", far).is_none());
         let late = reg2.record_beat_term(
             with_term(row("new", Holder::Agent, far, far), "abc123"),
             far,
@@ -1364,7 +1364,7 @@ mod tests {
         let out = reg.record_beat(row("plain", Holder::Agent, now, now), now);
         assert_eq!(out.row.term, None);
         assert_eq!(out.row.term_bound_unix, None);
-        assert_eq!(reg.session_for_term("abc123", now), None);
+        assert!(reg.session_for_term("abc123", now).is_none());
         assert_eq!(reg.term_for_session("plain", now), None);
     }
 }
