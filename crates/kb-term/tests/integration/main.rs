@@ -2024,7 +2024,7 @@ async fn term_int_login_profile_cannot_reintroduce_forbidden_env() {
         // Dirty server env: simulates a login profile having reintroduced
         // the forbidden vars into the pane environment.
         let mut cmd = std::process::Command::new(&tmux);
-        cmd.args(["-S", &sock]).args(&args[1..]);
+        cmd.args(["-S", &sock]).args(&args);
         cmd.env_clear();
         cmd.env("LANG", "C.UTF-8");
         cmd.env("KITTY_WINDOW_ID", "1");
