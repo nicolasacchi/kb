@@ -667,6 +667,12 @@ fn term_int_reseed_after_long_pause() {
     let json: serde_json::Value = serde_json::from_str(stdout.lines().last().unwrap_or("{}"))
         .unwrap_or_else(|_| panic!("driver JSON unparseable: {stdout}\nstderr: {stderr}"));
     assert_json_ok(&json, &stderr);
+    assert_eq!(
+        json["compare"]["ok"],
+        serde_json::Value::Bool(true),
+        "reseeded twin must equal the emitted-log reference (spec item 18): {}",
+        json["compare"]
+    );
 }
 
 #[test]
@@ -1050,5 +1056,18 @@ fn term_int_partial_sequence_quiescent_wait() {
         "term_int_partial_sequence_quiescent_wait OFF metric: {}",
         json2["metric"]
     );
+    // nextest suppresses passing-test output in the CI log (no OFF-metric
+    // line in run 42448196566's term-int job), so also persist the metric
+    // under $RUNNER_TEMP/witness when the runner env is present -- the
+    // term-int job uploads that directory as the witness-term-int artifact.
+    // Locally and in workspace-test this is a no-op.
+    if let Ok(rt) = std::env::var("RUNNER_TEMP") {
+        let dir = std::path::Path::new(&rt).join("witness");
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(
+            dir.join("quiescent-off-metric.json"),
+            serde_json::to_string_pretty(&json2["metric"]).unwrap_or_default(),
+        );
+    }
     let _ = stderr2;
 }
