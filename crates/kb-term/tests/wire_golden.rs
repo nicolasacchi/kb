@@ -231,7 +231,8 @@ fn control_messages_match_golden() {
 #[test]
 fn envelope_goldens_match() {
     for name in envelope_goldens() {
-        let hex = std::str::from_utf8(&read_golden(name))
+        let raw = read_golden(name);
+        let hex = std::str::from_utf8(&raw)
             .expect("envelope golden must be utf8 hex")
             .trim();
         let bytes: Vec<u8> = (0..hex.len())
