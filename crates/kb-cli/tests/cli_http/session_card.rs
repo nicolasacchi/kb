@@ -17,7 +17,6 @@ use kb_core::types::KbName;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::time::Duration;
 
 struct Fixture {
     _tmp: tempfile::TempDir,
