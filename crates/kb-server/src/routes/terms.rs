@@ -33,13 +33,16 @@ use crate::terminal::runner_client::{RunnerError, UnixRunner};
 use crate::terminal::wire::{Harness, RunnerReply, RunnerRequest};
 use axum::Extension;
 
-/// `ids` are 1..=16 chars drawn from `[a-z0-9]` only. (The runner's own
-/// `is_valid_term_id` is 8..=12 — this relay accepts the wider shape
-/// so the ticket handler can 404 on an id the runner never minted
-/// rather than 400 it.)
+use kb_core::sessions::live::LiveState;
+
+/// `ids` are 1..=32 chars drawn from `[a-z0-9]` only — the one grammar
+/// shared with the beat hook, the beat intake, the redaction floor and the
+/// binding directory. (The runner's own `is_valid_term_id` mints only
+/// 8..=12; this relay accepts the wider shape so the ticket handler can
+/// 404 on an id the runner never minted rather than 400 it.)
 fn is_valid_term_id(s: &str) -> bool {
     !s.is_empty()
-        && s.len() <= 16
+        && s.len() <= crate::terminal::binding::TERM_ID_MAX
         && s.chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
 }
@@ -87,6 +90,58 @@ fn not_found(detail: impl Into<String>) -> Response<Body> {
 }
 
 /// The `{"terms": ...}` list envelope (typed, no `json!`).
+/// One runner `list` item as a compile-checked struct: `id` and `pane_pid`
+/// are typed; every other runner field is preserved verbatim through the
+/// `extra` flatten so a newer runner's fields stay additive-readable. The
+/// additive enrichment fields (`session_id`, `state`, `blocked`) are real
+/// fields — never `obj.insert` on an opaque value — and always serialize
+/// (`None` as `null`, `blocked` as `bool`), never skipped.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct TermItem {
+    id: String,
+    pane_pid: Option<i64>,
+    #[serde(flatten)]
+    extra: serde_json::Map<String, serde_json::Value>,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    state: Option<LiveState>,
+    #[serde(default)]
+    blocked: bool,
+}
+
+/// Parse a runner `list` reply `data` into typed items, tolerating the bare
+/// array and the `{"terms": array}` envelope. `None` means the shape is
+/// neither (malformed): the caller must not replace the directory nor
+/// enrich. A valid array — including an empty one — is `Some`; a record
+/// without an `id` is dropped but its siblings are kept.
+fn parse_term_items(data: &serde_json::Value) -> Option<Vec<TermItem>> {
+    fn from_values(items: &[serde_json::Value]) -> Vec<TermItem> {
+        items
+            .iter()
+            .filter_map(|item| serde_json::from_value(item.clone()).ok())
+            .collect()
+    }
+    if let Some(items) = data.as_array() {
+        return Some(from_values(items));
+    }
+    if let Some(items) = data.get("terms").and_then(|v| v.as_array()) {
+        return Some(from_values(items));
+    }
+    None
+}
+
+/// Serialize typed items back into the envelope shape `data` had (bare
+/// array or `{"terms": array}`), so a forward-compatible runner keeps its
+/// own envelope while the items are the typed structs.
+fn serialize_items(items: &[TermItem], envelope: &serde_json::Value) -> serde_json::Value {
+    let array = serde_json::to_value(items).unwrap_or(serde_json::Value::Array(Vec::new()));
+    if envelope.is_array() {
+        array
+    } else {
+        serde_json::json!({"terms": array})
+    }
+}
 #[derive(Debug, Serialize)]
 struct TermsList {
     terms: serde_json::Value,
@@ -193,62 +248,36 @@ fn check_id(id: &str) -> bool {
 }
 
 /// T13 — the `(id, pane_pid)` pairs of a runner `list` reply `data`.
-fn items_of(data: &serde_json::Value) -> Vec<(String, i64)> {
-    fn from_items(items: &[serde_json::Value]) -> Vec<(String, i64)> {
+/// `None` = malformed shape: the old directory is kept untouched by the
+/// caller's success-only `replace`. A valid empty array is `Some(vec![])`
+/// and a replace with it is correct (the runner really has no terms).
+fn items_of(data: &serde_json::Value) -> Option<Vec<(String, i64)>> {
+    parse_term_items(data).map(|items| {
         items
-            .iter()
-            .filter_map(|item| {
-                let id = item.get("id").and_then(|v| v.as_str())?.to_string();
-                let pid = item.get("pane_pid").and_then(|v| v.as_i64())?;
-                Some((id, pid))
-            })
+            .into_iter()
+            .filter_map(|item| Some((item.id, item.pane_pid?)))
             .collect()
-    }
-    if let Some(items) = data.as_array() {
-        return from_items(items);
-    }
-    if let Some(items) = data.get("terms").and_then(|v| v.as_array()) {
-        return from_items(items);
-    }
-    Vec::new()
+    })
 }
 
-/// T13 — a successful `list` refreshes the term directory deterministically.
+/// T13 — a successful `list` refreshes the term directory deterministically,
+/// but only when the reply's shape parses; a malformed `Ok` must never wipe
+/// the directory (keep the old map).
 fn refresh_directory(state: &KbHandles, data: &serde_json::Value, now_unix: i64) {
-    state.terminals.term_dir.replace(items_of(data), now_unix);
+    if let Some(items) = items_of(data) {
+        state.terminals.term_dir.replace(items, now_unix);
+    }
 }
 
-/// T13 — additively enrich each list item with `session_id`, `state` and
-/// `blocked` from the live registry. `bound: None` means "state unknown".
-fn enrich_terms(state: &KbHandles, data: &mut serde_json::Value, now_unix: i64) {
-    fn enrich_items(state: &KbHandles, items: &mut [serde_json::Value], now_unix: i64) {
-        for item in items.iter_mut() {
-            let Some(id) = item.get("id").and_then(|v| v.as_str()).map(str::to_string) else {
-                continue;
-            };
-            let gate = state.live_registry.term_gate(&id, now_unix);
-            if let Some(obj) = item.as_object_mut() {
-                obj.insert(
-                    "session_id".to_string(),
-                    gate.bound
-                        .clone()
-                        .map(serde_json::Value::String)
-                        .unwrap_or(serde_json::Value::Null),
-                );
-                obj.insert(
-                    "state".to_string(),
-                    gate.state
-                        .map(|s| serde_json::to_value(s).unwrap_or(serde_json::Value::Null))
-                        .unwrap_or(serde_json::Value::Null),
-                );
-                obj.insert("blocked".to_string(), serde_json::Value::Bool(gate.blocked));
-            }
-        }
-    }
-    if let Some(items) = data.as_array_mut() {
-        enrich_items(state, items, now_unix);
-    } else if let Some(items) = data.get_mut("terms").and_then(|v| v.as_array_mut()) {
-        enrich_items(state, items, now_unix);
+/// T13 — additively enrich each typed list item in place with `session_id`,
+/// `state` and `blocked` from the live registry, on the typed fields (never
+/// an opaque `obj.insert`). `bound: None` means "state unknown".
+fn enrich_terms(state: &KbHandles, items: &mut [TermItem], now_unix: i64) {
+    for item in items.iter_mut() {
+        let gate = state.live_registry.term_gate(&item.id, now_unix);
+        item.session_id = gate.bound;
+        item.state = gate.state;
+        item.blocked = gate.blocked;
     }
 }
 
@@ -270,11 +299,19 @@ pub async fn list(
     match call(&state, &RunnerRequest::List {}).await {
         Err(e) => e,
         Ok(RunnerReply::Ok { data }) => {
-            let mut data = data;
             let now_unix = chrono::Utc::now().timestamp();
-            refresh_directory(&state, &data, now_unix);
-            enrich_terms(&state, &mut data, now_unix);
-            no_store(axum::Json(TermsList { terms: data }).into_response())
+            // Typed boundary: a parseable list refreshes the directory and
+            // is enriched on its typed fields; a malformed one relays
+            // verbatim — never a directory wipe, never an enrichment pass.
+            let terms = match parse_term_items(&data) {
+                Some(mut items) => {
+                    refresh_directory(&state, &data, now_unix);
+                    enrich_terms(&state, &mut items, now_unix);
+                    serialize_items(&items, &data)
+                }
+                None => data,
+            };
+            no_store(axum::Json(TermsList { terms }).into_response())
         }
         Ok(RunnerReply::Err { code, message }) => runner_err(&code, &message),
     }
@@ -692,5 +729,79 @@ pub async fn history(
     match call(&state, &RunnerRequest::History { id: id.clone() }).await {
         Err(e) => e,
         Ok(reply) => relay(reply),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn one_item() -> serde_json::Value {
+        serde_json::json!({
+            "id": "abc123",
+            "harness": "omp",
+            "cwd": "/work/proj",
+            "started_unix": 1234567890,
+            "pane_pid": 4242,
+        })
+    }
+
+    #[test]
+    fn malformed_list_shape_is_none_valid_empty_is_some() {
+        assert!(items_of(&serde_json::json!({"oops": 1})).is_none());
+        assert_eq!(
+            items_of(&serde_json::json!([])),
+            Some(Vec::new()),
+            "a valid empty array is a real (empty) directory, not malformed"
+        );
+        assert_eq!(
+            items_of(&serde_json::json!({"terms": []})),
+            Some(Vec::new())
+        );
+        assert_eq!(
+            items_of(&serde_json::json!([one_item()])),
+            Some(vec![("abc123".to_string(), 4242)])
+        );
+    }
+
+    #[test]
+    fn term_item_round_trips_runner_fields_and_adds_typed_enrichment() {
+        let items = parse_term_items(&serde_json::json!([one_item()])).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, "abc123");
+        assert_eq!(items[0].pane_pid, Some(4242));
+        // Enrichment defaults: unbound, unknown state, not blocked — always
+        // serialized (null/null/false), never skipped.
+        let out = serialize_items(&items, &serde_json::json!([]));
+        let item = &out[0];
+        assert_eq!(item["id"], "abc123");
+        assert_eq!(
+            item["harness"], "omp",
+            "runner fields survive the typed round trip"
+        );
+        assert_eq!(item["session_id"], serde_json::Value::Null);
+        assert_eq!(item["state"], serde_json::Value::Null);
+        assert_eq!(item["blocked"], false);
+        // Envelope shape is preserved.
+        let wrapped = serialize_items(&items, &serde_json::json!({"terms": []}));
+        assert!(wrapped.get("terms").is_some(), "{wrapped}");
+        assert_eq!(wrapped["terms"][0]["id"], "abc123");
+    }
+
+    #[test]
+    fn refresh_directory_keeps_old_map_on_a_malformed_ok() {
+        let dir = crate::terminal::binding::TermDirectory::new();
+        dir.replace([("abc123".to_string(), 4242)], 1_000_000);
+        // The caller gate (items_of) returns None for malformed shape, so
+        // replace is never called and the primed pane_pid still resolves.
+        assert!(items_of(&serde_json::json!({"oops": 1})).is_none());
+        assert_eq!(dir.pane_pid("abc123"), Some(4242));
+    }
+
+    #[test]
+    fn relay_accepts_the_unified_32_char_grammar() {
+        assert!(is_valid_term_id(&"a".repeat(32)));
+        assert!(!is_valid_term_id(&"a".repeat(33)));
+        assert!(!is_valid_term_id("Bad"));
     }
 }
