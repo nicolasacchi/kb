@@ -31,6 +31,10 @@ function goldenBytes(name: string): Uint8Array {
 const SERVER = ['sframe_hello', 'sframe_profile', 'sframe_imagedef', 'sframe_seed', 'sframe_resize', 'sframe_sizechanged', 'sframe_gfxreset', 'sframe_exit', 'sframe_clipboard', 'sframe_error'];
 const CLIENT = ['cframe_resumefrom', 'cframe_takesize', 'cframe_input', 'cframe_ping'];
 const ENVELOPE = ['env_ssc_text', 'env_ssc_binary', 'env_control'];
+// Control + request/response/session goldens land with merged units; the
+// shared dir is asserted in full so both language mirrors pin the same set.
+const CONTROL = ['ctrl_viewer_open', 'ctrl_viewer_close', 'ctrl_typed', 'ctrl_stats'];
+const REQUEST = ['req_list', 'req_launch', 'req_kill', 'req_resize', 'req_ping', 'req_paste', 'req_enter', 'req_keys', 'req_history', 'req_read', 'req_take_size', 'req_media'];
 
 test('wire_server_goldens_roundtrip_byte_identical', () => {
   for (const name of SERVER) {
@@ -77,7 +81,7 @@ test('wire_envelope_split_frame_needs_all_bytes', () => {
 
 test('wire_golden_directory_is_complete', () => {
   const actual = readdirSync(GOLDEN).sort();
-  const expected = [...SERVER.map((n) => `${n}.json`), ...CLIENT.map((n) => `${n}.json`), ...ENVELOPE.map((n) => `${n}.hex`)].sort();
+  const expected = [...SERVER.map((n) => `${n}.json`), ...CLIENT.map((n) => `${n}.json`), ...CONTROL.map((n) => `${n}.json`), ...REQUEST.map((n) => `${n}.json`), 'resp_ok.json', 'resp_err.json', 'session_info.json', ...ENVELOPE.map((n) => `${n}.hex`)].sort();
   expect(actual).toEqual(expected);
 });
 
