@@ -422,9 +422,18 @@ export type ChildrenLane = {
   next_after?: string,
 };
 
+// T13 — registry-derived lane (was A3's constant `{available, reason}`):
+// `admitted` is always present; `reason`/`term_id`/`harness`/`state`/
+// `blocked`/`via` serialize only when set.
 export type TerminalLane = {
   available: boolean,
-  reason: string,
+  reason?: string,
+  term_id?: string,
+  harness?: string,
+  state?: LiveState,
+  blocked?: boolean,
+  admitted: boolean,
+  via?: string,
 };
 
 export type ChildrenResponse = {

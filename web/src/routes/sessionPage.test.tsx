@@ -154,7 +154,11 @@ function fullCard(overrides: Record<string, unknown> = {}) {
       ],
       next_after: "1700000010:child-1",
     },
-    terminal: { available: false, reason: "no terminal runner" },
+    terminal: {
+      available: false,
+      reason: "terminal disabled",
+      admitted: false,
+    },
     ...overrides,
   };
 }
@@ -374,7 +378,7 @@ describe("SessionPage", () => {
   it("renders no terminal section while the lane is available but unadmitted", async () => {
     vi.stubGlobal(
       "fetch",
-      mockFetch({ card: fullCard({ terminal: { available: true } }) }),
+      mockFetch({ card: fullCard({ terminal: { available: true, admitted: false } }) }),
     );
     renderPage();
     await waitFor(() =>

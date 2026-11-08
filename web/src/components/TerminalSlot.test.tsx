@@ -11,9 +11,9 @@ afterEach(cleanup);
 describe("TerminalSlot", () => {
   it("renders nothing for unavailable, unadmitted, and available-and-admitted lanes", () => {
     for (const lane of [
-      { available: false, reason: "no terminal runner" },
-      { available: true, reason: "", admitted: false },
-      { available: true, reason: "", admitted: true },
+      { available: false, reason: "terminal disabled", admitted: false },
+      { available: true, term_id: "abc123", admitted: false },
+      { available: true, term_id: "abc123", admitted: true },
     ] as const) {
       const { container, unmount } = render(
         <TerminalSlot sid="sid-1" harness="claude" lane={lane} />,
