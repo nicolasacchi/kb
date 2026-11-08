@@ -1941,3 +1941,146 @@ async fn term_int_anchor_death_closes_viewers_promptly_without_an_rpc() {
         "anchor death must close viewers promptly without any RPC (close reason: {reason:?})"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn term_int_login_profile_cannot_reintroduce_forbidden_env() {
+    let Some(tmux) = require_tmux() else { return };
+    use kb_term::profiles::{self, PlanRequest};
+    use kb_term::runner::launch::{gate_argv, GATE_SCRIPT};
+    let tag = format!("{}-{}", std::process::id(), {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static N: AtomicUsize = AtomicUsize::new(0);
+        N.fetch_add(1, Ordering::SeqCst)
+    });
+    let sock = format!("/tmp/kbt-t10-{tag}.sock");
+    let dir = tempfile::tempdir().unwrap();
+    // A temp HOME whose login profile reintroduces forbidden vars.
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(
+        home.join(".bash_profile"),
+        "export KITTY_WINDOW_ID=1 TERM_PROGRAM=x GHOSTTY_FOO=1\n",
+    )
+    .unwrap();
+    // The plan env (from profiles::plan itself): KB_TERM_ID + allowlist
+    // only.
+    let base: Vec<(String, String)> = vec![
+        ("HOME".into(), home.to_string_lossy().into_owned()),
+        ("SHELL".into(), "/bin/bash".into()),
+        ("PATH".into(), "/usr/bin:/bin".into()),
+    ];
+    let plan = profiles::plan(&PlanRequest {
+        harness: "omp",
+        term_id: "tid01x",
+        resume_sid: None,
+        cwd: "/tmp",
+        job_ulid: None,
+        run_dir: dir.path(),
+        base_env: &base,
+        extra_passthrough: &[],
+    })
+    .unwrap();
+    let env: std::collections::BTreeMap<String, String> = plan.env.iter().cloned().collect();
+    let argv = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "/usr/bin/env; exec sleep 300".to_string(),
+    ];
+    let run_tmux = |args: &[&str]| -> (bool, String, String) {
+        let out = std::process::Command::new(&tmux)
+            .args(["-S", &sock])
+            .args(args)
+            .env_clear()
+            .env("LANG", "C.UTF-8")
+            .output()
+            .expect("spawn tmux");
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    for with_defence in [true, false] {
+        let script = if with_defence {
+            let prelude = profiles::env::shell_unset_prelude(&plan.unset_after_login).unwrap();
+            format!(
+                "{prelude}{} {GATE_SCRIPT}",
+                profiles::env::shell_unset_prefixes_snippet()
+            )
+        } else {
+            GATE_SCRIPT.to_string()
+        };
+        let args = gate_argv(
+            &tmux,
+            std::path::Path::new(&sock),
+            "tid01x",
+            std::path::Path::new("/tmp"),
+            120,
+            40,
+            &env,
+            &argv,
+            &script,
+        );
+        // Dirty server env: simulates a login profile having reintroduced
+        // the forbidden vars into the pane environment.
+        let mut cmd = std::process::Command::new(&tmux);
+        cmd.args(["-S", &sock]).args(&args);
+        cmd.env_clear();
+        cmd.env("LANG", "C.UTF-8");
+        cmd.env("KITTY_WINDOW_ID", "1");
+        cmd.env("TERM_PROGRAM", "x");
+        cmd.env("GHOSTTY_FOO", "1");
+        cmd.env("HOME", &home);
+        let out = cmd.output().expect("spawn tmux new-session");
+        assert!(
+            out.status.success(),
+            "new-session failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        // Release the gate, then capture the pane.
+        let (ok, _, _) = run_tmux(&["wait-for", "-S", "kbterm-go"]);
+        assert!(ok, "wait-for -S failed");
+        let mut captured = String::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
+            let (ok, stdout, _) = run_tmux(&["capture-pane", "-p", "-t", "kb"]);
+            if ok {
+                captured = stdout;
+                if captured.contains("KB_TERM_ID") || captured.contains("GHOSTTY_FOO") {
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let _ = run_tmux(&["kill-server"]);
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if with_defence {
+            for name in ["KITTY_WINDOW_ID=", "TERM_PROGRAM=", "GHOSTTY_FOO="] {
+                assert!(
+                    !captured.contains(name),
+                    "defence leaked {name}; pane env:\n{captured}"
+                );
+            }
+            assert!(
+                captured.contains("KB_TERM_ID=tid01x"),
+                "KB_TERM_ID present; pane env:\n{captured}"
+            );
+            // tmux-supplied vars ARE present.
+            assert!(
+                captured.contains("TMUX="),
+                "TMUX present; pane env:\n{captured}"
+            );
+            assert!(
+                captured.contains("TERM="),
+                "TERM present; pane env:\n{captured}"
+            );
+        } else {
+            for name in ["KITTY_WINDOW_ID=", "TERM_PROGRAM=", "GHOSTTY_FOO="] {
+                assert!(
+                    captured.contains(name),
+                    "control run must show {name}; pane env:\n{captured}"
+                );
+            }
+        }
+    }
+}

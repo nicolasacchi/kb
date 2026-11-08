@@ -31,7 +31,7 @@ impl Default for SupervisorKind {
 /// (T10); there is no flag for it.
 #[derive(Debug, Clone)]
 pub struct RunnerConfig {
-    /// Base dir: `<run-dir>/s/*.sock` holders, `<run-dir>/runner.sock`.
+    /// Base dir: `<run-dir>/s/*.sock` holders, `<run-dir>/runner/runner.sock`.
     pub run_dir: PathBuf,
     /// The PINNED tmux binary; never resolved via `PATH`.
     pub tmux_bin: String,
