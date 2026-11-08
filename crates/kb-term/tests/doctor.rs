@@ -74,7 +74,7 @@ fn doctor_xterm_pins() {
 fn doctor_harness() {
     let check = doctor::decide_harness("omp", Some("18.17.0"), Some("18.17.0"), false);
     assert_eq!(check.status, CheckStatus::Pass);
-    assert!(check.detail.contains("experimental") == false);
+    assert!(!check.detail.contains("experimental"));
     let check = doctor::decide_harness("omp", Some("18.16.0"), Some("18.17.0"), false);
     assert_eq!(check.status, CheckStatus::Warn);
     // kimi and grok never warn on version (unreconciled).
@@ -216,11 +216,11 @@ fn doctor_exit_codes() {
     let pass = doctor::Check::pass("c", "p");
     let skip = doctor::Check::skip("d", "s");
     // WARN only: 0 by default, 1 under --strict.
-    assert_eq!(doctor::exit_code(&[warn.clone()], false), 0);
-    assert_eq!(doctor::exit_code(&[warn.clone()], true), 1);
+    assert_eq!(doctor::exit_code(std::slice::from_ref(&warn), false), 0);
+    assert_eq!(doctor::exit_code(std::slice::from_ref(&warn), true), 1);
     // FAIL: 1 always.
-    assert_eq!(doctor::exit_code(&[fail.clone()], false), 1);
-    assert_eq!(doctor::exit_code(&[fail.clone()], true), 1);
+    assert_eq!(doctor::exit_code(std::slice::from_ref(&fail), false), 1);
+    assert_eq!(doctor::exit_code(std::slice::from_ref(&fail), true), 1);
     // SKIP never fails, even strict.
     assert_eq!(doctor::exit_code(&[skip, pass], false), 0);
     assert_eq!(

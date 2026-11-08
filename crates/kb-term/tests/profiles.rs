@@ -284,30 +284,34 @@ fn profiles_rejects_bad_inputs() {
     let dir = tempfile::tempdir().unwrap();
     let env = base_env();
     let mut req = request("zzz", dir.path(), &env);
-    assert_eq!(profiles::plan(&req), Err(PlanError::UnknownHarness));
+    assert!(matches!(
+        profiles::plan(&req),
+        Err(PlanError::UnknownHarness)
+    ));
     for sid in ["-x", "a b", &"a".repeat(129)] {
         let mut req = request("omp", dir.path(), &env);
         req.resume_sid = Some(sid);
-        assert_eq!(
-            profiles::plan(&req),
-            Err(PlanError::UnsafeToken("resume_sid")),
+        assert!(
+            matches!(
+                profiles::plan(&req),
+                Err(PlanError::UnsafeToken("resume_sid"))
+            ),
             "sid {sid:?}"
         );
     }
     // Relative cwd and cwd with a newline.
     let mut req = request("omp", dir.path(), &env);
     req.cwd = "relative";
-    assert_eq!(profiles::plan(&req), Err(PlanError::BadCwd));
+    assert!(matches!(profiles::plan(&req), Err(PlanError::BadCwd)));
     let mut req = request("omp", dir.path(), &env);
     req.cwd = "/w/x\ny";
-    assert_eq!(profiles::plan(&req), Err(PlanError::BadCwd));
+    assert!(matches!(profiles::plan(&req), Err(PlanError::BadCwd)));
     // Bad term ids.
     for tid in ["AB", "a-b", "", &"a".repeat(17)] {
         let mut req = request("omp", dir.path(), &env);
         req.term_id = tid;
-        assert_eq!(
-            profiles::plan(&req),
-            Err(PlanError::BadTermId),
+        assert!(
+            matches!(profiles::plan(&req), Err(PlanError::BadTermId)),
             "term {tid:?}"
         );
     }
@@ -354,7 +358,7 @@ fn profiles_exit_steps_omp_verified_sequence() {
         for step in plan.exit_steps {
             match step {
                 ExitStep::Keys(keys) => {
-                    for k in keys {
+                    for k in *keys {
                         assert!(
                             (1..=16).contains(&k.len())
                                 && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
@@ -384,10 +388,10 @@ fn profiles_job_ulid_optional() {
     // An unsafe job ulid is rejected.
     let mut req = request("omp", dir.path(), &env);
     req.job_ulid = Some("a b");
-    assert_eq!(
+    assert!(matches!(
         profiles::plan(&req),
         Err(PlanError::UnsafeToken("job_ulid"))
-    );
+    ));
 }
 
 #[test]
