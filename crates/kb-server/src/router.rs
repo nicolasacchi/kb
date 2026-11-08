@@ -485,6 +485,16 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
         .route("/terms/{id}/take-size", post(routes::terms::take_size))
         .route("/terms/{id}/read", get(routes::terms::read))
         .route("/terms/{id}/history", get(routes::terms::history))
+        .route("/terms/{id}/grid", get(routes::terms::grid))
+        .route(
+            "/terms/{id}/release-size",
+            post(routes::terms::release_size),
+        )
+        .route("/terms/{id}/resize", post(routes::terms::resize))
+        .route(
+            "/terms/{id}/viewer-close",
+            post(routes::terms::viewer_close),
+        )
         .route("/sessions/beat", post(routes::sessions::beat))
         .route("/sessions/live-status", get(routes::sessions::live_status))
         // OL PRES1 — which files live agent sessions are touching. Same
