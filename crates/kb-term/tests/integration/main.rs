@@ -1247,8 +1247,13 @@ async fn term_int_keys_reach_the_pane_unsplit() {
     // and tmux may split or coalesce key writes across reads, so assert on
     // the concatenation of all lines instead of per-line membership
     // (substring matches would also fire inside longer hex, e.g. "02" in
-    // "025" — the exact 19-char suffix pins order and contiguity).
-    let want = "02251b5b31333b3275";
+    // "025" — the exact suffix pins order and contiguity).
+    // Ctrl-B arrives as `CSI 98;5u` (kitty re-encoding: the probe asked
+    // for kitty keyboard with `CSI > 4;2 m`, and the holder uses
+    // `extended-keys always` + `extended-keys-format csi-u`, so tmux
+    // re-encodes per the pane's requested mode per the brief's spec 8).
+    // `%` stays raw. The kitty `CSI 13;2u` key passes through verbatim.
+    let want = "1b5b39383b3575251b5b31333b3275";
     let ok = poll_log(&log, Duration::from_secs(10), |text| {
         let joined: String = text.lines().collect();
         joined.ends_with(want)
@@ -1642,9 +1647,12 @@ async fn term_int_take_size_moves_the_window_and_a_foreign_owner_is_refused() {
         },
     )
     .await;
-    // The owner survives a runner restart (read from @kb_owner_grid).
+    // The owner survives a runner restart (read from `@kb_owner_grid`):
+    // a fresh in-process runner with no memory of this session reads the
+    // same owner back out of the holder. Checked BEFORE dropping `tr`,
+    // because the TestRunner drop guard kills the holder server (which
+    // would erase the very state under test).
     let run_dir = tr.runner.cfg.run_dir.clone();
-    drop(tr);
     let runner2 = kb_term::runner::Runner::direct(kb_term::runner::RunnerConfig::test_config(
         run_dir.clone(),
         tmux_bin.clone(),

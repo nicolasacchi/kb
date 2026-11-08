@@ -246,14 +246,21 @@ impl<S: Supervisor> Runner<S> {
     /// by the stale task.
     pub async fn store_anchor(&self, id: &str, anchor: Anchor) {
         let pump = anchor.pump().clone();
-        let anchors = std::sync::Arc::clone(&self.anchors);
-        let viewers = std::sync::Arc::clone(&self.viewers);
+        // Weak, not Arc: the watcher must not keep the maps (and hence the
+        // anchor masters, i.e. the SIGHUP path) alive after the runner is
+        // dropped. With Arc this was a reference cycle: map holds the
+        // anchor -> master open -> pump open -> watcher alive.
+        let anchors = std::sync::Arc::downgrade(&self.anchors);
+        let viewers = std::sync::Arc::downgrade(&self.viewers);
         let id = id.to_string();
         self.anchors.lock().await.insert(id.clone(), anchor);
         tokio::spawn(async move {
             while !pump.is_closed() {
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
+            let (Some(anchors), Some(viewers)) = (anchors.upgrade(), viewers.upgrade()) else {
+                return;
+            };
             let current_is_this = {
                 let guard = anchors.lock().await;
                 match guard.get(&id) {

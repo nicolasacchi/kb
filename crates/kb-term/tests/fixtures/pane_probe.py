@@ -55,13 +55,23 @@ def main():
     tty.setraw(0)
     LOG = open(path, "w")
     if mode == "query":
-        send(ESC + b"[c")
-        send(ESC + b"[>q")
-        send(ESC + b"]11;?" + b"\x07")
-        send(ESC + b"[14t")
-        send(ESC + b"[16t")
-        send(ESC + b"[18t")
-        read_loop(3.0)
+        # Repeat the query burst: tmux adopts the anchor's colour memory
+        # and client pixel size asynchronously after attach/resize, so an
+        # early burst can still be answered with tmux's synthetic
+        # fallbacks. Later bursts (after the grid is taken) carry the
+        # responder's answers. Read continuously between bursts so every
+        # reply lands in the log.
+        query = (
+            ESC + b"[c"
+            + ESC + b"[>q"
+            + ESC + b"]11;?" + b"\x07"
+            + ESC + b"[14t"
+            + ESC + b"[16t"
+            + ESC + b"[18t"
+        )
+        for _ in range(12):
+            send(query)
+            read_loop(0.5)
         send(ESC + b"[>4;2m")
         read_loop(3.0)
     elif mode == "raw":
