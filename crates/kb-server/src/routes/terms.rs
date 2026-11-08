@@ -192,6 +192,66 @@ fn check_id(id: &str) -> bool {
     is_valid_term_id(id)
 }
 
+/// T13 — the `(id, pane_pid)` pairs of a runner `list` reply `data`.
+fn items_of(data: &serde_json::Value) -> Vec<(String, i64)> {
+    fn from_items(items: &[serde_json::Value]) -> Vec<(String, i64)> {
+        items
+            .iter()
+            .filter_map(|item| {
+                let id = item.get("id").and_then(|v| v.as_str())?.to_string();
+                let pid = item.get("pane_pid").and_then(|v| v.as_i64())?;
+                Some((id, pid))
+            })
+            .collect()
+    }
+    if let Some(items) = data.as_array() {
+        return from_items(items);
+    }
+    if let Some(items) = data.get("terms").and_then(|v| v.as_array()) {
+        return from_items(items);
+    }
+    Vec::new()
+}
+
+/// T13 — a successful `list` refreshes the term directory deterministically.
+fn refresh_directory(state: &KbHandles, data: &serde_json::Value, now_unix: i64) {
+    state.terminals.term_dir.replace(items_of(data), now_unix);
+}
+
+/// T13 — additively enrich each list item with `session_id`, `state` and
+/// `blocked` from the live registry. `bound: None` means "state unknown".
+fn enrich_terms(state: &KbHandles, data: &mut serde_json::Value, now_unix: i64) {
+    fn enrich_items(state: &KbHandles, items: &mut [serde_json::Value], now_unix: i64) {
+        for item in items.iter_mut() {
+            let Some(id) = item.get("id").and_then(|v| v.as_str()).map(str::to_string) else {
+                continue;
+            };
+            let gate = state.live_registry.term_gate(&id, now_unix);
+            if let Some(obj) = item.as_object_mut() {
+                obj.insert(
+                    "session_id".to_string(),
+                    gate.bound
+                        .clone()
+                        .map(serde_json::Value::String)
+                        .unwrap_or(serde_json::Value::Null),
+                );
+                obj.insert(
+                    "state".to_string(),
+                    gate.state
+                        .map(|s| serde_json::to_value(s).unwrap_or(serde_json::Value::Null))
+                        .unwrap_or(serde_json::Value::Null),
+                );
+                obj.insert("blocked".to_string(), serde_json::Value::Bool(gate.blocked));
+            }
+        }
+    }
+    if let Some(items) = data.as_array_mut() {
+        enrich_items(state, items, now_unix);
+    } else if let Some(items) = data.get_mut("terms").and_then(|v| v.as_array_mut()) {
+        enrich_items(state, items, now_unix);
+    }
+}
+
 /// A `resume_sid`/`cwd` value: non-empty, ≤ 512 bytes, no NUL/control.
 fn free_text(value: &str) -> bool {
     !value.is_empty() && value.len() <= 512 && !value.chars().any(|c| c.is_control() || c == '\0')
@@ -210,6 +270,10 @@ pub async fn list(
     match call(&state, &RunnerRequest::List {}).await {
         Err(e) => e,
         Ok(RunnerReply::Ok { data }) => {
+            let mut data = data;
+            let now_unix = chrono::Utc::now().timestamp();
+            refresh_directory(&state, &data, now_unix);
+            enrich_terms(&state, &mut data, now_unix);
             no_store(axum::Json(TermsList { terms: data }).into_response())
         }
         Ok(RunnerReply::Err { code, message }) => runner_err(&code, &message),
@@ -431,14 +495,37 @@ pub async fn enter(
     if serde_json::from_slice::<EnterBody>(&body).is_err() {
         return bad_request("malformed enter body");
     }
-    // T13 replaces this constant `false` with the live-registry lookup.
+    // T13 — a bound-but-blocked terminal refuses with 409 BEFORE the
+    // runner relay; an unbound terminal is NOT blocked (state unknown)
+    // and gets an `x-kb-term-state: unbound` header on the relayed reply.
+    let term_gate = state
+        .live_registry
+        .term_gate(&id, chrono::Utc::now().timestamp());
+    if term_gate.blocked {
+        return no_store(Problem::response(
+            crate::terminal::gate::ERR_TERM_BLOCKED,
+            StatusCode::CONFLICT,
+            "Conflict",
+            "the bound session is blocked".to_string(),
+        ));
+    }
+    let unbound = term_gate.bound.is_none();
     let req = RunnerRequest::Enter {
         id: id.clone(),
         blocked: false,
     };
     match call(&state, &req).await {
         Err(e) => e,
-        Ok(reply) => relay(reply),
+        Ok(reply) => {
+            let mut resp = relay(reply);
+            if unbound {
+                resp.headers_mut().insert(
+                    "x-kb-term-state",
+                    axum::http::HeaderValue::from_static("unbound"),
+                );
+            }
+            resp
+        }
     }
 }
 

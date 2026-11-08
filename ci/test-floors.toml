@@ -38,8 +38,8 @@ executed = 3850
 # kb-term (T2): bun placeholder tests and the tmux 3.7c smoke cases. Later
 # units raise these in the PR that adds tests; never lower without a reason.
 [term-tap]
-executed = 30
+executed = 63
 
 [term-int]
-executed = 5
+executed = 14
 

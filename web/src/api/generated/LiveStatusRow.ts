@@ -49,4 +49,11 @@ last_tool_at?: number,
  * AH7: background work the harness reported still in flight at the turn
  * end, counts only. Present on a `waiting` hook row only.
  */
-background?: BackgroundCounts, };
+background?: BackgroundCounts, 
+/**
+ * T13: the kb-term terminal bound to this session (an opaque id, `^[a-z0-9]{1,32}$`).
+ * Present only on the BOUND row (`LiveRegistry::session_for_term`) of a hook row, and only
+ * while `[terminal] enabled`. It names no path and no host; it grants nothing — attaching
+ * still needs the SPA-only gate (Origin + intent header + single-use ticket).
+ */
+term?: string, };

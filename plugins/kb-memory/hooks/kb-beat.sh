@@ -412,6 +412,13 @@ fi
 host="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo unknown)"
 pid="${PPID:-0}"
 case "$pid" in '' | *[!0-9]*) pid=0 ;; esac
+
+# T13 — the kb-term launcher exports KB_TERM_ID into the pane. A beat echoes it as
+# an optional top-level `term` so the daemon can bind terminal <-> session (it
+# verifies pid against the runner's pane_pid; the hook asserts nothing).
+term="${KB_TERM_ID:-}"
+case "$term" in '' | *[!a-z0-9]*) term="" ;; esac
+[ "${#term}" -le 32 ] || term=""
 at="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" || at=""
 [ -n "$at" ] || exit 0
 lease_secs="${KB_BEAT_LEASE_SECS:-900}"
@@ -424,6 +431,7 @@ body="$(jq -n \
   --arg at "$at" \
   --arg host "$host" \
   --argjson pid "$pid" \
+  --arg term "$term" \
   --arg cwd "$cwd" \
   --arg model "$model" \
   --argjson lease_secs "$lease_secs" \
@@ -439,6 +447,7 @@ body="$(jq -n \
   '{v: 1, session_id: $session_id, harness: $harness, event: $event, at: $at}
    + (if $host != "" then {host: $host} else {} end)
    + (if $pid > 0 then {pid: $pid} else {} end)
+   + (if $term != "" then {term: $term} else {} end)
    + (if $cwd != "" then {cwd: $cwd} else {} end)
    + (if $model != "" then {model: $model} else {} end)
    + {lease_secs: $lease_secs}

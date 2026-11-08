@@ -1516,6 +1516,10 @@ jobs:
           n="$(sed -n 's/^Ran \([0-9]*\) tests\? .*/\1/p' /tmp/term-tools.log | tail -1)"
           test "${n:-0}" -ge 15
 
+      - name: Install tap dependencies (bun, exact pins)
+        run: |
+          cd crates/kb-term/tap
+          bun install
       - name: 'Tap pipeline tests (ci.sh: bun test + mutation + JUnit)'
         env:
           KB_REQUIRE_BUN_PIN: "1"
@@ -1578,9 +1582,49 @@ jobs:
           mkdir -p "$RUNNER_TEMP/witness"
           scripts/ci/tmux-smoke.sh "$RUNNER_TEMP/witness/tmux-smoke-junit.xml"
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.4"
+
+      - name: Bun matches the pin
+        run: test "$(bun --version)" = "$(cat crates/kb-term/tap/.bun-version)"
+
+      - name: Install tap dependencies (bun, exact pins)
+        run: |
+          cd crates/kb-term/tap
+          bun install
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2
+        with:
+          tool: cargo-nextest
+
+      - name: Install Rust toolchain
+        uses: ./.github/actions/setup-rust
+
+      - name: term_int_reseed (nextest, real tmux 3.7c + bun driver)
+        run: KB_TMUX_BIN="$KB_TMUX_BIN" KB_REQUIRE_TMUX=1 cargo nextest run --locked --no-fail-fast --profile ci -p kb-term --test term_int_reseed
+        timeout-minutes: 25
+
+      - name: Merge term-int JUnit (smoke + reseed)
+        if: ${{ !cancelled() }}
+        run: |
+          python3 -I - "$RUNNER_TEMP/witness/tmux-smoke-junit.xml" target/nextest/ci/junit.xml "$RUNNER_TEMP/witness/term-int-junit.xml" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+          smoke, nextest, out = sys.argv[1], sys.argv[2], sys.argv[3]
+          root = ET.Element("testsuites")
+          for f in (smoke, nextest):
+              r = ET.parse(f).getroot()
+              suites = [r] if r.tag == "testsuite" else list(r)
+              for s in suites:
+                  root.append(s)
+          ET.ElementTree(root).write(out, encoding="UTF-8", xml_declaration=True)
+          PY
       - name: Witness (tmux JUnit report -> floor + zero failures)
         if: ${{ !cancelled() }}
-        run: python3 scripts/ci/witness.py junit "$RUNNER_TEMP/witness/tmux-smoke-junit.xml" --lane term-int
+        run: python3 scripts/ci/witness.py junit "$RUNNER_TEMP/witness/term-int-junit.xml" --lane term-int
 
       - name: kb-term crate present
         id: crate
