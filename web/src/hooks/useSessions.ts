@@ -60,6 +60,7 @@ import {
   type SessionsListResponse,
   type TouchesResponse,
   type WhyResponse,
+  type WorkResponse,
 } from "../api/sessions";
 import { sse } from "../api/sse";
 import { presenceLiveSet, type PresenceLiveSet } from "../lib/sessionPresence";
