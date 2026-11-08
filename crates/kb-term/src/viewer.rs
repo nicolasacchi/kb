@@ -103,6 +103,7 @@ impl Drop for ClientHandle {
 /// `CSI 14t/16t/18t` and OSC 10/11 source (verified on CI: with the
 /// flag on every client, pane 14t is always `cells x default 32x16` and
 /// OSC 11 is always black, regardless of the client's winsize pixels).
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_tmux_client(
     tmux_bin: &str,
     sock: &std::path::Path,

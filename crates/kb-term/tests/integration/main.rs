@@ -1106,6 +1106,24 @@ async fn term_int_identity_is_the_kb_profile() {
         },
     )
     .await;
+    // tmux answers pane-issued queries (OSC 10/11, CSI 14t/16t/18t) via
+    // the client it considers primary: the attached client with the
+    // greatest client_activity (the brief's gap analysis). The control
+    // tap never bumps activity and the anchor's startup replies do not,
+    // so until a hidden viewer types, tmux has no colour/pixel source
+    // at all (black + synthetic 32x16 cells). One keystroke busts the
+    // viewer's activity so the responder's colours and 9x18 pixels are
+    // adopted from the kb profile.
+    let b64 = base64::engine::general_purpose::STANDARD.encode([b'x']);
+    dispatch_ok(
+        &tr,
+        Request::Keys {
+            id: id.clone(),
+            viewer: "web".to_string(),
+            input: kb_term::wire::KeyInput::Bytes { bytes_b64: b64 },
+        },
+    )
+    .await;
     // The brief's identity setup: anchor + viewer at grid 100x30,
     // cell 9x18. Launch boots at 120x40, so take the grid before the
     // identity assertions run.
