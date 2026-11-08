@@ -6,6 +6,11 @@
 //
 //  * right after the attach acknowledgement, `refresh-client -f pause-after=20`
 //    (PAUSE_AFTER_SECS) bounds the backlog a stalled tap can make tmux hold;
+//  * right after pause-after, when `paneId` is configured,
+//    `refresh-client -r '<pane>:<OSC 10/11 colour report>'` twice (fixed kb
+//    theme) so a pane's OSC 10/11 query is answered with the theme colours
+//    even when the tap is the first attached client (tmux answers from the
+//    first client, whose colours are zeroed; orchestrator addition);
 //  * command correlation: each command line written gets one
 //    `%begin <time> <num> <flags>` ... `%end|%error <time> <num> <flags>`
 //    block; lines in the block are raw replies (split on \n only, by the
@@ -24,6 +29,35 @@ import { ControlDecoder, type CtlEvent } from './decode.ts';
 
 /** Stall policy: tmux drops output paused longer than this. */
 export const PAUSE_AFTER_SECS = 20;
+
+/** Fixed kb theme colours (the anchor's first client is a control client
+ * only after a runner restart; tmux answers a pane's OSC 10/11 from the
+ * first attached client, whose colours are zeroed, so the tap reports the
+ * theme itself -- orchestrator addition, T7). Values mirror the T9
+ * responder defaults (`#d4d4d4` foreground / `#1e1e1e` background). */
+export const THEME_FG = '#d4d4d4';
+export const THEME_BG = '#1e1e1e';
+
+/** `#RRGGBB` -> X11 `rgb:RRRR/GGGG/BBBB` (each byte doubled, 16 bits per
+ * channel) -- the string tmux's `colour_parseX11` accepts. */
+function hex16(hex: string): string {
+  const h = hex.replace(/^#/, '');
+  const pair = (s: string): string => `${s}${s}`;
+  return `${pair(h.slice(0, 2))}/${pair(h.slice(2, 4))}/${pair(h.slice(4, 6))}`;
+}
+
+/** The exact `refresh-client -r` commands that report the fixed theme
+ * colours for `pane` (OSC 10 foreground + OSC 11 background, BEL-terminated
+ * replies as `tty_keys_colours` parses them). Pinned byte-for-byte by tests;
+ * callers must pass a `PANE_ID_RE`-validated pane id. */
+export function colourReportCommands(pane: string, fg: string = THEME_FG, bg: string = THEME_BG): string[] {
+  const esc = String.fromCharCode(27);
+  const bel = String.fromCharCode(7);
+  return [
+    `refresh-client -r '${pane}:${esc}]10;rgb:${hex16(fg)}${bel}'`,
+    `refresh-client -r '${pane}:${esc}]11;rgb:${hex16(bg)}${bel}'`,
+  ];
+}
 
 /** Pane ids are tmux's own `%N` tokens; anything else is rejected before it
  * can be spliced into a command line (injection via paneId). */
@@ -102,6 +136,10 @@ export interface ControlDeps {
   spawn?: SpawnFn;
   /** Override for the pause-after seconds sent on attach (default 20). */
   pauseAfterSecs?: number;
+  /** The tap's pane id (`%N`, validated against PANE_ID_RE): when set, the
+   * fixed theme colours are reported with `refresh-client -r` right after
+   * the pause-after line (orchestrator addition). */
+  paneId?: string;
 }
 
 export class Control {
@@ -155,7 +193,16 @@ export class Control {
     this.started = true;
     void this.readLoop(this.proc);
     const { promise: ackPromise, resolve: ack } = Promise.withResolvers<void>();
-    const [pauseAck] = this.write([`refresh-client -f pause-after=${this.deps.pauseAfterSecs ?? PAUSE_AFTER_SECS}`]);
+    const attachLines = [`refresh-client -f pause-after=${this.deps.pauseAfterSecs ?? PAUSE_AFTER_SECS}`];
+    if (this.deps.paneId !== undefined) {
+      // A pane id spliced into a `refresh-client -r` argument is an injection
+      // vector; reject anything that is not tmux's `%N` form before writing.
+      if (!PANE_ID_RE.test(this.deps.paneId)) {
+        throw new Error(`invalid pane id: ${this.deps.paneId}`);
+      }
+      attachLines.push(...colourReportCommands(this.deps.paneId));
+    }
+    const [pauseAck] = this.write(attachLines);
     // Resolved or rejected (`%error`): the line is on the wire either way.
     // A rejection is recorded (not swallowed silently) so a stall after a
     // failed pause-after is diagnosable; it surfaces through the RSS lane
