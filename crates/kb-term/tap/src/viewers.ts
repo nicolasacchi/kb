@@ -119,7 +119,9 @@ class NetTransport implements Transport {
     return this.socket.write(bytes);
   }
   close(): void {
-    this.socket.destroy();
+    // end (not destroy): a busy frame written immediately before close must
+    // reach the client before the FIN.
+    this.socket.end();
   }
   onDrain(cb: () => void): void {
     this.socket.on('drain', cb);
@@ -427,6 +429,10 @@ export class TapServer {
         if (this.withholder.syncOn || this.twinOffset !== this.ring.head || this.twinBroken) {
           this.writeText(viewer.connection, viewer.id, encodeServerFrame({ t: 'error', code: 'busy', msg: 'join deferred: frame in progress' }));
           this.closeViewer(viewer);
+          // A dropped join is terminal: end the connection once no viewer
+          // remains on it, so the client sees the busy frame and the socket
+          // closes (the header contract: "error{busy} and is closed").
+          if (viewer.connection.viewers.size === 0) viewer.connection.transport.close();
           return { ok: false, reason: 'busy' };
         }
         degraded = true;
