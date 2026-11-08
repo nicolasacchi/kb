@@ -100,9 +100,11 @@ pub fn build_gate_script(unset_after_login: &[String]) -> Result<String, String>
 pub struct ValidatedLaunch {
     /// Harness name (wire enum; for the `@kb_harness` option).
     pub harness: String,
-    /// The argv to run (first item an absolute path). The plan argv
-    /// governs the launch; verbatim caller argv is honoured only when
-    /// `allow_verbatim_probe` is set (test harness only).
+    /// The caller's argv, if any: `None` from kb-server by design (the
+    /// runner builds argv from the harness profile). Empty means "use
+    /// the plan argv" — the plan governs unless verbatim mode is set.
+    /// `Some` entries are validated (absolute `argv[0]`, harness-named,
+    /// forbidden scan).
     pub argv: Vec<String>,
     /// Resume session id, if any.
     pub resume_sid: Option<String>,
@@ -150,53 +152,45 @@ pub fn validate_launch(req: &Request, cfg: &RunnerConfig) -> Result<ValidatedLau
     else {
         return Err(RunnerError::BadRequest("not a launch request".to_string()));
     };
-    let Some(argv) = argv else {
-        return Err(RunnerError::BadRequest("argv is required".to_string()));
-    };
-    if argv.is_empty() {
-        return Err(RunnerError::BadRequest(
-            "argv must not be empty".to_string(),
-        ));
-    }
-    if !argv[0].starts_with('/') {
-        return Err(RunnerError::BadRequest(
-            "argv[0] must be an absolute path".to_string(),
-        ));
-    }
-    // The profile argv governs the launch: the caller's argv[0] must
-    // name the harness binary (its basename must equal the harness
-    // name). The only exception is `allow_verbatim_probe` (test harness
-    // only, never ambient env), which lets integration fixtures run
-    // verbatim; production always uses the plan argv, so a wire caller
-    // cannot run an alternate program. Forbidden argv elements never
-    // pass, under either mode: a verbatim argv cannot smuggle `--kb-off`
-    // or a bare continue past the profile.
-    if let Some(bad) = argv
-        .iter()
-        .find(|a| profiles::table::FORBIDDEN_ARGV.contains(&a.as_str()))
-    {
-        return Err(RunnerError::BadRequest(format!(
-            "argv element `{bad}` is forbidden"
-        )));
-    }
-    let names_harness = std::path::Path::new(&argv[0])
-        .file_name()
-        .is_some_and(|f| f.to_str() == Some(harness.as_str()));
-    if !names_harness && !cfg.allow_verbatim_probe {
-        return Err(RunnerError::BadRequest(format!(
-            "argv[0] must name the harness binary ({})",
-            harness.as_str()
-        )));
-    }
-    let total: usize = argv.iter().map(String::len).sum();
-    if total > 32 * 1024 {
-        return Err(RunnerError::BadRequest("argv exceeds 32 KiB".to_string()));
-    }
-    for arg in argv {
-        if arg.contains('\0') {
+    // kb-server sends `argv: None` by design (the runner builds argv
+    // from the harness profile). `None` (and an empty `Some`) therefore
+    // validates as "use the plan argv"; only a non-empty `Some` is
+    // validated as verbatim caller argv. Production always uses the
+    // plan argv, so a wire caller cannot run an alternate program.
+    let argv: Vec<String> = argv.clone().unwrap_or_default();
+    if !argv.is_empty() {
+        if !argv[0].starts_with('/') {
             return Err(RunnerError::BadRequest(
-                "argv contains a NUL byte".to_string(),
+                "argv[0] must be an absolute path".to_string(),
             ));
+        }
+        if let Some(bad) = argv
+            .iter()
+            .find(|a| profiles::table::FORBIDDEN_ARGV.contains(&a.as_str()))
+        {
+            return Err(RunnerError::BadRequest(format!(
+                "argv element `{bad}` is forbidden"
+            )));
+        }
+        let names_harness = std::path::Path::new(&argv[0])
+            .file_name()
+            .is_some_and(|f| f.to_str() == Some(harness.as_str()));
+        if !names_harness && !cfg.allow_verbatim_probe {
+            return Err(RunnerError::BadRequest(format!(
+                "argv[0] must name the harness binary ({})",
+                harness.as_str()
+            )));
+        }
+        let total: usize = argv.iter().map(String::len).sum();
+        if total > 32 * 1024 {
+            return Err(RunnerError::BadRequest("argv exceeds 32 KiB".to_string()));
+        }
+        for arg in &argv {
+            if arg.contains('\0') {
+                return Err(RunnerError::BadRequest(
+                    "argv contains a NUL byte".to_string(),
+                ));
+            }
         }
     }
     let cwd_path = std::path::Path::new(cwd);
@@ -341,15 +335,18 @@ async fn launch_locked<S: Supervisor>(
     // caller argv[0] that does not name the harness binary unless
     // `allow_verbatim_probe` is set (test harness only), in which case
     // an integration fixture runs verbatim (still under the profile env
-    // and exit keys). Caller extras are otherwise discarded, so no
-    // wire-supplied argv can smuggle `--kb-off` or a bare continue past
-    // the profile.
-    let launch_argv =
-        if is_profile_binary(&spec.argv, &plan.argv) || !runner.cfg.allow_verbatim_probe {
-            plan.argv.clone()
-        } else {
-            spec.argv.clone()
-        };
+    // and exit keys). `spec.argv` empty (kb-server sends `argv: None`,
+    // "use the plan") always yields the plan argv, even in verbatim
+    // mode. Caller extras are otherwise discarded, so no wire-supplied
+    // argv can smuggle `--kb-off` or a bare continue past the profile.
+    let launch_argv = if spec.argv.is_empty()
+        || is_profile_binary(&spec.argv, &plan.argv)
+        || !runner.cfg.allow_verbatim_probe
+    {
+        plan.argv.clone()
+    } else {
+        spec.argv.clone()
+    };
     let args = gate_argv(
         &runner.cfg.tmux_bin,
         &sock,
@@ -906,11 +903,6 @@ mod tests {
         bad.push(r);
         let mut r = base();
         if let Request::Launch { argv, .. } = &mut r {
-            *argv = Some(vec![]);
-        }
-        bad.push(r);
-        let mut r = base();
-        if let Request::Launch { argv, .. } = &mut r {
             *argv = Some(vec!["cat".to_string()]);
         }
         bad.push(r);
@@ -1027,6 +1019,45 @@ mod tests {
             validate_launch(&launch_with(&["/usr/bin/omp"]), &cfg()).is_ok(),
             "an argv[0] naming the harness binary validates"
         );
+    }
+    /// kb-server sends `argv: None` by design (the runner builds argv
+    /// from the harness profile). `validate_launch` must accept it
+    /// (empty ValidatedLaunch argv → plan argv in `launch_locked`), and
+    /// the committed `req_launch.json` golden bytes must validate too.
+    #[test]
+    fn validate_accepts_missing_argv_from_kb_server() {
+        let req = Request::Launch {
+            harness: Harness::Omp,
+            argv: None,
+            resume_sid: None,
+            cwd: "/tmp".to_string(),
+            cols: Some(120),
+            rows: Some(40),
+            env: None,
+            exit_keys: None,
+        };
+        let v = validate_launch(&req, &cfg()).unwrap();
+        assert!(v.argv.is_empty(), "None argv means use the plan");
+        let golden = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/req_launch.json");
+        let bytes = std::fs::read(golden).unwrap();
+        let req: Request = serde_json::from_slice(&bytes).unwrap();
+        assert!(
+            validate_launch(&req, &cfg()).is_ok(),
+            "golden bytes validate"
+        );
+        // An empty `Some` behaves like `None`.
+        let req = Request::Launch {
+            harness: Harness::Omp,
+            argv: Some(vec![]),
+            resume_sid: None,
+            cwd: "/tmp".to_string(),
+            cols: Some(120),
+            rows: Some(40),
+            env: None,
+            exit_keys: None,
+        };
+        let v = validate_launch(&req, &cfg()).unwrap();
+        assert!(v.argv.is_empty());
     }
 
     /// Only `allow_verbatim_probe` (test harness only) lets a fixture
