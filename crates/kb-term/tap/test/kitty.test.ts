@@ -140,6 +140,128 @@ test('drop_reasons interrupted_transmit_aborts_first', () => {
   expect(r.stats.abortedTransfer).toBe(1);
 });
 
+test('dropped_transmit_starts_do_not_abort_pending', () => {
+  // Each dropped start (bad format, bad medium, compressed, missing/bad i,
+  // bad base64 charset, m=1 oversize) must leave a legitimate pending
+  // multi-chunk transfer resumable, with abortedTransfer still 0.
+  const badStarts = [
+    ['bad_format', 'a=t,f=24,i=555', 'AAAA', 'unsupportedFormat'],
+    ['bad_format32', 'a=t,f=32,i=555', 'AAAA', 'unsupportedFormat'],
+    ['bad_medium', 'a=t,f=100,t=f,i=555', 'AAAA', 'unsupportedMedium'],
+    ['bad_medium_tmp', 'a=t,f=100,t=t,i=555', 'AAAA', 'unsupportedMedium'],
+    ['bad_medium_shm', 'a=t,f=100,t=s,i=555', 'AAAA', 'unsupportedMedium'],
+    ['compressed', 'a=t,f=100,o=z,i=555', 'AAAA', 'compressed'],
+    ['missing_i', 'a=t,f=100', 'AAAA', 'imageNumberUnsupported'],
+    ['bad_i_zero', 'a=t,f=100,i=0', 'AAAA', 'imageNumberUnsupported'],
+    ['bad_i_overflow', 'a=t,f=100,i=4294967296', 'AAAA', 'imageNumberUnsupported'],
+    ['bad_base64', 'a=t,f=100,i=555', 'AA*A', 'badBase64'],
+  ] as const;
+  for (const [name, ctrl, payload, reason] of badStarts) {
+    const png = makePng(8, 8, 7);
+    const parts = transmitApcs(9, png, 16);
+    const r = new KittyReassembler();
+    expect(r.push(parseKittyControl(parts[0]!.subarray(3, parts[0]!.length - 2)))).toBeNull();
+    expect(r.push(pc(ctrl, payload))).toEqual({ kind: 'drop', reason });
+    expect(r.stats.abortedTransfer).toBe(0);
+    // Pending survives: remaining continuations complete the original transfer.
+    let result: KittyResult | null = null;
+    for (let i = 1; i < parts.length; i++) {
+      result = r.push(parseKittyControl(parts[i]!.subarray(3, parts[i]!.length - 2)));
+    }
+    expect(result).not.toBeNull();
+    expect(result!.kind).toBe('transmit');
+    expect(r.stats.abortedTransfer).toBe(0);
+    expect(r.stats.transmits).toBe(1);
+    if (result!.kind === 'transmit') {
+      expect(result!.png).toEqual(png);
+      expect(result!.id).toBe(9);
+    }
+    // Sanity: this row really exercised the named drop.
+    expect(r.stats[reason]).toBe(1);
+    void name;
+  }
+  // m=1 oversize start also does not abort the pending transfer.
+  {
+    const png = makePng(8, 8, 7);
+    const parts = transmitApcs(9, png, 16);
+    const r = new KittyReassembler({ maxImageBytes: 500 });
+    expect(r.push(parseKittyControl(parts[0]!.subarray(3, parts[0]!.length - 2)))).toBeNull();
+    // First chunk alone decodes to well under 500, so this is not the pending
+    // transfer; craft an oversize m=1 start with a huge payload.
+    const huge = Buffer.alloc(800).toString('base64'); // 800 decoded bytes > 500
+    expect(r.push(pc('a=t,f=100,i=555,m=1', huge))).toEqual({ kind: 'drop', reason: 'oversize' });
+    expect(r.stats.abortedTransfer).toBe(0);
+    let result: KittyResult | null = null;
+    for (let i = 1; i < parts.length; i++) {
+      result = r.push(parseKittyControl(parts[i]!.subarray(3, parts[i]!.length - 2)));
+    }
+    expect(result!.kind).toBe('transmit');
+    expect(r.stats.abortedTransfer).toBe(0);
+    expect(r.stats.transmits).toBe(1);
+    if (result!.kind === 'transmit') expect(result!.png).toEqual(png);
+  }
+  // Single-chunk dropped starts (bad PNG / oversize) also leave pending alone.
+  {
+    const png = makePng(8, 8, 7);
+    const parts = transmitApcs(9, png, 16);
+    const r = new KittyReassembler();
+    expect(r.push(parseKittyControl(parts[0]!.subarray(3, parts[0]!.length - 2)))).toBeNull();
+    expect(r.push(pc('a=t,f=100,i=555', Buffer.from('hello world!').toString('base64')))).toEqual({ kind: 'drop', reason: 'badPng' });
+    expect(r.stats.abortedTransfer).toBe(0);
+    let result: KittyResult | null = null;
+    for (let i = 1; i < parts.length; i++) {
+      result = r.push(parseKittyControl(parts[i]!.subarray(3, parts[i]!.length - 2)));
+    }
+    expect(result!.kind).toBe('transmit');
+    expect(r.stats.abortedTransfer).toBe(0);
+    expect(r.stats.transmits).toBe(1);
+    if (result!.kind === 'transmit') expect(result!.png).toEqual(png);
+  }
+});
+
+test('oversize_exact_decoded_boundary_true_length_equals_cap', () => {
+  // True decoded length == cap must transmit, not oversize-drop early.
+  // Split so the first chunk length is b64.length-2 (not a multiple of 4):
+  // the ceil upper bound over-counts by the padding (1-2 bytes) and would
+  // drop; the exact 3*floor(len/4)-pad length fits.
+  let png: Uint8Array | null = null;
+  outer: for (let w = 2; w <= 12; w++) {
+    for (let fill = 1; fill <= 30; fill++) {
+      const cand = makePng(w, w, fill);
+      if (cand.length % 3 !== 0) { png = cand; break outer; }
+    }
+  }
+  if (png === null) throw new Error('no PNG with padding found');
+  const b64 = Buffer.from(png).toString('base64');
+  expect(b64.length % 4).toBe(0);
+  expect(png.length % 3).not.toBe(0); // padding > 0
+  const first = b64.slice(0, -2);
+  const last = b64.slice(-2);
+  const cap = png.length;
+  const r = new KittyReassembler({ maxImageBytes: cap });
+  expect(r.push(pc(`a=t,f=100,i=31,m=1`, first))).toBeNull();
+  expect(r.stats.oversize).toBe(0);
+  const res = r.push(pc(`q=2,m=0`, last));
+  expect(res).not.toBeNull();
+  expect(res!.kind).toBe('transmit');
+  expect(r.stats.transmits).toBe(1);
+  expect(r.stats.oversize).toBe(0);
+  if (res!.kind === 'transmit') expect(res!.png).toEqual(png);
+  // One byte over the cap must oversize-drop (enforcement not weakened).
+  const r2 = new KittyReassembler({ maxImageBytes: cap - 1 });
+  const res2a = r2.push(pc(`a=t,f=100,i=31,m=1`, first));
+  // First chunk may still fit under cap-1 exactly; final must oversize.
+  if (res2a !== null) {
+    expect(res2a).toEqual({ kind: 'drop', reason: 'oversize' });
+    expect(r2.stats.transmits).toBe(0);
+  } else {
+    const res2 = r2.push(pc(`q=2,m=0`, last));
+    expect(res2).toEqual({ kind: 'drop', reason: 'oversize' });
+    expect(r2.stats.oversize).toBe(1);
+    expect(r2.stats.transmits).toBe(0);
+  }
+});
+
 test('drop_reasons oversize_discards_pending_then_orphans', () => {
   const png = makePng(24, 24, 5);
   const parts = transmitApcs(77, png, 16);
