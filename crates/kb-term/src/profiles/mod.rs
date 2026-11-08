@@ -71,6 +71,10 @@ pub enum PlanError {
     BadCwd,
     ForbiddenEnvName(String),
     BadTermId,
+    /// An overlay write failed (disk/permission state, not a bad
+    /// request). Callers map this to an internal error, never a
+    /// `bad-request`.
+    Io(String),
 }
 
 impl std::fmt::Display for PlanError {
@@ -83,6 +87,7 @@ impl std::fmt::Display for PlanError {
                 write!(f, "forbidden env passthrough name `{name}`")
             }
             PlanError::BadTermId => write!(f, "term id must match [a-z0-9]{{1,16}}"),
+            PlanError::Io(msg) => write!(f, "host IO failure: {msg}"),
         }
     }
 }
@@ -204,21 +209,22 @@ pub fn plan(req: &PlanRequest<'_>) -> Result<LaunchPlan, PlanError> {
     })
 }
 
-/// Write the embedded omp overlay under `dir` with mode 0600.
+/// Write the embedded omp overlay under `dir` with mode 0600. IO
+/// failures (readonly run dir, full tmpfs) are `PlanError::Io` — host
+/// state, not a bad client request.
 fn write_overlay(dir: &Path, path: &Path) -> Result<(), PlanError> {
     use std::io::Write;
-    std::fs::create_dir_all(dir).map_err(|_| PlanError::BadCwd)?;
+    let io = |e: std::io::Error| PlanError::Io(e.to_string());
+    std::fs::create_dir_all(dir).map_err(io)?;
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
         .mode(0o600)
         .open(path)
-        .map_err(|_| PlanError::BadCwd)?;
-    file.write_all(OMP_OVERLAY.as_bytes())
-        .map_err(|_| PlanError::BadCwd)?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-        .map_err(|_| PlanError::BadCwd)?;
+        .map_err(io)?;
+    file.write_all(OMP_OVERLAY.as_bytes()).map_err(io)?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).map_err(io)?;
     Ok(())
 }
 

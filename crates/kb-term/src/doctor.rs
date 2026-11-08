@@ -331,7 +331,10 @@ pub fn decide_tap_binary(found: bool, version_line: Option<&str>) -> Check {
     }
     match version_line {
         Some(v) => Check::pass("tap_binary", format!("kb-tap at the recorded path ({v})")),
-        None => Check::pass("tap_binary", "kb-tap executable (--version gave no output)"),
+        None => Check::warn(
+            "tap_binary",
+            "kb-tap executable but `--version` gave no output or failed",
+        ),
     }
 }
 
@@ -447,6 +450,15 @@ pub fn probe_harness_version(path: &Path) -> Option<String> {
     first_line(&stdout).or_else(|| first_line(&stderr))
 }
 
+/// The version token of a `--version` line: its first token that
+/// starts with a digit (so `omp 18.17.0` yields `18.17.0`), or the
+/// trimmed line when there is none.
+fn version_token(line: &str) -> &str {
+    line.split_whitespace()
+        .find(|t| t.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .unwrap_or_else(|| line.trim())
+}
+
 pub fn decide_harness(
     name: &str,
     version_line: Option<&str>,
@@ -466,7 +478,9 @@ pub fn decide_harness(
             id,
             format!("{detail} (version unreconciled, recorded not gated)"),
         ),
-        Some(want) if v.contains(want) => Check::pass(id, detail),
+        // Exact version-token equality, not substring: `18.17.0.1` or
+        // `18.17.0-extra` warn, while `omp 18.17.0` passes.
+        Some(want) if version_token(v) == want => Check::pass(id, detail),
         Some(want) => Check::warn(id, format!("{detail} (known good {want})")),
     }
 }
@@ -492,30 +506,44 @@ pub fn overlay_path() -> PathBuf {
 /// `resizeScrollback: rebuild` under `tui:`, `collapseCompacted: false`
 /// under `display:`. Returns the missing/different keys.
 pub fn overlay_missing_keys(content: &str) -> Vec<&'static str> {
-    // Keys are unique across the two sections, so a flat name map is
-    // enough for the by-indentation check.
-    let mut seen: std::collections::HashMap<&str, String> = std::collections::HashMap::new();
+    // Section-aware by indentation: keys count only under their
+    // approved top-level section (`tui:` for the image/scrollback
+    // pins, `display:` for collapse-compacted), so a key under the
+    // wrong section does not satisfy the pin.
+    let mut in_tui = false;
+    let mut in_display = false;
+    let mut seen_tui: std::collections::HashMap<&str, String> = std::collections::HashMap::new();
+    let mut seen_display: std::collections::HashMap<&str, String> =
+        std::collections::HashMap::new();
     for line in content.lines() {
         let trimmed = line.trim();
+        let indented = line.starts_with([' ', '\t']);
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
-        if !line.starts_with([' ', '\t']) {
+        if !indented {
+            in_tui = trimmed == "tui:";
+            in_display = trimmed == "display:";
             continue;
         }
         if let Some((k, v)) = trimmed.split_once(':') {
             let v = v.split('#').next().unwrap_or(v).trim();
-            seen.insert(k.trim(), v.to_string());
+            let key = k.trim();
+            if in_tui {
+                seen_tui.insert(key, v.to_string());
+            } else if in_display {
+                seen_display.insert(key, v.to_string());
+            }
         }
     }
     let mut missing = Vec::new();
-    if seen.get("maxInlineImages").map(String::as_str) != Some("0") {
+    if seen_tui.get("maxInlineImages").map(String::as_str) != Some("0") {
         missing.push("tui.maxInlineImages != 0");
     }
-    if seen.get("resizeScrollback").map(String::as_str) != Some("rebuild") {
+    if seen_tui.get("resizeScrollback").map(String::as_str) != Some("rebuild") {
         missing.push("tui.resizeScrollback != rebuild");
     }
-    if seen.get("collapseCompacted").map(String::as_str) != Some("false") {
+    if seen_display.get("collapseCompacted").map(String::as_str) != Some("false") {
         missing.push("display.collapseCompacted != false");
     }
     missing
@@ -560,6 +588,13 @@ fn dir_state(path: &Path) -> Option<DirState> {
         mode: m.permissions().mode() & 0o777,
         uid: m.uid(),
     })
+}
+
+/// The runner socket path under a run root: the production bind site
+/// (`kb-termd`, `ensure_layout`) is `<run-dir>/runner/runner.sock` —
+/// the socket-permission check must probe exactly this file.
+pub fn runner_socket_path(root: &Path) -> PathBuf {
+    root.join("runner").join("runner.sock")
 }
 
 pub fn decide_run_layout(probe: &RunLayoutProbe) -> Check {
@@ -612,8 +647,9 @@ pub fn decide_run_layout(probe: &RunLayoutProbe) -> Check {
     }
 }
 
-fn probe_run_layout() -> RunLayoutProbe {
-    let root = Path::new(RUN_LAYOUT_ROOT);
+/// Probe the run layout under `root` (the socket is the real
+/// production path `runner/runner.sock`).
+pub fn probe_run_layout_at(root: &Path) -> RunLayoutProbe {
     let cur_uid = std::fs::metadata("/proc/self")
         .map(|m| m.uid())
         .unwrap_or(0);
@@ -621,9 +657,13 @@ fn probe_run_layout() -> RunLayoutProbe {
         root: dir_state(root),
         sessions: dir_state(&root.join("s")),
         runner: dir_state(&root.join("runner")),
-        sock: dir_state(&root.join("runner.sock")),
+        sock: dir_state(&runner_socket_path(root)),
         cur_uid,
     }
+}
+
+fn probe_run_layout() -> RunLayoutProbe {
+    probe_run_layout_at(Path::new(RUN_LAYOUT_ROOT))
 }
 
 /// `$SHELL -lc env` names: `None` when `$SHELL` is unset or the shell
@@ -672,6 +712,26 @@ pub fn decide_login_env(shell: Option<&str>, forbidden: &[String], shell_ok: boo
     } else {
         Check::warn(id, notes.join("; "))
     }
+}
+
+/// The login-env check from a probe result: a probe failure (`None`)
+/// is SKIP, never a false PASS — the machine may have a broken login
+/// env exactly when the shell cannot run.
+pub fn login_env_check(shell: &str, names: Option<&[String]>) -> Check {
+    let Some(names) = names else {
+        return Check::skip("login_env", "$SHELL could not be run as a login shell");
+    };
+    let forbidden: Vec<String> = names
+        .iter()
+        .filter(|n| crate::profiles::env::is_forbidden_name(n.as_str()))
+        .cloned()
+        .collect();
+    let base = Path::new(shell)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let shell_ok = POSIX_SHELLS.contains(&base.as_str());
+    decide_login_env(Some(shell), &forbidden, shell_ok)
 }
 
 // ---------------------------------------------------------------- driver
@@ -725,18 +785,11 @@ pub fn run_checks() -> Vec<Check> {
     match std::env::var("SHELL").ok() {
         None => checks.push(decide_login_env(None, &[], false)),
         Some(shell) => {
-            let names = probe_login_env(&shell).unwrap_or_default();
-            let forbidden: Vec<String> = names
-                .iter()
-                .filter(|n| crate::profiles::env::is_forbidden_name(n.as_str()))
-                .cloned()
-                .collect();
-            let base = Path::new(&shell)
-                .file_name()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let shell_ok = POSIX_SHELLS.contains(&base.as_str());
-            checks.push(decide_login_env(Some(shell.as_str()), &forbidden, shell_ok));
+            // A failed probe is SKIP (the machine may have a broken
+            // login env exactly when the shell cannot run); it must
+            // never be masked as a clean PASS by an empty name list.
+            let names = probe_login_env(&shell);
+            checks.push(login_env_check(&shell, names.as_deref()));
         }
     }
     checks
