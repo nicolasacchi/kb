@@ -160,12 +160,16 @@ impl std::fmt::Display for RunnerError {
 
 impl std::error::Error for RunnerError {}
 
+/// The per-id lock map: one `(mutex, live handles)` entry per session id.
+type LockMap =
+    std::sync::Arc<std::sync::Mutex<HashMap<String, (std::sync::Arc<Mutex<()>>, usize)>>>;
+
 /// A refcounted per-id lock handle: dropping it removes the id's entry
 /// from the [`Runner`] lock map when the last handle goes away, so the
 /// map stays bounded by live sessions instead of growing one `Arc` per
 /// id forever.
 pub struct IdLock {
-    map: std::sync::Arc<std::sync::Mutex<HashMap<String, (std::sync::Arc<Mutex<()>>, usize)>>>,
+    map: LockMap,
     id: String,
     mutex: std::sync::Arc<Mutex<()>>,
 }
@@ -198,7 +202,7 @@ pub struct Runner<S: Supervisor> {
     anchors: std::sync::Arc<Mutex<HashMap<String, Anchor>>>,
     /// Refcounted per-id locks: `(mutex, live handles)` per id. The map
     /// holds an entry only while an [`IdLock`] for it exists.
-    locks: std::sync::Arc<std::sync::Mutex<HashMap<String, (std::sync::Arc<Mutex<()>>, usize)>>>,
+    locks: LockMap,
     viewers: std::sync::Arc<Mutex<HashMap<(String, String), Viewer>>>,
     paste_only: Mutex<HashMap<String, bool>>,
     buffer_seqs: Mutex<HashMap<String, u64>>,
