@@ -475,9 +475,12 @@ impl EnvelopeDecoder {
         self.buf.extend_from_slice(chunk);
         let mut out = Vec::new();
         loop {
-            if self.buf.len() < 5 {
+            if self.buf.len() < 4 {
                 break;
             }
+            // The length can be validated as soon as its 4 bytes are
+            // buffered: an oversize (or zero) claim fails here, before the
+            // body is waited for (and never buffered).
             let mut hdr = [0u8; 4];
             hdr.copy_from_slice(&self.buf[..4]);
             let len = u32::from_be_bytes(hdr) as usize;

@@ -411,7 +411,10 @@ export class EnvelopeDecoder {
     this.buf = joined;
     const out: Envelope[] = [];
     for (;;) {
-      if (this.buf.length < 5) break;
+      if (this.buf.length < 4) break;
+      // The length can be validated as soon as its 4 bytes are buffered:
+      // an oversize (or zero) claim fails here, before the body is waited
+      // for (and never buffered).
       const dv = new DataView(this.buf.buffer, this.buf.byteOffset);
       const len = dv.getUint32(0);
       if (len === 0) throw new FrameError('bad-frame: zero-length envelope');
