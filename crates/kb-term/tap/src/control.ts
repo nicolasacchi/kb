@@ -19,6 +19,15 @@
 //
 // The tap-process wiring (reseeding on %exit too far behind / restart / new
 // client) lives in T7; this module only exposes the events.
+// Security boundary: the tmux control socket is an unauthenticated
+// local-trust pipe -- any local process that can reach the socket path can
+// run tmux commands through this client. Permissions/ownership of the
+// socket are the tmux owner's responsibility (runner.sock / tap.sock are
+// 0600, owned by the runner/tap user; the socket registry is a later unit;
+// T5 receives the path from config and spawns tmux itself). Within this
+// module the only boundary is structural: pane tokens are tmux's `%N` form
+// before splicing, and no client string is ever written into an argv
+// unvalidated.
 
 import { ControlDecoder, type CtlEvent } from './decode.ts';
 
@@ -31,17 +40,24 @@ export const PANE_ID_RE = /^%\d+$/;
 
 /** Exact wire form for the pause continue (pane QUOTED). Pinned by tests. */
 export function continueCommand(pane: string): string {
+  if (!PANE_ID_RE.test(pane)) throw new Error(`invalid pane id ${JSON.stringify(pane)}`);
   return `refresh-client -A '${pane}:continue'`;
 }
 /** Exact wire form for pausing a pane explicitly (pane QUOTED, same
  * convention as the continue). Used by the term-int pause test to trigger
  * the documented per-pane pause deterministically. */
 export function pauseCommand(pane: string): string {
+  if (!PANE_ID_RE.test(pane)) throw new Error(`invalid pane id ${JSON.stringify(pane)}`);
   return `refresh-client -A '${pane}:pause'`;
 }
 
 /** Exact argv for the control attach. Production never influences size. */
 export function attachArgv(tmuxBin: string, socketPath: string, sessionName: string): string[] {
+  // argv is an array (no shell), so injection is structural, not textual;
+  // still reject the empty/NUL cases that could never name a sane target.
+  for (const [what, v] of [['tmuxBin', tmuxBin], ['socketPath', socketPath], ['sessionName', sessionName]] as const) {
+    if (v.length === 0 || v.includes('\0')) throw new Error(`invalid ${what} for control attach`);
+  }
   return [tmuxBin, '-S', socketPath, '-C', 'attach', '-f', 'ignore-size', '-t', sessionName];
 }
 
@@ -195,15 +211,34 @@ export class Control {
 
   /** Send several commands in ONE stdin write; returns one promise per line,
    * in order. Each promise resolves with the block's raw reply lines
-   * (trailing \r stripped) or rejects with the %error text. */
+   * (trailing \r stripped) or rejects with the %error text. Never throws
+   * synchronously: a not-started (or failing) write returns rejected
+   * promises, so `.catch()` callers see the failure, and pendings pushed
+   * by this call are never orphaned on a %begin block that never comes. */
   write(lines: string[]): Promise<string[]>[] {
+    if (!this.proc) {
+      const err = new Error('control client not started');
+      return lines.map(() => Promise.reject<string[]>(err));
+    }
     const promises: Promise<string[]>[] = [];
+    const pendings: Pending[] = [];
     for (const _line of lines) {
       const { promise, resolve, reject } = Promise.withResolvers<string[]>();
-      this.pending.push({ replies: [], resolve, reject });
+      const pend: Pending = { replies: [], resolve, reject };
+      this.pending.push(pend);
+      pendings.push(pend);
       promises.push(promise);
     }
-    this.writeRaw(lines.join('\n'));
+    try {
+      this.writeRaw(lines.join('\n'));
+    } catch (err) {
+      // stdin failed synchronously AFTER pendings were pushed: pop exactly
+      // the ones this call created and reject them, so none is orphaned.
+      this.pending.splice(this.pending.length - pendings.length, pendings.length);
+      const e = err instanceof Error ? err : new Error(String(err));
+      for (const pend of pendings) pend.reject(e);
+      return promises;
+    }
     return promises;
   }
 
@@ -277,7 +312,15 @@ export class Control {
         // continue FIRST (quoted), then notify: a reseed triggered by the
         // callback must write its commands after the continue. A pane token
         // that is not tmux's `%N` form is never spliced into a command line.
-        if (PANE_ID_RE.test(ev.pane)) this.writeFireAndForget(continueCommand(ev.pane));
+        // The continue write is best-effort: if it throws (e.g. a broken
+        // stdin pipe), the failure is recorded and onPause still runs.
+        if (PANE_ID_RE.test(ev.pane)) {
+          try {
+            this.writeFireAndForget(continueCommand(ev.pane));
+          } catch (err) {
+            this.lastError = err instanceof Error ? err : new Error(String(err));
+          }
+        }
         for (const h of this.pauseHandlers) h(ev.pane);
         return;
       }
