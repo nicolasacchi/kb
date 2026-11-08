@@ -3056,6 +3056,13 @@ mod tests {
                 "EvidenceSummary",
                 "card::",
                 "SessionCard",
+                // A6 — kb-session-work/1 (invariant #11: the work grouping
+                // is surfaced, never scored; pinned by
+                // `work::no_ranking_module_reads_session_work`).
+                "work::",
+                "WorkGroup",
+                "group_work",
+                "kb-session-work",
             ] {
                 assert!(
                     !src.contains(needle),

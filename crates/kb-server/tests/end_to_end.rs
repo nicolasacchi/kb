@@ -6006,6 +6006,174 @@ async fn boot_with_token() -> (tempfile::TempDir, std::net::SocketAddr) {
     (tmp, addr)
 }
 
+/// A6 — seed a session row into the `smoke` kb's `index.db` the way A3's
+/// card tests do (`session_card.rs`'s `row()`: a synthetic `SessionRow`
+/// literal written through `sessions_upsert`, so `is_newest` maintenance
+/// runs exactly as in production).
+fn work_seed_row(
+    paths: &KbPaths,
+    artifact_id: &str,
+    sid: &str,
+    started_at: i64,
+) -> kb_core::storage::sqlite::SessionRow {
+    let sm = KbName::new("smoke").unwrap();
+    let mut db = kb_core::storage::sqlite::Db::open(&paths.kb_sqlite(&sm)).unwrap();
+    let mut row = kb_core::storage::sqlite::SessionRow {
+        artifact_id: artifact_id.into(),
+        session_id: sid.into(),
+        started_at,
+        ended_at: started_at + 600,
+        message_count: 42,
+        first_user_prompt: Some("synthetic prompt".into()),
+        source_relative: format!("sessions/session-{started_at}-{sid}.html"),
+        title: Some("synthetic title".into()),
+        cwd: Some("/work/alpha".into()),
+        git_branch: Some("main".into()),
+        files_read_count: 3,
+        files_edited_count: 2,
+        token_total: 12_345,
+        tool_calls: 9,
+        model: Some("synthetic-model".into()),
+        error_count: 1,
+        subagent_count: 1,
+        subagent_tokens: 5_000,
+        subagent_tool_calls: 4,
+        subagent_files_edited: 1,
+        subagent_launched_unstatted: 0,
+        project_key: Some("-work-alpha".into()),
+        repo_root: Some("/work/alpha".into()),
+        harness: "omp".into(),
+        cc_version: None,
+        last_assistant_text: Some("synthetic closing prose".into()),
+        all_cwds: None,
+        commit_count: 0,
+        user_turns: 2,
+        active_secs: 321,
+        substance: None,
+        segment_of: None,
+        segment_idx: None,
+        evidence_json: None,
+        parent_session_id: None,
+        root_session_id: None,
+        project_slug: None,
+    };
+    match sid {
+        "work-root" => {}
+        "work-child-1" | "work-child-2" => {
+            row.parent_session_id = Some("work-root".into());
+            row.root_session_id = Some("work-root".into());
+        }
+        _ => {}
+    }
+    db.sessions_upsert(&row).unwrap();
+    row
+}
+
+/// A6 — `GET /api/sessions/work` groups a root with its two stamped
+/// children and leaves an unrelated session alone; the response carries
+/// no scoring vocabulary, repeat reads are byte-identical, a project
+/// filter that matches nothing yields an empty group list, and the
+/// default collapsed list is unaffected.
+#[tokio::test]
+async fn sessions_work_groups_a_root_and_its_children_and_leaves_collapsed_listing_alone() {
+    let (_tmp, cfg, paths) = fixture_corpus();
+    let now = chrono::Utc::now().timestamp();
+    let _ = work_seed_row(&paths, "art-work-root", "work-root", now - 3600);
+    let _ = work_seed_row(&paths, "art-work-child-1", "work-child-1", now - 3500);
+    let _ = work_seed_row(&paths, "art-work-child-2", "work-child-2", now - 3400);
+    let _ = work_seed_row(&paths, "art-work-lone", "work-lone", now - 3000);
+    std::fs::create_dir_all(&paths.config).unwrap();
+    std::fs::write(paths.token_file(), FIXTURE_TOKEN).unwrap();
+    let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths.clone())
+        .await
+        .expect("serve");
+    common::wait_docs_listed(addr, "smoke", 4).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(url(addr, "/api/sessions/work"))
+        .header("Authorization", format!("Bearer {FIXTURE_TOKEN}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let first_bytes = resp.bytes().await.unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&first_bytes).unwrap();
+    assert_eq!(body["schema"], "kb-session-work/1", "{body}");
+    let groups = body["groups"].as_array().unwrap().clone();
+    assert_eq!(groups.len(), 2, "{body}");
+    let tree = groups
+        .iter()
+        .find(|g| g["term"] == "tree")
+        .expect("tree group");
+    assert_eq!(tree["members_total"], 3, "{body}");
+    let tree_members: Vec<&str> = tree["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["session_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(tree_members, ["work-root", "work-child-1", "work-child-2"]);
+    assert_eq!(tree["members"][0]["role"], "root");
+    assert_eq!(tree["members"][1]["role"], "child");
+    let alone = groups
+        .iter()
+        .find(|g| g["term"] == "alone")
+        .expect("alone group");
+    assert_eq!(alone["members_total"], 1, "{body}");
+    // No scoring vocabulary anywhere on the wire.
+    let text = String::from_utf8(first_bytes.to_vec()).unwrap();
+    for banned in ["score", "rank", "weight", "confidence", "relevance"] {
+        assert!(!text.contains(banned), "wire contains `{banned}`: {text}");
+    }
+    // Two identical GETs are byte-identical.
+    let resp2 = client
+        .get(url(addr, "/api/sessions/work"))
+        .header("Authorization", format!("Bearer {FIXTURE_TOKEN}"))
+        .send()
+        .await
+        .unwrap();
+    let second = resp2.bytes().await.unwrap();
+    assert_eq!(
+        first_bytes.as_ref(),
+        second.as_ref(),
+        "repeat read not byte-identical"
+    );
+    // An unrelated project filter yields no groups.
+    let resp3 = client
+        .get(url(addr, "/api/sessions/work?project=no-such-project"))
+        .header("Authorization", format!("Bearer {FIXTURE_TOKEN}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp3.status(), 200);
+    let empty_body: serde_json::Value = resp3.json().await.unwrap();
+    assert_eq!(
+        empty_body["groups"].as_array().unwrap().len(),
+        0,
+        "{empty_body}"
+    );
+    assert_eq!(empty_body["schema"], "kb-session-work/1");
+    // The sessions list's default collapsed view is unaffected: the root
+    // shows, its children stay hidden.
+    let list_resp = client
+        .get(url(addr, "/api/sessions"))
+        .header("Authorization", format!("Bearer {FIXTURE_TOKEN}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(list_resp.status(), 200);
+    let list_body: serde_json::Value = list_resp.json().await.unwrap();
+    let ids: Vec<&str> = list_body["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|s| s["session_id"].as_str())
+        .filter(|id| id.starts_with("work-"))
+        .collect();
+    assert_eq!(ids, ["work-lone", "work-root"], "{list_body}");
+}
+
 #[tokio::test]
 async fn auth_loopback_bypass_lets_requests_through_without_token() {
     // When ConnectInfo says peer is 127.0.0.1 AND there's no XFF,

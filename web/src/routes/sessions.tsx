@@ -11,6 +11,7 @@ import {
   useSessionProjects,
   useSessionRecollect,
   useSessionThreads,
+  useSessionWork,
 } from "../hooks/useSessions";
 import { useLiveSessions } from "../hooks/useLiveSessions";
 import { StateCard } from "@kb/ui/StateCard";
@@ -42,6 +43,8 @@ import {
   type SessionFileOut,
   type SessionRow,
   type ThreadOut,
+  type WorkGroupOut,
+  type WorkResponse,
 } from "../api/sessions";
 import { useState } from "react";
 import { sessionDisplayName } from "../lib/sessionDisplayName";
@@ -135,8 +138,8 @@ export default function SessionsRoute() {
   // P7/W3.C — view mode: chronological list (default), narrative threads, or
   // the projects home.
   const rawView = params.get("view");
-  const view: "list" | "threads" | "projects" =
-    rawView === "threads" ? "threads" : rawView === "projects" ? "projects" : "list";
+  const view: "list" | "threads" | "projects" | "work" =
+    rawView === "threads" ? "threads" : rawView === "projects" ? "projects" : rawView === "work" ? "work" : "list";
   // A4 — collapsed (default, param absent — subagent children hide under
   // their root) vs flat (`?tree=flat` — every capture row shows). Unknown
   // values degrade to collapsed via the ONE parser (sessionsUrl.ts).
@@ -202,6 +205,7 @@ export default function SessionsRoute() {
   const { threads, loading: threadsLoading } = useSessionThreads(
     view === "threads",
   );
+  const { work, loading: workLoading } = useSessionWork(view === "work", project || undefined);
   // Always enabled (not gated on `view === "projects"`): the project PILL
   // (shown in every view) needs the label for the currently-scoped project,
   // not just the projects-home view. Cheap — one aggregate request, same
@@ -218,7 +222,7 @@ export default function SessionsRoute() {
     return s;
   }, [projects]);
 
-  const setView = (next: "list" | "threads" | "projects") => {
+  const setView = (next: "list" | "threads" | "projects" | "work") => {
     const p = new URLSearchParams(params);
     if (next !== "list") p.set("view", next);
     else p.delete("view");
@@ -434,10 +438,12 @@ export default function SessionsRoute() {
     ? "searching…"
     : view === "threads"
       ? `${threads.length} ${threads.length === 1 ? "thread" : "threads"}`
-      : view === "projects"
-        ? `${projects.length} ${projects.length === 1 ? "project" : "projects"}`
-        : `${rows.length} ${rows.length === 1 ? "session" : "sessions"}`;
-  const viewControl = (v: "list" | "threads" | "projects"): Control => ({
+      : view === "work"
+        ? `${work.groups.length} ${work.groups.length === 1 ? "piece of work" : "pieces of work"}`
+        : view === "projects"
+          ? `${projects.length} ${projects.length === 1 ? "project" : "projects"}`
+          : `${rows.length} ${rows.length === 1 ? "session" : "sessions"}`;
+  const viewControl = (v: "list" | "threads" | "projects" | "work"): Control => ({
     id: `view-${v}`,
     label: v,
     kind: "toggle",
@@ -460,6 +466,7 @@ export default function SessionsRoute() {
         viewControl("list"),
         viewControl("threads"),
         viewControl("projects"),
+        viewControl("work"),
         {
           id: "tree-flat",
           label: "flat",
@@ -678,6 +685,11 @@ export default function SessionsRoute() {
             presenceSet={presenceSet}
             now={now}
           />
+        )}
+
+        {/* A6 — pieces of work by the named ladder. */}
+        {view === "work" && (
+          <SessionWorkView work={work} loading={workLoading} />
         )}
 
         {view === "list" && (
@@ -1238,6 +1250,74 @@ function ThreadsView({
         </section>
       ))}
     </div>
+  );
+}
+
+// A6 — the work view: pieces of work by the fixed named ladder. Each
+// group renders its first member's title, a plain-words term caption, the
+// shape counts, and its members as links to their session pages.
+const WORK_TERM_CAPTIONS: Record<string, string> = {
+  tree: "subagent tree",
+  job: "same job",
+  slate_take: "slate takeover",
+  segment: "segment chain",
+  cwd_time: "same folder, close in time",
+  alone: "alone",
+};
+
+export function SessionWorkView({
+  work,
+  loading,
+}: {
+  work: WorkResponse;
+  loading: boolean;
+}) {
+  if (loading) return <div className="kb-ses__empty">loading…</div>;
+  return (
+    <div className="kb-ses__work" aria-label="pieces of work">
+      {work.groups.length === 0 ? (
+        <StateCard
+          kind="empty"
+          title="no pieces of work yet"
+          reason="Sessions appear here once a transcript lands in the window."
+        />
+      ) : (
+        work.groups.map((g) => <WorkGroupSection key={g.key} group={g} />)
+      )}
+      {work.skipped.length > 0 && (
+        <div className="kb-ses__work-skipped" data-testid="work-skipped">
+          {work.skipped.map((s) => `${s.detail} (${s.reason})`).join(" · ")}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WorkGroupSection({ group }: { group: WorkGroupOut }) {
+  const caption = WORK_TERM_CAPTIONS[group.term] ?? group.term;
+  const first = group.members[0];
+  const more = group.members_total - group.members.length;
+  return (
+    <section className="kb-ses__work-group" data-testid="work-group">
+      <h3 className="kb-ses__work-head">
+        <span className="kb-ses__work-title" title={group.key}>
+          {first?.title ?? first?.session_id ?? group.key}
+        </span>
+        <span className="kb-ses__work-meta">
+          {caption} · {group.counts.logical_sessions}{" "}
+          {group.counts.logical_sessions === 1 ? "session" : "sessions"} ·{" "}
+          {group.counts.subagents} {group.counts.subagents === 1 ? "subagent" : "subagents"}
+        </span>
+      </h3>
+      <ul className="kb-ses__work-members">
+        {group.members.map((m) => (
+          <li key={`${m.kb}:${m.session_id}`}>
+            <Link to={`/sessions/${encodeURIComponent(m.session_id)}`}>{m.title ?? m.session_id}</Link>
+          </li>
+        ))}
+      </ul>
+      {more > 0 && <div className="kb-ses__work-more">+{more} more</div>}
+    </section>
   );
 }
 

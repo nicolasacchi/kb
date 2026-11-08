@@ -675,6 +675,38 @@ export async function fetchSessionLedger(
   return jsonOrEmpty<LedgerResponse>(r, EMPTY_LEDGER);
 }
 
+import type { WorkResponse } from "./generated/WorkResponse";
+import type { WorkGroupOut } from "./generated/WorkGroupOut";
+import type { WorkMemberOut } from "./generated/WorkMemberOut";
+import type { WorkCountsOut } from "./generated/WorkCountsOut";
+import type { WorkSkippedOut } from "./generated/WorkSkippedOut";
+export type { WorkResponse, WorkGroupOut, WorkMemberOut, WorkCountsOut, WorkSkippedOut };
+
+const EMPTY_WORK: WorkResponse = {
+  schema: "kb-session-work/1",
+  since: 0,
+  scan_capped: false,
+  truncated: false,
+  groups: [],
+  skipped: [],
+};
+
+/// A6 — sessions grouped into pieces of work by the fixed named ladder
+/// (kb-session-work/1). `project` absent = every project in the window.
+export async function fetchSessionWork(
+  project?: string,
+  signal?: AbortSignal,
+): Promise<WorkResponse> {
+  const params = new URLSearchParams();
+  if (project) params.set("project", project);
+  const qs = params.toString();
+  const r = await fetch(
+    `${currentDaemonBase()}/api/sessions/work${qs ? `?${qs}` : ""}`,
+    { headers: { Accept: "application/json" }, signal },
+  );
+  return jsonOrEmpty<WorkResponse>(r, EMPTY_WORK);
+}
+
 // A4/A6 — the per-session file-activity manifest (read/edit/write, in-corpus
 // links + out-of-corpus plain paths).
 export async function fetchSessionFiles(

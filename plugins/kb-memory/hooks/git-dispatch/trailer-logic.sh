@@ -71,13 +71,35 @@ rebase_apply="$(git rev-parse --git-path rebase-apply 2>/dev/null)" || rebase_ap
 # (b) GROK_SESSION_ID — Grok Build injects this on hook processes; some
 #     tool/bash children inherit it too. Claude wins if both are set
 #     (a nested session is rarer than a leftover Grok var).
-# (c) fallback: the repo-keyed marker file kb-wake.sh / kb-recall.sh
+# (c) KB_SESSION_ID — omp (kb-omp.ts) sets this for the MAIN agent only
+#     (A1: subagents never publish identity). Validated by kb_plain_token:
+#     the id is appended to the commit message, so a newline would forge
+#     trailers; an invalid value is IGNORED (falls through to the marker),
+#     never an error (fail-open).
+# (d) fallback: the repo-keyed marker file kb-wake.sh / kb-recall.sh
 #     (and the Grok adapters that wrap them) write, freshness-gated
 #     to ~40 minutes so a long-dead session never mis-attributes a
 #     much later commit.
 sid="${CLAUDE_CODE_SESSION_ID:-}"
 if [ -z "$sid" ]; then
   sid="${GROK_SESSION_ID:-}"
+fi
+
+# A plain token (same rule as is_plain_token in
+# crates/kb-core/src/sessions/resume.rs): non-empty, at most 128 bytes,
+# starts alphanumeric, then alphanumerics or `.` `_` `:` `-`. LC_ALL=C so
+# the length counts bytes and non-ASCII letters are rejected.
+kb_plain_token() {
+  local s="$1"
+  local LC_ALL=C
+  [ -n "$s" ] && [ "${#s}" -le 128 ] || return 1
+  case "$s" in [A-Za-z0-9]*) ;; *) return 1 ;; esac
+  case "$s" in *[!A-Za-z0-9._:-]*) return 1 ;; esac
+  return 0
+}
+
+if [ -z "$sid" ]; then
+  if kb_plain_token "${KB_SESSION_ID:-}"; then sid="$KB_SESSION_ID"; fi
 fi
 
 if [ -z "$sid" ]; then
