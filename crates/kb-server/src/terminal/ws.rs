@@ -30,6 +30,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+use axum::extract::ws::{close_code, CloseFrame, Message, WebSocket};
 use axum::{
     body::Bytes,
     extract::{Path, Query, State, WebSocketUpgrade},
@@ -37,12 +38,13 @@ use axum::{
     response::Response,
     Extension,
 };
-use axum::extract::ws::{close_code, CloseFrame, Message, WebSocket};
-use futures::{SinkExt, Sink, Stream, StreamExt};
+use futures::{Sink, SinkExt, Stream, StreamExt};
 use tokio::sync::{mpsc, watch};
 
 use super::events;
-use super::gate::{caller_class_admitted, check_origin, disabled, Problem, ERR_TERMINAL_ORIGIN_REFUSED};
+use super::gate::{
+    caller_class_admitted, check_origin, disabled, Problem, ERR_TERMINAL_ORIGIN_REFUSED,
+};
 use super::runner_client::{StreamError, StreamItem, TermStream, UnixRunner};
 use super::ticket::consume_ticket;
 use crate::middleware::Identity;
@@ -106,9 +108,7 @@ pub(crate) enum RelayEvent {
 /// The upstream stream trait the relay core speaks (so unit tests drive
 /// it with an in-memory pair). Implemented for `TermStream` below.
 pub(crate) trait Upstream: Send {
-    fn recv<'a>(
-        &'a mut self,
-    ) -> Pin<Box<dyn Future<Output = Option<StreamItem>> + Send + 'a>>;
+    fn recv<'a>(&'a mut self) -> Pin<Box<dyn Future<Output = Option<StreamItem>> + Send + 'a>>;
     fn send<'a>(
         &'a mut self,
         item: StreamItem,
@@ -116,9 +116,7 @@ pub(crate) trait Upstream: Send {
 }
 
 impl Upstream for TermStream {
-    fn recv<'a>(
-        &'a mut self,
-    ) -> Pin<Box<dyn Future<Output = Option<StreamItem>> + Send + 'a>> {
+    fn recv<'a>(&'a mut self) -> Pin<Box<dyn Future<Output = Option<StreamItem>> + Send + 'a>> {
         Box::pin(TermStream::recv(self))
     }
     fn send<'a>(
@@ -130,7 +128,10 @@ impl Upstream for TermStream {
 }
 
 fn is_valid_term_id(s: &str) -> bool {
-    !s.is_empty() && s.len() <= 16 && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+    !s.is_empty()
+        && s.len() <= 16
+        && s.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
 }
 
 /// The one 403 body for every ticket failure (no oracle: unknown,
@@ -276,9 +277,15 @@ pub(crate) async fn upgrade(
     let id2 = id.clone();
     let upgraded = ws.max_message_size(256 * 1024).on_upgrade(move |socket| {
         tokio::spawn(async move {
-            run_relay(socket, upstream, shutdown, RelayTimers::default(), |event| {
-                on_relay_event(&state2, &id2, event);
-            })
+            run_relay(
+                socket,
+                upstream,
+                shutdown,
+                RelayTimers::default(),
+                |event| {
+                    on_relay_event(&state2, &id2, event);
+                },
+            )
             .await;
             state2.terminals.sockets.fetch_sub(1, Ordering::SeqCst);
             tracing::info!(term = %id2, "terminal ws closed");
@@ -310,7 +317,12 @@ fn reserve_slot(counter: &AtomicUsize) -> Option<SlotGuard> {
         if current >= MAX_TERM_SOCKETS {
             return None;
         }
-        match counter.compare_exchange_weak(current, current + 1, Ordering::SeqCst, Ordering::SeqCst) {
+        match counter.compare_exchange_weak(
+            current,
+            current + 1,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        ) {
             Ok(_) => return Some(SlotGuard { counter }),
             Err(next) => current = next,
         }
@@ -359,11 +371,8 @@ pub(crate) async fn run_relay<S, U, F>(
             match up.recv().await {
                 None => return,
                 Some(item) => {
-                    match tokio::time::timeout(
-                        timers.slow_consumer_after,
-                        upstream_tx.send(item),
-                    )
-                    .await
+                    match tokio::time::timeout(timers.slow_consumer_after, upstream_tx.send(item))
+                        .await
                     {
                         Err(_) => {
                             let _ = slow_tx.send(()).await;
@@ -515,15 +524,16 @@ mod relay_tests {
     }
 
     impl Upstream for MemUpstream {
-        fn recv<'a>(
-            &'a mut self,
-        ) -> Pin<Box<dyn Future<Output = Option<StreamItem>> + Send + 'a>> {
+        fn recv<'a>(&'a mut self) -> Pin<Box<dyn Future<Output = Option<StreamItem>> + Send + 'a>> {
             // Take one item if queued; with `block`, park forever (the
             // relay's shutdown/idle arms end the test).
             if let Some(item) = self.items.pop_front() {
                 Box::pin(async move { Some(item) })
             } else if self.block {
-                Box::pin(async { std::future::pending::<()>().await; None })
+                Box::pin(async {
+                    std::future::pending::<()>().await;
+                    None
+                })
             } else {
                 Box::pin(async move { None })
             }
@@ -557,21 +567,29 @@ mod relay_tests {
 
     impl Sink<Message> for MemSinkStream {
         type Error = std::convert::Infallible;
-        fn poll_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        fn poll_ready(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
         fn start_send(self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
             let _ = self.to_test.try_send(item);
             Ok(())
         }
-        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
-        fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        fn poll_close(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
     }
-
 
     #[tokio::test]
     async fn slow_consumer_closes_1013_and_reader_is_backpressured() {
@@ -663,7 +681,10 @@ mod relay_tests {
         }
         let _ = tokio::time::timeout(Duration::from_secs(5), relay).await;
         assert!(pings >= 1, "pings must arrive at ping_every");
-        assert!(saw_1001, "a silent peer must close 1001 after idle_close_after");
+        assert!(
+            saw_1001,
+            "a silent peer must close 1001 after idle_close_after"
+        );
     }
 
     #[tokio::test]
@@ -692,7 +713,9 @@ mod relay_tests {
             items: [
                 StreamItem::Text(r#"{"t":"hello","proto":"kb-term/1"}"#.to_string()),
                 StreamItem::Binary(binary08.clone()),
-                StreamItem::Text(r#"{"t":"resize","seq":1,"offset":3,"cols":120,"rows":40}"#.to_string()),
+                StreamItem::Text(
+                    r#"{"t":"resize","seq":1,"offset":3,"cols":120,"rows":40}"#.to_string(),
+                ),
                 StreamItem::Binary(binary3.clone()),
                 StreamItem::Text(r#"{"t":"exit","seq":2,"code":0,"offset":6}"#.to_string()),
             ]
@@ -718,7 +741,11 @@ mod relay_tests {
                 Err(_) => break,
                 Ok(None) => break,
                 Ok(Some(Message::Close(Some(frame)))) => {
-                    assert_eq!(frame.code.as_u16(), CLOSE_NORMAL, "after exit the close is 1000");
+                    assert_eq!(
+                        frame.code.as_u16(),
+                        CLOSE_NORMAL,
+                        "after exit the close is 1000"
+                    );
                     closed = true;
                 }
                 Ok(Some(msg)) => frames.push(msg),
@@ -743,7 +770,9 @@ mod relay_tests {
             other => panic!("frame 3 must be the second binary, got {other:?}"),
         }
         match &frames[4] {
-            Message::Text(t) => assert_eq!(t.as_str(), r#"{"t":"exit","seq":2,"code":0,"offset":6}"#),
+            Message::Text(t) => {
+                assert_eq!(t.as_str(), r#"{"t":"exit","seq":2,"code":0,"offset":6}"#)
+            }
             other => panic!("frame 4 must be the exit text, got {other:?}"),
         }
         let ev = events.lock().unwrap();
@@ -759,5 +788,4 @@ mod relay_tests {
         assert_eq!(CLOSE_IDLE, 1001);
         assert_eq!(CLOSE_NORMAL, 1000);
     }
-
 }

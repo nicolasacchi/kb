@@ -21,6 +21,7 @@ use std::path::PathBuf;
 
 use crate::runner::{Runner, RunnerError};
 use crate::wire::{self, ControlMessage, Profile, ResumeInfo};
+use tokio::io::AsyncWriteExt;
 
 /// The tap socket for `id`: `<run-dir>/s/<id>/tap.sock` — the exact
 /// path the tap's `TapServer` binds (its constructor joins the same
@@ -85,8 +86,8 @@ pub async fn splice(
 ) -> std::io::Result<()> {
     let mut tap_write = tap_write;
     let mut client_write = client_write;
-    let to_client = tokio::io::copy(tap_read, &mut client_write);
-    let to_tap = tokio::io::copy(client_read, &mut tap_write);
+    let to_client = tokio::io::copy(&mut tap_read, &mut client_write);
+    let to_tap = tokio::io::copy(&mut client_read, &mut tap_write);
     // The first half to finish owns the close: dropping the other
     // future drops its sockets, which is how the far side observes the
     // close (a dropped runner client tears down its tap connection,
@@ -128,7 +129,9 @@ mod tests {
         assert_eq!(envs.len(), 1, "exactly one envelope");
         assert_eq!(envs[0].kind, wire::ENV_CONTROL);
         match serde_json::from_slice::<ControlMessage>(&envs[0].body).unwrap() {
-            ControlMessage::ViewerOpen { viewer, profile, .. } => (viewer, profile),
+            ControlMessage::ViewerOpen {
+                viewer, profile, ..
+            } => (viewer, profile),
             other => panic!("expected viewer-open, got {other:?}"),
         }
     }
@@ -151,12 +154,19 @@ mod tests {
         let mut dec = EnvelopeDecoder::new();
         let envs = dec.push(&bytes).expect("decode");
         match serde_json::from_slice::<ControlMessage>(&envs[0].body).unwrap() {
-            ControlMessage::ViewerOpen { viewer, profile, resume: Some(r) } => {
+            ControlMessage::ViewerOpen {
+                viewer,
+                profile,
+                resume: Some(r),
+            } => {
                 assert_eq!(viewer, "abcd1234");
                 assert_eq!(profile, Profile::Desktop);
                 assert_eq!(r.offset, 1234);
                 assert_eq!(r.mseq, 0, "the runner cannot know the marker seq");
-                assert!(r.epoch.is_empty(), "the runner cannot know the epoch; the tap's full-join fallback decides");
+                assert!(
+                    r.epoch.is_empty(),
+                    "the runner cannot know the epoch; the tap's full-join fallback decides"
+                );
             }
             other => panic!("expected viewer-open with resume, got {other:?}"),
         }
@@ -193,7 +203,8 @@ mod tests {
             }
             join
         });
-        let cfg = RunnerConfig::test_config(run_dir, "/bin/true".to_string(), tmp.path().join("conf"));
+        let cfg =
+            RunnerConfig::test_config(run_dir, "/bin/true".to_string(), tmp.path().join("conf"));
         let runner = Runner::direct(cfg);
         let tap = tokio::time::timeout(DEADLINE, connect_tap(&runner, id, None))
             .await
@@ -218,8 +229,13 @@ mod tests {
         // The shared codec pins the frame contract: an envelope past the
         // cap refuses to encode.
         let too_big = vec![0u8; wire::MAX_ENVELOPE_LEN];
-        assert_eq!(wire::encode_envelope(0, &too_big), Err(wire::WireError::BadEnvelope));
+        assert_eq!(
+            wire::encode_envelope(0, &too_big),
+            Err(wire::WireError::BadEnvelope)
+        );
         drop(test_end);
-        let _ = tokio::time::timeout(DEADLINE, splice).await.expect("splice end deadline");
+        let _ = tokio::time::timeout(DEADLINE, splice)
+            .await
+            .expect("splice end deadline");
     }
 }
