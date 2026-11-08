@@ -19,11 +19,10 @@
 // test/support/compare.ts.
 
 
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
-const headless = require('@xterm/headless') as { Terminal: TerminalCtor };
-const serializePkg = require('@xterm/addon-serialize') as { SerializeAddon: SerializeCtor };
-const graphemesPkg = require('@xterm/addon-unicode-graphemes') as { UnicodeGraphemesAddon: GraphemesCtor };
+import * as headless from '@xterm/headless';
+import { SerializeAddon } from '@xterm/addon-serialize';
+import { UnicodeGraphemesAddon } from '@xterm/addon-unicode-graphemes';
+import { Unicode11Addon } from '@xterm/addon-unicode11';
 
 export const TWIN_OPTS = { scrollback: 50000, scrollOnEraseInDisplay: true, allowProposedApi: true } as const;
 /** Viewer-side scrollback value (carried in the Profile later, T7). The twin itself always uses 50000. */
@@ -101,7 +100,7 @@ export function makeTwin(cols: number, rows: number, opts?: MakeTwinOpts): Twin 
     }
   };
   if (variant === 'graphemes') {
-    const Ctor = opts?.graphemesAddonForTest ?? graphemesPkg.UnicodeGraphemesAddon;
+    const Ctor = opts?.graphemesAddonForTest ?? UnicodeGraphemesAddon;
     term.loadAddon(new Ctor());
     const versions = (term.unicode.versions ?? []) as string[];
     const found = versions.find((k) => /grapheme/i.test(String(k)));
@@ -114,10 +113,8 @@ export function makeTwin(cols: number, rows: number, opts?: MakeTwinOpts): Twin 
     term.unicode.activeVersion = found;
     activeVersion = found;
   } else if (variant === 'unicode11') {
-    // Test-only variant (width comparison): loaded lazily so the production
-    // graphemes path never depends on the devDependency.
-    const u11 = require('@xterm/addon-unicode11') as { Unicode11Addon: U11Ctor };
-    term.loadAddon(new u11.Unicode11Addon());
+    // Test-only variant (width comparison).
+    term.loadAddon(new Unicode11Addon());
     term.unicode.activeVersion = '11';
     activeVersion = '11';
   } else {
@@ -127,7 +124,7 @@ export function makeTwin(cols: number, rows: number, opts?: MakeTwinOpts): Twin 
   term.onData(() => {
     dropped++;
   });
-  const ser = new serializePkg.SerializeAddon();
+  const ser = new SerializeAddon();
   term.loadAddon(ser);
   const twin: Twin = {
     term,
