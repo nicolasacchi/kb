@@ -266,7 +266,7 @@ async fn wait_groups_dead(
     pane_pid: Option<u32>,
     server_pid: Option<u32>,
     child_pid: u32,
-    holder: Option<&mut Held>,
+    mut holder: Option<&mut Held>,
 ) -> bool {
     for _ in 0..40 {
         let child_alive = match holder.as_deref_mut() {
