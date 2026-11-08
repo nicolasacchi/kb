@@ -120,7 +120,8 @@ pub use self::findings::{
     is_valid_severity, location_lines_json, slug_ordinal, AdoptedReviewFinding, AnchorRepairs,
     ClaimDisagreement, ComposeOutcome, DerivedFindingAnchor, FindingIdentity,
     FindingReanchorOutcome, FindingReanchorWrite, FindingsImportMode, FindingsImportOutcome,
-    ImportedFinding, NewReviewFinding, OtherReviewJudgement, ReviewFindingRow, DISPOSITIONS,
+    ImportedFinding, NewReviewFinding, OtherReviewJudgement, ReviewFindingRow, SeverityCounts,
+    DISPOSITIONS,
     DISPOSITION_AGREE, DISPOSITION_DISPUTE, DISPOSITION_FIX_LATER, DISPOSITION_WAIVE,
     FINDING_ORIGINS, FINDING_ORIGIN_IMPORT, FINDING_ORIGIN_MANUAL, LOCATION_KINDS,
     LOCATION_KIND_MULTI, LOCATION_KIND_RANGE, LOCATION_KIND_SINGLE, LOCATION_KIND_WHOLE_FILE,
@@ -138,7 +139,7 @@ pub use self::review_docs::{ComposeDocOutcome, NewReviewDoc, ReviewDocRow};
 pub use self::review_stores::{PatchsetBaseFields, RepoStoreRow, ReviewBaseRow, ReviewStoreRow};
 pub use self::reviews::{
     NewReviewBase, NewReviewPr, ReviewHunkViewedRow, ReviewPatchsetRow, ReviewPrBinding,
-    ReviewReport, ReviewRow, ReviewViewedRow,
+    ReviewReport, ReviewRow, ReviewViewedRow, SessionReviewRow,
 };
 pub use self::scip_runs::ScipRunRow;
 pub(crate) use self::sweep::BILL_TABLES;

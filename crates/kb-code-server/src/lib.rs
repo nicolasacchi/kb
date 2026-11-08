@@ -497,6 +497,9 @@ pub mod tree;
 pub mod kb_relay;
 /// OL PRES2 — `GET /api/kb/presence`: kb's live-touches mapped onto repos.
 pub mod presence;
+/// A5 — `GET /api/session-card`: the code-side session card
+/// (`kbc-session-card/1`) that kb's SPA fetches cross-origin.
+pub mod session_card;
 /// V76-R4a — ts-rs export gate + the `skip_serializing_if` → `field?: T`
 /// pin. Empty in the shipping binary; tests live under `#[cfg(test)]`.
 #[cfg(test)]

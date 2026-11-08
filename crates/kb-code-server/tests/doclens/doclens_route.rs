@@ -2215,12 +2215,14 @@ async fn cors_is_not_applied_to_api_repos_or_healthz() {
 }
 
 /// The pinned route set. Its whole job is to stop a later builder sliding
-/// another `/doc-lens/*` route under the CORS layer — the ACAO-carrying set
-/// must be EXACTLY the four W1.C/W2.A doc-lens routes. Every phase that lands
-/// one of the asserted-absent routes lands its probe entry in the SAME
-/// commit: an entry may never be added ahead of the route (the test would
-/// probe a 404 and pass vacuously) nor after it (a window where the route's
-/// CORS posture is unpinned).
+/// another route under the CORS layer — the ACAO-carrying set must be
+/// EXACTLY the five doc-lens routes (`/api/doc-lens`, `/doc-lens/repos`,
+/// `/doc-lens/pin`, `/doc-lens/pins`, `/doc-lens/path`) plus
+/// `/api/session-card` (A5, the code-side session card kb's SPA fetches
+/// cross-origin). Every phase that lands one of the asserted-absent routes
+/// lands its probe entry in the SAME commit: an entry may never be added
+/// ahead of the route (the test would probe a 404 and pass vacuously)
+/// nor after it (a window where the route's CORS posture is unpinned).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cors_layer_route_set_is_pinned() {
     let (boot, _alpha, _kb) = cors_boot(&[ALLOWED_ORIGIN]).await;
@@ -2262,6 +2264,12 @@ async fn cors_layer_route_set_is_pinned() {
             true,
             "SL7e",
         ),
+        // A5 mounts the code-side session card on doclens_read deliberately
+        // (kb's SPA is cross-origin and needs it; it is a strictly smaller
+        // read than the doc lens — counts, shas, review ids/titles, no
+        // paths, no text). Flipped to asserted-PRESENT in A5's own commit,
+        // so the widening is a reviewed decision.
+        ("/api/session-card?sid=sess-0001", true, true, "A5"),
         // R20: W2.B adds this route but mounts it on the PLAIN api router. A
         // corpus-wide path→id lookup behind an exact-origin ACAO +
         // Allow-Credentials would hand every allowlisted origin a
@@ -2436,9 +2444,38 @@ async fn cors_layer_route_set_is_pinned() {
             "/api/doc-lens/pin?kb=platform&doc=x0001",
             "/api/doc-lens/pins?kb=platform",
             "/api/doc-lens/path?kb=platform&path=a.rb",
+            "/api/session-card?sid=sess-0001",
         ],
-        "the ACAO-carrying set is EXACTLY the shipped doc-lens routes"
+        "the ACAO-carrying set is EXACTLY the five doc-lens routes plus /api/session-card"
     );
+}
+
+/// A5 — `GET /api/session-card` carries ACAO + credentials for an allowlisted
+/// origin only; a non-allowlisted origin gets no ACAO (the same credentialed
+/// read set the doc lens uses).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cors_session_card_carries_allowlisted_acac_only() {
+    let (boot, _alpha, _kb) = cors_boot(&[ALLOWED_ORIGIN]).await;
+    let resp = probe_get(
+        &boot.base,
+        "/api/session-card?sid=sess-0001",
+        ALLOWED_ORIGIN,
+    )
+    .await;
+    assert_eq!(acao(&resp).as_deref(), Some(ALLOWED_ORIGIN));
+    assert_eq!(
+        resp.headers()
+            .get("access-control-allow-credentials")
+            .and_then(|v| v.to_str().ok()),
+        Some("true")
+    );
+    let resp = probe_get(
+        &boot.base,
+        "/api/session-card?sid=sess-0001",
+        "https://evil.example.test",
+    )
+    .await;
+    assert_eq!(acao(&resp), None, "non-allowlisted origin must get no ACAO");
 }
 
 /// The GATE half of the review-store pin — and the half that actually fails if

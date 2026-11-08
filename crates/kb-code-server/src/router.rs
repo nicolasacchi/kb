@@ -259,6 +259,10 @@
 //! slate board captions with — to `doclens_read`, CORS'd like the reads
 //! beside it.
 //!
+//! **A5** adds `GET /session-card` (`crate::session_card`) to `doclens_read` —
+//! the code-side session card kb's SPA fetches cross-origin (counts, shas,
+//! review ids/titles, confidence labels; no paths, no text).
+//!
 //! **DCB W2.B** adds `GET /doc-lens/resolve-path` (`doclens::wire::
 //! resolve_path_route`) — the path-addressed lens entry ramp's server side
 //! (R2/R20). Registered on THIS plain `auth_bearer` `api` router below,
@@ -470,6 +474,7 @@ use crate::reviews;
 use crate::routes;
 use crate::scip;
 use crate::security;
+use crate::session_card;
 use crate::spa;
 use crate::state::SharedState;
 use crate::suggestions;
@@ -1739,6 +1744,15 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // flips this route's probe row to asserted-PRESENT in the same commit,
         // so the widening is reviewed, not incidental.
         .route("/doc-lens/path", get(doclens::wire::path_lens_route))
+        // A5 — the code-side session card joins the credentialed read set
+        // deliberately: kb's SPA is cross-origin to this daemon and asks
+        // for it with the same doc-lens client. It is a strictly SMALLER
+        // read than the doc lens it already gets there (counts, shas,
+        // review ids/titles, confidence labels — no paths, no file
+        // contents, no transcript or prompt text, not even a repo-relative
+        // path). `cors_layer_route_set_is_pinned` is flipped in the same
+        // commit, so the widening is a reviewed decision, not incidental.
+        .route("/session-card", get(session_card::session_card_route))
         .layer(from_fn_with_state(auth.clone(), auth_bearer))
         .layer(doclens::cors::read_cors(doclens_origins.clone()));
     // D-A moved the pin OFF the loopback-only sub-router onto `auth_bearer`

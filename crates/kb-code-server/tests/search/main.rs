@@ -10,3 +10,4 @@ mod kb_presence_route;
 mod kb_relay_routes;
 mod search_routes;
 mod search_unified;
+mod session_card_route;

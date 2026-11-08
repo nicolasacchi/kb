@@ -91,6 +91,36 @@ impl Store {
         Ok(rows)
     }
 
+    /// A5 (`kbc-session-card/1`) — unsuperseded findings this author wrote,
+    /// grouped by severity. The author matches EITHER `review_findings.author`
+    /// (usually NULL for imported findings — see the migration's doc) OR the
+    /// linked `annotations.author` (the review-comment thread identity).
+    /// A scan by design (no new index; small tables).
+    pub fn finding_severity_counts_authored_by(&self, author: &str) -> Result<SeverityCounts> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT f.severity, COUNT(*) FROM review_findings f
+             JOIN annotations a ON a.id = f.annotation_id
+             WHERE f.superseded = 0 AND (f.author = ?1 OR a.author = ?1)
+             GROUP BY f.severity",
+        )?;
+        let mut counts = SeverityCounts::default();
+        let rows = stmt
+            .query_map(params![author], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        for (severity, n) in rows {
+            match severity.as_str() {
+                SEVERITY_BLOCKER => counts.blocker = n as usize,
+                SEVERITY_CONCERN => counts.concern = n as usize,
+                SEVERITY_OK => counts.ok = n as usize,
+                _ => {}
+            }
+        }
+        Ok(counts)
+    }
+
     /// v0.44 F9b — what a human already decided about the SAME paths in
     /// OTHER reviews of `repo`: the unsuperseded findings with disposition
     /// `dispute` or `waive` located on one of `paths`, excluding
@@ -791,6 +821,16 @@ pub const SEVERITY_OK: &str = "ok";
 /// doc's original nit/praise/info sketch (deferred to a future
 /// `kbc-findings/2`).
 pub const SEVERITIES: [&str; 3] = [SEVERITY_BLOCKER, SEVERITY_CONCERN, SEVERITY_OK];
+
+/// Findings authored by one author, grouped by severity (A5,
+/// `kbc-session-card/1`'s findings lane). Plain counts; an unknown severity
+/// string in the table is simply not counted into any bucket.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SeverityCounts {
+    pub blocker: usize,
+    pub concern: usize,
+    pub ok: usize,
+}
 
 pub fn is_valid_severity(s: &str) -> bool {
     SEVERITIES.contains(&s)
