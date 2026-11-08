@@ -42,7 +42,7 @@ async fn spawn_mock(identity: Value, commits_body: Arc<Mutex<String>>) -> Socket
             }),
         )
         .route(
-            "/api/sessions/:sid/commits",
+            "/api/sessions/{sid}/commits",
             get(move |AxPath(_sid): AxPath<String>| {
                 let commits_body = commits_body.clone();
                 async move {
