@@ -6010,7 +6010,12 @@ async fn boot_with_token() -> (tempfile::TempDir, std::net::SocketAddr) {
 /// card tests do (`session_card.rs`'s `row()`: a synthetic `SessionRow`
 /// literal written through `sessions_upsert`, so `is_newest` maintenance
 /// runs exactly as in production).
-fn work_seed_row(paths: &KbPaths, artifact_id: &str, sid: &str, started_at: i64) -> kb_core::storage::sqlite::SessionRow {
+fn work_seed_row(
+    paths: &KbPaths,
+    artifact_id: &str,
+    sid: &str,
+    started_at: i64,
+) -> kb_core::storage::sqlite::SessionRow {
     let sm = KbName::new("smoke").unwrap();
     let mut db = kb_core::storage::sqlite::Db::open(&paths.kb_sqlite(&sm)).unwrap();
     let mut row = kb_core::storage::sqlite::SessionRow {
@@ -6079,12 +6084,10 @@ async fn sessions_work_groups_a_root_and_its_children_and_leaves_collapsed_listi
     let _ = work_seed_row(&paths, "art-work-lone", "work-lone", now - 3000);
     std::fs::create_dir_all(&paths.config).unwrap();
     std::fs::write(paths.token_file(), FIXTURE_TOKEN).unwrap();
-    let (addr, _task) = kb_server::serve_on_random_port_with_paths(
-        fixture_corpus().1,
-        paths.clone(),
-    )
-    .await
-    .expect("serve");
+    let (addr, _task) =
+        kb_server::serve_on_random_port_with_paths(fixture_corpus().1, paths.clone())
+            .await
+            .expect("serve");
     common::wait_docs_listed(addr, "smoke", 4).await;
     let client = reqwest::Client::new();
 
@@ -6100,7 +6103,10 @@ async fn sessions_work_groups_a_root_and_its_children_and_leaves_collapsed_listi
     assert_eq!(body["schema"], "kb-session-work/1", "{body}");
     let groups = body["groups"].as_array().unwrap().clone();
     assert_eq!(groups.len(), 2, "{body}");
-    let tree = groups.iter().find(|g| g["term"] == "tree").expect("tree group");
+    let tree = groups
+        .iter()
+        .find(|g| g["term"] == "tree")
+        .expect("tree group");
     assert_eq!(tree["members_total"], 3, "{body}");
     let tree_members: Vec<&str> = tree["members"]
         .as_array()
@@ -6111,7 +6117,10 @@ async fn sessions_work_groups_a_root_and_its_children_and_leaves_collapsed_listi
     assert_eq!(tree_members, ["work-root", "work-child-1", "work-child-2"]);
     assert_eq!(tree["members"][0]["role"], "root");
     assert_eq!(tree["members"][1]["role"], "child");
-    let alone = groups.iter().find(|g| g["term"] == "alone").expect("alone group");
+    let alone = groups
+        .iter()
+        .find(|g| g["term"] == "alone")
+        .expect("alone group");
     assert_eq!(alone["members_total"], 1, "{body}");
     // No scoring vocabulary anywhere on the wire.
     let text = String::from_utf8(first_bytes.to_vec()).unwrap();
@@ -6126,7 +6135,11 @@ async fn sessions_work_groups_a_root_and_its_children_and_leaves_collapsed_listi
         .await
         .unwrap();
     let second = resp2.bytes().await.unwrap();
-    assert_eq!(first_bytes.as_ref(), second.as_ref(), "repeat read not byte-identical");
+    assert_eq!(
+        first_bytes.as_ref(),
+        second.as_ref(),
+        "repeat read not byte-identical"
+    );
     // An unrelated project filter yields no groups.
     let resp3 = client
         .get(url(addr, "/api/sessions/work?project=no-such-project"))
@@ -6136,7 +6149,11 @@ async fn sessions_work_groups_a_root_and_its_children_and_leaves_collapsed_listi
         .unwrap();
     assert_eq!(resp3.status(), 200);
     let empty_body: serde_json::Value = resp3.json().await.unwrap();
-    assert_eq!(empty_body["groups"].as_array().unwrap().len(), 0, "{empty_body}");
+    assert_eq!(
+        empty_body["groups"].as_array().unwrap().len(),
+        0,
+        "{empty_body}"
+    );
     assert_eq!(empty_body["schema"], "kb-session-work/1");
     // The sessions list's default collapsed view is unaffected: the root
     // shows, its children stay hidden.

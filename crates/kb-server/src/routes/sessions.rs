@@ -2873,7 +2873,10 @@ pub fn work_outcome_to_response(
 /// (`re == Some(n)`) to a `take`/`hand` post, both carrying a provenance
 /// `session_id`, and the two ids differing, yields one `[TakeEdge]`.
 /// Text fields are never read or emitted.
-pub fn take_edges_from_posts(slug: &str, posts: &[kb_core::slate::Post]) -> Vec<kb_core::sessions::work::TakeEdge> {
+pub fn take_edges_from_posts(
+    slug: &str,
+    posts: &[kb_core::slate::Post],
+) -> Vec<kb_core::sessions::work::TakeEdge> {
     let by_seq: std::collections::HashMap<u64, &kb_core::slate::Post> =
         posts.iter().map(|p| (p.seq, p)).collect();
     let mut edges: Vec<kb_core::sessions::work::TakeEdge> = Vec::new();
@@ -2882,8 +2885,13 @@ pub fn take_edges_from_posts(slug: &str, posts: &[kb_core::slate::Post]) -> Vec<
             continue;
         }
         let Some(n) = post.re else { continue };
-        let Some(target) = by_seq.get(&n) else { continue };
-        if !matches!(target.kind, kb_core::slate::Kind::Take | kb_core::slate::Kind::Hand) {
+        let Some(target) = by_seq.get(&n) else {
+            continue;
+        };
+        if !matches!(
+            target.kind,
+            kb_core::slate::Kind::Take | kb_core::slate::Kind::Hand
+        ) {
             continue;
         }
         let (Some(from), Some(to)) = (
@@ -2924,8 +2932,16 @@ pub async fn work(
     // `sessions_list` is `started_at DESC` — break at the first row older
     // than `since`; exactly `WORK_SCAN_CAP` rows means more may exist.
     let project_filter_ref = &project_filter;
-    let mut futs: Vec<super::CorpusFut<'_, (String, Vec<(kb_core::storage::sqlite::SessionRow, Vec<String>)>, bool)>> =
-        Vec::new();
+    let mut futs: Vec<
+        super::CorpusFut<
+            '_,
+            (
+                String,
+                Vec<(kb_core::storage::sqlite::SessionRow, Vec<String>)>,
+                bool,
+            ),
+        >,
+    > = Vec::new();
     for (kb_name, ctx) in state.kbs.iter() {
         futs.push(Box::pin(async move {
             let rows = match ctx
@@ -3048,19 +3064,29 @@ pub async fn work(
         .collect();
 
     let outcome = kb_core::sessions::work::group_work(&work_sessions, &takes);
-    Json(work_outcome_to_response(outcome, p.project.clone(), since, scan_capped, limit))
+    Json(work_outcome_to_response(
+        outcome,
+        p.project.clone(),
+        since,
+        scan_capped,
+        limit,
+    ))
 }
 
 #[cfg(test)]
 mod work_tests {
     use super::{take_edges_from_posts, work_outcome_to_response, work_params_clamp, WorkParams};
     use kb_core::sessions::work::{
-        group_work, TakeEdge, WorkOutcome, WorkSession, WorkGroup, WorkMember, WorkCounts,
-        SkippedTerm,
+        group_work, SkippedTerm, TakeEdge, WorkCounts, WorkGroup, WorkMember, WorkOutcome,
+        WorkSession,
     };
 
     fn params(since: Option<i64>, limit: Option<u32>) -> WorkParams {
-        WorkParams { project: None, since, limit }
+        WorkParams {
+            project: None,
+            since,
+            limit,
+        }
     }
 
     #[test]
@@ -3178,7 +3204,13 @@ mod work_tests {
         }
     }
 
-    fn post(seq: u64, kind: kb_core::slate::Kind, re: Option<u64>, sid: &str, line: &str) -> kb_core::slate::Post {
+    fn post(
+        seq: u64,
+        kind: kb_core::slate::Kind,
+        re: Option<u64>,
+        sid: &str,
+        line: &str,
+    ) -> kb_core::slate::Post {
         kb_core::slate::Post {
             seq,
             id: format!("e_{seq:012}"),
@@ -3212,7 +3244,13 @@ mod work_tests {
         // Build a ledger through the crate's own serializer/parser.
         let posts = vec![
             post(1, Kind::Take, None, "sess-a", "LEAK-MARKER take"),
-            post(2, Kind::Take, Some(1), "sess-b", "takeover body LEAK-MARKER"),
+            post(
+                2,
+                Kind::Take,
+                Some(1),
+                "sess-b",
+                "takeover body LEAK-MARKER",
+            ),
             post(3, Kind::Hand, None, "sess-c", "hand LEAK-MARKER"),
             post(4, Kind::Take, Some(3), "sess-d", "takes over the hand"),
             post(5, Kind::Take, Some(2), "sess-b", "self-take is ignored"),

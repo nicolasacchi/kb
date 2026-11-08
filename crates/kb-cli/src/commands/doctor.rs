@@ -2972,7 +2972,12 @@ mod tests {
 
     #[test]
     fn trailer_sid_source_grok_passes() {
-        let c = decide_trailer_sid_source(&trailer_env(None, Some("grok-sid"), Some("kb-sid"), Some("omp")));
+        let c = decide_trailer_sid_source(&trailer_env(
+            None,
+            Some("grok-sid"),
+            Some("kb-sid"),
+            Some("omp"),
+        ));
         assert_eq!(c.status, CheckStatus::Pass);
         assert!(c.detail.contains("GROK_SESSION_ID"), "{}", c.detail);
         assert!(!c.detail.contains("grok-sid"), "{}", c.detail);
@@ -2980,7 +2985,8 @@ mod tests {
 
     #[test]
     fn trailer_sid_source_kb_omp_passes_with_omp_note() {
-        let c = decide_trailer_sid_source(&trailer_env(None, None, Some("omp-main-1"), Some("omp")));
+        let c =
+            decide_trailer_sid_source(&trailer_env(None, None, Some("omp-main-1"), Some("omp")));
         assert_eq!(c.status, CheckStatus::Pass);
         assert!(c.detail.contains("KB_SESSION_ID"), "{}", c.detail);
         assert!(c.detail.contains("harness=omp"), "{}", c.detail);
@@ -3038,8 +3044,20 @@ mod tests {
         ] {
             assert!(is_trailer_token(ok), "{ok:?} should be a plain token");
         }
-        for bad in ["x;rm", "-rf", "", &"a".repeat(129), "x y", "x\ny", "é", ".x"] {
-            assert!(!is_trailer_token(bad), "{bad:?} should not be a plain token");
+        for bad in [
+            "x;rm",
+            "-rf",
+            "",
+            &"a".repeat(129),
+            "x y",
+            "x\ny",
+            "é",
+            ".x",
+        ] {
+            assert!(
+                !is_trailer_token(bad),
+                "{bad:?} should not be a plain token"
+            );
         }
     }
 

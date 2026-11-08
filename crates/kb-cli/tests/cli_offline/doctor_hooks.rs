@@ -162,7 +162,8 @@ fn doctor_hooks_reports_the_kb_session_id_rung() {
     };
 
     let out = run(Some("sid-1"), false);
-    let parsed: serde_json::Value = serde_json::from_slice(&out).expect("--json should emit valid JSON");
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&out).expect("--json should emit valid JSON");
     let checks = parsed["checks"].as_array().expect("checks array");
     let src = checks
         .iter()
