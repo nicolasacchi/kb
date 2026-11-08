@@ -334,7 +334,8 @@ test('pins_report_true_build_pins_as_json_map', () => {
   expect(pins['@xterm/addon-serialize']).toBe('0.14.0');
   expect(pins['@xterm/addon-unicode-graphemes']).toBe('0.4.0');
   expect(pins['@xterm/addon-unicode11']).toBe('0.9.0');
-  // decodeTextFrame must accept every pin map entry the doctor parses.
+  // Sanity: wire.ts parsing is available; --pins is a JSON map consumed by
+  // kb-term doctor's probe_tap_pins. Pins match tap/package.json dependencies.
   expect(decodeTextFrame('{"t":"ping"}').kind).toBe('known');
 });
 
