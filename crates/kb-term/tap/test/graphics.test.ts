@@ -422,9 +422,15 @@ test('iip_and_sixel_stored_and_stubbed', () => {
   expect(store.readSeq(sha2)).toEqual(iipSt);
   expect(store.readSeq(sha3)).toEqual(sixel);
   const stub1 = buildMediaStub('iip', sha1, iipBel.length);
-  expect(Buffer.from(outBytes).includes(Buffer.from(stub1))).toBe(true);
-  expect(Buffer.from(outBytes).includes(Buffer.from(buildMediaStub('sixel', sha3, sixel.length)))).toBe(true);
-  // Each mediadef precedes its stub: find indexes.
+  // Ownership: the stub is NOT spliced into the extractor's bytes; it is
+  // rebuilt and fed exactly once, from the mediadef item, by TapServer.feed
+  // (viewers.ts) -- so the wire carries it once, never duplicated.
+  expect(Buffer.from(outBytes).includes(Buffer.from(stub1))).toBe(false);
+  expect(Buffer.from(outBytes).includes(Buffer.from(buildMediaStub('sixel', sha3, sixel.length)))).toBe(false);
+  const defs = co.filter((i) => i.kind === 'mediadef');
+  expect(defs.map((d) => (d.kind === 'mediadef' ? d.mediaKind : null))).toEqual(['iip', 'iip', 'sixel']);
+  expect(defs.map((d) => (d.kind === 'mediadef' ? d.sha256 : null))).toEqual([sha1, sha2, sha3]);
+  // The mediadef precedes the following bytes segment in stream order.
   const kinds = co.map((i) => i.kind);
   expect(kinds.indexOf('mediadef')).toBeLessThan(kinds.lastIndexOf('bytes'));
   // The stub form is exactly the documented bytes.
