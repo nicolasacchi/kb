@@ -5,8 +5,9 @@
 use std::path::{Path, PathBuf};
 
 use kb_term::wire::{
-    decode_binary, encode_binary, is_valid_term_id, ClientFrame, Harness, Request, Response,
-    ServerFrame, SessionInfo, WireError,
+    decode_binary, decode_text_frame, encode_binary, encode_envelope, is_valid_term_id,
+    parse_s2c_body, s2c_body, ClientFrame, ControlMessage, EnvelopeDecoder, Harness, Profile,
+    Request, Response, ResumeInfo, ServerFrame, SessionInfo, TextFrame, WireError,
 };
 
 fn golden_dir() -> PathBuf {
@@ -29,6 +30,7 @@ fn server_goldens() -> Vec<&'static str> {
         "sframe_sizechanged.json",
         "sframe_gfxreset.json",
         "sframe_exit.json",
+        "sframe_clipboard.json",
         "sframe_error.json",
     ]
 }
@@ -40,6 +42,19 @@ fn client_goldens() -> Vec<&'static str> {
         "cframe_input.json",
         "cframe_ping.json",
     ]
+}
+
+fn control_goldens() -> Vec<&'static str> {
+    vec![
+        "ctrl_viewer_open.json",
+        "ctrl_viewer_close.json",
+        "ctrl_typed.json",
+        "ctrl_stats.json",
+    ]
+}
+
+fn envelope_goldens() -> Vec<&'static str> {
+    vec!["env_ssc_text.hex", "env_ssc_binary.hex", "env_control.hex"]
 }
 
 fn request_goldens() -> Vec<&'static str> {
@@ -173,10 +188,11 @@ fn runner_response_and_session_info_match_golden() {
 
 #[test]
 fn binary_frame_roundtrip() {
-    let enc = encode_binary(0x0102030405060708, b"hi");
-    assert_eq!(enc, vec![1, 2, 3, 4, 5, 6, 7, 8, b'h', b'i']);
+    // 0x0002030405060708 < 2^53, so the decode bound does not fire.
+    let enc = encode_binary(0x0002030405060708, b"hi");
+    assert_eq!(enc, vec![0, 2, 3, 4, 5, 6, 7, 8, b'h', b'i']);
     let (off, payload) = decode_binary(&enc).expect("decode must succeed");
-    assert_eq!(off, 0x0102030405060708);
+    assert_eq!(off, 0x0002030405060708);
     assert_eq!(payload, b"hi");
     let empty = encode_binary(7, b"");
     let (off, payload) = decode_binary(&empty).expect("empty payload must decode");
@@ -186,6 +202,118 @@ fn binary_frame_roundtrip() {
         decode_binary(&[1, 2, 3, 4, 5, 6, 7]),
         Err(WireError::ShortBinaryFrame)
     );
+}
+
+#[test]
+fn decode_binary_rejects_offset_at_2pow53() {
+    let mut frame = (1u64 << 53).to_be_bytes().to_vec();
+    assert_eq!(decode_binary(&frame), Err(WireError::OffsetOutOfRange));
+    frame.extend_from_slice(b"x");
+    assert_eq!(decode_binary(&frame), Err(WireError::OffsetOutOfRange));
+    // 2^53 - 1 is the largest legal offset.
+    let ok = ((1u64 << 53) - 1).to_be_bytes();
+    let (off, payload) = decode_binary(&ok).expect("2^53 - 1 must decode");
+    assert_eq!(off, (1u64 << 53) - 1);
+    assert!(payload.is_empty());
+}
+
+#[test]
+fn control_messages_match_golden() {
+    for name in control_goldens() {
+        let bytes = read_golden(name);
+        let msg: ControlMessage =
+            serde_json::from_slice(&bytes).unwrap_or_else(|e| panic!("deserialize {name}: {e}"));
+        let out = serde_json::to_vec(&msg).unwrap_or_else(|e| panic!("serialize {name}: {e}"));
+        assert_eq!(out, bytes, "control message golden {name}");
+    }
+}
+
+#[test]
+fn envelope_goldens_match() {
+    for name in envelope_goldens() {
+        let hex = std::str::from_utf8(&read_golden(name))
+            .expect("envelope golden must be utf8 hex")
+            .trim();
+        let bytes: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("hex pair"))
+            .collect();
+        let mut dec = EnvelopeDecoder::new();
+        let envs = dec.push(&bytes).expect("envelope golden must decode");
+        assert_eq!(envs.len(), 1, "envelope golden {name} is one frame");
+        let re = encode_envelope(envs[0].kind, &envs[0].body).expect("re-encode");
+        assert_eq!(re, bytes, "envelope golden {name} round-trips");
+    }
+}
+
+#[test]
+fn envelope_codec_roundtrip_and_split_streaming() {
+    let body = s2c_body("v1", b"{\"t\":\"ping\"}").expect("s2c body");
+    let (id, frame) = parse_s2c_body(&body).expect("parse s2c body");
+    assert_eq!(id, "v1");
+    assert_eq!(frame, b"{\"t\":\"ping\"}");
+    let mut buf = encode_envelope(0, &body).expect("encode");
+    buf.extend_from_slice(&encode_envelope(2, b"{\"t\":\"stats\"}").expect("encode"));
+    let mut dec = EnvelopeDecoder::new();
+    assert!(dec.push(&buf[..3]).expect("partial prefix").is_empty());
+    let rest = dec.push(&buf[3..]).expect("rest");
+    assert_eq!(rest.len(), 2);
+    assert_eq!(rest[0].kind, 0);
+    assert_eq!(rest[1].kind, 2);
+    assert_eq!(rest[1].body, b"{\"t\":\"stats\"}");
+}
+
+#[test]
+fn envelope_negatives() {
+    assert_eq!(encode_envelope(9, b"x"), Err(WireError::BadEnvelope));
+    assert_eq!(
+        s2c_body(&"a".to_string().repeat(300), b""),
+        Err(WireError::BadEnvelope)
+    );
+    assert_eq!(parse_s2c_body(&[]), Err(WireError::BadEnvelope));
+    assert_eq!(parse_s2c_body(&[5, b'a']), Err(WireError::BadEnvelope));
+    let mut dec = EnvelopeDecoder::new();
+    assert_eq!(dec.push(&[0, 0, 0, 0, 0]), Err(WireError::BadEnvelope));
+    let mut dec2 = EnvelopeDecoder::new();
+    assert_eq!(dec2.push(&[0, 0, 0, 2, 9, 65]), Err(WireError::BadEnvelope));
+}
+
+#[test]
+fn decode_text_frame_handles_unknown_and_malformed() {
+    let raw = r#"{"t":"future-kind","x":[1,2,3]}"#;
+    match decode_text_frame(raw).expect("unknown must decode") {
+        TextFrame::Unknown(s) => assert_eq!(s, raw),
+        other => panic!("unknown t must be Unknown, got {other:?}"),
+    }
+    assert_eq!(decode_text_frame("{"), Err(WireError::MalformedJson));
+    assert_eq!(decode_text_frame("not json"), Err(WireError::MalformedJson));
+    assert_eq!(decode_text_frame("[1,2,3]"), Err(WireError::MalformedJson));
+    assert_eq!(
+        decode_text_frame(r#"{"x":1}"#),
+        Err(WireError::MalformedJson)
+    );
+    // Known variants route to their enums.
+    match decode_text_frame(r#"{"t":"ping"}"#).expect("ping") {
+        TextFrame::Client(ClientFrame::Ping {}) => {}
+        other => panic!("ping must be ClientFrame::Ping, got {other:?}"),
+    }
+    let open = serde_json::to_value(ControlMessage::ViewerOpen {
+        viewer: "v1".to_string(),
+        profile: Profile::Desktop,
+        resume: Some(ResumeInfo {
+            offset: 5,
+            mseq: 2,
+            epoch: "ab".to_string(),
+        }),
+    })
+    .expect("to value");
+    match decode_text_frame(&serde_json::to_string(&open).expect("to string")).expect("open") {
+        TextFrame::Control(ControlMessage::ViewerOpen { viewer, resume, .. }) => {
+            assert_eq!(viewer, "v1");
+            assert_eq!(resume.unwrap().offset, 5);
+        }
+        other => panic!("open must route, got {other:?}"),
+    }
 }
 
 #[test]
@@ -220,6 +348,8 @@ fn golden_files_are_complete() {
     let mut expected: Vec<String> = server_goldens()
         .into_iter()
         .chain(client_goldens())
+        .chain(control_goldens())
+        .chain(envelope_goldens())
         .chain(request_goldens())
         .chain(["resp_ok.json", "resp_err.json", "session_info.json"])
         .map(str::to_string)
