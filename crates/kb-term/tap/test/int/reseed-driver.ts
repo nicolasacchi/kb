@@ -47,7 +47,8 @@ interface CompareOut {
   hash: string;
   a: { history: number; cursorX: number; cursorY: number };
   b: { history: number; cursorX: number; cursorY: number };
-  examples: unknown;
+  rowsRef: string[];
+  rowsGot: string[];
 }
 
 function cursorOf(twin: Twin): { x: number; y: number } {
@@ -95,7 +96,8 @@ function compareTwins(reseeded: Twin, ref: Twin, result: ReseededResult, stats: 
     hash: stateHash(reseeded),
     a: result.a,
     b: result.b,
-    examples: normal.examples,
+    rowsRef: dumpRows(b, 'normal', 100000),
+    rowsGot: dumpRows(a, 'normal', 100000),
   };
 }
 
