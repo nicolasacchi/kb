@@ -147,7 +147,6 @@ test('DECSCUSR block/underline/bar x blink/steady round-trips', async () => {
           console.log(`DECSCUSR n=${n} twin=${JSON.stringify(a['decCursorStyle'])}/${JSON.stringify(a['decCursorBlink'])} viewer=${JSON.stringify(b['decCursorStyle'])}/${JSON.stringify(b['decCursorBlink'])} tail=${JSON.stringify(tail)}`);
           throw err;
         }
-        console.log(`DECSCUSR n=${n} style=${String(a['decCursorStyle'])} blink=${String(a['decCursorBlink'])} tail=${JSON.stringify(tail)}`);
       } finally {
         viewer.dispose();
       }
@@ -182,10 +181,8 @@ test('pen with a curly underline is restored', async () => {
     const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1 });
     await expectClean(twin, seed.bytes);
     const full = Buffer.from(seed.bytes).toString('latin1');
-    console.log(`curly full tail=${JSON.stringify(full.slice(-80))}`);
     const skippedSeed = buildSeed(twin, { scrollback: 50000, atOffset: 1, skip: ['pen'] });
     const skipped = Buffer.from(skippedSeed.bytes).toString('latin1');
-    console.log(`curly skipped tail=${JSON.stringify(skipped.slice(-80))}`);
     expect(full.includes(`${E}[0;4:3;58:5:42m`)).toBe(true);
     expect(skipped.includes(`${E}[0;4:3;58:5:42m`)).toBe(false);
   } finally {

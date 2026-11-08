@@ -291,12 +291,9 @@ async function runVariantStream(variant: Variant, spec: StreamSpec): Promise<voi
         const pv = await probeDecrc(viewer.term as never);
         refDirty = true;
         const same = JSON.stringify([pr.x, pr.y, pr.pen, pr.charset]) === JSON.stringify([pv.x, pv.y, pv.pen, pv.charset]);
-        const probe = same ? 'same' : 'DIFFERENT';
-        if (!same && isStageBAllowed(variant, spec.name, 'DECSC saved cursor')) {
-          console.log(`probeDecrc DIFFERENT (allowed DECSC residual) at ${variant}/${spec.name}@${j.off}: ref=${JSON.stringify(pr)} viewer=${JSON.stringify(pv)}`);
-        } else if (!same) {
-          throw new Error(`probeDecrc DIFFERENT at ${variant}/${spec.name}@${j.off}: ref=${JSON.stringify(pr)} viewer=${JSON.stringify(pv)}`);
-        }
+        let probe = same ? 'same' : 'DIFFERENT';
+        if (!same && !isStageBAllowed(variant, spec.name, 'DECSC saved cursor')) throw new Error(`probeDecrc DIFFERENT at ${variant}/${spec.name}@${j.off}: ref=${JSON.stringify(pr)} viewer=${JSON.stringify(pv)}`);
+        if (!same) { probe = 'DIFFERENT (allowed DECSC residual)'; }
         rec.joins.push({
           off: j.off, seedBytes: seed.bytes.length, probe,
           aClasses: [...aClasses], bClasses: [...bState.map((d) => d.cls), ...Object.keys(bCells)],
