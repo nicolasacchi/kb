@@ -156,6 +156,26 @@ export const queryClient = new QueryClient({
 //                                   invalidation (a session ending IS a
 //                                   state transition), so this bridge entry
 //                                   only has to add session.state.
+//   ["sessions", "card", sid]      A4 — one session's `kb-session-card/1`
+//                                   (`GET /api/sessions/{sid}/card`,
+//                                   `hooks/useSessionCard.ts`). Finite
+//                                   lifetime, bridge-owned, no poll
+//                                   (staleTime Infinity, no refetchInterval —
+//                                   not a new #23 exception). Rides the
+//                                   ["sessions"] prefix, so useSessions' own
+//                                   session.captured/session.deleted
+//                                   invalidation already reaches it — plus
+//                                   two explicit kinds below (session.state
+//                                   beside the LSC-4 entry, and slate.updated
+//                                   for the card's slate lane): a live-state
+//                                   flip or a slate append changes card content
+//                                   without a capture landing. Over-invalidation
+//                                   is accepted: only a mounted card refetches.
+//   ["sessions", "card", sid, "children"] A4 — the card's paged children
+//                                   (`GET /api/sessions/{sid}/children`,
+//                                   the session page's own useInfiniteQuery).
+//                                   Same lifetime/ownership as the card above;
+//                                   distinct key (different response).
 //   ["readingProgress", kb]        per-kb progress map
 //   ["calendar", kb]               W2.10 — per-UTC-day event density for the
 //                                  gallery's activity calendar
@@ -547,7 +567,11 @@ export function startSseInvalidationBridge(): () => void {
   // board.updated/proposal.* just above. Sharpens the Now band / Header
   // chip the moment a session flips working<->waiting<->finished, rather
   // than waiting out useLiveSessions' own ~10s poll.
-  on("session.state", () => invalidate(["sessions", "live"]));
+  on("session.state", () => {
+    invalidate(["sessions", "live"]);
+    // A4 — a live-state flip changes the card's `live` + `outcome` lanes.
+    invalidate(["sessions", "card"]);
+  });
   // memory.* in full, plus session.captured for the session lens (its
   // queries key under the same ["memories", …] prefix) and
   // artifact.removed (a forgotten memory is a removed artifact).
@@ -652,6 +676,12 @@ export function startSseInvalidationBridge(): () => void {
     const slug = typeof p.slug === "string" ? p.slug : undefined;
     invalidate(["slates"]);
     invalidate(slug ? ["slate", slug] : ["slate"]);
+    // A4 — an append changes the session card's `slate` lane (a card names
+    // the single slate it touched). Before the burst-gated ["changes"] call
+    // registered last below. (`slate.deleted` deliberately does NOT carry
+    // this: a purge drops the board's own entry, and no card names the
+    // purged slate's successor.)
+    invalidate(["sessions", "card"]);
   });
   // `slate.deleted {slug}` — a purge (loopback-only). The board's own entry
   // is dropped along with the row; invalidating both keeps a stale board
