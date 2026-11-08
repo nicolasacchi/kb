@@ -26,6 +26,7 @@ import { TapServer } from './viewers.ts';
 import { encodeServerFrame } from './wire.ts';
 import { Reseeder } from './reseed.ts';
 import { QueryStripper } from './strip.ts';
+import { ImageStore } from './imagestore.ts';
 
 export const HARNESSES = ['claude', 'codex', 'opencode', 'grok', 'kimi', 'omp'] as const;
 
