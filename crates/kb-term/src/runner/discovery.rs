@@ -76,34 +76,33 @@ impl Serialize for SessionEntry {
 }
 
 /// Convert one discovered entry into the wire [`SessionInfo`] the list RPC
-/// promises its consumers (`Request::List` answers `SessionInfo`s, whose
-/// harness/cwd/started/pane/grid fields are required).
+/// promises its consumers (`Request::List` answers `SessionInfo`s).
 ///
-/// Stale sockets (which answer nothing, so every `Option` is `None`)
-/// have no `SessionInfo` form and are skipped by the list RPC: emitting
-/// them as null-filled JSON broke `SessionInfo` deserialization downstream.
-pub fn session_entry_to_info(entry: &SessionEntry) -> Option<crate::wire::SessionInfo> {
-    if entry.stale {
-        return None;
-    }
-    let harness = crate::wire::Harness::parse(entry.harness.as_deref()?)?;
-    Some(crate::wire::SessionInfo {
+/// Stale sockets (which answer nothing) convert to a `SessionInfo` with
+/// all facts null and `stale: true`, so the reply round-trips through
+/// both `SessionInfo` contracts (kb-term's [`crate::wire`] and the
+/// kb-server mirror) for live and stale entries alike.
+pub fn session_entry_info(entry: &SessionEntry) -> crate::wire::SessionInfo {
+    crate::wire::SessionInfo {
         id: entry.id.clone(),
-        harness,
-        cwd: entry.cwd.clone()?,
-        started_unix: entry.started_unix?,
+        harness: entry
+            .harness
+            .as_deref()
+            .and_then(crate::wire::Harness::parse),
+        cwd: entry.cwd.clone(),
+        started_unix: entry.started_unix,
         resume_sid: entry.resume_sid.clone(),
-        pane_pid: entry.pane_pid?,
-        cols: entry.cols?,
-        rows: entry.rows?,
+        pane_pid: entry.pane_pid,
+        cols: entry.cols,
+        rows: entry.rows,
         bracket_paste_flag: entry.bracket_paste_flag,
         pane_dead: entry.pane_dead,
         exit_code: entry.exit_code,
         grid_owner: entry.grid_owner.clone(),
         conf_version: entry.conf_version,
         anchor_pid: entry.anchor_pid,
-        stale: false,
-    })
+        stale: entry.stale,
+    }
 }
 
 /// Glob `<run-dir>/s/*.sock` and describe every holder.
@@ -343,9 +342,9 @@ mod tests {
         assert!(json.contains("\"conf_version\":2"));
     }
 
-    /// The list RPC's `SessionInfo` array parses as `SessionInfo`s: a
-    /// non-stale entry converts (and its JSON deserializes back), while a
-    /// stale socket yields no `SessionInfo` instead of null-filled JSON.
+    /// The list RPC's `SessionInfo` array parses as `SessionInfo`s for
+    /// live entries AND stale sockets (null facts, `stale: true`): one
+    /// type covers both, and every entry round-trips.
     #[test]
     fn list_entries_convert_to_deserializable_session_info() {
         use crate::wire::SessionInfo;
@@ -366,10 +365,11 @@ mod tests {
             anchor_pid: Some(99),
             stale: false,
         };
-        let info = session_entry_to_info(&live).expect("live entry must convert");
+        let info = session_entry_info(&live);
         assert_eq!(info.id, "abcd1234");
-        assert_eq!(info.harness, crate::wire::Harness::Omp);
-        assert_eq!(info.pane_pid, 4242);
+        assert_eq!(info.harness, Some(crate::wire::Harness::Omp));
+        assert_eq!(info.pane_pid, Some(4242));
+        assert!(!info.stale);
         let json = serde_json::to_string(&info).unwrap();
         let back: SessionInfo = serde_json::from_str(&json).unwrap();
         assert_eq!(back, info, "SessionInfo must round-trip");
@@ -390,9 +390,17 @@ mod tests {
             anchor_pid: None,
             stale: true,
         };
+        let info = session_entry_info(&stale);
+        assert!(info.stale);
+        assert_eq!(info.id, "deadbeef");
         assert!(
-            session_entry_to_info(&stale).is_none(),
-            "stale entries must be skipped, never emitted"
+            info.harness.is_none() && info.cwd.is_none() && info.pane_pid.is_none(),
+            "stale facts must be explicit nulls"
         );
+        let json = serde_json::to_string(&info).unwrap();
+        assert!(json.contains("\"harness\":null"), "explicit null: {json}");
+        assert!(json.contains("\"stale\":true"));
+        let back: SessionInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, info, "stale SessionInfo must round-trip");
     }
 }
