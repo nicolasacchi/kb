@@ -8,7 +8,9 @@
 //! dies of SIGHUP (its master closed) and the new runner spawns a fresh
 //! one; the session survives.
 //!
-//! `ignore-size` plus `window-size manual` never resizes the window.
+//! The anchor is the session's sizing client (no `ignore-size`: tmux
+//! adopts its pixel fields and colour answers under `window-size
+//! manual`); viewers keep `ignore-size` so typing never moves the grid.
 
 use crate::responder::{PumpHandle, ResponderCfg};
 use crate::runner::RunnerError;
@@ -21,8 +23,13 @@ pub struct Anchor {
 
 impl Anchor {
     /// Spawn the anchor via the ONE hidden-client function shared with
-    /// viewers (`<tmux> -u -S <sock> attach-session -f ignore-size -t kb`
-    /// on a pty sized to the grid with profile-cell pixel fields).
+    /// viewers (same argv/env/responder/winsize as [`spawn_tmux_client`]).
+    /// The anchor attaches WITHOUT `-f ignore-size`: under `window-size
+    /// manual` the flag is a no-op for grid stability (manual windows
+    /// never resize from clients), but it also blocks tmux from adopting
+    /// this client's pixel fields and colour answers as the session's
+    /// `CSI 14t/16t/18t` and OSC 10/11 source. Viewers keep
+    /// `ignore-size` (spec 5).
     pub fn spawn(
         tmux_bin: &str,
         sock: &std::path::Path,
@@ -33,7 +40,7 @@ impl Anchor {
         cfg: &ResponderCfg,
     ) -> Result<Anchor, RunnerError> {
         Ok(Anchor {
-            client: spawn_tmux_client(tmux_bin, sock, cols, rows, cell_w, cell_h, cfg)?,
+            client: spawn_tmux_client(tmux_bin, sock, cols, rows, cell_w, cell_h, cfg, false)?,
         })
     }
 

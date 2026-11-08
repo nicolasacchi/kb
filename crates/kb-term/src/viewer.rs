@@ -4,7 +4,11 @@
 //! responder-equipped `tmux attach` on a pty whose output is drained
 //! (answering only queries) and never forwarded anywhere. Typing flows
 //! the other way: keys / Enter go through the writer each pump owns.
-//! `-f ignore-size` means hidden clients never move the window size.
+//! The anchor (permanent, sizing) shares the env and responder, but the
+//! anchor attaches WITHOUT `-f ignore-size` (needed so tmux adopts its
+//! pixel fields and colour answers; under `window-size manual` that
+//! flag is a no-op for grid stability) while viewers keep `-f
+//! ignore-size` so a hidden client can never move the window size.
 //!
 //! The runner keeps the [`Viewer`] map (see `runner/mod.rs`); this module
 //! owns the client handle and the id validation.
@@ -86,11 +90,19 @@ impl Drop for ClientHandle {
 
 /// Spawn ONE hidden client: the path both the anchor and every viewer use.
 ///
-/// Command: `<tmux> -u -S <sock> attach-session -f ignore-size -t kb`.
+/// Command: `<tmux> -u -S <sock> attach-session [-f ignore-size] -t kb`.
 /// Environment: `env_clear()` plus exactly `TERM=xterm-256color`,
 /// `LANG=C.UTF-8`, `PATH=/usr/bin:/bin`. Winsize pixel fields are the
 /// profile cell size, so tmux answers a pane's `CSI 14t/16t/18t`
 /// consistently with the anchor's starting size.
+///
+/// `ignore_size` is true for viewers (they must never move the grid).
+/// The anchor passes false: under `window-size manual` the flag is a
+/// no-op for grid stability, but it also blocks tmux from adopting the
+/// anchor's pixel fields and colour answers as the session's
+/// `CSI 14t/16t/18t` and OSC 10/11 source (verified on CI: with the
+/// flag on every client, pane 14t is always `cells x default 32x16` and
+/// OSC 11 is always black, regardless of the client's winsize pixels).
 pub fn spawn_tmux_client(
     tmux_bin: &str,
     sock: &std::path::Path,
@@ -99,15 +111,17 @@ pub fn spawn_tmux_client(
     cell_w: u16,
     cell_h: u16,
     cfg: &ResponderCfg,
+    ignore_size: bool,
 ) -> Result<ClientHandle, RunnerError> {
     let xpix = cols.saturating_mul(cell_w);
     let ypix = rows.saturating_mul(cell_h);
     let (master, slave) = open_pty(cols, rows, xpix, ypix)?;
     let mut cmd = Command::new(tmux_bin);
-    cmd.arg("-u")
-        .arg("-S")
-        .arg(sock)
-        .args(["attach-session", "-f", "ignore-size", "-t", "kb"]);
+    cmd.arg("-u").arg("-S").arg(sock).arg("attach-session");
+    if ignore_size {
+        cmd.args(["-f", "ignore-size"]);
+    }
+    cmd.arg("-t").arg("kb");
     cmd.env_clear();
     cmd.env("TERM", "xterm-256color");
     cmd.env("LANG", "C.UTF-8");

@@ -385,6 +385,7 @@ impl<S: Supervisor> Runner<S> {
             cell_w,
             cell_h,
             &self.cfg.responder_cfg(),
+            true,
         )?;
         let mut viewers = self.viewers.lock().await;
         // The per-id lock makes a concurrent insert impossible; the
