@@ -1,15 +1,19 @@
 #!/bin/bash
 # T3 mutation check: each mutant re-breaks exactly one rule; the suite must fail.
 # The temp copy is the whole tap directory with layout preserved (src/, test/,
-# package.json), so relative imports (../src, ../../fixtures) resolve. `mut()`
-# takes a target-file argument (src/strip.ts or src/decode.ts); that file is
-# restored from the pristine copy before each mutant. Every anchor is guarded
-# by `assert a in s`, so a stale anchor fails loudly instead of being vacuous.
+# package.json; out/ excluded), so relative imports (../src, ../../fixtures)
+# resolve. `mut()` takes a target-file argument (src/strip.ts or src/decode.ts);
+# that file is restored from the pristine copy before each mutant. Every anchor
+# is guarded by `assert a in s`, so a stale anchor fails loudly instead of being
+# vacuous. Mutants 1-11 are the brief's required eleven; 12-14 are the twin-site
+# guards (SNIFF ESC+not-ST, lone-raw C1, abort()-CAN) so a single-site break
+# cannot hide behind a rule proven at only one of its sites.
 set -uo pipefail
 SRC="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"
 mkdir -p "$TMP/mp"
 cp -r "$SRC" "$TMP/mp/tap"
+rm -rf "$TMP/mp/tap/out"   # spec 8: exclude out/ (metrics/junit from the ci.sh run)
 cp -r "$SRC/../fixtures" "$TMP/mp/fixtures"
 # pristine copies of the mutable production files
 cp "$SRC/src/strip.ts" "$TMP/strip.ts.orig"
@@ -83,7 +87,15 @@ mut src/strip.ts "      if (!this.isIdle()) {" "      if (false) {"
 # 10. Decoder treats a line inside a %begin..%end block as a notification
 mut src/decode.ts "    if (this.block) {" "    if (false) {"
 # 11. Octal decoder drops the third digit of an escape (wrong byte for \134 etc.)
-mut src/decode.ts "      out[o++] = ((v[i + 1] - 0x30) << 6) | ((v[i + 2] - 0x30) << 3) | (v[i + 3] - 0x30);" "      out[o++] = ((v[i + 1] - 0x30) << 6) | ((v[i + 2] - 0x30) << 3);"
+mut src/decode.ts "      const val = ((v[i + 1] - 0x30) << 6) | ((v[i + 2] - 0x30) << 3) | (v[i + 3] - 0x30);" "      const val = ((v[i + 1] - 0x30) << 6) | ((v[i + 2] - 0x30) << 3);"
+# 12. SNIFF twin of 3: ESC+not-ST forwards the partial instead of dropping it
+mut src/strip.ts "          if (c === BS) { this.buf.push(ESC); this.buf.push(c); this.endSniff(true); return; }
+          this.aborted++; this.restartEsc(); this.byte(c); return;" "          if (c === BS) { this.buf.push(ESC); this.buf.push(c); this.endSniff(true); return; }
+          this.emit(this.buf); this.restartEsc(); this.byte(c); return;"
+# 13. Lone-raw C1 twin of 5: deletion no longer emits BOUNDARY (the C1 delete splices)
+mut src/strip.ts "    if (c <= 0x9f) { this.out.push(BOUNDARY); return; }                 // lone raw C1 byte" "    if (c <= 0x9f) { return; }"
+# 14. abort() twin of 7: a forwarded string aborted mid-way gets no CAN
+mut src/strip.ts "    if (this.st === 'PASS') this.out.push(CAN);" "    if (this.st === 'PASS') { /* CAN removed */ }"
 
 echo "mutants=$n survivors=$surv"
-[ "$n" = 11 ] && [ "$surv" = 0 ]
+[ "$n" = 14 ] && [ "$surv" = 0 ]
