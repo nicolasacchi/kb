@@ -633,6 +633,19 @@ cap_is_plain_token() { # <value>
   esac
 }
 
+cap_is_ts_prefix() { # <value>
+  case "$1" in
+    ''|[!0-9]*) return 1 ;;
+  esac
+  case "$1" in
+    *[!0-9TZ.:-]*) return 1 ;;
+  esac
+  case "$1" in
+    *-*|*T*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # cap_lineage <session_file>: print {"parentSessionId":...,"rootSessionId":...}
 # (absent keys omitted; {} for top-level or on ANY failure — capture must
 # never fail on it). Implements the Rust fold_lineage rules with jq/bash.
@@ -646,11 +659,17 @@ cap_lineage() {
   [ -n "$hid" ] || { printf '{}'; return 0; }
 
   # Root: id after the FINAL _ of the OUTERMOST <ts>_<id> ancestor dir.
+  # The prefix must have a timestamp shape (the Rust fold_lineage twin's
+  # is_ts_prefix): a *_* bucket dir (my_bucket) is NOT a stem — skip it
+  # and keep scanning. A timestamp-shaped dir whose suffix is not a
+  # plain token is an unsafe stem: no lineage at all.
   local dir rest comp found="" root_idx=-1 idx=0
   dir="$(dirname -- "$f")"
   # Walk ancestors from the top: split dir into components.
   local IFS='/'
+  set -f
   set -- $dir
+  set +f
   local -a parts=("$@")
   unset IFS
   local n=${#parts[@]}
@@ -659,9 +678,9 @@ cap_lineage() {
     case "$comp" in
       *_*)
         root="${comp##*_}"
-        if cap_is_plain_token "$root"           && [ "${comp%"_$root"}" != "$comp" ]           && [ -n "${comp%"_$root"}" ]           && [ "$root" != "$hid" ]; then
+        if cap_is_ts_prefix "${comp%"_$root"}" && cap_is_plain_token "$root" && [ -n "${comp%"_$root"}" ] && [ "$root" != "$hid" ]; then
           found=1; root_idx=$idx; break
-        elif [ -n "${comp##*_}" ] && [ "${comp%"_${comp##*_}"}" != "$comp" ]; then
+        elif cap_is_ts_prefix "${comp%"_$root"}" && [ -n "${comp##*_}" ] && [ "${comp%"_${comp##*_}"}" != "$comp" ]; then
           # unsafe stem: no lineage at all
           printf '{}'; return 0
         fi
