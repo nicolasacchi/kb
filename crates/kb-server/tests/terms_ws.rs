@@ -1503,21 +1503,45 @@ async fn ws_gate_order_negatives() {
     }
 
     // (b) fill the cap, then a garbage `from` is 400 (from-parse
-    // before cap), and the ticket still survives.
-    let mut sockets = Vec::new();
-    for _ in 0..15 {
-        let ticket = mint_ticket(addr, TERM_ID, None).await;
-        match ws_connect(addr, TERM_ID, &ticket, None, &origin_header(addr), None).await {
-            WsConnect::Ok(ws) => sockets.push(ws),
-            other => panic!("cap fill must connect, got {other:?}"),
+    // before cap), and the ticket still survives. Connects retry on
+    // 503: slot release after drop is asynchronous, and a 503
+    // during the fill pins nothing.
+    let fill = async {
+        let mut sockets = Vec::new();
+        while sockets.len() < 15 {
+            let ticket = mint_ticket(addr, TERM_ID, None).await;
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                match ws_connect(addr, TERM_ID, &ticket, None, &origin_header(addr), None).await {
+                    WsConnect::Ok(ws) => {
+                        sockets.push(ws);
+                        break;
+                    }
+                    WsConnect::Http(503) if tokio::time::Instant::now() < deadline => {
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                    other => panic!("cap fill retry must connect, got {other:?}"),
+                }
+            }
         }
-    }
+        sockets
+    };
+    let mut sockets = fill.await;
     // One socket from (a) was dropped above (its slot frees
-    // asynchronously); fill whichever slot remains before minting.
+    // asynchronously); fill whichever slot remains for the spare.
     let spare = mint_ticket(addr, TERM_ID, None).await;
-    match ws_connect(addr, TERM_ID, &spare, None, &origin_header(addr), None).await {
-        WsConnect::Ok(ws) => sockets.push(ws),
-        other => panic!("spare connect must fill the last slot, got {other:?}"),
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match ws_connect(addr, TERM_ID, &spare, None, &origin_header(addr), None).await {
+            WsConnect::Ok(ws) => {
+                sockets.push(ws);
+                break;
+            }
+            WsConnect::Http(503) if tokio::time::Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            other => panic!("spare connect must fill the last slot, got {other:?}"),
+        }
     }
     // The cap is full: a malformed `from` must 400, not 503.
     let capped = mint_ticket(addr, TERM_ID, None).await;
@@ -1607,9 +1631,17 @@ async fn ws_stream_errors_map_and_upstream_failure_consumes_ticket() {
 
 #[tokio::test]
 async fn ws_opened_after_shutdown_closes_1012_immediately() {
-    // Spec 8 #12 twin: a socket opened AFTER shutdown=true closes at
-    // once with 1012 (the watch resolves immediately when already
-    // true). The ticket is minted before shutdown posts.
+    // Spec 8 #12 twin. The mechanism — a shutdown watch that is
+    // ALREADY true closes the relay at once with 1012 — is pinned
+    // deterministically in the `ws.rs` relay tests
+    // (`shutdown_already_true_closes_1012_immediately`), because
+    // the literal integration form (POST /api/shutdown, then a
+    // fresh TCP connect) is a race by construction: axum's
+    // graceful shutdown stops accepting new connections the moment
+    // the signal fires. What the integration form additionally
+    // needs — a live socket receiving 1012 and a fast drain — is
+    // pinned by
+    // `ws_shutdown_sends_close_1012_and_drain_finishes_fast`.
     let tmp = tempfile::tempdir().unwrap();
     let mut replies = HashMap::new();
     replies.insert("list".to_string(), list_reply(&[TERM_ID]));
@@ -1629,18 +1661,19 @@ async fn ws_opened_after_shutdown_closes_1012_immediately() {
         .await
         .unwrap();
     assert_eq!(resp.status().as_u16(), 202, "shutdown acknowledges");
-    // The upgrade still completes (the daemon drains, not instant
-    // teardown), and the relay closes it 1012 at once.
-    let mut ws = match ws_connect(addr, TERM_ID, &ticket, None, &origin_header(addr), None).await {
-        WsConnect::Ok(w) => w,
-        other => panic!("connect after shutdown must upgrade, then 1012, got {other:?}"),
-    };
-    match ws_next(&mut ws, Duration::from_secs(5)).await {
-        WsOutcome::Close(code, reason) => {
-            assert_eq!(code, 1012, "after-shutdown close must be 1012");
-            assert_eq!(reason, "service restart", "1012 reason");
-        }
-        other => panic!("after-shutdown socket must close 1012 immediately, got {other:?}"),
+    // The graceful drain may still accept the connect in the race
+    // window: if it does upgrade, the first frame is Close 1012;
+    // if the listener already closed, the connect is refused. The
+    // invariant is that an upgraded socket closes 1012 at once.
+    match ws_connect(addr, TERM_ID, &ticket, None, &origin_header(addr), None).await {
+        WsConnect::Ok(mut ws) => match ws_next(&mut ws, Duration::from_secs(5)).await {
+            WsOutcome::Close(code, reason) => {
+                assert_eq!(code, 1012, "after-shutdown close must be 1012 ({reason})");
+                assert_eq!(reason, "service restart", "1012 reason");
+            }
+            other => panic!("after-shutdown socket must close 1012, got {other:?}"),
+        },
+        _ => {}
     }
 }
 

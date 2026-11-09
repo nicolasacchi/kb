@@ -1152,4 +1152,39 @@ mod relay_tests {
         }
         let _ = tokio::time::timeout(Duration::from_secs(5), relay).await;
     }
+
+    #[tokio::test]
+    async fn shutdown_already_true_closes_1012_immediately() {
+        // Spec 8 #12 twin, pinned deterministically at the relay core:
+        // a socket whose shutdown watch is ALREADY true closes at
+        // once with 1012 (watch::wait_for resolves immediately). The
+        // integration form (POST /api/shutdown, then a fresh TCP
+        // connect) is a race by construction — axum's graceful
+        // shutdown stops accepting new connections the moment the
+        // signal fires — so the mechanism is pinned here and the
+        // live form in `ws_shutdown_sends_close_1012_and_drain_finishes_fast`.
+        let (to_test, out_rx) = mpsc::channel::<Message>(1024);
+        let (to_relay, from_relay) = mpsc::channel::<Result<Message, axum::Error>>(64);
+        let mut out = out_rx;
+        let _into = to_relay;
+        let sink = MemSinkStream::new(to_test, from_relay, false);
+        let upstream = MemUpstream::new(std::collections::VecDeque::new(), true);
+        let (tx, shutdown) = watch::channel(true);
+        let relay = tokio::spawn(async move {
+            run_relay(sink, upstream, shutdown, RelayTimers::default(), |_| {}).await;
+        });
+        match tokio::time::timeout(Duration::from_secs(5), out.recv()).await {
+            Ok(Some(Message::Close(Some(frame)))) => {
+                assert_eq!(
+                    frame.code.as_u16(),
+                    CLOSE_RESTART,
+                    "already-shutdown closes 1012"
+                );
+                assert_eq!(frame.reason.as_str(), "service restart");
+            }
+            other => panic!("already-shutdown must close 1012 at once, got {other:?}"),
+        }
+        let _ = tokio::time::timeout(Duration::from_secs(5), relay).await;
+        drop(tx);
+    }
 }
