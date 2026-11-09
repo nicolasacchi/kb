@@ -837,7 +837,9 @@ test('viewers_blocked_viewer_dropped_on_clipboard_pending_overflow', async () =>
   t.alwaysBlock = true;
   t.clear();
   const dataB64 = 'A'.repeat(900_000);
-  for (let i = 0; i < 9 && server.viewerCount === 1; i++) {
+  // Each clipboard frame is ~900 KiB of pending control bytes: 9 stay
+  // under the 8 MiB budget, the 10th crosses it and trips the drop.
+  for (let i = 0; i < 10 && server.viewerCount === 1; i++) {
     server.feed([{ kind: 'bytes', data: enc(`${E}]52;c;${dataB64}\x07`) }]);
   }
   expect(server.viewerCount).toBe(0);
