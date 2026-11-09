@@ -16,4 +16,6 @@ export interface TerminalPanelProps {
   sid: string;
   harness: string;
   mode: "watch";
+  /** Close unmounts the panel (disconnect only) via the slot owner. */
+  onClose?: () => void;
 }

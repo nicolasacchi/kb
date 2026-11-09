@@ -7,6 +7,7 @@ import {
   TermsApiError,
   wsUrl,
 } from "./terms";
+import { setDaemonBase } from "./base";
 
 interface Call {
   url: string;
@@ -80,10 +81,20 @@ describe("terms API", () => {
     expect(wsUrl("t1", "tick")).toBe("wss://kb.example.com/api/terms/t1/ws?ticket=tick");
   });
 
-  it("wsUrl omits from at 0 and includes it when > 0", () => {
-    expect(wsUrl("t1", "tick", 0)).not.toContain("from=");
-    expect(wsUrl("t1", "tick", 1234)).toContain("from=1234");
-    expect(wsUrl("t1", "tick")).not.toContain("from=");
+  it("wsUrl derives scheme and host from a non-empty daemon base", () => {
+    setDaemonBase("https://kb.example.com:4000");
+    try {
+      expect(wsUrl("t1", "tick", 5)).toBe("wss://kb.example.com:4000/api/terms/t1/ws?ticket=tick&from=5");
+    } finally {
+      setDaemonBase("");
+    }
+    // http base → ws.
+    setDaemonBase("http://laptop.local:4000");
+    try {
+      expect(wsUrl("t1", "tick")).toBe("ws://laptop.local:4000/api/terms/t1/ws?ticket=tick");
+    } finally {
+      setDaemonBase("");
+    }
   });
 
   it("404 on mintTicket throws TermsApiError with status 404", async () => {
@@ -105,5 +116,19 @@ describe("terms API", () => {
     expect(err).toBeInstanceOf(TermsApiError);
     expect((err as TermsApiError).status).toBe(400);
     expect((err as TermsApiError).type).toBe("urn:kb:errors:bad-request");
+  });
+  it("listTerms 500 throws TermsApiError with status 500", async () => {
+    mockFetch(() => new Response("", { status: 500 }));
+    const err = await listTerms().catch((e) => e);
+    expect(err).toBeInstanceOf(TermsApiError);
+    expect((err as TermsApiError).status).toBe(500);
+  });
+
+  it("mintTicket URL-encodes the term id", async () => {
+    const calls = mockFetch(() =>
+      jsonResponse(200, { ticket: "a".repeat(32), expires_in: 30, term: "x" }),
+    );
+    await mintTicket("a/b c?d");
+    expect(calls[0].url).toBe(`/api/terms/${encodeURIComponent("a/b c?d")}/ticket`);
   });
 });

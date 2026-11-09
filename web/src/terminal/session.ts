@@ -36,6 +36,7 @@
 
 import {
   decodeBinaryFrame,
+  encodeBinaryInput,
   encodeInput,
   parseTextFrame,
   WireProtocolError,
@@ -152,7 +153,7 @@ export class TermSession {
   getState(): SessionState {
     let caption: string;
     if (this.phase === "blocked") caption = `blocked: ${this.blockedReason ?? "unknown"}`;
-    else if (this.phase === "ended") caption = `exited (code ${this.exitCode ?? 0})`;
+    else if (this.phase === "ended") caption = this.exitCode === null ? "exited" : `exited (code ${this.exitCode})`;
     else if (this.phase === "reconnecting") {
       const nextMs = Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * 2 ** this.attempt);
       caption = `reconnecting in ${Math.max(1, Math.ceil(nextMs / 1000))}s`;
@@ -179,6 +180,9 @@ export class TermSession {
   /** Unmount: close 1000, cancel timers, mint no further tickets. */
   dispose(): void {
     this.disposed = true;
+    // Bump the generation so in-flight frames on the old socket are
+    // ignored by the gen-guarded handlers after dispose.
+    this.socketGen += 1;
     this.clearAllTimers();
     if (this.mintAbort) {
       this.mintAbort.abort();
@@ -192,14 +196,15 @@ export class TermSession {
   /**
    * Send one keystroke payload. Returns false (and does not queue)
    * when the stream is not live — the caller drops it with a
-   * transient caption.
+   * transient caption. Binary (xterm `onBinary`) bytes are UTF-8
+   * decoded to the pinned string frame; never string1337ified.
    */
-  sendInput(data: string): boolean {
+  sendInput(data: string | Uint8Array): boolean {
     if (this.phase !== "live" || this.socket === null || this.disposed) {
       this.cb.onTransient?.("input dropped (not live)");
       return false;
     }
-    this.socket.send(encodeInput(data));
+    this.socket.send(typeof data === "string" ? encodeInput(data) : encodeBinaryInput(data));
     return true;
   }
 
@@ -287,6 +292,7 @@ export class TermSession {
   block(reason: string): void {
     this.phase = "blocked";
     this.blockedReason = reason;
+    this.socketGen += 1;
     this.clearAllTimers();
     if (this.mintAbort) {
       this.mintAbort.abort();
@@ -356,7 +362,15 @@ export class TermSession {
 
   private markLive(): void {
     this.clearWatchdog();
+    const wasLive = this.phase === "live";
     this.phase = "live";
+    if (wasLive) {
+      // Already live on this generation: keep the original 5s timer.
+      // Re-arming on every frame would postpone the attempt reset
+      // indefinitely under steady traffic.
+      this.emit();
+      return;
+    }
     this.clearLiveReset();
     const gen = this.socketGen;
     // `attempt` resets only after the connection stayed live ≥ 5 s.
@@ -367,30 +381,42 @@ export class TermSession {
     this.emit();
   }
 
-  private enqueueWrite(data: Uint8Array): void {
-    this.writeQueue = this.writeQueue.then(() => {
-      let resolve!: () => void;
-      const promise = new Promise<void>((res) => {
-        resolve = res;
+  /** Chain one step onto the write queue, always finally-resolved so a
+   *  sync throw in `fn` cannot poison every later write. */
+  private enqueueStep(fn: () => void): void {
+    this.writeQueue = this.writeQueue
+      .catch(() => {})
+      .then(() => {
+        try {
+          fn();
+        } catch {
+          // Sink throws are swallowed: the stream machine stays alive.
+        }
       });
-      this.sink.write(data, resolve);
-      return promise;
-    });
   }
 
-  private enqueueReset(): void {
-    this.writeQueue = this.writeQueue.then(() => {
-      this.sink.reset();
-    });
+  private enqueueWrite(data: Uint8Array): void {
+    this.writeQueue = this.writeQueue
+      .catch(() => {})
+      .then(() => {
+        const { promise, resolve } = Promise.withResolvers<void>();
+        try {
+          this.sink.write(data, resolve);
+        } catch {
+          resolve();
+        }
+        return promise;
+      });
   }
+
+  private enqueueReset(): void { this.enqueueStep(() => this.sink.reset()); }
 
   private enqueueResize(cols: number, rows: number): void {
-    this.writeQueue = this.writeQueue.then(() => {
-      this.sink.resize(cols, rows);
-    });
+    this.enqueueStep(() => this.sink.resize(cols, rows));
   }
 
   private onBinary(frame: Uint8Array): void {
+    if (this.disposed || this.isSettled()) return;
     let decoded: { offset: number; payload: Uint8Array };
     try {
       decoded = decodeBinaryFrame(frame);
@@ -435,6 +461,7 @@ export class TermSession {
   }
 
   private onText(text: string): void {
+    if (this.disposed || this.isSettled()) return;
     let frame: ServerTextFrame;
     try {
       frame = parseTextFrame(text);
@@ -454,12 +481,25 @@ export class TermSession {
         break;
       }
       case "profile":
-        this.cb.onProfile?.(frame);
+        if (
+          Number.isSafeInteger(frame.cols) && Number.isSafeInteger(frame.rows) &&
+          Number.isSafeInteger(frame.scrollback) &&
+          frame.cols >= 1 && frame.cols <= 1000 && frame.rows >= 1 && frame.rows <= 1000 &&
+          frame.scrollback >= 0 && frame.scrollback <= 1_000_000
+        ) {
+          this.cb.onProfile?.(frame);
+        }
         break;
       case "imagedef":
         this.cb.onImageDef?.(frame);
         break;
       case "seed": {
+        // Validate (unsafe/negative leaks into ?from=); an invalid seed is
+        // ignored and must not poison the write queue.
+        if (!Number.isSafeInteger(frame.offset) || !Number.isSafeInteger(frame.len) ||
+          frame.offset < 0 || frame.len < 0 || frame.offset > Number.MAX_SAFE_INTEGER) {
+          break;
+        }
         this.enqueueReset();
         this.seeding = true;
         this.seedOffset = frame.offset;
@@ -475,7 +515,13 @@ export class TermSession {
         break;
       }
       case "resize":
-        this.enqueueResize(frame.cols, frame.rows);
+        if (
+          Number.isSafeInteger(frame.cols) && Number.isSafeInteger(frame.rows) &&
+          frame.cols >= 1 && frame.cols <= 1000 &&
+          frame.rows >= 1 && frame.rows <= 1000
+        ) {
+          this.enqueueResize(frame.cols, frame.rows);
+        }
         break;
       case "sizechanged":
         this.cb.onSizeChanged?.(frame.cols, frame.rows, frame.by);
@@ -492,6 +538,7 @@ export class TermSession {
         // frame (in-order delivery); end permanently, never reconnect.
         this.phase = "ended";
         this.exitCode = frame.code;
+        this.socketGen += 1;
         this.clearAllTimers();
         const s = this.socket;
         this.socket = null;

@@ -29,9 +29,9 @@ import { countHits, findNext, type FindHit } from "./find";
 import { useTerms } from "./useTerms";
 import type { ImageDefFrame, ProfileFrame } from "./wire";
 import type { TerminalPanelProps } from "./TerminalPanel.lazy";
+import { osc52ClipboardText, writeClipboardText } from "./clipboard";
 import "./terminal.css";
 
-const TYPED_WINDOW_MS = 10_000;
 const TRANSIENT_MS = 2_000;
 
 /** e2e seam: `container.__kbTerm` exposes the live instance (no window global). */
@@ -126,14 +126,11 @@ export function TerminalPanel(props: TerminalPanelProps) {
     let dead = false;
     let transientTimer: number | null = null;
     let fitTimer: number | null = null;
+    let hostClick: (() => void) | null = null;
 
-    const writeClipboardIfRecent = (text: string): void => {
-      if (Date.now() - lastTypedRef.current > TYPED_WINDOW_MS) return;
-      try {
-        void navigator.clipboard?.writeText(text);
-      } catch {
-        // Clipboard failures are caught silently.
-      }
+    const writeClipboardIfRecent = (data: string): void => {
+      const text = osc52ClipboardText(data, lastTypedRef.current, Date.now());
+      if (text !== null) void writeClipboardText(text);
     };
 
     const createTerminal = (profile: ProfileFrame): boolean => {
@@ -197,15 +194,10 @@ export function TerminalPanel(props: TerminalPanelProps) {
       });
       term.parser.registerOscHandler(52, (data) => {
         if (data.includes("?")) return true;
-        const parts = data.split(";");
-        if (parts.length >= 2) {
-          try {
-            writeClipboardIfRecent(atob(parts[1]));
-          } catch {
-            // Not clipboard content — ignored.
-          }
-        }
-        return false;
+        // Set: gated write, then swallow (return true) so xterm's
+        // default OSC 52 handling never reaches the clipboard.
+        writeClipboardIfRecent(data);
+        return true;
       });
       term.attachCustomKeyEventHandler((ev) => {
         if (
@@ -231,7 +223,9 @@ export function TerminalPanel(props: TerminalPanelProps) {
           lastTypedRef.current = Date.now();
         }
       });
-      host.addEventListener("click", () => term.focus());
+      const onHostClick = (): void => term.focus();
+      host.addEventListener("click", onHostClick);
+      hostClick = onHostClick;
       fitNow(term, host, profile.cols);
       termRef.current = term;
       (host as TermSeam).__kbTerm = term;
@@ -306,6 +300,8 @@ export function TerminalPanel(props: TerminalPanelProps) {
             profile.rows !== existing.rows ||
             profile.scrollback !== existing.options.scrollback
           ) {
+            if (hostClick) host.removeEventListener("click", hostClick);
+            hostClick = null;
             existing.dispose();
             termRef.current = null;
             (host as TermSeam).__kbTerm = undefined;
@@ -322,11 +318,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
           transientTimer = window.setTimeout(() => setTransient(null), TRANSIENT_MS);
         },
         onClipboard: (dataB64) => {
-          try {
-            writeClipboardIfRecent(atob(dataB64));
-          } catch {
-            // Not clipboard content — ignored.
-          }
+          writeClipboardIfRecent(`c;${dataB64}`);
         },
       },
     });
@@ -347,6 +339,8 @@ export function TerminalPanel(props: TerminalPanelProps) {
       observer.disconnect();
       if (fitTimer !== null) window.clearTimeout(fitTimer);
       if (transientTimer !== null) window.clearTimeout(transientTimer);
+      if (hostClick) host.removeEventListener("click", hostClick);
+      hostClick = null;
       session.dispose();
       sessionRef.current = null;
       const term = termRef.current;
@@ -415,10 +409,16 @@ export function TerminalPanel(props: TerminalPanelProps) {
           className="kb-term__btn"
           data-testid="kb-term-close"
           onClick={() => {
+            if (props.onClose) {
+              props.onClose();
+              return;
+            }
             sessionRef.current?.dispose();
             sessionRef.current = null;
             termRef.current?.dispose();
             termRef.current = null;
+            if (hostRef.current) (hostRef.current as TermSeam).__kbTerm = undefined;
+            setGrid(null);
           }}
         >
           Close

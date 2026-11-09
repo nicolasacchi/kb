@@ -68,6 +68,7 @@ export function TerminalSlot(props: TerminalSlotProps): ReactElement | null {
             sid={props.sid}
             harness={harness}
             mode="watch"
+            onClose={() => setOpen(false)}
           />
         </Suspense>
       ) : null}

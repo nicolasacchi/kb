@@ -15,7 +15,13 @@ vi.mock("../terminal/TerminalPanel.lazy", () => {
   mockEvalCount += 1;
   return {
     __esModule: true,
-    default: () => <div data-testid="mock-panel" />,
+    default: (props: { onClose?: () => void }) => (
+      <div data-testid="mock-panel">
+        <button type="button" data-testid="mock-panel-close" onClick={() => props.onClose?.()}>
+          Close
+        </button>
+      </div>
+    ),
   };
 });
 
@@ -70,5 +76,20 @@ describe("TerminalSlot (T14 seam)", () => {
     expect(screen.queryByTestId("kb-term-open")).toBeNull();
     expect(screen.queryByTestId("mock-panel")).toBeNull();
     expect(mockEvalCount).toBe(0);
+  });
+
+  it("panel Close (slot onClose) unmounts the panel; reopening works", async () => {
+    render(
+      <TerminalSlot
+        sid="sid-1"
+        harness="omp"
+        lane={{ available: true, term_id: "t1", harness: "omp", state: "working", admitted: true }}
+      />,
+    );
+    (screen.getByTestId("kb-term-open") as HTMLButtonElement).click();
+    expect(await screen.findByTestId("mock-panel")).toBeTruthy();
+    (screen.getByTestId("mock-panel-close") as HTMLButtonElement).click();
+    expect(screen.queryByTestId("mock-panel")).toBeNull();
+    expect(screen.getByTestId("kb-term-open").textContent).toBe("Open terminal");
   });
 });

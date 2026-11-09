@@ -31,15 +31,19 @@ export function findNext(
 ): FindHit | null {
   if (query === "" || source.length === 0) return null;
   const n = source.length;
-  for (let step = 0; step < n; step += 1) {
+  // Visit every line once in the search direction, then re-scan the
+  // starting line from the far edge (`n + 1` visits): the starting
+  // line's region before the cursor is reachable after a full wrap.
+  for (let step = 0; step <= n; step += 1) {
     const y = (((from.line + dir * step) % n) + n) % n;
     const text = source.lineToString(y);
+    const isStartVisit = step === 0;
     if (dir > 0) {
-      const start = y === from.line ? from.col + 1 : 0;
+      const start = isStartVisit ? from.col + 1 : 0;
       const idx = text.indexOf(query, start);
       if (idx >= 0) return { line: y, col: idx, length: query.length };
     } else {
-      const start = y === from.line ? from.col - 1 : text.length - 1;
+      const start = isStartVisit ? from.col - 1 : text.length - 1;
       if (start < 0) continue;
       const idx = text.lastIndexOf(query, Math.min(start, text.length - 1));
       if (idx >= 0) return { line: y, col: idx, length: query.length };

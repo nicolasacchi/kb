@@ -19,9 +19,11 @@ const GOLDEN_DIR = here("../../../crates/kb-term/tests/golden/");
 import {
   decodeBinaryFrame,
   encodeBinaryFrame,
+  encodeBinaryInput,
   encodeInput,
   KNOWN_CLIENT_KEYS,
   KNOWN_SERVER_KEYS,
+  MAX_OFFSET,
   parseTextFrame,
   WireProtocolError,
 } from "./wire";
@@ -38,6 +40,11 @@ function readGolden(name: string): string {
 }
 
 describe("binary frames", () => {
+  it("MAX_OFFSET is exactly 2^53 (a 32-bit shift would give 2097152)", () => {
+    expect(MAX_OFFSET).toBe(9007199254740992);
+    expect(MAX_OFFSET).toBe(Number.MAX_SAFE_INTEGER + 1);
+  });
+
   it("decodes offsets 0, 2^32+5 and near 2^53", () => {
     const payload = new TextEncoder().encode("hi");
     for (const offset of [0, 2 ** 32 + 5, Number.MAX_SAFE_INTEGER]) {
@@ -138,5 +145,13 @@ describe("client text frames (goldens)", () => {
   it("encodeInput escapes the data string exactly as JSON", () => {
     expect(encodeInput("a\"b\nc")).toBe('{"t":"input","data":"a\\"b\\nc"}');
     expect(encodeInput("")).toBe('{"t":"input","data":""}');
+  });
+  it("encodeBinaryInput decodes UTF-8 bytes into the pinned string frame", () => {
+    // Ctrl-Z (0x1A) and a UTF-8 multi-byte sequence must stay a string,
+    // never a number-keyed object.
+    expect(encodeBinaryInput(new Uint8Array([26]))).toBe('{"t":"input","data":"\\u001a"}');
+    expect(encodeBinaryInput(new TextEncoder().encode("hé"))).toBe('{"t":"input","data":"hé"}');
+    expect(encodeBinaryInput(new Uint8Array([]))).toBe('{"t":"input","data":""}');
+    expect(encodeBinaryInput(new Uint8Array([26]))).not.toContain('"0":');
   });
 });

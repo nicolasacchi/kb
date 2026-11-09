@@ -30,9 +30,9 @@ function numberedStream(total) {
 }
 
 // Terminal queries the guards must swallow (DA1, DA2, XTVERSION, DSR,
-// XTWINOPS, kitty keyboard, OSC 11/52 queries).
+// XTWINOPS, kitty keyboard, DCS +q/$q, OSC 11/52 queries).
 const QUERY_BYTES = Buffer.from(
-  "\u001b[c\u001b[>c\u001b[>q\u001b[5n\u001b[6n\u001b[?996n\u001b[?2026$p\u001b[16t\u001b[?u\u001b]11;?\u001b\\\u001b]52;c;?\u001b\\",
+  "\u001b[c\u001b[>c\u001b[>q\u001b[5n\u001b[6n\u001b[?996n\u001b[?2026$p\u001b[16t\u001b[?u\u001bP+q\u001b\\\u001bP$q\u001b\\\u001b]11;?\u001b\\\u001b]52;c;?\u001b\\",
   "utf8",
 );
 
@@ -142,8 +142,8 @@ export async function installFakeTerminal(page, opts = {}) {
   const exitCode = opts.exitCode ?? null;
   const ticketStatus = opts.ticketStatus ?? null;
   const profilePatch = opts.profilePatch ?? null;
+  const secondProfile = opts.secondProfile ?? null;
   const seedByteLen = LINE_LEN * seedLines;
-
   // The numbered-line stream, optionally with reply-guard queries
   // spliced in right after the seed region. The query bytes are real
   // pane-output bytes occupying real stream offsets (they would have
@@ -267,8 +267,8 @@ export async function installFakeTerminal(page, opts = {}) {
     } else {
       cursor = Math.max(0, from - rewind);
     }
-
     const connStart = cursor;
+    let secondProfileSent = false;
     const pump = () => {
       if (closed) return;
       if (exitCode !== null && cursor >= stream.length) {
@@ -280,6 +280,16 @@ export async function installFakeTerminal(page, opts = {}) {
       if (gapAt !== null && !gapDone && cursor >= gapAt && cursor < stream.length) {
         gapDone = true;
         sendBinary(cursor + 100, Buffer.from("GAPGAPGAPG", "utf8"));
+        setTimeout(() => pump(), pace);
+        return;
+      }
+      if (
+        secondProfile !== null &&
+        !secondProfileSent &&
+        cursor > seedByteLen
+      ) {
+        secondProfileSent = true;
+        sendText(profileFrame(secondProfile));
         setTimeout(() => pump(), pace);
         return;
       }

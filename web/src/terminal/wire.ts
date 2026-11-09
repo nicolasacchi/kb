@@ -23,7 +23,7 @@
 export const PROTO = "kb-term/1";
 
 /** Largest legal stream offset (offsets are JS-safe integers, `< 2^53`). */
-export const MAX_OFFSET: number = 1 << 53;
+export const MAX_OFFSET: number = 2 ** 53;
 
 export class WireProtocolError extends Error {
   readonly kind: "short-binary" | "offset-out-of-range" | "malformed-text";
@@ -161,4 +161,16 @@ export interface InputFrame { t: "input"; data: string }
 export function encodeInput(data: string): string {
   const frame: InputFrame = { t: "input", data };
   return JSON.stringify(frame);
+}
+
+/**
+ * Encode xterm `onBinary` bytes as an input frame. xterm binary payloads
+ * are UTF-8 key sequences (kitty keys with Unicode); decode them and use
+ * the pinned string frame. (Previously the Uint8Array reached
+ * `encodeInput`'s `JSON.stringify` directly, emitting a number-keyed
+ * object the relay cannot decode.)
+ */
+export function encodeBinaryInput(data: Uint8Array): string {
+  const text = new TextDecoder("utf-8").decode(data);
+  return encodeInput(text);
 }

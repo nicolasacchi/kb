@@ -72,7 +72,7 @@ async function bufferInfo(page: Page): Promise<BufInfo> {
   });
 }
 
-async function openTerminal(page: Page): Promise<void> {
+async function openTerminal(page: Page): Promise<unknown[]> {
   const errors: unknown[] = [];
   page.on("pageerror", (e) => errors.push(e));
   // Surface uncaught page errors in the CI log even when the panel mounts:
@@ -89,11 +89,12 @@ async function openTerminal(page: Page): Promise<void> {
   try {
     await expect(page.locator('[data-kb-term]')).toBeVisible({ timeout: 15_000 });
   } catch (e) {
-    const slots = await page.evaluate(() => document.body.innerHTML.length);
+    const bodyLen = await page.evaluate(() => document.body.innerHTML.length);
     // eslint-disable-next-line no-console
-    console.log(`[t14-open] bodyLen=${slots} errors=${JSON.stringify(errors.map(String)).slice(0, 4000)}`);
+    console.log(`[t14-open] bodyLen=${bodyLen} errors=${JSON.stringify(errors.map(String)).slice(0, 4000)}`);
     throw e;
   }
+  return errors;
 }
 
 test.describe("T14 — desktop terminal panel", () => {
@@ -102,7 +103,23 @@ test.describe("T14 — desktop terminal panel", () => {
   }) => {
     const TOTAL = 2000;
     const stats = await installFakeTerminal(page, { total: TOTAL, seedLines: 500 });
-    await openTerminal(page);
+    // Belt-and-braces lazy assertion: no panel-chunk / xterm request
+    // before the click.
+    const requests: string[] = [];
+    page.on("request", (r) => requests.push(r.url()));
+    const errors: unknown[] = [];
+    page.on("pageerror", (e) => errors.push(e));
+    page.on("console", (m) => errors.push(`${m.type()}: ${m.text()}`));
+    page.on("requestfailed", (r) => errors.push(`reqfail: ${r.url()}`));
+    page.on("response", (r) => {
+      if (r.status() >= 400) errors.push(`http-${r.status()}: ${r.url()}`);
+    });
+    await page.goto(`${BASE}/sessions/${SID}`);
+    await expect(page.locator('[data-testid="kb-terminal-slot"]')).toBeVisible({ timeout: 15_000 });
+    const beforeClick = requests.filter((u) => /TerminalPanel|xterm/i.test(u));
+    expect(beforeClick, "panel chunk must not load before click").toEqual([]);
+    await page.locator('[data-testid="kb-term-open"]').click();
+    await expect(page.locator('[data-kb-term]')).toBeVisible({ timeout: 15_000 });
     await expect
       .poll(async () => (await bufferInfo(page)).lines.length, { timeout: 30_000 })
       .toBe(TOTAL);
@@ -123,6 +140,7 @@ test.describe("T14 — desktop terminal panel", () => {
     expect(headers["origin"]).toContain("127.0.0.1");
     expect(headers["authorization"]).toBeUndefined();
     expect(stats.froms[0]).toBeNull();
+    expect(errors, "no page errors after live").toEqual([]);
   });
 
   test("resume: 4 abrupt drops, from strictly increasing, gaps=0, resets=1", async ({
@@ -223,8 +241,11 @@ test.describe("T14 — desktop terminal panel", () => {
       .toBe("live");
     const area = page.locator(".xterm-helper-textarea");
     await area.press("Shift+Enter");
-    await expect.poll(() => stats.inputs.length).toBeGreaterThanOrEqual(1);
-    expect(stats.inputs.some((f) => f.includes("13;2u"))).toBe(true);
+    // Exactly one input frame (the CSI-u), with no bare-\r double-send:
+    // a handler returning true would add a second \r frame.
+    await expect.poll(() => stats.inputs.length).toBe(1);
+    expect(stats.inputs[0]).toContain("13;2u");
+    expect(stats.inputs[0].endsWith('"data":"\\r"}')).toBe(false);
     await area.press("Enter");
     await expect.poll(() => stats.inputs.some((f) => f.endsWith('"data":"\\r"}'))).toBe(true);
     await area.press("Control+c");
@@ -283,9 +304,11 @@ test.describe("T14 — desktop terminal panel", () => {
     await expect
       .poll(async () => (await bufferInfo(page)).phase, { timeout: 30_000 })
       .toBe("live");
-    await page.locator('[data-testid="kb-term-open"]').click();
+    // The panel's own Close unmounts (disconnect only) via the slot.
+    await page.locator('[data-testid="kb-term-close"]').click();
     await expect(page.locator("[data-kb-term]")).toHaveCount(0);
-    expect(stats.closes).toContain(1000);
+    await expect(page.locator('[data-testid="kb-term-open"]')).toHaveText("Open terminal");
+    await expect.poll(() => stats.closes).toContain(1000);
     const tickets = stats.tickets;
     await page.waitForTimeout(1000);
     expect(stats.tickets).toBe(tickets);
@@ -323,5 +346,41 @@ test.describe("T14 — desktop terminal panel", () => {
     const info = await bufferInfo(page);
     expect(info.resets).toBe("0");
     expect(info.lines).toEqual([]);
+  });
+  test("second Profile with a new grid recreates the terminal and rejoins full", async ({
+    page,
+  }) => {
+    const stats = await installFakeTerminal(page, {
+      total: 300,
+      seedLines: 100,
+      secondProfile: { cols: 80, rows: 24 },
+    });
+    await openTerminal(page);
+    // The grid caption flips to the new profile's cols x rows, and the
+    // full rejoin increments resets on the second socket.
+    await expect(page.locator('[data-testid="kb-term-grid"]')).toHaveText("80x24", {
+      timeout: 30_000,
+    });
+    await expect
+      .poll(async () => (await bufferInfo(page)).resets, { timeout: 30_000 })
+      .toBe("2");
+    await expect.poll(() => stats.sockets).toBe(2);
+    expect(stats.froms[1]).toBeNull();
+  });
+
+  test("narrow viewport: fit still too wide at fontSize 10 overflows-x auto", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 320, height: 600 });
+    await installFakeTerminal(page, { total: 300, seedLines: 100 });
+    await openTerminal(page);
+    await expect
+      .poll(async () => (await bufferInfo(page)).phase, { timeout: 30_000 })
+      .toBe("live");
+    const overflowX = await page.evaluate(() => {
+      const el = document.querySelector("[data-kb-term]") as HTMLElement | null;
+      return el?.style.overflowX ?? "";
+    });
+    expect(overflowX).toBe("auto");
   });
 });

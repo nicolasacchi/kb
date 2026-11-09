@@ -102,4 +102,34 @@ describe("installReplyGuards", () => {
     expect(osc52.handler("c;?")).toBe(true);
     expect(osc52.handler("c;SGVsbG8=")).toBe(false);
   });
+  it("XTWINOPS mixed params (report + 22/23) pass through", () => {
+    const { rec, parser } = fakeParser();
+    installReplyGuards(parser);
+    const t = rec.csi.find((e) => e.final === "t")!;
+    expect(t.handler([11, 22])).toBe(false);
+    expect(t.handler([16, 23])).toBe(false);
+    expect(t.handler([11, 13])).toBe(true);
+    expect(t.handler([22, 11])).toBe(false);
+  });
+
+  it("dispose disposes every registered disposable", () => {
+    const disposed: string[] = [];
+    const parser: ReplyParser = {
+      registerCsiHandler: (prefix, intermediates, final) => ({
+        dispose: () => disposed.push(`csi:${prefix}${intermediates}${final}`),
+      }),
+      registerOscHandler: (code) => ({
+        dispose: () => disposed.push(`osc:${code}`),
+      }),
+      registerDcsHandler: (prefix, intermediates, final) => ({
+        dispose: () => disposed.push(`dcs:${prefix}${intermediates}${final}`),
+      }),
+    };
+    const installed = installReplyGuards(parser);
+    installed.dispose();
+    // 12 CSI + 2 DCS + 14 OSC = 28 disposables.
+    expect(disposed).toHaveLength(28);
+    expect(disposed).toContain("dcs:+q");
+    expect(disposed).toContain("osc:52");
+  });
 });
