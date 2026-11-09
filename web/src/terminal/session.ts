@@ -413,16 +413,16 @@ export class TermSession {
         this.markLive();
       }
     } else if (offset === this.applied) {
-      this.clearWatchdog();
       this.enqueueWrite(payload);
       this.applied += payload.length;
+      this.markLive();
     } else if (offset < this.applied) {
       const overlap = Math.min(this.applied - offset, payload.length);
       if (overlap < payload.length) {
         this.enqueueWrite(payload.subarray(overlap));
         this.applied += payload.length - overlap;
       }
-      this.clearWatchdog();
+      this.markLive();
     } else {
       // off > applied: GAP — close and rejoin FULL (no `from`).
       this.gaps += 1;

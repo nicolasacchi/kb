@@ -219,14 +219,29 @@ describe("TermSession", () => {
     // Live again, but attempt must NOT reset before 5s live elapses.
     const s2 = h.sockets[2];
     s2.pushText({ t: "hello", proto: "kb-term/1", session: "s1", epoch: "E1", harness: "omp", bound_sid: null });
-    // resume joins need no seed; one in-order frame marks live only via seed,
-    // so drive a seed join on this connection:
-    s2.pushText({ t: "seed", offset: 0, len: 1 });
-    s2.pushBinary(0, "z");
+    // A resume join needs no seed; the first in-order data frame marks live.
+    s2.pushBinary(105, "q");
     expect(h.session.getState().phase).toBe("live");
     expect(h.session.getState().attempt).toBe(2);
     h.fire(5000);
     expect(h.session.getState().attempt).toBe(0);
+  });
+
+  it("a resumed (seedless) connection becomes live on its first data frame and accepts input", async () => {
+    const h = setup();
+    const s = await goLive(h);
+    s.closeFromServer(1000);
+    h.fire(h.pendingTimer(250)?.ms ?? 250);
+    await flush();
+    const s2 = h.sockets[h.sockets.length - 1];
+    expect(h.urls[h.urls.length - 1]).toContain("from=105");
+    s2.pushText({ t: "hello", proto: "kb-term/1", session: "s1", epoch: "E1", harness: "omp", bound_sid: null });
+    // Not resumed until data arrives.
+    expect(h.session.getState().phase).toBe("reconnecting");
+    s2.pushBinary(105, "x");
+    expect(h.session.getState().phase).toBe("live");
+    expect(h.session.sendInput("y")).toBe(true);
+    expect(s2.sent).toEqual(['{"t":"input","data":"y"}']);
   });
 
   it("mints exactly one new ticket per attempt", async () => {
