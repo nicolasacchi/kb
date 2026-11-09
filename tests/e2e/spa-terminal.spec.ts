@@ -73,6 +73,9 @@ async function bufferInfo(page: Page): Promise<BufInfo> {
 async function openTerminal(page: Page): Promise<void> {
   const errors: unknown[] = [];
   page.on("pageerror", (e) => errors.push(e));
+  // Surface uncaught page errors in the CI log even when the panel mounts:
+  // a createTerminal throw currently shows up only as missing scrollback.
+  page.on("pageerror", (e) => console.log(`[t14-pageerror] ${String(e).slice(0, 900)}`));
   page.on("console", (m) => errors.push(`${m.type()}: ${m.text()}`));
   page.on("requestfailed", (r) => errors.push(`reqfail: ${r.url()} ${r.failure()?.errorText ?? ""}`));
   page.on("response", (r) => {

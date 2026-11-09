@@ -242,8 +242,9 @@ export async function installFakeTerminal(page, opts = {}) {
     ws.onMessage((msg) => {
       stats.inputs.push(String(msg.toString()));
     });
-    ws.onClose((info) => {
-      stats.closes.push(info.code);
+    // Playwright's onClose handler receives (code, reason) positionally.
+    ws.onClose((code) => {
+      stats.closes.push(code);
       closed = true;
     });
     const sendText = (t) => {
