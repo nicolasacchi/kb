@@ -26,11 +26,12 @@
 //! a WS handshake). It is consumed at the upgrade (replayed or logged
 //! copies are dead), and this module never logs it or the raw URI.
 
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use axum::extract::ws::{close_code, CloseFrame, Message, WebSocket};
+use axum::extract::ws::{close_code, CloseFrame, Message};
 use axum::{
     body::Bytes,
     extract::{Path, Query, State, WebSocketUpgrade},
@@ -360,7 +361,7 @@ pub(crate) async fn run_relay<S, U, F>(
     S: SinkExt<Message> + StreamExt<Item = Result<Message, axum::Error>> + Unpin + Send + 'static,
     U: Upstream,
     F: Fn(RelayEvent) + Send + 'static,
-    <S as SinkExt<Message>>::Error: std::fmt::Debug,
+    <S as Sink<Message>>::Error: std::fmt::Debug,
 {
     let (mut sink, mut stream) = sink_stream.split();
     let (slow_tx, mut slow_rx) = mpsc::channel::<()>(1);
@@ -410,7 +411,7 @@ pub(crate) async fn run_relay<S, U, F>(
             // Slow consumer signalled by the reader: close 1013.
             _ = slow_rx.recv() => {
                 let _ = sink.send(Message::Close(Some(CloseFrame {
-                    code: close_code::TRY_AGAIN_LATER.into(),
+                    code: close_code::AGAIN.into(),
                     reason: "slow consumer".into(),
                 }))).await;
                 break;
