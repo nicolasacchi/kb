@@ -140,6 +140,38 @@ test('drop_reasons interrupted_transmit_aborts_first', () => {
   expect(r.stats.abortedTransfer).toBe(1);
 });
 
+test('valid_m1_start_interrupts_pending_and_b_completes', () => {
+  // A valid m=1 start interrupting a pending transfer aborts it once
+  // (abortedTransfer===1), the first transfer never completes, and the
+  // interrupting transfer transmits with its own id/png.
+  const pngA = makePng(8, 8, 7);
+  const partsA = transmitApcs(9, pngA, 16);
+  expect(partsA.length).toBeGreaterThan(2);
+  const r = new KittyReassembler();
+  expect(r.push(parseKittyControl(partsA[0]!.subarray(3, partsA[0]!.length - 2)))).toBeNull();
+  const pngB = makePng(6, 6, 3);
+  const partsB = transmitApcs(10, pngB, 16);
+  expect(partsB.length).toBeGreaterThan(1);
+  expect(r.push(parseKittyControl(partsB[0]!.subarray(3, partsB[0]!.length - 2)))).toBeNull();
+  expect(r.stats.abortedTransfer).toBe(1);
+  let result: KittyResult | null = null;
+  for (let i = 1; i < partsB.length; i++) {
+    result = r.push(parseKittyControl(partsB[i]!.subarray(3, partsB[i]!.length - 2)));
+    if (i < partsB.length - 1) expect(result).toBeNull();
+  }
+  expect(result).not.toBeNull();
+  expect(result!.kind).toBe('transmit');
+  expect(r.stats.transmits).toBe(1);
+  expect(r.stats.abortedTransfer).toBe(1);
+  if (result!.kind === 'transmit') {
+    expect(result!.id).toBe(10);
+    expect(result!.png).toEqual(pngB);
+  }
+  // Transfer A never completes: its leftover continuations are orphans.
+  expect(r.push(parseKittyControl(partsA[1]!.subarray(3, partsA[1]!.length - 2)))).toEqual({ kind: 'drop', reason: 'orphanChunk' });
+  expect(r.stats.orphanChunk).toBe(1);
+});
+
 test('dropped_transmit_starts_do_not_abort_pending', () => {
   // Each dropped start (bad format, bad medium, compressed, missing/bad i,
   // bad base64 charset, m=1 oversize) must leave a legitimate pending
@@ -177,8 +209,9 @@ test('dropped_transmit_starts_do_not_abort_pending', () => {
       expect(result!.id).toBe(9);
     }
     // Sanity: this row really exercised the named drop.
-    expect(r.stats[reason]).toBe(1);
-    void name;
+    if (r.stats[reason] !== 1) {
+      throw new Error(`${name}: expected stats.${reason} === 1, got ${r.stats[reason]}`);
+    }
   }
   // m=1 oversize start also does not abort the pending transfer.
   {
@@ -207,6 +240,42 @@ test('dropped_transmit_starts_do_not_abort_pending', () => {
     const r = new KittyReassembler();
     expect(r.push(parseKittyControl(parts[0]!.subarray(3, parts[0]!.length - 2)))).toBeNull();
     expect(r.push(pc('a=t,f=100,i=555', Buffer.from('hello world!').toString('base64')))).toEqual({ kind: 'drop', reason: 'badPng' });
+    expect(r.stats.abortedTransfer).toBe(0);
+    let result: KittyResult | null = null;
+    for (let i = 1; i < parts.length; i++) {
+      result = r.push(parseKittyControl(parts[i]!.subarray(3, parts[i]!.length - 2)));
+    }
+    expect(result!.kind).toBe('transmit');
+    expect(r.stats.abortedTransfer).toBe(0);
+    expect(r.stats.transmits).toBe(1);
+    if (result!.kind === 'transmit') expect(result!.png).toEqual(png);
+  }
+  // Single-chunk finish-path oversize drop also leaves pending alone.
+  {
+    const png = makePng(8, 8, 7);
+    const parts = transmitApcs(9, png, 16);
+    const r = new KittyReassembler({ maxImageBytes: 500 });
+    expect(r.push(parseKittyControl(parts[0]!.subarray(3, parts[0]!.length - 2)))).toBeNull();
+    const huge = Buffer.alloc(800).toString('base64'); // decodes over the 500 cap at finish
+    expect(r.push(pc('a=t,f=100,i=555', huge))).toEqual({ kind: 'drop', reason: 'oversize' });
+    expect(r.stats.abortedTransfer).toBe(0);
+    let result: KittyResult | null = null;
+    for (let i = 1; i < parts.length; i++) {
+      result = r.push(parseKittyControl(parts[i]!.subarray(3, parts[i]!.length - 2)));
+    }
+    expect(result!.kind).toBe('transmit');
+    expect(r.stats.abortedTransfer).toBe(0);
+    expect(r.stats.transmits).toBe(1);
+    if (result!.kind === 'transmit') expect(result!.png).toEqual(png);
+  }
+  // Single-chunk finish-path bad-base64 (length) drop also leaves
+  // pending alone ('AAA' passes the charset gate, fails length % 4 at finish).
+  {
+    const png = makePng(8, 8, 7);
+    const parts = transmitApcs(9, png, 16);
+    const r = new KittyReassembler();
+    expect(r.push(parseKittyControl(parts[0]!.subarray(3, parts[0]!.length - 2)))).toBeNull();
+    expect(r.push(pc('a=t,f=100,i=555', 'AAA'))).toEqual({ kind: 'drop', reason: 'badBase64' });
     expect(r.stats.abortedTransfer).toBe(0);
     let result: KittyResult | null = null;
     for (let i = 1; i < parts.length; i++) {
@@ -248,18 +317,57 @@ test('oversize_exact_decoded_boundary_true_length_equals_cap', () => {
   expect(r.stats.oversize).toBe(0);
   if (res!.kind === 'transmit') expect(res!.png).toEqual(png);
   // One byte over the cap must oversize-drop (enforcement not weakened).
+  // Deterministic path: the first chunk (4k-2 chars, pad_first=0) decodes
+  // to 3k-3 <= cap-1, so it always fits and returns null; the final
+  // chunk then oversize-drops at finishTransmit.
   const r2 = new KittyReassembler({ maxImageBytes: cap - 1 });
-  const res2a = r2.push(pc(`a=t,f=100,i=31,m=1`, first));
-  // First chunk may still fit under cap-1 exactly; final must oversize.
-  if (res2a !== null) {
-    expect(res2a).toEqual({ kind: 'drop', reason: 'oversize' });
-    expect(r2.stats.transmits).toBe(0);
-  } else {
-    const res2 = r2.push(pc(`q=2,m=0`, last));
-    expect(res2).toEqual({ kind: 'drop', reason: 'oversize' });
-    expect(r2.stats.oversize).toBe(1);
-    expect(r2.stats.transmits).toBe(0);
+  expect(r2.push(pc('a=t,f=100,i=31,m=1', first))).toBeNull();
+  const res2 = r2.push(pc('q=2,m=0', last));
+  expect(res2).toEqual({ kind: 'drop', reason: 'oversize' });
+  expect(r2.stats.oversize).toBe(1);
+  expect(r2.stats.transmits).toBe(0);
+});
+
+test('oversize_exact_continuation_boundary_at_cap', () => {
+  // The pushContinuation more=true exact check accepts an intermediate
+  // total at the cap: after the second chunk the concatenated length is
+  // b64.length-2, whose exact decoded length 3k-3 fits the cap (3k-1 or
+  // 3k-2), while the old ceil upper bound 3k would oversize-drop here.
+  let png: Uint8Array | null = null;
+  outer: for (let w = 2; w <= 12; w++) {
+    for (let fill = 1; fill <= 30; fill++) {
+      const cand = makePng(w, w, fill);
+      if (cand.length % 3 !== 0) { png = cand; break outer; }
+    }
   }
+  if (png === null) throw new Error('no PNG with padding found');
+  const b64 = Buffer.from(png).toString('base64');
+  expect(b64.length % 4).toBe(0);
+  expect(png.length % 3).not.toBe(0); // padding > 0
+  const first = b64.slice(0, 4);
+  const second = b64.slice(4, -2);
+  const third = b64.slice(-2);
+  const cap = png.length;
+  const r = new KittyReassembler({ maxImageBytes: cap });
+  expect(r.push(pc('a=t,f=100,i=32,m=1', first))).toBeNull();
+  // Middle (more=true) continuation: exact intermediate <= cap, so null;
+  // with the ceil bound this push would oversize-drop.
+  expect(r.push(pc('q=2,m=1', second))).toBeNull();
+  expect(r.stats.oversize).toBe(0);
+  const res = r.push(pc('q=2,m=0', third));
+  expect(res).not.toBeNull();
+  expect(res!.kind).toBe('transmit');
+  expect(r.stats.transmits).toBe(1);
+  expect(r.stats.oversize).toBe(0);
+  if (res!.kind === 'transmit') expect(res!.png).toEqual(png);
+  // A mid-stream continuation that pushes the total over the cap
+  // still drops, and the discarded pending transfer orphans the tail.
+  const r3 = new KittyReassembler({ maxImageBytes: cap - 4 });
+  expect(r3.push(pc('a=t,f=100,i=32,m=1', first))).toBeNull();
+  expect(r3.push(pc('q=2,m=1', second))).toEqual({ kind: 'drop', reason: 'oversize' });
+  expect(r3.stats.oversize).toBe(1);
+  expect(r3.push(pc('q=2,m=0', third))).toEqual({ kind: 'drop', reason: 'orphanChunk' });
+  expect(r3.stats.orphanChunk).toBe(1);
 });
 
 test('drop_reasons oversize_discards_pending_then_orphans', () => {
@@ -296,14 +404,25 @@ test('stats_identity', () => {
   r.push(pc('a=q,i=1')); // drop queryAction
   // orphan continuation
   r.push(pc('q=2,m=0', tinyPngB64()));
+  // A pending transfer aborted by a valid interrupting start, plus a
+  // dropped start that leaves the new pending transfer alone: each
+  // push still lands in exactly one bucket, so the identity below is
+  // unconditional (exercised over the abort paths, not only happy ones).
+  const multi2 = transmitApcs(7, png, 16);
+  r.push(parseKittyControl(multi2[0]!.subarray(3, multi2[0]!.length - 2))); // pending, chunks++
+  r.push(pc('a=t,f=24,i=9', 'AAAA')); // drop unsupportedFormat, no abort
+  const single2 = transmitApcs(8, png, 4096)[0]!;
+  r.push(parseKittyControl(single2.subarray(3, single2.length - 2))); // transmit, aborts pending
   const s = r.stats;
   const drops = s.unsupportedFormat + s.unsupportedMedium + s.compressed
     + s.directPlacement + s.nonVirtualPlacement + s.queryAction
     + s.imageNumberUnsupported + s.orphanChunk + s.badBase64 + s.badPng
     + s.oversize + s.otherAction;
-  expect(s.apcs).toBe(1 + 1 + 1 + multi.length + 2);
+  expect(s.apcs).toBe(1 + 1 + 1 + multi.length + 2 + 3);
   expect(s.apcs).toBe(s.transmits + s.places + s.resets + s.chunks + drops);
-  expect(s.transmits).toBe(2);
+  expect(s.transmits).toBe(3);
+  expect(s.abortedTransfer).toBe(1);
+  expect(s.unsupportedFormat).toBe(1);
   expect(s.places).toBe(1);
   expect(s.resets).toBe(1);
 });
