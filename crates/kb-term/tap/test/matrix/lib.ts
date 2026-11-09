@@ -39,14 +39,36 @@ export const VISUAL_SAME_P16 = 'SerializeAddon P16 downgrade for palette indices
 export const BLANK_FLAG_ATTR = 'serialize drops flags on blank cells' as const;
 
 /** Spike (T1) stage-B residual budgets (spec 9.2): total cells/rows of each
- * named class across ALL quiescent joins must stay at or below these. A new
- * allowlisted class with no budget entry fails the bound test. */
+ * named CELL/ROW class across ALL quiescent joins must stay at or below
+ * these. A new allowlisted cell/row class with no budget entry fails the
+ * bound test. STATE classes (DECSC) sit outside the cell/row spike budget
+ * but are NOT silent: every allowed state diff is counted and enumerated by
+ * the bound test under its class key (see DECSC_STAGEB_CLASS). */
 export const SPIKE_BOUNDS: Readonly<Record<string, number>> = Object.freeze({
   'cell chars': 15,
   'wide-char boundary': 7,
   'rows only in viewer (extra)': 6,
   'rows only in expected (lost by seed/viewer)': 2,
 });
+
+/** Named stage-B state residual (FXT6 review round 2): DECRC (ESC 8)
+ * restores from RAW saved coordinates shifted by ybase -- a REF that ran
+ * the full stream and a seed viewer (seed + remainder) can share exactly
+ * the viewport slot while their absolute savedY differs by the ybase
+ * delta (different history lengths after ED3 trims): no CUP can reconcile
+ * that from the seed, DECRC ignores it, and the viewport position is what
+ * the user sees. Stage-B DECSC coordinate diffs whose DECRC-restored
+ * positions agree (decscStageBAllowed) are allowed under THIS named
+ * residual -- not a blanket -- and every such exemption is counted under
+ * this key by the matrix and enumerated by the spike-bound test. The four
+ * per-{variant,stream} STATE_ALLOWLIST DECSC entries remain for the
+ * narrower case the named residual cannot cover (a restored position that
+ * genuinely differs on those streams); their exemptions are counted under
+ * the same key so no DECSC state diff is uncounted. probeDecrc remains
+ * the ultimate arbiter at every join. Owned by this class, FLOORED nowhere
+ * below: it is a state residual, deliberately outside the 15+7+6+2
+ * cell/row spike budget (T6 spec 9.2) but never unenumerated. */
+export const DECSC_STAGEB_CLASS = 'DECSC saved cursor (restored-position equivalence)' as const;
 
 type Term = {
   cols: number;
@@ -142,17 +164,17 @@ export function decscStageAAllowed(a: Record<string, unknown>, b: Record<string,
 }
 /**
  * Stage-B DECSC rule (FXT6): compare DECRC-restored viewport positions, not
- * raw absolute savedY. REF (full stream) and the seed viewer (seed + remainder)
- * can share exactly the viewport slot while their absolute savedY differs by
- * the ybase delta (different history lengths after ED3 trims): no CUP can
- * reconcile that, DECRC ignores it, and the viewport position is what the
- * user sees. This is the semantics the pre-FXT6 clamped comparison already
- * enforced for stage B (stateOf clamped savedX/savedY to the viewport);
- * FXT6's raw-in-viewport strictness applies to stage A only, where the seed
- * must match its twin exactly wherever a CUP can express it. The ESC 8 probe
- * remains stage B's ultimate arbiter. Returns true only when EVERY buffer's
- * restored position agrees; the caller scopes this to savedX/savedY keys so a
- * savedAttr/savecharset diff still fails.
+ * raw absolute savedY. This implements the named residual
+ * DECSC_STAGEB_CLASS (see its root-cause comment): REF (full stream) and
+ * the seed viewer (seed + remainder) can share exactly the viewport slot
+ * while their absolute savedY differs by the ybase delta (different
+ * history lengths after ED3 trims); no CUP can reconcile that from the
+ * seed, DECRC ignores it, and the viewport position is what the user sees.
+ * FXT6's raw-in-viewport strictness applies to stage A only, where the
+ * seed must match its twin exactly wherever a CUP can express it. The
+ * ESC 8 probe remains stage B's ultimate arbiter. Returns true only when
+ * EVERY buffer's restored position agrees; the caller scopes this to
+ * savedX/savedY keys so a savedAttr/savecharset diff still fails.
  */
 export function decscStageBAllowed(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
   const cols = Number(a.__cols ?? 0);
@@ -167,6 +189,37 @@ export function decscStageBAllowed(a: Record<string, unknown>, b: Record<string,
     if (ra[0] !== rb[0] || ra[1] !== rb[1]) return false;
   }
   return true;
+}
+
+/** Stage-B STATE decision (FXT6 review round 2): every state diff is
+ * either allowed -- an exact STATE_ALLOWLIST {variant,stream,class} entry,
+ * or a DECSC coordinate diff under the named DECSC_STAGEB_CLASS residual
+ * (restored positions agree; savedAttr/savecharset still fail) -- or bad.
+ * There is no blanket class wildcard. The matrix counts each allowed diff
+ * under its exact class key (DECSC under DECSC_STAGEB_CLASS) and fails
+ * the join on any bad entry; the spike-bound test then enumerates every
+ * counted key, so a new verb cannot pass silently. */
+export function stageBStateDecision(
+  variant: string,
+  stream: string,
+  refState: Record<string, unknown>,
+  viewerStateB: Record<string, unknown>,
+  bState: StateDiff[],
+): { bad: string[]; allowed: StateDiff[] } {
+  const bad: string[] = [];
+  const allowed: StateDiff[] = [];
+  for (const d of bState) {
+    const restoredEq =
+      d.cls === 'DECSC saved cursor' &&
+      (d.key.endsWith('.savedX') || d.key.endsWith('.savedY')) &&
+      decscStageBAllowed(refState, viewerStateB);
+    if (isStageBAllowed(variant, stream, d.cls) || restoredEq) {
+      allowed.push(d);
+      continue;
+    }
+    bad.push(`state:${d.cls}:${d.key}`);
+  }
+  return { bad, allowed };
 }
 
 /** Visual colour equality for masked fg/bg words (bits 0-25, mode bits
@@ -231,10 +284,10 @@ export interface ResidualEntry {
 }
 
 export const STATE_ALLOWLIST: ResidualEntry[] = [
-  { variant: 'graphemes', stream: 'harness-s6', cls: 'DECSC saved cursor', why: 'stage-B: remainder drives the clamped seed slot off via DECRC/ED3 after the join; buffers then converge identically (bCells empty) and the DECRC probe stays same, but the final raw slot differs after the remainder shifts ybase; total joins capped here within the spike bound.' },
-  { variant: 'graphemes', stream: 'harness-s7', cls: 'DECSC saved cursor', why: 'stage-B: remainder drives the clamped seed slot off via DECRC/ED3 after the join; buffers then converge identically (bCells empty) and the DECRC probe stays same, but the final raw slot differs after the remainder shifts ybase; total joins capped here within the spike bound.' },
-  { variant: 'unicode11', stream: 'harness-s6', cls: 'DECSC saved cursor', why: 'stage-B: remainder drives the clamped seed slot off via DECRC/ED3 after the join; buffers then converge identically (bCells empty) and the DECRC probe stays same, but the final raw slot differs after the remainder shifts ybase; total joins capped here within the spike bound.' },
-  { variant: 'unicode11', stream: 'harness-s7', cls: 'DECSC saved cursor', why: 'stage-B: remainder drives the clamped seed slot off via DECRC/ED3 after the join; buffers then converge identically (bCells empty) and the DECRC probe stays same, but the final raw slot differs after the remainder shifts ybase; total joins capped here within the spike bound.' },
+  { variant: 'graphemes', stream: 'harness-s6', cls: 'DECSC saved cursor', why: 'stage-B: remainder drives the seed slot off via DECRC/ED3 after the join; buffers converge identically (bCells empty) and the DECRC probe stays same, but the final raw (and restored) slot differs after the remainder shifts ybase; every such exemption is counted under the named DECSC_STAGEB_CLASS residual (outside the cell/row spike budget, enumerated by the bound test).' },
+  { variant: 'graphemes', stream: 'harness-s7', cls: 'DECSC saved cursor', why: 'stage-B: remainder drives the seed slot off via DECRC/ED3 after the join; buffers converge identically (bCells empty) and the DECRC probe stays same, but the final raw (and restored) slot differs after the remainder shifts ybase; every such exemption is counted under the named DECSC_STAGEB_CLASS residual (outside the cell/row spike budget, enumerated by the bound test).' },
+  { variant: 'unicode11', stream: 'harness-s6', cls: 'DECSC saved cursor', why: 'stage-B: remainder drives the seed slot off via DECRC/ED3 after the join; buffers converge identically (bCells empty) and the DECRC probe stays same, but the final raw (and restored) slot differs after the remainder shifts ybase; every such exemption is counted under the named DECSC_STAGEB_CLASS residual (outside the cell/row spike budget, enumerated by the bound test).' },
+  { variant: 'unicode11', stream: 'harness-s7', cls: 'DECSC saved cursor', why: 'stage-B: remainder drives the seed slot off via DECRC/ED3 after the join; buffers converge identically (bCells empty) and the DECRC probe stays same, but the final raw (and restored) slot differs after the remainder shifts ybase; every such exemption is counted under the named DECSC_STAGEB_CLASS residual (outside the cell/row spike budget, enumerated by the bound test).' },
 ];
 
 export function isStageBAllowed(variant: string, stream: string, cls: string): boolean {

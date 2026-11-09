@@ -10,17 +10,21 @@ bare `serialize()`.
   outside any `?2026h..?2026l` interval at which a standalone `GroundTracker`
   scan of the whole (post-strip) stream is at ground. Stage A (seed
   fidelity) must be clean within `COSMETIC_RESIDUALS` plus the named
-  residuals below; Stage B (convergence after the remainder) must be clean
-  within `STATE_ALLOWLIST` (entries need a one-line root cause each) or
-  the folded spec-6 residuals (cosmetic classes plus the named
-  VISUAL_SAME_P16 / BLANK_FLAG_ATTR proofs over ALL differing cells) --
-  there is no blanket class wildcard. Stage-B residual cell/row totals are
-  counted across every quiescent join and must stay within the spike
-  budgets (`SPIKE_BOUNDS`: cell chars 15, wide 7, extra rows 6, lost rows
-  2). ESC 8 (DECRC) probe must read `same` at every join. A
-  `QuiescentJoinGate` cross-check on a sample of the picks must agree.
-  Every failing join is enumerated (subjective first-failure hiding is
-  not used).
+  residuals below. Stage B (convergence after the remainder) must be
+  clean within a `STATE_ALLOWLIST` exact `{variant, stream, class}` entry
+  or the folded spec-6 residuals (cosmetic classes plus the named
+  VISUAL_SAME_P16 / BLANK_FLAG_ATTR proofs over ALL differing cells) or
+  the named DECSC restored-position residual below -- there is no blanket
+  class wildcard. Every allowed stage-B class (cells AND state) is
+  counted under its class key across every quiescent join; the
+  spike-bound test (`SPIKE_BOUNDS`: cell chars 15, wide 7, extra rows 6,
+  lost rows 2) bounds the CELL/ROW classes and enumerates the named
+  residuals (cosmetic, VISUAL_SAME_P16, BLANK_FLAG_ATTR,
+  DECSC_STAGEB_CLASS), so state classes sit outside the cell/row budget
+  but are never silent. ESC 8 (DECRC) probe must read `same` at every
+  join. A `QuiescentJoinGate` cross-check on a sample of the picks must
+  agree. Every failing join is enumerated (subjective first-failure
+  hiding is not used).
 - **Raw (informational):** the spike's `pickJoins` offsets (including
   inside-frame) with bare `serialize()`, printed as a
   52/741-style clean count. Not asserted.
@@ -47,24 +51,46 @@ wrap, modes, alt state) are fixed fully by the seed tail and are asserted.
 // FOLLOW-UP(T6b): per-cell replay of OSC 8 / underline style / SGR 58 if
 // the operator rejects this loss (see the plan's Later section).
 
-## DECSC slots, raw comparison and DECRC equivalence (FXT6)
+## DECSC slots, raw comparison, DECRC equivalence and named residuals (FXT6)
 
 `lib.ts`'s `stateOf` reports `savedX`/`savedY` RAW (absolute buffer
 coordinates). Stage A compares them raw whenever the slot is in-viewport
 on either side, so a wrong in-viewport CUP always fails (a one-row
-mutation test pins this). A raw mismatch is permitted only when neither
+mutation test guards this). The DISCRIMINATING raw-vs-clamped pin is the
+ybase-delta test: twin and viewer with ybase 0 vs >0 save the SAME
+viewport row with different absolute savedY -- clamped stateOf compared
+that clean; the raw stage-A comparison must flag it, and it does
+(`decscStageAAllowed`). A raw mismatch is permitted only when neither
 side can express the slot: at least one slot sits outside its viewport
 (scrollback-above `savedY < ybase`, past-end `savedY - ybase >= rows`,
 or pending-wrap `savedX == cols`) AND the DECRC-restored positions still
-agree (`decscStageAAllowed`). xterm 6.0.0 `restoreCursor` sets
-`y = max(savedY - ybase, 0)` then `_restrictCursor` clamps to
-`[0, rows-1]` (`x` likewise to `[0, cols-1]`; origin mode clamps to the
-scroll margin, identical on both sides since the scroll region is
-compared separately). The ESC 8 (`probeDecrc`) probe is enforced at
-every join and witnesses exactly this restored cursor/pen. Out-of-viewport
-slots survive via the seed's early prefix (saved while the viewer's
-`ybase` is still 0) and the late tail's clamped re-save; two slots are
-DECSC-equivalent in that regime iff their restored positions are equal.
+agree. xterm 6.0.0 `restoreCursor` sets `y = max(savedY - ybase, 0)` then
+`_restrictCursor` clamps to `[0, rows-1]` (`x` likewise to `[0, cols-1]`;
+origin mode clamps to the scroll margin, identical on both sides since
+the scroll region is compared separately). Out-of-viewport slots survive
+via the seed's early prefix (saved while the viewer's `ybase` is still 0)
+and the late tail's clamped re-save; two slots are DECSC-equivalent in
+that regime iff their restored positions are equal.
+
+Named stage-B residual `DECSC_STAGEB_CLASS` (decision:
+`decscStageBAllowed`; root cause: DECRC-restored viewport equivalence.
+(full stream) and seed viewer (seed + remainder) can share exactly the
+same viewport slot while their absolute savedY differs by the ybase delta
+(different history lengths after ED3 trims): no CUP can reconcile that
+from the seed, DECRC ignores it, and the viewport position is what the
+user sees. Stage-B coordinate diffs whose DECRC-restored positions agree
+are allowed under THIS named root cause -- not a blanket -- and every
+such exemption is counted under the `DECSC_STAGEB_CLASS` key and
+enumerated by the spike-bound test. The four `STATE_ALLOWLIST`
+`harness-s6`/`harness-s7` `DECSC saved cursor` entries remain for the
+narrower case the named residual cannot cover (a restored position that
+genuinely differs on those streams); their exemptions are counted under
+the same key. A stage-B DECSC diff whose restored position DIFFERS and
+is not EXACTLY allowlisted must fail (a dedicated negative test pins
+this). The ESC 8 (`probeDecrc`) probe is enforced at every join and is
+the ultimate arbiter of DECSC equivalence. Stage A is unaffected: raw
+in-viewport mismatch still fails stage A even when stage B would allow
+it under the named residual.
 
 ## fg/bg colour: SerializeAddon P16 downgrade (visual-same)
 
@@ -97,9 +123,12 @@ empty glyphs with visual-same colours are invisible. A minimal repro
   further relaxation needs a README amendment plus a re-pinned assertion,
   never a comment alone. Pinned in `seed.test.ts`.
 - **Pending wrap:** the tail rewrites the cell under a pending wrap (the
-  cell at `cols-1`); a wide grapheme is rewritten verbatim and an empty
-  cell (code 0) rewrites as a space. Pinned by golden in
-  `seed-state.test.ts` (wide + empty cases).
+  cell at `cols-1`); the wrap cell of a wide grapheme is its trailing
+  spacer (blank, code 0) so it is rewritten with a space (not the
+  grapheme verbatim), and an empty cell (code 0) likewise rewrites as a
+  space (`readWrapCell` returns blank). The golden pins CUP(1,10)+SGR+space
+  plus convergence. Pinned by golden in `seed-state.test.ts` (wide +
+  empty cases).
 
 ## Adapters from the spike port
 
