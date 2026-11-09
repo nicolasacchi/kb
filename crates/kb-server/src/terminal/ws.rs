@@ -39,7 +39,7 @@ use axum::{
     response::Response,
     Extension,
 };
-use futures::{Sink, SinkExt, Stream, StreamExt};
+use futures::{Sink, SinkExt, StreamExt};
 use tokio::sync::{mpsc, watch};
 
 use super::events;
@@ -223,15 +223,11 @@ pub(crate) async fn upgrade(
     // rejection must not consume the ticket, and any later failure
     // releases the reservation (the guard is dropped when the socket
     // closes).
-    {
-        let counter = &state.terminals.sockets;
-        match reserve_slot(counter) {
-            Some(_) => {}
-            None => return socket_cap(),
-        }
-    }
+    let guard = match reserve_slot(&state.terminals.sockets) {
+        Some(g) => g,
+        None => return socket_cap(),
+    };
     if !consume_ticket(&state, &q.ticket, &id, &identity.user) {
-        state.terminals.sockets.fetch_sub(1, Ordering::SeqCst);
         return ticket_forbidden();
     }
     // Open the upstream stream BEFORE upgrading.
@@ -243,7 +239,6 @@ pub(crate) async fn upgrade(
     let upstream = match runner.open_stream(&id, from).await {
         Ok(stream) => stream,
         Err(StreamError::NotFound(_)) => {
-            state.terminals.sockets.fetch_sub(1, Ordering::SeqCst);
             return Problem::response(
                 "urn:kb:errors:terminal-not-found",
                 StatusCode::NOT_FOUND,
@@ -252,7 +247,6 @@ pub(crate) async fn upgrade(
             );
         }
         Err(StreamError::Unavailable) => {
-            state.terminals.sockets.fetch_sub(1, Ordering::SeqCst);
             return Problem::response(
                 "urn:kb:errors:terminal-runner-unavailable",
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -261,7 +255,6 @@ pub(crate) async fn upgrade(
             );
         }
         Err(StreamError::BadReply) => {
-            state.terminals.sockets.fetch_sub(1, Ordering::SeqCst);
             return Problem::response(
                 "urn:kb:errors:terminal-bad-reply",
                 StatusCode::BAD_GATEWAY,
@@ -276,8 +269,9 @@ pub(crate) async fn upgrade(
     let shutdown = state.shutdown.subscribe();
     let state2 = state.clone();
     let id2 = id.clone();
-    let upgraded = ws.max_message_size(256 * 1024).on_upgrade(move |socket| {
-        tokio::spawn(async move {
+    let upgraded = ws
+        .max_message_size(256 * 1024)
+        .on_upgrade(move |socket| async move {
             run_relay(
                 socket,
                 upstream,
@@ -288,10 +282,9 @@ pub(crate) async fn upgrade(
                 },
             )
             .await;
-            state2.terminals.sockets.fetch_sub(1, Ordering::SeqCst);
             tracing::info!(term = %id2, "terminal ws closed");
-        })
-    });
+            drop(guard);
+        });
     tracing::info!(term = %id, "terminal ws upgraded");
     upgraded
 }
@@ -312,7 +305,7 @@ pub(crate) fn on_relay_event(state: &KbHandles, id: &str, event: RelayEvent) {
 
 /// Reserve one socket slot, or `None` when at the cap. The returned
 /// guard releases on drop.
-fn reserve_slot(counter: &AtomicUsize) -> Option<SlotGuard> {
+fn reserve_slot(counter: &std::sync::Arc<AtomicUsize>) -> Option<SlotGuard> {
     let mut current = counter.load(Ordering::SeqCst);
     loop {
         if current >= MAX_TERM_SOCKETS {
@@ -324,16 +317,19 @@ fn reserve_slot(counter: &AtomicUsize) -> Option<SlotGuard> {
             Ordering::SeqCst,
             Ordering::SeqCst,
         ) {
-            Ok(_) => return Some(SlotGuard { counter }),
+            Ok(_) => {
+                return Some(SlotGuard {
+                    counter: std::sync::Arc::clone(counter),
+                })
+            }
             Err(next) => current = next,
         }
     }
 }
 
-/// RAII socket-slot guard: the increment is undone on drop. Not
-/// `Send`-unsafe: the counter lives until process exit.
+/// RAII socket-slot guard: the increment is undone on drop.
 struct SlotGuard {
-    counter: &'static AtomicUsize,
+    counter: std::sync::Arc<AtomicUsize>,
 }
 
 impl Drop for SlotGuard {
@@ -366,21 +362,39 @@ pub(crate) async fn run_relay<S, U, F>(
     let (mut sink, mut stream) = sink_stream.split();
     let (slow_tx, mut slow_rx) = mpsc::channel::<()>(1);
     let (upstream_tx, mut upstream_rx) = mpsc::channel::<StreamItem>(64);
+    let (browser_tx, mut browser_rx) = mpsc::channel::<StreamItem>(64);
     let reader = tokio::spawn(async move {
         let mut up = upstream;
         loop {
-            match up.recv().await {
-                None => return,
-                Some(item) => {
-                    match tokio::time::timeout(timers.slow_consumer_after, upstream_tx.send(item))
-                        .await
-                    {
-                        Err(_) => {
-                            let _ = slow_tx.send(()).await;
-                            return;
+            tokio::select! {
+                item = up.recv() => {
+                    match item {
+                        None => return,
+                        Some(item) => {
+                            match tokio::time::timeout(
+                                timers.slow_consumer_after,
+                                upstream_tx.send(item),
+                            )
+                            .await
+                            {
+                                Err(_) => {
+                                    let _ = slow_tx.send(()).await;
+                                    return;
+                                }
+                                Ok(Err(_)) => return,
+                                Ok(Ok(())) => {}
+                            }
                         }
-                        Ok(Err(_)) => return,
-                        Ok(Ok(())) => {}
+                    }
+                }
+                item = browser_rx.recv() => {
+                    match item {
+                        None => return,
+                        Some(item) => {
+                            if up.send(item).await.is_err() {
+                                return;
+                            }
+                        }
                     }
                 }
             }
@@ -424,12 +438,12 @@ pub(crate) async fn run_relay<S, U, F>(
                     Some(Err(_)) => break,
                     Some(Ok(Message::Binary(bytes))) => {
                         last_seen = Instant::now();
-                        let _ = upstream_rx.send(StreamItem::Binary(bytes.to_vec())).await;
+                        let _ = browser_tx.send(StreamItem::Binary(bytes.to_vec())).await;
                     }
                     Some(Ok(Message::Text(text))) => {
                         last_seen = Instant::now();
                         if text.len() <= 64 * 1024 {
-                            let _ = upstream_rx.send(StreamItem::Text(text.to_string())).await;
+                            let _ = browser_tx.send(StreamItem::Text(text.to_string())).await;
                         }
                     }
                     Some(Ok(Message::Pong(_))) | Some(Ok(Message::Ping(_))) => {
@@ -482,6 +496,7 @@ pub(crate) async fn run_relay<S, U, F>(
     }
     // Browser close/shutdown: drop the upstream (the runner tears down
     // this viewer's tap connection) and let the reader task end.
+    drop(browser_tx);
     drop(upstream_rx);
     let _ = tokio::time::timeout(Duration::from_millis(200), reader).await;
 }

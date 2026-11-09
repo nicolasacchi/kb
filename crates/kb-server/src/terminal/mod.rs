@@ -35,6 +35,6 @@ pub struct TerminalState {
     /// T12 — live WebSocket socket count (`ws::MAX_TERM_SOCKETS`) and
     /// the `term.ended` id dedup set (`events::EndedSet`). In memory
     /// only (LF-7).
-    pub(crate) sockets: std::sync::atomic::AtomicUsize,
+    pub(crate) sockets: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     pub(crate) ended: events::EndedSet,
 }

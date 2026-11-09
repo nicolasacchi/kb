@@ -89,6 +89,7 @@ pub async fn splice(
     let mut client_read = client_read;
     let mut client_write = client_write;
     let to_client = tokio::io::copy(&mut tap_read, &mut client_write);
+    let to_tap = tokio::io::copy(&mut client_read, &mut tap_write);
     // The first half to finish owns the close: dropping the other
     // future drops its sockets, which is how the far side observes the
     // close (a dropped runner client tears down its tap connection,

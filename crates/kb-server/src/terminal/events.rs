@@ -125,10 +125,10 @@ pub(crate) fn emit_state(
     rows: Option<u16>,
     grid_owner: Option<&str>,
 ) {
-    let state = if live { "live" } else { "ended" };
+    let state_str = if live { "live" } else { "ended" };
     state.bus.emit(
         "term.state",
-        term_state_payload(id, state, cols, rows, grid_owner),
+        term_state_payload(id, state_str, cols, rows, grid_owner),
     );
 }
 
