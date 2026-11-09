@@ -84,7 +84,7 @@ pub fn is_valid_term_id(s: &str) -> bool {
 pub fn is_valid_sha256_hex(s: &str) -> bool {
     s.len() == 64
         && s.chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
 }
 
 /// Server-to-client text frames (tag `t`, lowercase variant names, snake_case
@@ -133,7 +133,7 @@ pub enum ServerFrame {
         id: u32,
         /// Image generation.
         gen: u32,
-        /// sha256 of the image bytes.
+        /// sha256 of the image bytes, as a hex64 key (see [`is_valid_sha256_hex`]).
         sha256: String,
         /// MIME type, e.g. `"image/png"`.
         mime: String,
