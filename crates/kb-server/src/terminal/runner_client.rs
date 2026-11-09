@@ -135,7 +135,7 @@ pub(crate) enum StreamItem {
 /// failure (the socket path never leaks into either arm's message).
 #[derive(Debug)]
 pub(crate) enum StreamError {
-    NotFound(String),
+    NotFound,
     Unavailable,
     BadReply,
 }
@@ -143,7 +143,7 @@ pub(crate) enum StreamError {
 impl StreamError {
     pub(crate) fn message(&self) -> &str {
         match self {
-            StreamError::NotFound(message) => message,
+            StreamError::NotFound => "no such terminal",
             StreamError::Unavailable => "runner unavailable",
             StreamError::BadReply => "bad runner reply",
         }
@@ -348,10 +348,10 @@ impl UnixRunner {
         let text = String::from_utf8(reply).map_err(|_| StreamError::BadReply)?;
         match serde_json::from_str::<RunnerReply>(text.trim()).map_err(|_| StreamError::BadReply)? {
             RunnerReply::Ok { .. } => {}
-            RunnerReply::Err { code, message }
+            RunnerReply::Err { code, .. }
                 if code == "not-found" || code == "no-session" || code == "invalid-id" =>
             {
-                return Err(StreamError::NotFound(message));
+                return Err(StreamError::NotFound);
             }
             RunnerReply::Err { .. } => return Err(StreamError::BadReply),
         }
@@ -597,7 +597,7 @@ mod tests {
         });
         let runner = UnixRunner::new(sock, Duration::from_secs(5));
         match runner.open_stream("abcd1234", None).await {
-            Err(StreamError::NotFound(_)) => {}
+            Err(StreamError::NotFound) => {}
             other => panic!("expected NotFound, got {other:?}"),
         }
     }

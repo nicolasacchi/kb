@@ -247,7 +247,7 @@ pub(crate) async fn upgrade(
     );
     let upstream = match runner.open_stream(&id, from).await {
         Ok(stream) => stream,
-        Err(e @ StreamError::NotFound(_)) => {
+        Err(e @ StreamError::NotFound) => {
             return Problem::response(
                 "urn:kb:errors:terminal-not-found",
                 StatusCode::NOT_FOUND,
@@ -603,6 +603,7 @@ mod relay_tests {
     //! wall-clock so the test pins the real ones).
 
     use super::*;
+    use futures::Stream;
     use std::task::{Context, Poll};
 
     /// An in-memory upstream: a canned queue of items; `send` records
