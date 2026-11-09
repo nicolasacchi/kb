@@ -698,29 +698,38 @@ fn image_item_renders_a_figure_with_escaped_attrs() {
         !rendered.contains("AAAA"),
         "base64 must not leak: {rendered}"
     );
-    // A hostile mime is escaped in both the attr and the label.
+    // A hostile mime never survives the view: it is not a valid token, so
+    // the block falls back to the wildcard mime instead of being escaped
+    // into the figure attributes. The figure still renders; no fragment of
+    // the hostile string reaches the markup.
     let rendered = render(
         r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"image","source":{"type":"blob_ref","media_type":"image/\"><script>","sha256":"abababababababababababababababababababababababababababababababab"}}]}}"#,
     );
     assert!(
-        !rendered.contains("\"><script>"),
-        "mime must be escaped: {rendered}"
+        rendered.contains(r#"class="ses-img""#),
+        "hostile+sha still renders a figure: {rendered}"
     );
     assert!(
-        rendered.contains("&lt;script&gt;"),
-        "escaped form present: {rendered}"
+        rendered.contains(r#"data-kb-image-mime="image/*""#),
+        "hostile mime collapses to the wildcard: {rendered}"
     );
-    // A quote-bearing mime cannot break out of the double-quoted attr.
+    assert!(
+        !rendered.contains("\"><script>") && !rendered.contains("image/\"><"),
+        "hostile mime must not appear raw: {rendered}"
+    );
+    // A quote-bearing mime cannot break out of the double-quoted attr: it
+    // likewise collapses to the wildcard before reaching the renderer.
     let rendered = render(
         r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"image","source":{"type":"blob_ref","media_type":"image/x\" onmouseover=\"alert(1)","sha256":"abababababababababababababababababababababababababababababababab"}}]}}"#,
     );
     assert!(
-        !rendered.contains(r#"image/x" onmouseover="alert(1)"#),
-        "quote breakout sequence must not appear: {rendered}"
+        rendered.contains(r#"data-kb-image-mime="image/*""#),
+        "quote-bearing mime collapses to the wildcard: {rendered}"
     );
     assert!(
-        rendered.contains("&quot;"),
-        "escaped quote present: {rendered}"
+        !rendered.contains(r#"image/x" onmouseover="alert(1)"#)
+            && !rendered.contains("onmouseover"),
+        "quote breakout sequence must not appear: {rendered}"
     );
 }
 

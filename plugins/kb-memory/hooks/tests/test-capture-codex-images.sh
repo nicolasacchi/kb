@@ -72,20 +72,20 @@ if [ -n "$only_out" ]; then
 else
   bad "image-only rollout wrote nothing (expected the adapter-meta capture)"
 fi
-if [ -n "$only_out" ]; then
-  only_body="$(sed -n '/<pre>/,/<\/pre>/p' "$only_out" | sed '1d;$s|</pre>$||')"
+if [ -n "$only_out" ] && grep -q '"type":"adapter-meta"' "$only_out"; then
+  ok "image-only capture carries its adapter-meta record"
 else
-  only_body=""
+  bad "image-only capture missing adapter-meta"
 fi
-if printf '%s\n' "$only_body" | jq -e 'select(.type == "user")' >/dev/null 2>&1; then
-  bad "image-only codex message leaked a user record: $only_body"
+if [ -n "$only_out" ] && grep -q '"type":"user"' "$only_out"; then
+  bad "image-only codex message leaked a user record"
 else
   ok "image-only codex message writes no user record"
 fi
-if printf '%s\n' "$only_body" | jq -e '[.. | objects | select(.type == "image")] | length == 0' >/dev/null 2>&1; then
-  ok "no image block survives from an image-only message"
+if [ -n "$only_out" ] && grep -q '"type":"image"' "$only_out"; then
+  bad "image block survived from an image-only message"
 else
-  bad "image block leaked from an image-only message: $only_body"
+  ok "no image block survives from an image-only message"
 fi
 
 echo
