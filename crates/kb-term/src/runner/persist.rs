@@ -149,12 +149,15 @@ mod tests {
         let sock = test_sock();
         assert!(!read_paste_only(&fake, &sock).await);
         write_paste_only(&fake, &sock, true).await.unwrap();
-        let calls = fake.calls.lock().unwrap();
-        let written = calls
-            .iter()
-            .find(|(_, a)| a.first().map(String::as_str) == Some("set-option"));
+        let written = {
+            let calls = fake.calls.lock().unwrap();
+            calls
+                .iter()
+                .find(|(_, a)| a.first().map(String::as_str) == Some("set-option"))
+                .map(|(_, a)| a.clone())
+        };
         assert_eq!(
-            written.map(|(_, a)| a.clone()),
+            written,
             Some(vec![
                 "set-option".to_string(),
                 "-g".to_string(),
@@ -163,7 +166,6 @@ mod tests {
             ]),
             "paste_only writes the documented option/value"
         );
-        drop(calls);
         fake.canned
             .lock()
             .unwrap()
