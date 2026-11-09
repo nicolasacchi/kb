@@ -336,45 +336,39 @@ pub fn decode_text_frame(raw: &str) -> Result<TextFrame, WireError> {
         "resumefrom" | "takesize" | "input" | "ping" => {
             let frame: ClientFrame =
                 serde_json::from_str(raw).map_err(|_| WireError::MalformedJson)?;
-            match &frame {
-                ClientFrame::Resumefrom { offset, mseq, .. } => {
-                    check_js_safe(&[*offset, *mseq])?;
-                }
-                _ => {}
+            if let ClientFrame::Resumefrom { offset, mseq, .. } = &frame {
+                check_js_safe(&[*offset, *mseq])?;
             }
             Ok(TextFrame::Client(frame))
         }
         "viewer-open" | "viewer-close" | "typed" | "stats" => {
             let msg: ControlMessage =
                 serde_json::from_str(raw).map_err(|_| WireError::MalformedJson)?;
-            match &msg {
-                ControlMessage::ViewerOpen { resume, .. } => {
-                    if let Some(r) = resume {
-                        check_js_safe(&[r.offset, r.mseq])?;
-                    }
+            if let ControlMessage::ViewerOpen { resume, .. } = &msg {
+                if let Some(r) = resume {
+                    check_js_safe(&[r.offset, r.mseq])?;
                 }
-                ControlMessage::Stats {
-                    joins,
-                    degraded_joins,
-                    viewers,
-                } => {
-                    let mut vals = [0u64; 3];
-                    let mut n = 0;
-                    if let Some(v) = joins {
-                        vals[n] = *v;
-                        n += 1;
-                    }
-                    if let Some(v) = degraded_joins {
-                        vals[n] = *v;
-                        n += 1;
-                    }
-                    if let Some(v) = viewers {
-                        vals[n] = *v;
-                        n += 1;
-                    }
-                    check_js_safe(&vals[..n])?;
+            } else if let ControlMessage::Stats {
+                joins,
+                degraded_joins,
+                viewers,
+            } = &msg
+            {
+                let mut vals = [0u64; 3];
+                let mut n = 0;
+                if let Some(v) = joins {
+                    vals[n] = *v;
+                    n += 1;
                 }
-                _ => {}
+                if let Some(v) = degraded_joins {
+                    vals[n] = *v;
+                    n += 1;
+                }
+                if let Some(v) = viewers {
+                    vals[n] = *v;
+                    n += 1;
+                }
+                check_js_safe(&vals[..n])?;
             }
             Ok(TextFrame::Control(msg))
         }
