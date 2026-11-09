@@ -763,11 +763,11 @@ mod relay_tests {
                 // Exactly one message per cadence: `try_recv`
                 // errors (empty) simply ride out the sleep.
                 if let Ok(msg) = out.try_recv() {
-                    if let Message::Close(Some(frame)) = msg {
-                        if frame.code == CLOSE_SLOW_CONSUMER {
-                            saw_1013 = true;
-                            return;
-                        }
+                    let is_slow_close =
+                        matches!(msg, Message::Close(Some(ref f)) if f.code == CLOSE_SLOW_CONSUMER);
+                    if is_slow_close {
+                        saw_1013 = true;
+                        return;
                     }
                 }
                 if let Some(w) = ready.lock().unwrap().take() {
