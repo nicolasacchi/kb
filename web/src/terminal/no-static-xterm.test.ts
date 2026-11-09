@@ -49,7 +49,7 @@ describe("no static xterm imports", () => {
     expect(findXtermImports(slot)).toEqual([]);
   });
 
-  it("within terminal/, only TerminalPanel.lazy.ts references ./TerminalPanel via import(", () => {
+  it("within terminal/, only TerminalPanel.lazy.ts references ./TerminalPanel, and never wraps it in another lazy(", () => {
     const dir = here("../../src/terminal/");
     const files = walk(dir).filter((f) => !f.endsWith(".test.ts") && !f.endsWith(".test.tsx"));
     const refs: string[] = [];
@@ -61,6 +61,10 @@ describe("no static xterm imports", () => {
     }
     expect(refs).toEqual([dir + "TerminalPanel.lazy.ts"]);
     const lazyText = nodeFs.readFileSync(dir + "TerminalPanel.lazy.ts", "utf8");
-    expect(lazyText).toContain('import("./TerminalPanel")');
+    // A plain re-export into the async chunk. Wrapping ./TerminalPanel in
+    // a second React.lazy makes the slot's lazy() resolve to a lazy object
+    // and React throws error #306 (e2e: the panel never mounted).
+    expect(lazyText).toMatch(/export\s+\{[^}]*\}\s+from\s+"\.\/TerminalPanel"/);
+    expect(lazyText).not.toContain("lazy(");
   });
 });
