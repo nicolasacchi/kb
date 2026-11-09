@@ -1648,6 +1648,10 @@ jobs:
           shared-key: term-int
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: Install protoc (lancedb transitive dep)
+        if: steps.crate.outputs.present == 'true'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev
+
       - name: Integration tests
         if: steps.crate.outputs.present == 'true'
         # Integration tests live in ONE binary

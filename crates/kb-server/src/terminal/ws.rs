@@ -269,6 +269,7 @@ pub(crate) async fn upgrade(
     let shutdown = state.shutdown.subscribe();
     let state2 = state.clone();
     let id2 = id.clone();
+    let id3 = id2.clone();
     let upgraded = ws
         .max_message_size(256 * 1024)
         .on_upgrade(move |socket| async move {
@@ -277,8 +278,8 @@ pub(crate) async fn upgrade(
                 upstream,
                 shutdown,
                 RelayTimers::default(),
-                |event| {
-                    on_relay_event(&state2, &id2, event);
+                move |event: RelayEvent| {
+                    on_relay_event(&state2, &id3, event);
                 },
             )
             .await;
@@ -355,7 +356,7 @@ pub(crate) async fn run_relay<S, U, F>(
     on_event: F,
 ) where
     S: SinkExt<Message> + StreamExt<Item = Result<Message, axum::Error>> + Unpin + Send + 'static,
-    U: Upstream,
+    U: Upstream + 'static,
     F: Fn(RelayEvent) + Send + 'static,
     <S as Sink<Message>>::Error: std::fmt::Debug,
 {
