@@ -549,7 +549,7 @@ async fn term_int_list_data_parses_as_session_infos() {
     let Some(tmux_bin) = require_tmux() else {
         return;
     };
-    let mut tr = TestRunner::new(tmux_bin);
+    let tr = TestRunner::new(tmux_bin);
     boot_runner(&tr).await;
     let cwd = tr.dir.path().to_string_lossy().into_owned();
     let req = common::launch_req(vec!["/bin/cat".to_string()], cwd);
