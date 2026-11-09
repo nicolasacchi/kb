@@ -598,7 +598,8 @@ mod tests {
         let runner = UnixRunner::new(sock, Duration::from_secs(5));
         match runner.open_stream("abcd1234", None).await {
             Err(StreamError::NotFound) => {}
-            other => panic!("expected NotFound, got {other:?}"),
+            Ok(_) => panic!("expected NotFound, got Ok"),
+            Err(e) => panic!("expected NotFound, got {e:?}"),
         }
     }
 
