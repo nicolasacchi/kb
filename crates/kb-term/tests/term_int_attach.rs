@@ -230,6 +230,7 @@ struct RunnerLog {
 struct FakeRunner {
     sock: PathBuf,
     log: Arc<Mutex<RunnerLog>>,
+    stop: Option<Arc<std::sync::atomic::AtomicBool>>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -245,9 +246,13 @@ impl FakeRunner {
         let log2 = log.clone();
         let failures2 = take_failures.clone();
         let list = session_list.clone();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop2 = stop.clone();
         let thread = std::thread::spawn(move || loop {
+            if stop2.load(std::sync::atomic::Ordering::SeqCst) {
+                return;
+            }
             let conn = match listener.accept() {
-                Ok((c, _)) => c,
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     std::thread::sleep(Duration::from_millis(10));
                     continue;
@@ -271,6 +276,7 @@ impl FakeRunner {
         FakeRunner {
             sock,
             log,
+            stop: Some(stop),
             thread: Some(thread),
         }
     }
@@ -291,6 +297,9 @@ impl FakeRunner {
 
 impl Drop for FakeRunner {
     fn drop(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
         let _ = std::fs::remove_file(&self.sock);
         if let Some(t) = self.thread.take() {
             let _ = t.join();
@@ -760,6 +769,13 @@ fn spawn_bin(args: &[&str], cols: u16, rows: u16) -> (PtyProc, std::fs::File) {
             match m.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => out.extend_from_slice(&buf[..n]),
+                // `open_pty` sets the master O_NONBLOCK: a momentarily
+                // empty read is EAGAIN, not EOF — retry, or the child
+                // blocks forever once the pty buffer fills (it can
+                // never exit a test).
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
                 Err(_) => break,
             }
         }

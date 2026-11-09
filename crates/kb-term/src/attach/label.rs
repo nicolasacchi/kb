@@ -150,11 +150,24 @@ fn strip_escapes(bytes: &[u8]) -> String {
             i += 2;
             continue;
         }
+        // Plain text until the next ESC: never consume past it. An
+        // embedded escape sequence is valid UTF-8 (ASCII-legal), so a
+        // whole-rest `from_utf8` would leak later escapes into the
+        // visible text (they would then count as display cells for
+        // `fit` and could be cut mid-sequence).
         let rest = &bytes[i..];
-        match std::str::from_utf8(rest) {
-            Ok(s) => {
+        let esc = rest.iter().position(|&b| b == 0x1B).unwrap_or(rest.len());
+        match std::str::from_utf8(&rest[..esc]) {
+            Ok(s) if !s.is_empty() => {
                 out.push_str(s);
-                break;
+                i += esc;
+            }
+            Ok(_) => {
+                // The only empty-slice case is a lone trailing ESC
+                // (the top-of-loop escape branch needs a next byte):
+                // keep it as text and advance (no progress otherwise).
+                out.push(rest[0] as char);
+                i += 1;
             }
             Err(e) => {
                 let good = e.valid_up_to();
@@ -676,8 +689,11 @@ mod tests {
         let input = picture_row((9, 9, 9), 0, 60, b"\r\n");
         let out = feed_all(&mut rw, &input);
         let text = strip_escapes(&out);
+        // The spec bound covers the label + preceding text; the line
+        // terminator is not part of it.
+        let visible = text.trim_end_matches(['\r', '\n']);
         assert!(
-            super::super::width::str_width(&text) <= 200,
+            super::super::width::str_width(visible) <= 200,
             "visible width fits cols-1: {text:?}"
         );
 
@@ -692,10 +708,11 @@ mod tests {
         input.extend_from_slice(b"\x1b[39;59m\r\n");
         let out = feed_all(&mut rw, &input);
         let text = strip_escapes(&out);
+        let visible = text.trim_end_matches(['\r', '\n']);
         assert!(
-            super::super::width::str_width(&text) <= 19,
+            super::super::width::str_width(visible) <= 19,
             "cols=20 truncates to 19 cells, got {}: {text:?}",
-            super::super::width::str_width(&text)
+            super::super::width::str_width(visible)
         );
         assert!(
             text.contains('日') || text.contains('['),
