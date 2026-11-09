@@ -59,7 +59,7 @@ ignore = [
     # Review by 2027-01-31, or sooner when a refinery release raises the
     # rusqlite bound (re-check trigger: run `cargo deny check advisories`
     # after the rusqlite bump, then delete this entry).
-    { id = "RUSTSEC-2026-0459", reason = "libsqlite3-sys 0.38.2 WAL page-size mismatch: the defect needs a sibling -wal with a different page size than the database; kb creates its own state DBs itself (WAL mode on, page size from its own creation) inside its state dir, so a foreign-sized WAL would need write access there, which is already full compromise; the one foreign read, the opencode live adapter's READ_ONLY open of the operator's own opencode.db, is the same same-host trust domain" },
+    { id = "RUSTSEC-2026-0459", reason = "libsqlite3-sys 0.38.2 WAL page-size mismatch: the defect needs a sibling -wal with a different page size than the database; kb creates its own state DBs itself (WAL mode on, page size from its own creation) inside its state dir, so a foreign-sized WAL would need write access there, which is already full compromise; foreign reads are the opencode live adapter's READ_ONLY open of the operator's own opencode.db, which is in the same-host trust domain, and a -wal can also arrive via `kb restore` of a backup tarball from outside the state dir (reverse of the off-host copy); legit backups carry a VACUUM INTO snapshot with no -wal and a hostile tarball already fully controls restored state, so the limitation is: restore trusted backups only" },
     # (previously empty) RUSTSEC-2026-0194/0195 (quick-xml 0.39 via object_store) and
     # RUSTSEC-2023-0071 (rsa via opendal/reqsign) were ignored until v0.45 N7:
     # `lance` was declared with its default features, which compiled the cloud
