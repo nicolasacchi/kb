@@ -36,7 +36,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use axum::extract::ws::{close_code, CloseFrame, Message};
+use axum::extract::ws::{CloseFrame, Message};
 use axum::{
     body::Bytes,
     extract::{Path, Query, State, WebSocketUpgrade},
@@ -437,12 +437,12 @@ pub(crate) async fn run_relay<S, U, F>(
                     shutdown.changed().await.is_ok() || *shutdown.borrow()
                 }
             } => {
-                send_close(&mut sink, CLOSE_RESTART.into(), "service restart").await;
+                send_close(&mut sink, CLOSE_RESTART, "service restart").await;
                 break;
             }
             // Slow consumer signalled by the reader: close 1013.
             _ = slow_rx.recv() => {
-                send_close(&mut sink, CLOSE_SLOW_CONSUMER.into(), "slow consumer").await;
+                send_close(&mut sink, CLOSE_SLOW_CONSUMER, "slow consumer").await;
                 break;
             }
             // (b) browser -> upstream, verbatim (Pong/Ping refresh
@@ -467,16 +467,15 @@ pub(crate) async fn run_relay<S, U, F>(
                     }
                     Some(Ok(Message::Text(text))) => {
                         last_seen = Instant::now();
-                        if text.len() <= 64 * 1024 {
-                            if tokio::time::timeout(
+                        if text.len() <= 64 * 1024
+                            && tokio::time::timeout(
                                 timers.slow_consumer_after,
                                 browser_tx.send(StreamItem::Text(text.to_string())),
                             )
                             .await
                             .is_err()
-                            {
-                                break;
-                            }
+                        {
+                            break;
                         }
                     }
                     Some(Ok(Message::Pong(_))) | Some(Ok(Message::Ping(_))) => {
@@ -497,7 +496,7 @@ pub(crate) async fn run_relay<S, U, F>(
                     let reason = if code == CLOSE_NORMAL { "normal" } else { "upstream closed" };
                     let _ = tokio::time::timeout(Duration::from_millis(500),
                         sink.send(Message::Close(Some(CloseFrame {
-                            code: (code as u16).into(),
+                            code,
                             reason: reason.into(),
                         })))).await;
                     break;
@@ -526,7 +525,7 @@ pub(crate) async fn run_relay<S, U, F>(
                 if last_seen.elapsed() >= timers.idle_close_after {
                     let _ = tokio::time::timeout(Duration::from_millis(500),
                         sink.send(Message::Close(Some(CloseFrame {
-                            code: CLOSE_IDLE.into(),
+                            code: CLOSE_IDLE,
                             reason: "idle".into(),
                         })))).await;
                     break;
@@ -555,7 +554,7 @@ where
     let _ = tokio::time::timeout(
         Duration::from_millis(500),
         sink.send(Message::Close(Some(CloseFrame {
-            code: code.into(),
+            code,
             reason: reason.into(),
         }))),
     )
@@ -685,7 +684,7 @@ mod relay_tests {
         }
     }
 
-    impl Stream for MemSinkStream {
+    impl futures::Stream for MemSinkStream {
         type Item = Result<Message, axum::Error>;
         fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
             self.get_mut().from_test.poll_recv(cx)
@@ -762,7 +761,7 @@ mod relay_tests {
             while let Ok(msg) = out.try_recv() {
                 got = true;
                 if let Message::Close(Some(frame)) = msg {
-                    if frame.code.as_u16() == CLOSE_SLOW_CONSUMER {
+                    if frame.code == CLOSE_SLOW_CONSUMER {
                         saw_1013 = true;
                         break;
                     }
@@ -817,7 +816,7 @@ mod relay_tests {
                 Ok(None) => break,
                 Ok(Some(Message::Ping(_))) => pings += 1,
                 Ok(Some(Message::Close(Some(frame)))) => {
-                    if frame.code.as_u16() == CLOSE_IDLE {
+                    if frame.code == CLOSE_IDLE {
                         saw_1001 = true;
                     }
                 }
@@ -882,11 +881,7 @@ mod relay_tests {
                 Err(_) => break,
                 Ok(None) => break,
                 Ok(Some(Message::Close(Some(frame)))) => {
-                    assert_eq!(
-                        frame.code.as_u16(),
-                        CLOSE_NORMAL,
-                        "after exit the close is 1000"
-                    );
+                    assert_eq!(frame.code, CLOSE_NORMAL, "after exit the close is 1000");
                     closed = true;
                 }
                 Ok(Some(msg)) => frames.push(msg),
@@ -992,11 +987,7 @@ mod relay_tests {
         }
         match tokio::time::timeout(Duration::from_secs(5), out.recv()).await {
             Ok(Some(Message::Close(Some(frame)))) => {
-                assert_eq!(
-                    frame.code.as_u16(),
-                    CLOSE_UPSTREAM,
-                    "EOF without exit is 1011"
-                );
+                assert_eq!(frame.code, CLOSE_UPSTREAM, "EOF without exit is 1011");
                 assert_eq!(frame.reason.as_str(), "upstream closed");
             }
             other => panic!("EOF must close 1011, got {other:?}"),
@@ -1037,7 +1028,7 @@ mod relay_tests {
             match tokio::time::timeout(Duration::from_secs(5), out.recv()).await {
                 Err(_) | Ok(None) => break,
                 Ok(Some(Message::Close(Some(frame)))) => {
-                    if frame.code.as_u16() == CLOSE_UPSTREAM {
+                    if frame.code == CLOSE_UPSTREAM {
                         close_1011 = true;
                     }
                 }
@@ -1101,7 +1092,7 @@ mod relay_tests {
         let _ = tx.send(true);
         match tokio::time::timeout(Duration::from_secs(5), out.recv()).await {
             Ok(Some(Message::Close(Some(frame)))) => {
-                assert_eq!(frame.code.as_u16(), CLOSE_RESTART, "shutdown arm preempts");
+                assert_eq!(frame.code, CLOSE_RESTART, "shutdown arm preempts");
             }
             other => panic!("shutdown must close 1012, got {other:?}"),
         }
@@ -1162,11 +1153,7 @@ mod relay_tests {
         let _ = tx.send(true);
         match tokio::time::timeout(Duration::from_secs(5), out.recv()).await {
             Ok(Some(Message::Close(Some(frame)))) => {
-                assert_eq!(
-                    frame.code.as_u16(),
-                    CLOSE_RESTART,
-                    "relay alive until shutdown"
-                );
+                assert_eq!(frame.code, CLOSE_RESTART, "relay alive until shutdown");
             }
             other => panic!("shutdown must close 1012, got {other:?}"),
         }
@@ -1195,11 +1182,7 @@ mod relay_tests {
         });
         match tokio::time::timeout(Duration::from_secs(5), out.recv()).await {
             Ok(Some(Message::Close(Some(frame)))) => {
-                assert_eq!(
-                    frame.code.as_u16(),
-                    CLOSE_RESTART,
-                    "already-shutdown closes 1012"
-                );
+                assert_eq!(frame.code, CLOSE_RESTART, "already-shutdown closes 1012");
                 assert_eq!(frame.reason.as_str(), "service restart");
             }
             other => panic!("already-shutdown must close 1012 at once, got {other:?}"),

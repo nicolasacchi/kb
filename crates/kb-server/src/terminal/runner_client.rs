@@ -141,9 +141,9 @@ pub(crate) enum StreamError {
 }
 
 impl StreamError {
-    pub(crate) fn message(&self) -> &'static str {
+    pub(crate) fn message(&self) -> &str {
         match self {
-            StreamError::NotFound(_) => "no such terminal",
+            StreamError::NotFound(message) => message,
             StreamError::Unavailable => "runner unavailable",
             StreamError::BadReply => "bad runner reply",
         }
