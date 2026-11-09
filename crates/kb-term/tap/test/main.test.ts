@@ -412,10 +412,10 @@ test('seam_reseed_handover_feeds_post_B_bytes_exactly_once_post_withhold', async
     // Post-B output, while the attempt is parked on the capture feed:
     // a withheld main-screen mouse enable (must never reach the twin)
     // plus plain bytes (must reach it exactly once, after the capture).
-    // The leading CRLF puts them on a fresh line so they cannot
-    // overwrite the restored capture line in the seed.
-    fake.stdout.push(octal('%0', '\r\nAFTER-B\x1b[?1000htail'));
-    await waitUntil(() => stack.server.head >= 3 + 13, 'post-B bytes in ring');
+    // A CUP to row 2 puts them on a fresh line so they cannot overwrite
+    // the restored capture line in the seed.
+    fake.stdout.push(octal('%0', '\x1b[2;1HAFTER-B\x1b[?1000htail'));
+    await waitUntil(() => stack.server.head >= 3 + 17, 'post-B bytes in ring');
     rec.releaseGated();
     await waitUntil(() => rec.feeds.some((f) => f.includes('AFTER-Btail')), 'post-B fed via chain');
 
