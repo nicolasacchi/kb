@@ -1724,6 +1724,16 @@ jobs:
           "$P/bin/kb-term" --version >/dev/null
           "$P/bin/kb-termd" --version >/dev/null
           test "$(head -c4 "$P/bin/kb-tap" | od -An -tx1 | tr -d ' \n')" = "7f454c46"
+          test "$("$P/bin/kb-tap")" = "kb-tap placeholder"
+          # VERSIONS carries every build fact the packager records.
+          grep -q '^bun=' "$P/share/kb-term/VERSIONS"
+          grep -q '^git_sha=' "$P/share/kb-term/VERSIONS"
+          grep -q '^tmux_src_sha256=' "$P/share/kb-term/VERSIONS"
+          # INSTALL lists the tmux runtime libraries when the pinned tmux is
+          # dynamic (guarded so a static build does not flake the lane).
+          if ldd "$P/libexec/kb-term/tmux" >/dev/null 2>&1 && ldd "$P/libexec/kb-term/tmux" 2>/dev/null | grep -q '=>'; then
+            grep -q 'Runtime libraries this tmux needs' "$P/share/kb-term/INSTALL"
+          fi
 
       - name: Archive manifest matches the selftest list
         run: |

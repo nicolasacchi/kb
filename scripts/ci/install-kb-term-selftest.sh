@@ -225,6 +225,12 @@ for u in kb-termd.service kb-tap@.service kb-term@.service; do
   grep -qF "$work/p4" "$work/home/.config/systemd/user/$u" \
     || fail "unit $u does not carry the rendered prefix $work/p4"
 done
+for u in kb-termd.service kb-tap@.service kb-term@.service; do
+  [ -f "$work/p4/share/kb-term/systemd/$u" ] \
+    || fail "share unit $u not installed under share/kb-term/systemd"
+  grep -qF "$work/p4" "$work/p4/share/kb-term/systemd/$u" \
+    || fail "share unit $u does not carry the rendered prefix $work/p4"
+done
 ! grep -rE '@[A-Z][A-Z0-9_]*@|__[A-Z][A-Z0-9_]*__' "$work/p4" >/dev/null 2>&1 \
   || fail "installer token survived under \$P"
 ! grep -rE '@[A-Z][A-Z0-9_]*@|__[A-Z][A-Z0-9_]*__' "$work/home/.config/systemd" >/dev/null 2>&1 \
@@ -249,6 +255,16 @@ grep -qF "sudo install -m 0644 $work/p4/share/kb-term/tmpfiles.d/kb-term.conf" "
 grep -q "linger" "$work/out" || fail "linger hint missing"
 grep -q "NOT put on PATH" "$work/out" || fail "tmux OFF PATH line missing"
 grep -q "do not restart kb-term" "$work/out" || fail "do-not-restart warning missing"
+grep -qF "systemctl --user enable --now kb-termd.service" "$work/out" \
+  || fail "enable --now next-step line missing from output"
+grep -qF "kb-term doctor" "$work/out" \
+  || fail "doctor next-step line missing from output"
+grep -qF "- /run/kb-term/runner:/run/kb-term/runner" "$work/out" \
+  || fail "compose bind-mount next-step line missing from output"
+grep -qF "[terminal] enabled = true" "$work/out" \
+  || fail "terminal-enabled next-step line missing from output"
+grep -qF "export PATH=\"$work/p4/bin:\$PATH\"" "$work/out" \
+  || fail "PATH hint line missing from output"
 say_ok "4 good sidecar installs with correct layout"
 
 # 5. gh attestation fails -> abort with nothing installed; override proceeds
@@ -525,21 +541,65 @@ grep -qF "version : ${ver}" "$work/out" || fail "latest tag_name not resolved to
 [ -x "$work/p24/bin/kb-termd" ] || fail "kb-termd not installed via latest lookup"
 say_ok "24b latest lookup resolves GitHub API tag_name"
 # 25. the packager refuses to package when a required repo template is
-# absent (deleting the template-absence loop must fail this case).
+# absent. Loops over all six templates: deleting any one (not just the
+# overlay) must fail with 'source template missing:' naming it.
 repo_root="$(cd "$here/../.." && pwd)"
 mkdir -p "$work/repo-copy/scripts" "$work/repo-copy/crates/kb-term"
 cp "$packager_sh" "$work/repo-copy/scripts/package-kb-term.sh"
-cp -r "$repo_root/crates/kb-term/share" "$work/repo-copy/crates/kb-term/share"
-rm "$work/repo-copy/crates/kb-term/share/omp/overlay.yml"
-if env -i HOME="$work/home" PATH="$PATH" \
-    KB_TERMD_BIN="$work/pkgin/termd" KB_TERM_BIN="$work/pkgin/term" \
-    KB_TAP_BIN="$work/pkgin/tap" KB_TMUX_BIN="$work/pkgin/tmux" \
-    KB_TERM_VERSION=9.9.9 KB_TERM_TARGET=x86_64-unknown-linux-gnu \
-    OUT_DIR="$work/pkgout" bash "$work/repo-copy/scripts/package-kb-term.sh" >"$work/out" 2>&1; then
-  fail "missing template must fail the packager"
+for tpl in share/systemd/kb-termd.service share/systemd/kb-tap@.service share/systemd/kb-term@.service share/tmpfiles.d/kb-term.conf share/omp/overlay.yml share/kb-term.conf; do
+  rm -rf "$work/repo-copy/crates/kb-term/share"
+  cp -r "$repo_root/crates/kb-term/share" "$work/repo-copy/crates/kb-term/share"
+  tmpl_name="$(basename "$tpl")"
+  rm "$work/repo-copy/crates/kb-term/$tpl"
+  if env -i HOME="$work/home" PATH="$PATH" \
+      KB_TERMD_BIN="$work/pkgin/termd" KB_TERM_BIN="$work/pkgin/term" \
+      KB_TAP_BIN="$work/pkgin/tap" KB_TMUX_BIN="$work/pkgin/tmux" \
+      KB_TERM_VERSION=9.9.9 KB_TERM_TARGET=x86_64-unknown-linux-gnu \
+      OUT_DIR="$work/pkgout" bash "$work/repo-copy/scripts/package-kb-term.sh" >"$work/out" 2>&1; then
+    fail "missing template $tpl must fail the packager"
+  fi
+  grep -q "source template missing:" "$work/out" \
+    || fail "no missing-template message for $tpl"
+  grep -qF "$tmpl_name" "$work/out" \
+    || fail "missing-template error does not name $tmpl_name"
+done
+say_ok "25 packager rejects a missing source template (all six)"
+
+# 26. a non-x86_64 KB_TERM_TARGET is refused, naming the x86_64-only rule.
+if pkg_run KB_TERM_TARGET=aarch64-unknown-linux-gnu; then
+  fail "aarch64 target must fail the packager"
 fi
-grep -q "source template missing:" "$work/out" || fail "no missing-template message"
-grep -q "overlay.yml" "$work/out" || fail "missing-template error does not name the file"
-say_ok "25 packager rejects a missing source template"
+grep -q "x86_64 Linux only" "$work/out" || fail "bad-target error does not name the x86_64-only rule"
+grep -qF "aarch64-unknown-linux-gnu" "$work/out" || fail "bad-target error does not name the target"
+say_ok "26 packager rejects a non-x86_64 target"
+# 27. VERSIONS carries every build fact; the tmux sidecar uses the bare
+# name; GITHUB_OUTPUT receives archive=<name>.
+rm -rf "$work/pkgout" "$work/extract"
+mkdir -p "$work/pkgout" "$work/extract"
+: > "$work/github-output"
+pkg_run KB_BUN_VERSION=1.4.4 KB_GIT_SHA=abc1234 KB_TMUX_SRC_SHA256=deadbeef \
+  GITHUB_OUTPUT="$work/github-output" || fail "good packager run must succeed"
+[ -f "$work/pkgout/${pkg}.tar.gz" ] || fail "archive not produced"
+tar -xzf "$work/pkgout/${pkg}.tar.gz" -C "$work/extract"
+for fact in version=${ver} target=${target} tmux=3.7c bun=1.4.4 git_sha=abc1234 tmux_src_sha256=deadbeef; do
+  grep -qF "$fact" "$work/extract/$pkg/share/kb-term/VERSIONS" \
+    || fail "VERSIONS missing $fact"
+done
+grep -qE '^[0-9a-f]{64}  tmux$' "$work/extract/$pkg/libexec/kb-term/tmux.sha256" \
+  || fail "tmux.sha256 is not the bare-name sha256sum format"
+grep -qF "archive=${pkg}.tar.gz" "$work/github-output" \
+  || fail "GITHUB_OUTPUT did not record archive="
+[ -f "$work/pkgout/${pkg}.tar.gz.sha256" ] || fail "archive sidecar not produced"
+say_ok "27 VERSIONS facts, bare-name sidecar and GITHUB_OUTPUT archive"
+# 28. INSTALL carries the ldd block for a dynamic tmux, and omits it for a
+# static one (the fake tmux script here is non-dynamic).
+if ldd "$work/pkgin/tmux" >/dev/null 2>&1 && ldd "$work/pkgin/tmux" 2>/dev/null | grep -q '=>'; then
+  grep -q "Runtime libraries this tmux needs" "$work/extract/$pkg/INSTALL" \
+    || fail "INSTALL missing the ldd block for a dynamic tmux"
+else
+  grep -q "Runtime libraries this tmux needs" "$work/extract/$pkg/INSTALL" \
+    && fail "INSTALL must omit the ldd block for a static tmux"
+fi
+say_ok "28 INSTALL ldd block follows tmux dynamism"
 
 echo "install-kb-term selftest OK"
