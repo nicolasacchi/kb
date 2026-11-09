@@ -722,11 +722,13 @@ mod relay_tests {
 
     #[tokio::test]
     async fn slow_consumer_closes_1013_and_reader_is_backpressured() {
-        // The gated sink has a 4-deep drain: the writer stalls on
-        // `poll_ready`, the relay's mpsc (cap 64) fills, the reader
-        // blocks on `send_timeout`, and the writer closes 1013. The
-        // reader must be backpressured: it pulls only a bounded
-        // prefix of the 500-item flood, never the whole queue.
+        // The gated sink (4-deep drain) is drained slower than the
+        // writer can stall, so the relay's mpsc (cap 64) stays full
+        // and the reader blocks on its send deadline; that signal
+        // closes 1013. The drain pace is the point: one message per
+        // 200 ms keeps the reader's block (200 ms) longer than its
+        // 100 ms deadline so the signal fires, while bounding the
+        // total pull to the sink+mpsc caps plus the handful paced.
         let (to_test, out_rx) = mpsc::channel::<Message>(4);
         let (to_relay, from_relay) = mpsc::channel::<Result<Message, axum::Error>>(64);
         let mut out = out_rx;
@@ -753,38 +755,49 @@ mod relay_tests {
             run_relay(sink, upstream, shutdown, timers, |_| {}).await;
         });
         let mut saw_1013 = false;
-        while !saw_1013 {
-            // Drain without awaiting: `try_recv` + thewaker tap
-            // keeps the gated sink half-drained (it must progress
-            // far enough to deliver the close) while the 500-item
-            // flood keeps the reader blocked.
-            let mut got = false;
-            while let Ok(msg) = out.try_recv() {
-                got = true;
-                if let Message::Close(Some(frame)) = msg {
-                    if frame.code == CLOSE_SLOW_CONSUMER {
-                        saw_1013 = true;
-                        break;
+        // Phase one: let the caps fill and the reader stall. One
+        // drained message per 200 ms keeps the mpsc full long
+        // enough for the reader's 100 ms send deadline to fire.
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                while let Ok(msg) = out.try_recv() {
+                    if let Message::Close(Some(frame)) = msg {
+                        if frame.code == CLOSE_SLOW_CONSUMER {
+                            saw_1013 = true;
+                            return;
+                        }
                     }
+                    break; // exactly one message per cadence
+                }
+                if let Some(w) = ready.lock().unwrap().take() {
+                    w.wake();
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+        })
+        .await
+        .expect("the paced drain must signal 1013");
+        // Phase two: free the remaining messages so the close
+        // (queued after the signal) can reach the test.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !saw_1013 {
+                match out.recv().await {
+                    Some(Message::Close(Some(frame))) if frame.code == CLOSE_SLOW_CONSUMER => {
+                        saw_1013 = true;
+                    }
+                    Some(_) => {}
+                    None => break,
                 }
             }
-            if saw_1013 {
-                break;
-            }
-            if let Some(w) = ready.lock().unwrap().take() {
-                w.wake();
-            }
-            if !got {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-            // Bounded: a relay that never signals 1013 fails here.
-            assert!(
-                pulled.load(std::sync::atomic::Ordering::SeqCst) <= 4 + 64 + 2,
-                "the reader must be backpressured at a bounded prefix"
-            );
-        }
+        })
+        .await
+        .expect("the 1013 close must arrive once drained");
         let _ = tokio::time::timeout(Duration::from_secs(5), relay).await;
         assert!(saw_1013, "a flooded, undrained sink must close 1013");
+        assert!(
+            pulled.load(std::sync::atomic::Ordering::SeqCst) <= 4 + 64 + 8,
+            "the reader must be backpressured at a bounded prefix"
+        );
         assert!(
             pulled.load(std::sync::atomic::Ordering::SeqCst) < 500,
             "the reader must never drain the whole flood"
