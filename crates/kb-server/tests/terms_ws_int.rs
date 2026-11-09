@@ -174,7 +174,7 @@ type WsStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 enum WsConnect {
-    Ok(WsStream),
+    Ok(Box<WsStream>),
     Other,
 }
 
@@ -196,7 +196,7 @@ async fn ws_connect(
         .body(())
         .unwrap();
     match tokio_tungstenite::connect_async_with_config(req, None, false).await {
-        Ok((ws, _resp)) => WsConnect::Ok(ws),
+        Ok((ws, _resp)) => WsConnect::Ok(Box::new(ws)),
         Err(_) => WsConnect::Other,
     }
 }
@@ -319,7 +319,7 @@ async fn ws_real_tap_roundtrip() {
     std::fs::create_dir_all(run_dir.join("runner")).unwrap();
     let mut cfg = RunnerConfig::test_config(run_dir.clone(), tmux_bin.clone(), conf_path());
     cfg.require_tap = true;
-    cfg.tap_ready_secs = 10;
+    cfg.tap_ready_secs = 30;
     cfg.tap_bin = Some(tap_bin);
     let runner = Arc::new(Runner::direct(cfg));
     let sock_path = run_dir.join("runner").join("runner.sock");

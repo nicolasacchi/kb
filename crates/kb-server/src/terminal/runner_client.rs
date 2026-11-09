@@ -635,8 +635,9 @@ mod tests {
         assert_eq!(binary[0].0, ENV_BINARY);
         // The 8-byte BE offset header rides inside the frame bytes.
         let frame = strip_s2c_id(&binary[0].1).unwrap();
-        assert_eq!(frame.len(), 8 + 3);
-        assert_eq!(u64::from_be_bytes(frame[..8].try_into().unwrap()), 3);
+        assert_eq!(frame.len(), 8 + 2);
+        assert_eq!(u64::from_be_bytes(frame[..8].try_into().unwrap()), 258);
+        assert_eq!(&frame[8..], b"hi");
     }
 
     #[test]
