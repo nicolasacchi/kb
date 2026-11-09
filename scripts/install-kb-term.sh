@@ -166,6 +166,7 @@ verify_attestation() {
 # rename; copying over a running ELF fails with "text file busy").
 install_one() {
   src="$1"; dest="$2"; mode="$3"
+  [ ! -d "$dest" ] || err "install destination ${dest} is a directory — refusing to install"
   dest_dir=$(dirname "$dest")
   mkdir -p "$dest_dir"
   tmpfile="${dest}.tmp.$$"
@@ -186,6 +187,7 @@ sed_escape() {
 render() {
   # $1 src   $2 dest
   src="$1"; dest="$2"
+  [ ! -d "$dest" ] || err "install destination ${dest} is a directory — refusing to install"
   prefix_abs=$(CDPATH= cd "${PREFIX}" 2>/dev/null && pwd) \
     || err "PREFIX ${PREFIX} is not a directory"
   p_esc=$(sed_escape "$prefix_abs")

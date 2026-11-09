@@ -48,8 +48,8 @@
 # only), ships the host-side kb-term runner, client, compiled tap and the pinned
 # tmux 3.7c, installed by `scripts/install-kb-term.sh` (docs/kb-term-install.md).
 #
-# Tarball contents (v0.44 F2): each archive carries its binaries, an INSTALL
-# note AND the web reader under share/ — `share/kb/web/dist` +
+# Tarball contents (v0.44 F2): each kb/kb-code archive carries its binaries,
+# an INSTALL note AND the web reader under share/ — `share/kb/web/dist` +
 # `share/kb/sample-corpus` for kb, `share/kb-code/web-code/dist` for kb-code —
 # the layout the container images use. Both daemons resolve their SPA at
 # `<exe dir>/../share/<pkg>/…` with no env var (spa.rs resolve_spa_dist), and

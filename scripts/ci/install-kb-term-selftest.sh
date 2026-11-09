@@ -57,6 +57,7 @@ fi
 #   $4 = kb-termd-2 source for archive 2 | none
 #   $5 = unit extra line ("" / "second")
 #   $6 = sidecar mode ("" = good tmux.sha256, "corrupt" = zero hash)
+#   $7 = bad token in a unit file ("" / "1")
 ver="9.9.9"
 target="x86_64-unknown-linux-gnu"
 pkg="kb-term-${ver}-${target}"
@@ -64,6 +65,7 @@ pkg="kb-term-${ver}-${target}"
 build_fake_archive() {
   # $1 dir   $2 tmux line   $3 include-tap   $4 termd src   $5 unit marker   $6 sidecar
   dir="$1"; tmux_line="$2"; include_tap="$3"; termd_src="$4"; unit_marker="$5"; sidecar_mode="${6:-}"
+  bad_token="${7:-}"
   rm -rf "$dir"
   mkdir -p "$dir/$pkg/bin" "$dir/$pkg/libexec/kb-term" \
            "$dir/$pkg/share/kb-term/systemd" "$dir/$pkg/share/kb-term/tmpfiles.d" \
@@ -95,9 +97,14 @@ build_fake_archive() {
     printf "[Unit]\nDescription=kb-term ${u}\nExecStart=@PREFIX@/bin/kb-term --${unit_marker}\n" \
       > "$dir/$pkg/share/kb-term/systemd/$u"
   done
-  # The shipped tmpfiles spelling (__USER__ __USER__), as in the real archive.
-  printf 'd /run/kb-term 0755 __USER__ __USER__ -\nd /run/kb-term/s 0700 __USER__ __USER__ -\nd /run/kb-term/runner 0700 __USER__ __USER__ -\n' \
+  # The shipped tmpfiles spelling (__USER__ __USER__), plus @GROUP@ so case 4
+  # proves the @GROUP@ substitution (id -gn) distinct from __USER__ (id -un).
+  printf 'd /run/kb-term 0755 __USER__ @GROUP@ -\nd /run/kb-term/s 0700 __USER__ @GROUP@ -\nd /run/kb-term/runner 0700 __USER__ @GROUP@ -\n' \
     > "$dir/$pkg/share/kb-term/tmpfiles.d/kb-term.conf"
+  if [ "$bad_token" = "1" ]; then
+    printf 'ExecStart=@SOME_TOKEN@/bin/kb-term\n' \
+      >> "$dir/$pkg/share/kb-term/systemd/kb-termd.service"
+  fi
   printf 'tui:\n  maxInlineImages: 0\n' > "$dir/$pkg/share/kb-term/omp/overlay.yml"
   printf '# fake tmux conf\n' > "$dir/$pkg/share/kb-term/kb-term.conf"
   printf 'version=%s\ntarget=%s\ntmux=3.7c\n' "$ver" "$target" > "$dir/$pkg/share/kb-term/VERSIONS"
@@ -226,6 +233,19 @@ grep -qF "$(id -un)" "$work/p4/share/kb-term/tmpfiles.d/kb-term.conf" \
   || fail "rendered tmpfiles does not contain the user"
 grep -qF "$(id -gn)" "$work/p4/share/kb-term/tmpfiles.d/kb-term.conf" \
   || fail "rendered tmpfiles does not contain the group"
+for sh in kb-term.conf omp/overlay.yml VERSIONS INSTALL; do
+  [ -f "$work/p4/share/kb-term/$sh" ] || fail "share file $sh not installed"
+done
+grep -qF "version=${ver}" "$work/p4/share/kb-term/VERSIONS" \
+  || fail "VERSIONS does not carry version="
+grep -qF "target=${target}" "$work/p4/share/kb-term/VERSIONS" \
+  || fail "VERSIONS does not carry target="
+grep -qF "tui:" "$work/p4/share/kb-term/omp/overlay.yml" \
+  || fail "overlay.yml content not installed"
+grep -qF "fake tmux conf" "$work/p4/share/kb-term/kb-term.conf" \
+  || fail "kb-term.conf content not installed"
+grep -qF "sudo install -m 0644 $work/p4/share/kb-term/tmpfiles.d/kb-term.conf" "$work/out" \
+  || fail "sudo install tmpfiles line missing from output"
 grep -q "linger" "$work/out" || fail "linger hint missing"
 grep -q "NOT put on PATH" "$work/out" || fail "tmux OFF PATH line missing"
 grep -q "do not restart kb-term" "$work/out" || fail "do-not-restart warning missing"
@@ -411,11 +431,13 @@ pkg_run() {
     KB_TERM_VERSION=9.9.9 KB_TERM_TARGET=x86_64-unknown-linux-gnu \
     OUT_DIR="$work/pkgout" "$@" bash "$packager_sh" >"$work/out" 2>&1
 }
-# 19. an unset input var fails, naming it (empty string takes the unset path)
-if pkg_run KB_TERMD_BIN=; then fail "unset KB_TERMD_BIN must fail"; fi
-grep -q "KB_TERMD_BIN is unset" "$work/out" \
-  || fail "no unset-var message naming KB_TERMD_BIN"
-say_ok "19 packager rejects an unset input var"
+# 19. each unset input var fails, naming it (empty string takes the unset path)
+for v in KB_TERMD_BIN KB_TERM_BIN KB_TAP_BIN KB_TMUX_BIN; do
+  if pkg_run "${v}="; then fail "unset ${v} must fail"; fi
+  grep -q "${v} is unset" "$work/out" \
+    || fail "no unset-var message naming ${v}"
+done
+say_ok "19 packager rejects each unset input var"
 # 20. a directory is not an executable file (it must not reach `cp`)
 if pkg_run KB_TERMD_BIN="$work/pkgin"; then
   fail "directory KB_TERMD_BIN must fail"
@@ -431,5 +453,93 @@ grep -q "tmux 3.7c" "$work/out" || fail "packager error does not name 3.7c"
 grep -q "refusing to package" "$work/out" \
   || fail "packager error is not fail-closed"
 say_ok "21 packager rejects tmux 3.4"
+# 22. an unknown surviving token in a unit aborts BEFORE anything is
+# installed (staging + per-file check are fail-closed); a pre-existing
+# unrelated @FOO@ file in the prefix does NOT abort a good install.
+build_fake_archive "$work/src" "tmux 3.7c" 1 stub "" "" 1
+cp "$work/src/${pkg}.tar.gz" "$work/mirror/"
+cp "$work/src/${pkg}.tar.gz.expected" "$work/mirror/${pkg}.tar.gz.sha256"
+if run "$work/p20"; then fail "unknown surviving token must abort"; fi
+[ ! -e "$work/p20/bin/kb-termd" ] || fail "installed despite surviving token"
+grep -q "token survived rendering" "$work/out" || fail "no surviving-token message"
+build_fake_archive "$work/src" "tmux 3.7c" 1 stub ""
+cp "$work/src/${pkg}.tar.gz" "$work/mirror/"
+cp "$work/src/${pkg}.tar.gz.expected" "$work/mirror/${pkg}.tar.gz.sha256"
+mkdir -p "$work/p21/share/kb-term"
+printf '@FOO@ left-over marker\n' > "$work/p21/share/kb-term/junk.txt"
+run "$work/p21" || fail "pre-existing unrelated token file must not abort a good install"
+[ -x "$work/p21/bin/kb-termd" ] || fail "kb-termd not installed with pre-existing token file"
+say_ok "22 surviving token aborts; unrelated pre-existing token file does not"
+# 23. an install destination that is a directory aborts (mv would otherwise
+# move the new file INSIDE it and report success without a usable binary).
+build_fake_archive "$work/src" "tmux 3.7c" 1 stub ""
+cp "$work/src/${pkg}.tar.gz" "$work/mirror/"
+cp "$work/src/${pkg}.tar.gz.expected" "$work/mirror/${pkg}.tar.gz.sha256"
+mkdir -p "$work/p22/bin/kb-termd"
+if run "$work/p22"; then fail "directory destination must abort"; fi
+grep -q "is a directory" "$work/out" || fail "no is-a-directory message"
+[ -d "$work/p22/bin/kb-termd" ] || fail "pre-planted directory was removed"
+[ -z "$(find "$work/p22/bin/kb-termd" -type f 2>/dev/null)" ] \
+  || fail "new binary was moved inside the pre-planted directory"
+say_ok "23 directory destination aborts"
+# 24. version handling: `vx` must NOT strip the leading v (only v[0-9]
+# strips), and latest lookup (no KB_VERSION, no KB_BASE_URL) resolves the
+# GitHub API tag_name to an installable archive.
+build_fake_archive "$work/src" "tmux 3.7c" 1 stub ""
+cp "$work/src/${pkg}.tar.gz" "$work/mirror/"
+cp "$work/src/${pkg}.tar.gz.expected" "$work/mirror/${pkg}.tar.gz.sha256"
+if run "$work/p23" KB_VERSION="vx" 2>/dev/null; then fail "vx download must fail (no such archive)"; fi
+grep -qF "version : vx" "$work/out" || fail "vx was stripped (expected version : vx)"
+grep -q "download failed" "$work/out" || fail "vx download failure not reported"
+[ ! -e "$work/p23/bin/kb-termd" ] || fail "installed despite vx download failure"
+say_ok "24a vx is not stripped"
+mkdir -p "$work/latest-bin"
+{ printf '#!/bin/sh\nmirror=%s\npkg=%s\n' "'$work/mirror'" "'$pkg'";
+  cat <<'STUB'
+dest=""; url=""; prev=""
+for a in "$@"; do
+  if [ "$prev" = "-o" ]; then dest="$a"; fi
+  prev="$a"
+  case "$a" in https://*) url="$a" ;; esac
+done
+case "$url" in
+  *api.github.com*) printf '{"tag_name": "v9.9.9"}\n' ;;
+  *.tar.gz.sha256) cat "$mirror/${pkg}.tar.gz.sha256" ;;
+  *.tar.gz) cp "$mirror/${pkg}.tar.gz" "$dest" ;;
+  *) exit 1 ;;
+esac
+STUB
+} > "$work/latest-bin/curl"
+chmod +x "$work/latest-bin/curl"
+build_fake_archive "$work/src" "tmux 3.7c" 1 stub ""
+cp "$work/src/${pkg}.tar.gz" "$work/mirror/"
+cp "$work/src/${pkg}.tar.gz.expected" "$work/mirror/${pkg}.tar.gz.sha256"
+if env -i HOME="$work/home" XDG_CONFIG_HOME="$work/home/.config" \
+    PATH="$work/latest-bin:$PATH" PREFIX="$work/p24" \
+    KB_TERM_SKIP_SYSTEMD=1 sh "$install_sh" >"$work/out" 2>&1; then
+  : # latest install must succeed below; fallthrough to assertions
+else
+  fail "latest-lookup install should succeed"
+fi
+grep -qF "version : ${ver}" "$work/out" || fail "latest tag_name not resolved to version"
+[ -x "$work/p24/bin/kb-termd" ] || fail "kb-termd not installed via latest lookup"
+say_ok "24b latest lookup resolves GitHub API tag_name"
+# 25. the packager refuses to package when a required repo template is
+# absent (deleting the template-absence loop must fail this case).
+repo_root="$(cd "$here/../.." && pwd)"
+mkdir -p "$work/repo-copy/scripts" "$work/repo-copy/crates/kb-term"
+cp "$packager_sh" "$work/repo-copy/scripts/package-kb-term.sh"
+cp -r "$repo_root/crates/kb-term/share" "$work/repo-copy/crates/kb-term/share"
+rm "$work/repo-copy/crates/kb-term/share/omp/overlay.yml"
+if env -i HOME="$work/home" PATH="$PATH" \
+    KB_TERMD_BIN="$work/pkgin/termd" KB_TERM_BIN="$work/pkgin/term" \
+    KB_TAP_BIN="$work/pkgin/tap" KB_TMUX_BIN="$work/pkgin/tmux" \
+    KB_TERM_VERSION=9.9.9 KB_TERM_TARGET=x86_64-unknown-linux-gnu \
+    OUT_DIR="$work/pkgout" bash "$work/repo-copy/scripts/package-kb-term.sh" >"$work/out" 2>&1; then
+  fail "missing template must fail the packager"
+fi
+grep -q "source template missing:" "$work/out" || fail "no missing-template message"
+grep -q "overlay.yml" "$work/out" || fail "missing-template error does not name the file"
+say_ok "25 packager rejects a missing source template"
 
 echo "install-kb-term selftest OK"

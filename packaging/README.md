@@ -36,7 +36,7 @@ same repo and the same tag, never a `kb` subcommand.
 Both images come from the one repo-root `Dockerfile`; kb-code's is its
 `kb-code-runtime` target, kb's is the (deliberately last) `runtime` stage.
 
-**Both tarballs bundle their SPA** (since v0.44) under `share/`:
+The kb and kb-code tarballs bundle their SPA (since v0.44) under `share/`:
 `share/kb/web/dist` + `share/kb/sample-corpus`, and
 `share/kb-code/web-code/dist`. Each daemon resolves it at
 `<exe dir>/../share/<pkg>/…` when `KB_SPA_DIST` / `KB_CODE_SPA_DIST` is unset
