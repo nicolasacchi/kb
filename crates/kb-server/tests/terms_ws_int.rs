@@ -216,7 +216,7 @@ async fn ws_connect_retry(
     loop {
         let ticket = mint_ticket(addr, id).await;
         match ws_connect(addr, id, &ticket, from).await {
-            WsConnect::Ok(ws) => return ws,
+            WsConnect::Ok(ws) => return *ws,
             WsConnect::Other(e) => last = e,
         }
         assert!(

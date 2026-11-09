@@ -760,14 +760,15 @@ mod relay_tests {
         // enough for the reader's 100 ms send deadline to fire.
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
-                while let Ok(msg) = out.try_recv() {
+                // Exactly one message per cadence: `try_recv`
+                // errors (empty) simply ride out the sleep.
+                if let Ok(msg) = out.try_recv() {
                     if let Message::Close(Some(frame)) = msg {
                         if frame.code == CLOSE_SLOW_CONSUMER {
                             saw_1013 = true;
                             return;
                         }
                     }
-                    break; // exactly one message per cadence
                 }
                 if let Some(w) = ready.lock().unwrap().take() {
                     w.wake();
