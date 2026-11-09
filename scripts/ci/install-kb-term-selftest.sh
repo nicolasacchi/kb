@@ -259,7 +259,7 @@ grep -qF "systemctl --user enable --now kb-termd.service" "$work/out" \
   || fail "enable --now next-step line missing from output"
 grep -qF "kb-term doctor" "$work/out" \
   || fail "doctor next-step line missing from output"
-grep -qF "- /run/kb-term/runner:/run/kb-term/runner" "$work/out" \
+grep -qF -- "- /run/kb-term/runner:/run/kb-term/runner" "$work/out" \
   || fail "compose bind-mount next-step line missing from output"
 grep -qF "[terminal] enabled = true" "$work/out" \
   || fail "terminal-enabled next-step line missing from output"
