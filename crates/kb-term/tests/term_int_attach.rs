@@ -817,7 +817,11 @@ impl PtyProc {
                             .take()
                             .and_then(|rx| rx.recv_timeout(Duration::from_secs(2)).ok())
                             .unwrap_or_default();
-                        return (None, out);
+                        let tail = String::from_utf8_lossy(&out[out.len().saturating_sub(600)..]);
+                        panic!(
+                            "child did not exit within {timeout:?}; captured {} bytes, tail: {tail:?}",
+                            out.len()
+                        );
                     }
                     std::thread::sleep(Duration::from_millis(10));
                 }

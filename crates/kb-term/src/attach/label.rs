@@ -451,7 +451,14 @@ impl LabelRewriter {
             let lf = rest.iter().position(|&b| b == b'\n');
             let seg_end = lf.unwrap_or(rest.len());
             if let Some(i) = earliest_trigger(&rest[..seg_end]) {
-                out.extend_from_slice(&rest[..i]);
+                // Bytes before the trigger are part of this held row:
+                // their visible text is emitted directly (the row's own
+                // visible prefix is computed from the held row alone),
+                // but raw escape sequences must never leak — a `\x1b[58`
+                // SGR sitting right before the picture trigger would
+                // otherwise escape into the output (spec: zero ESC[58).
+                let pre = strip_escapes(&rest[..i]);
+                out.extend_from_slice(pre.as_bytes());
                 self.holding = true;
                 if let Some(p) = lf {
                     let seg = &rest[i..=p];
