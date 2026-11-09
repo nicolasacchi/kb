@@ -397,20 +397,34 @@ fn envelope_length_capped_at_max_envelope_len() {
 
 #[test]
 fn decode_text_frame_rejects_missing_required_fields() {
-    // Lock-step with the TS decoder: a known `t` without its required
-    // fields is MalformedJson, never a half-populated frame.
-    assert_eq!(
-        decode_text_frame(r#"{"t":"seed","offset":1000}"#),
-        Err(WireError::MalformedJson)
-    );
-    assert_eq!(
-        decode_text_frame(r#"{"t":"hello","proto":"kb-term/1","session":"s"}"#),
-        Err(WireError::MalformedJson)
-    );
-    assert_eq!(
-        decode_text_frame(r#"{"t":"resumefrom","offset":1000,"epoch":"e"}"#),
-        Err(WireError::MalformedJson)
-    );
+    // Lock-step with the TS decoder: a known `t` must carry every
+    // required field and a partial nested ResumeInfo is rejected too.
+    // These cover every ServerFrame field that once carried a serde
+    // default (seq, offset, profile.image) plus a partial nested resume.
+    let cases = [
+        r#"{"t":"seed","offset":1000}"#,
+        r#"{"t":"hello","proto":"kb-term/1","session":"s"}"#,
+        r#"{"t":"resumefrom","offset":1000,"epoch":"e"}"#,
+        r#"{"t":"imagedef","id":1,"gen":1,"sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","mime":"image/png","w":1,"h":1,"cols":1,"rows":1,"offset":1}"#,
+        r#"{"t":"imagedef","seq":1,"id":1,"gen":1,"sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","mime":"image/png","w":1,"h":1,"cols":1,"rows":1}"#,
+        r#"{"t":"resize","cols":80,"rows":24}"#,
+        r#"{"t":"resize","seq":1,"cols":80,"rows":24}"#,
+        r#"{"t":"sizechanged","seq":1,"cols":80,"rows":24,"by":"v1"}"#,
+        r#"{"t":"gfxreset","gen":1,"offset":1}"#,
+        r#"{"t":"exit","code":0,"offset":1}"#,
+        r#"{"t":"exit","seq":1,"code":0}"#,
+        r#"{"t":"clipboard","data_b64":""}"#,
+        r#"{"t":"profile","xterm":"6.0.0","serialize":"0.14.0","width":"unicode-graphemes@0.4.0","cols":120,"rows":40,"scrollback":50000,"scroll_on_erase_in_display":true,"cell_px_w":9,"cell_px_h":18,"theme":null}"#,
+        r#"{"t":"viewer-open","viewer":"v1","profile":"desktop","resume":{}}"#,
+        r#"{"t":"viewer-open","viewer":"v1","profile":"desktop","resume":{"offset":1}}"#,
+    ];
+    for raw in cases {
+        assert_eq!(
+            decode_text_frame(raw),
+            Err(WireError::MalformedJson),
+            "missing required field must be rejected: {raw}"
+        );
+    }
 }
 
 #[test]
