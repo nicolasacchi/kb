@@ -26,6 +26,11 @@ use crate::runner::{Runner, RunnerError};
 /// A source of "how long has session `id` been quiet".
 ///
 /// Anchor-backed here; the tap replaces the anchor-backed clock later.
+///
+/// Contract note: the T9 brief pinned a sync `quiet_for(&self, id) ->
+/// Option<Duration>`; the merged reality is this async trait (the
+/// anchor-backed impl must lock an async map), and later units code
+/// against the async form.
 pub trait QuietSource: Send + Sync {
     /// Time since the session's last output (`None` if never active).
     fn quiet_for(&self, id: &str) -> impl Future<Output = Option<Duration>> + Send;

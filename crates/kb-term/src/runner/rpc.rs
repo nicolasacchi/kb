@@ -24,7 +24,6 @@ use crate::runner::ids::{valid_harness, valid_id};
 use crate::runner::kill;
 use crate::runner::launch;
 use crate::runner::supervisor::Supervisor;
-use crate::runner::tmux::Tmux;
 use crate::runner::{Runner, RunnerError};
 use crate::wire::{EmptyData, GridData, PasteData, Request, Response, ViewerData};
 
@@ -336,42 +335,18 @@ pub fn decode_keys_input(input: &crate::wire::KeyInput) -> Result<Vec<u8>, Runne
     }
 }
 
-/// Resize primitive (T9 owns the grid-owner policy): `resize-window`,
-/// then the anchor pty winsize (cells + pixel fields).
+/// Resize primitive — the legacy op obeys the grid-ownership policy:
+/// bounds via `grid::valid_size` (`bad-size`), refuses any recorded
+/// grid owner (`grid-owned`, no owner claim on the wire), and applies
+/// through `grid::apply_size` (anchor + all viewers). See
+/// `grid::resize_legacy`.
 pub async fn resize<S: Supervisor>(
     runner: &Runner<S>,
     id: &str,
     cols: u16,
     rows: u16,
 ) -> Result<(), RunnerError> {
-    if !(20..=500).contains(&cols) {
-        return Err(RunnerError::BadRequest("cols must be 20..=500".to_string()));
-    }
-    if !(5..=200).contains(&rows) {
-        return Err(RunnerError::BadRequest("rows must be 5..=200".to_string()));
-    }
-    let sock = runner.holder_socket(id);
-    let out = runner
-        .tmux
-        .run(
-            &sock,
-            &[
-                "resize-window",
-                "-t",
-                "kb",
-                "-x",
-                &cols.to_string(),
-                "-y",
-                &rows.to_string(),
-            ],
-            None,
-        )
-        .await?;
-    if !out.ok {
-        return Err(RunnerError::NotFound(format!("no holder for {id}")));
-    }
-    runner.anchor_set_winsize(id, cols, rows).await;
-    Ok(())
+    crate::runner::grid::resize_legacy(runner, &runner.tmux, id, cols, rows).await
 }
 
 /// read/history are interim and shape-stable: `capture-pane -p -J`
