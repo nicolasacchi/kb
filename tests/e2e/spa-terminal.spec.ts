@@ -111,7 +111,8 @@ test.describe("T14 — desktop terminal panel", () => {
     for (let i = 0; i < TOTAL; i += 1) {
       expect(info.lines[i]).toBe(`L${String(i + 1).padStart(6, "0")}`);
     }
-    expect(info.lines[TOTAL - 1]).toBe(`L${TOTAL}`);
+    // Highest line == total, zero-padded like every line above.
+    expect(info.lines[TOTAL - 1]).toBe(`L${String(TOTAL).padStart(6, "0")}`);
     expect(info.baseY + info.rows).toBeGreaterThanOrEqual(TOTAL);
     expect(info.width).toBe("unicode-graphemes");
 
@@ -186,7 +187,11 @@ test.describe("T14 — desktop terminal panel", () => {
       .poll(async () => (await bufferInfo(page)).gaps, { timeout: 30_000 })
       .toBe("1");
     const info = await bufferInfo(page);
-    expect(info.resets).toBe("2");
+    // The full rejoin lands after the >=250ms reconnect backoff, so poll
+    // for it rather than asserting it immediately after the gap.
+    await expect
+      .poll(async () => (await bufferInfo(page)).resets, { timeout: 30_000 })
+      .toBe("2");
     await expect
       .poll(async () => (await bufferInfo(page)).lines.length, { timeout: 30_000 })
       .toBe(TOTAL);
