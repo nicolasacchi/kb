@@ -106,6 +106,10 @@ pub(crate) fn emit_created(state: &KbHandles, id: &str, harness: &str, cols: u16
 
 /// Emit `term.ended` exactly once per id (the dedup claim is the
 /// gate: a duplicate claim emits nothing). Returns whether it emitted.
+/// `emit_ended` also emits the matching `term.state` (`"ended"`), so
+/// an SPA waiting for the ended state never hangs on an `ended` it
+/// already saw. The state follows the ended event so a listener that
+/// reconciles on `ended` still finds the state next, in order.
 pub(crate) fn emit_ended(state: &KbHandles, id: &str, exit_code: Option<i32>) -> bool {
     if !ended_claim(state, id) {
         return false;
@@ -113,6 +117,7 @@ pub(crate) fn emit_ended(state: &KbHandles, id: &str, exit_code: Option<i32>) ->
     state
         .bus
         .emit("term.ended", term_ended_payload(id, exit_code));
+    emit_state(state, id, false, None, None, None);
     true
 }
 

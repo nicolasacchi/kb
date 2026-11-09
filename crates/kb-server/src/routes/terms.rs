@@ -342,22 +342,35 @@ pub async fn launch(
         Err(e) => e,
         Ok(RunnerReply::Ok { data }) => {
             // T12: the runner confirmed the launch — the SPA's
-            // `term.created` (harness/cols/rows come from the launch
-            // body: the relay's own record of what it asked for).
+            // `term.created`. The id is the runner's; cols/rows prefer
+            // the runner's confirm values, then the launch body, then
+            // the runner-shaped defaults (the event must not state
+            // dimensions the runner never used). A confirm without
+            // an id cannot be emitted as `created` (there is no id
+            // to key it on): the reply is malformed, so the launch
+            // fails 502 instead of silently skipping the event.
             let new_id = data
                 .get("id")
                 .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            if !new_id.is_empty() {
-                crate::terminal::events::emit_created(
-                    &state,
-                    &new_id,
-                    &parsed.harness,
-                    parsed.cols.unwrap_or(80),
-                    parsed.rows.unwrap_or(24),
-                );
+                .map(str::to_string)
+                .unwrap_or_default();
+            if new_id.is_empty() {
+                return runner_err("bad-reply", "runner launch confirm has no id");
             }
+            let dim = |key: &str, fallback: Option<u16>, default: u16| -> u16 {
+                data.get(key)
+                    .and_then(|v| v.as_u64())
+                    .and_then(|v| u16::try_from(v).ok())
+                    .or(fallback)
+                    .unwrap_or(default)
+            };
+            crate::terminal::events::emit_created(
+                &state,
+                &new_id,
+                &parsed.harness,
+                dim("cols", parsed.cols, 80),
+                dim("rows", parsed.rows, 24),
+            );
             no_store((StatusCode::CREATED, axum::Json(data)).into_response())
         }
         Ok(RunnerReply::Err { code, message }) => runner_err(&code, &message),

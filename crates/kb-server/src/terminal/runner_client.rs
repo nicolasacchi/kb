@@ -159,6 +159,18 @@ pub(crate) struct TermStream {
     write: tokio::net::unix::OwnedWriteHalf,
     /// Decoded envelopes not yet consumed (one `push` can yield many).
     pending: std::collections::VecDeque<StreamItem>,
+    /// Raw envelope bytes not yet forming a complete envelope: the
+    /// trailing partial of the last read, seeded from the reply-line
+    /// leftovers. It survives across `recv` calls, so an envelope
+    /// split across reads (or coalesced with a neighbour) always
+    /// reassembles — a per-call buffer would drop the second
+    /// envelope's head and corrupt the byte stream.
+    read_buf: std::collections::VecDeque<u8>,
+    /// The viewer id the runner opened this stream for (the `stream`
+    /// request's `id`; the runner splices with the same id). C->S
+    /// bodies carry the tap's S2C id prefix so `parseS2C` unwraps
+    /// exactly what the tap itself would emit.
+    viewer: String,
 }
 
 /// tap.sock envelope constants — the ONE framing on this connection
@@ -205,20 +217,31 @@ fn decode_envelopes(
     }
 }
 
-/// Frame one item for the splice: the body is the item's bytes; the
-/// envelope kind is text or binary per the variant.
-fn encode_item(item: &StreamItem) -> Result<Vec<u8>, String> {
-    let (kind, body) = match item {
-        StreamItem::Binary(bytes) => (ENV_BINARY, bytes.clone()),
-        StreamItem::Text(text) => (ENV_TEXT, text.clone().into_bytes()),
+/// Frame one item for the splice as the tap's S2C shape
+/// (`[idlen][id][frame]`, kind per variant): the tap's `parseS2C`
+/// unwraps it exactly as it would a frame the tap itself emitted,
+/// and the frame bytes ride verbatim inside the id prefix. A bare
+/// JSON body would be misread as a length-prefixed id and close
+/// the tap connection, so the prefix is not optional.
+fn encode_item(item: &StreamItem, viewer: &str) -> Result<Vec<u8>, String> {
+    let viewer_bytes = viewer.as_bytes();
+    if viewer_bytes.is_empty() || viewer_bytes.len() > 255 {
+        return Err("viewer id must be 1..=255 bytes".to_string());
+    }
+    let (kind, frame): (u8, &[u8]) = match item {
+        StreamItem::Binary(bytes) => (ENV_BINARY, bytes),
+        StreamItem::Text(text) => (ENV_TEXT, text.as_bytes()),
     };
-    if 1 + body.len() > MAX_ENVELOPE_LEN {
+    if 1 + 1 + viewer_bytes.len() + frame.len() > MAX_ENVELOPE_LEN {
         return Err("item exceeds the envelope cap".to_string());
     }
-    let mut out = Vec::with_capacity(4 + 1 + body.len());
-    out.extend_from_slice(&((1 + body.len()) as u32).to_be_bytes());
+    let len = (1 + 1 + viewer_bytes.len() + frame.len()) as u32;
+    let mut out = Vec::with_capacity(4 + 1 + 1 + viewer_bytes.len() + frame.len());
+    out.extend_from_slice(&len.to_be_bytes());
     out.push(kind);
-    out.extend_from_slice(&body);
+    out.push(viewer_bytes.len() as u8);
+    out.extend_from_slice(viewer_bytes);
+    out.extend_from_slice(frame);
     Ok(out)
 }
 
@@ -234,23 +257,24 @@ fn strip_s2c_id(body: &[u8]) -> Option<&[u8]> {
 }
 
 impl TermStream {
-    /// Read the next decoded item, or `None` at a clean EOF. Buffering
-    /// is bounded by the envelope cap plus one chunk; a malformed
-    /// envelope is treated as a closed stream (the relay closes).
+    /// Read the next decoded item, or `None` at a clean EOF (or on a
+    /// malformed envelope / non-UTF-8 text frame: the relay closes).
+    /// Unconsumed raw bytes persist in `self.read_buf` across calls,
+    /// so an envelope split across reads reassembles and a second
+    /// envelope decoded in the same read is never discarded.
     pub(crate) async fn recv(&mut self) -> Option<StreamItem> {
         if let Some(item) = self.pending.pop_front() {
             return Some(item);
         }
-        let mut buf = std::collections::VecDeque::new();
         let mut chunk = [0u8; 16 * 1024];
         loop {
             let n = match self.read.read(&mut chunk).await {
                 Ok(0) | Err(_) => return None,
                 Ok(n) => n,
             };
-            buf.extend(&chunk[..n]);
+            self.read_buf.extend(&chunk[..n]);
             let mut decoded = Vec::new();
-            if decode_envelopes(&mut buf, &mut decoded).is_err() {
+            if decode_envelopes(&mut self.read_buf, &mut decoded).is_err() {
                 return None;
             }
             for (kind, body) in decoded {
@@ -263,9 +287,13 @@ impl TermStream {
                 };
                 let item = match kind {
                     ENV_BINARY => StreamItem::Binary(frame),
+                    // A text envelope that is not UTF-8 cannot be
+                    // forwarded as a WebSocket text frame: it would
+                    // be silently lost, breaking the verbatim relay
+                    // claim. Treat it as a stream error instead.
                     ENV_TEXT => match String::from_utf8(frame) {
                         Ok(text) => StreamItem::Text(text),
-                        Err(_) => continue,
+                        Err(_) => return None,
                     },
                     _ => continue,
                 };
@@ -277,9 +305,10 @@ impl TermStream {
         }
     }
 
-    /// Write one item back towards the tap as a single envelope.
+    /// Write one item back towards the tap as a single S2C-wrapped
+    /// envelope (see [`encode_item`]).
     pub(crate) async fn send(&mut self, item: StreamItem) -> Result<(), StreamError> {
-        let bytes = encode_item(&item).map_err(|_| StreamError::BadReply)?;
+        let bytes = encode_item(&item, &self.viewer).map_err(|_| StreamError::BadReply)?;
         self.write
             .write_all(&bytes)
             .await
@@ -319,18 +348,23 @@ impl UnixRunner {
         let text = String::from_utf8(reply).map_err(|_| StreamError::BadReply)?;
         match serde_json::from_str::<RunnerReply>(text.trim()).map_err(|_| StreamError::BadReply)? {
             RunnerReply::Ok { .. } => {}
-            RunnerReply::Err { code, message } if code == "not-found" || code == "no-session" => {
+            RunnerReply::Err { code, message }
+                if code == "not-found" || code == "no-session" || code == "invalid-id" =>
+            {
                 return Err(StreamError::NotFound(message));
             }
             RunnerReply::Err { .. } => return Err(StreamError::BadReply),
         }
         // Any bytes the reply read buffered past the newline are the
         // first spliced envelopes; seed the stream with them.
+        let (pending, read_buf) = decode_seed(rest);
         let (read, write) = stream.into_split();
         Ok(TermStream {
             read,
             write,
-            pending: decode_seed(rest),
+            pending,
+            read_buf,
+            viewer: id.to_string(),
         })
     }
 }
@@ -371,13 +405,22 @@ async fn read_reply_line(
     }
 }
 
-/// Decode any envelopes already buffered past the reply line.
-fn decode_seed(rest: Vec<u8>) -> std::collections::VecDeque<StreamItem> {
+/// Decode any envelopes already buffered past the reply line, as
+/// `(pending, leftover)`: complete envelopes seed the pending
+/// queue; a trailing partial envelope is returned as raw bytes,
+/// which seeds the stream's persistent read buffer (the head of
+/// the next envelope, never dropped).
+fn decode_seed(
+    rest: Vec<u8>,
+) -> (
+    std::collections::VecDeque<StreamItem>,
+    std::collections::VecDeque<u8>,
+) {
     let mut out = std::collections::VecDeque::new();
-    if rest.is_empty() {
-        return out;
-    }
     let mut buf: std::collections::VecDeque<u8> = rest.iter().copied().collect();
+    if buf.is_empty() {
+        return (out, buf);
+    }
     let mut decoded = Vec::new();
     if decode_envelopes(&mut buf, &mut decoded).is_ok() {
         for (kind, body) in decoded {
@@ -393,7 +436,7 @@ fn decode_seed(rest: Vec<u8>) -> std::collections::VecDeque<StreamItem> {
             out.push_back(item);
         }
     }
-    out
+    (out, buf)
 }
 
 #[cfg(test)]
@@ -597,17 +640,101 @@ mod tests {
 
     #[test]
     fn stream_send_frames_each_item_as_one_envelope() {
+        // C->S bodies carry the tap's S2C viewer-id prefix (handed off
+        // to `parseS2C` on the tap side), with the frame bytes verbatim
+        // inside it. A bare body here would close the tap connection.
         let binary = StreamItem::Binary(vec![1, 2, 3]);
-        let bytes = encode_item(&binary).unwrap();
+        let bytes = encode_item(&binary, "v").unwrap();
         let mut buf: std::collections::VecDeque<u8> = bytes.iter().copied().collect();
         let mut out = Vec::new();
         decode_envelopes(&mut buf, &mut out).unwrap();
-        assert_eq!(out, vec![(ENV_BINARY, vec![1, 2, 3])]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0, ENV_BINARY);
+        let body = &out[0].1;
+        assert_eq!(body[0], 1, "idlen carries the viewer id");
+        assert_eq!(&body[1..2], b"v", "the viewer id rides with the frame");
+        assert_eq!(strip_s2c_id(body).unwrap(), &[1, 2, 3]);
         let text = StreamItem::Text("hello".to_string());
-        let bytes = encode_item(&text).unwrap();
+        let bytes = encode_item(&text, "abcd1234").unwrap();
         let mut buf: std::collections::VecDeque<u8> = bytes.iter().copied().collect();
         let mut out = Vec::new();
         decode_envelopes(&mut buf, &mut out).unwrap();
-        assert_eq!(out, vec![(ENV_TEXT, b"hello".to_vec())]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0, ENV_TEXT);
+        let body = &out[0].1;
+        assert_eq!(body[0], 8);
+        assert_eq!(&body[1..9], b"abcd1234");
+        assert_eq!(strip_s2c_id(body).unwrap(), b"hello");
+    }
+
+    #[tokio::test]
+    async fn stream_recv_reassembles_envelopes_split_across_reads() {
+        // Regression: a per-call decode buffer dropped the trailing
+        // partial of one read, so an envelope split across reads
+        // (or two envelopes coalesced in one read) corrupted the
+        // stream. The persistent buffer must deliver both items in
+        // order, byte-for-byte, however the bytes were chunked.
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("runner.sock");
+        let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 4096];
+            let _ = stream.read(&mut buf).await;
+            let _ = stream.write_all(b"{\"status\":\"ok\",\"data\":{}}\n").await;
+            let text = fake_envelope(0, "v", br#"{"t":"ping"}"#);
+            let binary = fake_envelope(1, "v", &[0, 0, 0, 0, 0, 0, 0, 3, b'a', b'b', b'c']);
+            let mut all = text;
+            all.extend_from_slice(&binary);
+            // One byte at a time: every read boundary is a split
+            // inside an envelope.
+            for byte in all {
+                if stream.write_all(std::slice::from_ref(&byte)).await.is_err() {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        });
+        let runner = UnixRunner::new(sock, Duration::from_secs(5));
+        let mut stream = runner
+            .open_stream("abcd1234", None)
+            .await
+            .expect("open stream");
+        let first = tokio::time::timeout(Duration::from_secs(5), stream.recv())
+            .await
+            .expect("recv 1 deadline")
+            .expect("first item");
+        assert_eq!(first, StreamItem::Text(r#"{"t":"ping"}"#.to_string()));
+        let second = tokio::time::timeout(Duration::from_secs(5), stream.recv())
+            .await
+            .expect("recv 2 deadline")
+            .expect("second item");
+        assert_eq!(
+            second,
+            StreamItem::Binary(vec![0, 0, 0, 0, 0, 0, 0, 3, b'a', b'b', b'c'])
+        );
+    }
+
+    #[test]
+    fn decode_seed_keeps_trailing_partial() {
+        // Bytes past the reply newline that form only a partial
+        // envelope must survive as the read-buffer seed — not be
+        // dropped with the per-call buffer that used to lose them.
+        let full = fake_envelope(0, "v", br#"{"t":"ping"}"#);
+        let binary = fake_envelope(1, "v", &[0, 0, 0, 0, 0, 0, 0, 3, b'a', b'b', b'c']);
+        let split = binary.len() / 2;
+        let mut rest = full.clone();
+        rest.extend_from_slice(&binary[..split]);
+        let (pending, leftover) = decode_seed(rest);
+        assert_eq!(
+            pending.into_iter().collect::<Vec<_>>(),
+            vec![StreamItem::Text(r#"{"t":"ping"}"#.to_string())]
+        );
+        let leftover: Vec<u8> = leftover.into_iter().collect();
+        assert_eq!(
+            leftover,
+            binary[..split].to_vec(),
+            "the partial envelope head must seed the read buffer"
+        );
     }
 }

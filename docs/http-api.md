@@ -1485,20 +1485,26 @@ GET    /api/terms/{id}/ws                    SPA-only terminal byte
                                             `?ticket=<t>&from=<offset>`
                                             (both optional except
                                             ticket). Handler-side gate
-                                            order: enabled (bodiless
-                                            404) -> exact Origin
-                                            (absent fails closed) ->
-                                            caller class -> single-use
-                                            ticket (bound to `{id}` and
-                                            the caller; every failure
-                                            is the same 403) -> socket
-                                            cap 16 (503) -> `from`
-                                            parse (400) -> upstream
-                                            stream (404 no such
-                                            terminal, 502/503 runner
-                                            errors) -> upgrade. The
-                                            ticket is consumed at the
-                                            upgrade, is never logged,
+                                            order: id shape (400) ->
+                                            enabled (bodiless 404) ->
+                                            exact Origin (absent fails
+                                            closed) -> caller class
+                                            (403) -> `from` parse (400)
+                                            -> socket cap 16 (503) ->
+                                            single-use ticket (bound
+                                            to `{id}` and the caller;
+                                            every failure is the same
+                                            403) -> upstream stream
+                                            (404 no such terminal, 502
+                                            runner unreachable/bad
+                                            reply) -> upgrade. Neither
+                                            a cap rejection nor a bad
+                                            `from` consumes the ticket
+                                            (both run before the
+                                            consume); a stream-open
+                                            failure does (auth runs
+                                            before any upstream dial).
+                                            The ticket is never logged,
                                             and the loopback bypass does
                                             NOT apply. The socket
                                             relays the tap's frames

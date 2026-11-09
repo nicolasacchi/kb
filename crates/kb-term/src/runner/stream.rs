@@ -60,10 +60,18 @@ pub async fn connect_tap<S: crate::runner::supervisor::Supervisor>(
     id: &str,
     from: Option<u64>,
 ) -> Result<tokio::net::UnixStream, RunnerError> {
+    // Session-down vs tap-down: a session whose directory is gone is
+    // "no such session" (NotFound -> 404 at kb-server); a session
+    // that exists but whose tap socket will not connect is an
+    // upstream failure (TapTimeout -> 502 at kb-server), never the
+    // same 404.
+    if !runner.sessions_dir().join(id).exists() {
+        return Err(RunnerError::NotFound(format!("no session {id}")));
+    }
     let path = tap_socket_path(runner, id);
     let mut tap = tokio::net::UnixStream::connect(&path)
         .await
-        .map_err(|e| RunnerError::NotFound(format!("no tap socket for {id}: {e}")))?;
+        .map_err(|e| RunnerError::TapTimeout(format!("tap unavailable for {id}: {e}")))?;
     let join = join_envelope(id, from)
         .map_err(|e| RunnerError::Internal(format!("encode join envelope: {e}")))?;
     tap.write_all(&join)

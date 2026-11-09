@@ -13,14 +13,19 @@
 //!
 //! The WS upgrade is a `GET`, so `origin_allowlist` (which skips
 //! non-state-changing methods) checks nothing. Every check below runs
-//! BEFORE `ws.on_upgrade(...)` and fails with a plain HTTP response:
-//! enabled (bodiless 404) -> exact Origin via
+//! BEFORE `ws.on_upgrade(...)` and fails with a plain HTTP response,
+//! in this order:
+//! id shape (400) -> enabled (bodiless 404) -> exact Origin via
 //! [`check_origin`](crate::terminal::gate::check_origin) (absent fails
 //! closed; the loopback bypass does NOT apply — agents run on
-//! loopback) -> caller class -> ticket (single-use, bound to
-//! `{id}` + the caller's [`Identity`]) -> socket cap (reserve/release,
-//! so a cap rejection never burns the ticket) -> `from` parse -> open
-//! the upstream stream -> upgrade.
+//! loopback) -> caller class (403) -> `from` parse (400) -> socket
+//! cap (reserve/release, 503) -> ticket consume (single-use, bound to
+//! `{id}` + the caller's [`Identity`], 403) -> open the upstream
+//! stream (404 no such terminal, 502 runner error) -> upgrade.
+//! Neither a cap rejection nor a malformed `from` burns the ticket
+//! (both run before the consume). A stream-open failure does consume
+//! it: auth runs before any upstream dial, so an unauthenticated
+//! probe cannot open runner streams.
 //!
 //! The ticket rides in the query string (browsers cannot set headers on
 //! a WS handshake). It is consumed at the upgrade (replayed or logged
@@ -129,8 +134,12 @@ impl Upstream for TermStream {
 }
 
 fn is_valid_term_id(s: &str) -> bool {
-    !s.is_empty()
-        && s.len() <= 16
+    // The canonical wire bounds (`kb-term`'s
+    // `wire::is_valid_term_id`, also enforced by the runner at its
+    // RPC entry): 8..=12 chars from `[a-z0-9]`. A wider local
+    // validator would let ids through the WS gate only to fail at
+    // the runner as a 502 BadReply instead of this consistent 400.
+    (8..=12).contains(&s.len())
         && s.chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
 }
@@ -247,10 +256,13 @@ pub(crate) async fn upgrade(
             );
         }
         Err(StreamError::Unavailable) => {
+            // Spec 1.6: runner unreachable -> 502 (problem+json).
+            // (The REST ops keep their urn to 503; this is the
+            // stream-open arm only.)
             return Problem::response(
                 "urn:kb:errors:terminal-runner-unavailable",
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Service Unavailable",
+                StatusCode::BAD_GATEWAY,
+                "Bad Gateway",
                 "runner unavailable".to_string(),
             );
         }
@@ -425,26 +437,45 @@ pub(crate) async fn run_relay<S, U, F>(
             }
             // Slow consumer signalled by the reader: close 1013.
             _ = slow_rx.recv() => {
-                let _ = sink.send(Message::Close(Some(CloseFrame {
-                    code: close_code::AGAIN.into(),
-                    reason: "slow consumer".into(),
-                }))).await;
+                let _ = tokio::time::timeout(Duration::from_millis(500),
+                    sink.send(Message::Close(Some(CloseFrame {
+                        code: close_code::AGAIN.into(),
+                        reason: "slow consumer".into(),
+                    })))).await;
                 break;
             }
             // (b) browser -> upstream, verbatim (Pong/Ping refresh
-            // last-seen).
+            // last-seen). The channel send is bounded: if the reader
+            // is stuck on a dead tap, this arm must not park the
+            // whole select (shutdown/slow arms would never run).
             msg = stream.next() => {
                 match msg {
                     None => break,
                     Some(Err(_)) => break,
                     Some(Ok(Message::Binary(bytes))) => {
                         last_seen = Instant::now();
-                        let _ = browser_tx.send(StreamItem::Binary(bytes.to_vec())).await;
+                        if tokio::time::timeout(
+                            timers.slow_consumer_after,
+                            browser_tx.send(StreamItem::Binary(bytes.to_vec())),
+                        )
+                        .await
+                        .is_err()
+                        {
+                            break;
+                        }
                     }
                     Some(Ok(Message::Text(text))) => {
                         last_seen = Instant::now();
                         if text.len() <= 64 * 1024 {
-                            let _ = browser_tx.send(StreamItem::Text(text.to_string())).await;
+                            if tokio::time::timeout(
+                                timers.slow_consumer_after,
+                                browser_tx.send(StreamItem::Text(text.to_string())),
+                            )
+                            .await
+                            .is_err()
+                            {
+                                break;
+                            }
                         }
                     }
                     Some(Ok(Message::Pong(_))) | Some(Ok(Message::Ping(_))) => {
@@ -454,16 +485,20 @@ pub(crate) async fn run_relay<S, U, F>(
                 }
             }
             // (c) mpsc -> sink (upstream items verbatim, in order).
+            // Every sink send is bounded by the same 500 ms write
+            // deadline as the shutdown arm: a stalled browser must
+            // never park the select where the shutdown arm lives.
             item = upstream_rx.recv() => {
                 let Some(item) = item else {
                     // Upstream EOF/error: 1011, unless an exit frame was
                     // already flushed (then close 1000).
                     let code = exit_seen.take().map(|_| CLOSE_NORMAL).unwrap_or(CLOSE_UPSTREAM);
                     let reason = if code == CLOSE_NORMAL { "normal" } else { "upstream closed" };
-                    let _ = sink.send(Message::Close(Some(CloseFrame {
-                        code: (code as u16).into(),
-                        reason: reason.into(),
-                    }))).await;
+                    let _ = tokio::time::timeout(Duration::from_millis(500),
+                        sink.send(Message::Close(Some(CloseFrame {
+                            code: (code as u16).into(),
+                            reason: reason.into(),
+                        })))).await;
                     break;
                 };
                 match &item {
@@ -475,23 +510,28 @@ pub(crate) async fn run_relay<S, U, F>(
                         if let Some((cols, rows)) = parse_sizechanged(text) {
                             (on_event)(RelayEvent::SizeChanged { cols, rows });
                         }
-                        let _ = sink.send(Message::Text(text.clone().into())).await;
+                        let _ = tokio::time::timeout(Duration::from_millis(500),
+                            sink.send(Message::Text(text.clone().into()))).await;
                     }
                     StreamItem::Binary(bytes) => {
-                        let _ = sink.send(Message::Binary(bytes.clone().into())).await;
+                        let _ = tokio::time::timeout(Duration::from_millis(500),
+                            sink.send(Message::Binary(bytes.clone().into()))).await;
                     }
                 }
             }
-            // (d) ping + idle close.
+            // (d) ping + idle close. The idle close is 1001 (going
+            // away): the browser is silent, not finished.
             _ = ping.tick() => {
                 if last_seen.elapsed() >= timers.idle_close_after {
-                    let _ = sink.send(Message::Close(Some(CloseFrame {
-                        code: close_code::NORMAL.into(),
-                        reason: "idle".into(),
-                    }))).await;
+                    let _ = tokio::time::timeout(Duration::from_millis(500),
+                        sink.send(Message::Close(Some(CloseFrame {
+                            code: close_code::GOING_AWAY.into(),
+                            reason: "idle".into(),
+                        })))).await;
                     break;
                 }
-                let _ = sink.send(Message::Ping(Bytes::new())).await;
+                let _ = tokio::time::timeout(Duration::from_millis(500),
+                    sink.send(Message::Ping(Bytes::new()))).await;
             }
         }
     }
@@ -510,7 +550,13 @@ fn parse_exit(text: &str) -> Option<Option<i32>> {
     if v.get("t").and_then(|t| t.as_str()) != Some("exit") {
         return None;
     }
-    Some(v.get("code").and_then(|c| c.as_i64()).map(|c| c as i32))
+    // An out-of-range `code` skips the code (it does not wrap the
+    // exit status the SPA displays).
+    Some(
+        v.get("code")
+            .and_then(|c| c.as_i64())
+            .and_then(|c| i32::try_from(c).ok()),
+    )
 }
 
 fn parse_sizechanged(text: &str) -> Option<(u16, u16)> {
@@ -518,8 +564,16 @@ fn parse_sizechanged(text: &str) -> Option<(u16, u16)> {
     if v.get("t").and_then(|t| t.as_str()) != Some("sizechanged") {
         return None;
     }
-    let cols = v.get("cols").and_then(|c| c.as_u64())? as u16;
-    let rows = v.get("rows").and_then(|c| c.as_u64())? as u16;
+    // An out-of-range dimension skips the event instead of wrapping
+    // the grid the SPA draws (the frame is still forwarded).
+    let cols = v
+        .get("cols")
+        .and_then(|c| c.as_u64())
+        .and_then(|c| u16::try_from(c).ok())?;
+    let rows = v
+        .get("rows")
+        .and_then(|c| c.as_u64())
+        .and_then(|c| u16::try_from(c).ok())?;
     Some((cols, rows))
 }
 
@@ -533,11 +587,25 @@ mod relay_tests {
     use std::task::{Context, Poll};
 
     /// An in-memory upstream: a canned queue of items; `send` records
-    /// browser->upstream bytes.
+    /// browser->upstream bytes. `recv_count` bounds the reader's pull
+    /// rate (the backpressure pin: a relay that drains the queue
+    /// instantly is not backpressuring anything).
     struct MemUpstream {
         items: std::collections::VecDeque<StreamItem>,
         sent: std::sync::Arc<std::sync::Mutex<Vec<StreamItem>>>,
+        recv_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
         block: bool,
+    }
+
+    impl MemUpstream {
+        fn new(items: std::collections::VecDeque<StreamItem>, block: bool) -> Self {
+            Self {
+                items,
+                sent: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+                recv_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                block,
+            }
+        }
     }
 
     impl Upstream for MemUpstream {
@@ -545,6 +613,8 @@ mod relay_tests {
             // Take one item if queued; with `block`, park forever (the
             // relay's shutdown/idle arms end the test).
             if let Some(item) = self.items.pop_front() {
+                self.recv_count
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 Box::pin(async move { Some(item) })
             } else if self.block {
                 Box::pin(async {
@@ -567,12 +637,32 @@ mod relay_tests {
         }
     }
 
-    /// The in-memory sink end: start_send never blocks and never fails
-    /// (a try_send onto the test's drain channel records everything;
-    /// the test stops reading when it has seen what it needs).
+    /// The in-memory sink end. Ungated, `start_send` never blocks and
+    /// never fails (a try_send onto the test's drain channel records
+    /// everything). Gated (`gated: true`), `poll_ready` pends while
+    /// the drain channel is full and registers a waker the test taps
+    /// after every drain, so a sink nobody drains genuinely stalls
+    /// the writer — the slow-consumer pin.
     struct MemSinkStream {
         to_test: mpsc::Sender<Message>,
         from_test: mpsc::Receiver<Result<Message, axum::Error>>,
+        gated: bool,
+        ready: std::sync::Arc<std::sync::Mutex<Option<std::task::Waker>>>,
+    }
+
+    impl MemSinkStream {
+        fn new(
+            to_test: mpsc::Sender<Message>,
+            from_test: mpsc::Receiver<Result<Message, axum::Error>>,
+            gated: bool,
+        ) -> Self {
+            Self {
+                to_test,
+                from_test,
+                gated,
+                ready: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            }
+        }
     }
 
     impl Stream for MemSinkStream {
@@ -584,11 +674,13 @@ mod relay_tests {
 
     impl Sink<Message> for MemSinkStream {
         type Error = std::convert::Infallible;
-        fn poll_ready(
-            self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-        ) -> Poll<Result<(), Self::Error>> {
-            Poll::Ready(Ok(()))
+        fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            if !self.gated || self.to_test.capacity() > 0 {
+                Poll::Ready(Ok(()))
+            } else {
+                *self.ready.lock().unwrap() = Some(cx.waker().clone());
+                Poll::Pending
+            }
         }
         fn start_send(self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
             let _ = self.to_test.try_send(item);
@@ -610,50 +702,73 @@ mod relay_tests {
 
     #[tokio::test]
     async fn slow_consumer_closes_1013_and_reader_is_backpressured() {
-        let (to_test, out_rx) = mpsc::channel::<Message>(1024);
+        // The gated sink has a 4-deep drain: the writer stalls on
+        // `poll_ready`, the relay's mpsc (cap 64) fills, the reader
+        // blocks on `send_timeout`, and the writer closes 1013. The
+        // reader must be backpressured: it pulls only a bounded
+        // prefix of the 500-item flood, never the whole queue.
+        let (to_test, out_rx) = mpsc::channel::<Message>(4);
         let (to_relay, from_relay) = mpsc::channel::<Result<Message, axum::Error>>(64);
         let mut out = out_rx;
         let _into = to_relay;
-        let sink = MemSinkStream {
-            to_test,
-            from_test: from_relay,
-        };
-        let upstream = MemUpstream {
-            items: (0..500)
+        let sink = MemSinkStream::new(to_test, from_relay, true);
+        let ready = sink.ready.clone();
+        let upstream = MemUpstream::new(
+            (0..500)
                 .map(|_| StreamItem::Binary(b"x".to_vec()))
                 .collect(),
-            sent: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            block: false,
-        };
+            false,
+        );
+        let pulled = upstream.recv_count.clone();
         let (_tx, shutdown) = watch::channel(false);
         let timers = RelayTimers {
             ping_every: Duration::from_secs(25),
             idle_close_after: Duration::from_secs(75),
-            slow_consumer_after: Duration::from_millis(50),
+            slow_consumer_after: Duration::from_millis(100),
         };
-        // The test never reads `out` for the first burst: the relay's
-        // mpsc (cap 64) fills, the reader blocks on send_timeout, then
-        // the writer closes 1013. Read AFTER the flood so the close
-        // must already be queued.
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        // Spawn first, flood second: the pre-spawn sleep used to
+        // guarantee the degenerate case (the sink drained instantly
+        // and the relay ended via EOF on 1011, never 1013).
         let relay = tokio::spawn(async move {
             run_relay(sink, upstream, shutdown, timers, |_| {}).await;
         });
         let mut saw_1013 = false;
         while !saw_1013 {
-            match tokio::time::timeout(Duration::from_secs(5), out.recv()).await {
-                Err(_) => break,
-                Ok(None) => break,
-                Ok(Some(Message::Close(Some(frame)))) => {
+            // Drain without awaiting: `try_recv` + thewaker tap
+            // keeps the gated sink half-drained (it must progress
+            // far enough to deliver the close) while the 500-item
+            // flood keeps the reader blocked.
+            let mut got = false;
+            while let Ok(msg) = out.try_recv() {
+                got = true;
+                if let Message::Close(Some(frame)) = msg {
                     if frame.code.as_u16() == CLOSE_SLOW_CONSUMER {
                         saw_1013 = true;
+                        break;
                     }
                 }
-                Ok(Some(_)) => {}
             }
+            if saw_1013 {
+                break;
+            }
+            if let Some(w) = ready.lock().unwrap().take() {
+                w.wake();
+            }
+            if !got {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            // Bounded: a relay that never signals 1013 fails here.
+            assert!(
+                pulled.load(std::sync::atomic::Ordering::SeqCst) <= 4 + 64 + 2,
+                "the reader must be backpressured at a bounded prefix"
+            );
         }
         let _ = tokio::time::timeout(Duration::from_secs(5), relay).await;
         assert!(saw_1013, "a flooded, undrained sink must close 1013");
+        assert!(
+            pulled.load(std::sync::atomic::Ordering::SeqCst) < 500,
+            "the reader must never drain the whole flood"
+        );
     }
 
     #[tokio::test]
@@ -662,15 +777,8 @@ mod relay_tests {
         let (to_relay, from_relay) = mpsc::channel::<Result<Message, axum::Error>>(64);
         let mut out = out_rx;
         let _into = to_relay;
-        let sink = MemSinkStream {
-            to_test,
-            from_test: from_relay,
-        };
-        let upstream = MemUpstream {
-            items: std::collections::VecDeque::new(),
-            sent: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            block: true,
-        };
+        let sink = MemSinkStream::new(to_test, from_relay, false);
+        let upstream = MemUpstream::new(std::collections::VecDeque::new(), true);
         let (_tx, shutdown) = watch::channel(false);
         let timers = RelayTimers {
             ping_every: Duration::from_millis(50),
@@ -710,10 +818,7 @@ mod relay_tests {
         let (to_relay, from_relay) = mpsc::channel::<Result<Message, axum::Error>>(64);
         let mut out = out_rx;
         let _into = to_relay;
-        let sink = MemSinkStream {
-            to_test,
-            from_test: from_relay,
-        };
+        let sink = MemSinkStream::new(to_test, from_relay, false);
         let binary08 = {
             let mut v = Vec::new();
             v.extend_from_slice(&0u64.to_be_bytes());
@@ -726,8 +831,8 @@ mod relay_tests {
             v.extend_from_slice(b"def");
             v
         };
-        let upstream = MemUpstream {
-            items: [
+        let upstream = MemUpstream::new(
+            [
                 StreamItem::Text(r#"{"t":"hello","proto":"kb-term/1"}"#.to_string()),
                 StreamItem::Binary(binary08.clone()),
                 StreamItem::Text(
@@ -738,9 +843,8 @@ mod relay_tests {
             ]
             .into_iter()
             .collect(),
-            sent: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            block: false,
-        };
+            false,
+        );
         let (_tx, shutdown) = watch::channel(false);
         let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let events2 = events.clone();
@@ -804,5 +908,248 @@ mod relay_tests {
         assert_eq!(CLOSE_UPSTREAM, 1011);
         assert_eq!(CLOSE_IDLE, 1001);
         assert_eq!(CLOSE_NORMAL, 1000);
+    }
+
+    #[test]
+    fn term_id_validator_mirrors_the_canonical_bounds() {
+        // The WS gate must reject exactly what the runner would:
+        // lengths 7 and 13 (and 1..=16 in the old local validator)
+        // are 400s here, not 502s at the runner.
+        assert!(!super::is_valid_term_id("abcd123"), "len 7");
+        assert!(super::is_valid_term_id("abcd1234"), "len 8");
+        assert!(super::is_valid_term_id("abcd1234wxyz"), "len 12");
+        assert!(!super::is_valid_term_id("abcd1234wxyz1"), "len 13");
+        assert!(!super::is_valid_term_id("ABCD1234"), "uppercase");
+        assert!(!super::is_valid_term_id(""), "empty");
+        assert!(!super::is_valid_term_id("abcd 1234"), "space");
+    }
+
+    #[test]
+    fn oversize_dimensions_and_codes_skip_the_event_not_the_frame() {
+        assert_eq!(
+            super::parse_sizechanged(r#"{"t":"sizechanged","cols":70000,"rows":40}"#),
+            None,
+            "cols > u16::MAX must skip, not wrap to 4464"
+        );
+        assert_eq!(
+            super::parse_sizechanged(r#"{"t":"sizechanged","cols":65535,"rows":40}"#),
+            Some((65535, 40))
+        );
+        assert_eq!(
+            super::parse_exit(r#"{"t":"exit","code":30000000000}"#),
+            Some(None),
+            "an out-of-range exit code skips the code, not the exit"
+        );
+        assert_eq!(
+            super::parse_exit(r#"{"t":"exit","code":-1}"#),
+            Some(Some(-1))
+        );
+    }
+
+    #[tokio::test]
+    async fn upstream_eof_without_exit_closes_1011() {
+        let (to_test, out_rx) = mpsc::channel::<Message>(1024);
+        let (to_relay, from_relay) = mpsc::channel::<Result<Message, axum::Error>>(64);
+        let mut out = out_rx;
+        let _into = to_relay;
+        let sink = MemSinkStream::new(to_test, from_relay, false);
+        let upstream = MemUpstream::new(
+            {
+                let mut v = std::collections::VecDeque::new();
+                v.push_back(StreamItem::Binary(vec![0u8; 8]));
+                v
+            },
+            false,
+        );
+        let (_tx, shutdown) = watch::channel(false);
+        let relay = tokio::spawn(async move {
+            run_relay(sink, upstream, shutdown, RelayTimers::default(), |_| {}).await;
+        });
+        // One binary frame, then EOF with no exit: 1011.
+        match tokio::time::timeout(Duration::from_secs(5), out.recv()).await {
+            Ok(Some(Message::Binary(_))) => {}
+            other => panic!("the binary must relay first, got {other:?}"),
+        }
+        match tokio::time::timeout(Duration::from_secs(5), out.recv()).await {
+            Ok(Some(Message::Close(Some(frame)))) => {
+                assert_eq!(
+                    frame.code.as_u16(),
+                    CLOSE_UPSTREAM,
+                    "EOF without exit is 1011"
+                );
+                assert_eq!(frame.reason.as_str(), "upstream closed");
+            }
+            other => panic!("EOF must close 1011, got {other:?}"),
+        }
+        let _ = tokio::time::timeout(Duration::from_secs(5), relay).await;
+    }
+
+    #[tokio::test]
+    async fn sizechanged_emits_one_live_state_and_data_emits_none() {
+        let (to_test, out_rx) = mpsc::channel::<Message>(1024);
+        let (to_relay, from_relay) = mpsc::channel::<Result<Message, axum::Error>>(64);
+        let mut out = out_rx;
+        let _into = to_relay;
+        let sink = MemSinkStream::new(to_test, from_relay, false);
+        let upstream = MemUpstream::new(
+            [
+                StreamItem::Binary(vec![0u8; 8]),
+                StreamItem::Text(r#"{"t":"sizechanged","cols":120,"rows":40}"#.to_string()),
+                StreamItem::Binary(vec![8u8; 8]),
+            ]
+            .into_iter()
+            .collect(),
+            false,
+        );
+        let (_tx, shutdown) = watch::channel(false);
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let events2 = events.clone();
+        let relay = tokio::spawn(async move {
+            run_relay(sink, upstream, shutdown, RelayTimers::default(), move |e| {
+                events2.lock().unwrap().push(e);
+            })
+            .await;
+        });
+        // Three frames relayed, then EOF (no exit) -> 1011 close.
+        let mut frames = 0;
+        let mut close_1011 = false;
+        while !close_1011 {
+            match tokio::time::timeout(Duration::from_secs(5), out.recv()).await {
+                Err(_) | Ok(None) => break,
+                Ok(Some(Message::Close(Some(frame)))) => {
+                    if frame.code.as_u16() == CLOSE_UPSTREAM {
+                        close_1011 = true;
+                    }
+                }
+                Ok(Some(_)) => frames += 1,
+            }
+        }
+        let _ = tokio::time::timeout(Duration::from_secs(5), relay).await;
+        assert_eq!(frames, 3, "all three frames relay verbatim");
+        assert!(close_1011, "EOF without exit closes 1011");
+        let ev = events.lock().unwrap();
+        assert_eq!(
+            *ev,
+            vec![RelayEvent::SizeChanged {
+                cols: 120,
+                rows: 40
+            }],
+            "exactly one live state event; the two binary data frames emit none"
+        );
+    }
+
+    #[tokio::test]
+    async fn oversize_browser_text_is_dropped_not_forwarded() {
+        let (to_test, out_rx) = mpsc::channel::<Message>(1024);
+        let (to_relay, from_relay) = mpsc::channel::<Result<Message, axum::Error>>(64);
+        let mut out = out_rx;
+        let sink = MemSinkStream::new(to_test, from_relay, false);
+        let upstream = MemUpstream::new(std::collections::VecDeque::new(), true);
+        let sent = upstream.sent.clone();
+        let (tx, shutdown) = watch::channel(false);
+        let relay = tokio::spawn(async move {
+            run_relay(sink, upstream, shutdown, RelayTimers::default(), |_| {}).await;
+        });
+        let big = "x".repeat(64 * 1024 + 1);
+        to_relay.send(Ok(Message::Text(big.into()))).await.unwrap();
+        to_relay
+            .send(Ok(Message::Text(r#"{"t":"ping"}"#.into())))
+            .await
+            .unwrap();
+        // Wait until the small frame reaches the upstream (or the
+        // deadline says it never will).
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            {
+                let got = sent.lock().unwrap().clone();
+                if !got.is_empty() {
+                    assert_eq!(
+                        got,
+                        vec![StreamItem::Text(r#"{"t":"ping"}"#.to_string())],
+                        "the >64 KiB text must be dropped; the small one forwarded"
+                    );
+                    break;
+                }
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the small text must reach the upstream"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        // The relay is still alive: shutdown closes it 1012.
+        let _ = tx.send(true);
+        match tokio::time::timeout(Duration::from_secs(5), out.recv()).await {
+            Ok(Some(Message::Close(Some(frame)))) => {
+                assert_eq!(frame.code.as_u16(), CLOSE_RESTART, "shutdown arm preempts");
+            }
+            other => panic!("shutdown must close 1012, got {other:?}"),
+        }
+        let _ = tokio::time::timeout(Duration::from_secs(5), relay).await;
+    }
+
+    #[tokio::test]
+    async fn pong_refreshes_the_idle_deadline() {
+        let (to_test, out_rx) = mpsc::channel::<Message>(1024);
+        let (to_relay, from_relay) = mpsc::channel::<Result<Message, axum::Error>>(64);
+        let mut out = out_rx;
+        let sink = MemSinkStream::new(to_test, from_relay, false);
+        let upstream = MemUpstream::new(std::collections::VecDeque::new(), true);
+        let (tx, shutdown) = watch::channel(false);
+        let timers = RelayTimers {
+            ping_every: Duration::from_millis(50),
+            idle_close_after: Duration::from_millis(250),
+            slow_consumer_after: Duration::from_secs(2),
+        };
+        let relay = tokio::spawn(async move {
+            run_relay(sink, upstream, shutdown, timers, |_| {}).await;
+        });
+        // Pong every 40 ms for longer than the idle deadline: the
+        // peer must stay alive (no 1001) because Pong refreshes
+        // last-seen.
+        let mut saw_close = false;
+        let mut saw_ping = false;
+        for _ in 0..16 {
+            to_relay
+                .send(Ok(Message::Pong(Bytes::new())))
+                .await
+                .unwrap();
+            while let Ok(msg) = out.try_recv() {
+                match msg {
+                    Message::Ping(_) => saw_ping = true,
+                    Message::Close(_) => saw_close = true,
+                    _ => {}
+                }
+            }
+            assert!(
+                !saw_close,
+                "Pong must keep the peer alive past idle_close_after"
+            );
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            while let Ok(msg) = out.try_recv() {
+                match msg {
+                    Message::Ping(_) => saw_ping = true,
+                    Message::Close(_) => saw_close = true,
+                    _ => {}
+                }
+            }
+            assert!(
+                !saw_close,
+                "Pong must keep the peer alive past idle_close_after"
+            );
+        }
+        assert!(saw_ping, "relay pings must arrive during the keep-alive");
+        let _ = tx.send(true);
+        match tokio::time::timeout(Duration::from_secs(5), out.recv()).await {
+            Ok(Some(Message::Close(Some(frame)))) => {
+                assert_eq!(
+                    frame.code.as_u16(),
+                    CLOSE_RESTART,
+                    "relay alive until shutdown"
+                );
+            }
+            other => panic!("shutdown must close 1012, got {other:?}"),
+        }
+        let _ = tokio::time::timeout(Duration::from_secs(5), relay).await;
     }
 }

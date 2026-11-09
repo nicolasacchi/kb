@@ -1137,6 +1137,24 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
         // the parent-origin SPA shell.
         .fallback(routes::dispatch::fallback)
         .layer(from_fn_with_state(origin_state, origin_allowlist))
-        .layer(TraceLayer::new_for_http())
+        .layer(
+            // The terminal WS ticket rides the query string (browsers
+            // cannot set headers on a WS handshake). Span fields print
+            // as context on nested events at TRACE, so the default
+            // span (full URI incl. query) would leak the ticket into
+            // the logs. This span carries method + path only — the
+            // query (and with it the ticket) never lands in a span.
+            // `on_request(())` drops tower-http's "started request"
+            // event, which logs the full URI the same way.
+            TraceLayer::new_for_http()
+                .make_span_with(|request: &axum::http::Request<axum::body::Body>| {
+                    tracing::info_span!(
+                        "request",
+                        http.method = %request.method(),
+                        http.uri = request.uri().path(),
+                    )
+                })
+                .on_request(()),
+        )
         .with_state(state)
 }
