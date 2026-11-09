@@ -1028,9 +1028,19 @@ p='{"session_id":"s-term-1","cwd":"/tmp/proj-a","source":"startup"}'
 g_with="$(beat_dryrun claude start "$p" KB_TERM_ID=abc123)"
 g_without="$(beat_dryrun claude start "$p")"
 # Each run spawns its own process, so the echoed pid differs between the
-# two runs; it is not part of the term contract and is ignored here.
+# two runs; the pid VALUE is not part of the term contract and is deleted
+# for the body compare. Its presence/shape IS pinned separately below:
+# a pid regression tied to term handling must not pass silently.
+pid_with="$(jget "$g_with" '.pid')"
+pid_without="$(jget "$g_without" '.pid')"
+pid_ok=1
+for pid in "$pid_with" "$pid_without"; do
+  case "$pid" in '' | *[!0-9]*) pid_ok=0 ;; esac
+  [ "$pid_ok" -eq 1 ] && [ "$pid" -gt 0 ] 2>/dev/null || pid_ok=0
+done
 if [ "$(jget "$g_with" '.term')" = "abc123" ] \
-   && [ "$(printf '%s' "$g_with" | jq -c 'del(.at, .term, .pid)')" = "$(printf '%s' "$g_without" | jq -c 'del(.at, .term, .pid)')" ]; then
+   && [ "$(printf '%s' "$g_with" | jq -c 'del(.at, .term, .pid)')" = "$(printf '%s' "$g_without" | jq -c 'del(.at, .term, .pid)')" ] \
+   && [ "$pid_ok" -eq 1 ]; then
   ok "KB_TERM_ID_echoes_as_term"
 else
   bad "KB_TERM_ID_echoes_as_term (got: $g_with)"

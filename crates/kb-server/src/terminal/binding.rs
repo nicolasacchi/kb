@@ -12,10 +12,16 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-/// Maximum length of a terminal id (`^[a-z0-9]{1,32}$`).
+/// Maximum length of a terminal id (`^[a-z0-9]{1,32}$`). The runner mints
+/// 8..=12 characters (`kb-term`'s `is_valid_term_id`); the hook, the beat
+/// intake, the redaction floor, the SPA relay and this directory all accept
+/// the wider 1..=32 shape so an id the runner never minted is a drop/404,
+/// never a grammar rejection.
 pub const TERM_ID_MAX: usize = 32;
 
-/// `^[a-z0-9]{1,32}$` — the ONE grammar (hook, intake, redaction floor, SPA all agree).
+/// `^[a-z0-9]{1,32}$` — the one grammar on every surface except the runner
+/// mint (8..=12): the kb-beat hook, the beat intake, the redaction floor
+/// and the SPA relay all accept 1..=32.
 pub fn is_valid_term_id(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= TERM_ID_MAX
@@ -52,6 +58,10 @@ pub fn bound_at(
 
 /// In-memory directory of terminal id -> pane pid, refreshed from the
 /// runner's `list` reply. No `.await` inside the lock (#15).
+/// `refreshed_at` records the `now` of the last successful `replace` and
+/// is read only through [`TermDirectory::last_refresh`]; no freshness or
+/// expiry check consumes it yet (refresh pacing lives in the caller's
+/// minimum-interval gate, not here).
 pub struct TermDirectory {
     inner: Mutex<HashMap<String, i64>>,
     refreshed_at: Mutex<Option<i64>>,
@@ -85,6 +95,10 @@ impl TermDirectory {
             .unwrap_or_else(|e| e.into_inner())
             .get(id)
             .copied()
+    }
+    /// The `now` of the last successful `replace`, if any.
+    pub fn last_refresh(&self) -> Option<i64> {
+        *self.refreshed_at.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Replace the directory with one runner `list` result. Call only on
@@ -125,6 +139,15 @@ mod tests {
         assert!(!claim_verified("abc123", Some(9999), Some(4242)));
         assert!(!claim_verified("abc123", Some(4242), None));
         assert!(!claim_verified("Bad", Some(4242), Some(4242)));
+    }
+    #[test]
+    fn last_refresh_tracks_the_last_successful_replace() {
+        let dir = TermDirectory::new();
+        assert_eq!(dir.last_refresh(), None);
+        dir.replace([("abc123".to_string(), 4242)], 1_000_000);
+        assert_eq!(dir.last_refresh(), Some(1_000_000));
+        dir.replace([("abc123".to_string(), 4242)], 1_000_005);
+        assert_eq!(dir.last_refresh(), Some(1_000_005));
     }
 
     #[test]

@@ -516,7 +516,8 @@ async fn terminal_id_charset_is_enforced_before_the_runner() {
     let fake = spawn_fake(tmp.path(), Default::default());
     let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
     let c = client();
-    for id in ["..%2Fx", "A1", "a".repeat(17).as_str(), "a%20b"] {
+    // Over the 32-char unified grammar, so a runner connection must never open.
+    for id in ["..%2Fx", "A1", "a".repeat(33).as_str(), "a%20b"] {
         let resp = c
             .post(format!("{}/api/terms/{id}/kill", base_url(addr)))
             .header("Origin", origin_header(addr))
