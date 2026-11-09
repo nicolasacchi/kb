@@ -192,7 +192,7 @@ fn main() {
             2
         }
     };
-    std::process::exit(code);
+    std::process::exit(i32::from(code));
 }
 
 /// Build a current-thread runtime and block on `fut`.

@@ -20,6 +20,7 @@ use std::io::Write;
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use kb_term::wire::{EnvelopeDecoder, ServerFrame, ENV_BINARY, ENV_CONTROL, ENV_TEXT};
@@ -1101,6 +1102,8 @@ fn attach_four_forced_drops_equals_undropped() {
     );
     let (code_u, out_u) = proc_u.0.wait_for_exit(Duration::from_secs(20));
     assert_eq!(code_u, Some(0));
+    let report_u = model(&out_u, 3300);
+    assert!(report_u.last_is_1_to_n);
     // Dropped run: 4 mid-stream drops, ALL past the seed (budgets are
     // stream bytes per connection, and the seed alone exceeds the old
     // budget). A drop mid-seed would force a full rejoin with a fresh
@@ -1423,7 +1426,11 @@ fn new_passes_resume_cwd_and_size() {
     let l = &launches[0];
     assert_eq!(l["harness"], "omp");
     assert_eq!(l["resume_sid"], "deadbeef", "resume passthrough");
-    assert_eq!(l["cwd"], workdir.to_string_lossy(), "cwd passthrough");
+    assert_eq!(
+        l["cwd"],
+        workdir.to_string_lossy().into_owned(),
+        "cwd passthrough"
+    );
     assert_eq!(l["cols"], 120, "cols passthrough");
     assert_eq!(l["rows"], 40, "rows passthrough");
 }

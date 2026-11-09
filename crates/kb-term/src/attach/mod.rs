@@ -377,6 +377,7 @@ async fn attach_session(mut ctx: AttachContext) -> u8 {
 
 /// One join: connect to the tap, viewer-open, take-size (unless
 /// watch), then pump frames until the session ends.
+#[allow(clippy::too_many_arguments)]
 async fn run_one_join(
     ctx: &mut AttachContext,
     rewriter: &mut LabelRewriter,
@@ -441,10 +442,8 @@ async fn run_one_join(
                             EnvelopeOutcome::DropAndResume => return SessionResult::Error("tap rejoin"),
                             EnvelopeOutcome::GapResume => return SessionResult::Error("tap gap"),
                         }
-                        if !sink.is_empty() {
-                            if write_out(&sink).await.is_err() {
-                                return SessionResult::Detached;
-                            }
+                        if !sink.is_empty() && write_out(&sink).await.is_err() {
+                            return SessionResult::Detached;
                         }
                     }
                     Ok(None) => return SessionResult::Error("tap closed"),
