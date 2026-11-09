@@ -256,6 +256,7 @@ async function runVariantStream(variant: Variant, spec: StreamSpec): Promise<voi
         ref = await buildRef();
         refDirty = false;
       }
+      const viewer = mk();
       try {
         // pending: 0, stated explicitly: twin.feed above is awaited, so no
         // feed is in flight (gate-fed callers pass gate.pending instead).
