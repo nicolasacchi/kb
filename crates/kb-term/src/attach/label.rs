@@ -66,7 +66,7 @@ fn atoi(b: &[u8]) -> u8 {
     let mut any = false;
     for &c in b {
         if c.is_ascii_digit() {
-            v = v * 10 + (c - b'0') as u32;
+            v = v.saturating_mul(10).saturating_add((c - b'0') as u32);
             any = true;
         }
     }
@@ -803,16 +803,39 @@ mod tests {
 
     #[test]
     fn label_hold_cap_flushes_raw() {
-        // A row far beyond the 64 KiB cap, no placeholder: the output
-        // equals the raw input (flushed raw, not lost, row count kept).
+        // A held row far beyond the 64 KiB cap (picture trigger plus
+        // 70k plain bytes, no LF until the end): the hold-cap code is
+        // reached and the output equals the raw input (flushed raw,
+        // not lost, row count kept). Trigger-less bytes never hold,
+        // so feeding them here would be vacuous.
         let mut rw = LabelRewriter::new(201, true);
         let mut input = Vec::new();
+        input.extend_from_slice(b"\x1b[38;2;1;2;3m");
         input.resize(70_000, b'a');
         input.extend_from_slice(b"\r\n");
+        let split = 30_000;
         let mut out = Vec::new();
-        rw.feed(&input[..30_000], &mut out);
-        rw.feed(&input[30_000..], &mut out);
+        rw.feed(&input[..split], &mut out);
+        rw.feed(&input[split..], &mut out);
         assert_eq!(out, input, "cap flush is byte-identical raw");
+    }
+
+    #[test]
+    fn atoi_saturates_on_hostile_input() {
+        // A harness-controlled long digit run must not overflow (debug
+        // panic; release wrap giving the wrong image id).
+        assert_eq!(
+            sgr_foreground(b"38;2;99999999999;0;0"),
+            Some(Fg::Rgb(255, 0, 0)),
+            "huge channel saturates to 255"
+        );
+        assert_eq!(
+            sgr_foreground(b"38;5;99999999999999999999"),
+            Some(Fg::Indexed(255)),
+            "huge index saturates to 255"
+        );
+        // A normal colour is unaffected.
+        assert_eq!(sgr_foreground(b"38;2;1;2;3"), Some(Fg::Rgb(1, 2, 3)));
     }
 
     #[test]

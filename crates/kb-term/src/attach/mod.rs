@@ -283,6 +283,10 @@ enum SessionResult {
     GridOwned(String),
     /// The tap connection died (retry with resume + backoff).
     Error(&'static str),
+    /// The hidden-client keys path rejected key bytes (e.g. `no-viewer`
+    /// after a runner restart). Continuing would run inputless, so the
+    /// attach fails instead.
+    KeysFailed,
 }
 
 fn print_session_ended(code: Option<i32>) {
@@ -304,14 +308,25 @@ async fn attach_session(mut ctx: AttachContext) -> u8 {
     let mut stdin_rx = if watch { None } else { Some(spawn_stdin()) };
     let mut filter = InputFilter::new();
     // Open the viewer's hidden client once per attach: the real runner
-    // rejects `keys` for a viewer that never opened (`no-viewer`).
-    let _ = ctx
+    // rejects `keys` for a viewer that never opened (`no-viewer`), so
+    // a failed open must fail the attach instead of running inputless.
+    if let Err(e) = ctx
         .runner
         .call(&Request::ViewerOpen {
             id: ctx.args.id.clone(),
             viewer: ctx.viewer.clone(),
         })
-        .await;
+        .await
+    {
+        eprintln!("kb-term: viewer_open: {e}");
+        if let Some(g) = raw.as_mut() {
+            g.restore();
+        }
+        let mut stdout = tokio::io::stdout();
+        let _ = stdout.write_all(RESTORE_BYTES).await;
+        let _ = stdout.flush().await;
+        return if e.code() == Some("invalid-id") { 4 } else { 1 };
+    }
     let mut rewriter = LabelRewriter::new(ctx.local_size.0, ctx.dim);
     let mut state = StreamState::default();
     let mut backoff = Backoff::new();
@@ -344,7 +359,11 @@ async fn attach_session(mut ctx: AttachContext) -> u8 {
                 let _ = owner;
                 state = StreamState::default();
                 rewriter.reset();
+                banner_printed = false;
                 continue 'outer;
+            }
+            SessionResult::KeysFailed => {
+                break 'outer SessionResult::KeysFailed;
             }
             SessionResult::Error(msg) => {
                 // Tap unreachable / reset / gap: backoff, then re-join
@@ -363,6 +382,14 @@ async fn attach_session(mut ctx: AttachContext) -> u8 {
             viewer: ctx.viewer.clone(),
         })
         .await;
+    // Flush the rewriter's held tail (a trigger-bearing row with no
+    // trailing LF, and any partial-trigger prefix) so it still reaches
+    // the scrollback before the tty is restored.
+    let mut tail = Vec::new();
+    rewriter.flush(&mut tail);
+    if !tail.is_empty() {
+        let _ = write_out(&tail).await;
+    }
     if let Some(g) = raw.as_mut() {
         g.restore();
     }
@@ -371,7 +398,7 @@ async fn attach_session(mut ctx: AttachContext) -> u8 {
     let _ = stdout.flush().await;
     match result {
         SessionResult::Normal(_) | SessionResult::Detached | SessionResult::GridOwned(_) => 0,
-        SessionResult::Error(_) => 1,
+        SessionResult::Error(_) | SessionResult::KeysFailed => 1,
     }
 }
 
@@ -457,7 +484,9 @@ async fn run_one_join(
                 match filter.decide(&data) {
                     StdinDecision::Detach => return SessionResult::Detached,
                     StdinDecision::Forward(bytes) => {
-                        if filter.has_pending() {
+                        // Only a bare ESC can ever idle-flush; arming on
+                        // a partial CSI would wake the pump forever.
+                        if filter.pending_is_bare_esc() {
                             esc_deadline = Some(tokio::time::Instant::now() + Duration::from_millis(20));
                         }
                         if bytes.is_empty() {
@@ -479,8 +508,12 @@ async fn run_one_join(
                                 Ok(_) => return SessionResult::GridOwned(grid_owned.unwrap_or_default()),
                                 Err(_) => return SessionResult::Detached,
                             }
+                        } else if let Err(e) =
+                            send_keys(&mut ctx.runner, &ctx.args.id, &ctx.viewer, &bytes).await
+                        {
+                            eprintln!("kb-term: keys: {e}");
+                            return SessionResult::KeysFailed;
                         } else {
-                            send_keys(&mut ctx.runner, &ctx.args.id, &ctx.viewer, &bytes).await;
                             let _ = send_typed(&mut conn, &ctx.viewer).await;
                         }
                     }
@@ -514,10 +547,10 @@ async fn run_one_join(
                 None => std::future::pending::<()>().await,
             } } => {
                 esc_deadline = None;
-                if filter.has_pending() {
-                    esc_deadline = Some(tokio::time::Instant::now() + Duration::from_millis(20));
+                // Only a bare ESC can idle-flush; a dangling partial CSI
+                // waits for more bytes (arming again would wake forever).
+                if filter.pending_is_bare_esc() {
                     if let Some(bytes) = filter.take_expired_esc(Duration::from_millis(20)) {
-                        esc_deadline = None;
                         if grid_owned.is_some() {
                             let size = RawGuard::size(0).unwrap_or(ctx.local_size);
                             let args_id = ctx.args.id.clone();
@@ -532,10 +565,17 @@ async fn run_one_join(
                                 Ok(_) => return SessionResult::GridOwned(grid_owned.unwrap_or_default()),
                                 Err(_) => return SessionResult::Detached,
                             }
+                        } else if let Err(e) =
+                            send_keys(&mut ctx.runner, &ctx.args.id, &ctx.viewer, &bytes).await
+                        {
+                            eprintln!("kb-term: keys: {e}");
+                            return SessionResult::KeysFailed;
                         } else {
-                            send_keys(&mut ctx.runner, &ctx.args.id, &ctx.viewer, &bytes).await;
                             let _ = send_typed(&mut conn, &ctx.viewer).await;
                         }
+                    } else {
+                        // Not yet idle long enough: re-arm once.
+                        esc_deadline = Some(tokio::time::Instant::now() + Duration::from_millis(20));
                     }
                 }
             }
@@ -544,18 +584,26 @@ async fn run_one_join(
 }
 
 /// Send key bytes to the viewer's hidden tmux client (4 KiB chunks).
-async fn send_keys(runner: &mut RunnerClient, id: &str, viewer: &str, bytes: &[u8]) {
+/// The first chunk the runner rejects fails the send (the caller
+/// surfaces it and stops instead of running inputless).
+async fn send_keys(
+    runner: &mut RunnerClient,
+    id: &str,
+    viewer: &str,
+    bytes: &[u8],
+) -> Result<(), RunnerClientError> {
     use base64::Engine as _;
     for chunk in bytes.chunks(4096) {
         let b64 = base64::engine::general_purpose::STANDARD.encode(chunk);
-        let _ = runner
+        runner
             .call(&Request::Keys {
                 id: id.to_string(),
                 viewer: viewer.to_string(),
                 input: KeyInput::Bytes { bytes_b64: b64 },
             })
-            .await;
+            .await?;
     }
+    Ok(())
 }
 
 /// The `typed` notification (the tap only sends `Clipboard` to recent

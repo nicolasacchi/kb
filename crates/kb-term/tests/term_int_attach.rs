@@ -241,6 +241,32 @@ struct FakeRunner {
 
 impl FakeRunner {
     fn start(dir: &TempDir, session_list: serde_json::Value, take_failures: usize) -> FakeRunner {
+        Self::start_inner(dir, session_list, take_failures, 0, 0)
+    }
+
+    fn start_failing_viewer_open(
+        dir: &TempDir,
+        session_list: serde_json::Value,
+        viewer_open_failures: usize,
+    ) -> FakeRunner {
+        Self::start_inner(dir, session_list, 0, viewer_open_failures, 0)
+    }
+
+    fn start_failing_keys(
+        dir: &TempDir,
+        session_list: serde_json::Value,
+        keys_failures: usize,
+    ) -> FakeRunner {
+        Self::start_inner(dir, session_list, 0, 0, keys_failures)
+    }
+
+    fn start_inner(
+        dir: &TempDir,
+        session_list: serde_json::Value,
+        take_failures: usize,
+        viewer_open_failures: usize,
+        keys_failures: usize,
+    ) -> FakeRunner {
         let sock = dir.file("runner/runner.sock");
         std::fs::create_dir_all(sock.parent().unwrap()).expect("mkdir runner dir");
         let _ = std::fs::remove_file(&sock);
@@ -248,8 +274,12 @@ impl FakeRunner {
         listener.set_nonblocking(true).expect("nonblocking");
         let log = Arc::new(Mutex::new(RunnerLog::default()));
         let take_failures = Arc::new(Mutex::new(take_failures));
+        let viewer_open_failures = Arc::new(Mutex::new(viewer_open_failures));
+        let keys_failures = Arc::new(Mutex::new(keys_failures));
         let log2 = log.clone();
         let failures2 = take_failures.clone();
+        let viewer2 = viewer_open_failures.clone();
+        let keys2 = keys_failures.clone();
         let list = session_list.clone();
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let stop2 = stop.clone();
@@ -268,6 +298,8 @@ impl FakeRunner {
             let reader = conn.try_clone().expect("clone conn");
             let log3 = log2.clone();
             let failures3 = failures2.clone();
+            let viewer3 = viewer2.clone();
+            let keys3 = keys2.clone();
             let list3 = list.clone();
             std::thread::spawn(move || {
                 handle_runner_conn(
@@ -275,6 +307,8 @@ impl FakeRunner {
                     conn,
                     &log3,
                     &failures3,
+                    &viewer3,
+                    &keys3,
                     list3,
                 );
             });
@@ -321,6 +355,8 @@ fn handle_runner_conn(
     mut stream: std::os::unix::net::UnixStream,
     log: &Arc<Mutex<RunnerLog>>,
     take_failures: &Arc<Mutex<usize>>,
+    viewer_open_failures: &Arc<Mutex<usize>>,
+    keys_failures: &Arc<Mutex<usize>>,
     session_list: serde_json::Value,
 ) {
     use std::io::BufRead as _;
@@ -374,12 +410,19 @@ fn handle_runner_conn(
             }
             "viewer_open" => {
                 let viewer = req.get("viewer").and_then(|v| v.as_str()).unwrap_or("");
-                log.lock()
-                    .unwrap()
-                    .opened_viewers
-                    .insert(viewer.to_string());
-                log.lock().unwrap().ever_opened.insert(viewer.to_string());
-                serde_json::json!({"status": "ok", "data": {"viewer": viewer}})
+                let mut f = viewer_open_failures.lock().unwrap();
+                if *f > 0 {
+                    *f -= 1;
+                    serde_json::json!({"status": "err", "code": "viewer-open-failed", "message": "viewer reaped before open"})
+                } else {
+                    drop(f);
+                    log.lock()
+                        .unwrap()
+                        .opened_viewers
+                        .insert(viewer.to_string());
+                    log.lock().unwrap().ever_opened.insert(viewer.to_string());
+                    serde_json::json!({"status": "ok", "data": {"viewer": viewer}})
+                }
             }
             "viewer_close" => {
                 let viewer = req.get("viewer").and_then(|v| v.as_str()).unwrap_or("");
@@ -391,7 +434,11 @@ fn handle_runner_conn(
                 // The real runner rejects keys for a viewer that never
                 // opened; the fake enforces the same `no-viewer` gate.
                 let viewer = req.get("viewer").and_then(|v| v.as_str()).unwrap_or("");
-                if !log.lock().unwrap().opened_viewers.contains(viewer) {
+                let mut kf = keys_failures.lock().unwrap();
+                if *kf > 0 {
+                    *kf -= 1;
+                    serde_json::json!({"status": "err", "code": "no-viewer", "message": "viewer reaped during keys"})
+                } else if !log.lock().unwrap().opened_viewers.contains(viewer) {
                     serde_json::json!({"status": "err", "code": "no-viewer", "message": "viewer not open"})
                 } else {
                     // Key bytes live at req["input"]["bytes_b64"] (the
@@ -442,6 +489,9 @@ struct TapScript {
     chunk: usize,
     /// Delay before the Exit frame (ms), for key/tap races.
     exit_delay_ms: u64,
+    /// Append a trigger-bearing line with no trailing LF before Exit
+    /// (the held-tail flush pin).
+    tail_trigger_no_lf: bool,
 }
 
 struct FakeTap {
@@ -675,6 +725,20 @@ fn handle_tap_conn(
         }
     }
     let _ = total;
+    if script.tail_trigger_no_lf {
+        // A trigger-bearing line with no LF: the rewriter holds it and
+        // it must be flushed raw on exit (the held-tail pin).
+        let mut tail = Vec::new();
+        tail.extend_from_slice(b"TAIL \x1b[38;2;17;34;51m\x1b[58:2::17:34:51m");
+        tail.extend_from_slice(&PLACEHOLDER);
+        tail.extend_from_slice(&char_bytes(DIACRITICS[0]));
+        tail.extend_from_slice(&char_bytes(DIACRITICS[1]));
+        tail.extend_from_slice(b"\x1b[39;59m");
+        let _ = write(
+            &[bin_env(&viewer, live_bytes.len() as u64, &tail)],
+            &mut stream,
+        );
+    }
     // Optional hold before the Exit (typed/clipboard tests write a
     // key while the stream is still flowing): keep reading any
     // control envelopes (the typed notification) during the hold.
@@ -896,6 +960,14 @@ struct ModelReport {
     last_is_1_to_n: bool,
     highest: u32,
     final_lines: Vec<String>,
+    /// Widest visible (escape-stripped) line in the last segment.
+    max_visible_width: usize,
+}
+
+fn visible_width(line: &str) -> usize {
+    let stripped = strip_csis(line.as_bytes());
+    let text = String::from_utf8_lossy(&stripped).into_owned();
+    kb_term::attach::width::str_width(&text)
 }
 
 fn model(capture: &[u8], expect_total: u32) -> ModelReport {
@@ -908,6 +980,7 @@ fn model(capture: &[u8], expect_total: u32) -> ModelReport {
     let mut segment_ok = true;
     let mut last_numbers: Vec<u32> = Vec::new();
     let mut final_lines: Vec<String> = Vec::new();
+    let mut max_visible_width = 0usize;
     for (idx, seg) in parts.iter().enumerate().skip(1) {
         let mut nums: Vec<u32> = Vec::new();
         let mut lines: Vec<String> = Vec::new();
@@ -922,6 +995,7 @@ fn model(capture: &[u8], expect_total: u32) -> ModelReport {
         }
         if idx == parts.len() - 1 {
             last_numbers = nums;
+            max_visible_width = final_lines_max_width(&lines, seg);
             final_lines = lines;
         }
     }
@@ -934,7 +1008,12 @@ fn model(capture: &[u8], expect_total: u32) -> ModelReport {
         last_is_1_to_n,
         highest,
         final_lines,
+        max_visible_width,
     }
+}
+
+fn final_lines_max_width(lines: &[String], _seg: &str) -> usize {
+    lines.iter().map(|l| visible_width(l)).max().unwrap_or(0)
 }
 
 fn count_occurrences(out: &[u8], needle: &[u8]) -> usize {
@@ -1021,6 +1100,7 @@ fn t4_script() -> TapScript {
         defs: true,
         chunk: 65_536,
         exit_delay_ms: 0,
+        tail_trigger_no_lf: false,
     }
 }
 
@@ -1051,6 +1131,11 @@ fn attach_t4_seed_then_3_rebuilds_last_segment_1_to_n_once() {
     assert!(report.sync_ok, "balanced ?2026");
     assert!(report.segment_ok, "every segment is 1..len consecutive");
     assert!(report.last_is_1_to_n, "last segment is 1..3300");
+    assert!(
+        report.max_visible_width <= 200,
+        "every visible line <= 200 cells at cols=201, got {}",
+        report.max_visible_width
+    );
     assert!(
         out.windows(PLACEHOLDER.len()).all(|w| w != PLACEHOLDER),
         "zero U+10EEEE"
@@ -1245,11 +1330,22 @@ fn attach_grid_owned_prints_banner_and_watches_until_key() {
         "the take key was NOT forwarded as keys"
     );
     // The fallback watched: stream output reached the terminal before
-    // the key was pressed (spec §6 keeps pumping in watch mode).
+    // the key was pressed (spec §6 keeps pumping in watch mode). The
+    // exact total is distinguishable only if the first join pumped:
+    // 4 pre-key ED3 (mirror leading + 3 rebuilds, since the fake streams
+    // immediately and holds Exit 3000ms) plus 4 post-restart = 8. A
+    // suspend-until-key impl would show 4 (returning GridOwned before
+    // the first seed).
     assert!(
         out.windows(b"on web]".len()).any(|w| w == b"on web]"),
         "picture labels shown during the fallback watch"
     );
+    let report = model(&out, 3300);
+    assert_eq!(
+        report.ed3_count, 8,
+        "pumped 4 pre-key + 4 post-restart ED3 (suspend would be 4)"
+    );
+    assert!(report.last_is_1_to_n, "restart segment is 1..3300");
 }
 
 #[test]
@@ -1281,6 +1377,90 @@ fn attach_clipboard_and_typed_notified() {
             .any(|w| w == b"\x1b]52;c;aGVsbG8="),
         "the Clipboard frame is forwarded as local OSC 52"
     );
+}
+
+#[test]
+fn attach_exit_flushes_trigger_tail_without_lf() {
+    if !term_int_gate() {
+        return;
+    }
+    let mut script = t4_script();
+    script.exit_delay_ms = 0;
+    script.tail_trigger_no_lf = true;
+    let rig = setup_rig(0, script);
+    std::thread::sleep(Duration::from_millis(100));
+    let mut proc = spawn_bin(
+        &["attach", "abcd1234", "--runner-sock", &rig.sock_str],
+        201,
+        48,
+    );
+    let (code, out) = proc.0.wait_for_exit(Duration::from_secs(20));
+    assert_eq!(code, Some(0));
+    assert!(
+        out.windows(PLACEHOLDER.len()).any(|w| w == PLACEHOLDER),
+        "held trigger tail flushed raw on exit"
+    );
+    assert!(
+        out.windows(b"TAIL ".len()).any(|w| w == b"TAIL "),
+        "tail visible text flushed"
+    );
+}
+
+#[test]
+fn attach_viewer_open_failure_exits_nonzero() {
+    if !term_int_gate() {
+        return;
+    }
+    let dir = TempDir::new();
+    std::fs::create_dir_all(dir.file("s/abcd1234")).expect("mkdir session dir");
+    let runner = FakeRunner::start_failing_viewer_open(&dir, session_list(), 1);
+    let sock = runner.sock.to_string_lossy().into_owned();
+    let out = wait_output(&["attach", "abcd1234", "--runner-sock", &sock]);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "viewer_open failure exits 1, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("viewer_open") && err.contains("viewer-open-failed"),
+        "runner error surfaced: {err}"
+    );
+    assert!(
+        runner.recorded_ops().iter().any(|o| o == "viewer_open"),
+        "the failing open was attempted"
+    );
+}
+
+#[test]
+fn attach_keys_failure_exits_nonzero() {
+    if !term_int_gate() {
+        return;
+    }
+    let mut script = t4_script();
+    script.exit_delay_ms = 3_000;
+    let dir = TempDir::new();
+    std::fs::create_dir_all(dir.file("s/abcd1234")).expect("mkdir session dir");
+    let runner = FakeRunner::start_failing_keys(&dir, session_list(), 1);
+    let tap = FakeTap::start(&dir, script);
+    let sock_str = runner.sock.to_string_lossy().into_owned();
+    std::thread::sleep(Duration::from_millis(100));
+    let mut proc = spawn_bin(&["attach", "abcd1234", "--runner-sock", &sock_str], 201, 48);
+    std::thread::sleep(Duration::from_millis(1_200));
+    proc.1.write_all(b"x").expect("key");
+    let (code, out) = proc.0.wait_for_exit(Duration::from_secs(20));
+    assert_eq!(
+        code,
+        Some(1),
+        "keys failure exits 1 instead of running inputless"
+    );
+    assert!(
+        out.windows(b"keys:".len()).any(|w| w == b"keys:"),
+        "keys diagnostic surfaced on stderr"
+    );
+    let _ = tap;
+    let _ = runner;
 }
 
 // ------------------------------------------------------------ CLI smoke tests

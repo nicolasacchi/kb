@@ -211,6 +211,15 @@ impl InputFilter {
         !self.pending.is_empty()
     }
 
+    /// Whether the held bytes are exactly a bare `ESC` (the only
+    /// shape [`Self::take_expired_esc`] can ever flush). Used to
+    /// avoid re-arming the idle deadline for a dangling partial CSI
+    /// (`ESC[` etc.), which would wake the pump forever.
+    #[must_use]
+    pub fn pending_is_bare_esc(&self) -> bool {
+        self.pending == [ESC]
+    }
+
     /// Flush a held bare `ESC` once it has been idle for at least
     /// `idle`. A lone Esc is a valid key and must not wait forever for
     /// bytes that never arrive; a longer incomplete sequence still
@@ -261,7 +270,7 @@ fn parse_nums(params: &[u8]) -> Vec<u64> {
             let mut v: u64 = 0;
             for &c in t {
                 if c.is_ascii_digit() {
-                    v = v * 10 + (c - b'0') as u64;
+                    v = v.saturating_mul(10).saturating_add((c - b'0') as u64);
                 }
             }
             v
@@ -395,5 +404,28 @@ mod tests {
             RESTORE_BYTES,
             b"\x1b[0m\x1b[?2026l\x1b[?25h\x1b[?2004l\x1b[?1004l\r\n"
         );
+    }
+
+    #[test]
+    fn parse_nums_saturates_on_hostile_input() {
+        // A long digit run must not overflow (debug panic; release
+        // wrap misclassifying the CPR).
+        assert!(
+            filtered(b"\x1b[99999999999999999999;1R").is_empty(),
+            "huge CPR row is still a CPR (dropped), not F3"
+        );
+        assert_eq!(
+            filtered(b"\x1b[1;2R"),
+            b"\x1b[1;2R",
+            "F3 exception unaffected"
+        );
+        // The bare-Esc helper distinguishes a lone Esc from a partial
+        // CSI (the idle-deadline re-arm gate).
+        let mut f = InputFilter::new();
+        let _ = f.decide(b"\x1b");
+        assert!(f.pending_is_bare_esc());
+        let mut f = InputFilter::new();
+        let _ = f.decide(b"\x1b[");
+        assert!(!f.pending_is_bare_esc());
     }
 }
