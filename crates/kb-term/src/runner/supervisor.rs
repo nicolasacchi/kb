@@ -351,6 +351,7 @@ pub mod fake {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
 
     /// `systemctl --user` needs HOME + XDG_RUNTIME_DIR (+ the bus address
     /// when inherited); a cleared environment breaks the user bus, so the
