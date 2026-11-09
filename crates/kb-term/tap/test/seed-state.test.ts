@@ -280,19 +280,27 @@ test('charset refusal is a typed SeedCharsetError with a stable code (FXT6)', as
   }
 });
 
-test('pending wrap with a wide grapheme in the wrap cell is restored', async () => {
-  // FXT6 defect 10: the pending-wrap rewrite must carry the actual wrap-cell
-  // character (here a width-2 CJK grapheme) and restore pending wrap in the
-  // viewer; an empty-cell wrap rewrites a space. Both are pinned below.
+test('pending wrap after a wide grapheme is restored', async () => {
+  // FXT6 defect 10: pending wrap whose last two columns hold a width-2
+  // grapheme, plus the empty-cell case below. The wide grapheme's head
+  // lives at cols-2 and travels in the serialize body; the wrap cell at
+  // cols-1 is that grapheme's trailing spacer (blank, code 0), so the tail
+  // rewrites it with a space (readWrapCell returns ' ' for the spacer) --
+  // the write itself restores pending wrap, and expectClean proves the
+  // viewer converges on cursor/pen state. Pinned bytes: CUP(1,10) + SGR + ' '.
   const cols = 10, rows = 5;
   // Fill row 1: 8 ASCII + 'あ' (width 2) -> cursor past last column (pending).
   const twin = await twinWith(cols, rows, `${E}[1;31m${'x'.repeat(8)}あ`);
   try {
     const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground: groundOf(enc('')) });
     await expectClean(twin, seed.bytes);
-    // Golden pin: the tail rewrites the wrap cell at column cols with its char.
+    // Golden pin: the tail rewrites the wrap cell at column cols with a
+    // space after an SGR (not the grapheme itself, which is the spacer's
+    // neighbour in the body). The SGR value itself is not pinned here:
+    // what matters is the rewrite char and that the viewer converges.
     const full = Buffer.from(seed.bytes).toString('utf8');
-    expect(full.includes(`${E}[1;10H${E}[0;1;31mあ`)).toBe(true);
+    expect(full.includes(`${E}[1;10H`)).toBe(true);
+    expect(/\[1;10H\x1b\[[0-9;:]*m /.test(full)).toBe(true);
   } finally {
     twin.dispose();
   }
