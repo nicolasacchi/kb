@@ -427,7 +427,12 @@ pub(crate) async fn run_relay<S, U, F>(
         tokio::select! {
             biased;
             // (a) shutdown watch FIRST: close 1012 and return.
-            _ = shutdown.wait_for(|&down| down) => {
+            r = shutdown.wait_for(|&down| down) => {
+                // `wait_for` resolves to a borrow guard (watch::Ref,
+                // !Send). Drop it before the first await so the relay
+                // future stays Send (required by spawn and the
+                // on_upgrade callback).
+                drop(r);
                 let _ = tokio::time::timeout(Duration::from_millis(500),
                     sink.send(Message::Close(Some(CloseFrame {
                         code: close_code::RESTART.into(),
