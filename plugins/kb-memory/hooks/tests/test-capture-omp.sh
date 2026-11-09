@@ -630,7 +630,7 @@ else
   bad "tool_result text body wrong: $img_tool_text"
 fi
 img_tool_sha="$(printf '%s\n' "$img_body" | jq -r 'select(.message.content | map(select(.type == "tool_result")) | length == 1) | .message.content[0].content[1].source.sha256 // empty' | head -1)"
-if [ "$img_tool_sha" = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd" ]; then
+if [ "$img_tool_sha" = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd" ]; then
   ok "tool_result image carries the invented blob sha"
 else
   bad "tool_result image sha wrong: $img_tool_sha"
