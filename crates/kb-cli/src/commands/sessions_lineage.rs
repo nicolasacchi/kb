@@ -36,7 +36,7 @@ pub(crate) const BACKFILL_TREE_BATCH_CAP: usize = 500;
 
 /// Clamp a `--batch` value into `1..=BACKFILL_TREE_BATCH_CAP`.
 pub(crate) fn clamp_batch(batch: usize) -> usize {
-    batch.min(BACKFILL_TREE_BATCH_CAP).max(1)
+    batch.clamp(1, BACKFILL_TREE_BATCH_CAP)
 }
 
 /// `(would_change, changed, unmatched)` summed out of one chunk's route
