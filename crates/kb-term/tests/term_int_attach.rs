@@ -1069,10 +1069,7 @@ fn attach_t4_seed_then_3_rebuilds_last_segment_1_to_n_once() {
     );
     assert_eq!(rig.runner.recorded_takes().len(), 1);
     assert!(
-        rig.runner
-            .recorded_ops()
-            .iter()
-            .any(|o| o == "viewer_open"),
+        rig.runner.recorded_ops().iter().any(|o| o == "viewer_open"),
         "the client opened the viewer (hidden-client keys need it); ops: {:?}",
         rig.runner.recorded_ops()
     );
