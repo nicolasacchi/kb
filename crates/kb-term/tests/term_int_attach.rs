@@ -595,14 +595,14 @@ fn handle_tap_conn(
         // Same-epoch resume: binary replay of the live bytes from the
         // resume offset onward (no seed, no ED3 — the client already
         // has its scrollback).
-        let mut offset = resume_offset;
+        let mut offset: u64 = 0;
         for chunk in live_bytes.chunks(script.chunk) {
             let clen = chunk.len() as u64;
             if offset + clen <= resume_offset {
                 offset += clen;
                 continue;
             }
-            let skip = (resume_offset - offset) as usize;
+            let skip = resume_offset.saturating_sub(offset) as usize;
             let piece = &chunk[skip..];
             if !write(
                 &[bin_env(&viewer, offset + skip as u64, piece)],
