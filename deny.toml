@@ -59,6 +59,20 @@ ignore = [
     # is fixed), and scripts/ci/no-cloud-stack.sh fails the supply-chain job if
     # they ever return. Add an entry here only with an owner, a review-by date
     # and a re-check trigger.
+    # libsqlite3-sys 0.38.2 (bundled SQLite 3.53.2) via rusqlite 0.40.2.
+    # Fixed upstream in libsqlite3-sys 0.39.0 (SQLite 3.54.0) via rusqlite 0.41, but
+    # refinery-core 0.10 (latest release 2026-10-02) caps rusqlite at <= 0.40 and two
+    # libsqlite3-sys lines cannot coexist (links = "sqlite3"), so the bump is held
+    # until refinery raises its bound (see Cargo.toml note on rusqlite = "0.40").
+    # Reachability: kb opens SQLite databases only inside its own operator-owned state
+    # dir; a crafted db/-wal pair needs a less-trusted writer to have write access to
+    # that dir, which is already full compromise of the operator's data, and kb never
+    # opens database files in a less-trusted location. The fault is a local-only
+    # uninitialized-page-cache read (CVE-2026-119375). Owner: the operator.
+    # Review by 2027-01-31, or sooner when a refinery release admits rusqlite 0.41
+    # (re-check trigger: bump rusqlite to 0.41, run `cargo deny check advisories`,
+    # then delete this entry).
+    { id = "RUSTSEC-2026-0459", reason = "libsqlite3-sys 0.38.2 bundled SQLite page-cache read: kb opens databases only in its own operator-owned state dir, so a crafted db/-wal pair needs a less-trusted writer there (already full compromise); fix (rusqlite 0.41) blocked by refinery-core 0.10 <= 0.40 bound" },
 ]
 
 [licenses]
