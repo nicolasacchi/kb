@@ -90,11 +90,16 @@ pub async fn splice(
     let mut client_write = client_write;
     let to_client = tokio::io::copy(&mut tap_read, &mut client_write);
     let to_tap = tokio::io::copy(&mut client_read, &mut tap_write);
-    // The first half to finish owns the close: dropping the other
-    // future drops its sockets, which is how the far side observes the
+    // The first half to finish owns the close: select returns when the
+    // first completes, dropping the other future — and with it (at
+    // return) the sockets, which is how the far side observes the
     // close (a dropped runner client tears down its tap connection,
-    // and a dead tap ends the client's stream).
-    match tokio::try_join!(to_client, to_tap) {
+    // and a dead tap ends the client's stream). try_join would wait
+    // for both halves on a clean EOF and hang.
+    match tokio::select! {
+        r = to_client => r,
+        r = to_tap => r,
+    } {
         Ok(_) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
         Err(e) => Err(e),
