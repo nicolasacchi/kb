@@ -247,12 +247,12 @@ pub(crate) async fn upgrade(
     );
     let upstream = match runner.open_stream(&id, from).await {
         Ok(stream) => stream,
-        Err(StreamError::NotFound(_)) => {
+        Err(e @ StreamError::NotFound(_)) => {
             return Problem::response(
                 "urn:kb:errors:terminal-not-found",
                 StatusCode::NOT_FOUND,
                 "Not Found",
-                "no such terminal".to_string(),
+                e.message().to_string(),
             );
         }
         Err(StreamError::Unavailable) => {
@@ -437,12 +437,12 @@ pub(crate) async fn run_relay<S, U, F>(
                     shutdown.changed().await.is_ok() || *shutdown.borrow()
                 }
             } => {
-                send_close(&mut sink, close_code::RESTART, "service restart").await;
+                send_close(&mut sink, CLOSE_RESTART.into(), "service restart").await;
                 break;
             }
             // Slow consumer signalled by the reader: close 1013.
             _ = slow_rx.recv() => {
-                send_close(&mut sink, close_code::AGAIN, "slow consumer").await;
+                send_close(&mut sink, CLOSE_SLOW_CONSUMER.into(), "slow consumer").await;
                 break;
             }
             // (b) browser -> upstream, verbatim (Pong/Ping refresh
@@ -526,7 +526,7 @@ pub(crate) async fn run_relay<S, U, F>(
                 if last_seen.elapsed() >= timers.idle_close_after {
                     let _ = tokio::time::timeout(Duration::from_millis(500),
                         sink.send(Message::Close(Some(CloseFrame {
-                            code: close_code::AWAY.into(),
+                            code: CLOSE_IDLE.into(),
                             reason: "idle".into(),
                         })))).await;
                     break;
