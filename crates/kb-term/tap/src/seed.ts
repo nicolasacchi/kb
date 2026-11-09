@@ -93,8 +93,12 @@ function serializeBody(twin: Twin, scrollback: number): string {
   return (fn as (this: unknown, o: { scrollback?: number }) => string).call(ser, { scrollback });
 }
 
-/** Point-in-time quiescence: twin parsed (caller guarantees), frame off, ground. */
-export function isQuiescent(twin: Twin, ground: GroundTracker, pending = 0): boolean {
+/** Point-in-time quiescence: twin parsed (caller guarantees), frame off, ground.
+ * `pending` is REQUIRED: 0 means the twin has parsed through the candidate
+ * offset (no feeds in flight); non-zero means twin-behind. There is
+ * deliberately no default -- a caller that omits it must not silently
+ * assert zero (FXT6 review round 2). */
+export function isQuiescent(twin: Twin, ground: GroundTracker, pending: number): boolean {
   if (pending > 0) return false;
   if (syncOn(twin)) return false;
   return ground.atGround();
@@ -105,8 +109,9 @@ export function isQuiescent(twin: Twin, ground: GroundTracker, pending = 0): boo
  * the buildSeed refusal. Returns null when the offset IS quiescent.
  * `pending` is the QuiescentJoinGate's in-flight feed count: non-zero means
  * the twin has not parsed through the candidate offset yet (twin-behind).
+ * REQUIRED, like isQuiescent -- no opt-out default.
  */
-export function quiescentReason(twin: Twin, ground: GroundTracker, pending = 0): JoinPoint['reason'] {
+export function quiescentReason(twin: Twin, ground: GroundTracker, pending: number): JoinPoint['reason'] {
   if (pending > 0) return 'twin-behind';
   if (syncOn(twin)) return 'sync-frame';
   if (!ground.atGround()) return 'mid-sequence';
@@ -114,7 +119,7 @@ export function quiescentReason(twin: Twin, ground: GroundTracker, pending = 0):
 }
 
 /** Throw (fail-closed) unless the join offset is quiescent. */
-export function assertQuiescent(twin: Twin, ground: GroundTracker, pending = 0): void {
+export function assertQuiescent(twin: Twin, ground: GroundTracker, pending: number): void {
   const reason = quiescentReason(twin, ground, pending);
   if (reason !== null) throw new Error(`seed: refusing not quiescent join (reason: ${reason})`);
 }
@@ -243,13 +248,18 @@ export function buildSeed(
      * ground-less fallback: the old `!syncOn(twin)`-only branch let any
      * caller join mid-sequence with no check. */
     ground: GroundTracker;
-    /** QuiescentJoinGate in-flight feeds; non-zero = twin-behind. */
-    pending?: number;
+    /** Required (FXT6 review round 2): QuiescentJoinGate in-flight feeds;
+     * non-zero = twin-behind, and buildSeed refuses. No default -- omitting
+     * it once silently asserted 0, which is exactly the fail-open shape
+     * defect 1 closed for ground. Callers that fed the twin directly and
+     * awaited the feed pass 0 explicitly; gate-fed callers pass
+     * gate.pending. */
+    pending: number;
   },
 ): Seed {
   const st = captureTwinState(twin);
   try {
-    assertQuiescent(twin, opts.ground, opts.pending ?? 0);
+    assertQuiescent(twin, opts.ground, opts.pending);
   } catch (e) {
     throw new Error(`seed: refusing not quiescent join at offset ${opts.atOffset}: ${(e as Error).message}`);
   }

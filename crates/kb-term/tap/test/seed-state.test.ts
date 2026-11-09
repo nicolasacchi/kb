@@ -44,7 +44,12 @@ async function expectBareDirty(twin: Twin, cls: string): Promise<void> {
   expect(classes.has(cls)).toBe(true);
 }
 
-function groundOf(data: Uint8Array): GroundTracker {
+function groundOf(data: Uint8Array, pending: number): GroundTracker {
+  // Helper-local assertion (both params are load-bearing): these fixtures
+  // feed the twin synchronously, so the feed is always fully parsed and
+  // pending is always 0. A non-zero value here would mean the fixture is
+  // lying about quiescence; fail the test instead of building a bad seed.
+  if (pending !== 0) throw new Error(`groundOf: pending must be 0 in synchronous fixtures, got ${pending}`);
   const g = new GroundTracker();
   g.push(data);
   return g;
@@ -54,7 +59,7 @@ test('DECSTBM scroll region is restored', async () => {
   const twin = await twinWith(40, 12, `abc${E}[3;10r${E}[5;5Hhello${E}[2;2H`);
   try {
     await expectBareDirty(twin, 'scroll region');
-    const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground: groundOf(enc('')) });
+    const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground: groundOf(enc(''), 0), pending: 0 });
     await expectClean(twin, seed.bytes);
   } finally {
     twin.dispose();
@@ -65,7 +70,7 @@ test('DECSC slot (position and pen) is restored', async () => {
   const twin = await twinWith(40, 12, `${E}[1;31m${E}[4;7H${E}7${E}[0m${E}[1;1Hxyz`);
   try {
     await expectBareDirty(twin, 'DECSC saved cursor');
-    const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground: groundOf(enc('')) });
+    const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground: groundOf(enc(''), 0), pending: 0 });
     await expectClean(twin, seed.bytes);
     // probe: ESC 8 restores the twin slot position (4;7 -> x=6) in the viewer.
     const viewer = makeTwin(40, 12);
@@ -86,10 +91,10 @@ test('pending wrap at the last column is restored', async () => {
   try {
     // Bare serialize already reproduces pending wrap (x === cols), so
     // load-bearingness is pinned via skip + seed-content, not bare-dirty.
-    const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground: groundOf(enc('')) });
+    const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground: groundOf(enc(''), 0), pending: 0 });
     await expectClean(twin, seed.bytes);
     const full = Buffer.from(seed.bytes).toString('latin1');
-    const skippedSeed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground: groundOf(enc('')), skip: ['pendingWrap'] });
+    const skippedSeed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground: groundOf(enc(''), 0), pending: 0, skip: ['pendingWrap'] });
     const skipped = Buffer.from(skippedSeed.bytes).toString('latin1');
     // Full tail rewrites the wrapped cell (CUP 1;10 + pen SGR + 'x'); the
     // skipped tail omits the rewrite char.
@@ -104,7 +109,7 @@ test('origin mode with a scroll region is restored', async () => {
   const twin = await twinWith(40, 12, `${E}[3;10r${E}[?6h${E}[2;2Hhi${E}[1;1H`);
   try {
     await expectBareDirty(twin, 'scroll region');
-    const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground: groundOf(enc('')) });
+    const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground: groundOf(enc(''), 0), pending: 0 });
     await expectClean(twin, seed.bytes);
   } finally {
     twin.dispose();
@@ -114,7 +119,7 @@ test('origin mode with a scroll region is restored', async () => {
 test('cursor style and visibility are restored', async () => {
   const twin = await twinWith(40, 12, `${E}[5 q${E}[?25l`); // bar, blink off; cursor hidden
   try {
-    const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground: groundOf(enc('')) });
+    const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground: groundOf(enc(''), 0), pending: 0 });
     const viewer = makeTwin(40, 12);
     try {
       await viewer.feed(seed.bytes);
@@ -130,7 +135,7 @@ test('DECSCUSR block/underline/bar x blink/steady round-trips', async () => {
   for (const n of [0, 1, 2, 3, 4, 5, 6]) {
     const twin = await twinWith(40, 12, `${E}[${n} q`);
     try {
-      const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground: groundOf(enc('')) });
+      const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground: groundOf(enc(''), 0), pending: 0 });
       const viewer = makeTwin(40, 12);
       try {
         await viewer.feed(seed.bytes);
@@ -163,7 +168,7 @@ test('alt active: normal DECSC slot survives composition (uses ?47h, not ?1049h)
   const twin = await twinWith(40, 12, `${E}[1;32m${E}[2;3H${E}7${E}[5;5H${E}[0m${E}[?47h${E}[8;8H${E}7${E}[2J${E}[9;9HALT`);
   try {
     await expectBareDirty(twin, 'DECSC saved cursor');
-    const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground: groundOf(enc('')) });
+    const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground: groundOf(enc(''), 0), pending: 0 });
     const text = Buffer.from(seed.bytes).toString('latin1');
     expect(text.includes(`${E}[?47h`)).toBe(true);
     expect(text.includes(`${E}[?1049h`)).toBe(false);
@@ -178,10 +183,10 @@ test('pen with a curly underline is restored', async () => {
   try {
     // Bare serialize preserves the pen (its body restores _curAttrData),
     // so load-bearingness is pinned via skip + seed-content below.
-    const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground: groundOf(enc('')) });
+    const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground: groundOf(enc(''), 0), pending: 0 });
     await expectClean(twin, seed.bytes);
     const full = Buffer.from(seed.bytes).toString('latin1');
-    const skippedSeed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground: groundOf(enc('')), skip: ['pen'] });
+    const skippedSeed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground: groundOf(enc(''), 0), pending: 0, skip: ['pen'] });
     const skipped = Buffer.from(skippedSeed.bytes).toString('latin1');
     expect(full.includes(`${E}[0;4:3;58:5:42m`)).toBe(true);
     expect(skipped.includes(`${E}[0;4:3;58:5:42m`)).toBe(false);
@@ -220,7 +225,7 @@ test('skip mutations: region/DECSC/modes tail items are load-bearing', async () 
       ['modes', 'cursor style'],
     ];
     for (const [item, cls] of cases) {
-      const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground: groundOf(enc('')), skip: [item] });
+      const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground: groundOf(enc(''), 0), pending: 0, skip: [item] });
       const classes = await stageClasses(twin, seed.bytes);
       expect(classes.has(cls)).toBe(true);
     }
@@ -233,20 +238,20 @@ test('buildSeed fails closed on a non-default charset/glevel', async () => {
   const plain = makeTwin(20, 8);
   try {
     await plain.feed(enc('hello'));
-    expect(() => buildSeed(plain, { scrollback: 50000, atOffset: 1, ground: groundOf(enc('')) })).not.toThrow();
+    expect(() => buildSeed(plain, { scrollback: 50000, atOffset: 1, ground: groundOf(enc(''), 0), pending: 0 })).not.toThrow();
   } finally {
     plain.dispose();
   }
   const glevel = await twinWith(40, 12, `${E}n${E}[1;1Hhi`);
   try {
-    expect(() => buildSeed(glevel, { scrollback: 50000, atOffset: 1, ground: groundOf(enc('')) }))
+    expect(() => buildSeed(glevel, { scrollback: 50000, atOffset: 1, ground: groundOf(enc(''), 0), pending: 0 }))
       .toThrow(/seed: non-default charset\/glevel/);
   } finally {
     glevel.dispose();
   }
   const charset = await twinWith(40, 12, `${E}(0${E}7${E}[1;1Hhi`);
   try {
-    expect(() => buildSeed(charset, { scrollback: 50000, atOffset: 1, ground: groundOf(enc('')) }))
+    expect(() => buildSeed(charset, { scrollback: 50000, atOffset: 1, ground: groundOf(enc(''), 0), pending: 0 }))
       .toThrow(/seed: non-default charset\/glevel/);
   } finally {
     charset.dispose();
@@ -256,7 +261,7 @@ test('buildSeed fails closed on a non-default charset/glevel', async () => {
 test('skip alt mutation: ?1049h clobbers the normal slot', async () => {
   const twin = await twinWith(40, 12, `${E}[1;32m${E}[2;3H${E}7${E}[5;5H${E}[0m${E}[?47h${E}[8;8H${E}7${E}[2J${E}[9;9HALT`);
   try {
-    const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground: groundOf(enc('')), skip: ['alt'] });
+    const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground: groundOf(enc(''), 0), pending: 0, skip: ['alt'] });
     const classes = await stageClasses(twin, seed.bytes);
     expect(classes.has('DECSC saved cursor')).toBe(true);
   } finally {
@@ -269,7 +274,7 @@ test('charset refusal is a typed SeedCharsetError with a stable code (FXT6)', as
   try {
     let caught: unknown;
     try {
-      buildSeed(glevel, { scrollback: 50000, atOffset: 1, ground: groundOf(enc('')) });
+      buildSeed(glevel, { scrollback: 50000, atOffset: 1, ground: groundOf(enc(''), 0), pending: 0 });
     } catch (e) {
       caught = e;
     }
@@ -292,7 +297,7 @@ test('pending wrap after a wide grapheme is restored', async () => {
   // Fill row 1: 8 ASCII + 'あ' (width 2) -> cursor past last column (pending).
   const twin = await twinWith(cols, rows, `${E}[1;31m${'x'.repeat(8)}あ`);
   try {
-    const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground: groundOf(enc('')) });
+    const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground: groundOf(enc(''), 0), pending: 0 });
     await expectClean(twin, seed.bytes);
     // Golden pin: the tail rewrites the wrap cell at column cols with a
     // space after an SGR (not the grapheme itself, which is the spacer's
@@ -316,7 +321,7 @@ test('pending wrap on an empty cell rewrites a space', async () => {
   try {
     const st = captureTwinState(twin);
     expect(st.normal.pendingWrap).toBe(true);
-    const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground: groundOf(enc('')) });
+    const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground: groundOf(enc(''), 0), pending: 0 });
     await expectClean(twin, seed.bytes);
     const full = Buffer.from(seed.bytes).toString('utf8');
     expect(full.includes(`${E}[1;10H`)).toBe(true);
