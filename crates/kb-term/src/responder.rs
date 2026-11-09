@@ -915,6 +915,21 @@ mod tests {
                 libc::fcntl(slave.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK),
                 0
             );
+            // Canonical mode buffers master->slave input until a
+            // newline, so the newline-free items would never become
+            // readable on the slave; raw mode delivers both bytes.
+            let mut tio: libc::termios = std::mem::zeroed();
+            assert_eq!(
+                libc::tcgetattr(slave.as_raw_fd(), &mut tio),
+                0,
+                "tcgetattr on slave"
+            );
+            tio.c_lflag &= !(libc::ICANON | libc::ECHO);
+            assert_eq!(
+                libc::tcsetattr(slave.as_raw_fd(), libc::TCSANOW, &tio),
+                0,
+                "tcsetattr on slave"
+            );
         }
         let need = big.len() + reply.len();
         let mut got = Vec::new();
