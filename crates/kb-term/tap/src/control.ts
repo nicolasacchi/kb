@@ -247,7 +247,13 @@ export class Control {
    * pause-after and the pause continue, whose replies no caller awaits. */
   private writeFireAndForget(text: string): void {
     const [p] = this.write([text]);
-    p.catch(() => {});
+    // No caller awaits this promise; the rejection goes to lastError so a
+    // broken stdin pipe is diagnosable instead of silent. (write() never
+    // throws synchronously, so the dispatch try/catch around this call does
+    // not fire -- the rejection here is the failure the %pause hook records.)
+    p.catch((err: unknown) => {
+      this.lastError = err instanceof Error ? err : new Error(String(err));
+    });
   }
 
   stop(): void {

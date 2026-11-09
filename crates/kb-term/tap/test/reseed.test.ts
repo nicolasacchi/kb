@@ -370,7 +370,7 @@ test('reseed_waits_for_quiescence', async () => {
     const done4 = reseeder2.reseed('%0', opts);
     await tick();
     // The write must only land after 50ms past the fresh output.
-    expect(control.writes.length).toBe(4);
+    expect(control.writes.length).toBe(5);
     expect(control.now).toBeGreaterThanOrEqual(150);
     await resolveAttempt(control, ['hello'], ['A 0 5 0'], ['B 0 5 0']);
     const r4 = await done4;

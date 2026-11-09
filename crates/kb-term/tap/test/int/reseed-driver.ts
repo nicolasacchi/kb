@@ -128,6 +128,7 @@ function compareTwins(reseeded: Twin, ref: Twin, result: ReseededResult, stats: 
     stateDiffDetail: sd,
     cursor,
     cursorRef,
+    altCellsDiff: alt ? sumCells(alt) : 0,
     attempts: result.attempts,
     stats,
     bytesFed: result.bytesFed,
