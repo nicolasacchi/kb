@@ -400,7 +400,11 @@ mod tests {
         let holder = include_str!("../../share/systemd/kb-term@.service");
         for needle in [
             "Description=kb-term holder %i",
-            "ExecStart=/bin/sh -c 'tmux -D -S /run/kb-term/s/%i.sock -f %h/.local/share/kb-term/kb-term.conf || exit 1; exec sleep infinity'",
+            "Environment=KB_TMUX_BIN=%h/.local/libexec/kb-term/tmux",
+            // The holder must exec the pinned tmux by path (it is never
+            // on PATH), never a bare `tmux` lookup resolved against the
+            // user manager's PATH.
+            "ExecStart=/bin/sh -c '\"$KB_TMUX_BIN\" -D -S /run/kb-term/s/%i.sock -f %h/.local/share/kb-term/kb-term.conf || exit 1; exec sleep infinity'",
             "Restart=no",
             "KillMode=control-group",
             "SendSIGKILL=yes",

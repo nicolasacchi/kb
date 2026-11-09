@@ -3,7 +3,8 @@ Description=kb-term holder %i
 After=network.target
 
 [Service]
-ExecStart=/bin/sh -c 'tmux -D -S /run/kb-term/s/%i.sock -f %h/.local/share/kb-term/kb-term.conf || exit 1; exec sleep infinity'
+Environment=KB_TMUX_BIN=%h/.local/libexec/kb-term/tmux
+ExecStart=/bin/sh -c '"$KB_TMUX_BIN" -D -S /run/kb-term/s/%i.sock -f %h/.local/share/kb-term/kb-term.conf || exit 1; exec sleep infinity'
 Restart=no
 KillMode=control-group
 SendSIGKILL=yes
