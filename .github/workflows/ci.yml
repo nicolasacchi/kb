@@ -1731,9 +1731,10 @@ jobs:
           grep -q '^tmux_src_sha256=' "$P/share/kb-term/VERSIONS"
           # INSTALL lists the tmux runtime libraries when the pinned tmux is
           # dynamic (guarded so a static build does not flake the lane).
-          if ldd "$P/libexec/kb-term/tmux" >/dev/null 2>&1 && ldd "$P/libexec/kb-term/tmux" 2>/dev/null | grep -q '=>'; then
-            grep -q 'Runtime libraries this tmux needs' "$P/share/kb-term/INSTALL"
-          fi
+          ldd_out="$(ldd "$P/libexec/kb-term/tmux" 2>/dev/null || true)"
+          case "$ldd_out" in
+            *'=>') grep -q 'Runtime libraries this tmux needs' "$P/share/kb-term/INSTALL" ;;
+          esac
 
       - name: Archive manifest matches the selftest list
         run: |
