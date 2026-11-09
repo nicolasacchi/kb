@@ -1003,6 +1003,9 @@ mod relay_tests {
         let mut out = out_rx;
         let _into = to_relay;
         let sink = MemSinkStream::new(to_test, from_relay, false);
+        // `block: true`: the upstream parks after the three frames.
+        // A finite (EOF-closing) stream would close 1011 possibly
+        // before the test reads the frames — a scheduling race.
         let upstream = MemUpstream::new(
             [
                 StreamItem::Binary(vec![0u8; 8]),
@@ -1011,9 +1014,9 @@ mod relay_tests {
             ]
             .into_iter()
             .collect(),
-            false,
+            true,
         );
-        let (_tx, shutdown) = watch::channel(false);
+        let (tx, shutdown) = watch::channel(false);
         let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let events2 = events.clone();
         let relay = tokio::spawn(async move {
@@ -1022,23 +1025,41 @@ mod relay_tests {
             })
             .await;
         });
-        // Three frames relayed, then EOF (no exit) -> 1011 close.
-        let mut frames = 0;
-        let mut close_1011 = false;
-        while !close_1011 {
+        // Exactly the three frames arrive, in order, with no
+        // close: the parked upstream keeps the stream open until
+        // the test flips shutdown, which closes 1012.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let mut frames: Vec<Message> = Vec::new();
+        let mut saw_close = false;
+        while frames.len() < 3 {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "deadline: three frames must arrive (got {frames:?})"
+            );
             match tokio::time::timeout(Duration::from_secs(5), out.recv()).await {
                 Err(_) | Ok(None) => break,
-                Ok(Some(Message::Close(Some(frame)))) => {
-                    if frame.code == CLOSE_UPSTREAM {
-                        close_1011 = true;
-                    }
+                Ok(Some(Message::Ping(_))) => {}
+                Ok(Some(Message::Close(_))) => {
+                    saw_close = true;
+                    break;
                 }
-                Ok(Some(_)) => frames += 1,
+                Ok(Some(msg)) => frames.push(msg),
             }
         }
+        assert_eq!(
+            frames.len(),
+            3,
+            "all three frames relay verbatim, got {frames:?}"
+        );
+        assert!(!saw_close, "no close before shutdown: the stream is open");
+        let _ = tx.send(true);
+        match tokio::time::timeout(Duration::from_secs(5), out.recv()).await {
+            Ok(Some(Message::Close(Some(frame)))) => {
+                assert_eq!(frame.code, CLOSE_RESTART, "shutdown arm preempts");
+            }
+            other => panic!("shutdown must close 1012, got {other:?}"),
+        }
         let _ = tokio::time::timeout(Duration::from_secs(5), relay).await;
-        assert_eq!(frames, 3, "all three frames relay verbatim");
-        assert!(close_1011, "EOF without exit closes 1011");
         let ev = events.lock().unwrap();
         assert_eq!(
             *ev,

@@ -435,7 +435,7 @@ type WsStream =
 #[derive(Debug)]
 
 enum WsConnect {
-    Ok(WsStream),
+    Ok(Box<WsStream>),
     Http(u16),
     Other,
 }
@@ -473,7 +473,7 @@ async fn ws_connect(
     // version above pin the handshake shape axum expects.
     let req = builder.body(()).unwrap();
     match tokio_tungstenite::connect_async_with_config(req, None, false).await {
-        Ok((ws, _resp)) => WsConnect::Ok(ws),
+        Ok((ws, _resp)) => WsConnect::Ok(Box::new(ws)),
         Err(tokio_tungstenite::tungstenite::error::Error::Http(resp)) => {
             WsConnect::Http(resp.status().as_u16())
         }
@@ -518,9 +518,8 @@ async fn ws_read_n(ws: &mut WsStream, n: usize) -> (Vec<Message>, Option<(u16, S
         }
     }
     if data.len() >= n && close.is_none() {
-        match ws_next(ws, Duration::from_secs(5)).await {
-            WsOutcome::Close(code, reason) => close = Some((code, reason)),
-            _ => {}
+        if let WsOutcome::Close(code, reason) = ws_next(ws, Duration::from_secs(5)).await {
+            close = Some((code, reason));
         }
     }
     (data, close)
@@ -1668,15 +1667,15 @@ async fn ws_opened_after_shutdown_closes_1012_immediately() {
     // window: if it does upgrade, the first frame is Close 1012;
     // if the listener already closed, the connect is refused. The
     // invariant is that an upgraded socket closes 1012 at once.
-    match ws_connect(addr, TERM_ID, &ticket, None, &origin_header(addr), None).await {
-        WsConnect::Ok(mut ws) => match ws_next(&mut ws, Duration::from_secs(5)).await {
+    let connected = ws_connect(addr, TERM_ID, &ticket, None, &origin_header(addr), None).await;
+    if let WsConnect::Ok(mut ws) = connected {
+        match ws_next(&mut ws, Duration::from_secs(5)).await {
             WsOutcome::Close(code, reason) => {
                 assert_eq!(code, 1012, "after-shutdown close must be 1012 ({reason})");
                 assert_eq!(reason, "service restart", "1012 reason");
             }
             other => panic!("after-shutdown socket must close 1012, got {other:?}"),
-        },
-        _ => {}
+        }
     }
 }
 
