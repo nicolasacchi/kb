@@ -17,7 +17,7 @@ use std::os::unix::io::OwnedFd;
 
 use tokio::process::Command;
 
-use crate::pty::{async_fd_dup, drop_kill, open_pty, set_winsize, spawn_on_pty, winsize_of};
+use crate::pty::{async_fd_dup, escalate_kill, open_pty, set_winsize, spawn_on_pty, winsize_of};
 use crate::responder::{spawn_pump, PumpHandle, ResponderCfg};
 use crate::runner::RunnerError;
 
@@ -56,19 +56,19 @@ impl ClientHandle {
     }
 
     /// Current pty size: (cols, rows, xpix, ypix).
-    pub fn winsize(&self) -> (u16, u16, u16, u16) {
+    pub fn winsize(&self) -> Result<(u16, u16, u16, u16), RunnerError> {
         winsize_of(&self.master)
     }
 
     /// Resize the pty (cells and pixel fields).
-    pub fn set_winsize(&self, cols: u16, rows: u16) {
+    pub fn set_winsize(&self, cols: u16, rows: u16) -> Result<(), RunnerError> {
         set_winsize(
             &self.master,
             cols,
             rows,
             cols.saturating_mul(self.cell_w),
             rows.saturating_mul(self.cell_h),
-        );
+        )
     }
 
     /// Queue one item to the writer task (whole, never split); `busy-pty`
@@ -80,11 +80,16 @@ impl ClientHandle {
 
 impl Drop for ClientHandle {
     fn drop(&mut self) {
-        // Dropping the pump closes the master (SIGHUP on the client);
-        // SIGTERM as well keeps a dropped runner from leaking the client
-        // process if it ignores HUP. Reaping is the pty wait task.
-        // All process signalling lives in `pty` (no unsafe here).
-        drop_kill(self.pid);
+        // Abort the pump tasks first: their reader/writer dups are three
+        // fds for one pty, and until all of them close the master stays
+        // open past this drop, so the client never gets SIGHUP. The
+        // master field below then closes the last fd (SIGHUP on the
+        // client, whose controlling tty hangs up). TERM now, KILL after
+        // a grace wait for a TERM-ignoring client (bounded per viewer).
+        // Reaping is the pty wait task. All process signalling lives in
+        // `pty` (no unsafe here).
+        self.pump.close();
+        escalate_kill(self.pid, std::time::Duration::from_secs(2));
     }
 }
 

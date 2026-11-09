@@ -40,7 +40,7 @@ pub fn open_pty(
             std::io::Error::last_os_error()
         ))
     };
-    unsafe {
+    let (master, slave) = unsafe {
         let master_raw = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC);
         if master_raw < 0 {
             return Err(open_err("posix_openpt"));
@@ -76,41 +76,68 @@ pub fn open_pty(
             return Err(open_err("open slave"));
         }
         let slave = OwnedFd::from(std::fs::File::from_raw_fd(slave_raw));
-        set_winsize(&master, cols, rows, xpix, ypix);
-        // Master non-blocking for AsyncFd; the slave stays blocking so the
-        // child sees a normal tty.
+        (master, slave)
+    };
+    set_winsize(&master, cols, rows, xpix, ypix)?;
+    // Master non-blocking for AsyncFd; the slave stays blocking so the
+    // child sees a normal tty. Both fcntl steps are hard-fails: a
+    // master that silently stays blocking would wedge AsyncFd.
+    unsafe {
         let flags = libc::fcntl(master.as_raw_fd(), libc::F_GETFL);
-        if flags >= 0 {
-            libc::fcntl(master.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK);
+        if flags < 0 {
+            return Err(RunnerError::Internal(format!(
+                "open_pty F_GETFL: {}",
+                std::io::Error::last_os_error()
+            )));
         }
-        Ok((master, slave))
+        if libc::fcntl(master.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) != 0 {
+            return Err(RunnerError::Internal(format!(
+                "open_pty F_SETFL: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
     }
+    Ok((master, slave))
 }
 
-/// Read the current winsize of `fd`: (cols, rows, xpix, ypix).
-pub fn winsize_of<Fd: AsRawFd>(fd: &Fd) -> (u16, u16, u16, u16) {
+pub fn winsize_of<Fd: AsRawFd>(fd: &Fd) -> Result<(u16, u16, u16, u16), RunnerError> {
     let mut ws = libc::winsize {
         ws_row: 0,
         ws_col: 0,
         ws_xpixel: 0,
         ws_ypixel: 0,
     };
-    unsafe {
-        libc::ioctl(fd.as_raw_fd(), libc::TIOCGWINSZ, &mut ws);
+    let rc = unsafe { libc::ioctl(fd.as_raw_fd(), libc::TIOCGWINSZ, &mut ws) };
+    if rc != 0 {
+        return Err(RunnerError::Internal(format!(
+            "TIOCGWINSZ: {}",
+            std::io::Error::last_os_error()
+        )));
     }
-    (ws.ws_col, ws.ws_row, ws.ws_xpixel, ws.ws_ypixel)
+    Ok((ws.ws_col, ws.ws_row, ws.ws_xpixel, ws.ws_ypixel))
 }
 
-/// Write the winsize (cells and pixel fields) to `fd`.
-pub fn set_winsize<Fd: AsRawFd>(fd: &Fd, cols: u16, rows: u16, xpix: u16, ypix: u16) {
+pub fn set_winsize<Fd: AsRawFd>(
+    fd: &Fd,
+    cols: u16,
+    rows: u16,
+    xpix: u16,
+    ypix: u16,
+) -> Result<(), RunnerError> {
     let ws = libc::winsize {
         ws_row: rows,
         ws_col: cols,
         ws_xpixel: xpix,
         ws_ypixel: ypix,
     };
-    unsafe {
-        libc::ioctl(fd.as_raw_fd(), libc::TIOCSWINSZ, &ws);
+    let rc = unsafe { libc::ioctl(fd.as_raw_fd(), libc::TIOCSWINSZ, &ws) };
+    if rc != 0 {
+        Err(RunnerError::Internal(format!(
+            "TIOCSWINSZ: {}",
+            std::io::Error::last_os_error()
+        )))
+    } else {
+        Ok(())
     }
 }
 
@@ -170,11 +197,35 @@ pub fn async_fd_dup(master: &OwnedFd) -> Result<AsyncFd<File>, RunnerError> {
 /// SIGTERM `pid` if it is still alive (caller checks pid != 0).
 /// All `unsafe` (the `kill` call) stays in this file.
 pub fn drop_kill(pid: u32) {
-    if pid == 0 {
+    if pid == 0 || !pid_alive_local(pid) {
         return;
     }
-    // Liveness check first: never signal a reaped/reused pid blindly.
-    // A zombie answers kill(pid, 0) but is already dead for our purposes.
+    unsafe {
+        libc::kill(pid as i32, libc::SIGTERM);
+    }
+}
+
+/// SIGTERM now, SIGKILL after `grace` if the process ignores TERM
+/// (bounded per viewer: a TERM-ignoring hidden client must not leak).
+/// Spawns the delayed escalation when a tokio runtime is current;
+/// without a runtime only the TERM is sent.
+pub fn escalate_kill(pid: u32, grace: std::time::Duration) {
+    drop_kill(pid);
+    if tokio::runtime::Handle::try_current().is_err() {
+        return;
+    }
+    tokio::task::spawn(async move {
+        tokio::time::sleep(grace).await;
+        if pid != 0 && pid_alive_local(pid) {
+            unsafe {
+                libc::kill(pid as i32, libc::SIGKILL);
+            }
+        }
+    });
+}
+
+/// Is `pid` live (answers kill(pid, 0) and is not a zombie)?
+fn pid_alive_local(pid: u32) -> bool {
     if let Ok(state) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
         if state
             .rsplit(')')
@@ -182,17 +233,10 @@ pub fn drop_kill(pid: u32) {
             .and_then(|s| s.split_whitespace().next())
             == Some("Z")
         {
-            return;
+            return false;
         }
     }
-    unsafe {
-        if libc::kill(pid as i32, 0) != 0 {
-            return;
-        }
-    }
-    unsafe {
-        libc::kill(pid as i32, libc::SIGTERM);
-    }
+    unsafe { libc::kill(pid as i32, 0) == 0 }
 }
 
 #[cfg(test)]
@@ -202,11 +246,36 @@ mod tests {
     #[test]
     fn open_pty_carries_the_requested_winsize_and_pixels() {
         let (master, _slave) = open_pty(100, 30, 900, 540).unwrap();
-        assert_eq!(winsize_of(&master), (100, 30, 900, 540));
-        set_winsize(&master, 80, 24, 720, 432);
-        assert_eq!(winsize_of(&master), (80, 24, 720, 432));
+        assert_eq!(winsize_of(&master).unwrap(), (100, 30, 900, 540));
+        set_winsize(&master, 80, 24, 720, 432).unwrap();
+        assert_eq!(winsize_of(&master).unwrap(), (80, 24, 720, 432));
         // The master is non-blocking (flags carry O_NONBLOCK).
         let flags = unsafe { libc::fcntl(master.as_raw_fd(), libc::F_GETFL) };
         assert!(flags & libc::O_NONBLOCK != 0, "master must be O_NONBLOCK");
+    }
+
+    #[tokio::test]
+    async fn escalate_kill_reaps_a_term_ignoring_child() {
+        let (_master, slave) = open_pty(80, 24, 720, 432).unwrap();
+        let mut cmd = tokio::process::Command::new("sh");
+        cmd.arg("-c").arg("trap '' TERM; sleep 30");
+        let child = spawn_on_pty(cmd, &slave).unwrap();
+        assert!(pid_alive_local(child.pid), "child must start alive");
+        escalate_kill(child.pid, std::time::Duration::from_millis(50));
+        // TERM is ignored; the escalation SIGKILL must land well inside
+        // this bound (without escalation the child survives it).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while pid_alive_local(child.pid) && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        if pid_alive_local(child.pid) {
+            unsafe {
+                libc::kill(child.pid as i32, libc::SIGKILL);
+            }
+        }
+        assert!(
+            !pid_alive_local(child.pid),
+            "term-ignoring child must be SIGKILLed after the grace wait"
+        );
     }
 }

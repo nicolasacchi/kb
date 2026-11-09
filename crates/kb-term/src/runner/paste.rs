@@ -222,6 +222,13 @@ mod tests {
             .await
             .unwrap();
         assert!(out.bracketed);
+        // The buffer bytes reach tmux on stdin verbatim (without this
+        // assertion a paste that drops `text` entirely would pass).
+        {
+            let stdin = fake.stdin_log.lock().unwrap();
+            assert_eq!(stdin.len(), 1, "exactly one load-buffer stdin");
+            assert_eq!(stdin[0], b"a\nb", "stdin must be the text bytes");
+        }
         let argv = args(&fake);
         let load = argv
             .iter()
