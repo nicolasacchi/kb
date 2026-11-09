@@ -825,7 +825,7 @@ impl PtyProc {
                             out.len(),
                             text.contains("[session ended"),
                             text.contains("reconnecting"),
-                            text.matches('\x1b[3J').count()
+                            text.matches("\x1b[3J").count()
                         );
                     }
                     std::thread::sleep(Duration::from_millis(10));
