@@ -374,6 +374,12 @@ impl PumpHandle {
     /// Queue one item to the writer (whole, never split). Bounded at 2 s:
     /// a stuck client answers `busy-pty` instead of hanging the RPC.
     pub async fn write(&self, item: Vec<u8>) -> Result<(), RunnerError> {
+        // Fail fast after `close()`/pump exit: an aborted writer would
+        // take the receiver away (send then fails) but only once the
+        // abort lands, so the closed flag is the deterministic guard.
+        if self.shared.closed.load(Ordering::Relaxed) {
+            return Err(RunnerError::BusyPty("client pty closed".to_string()));
+        }
         tokio::time::timeout(Duration::from_secs(2), self.tx.send(item))
             .await
             .map_err(|_| RunnerError::BusyPty("client writer busy".to_string()))?
