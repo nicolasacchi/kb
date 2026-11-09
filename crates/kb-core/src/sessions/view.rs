@@ -4587,14 +4587,14 @@ mod tests {
         // The mime lives at the block top level (omp capture shape), with
         // only the sha under source: the mimeType lookup must find it.
         let item = image_of_block(
-            r#"{"type":"image","mimeType":"image/png","source":{"type":"blob_ref","sha256":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"}}"#,
+            r#"{"type":"image","mimeType":"image/png","source":{"type":"blob_ref","sha256":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"}}"#,
         );
         match item {
             Item::Image { mime, sha256, .. } => {
                 assert_eq!(mime, "image/png");
                 assert_eq!(
                     sha256.as_deref(),
-                    Some("cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd")
+                    Some("cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd")
                 );
             }
             other => panic!("top-level mimeType must yield Item::Image, got {other:?}"),
