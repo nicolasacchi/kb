@@ -7,7 +7,7 @@
 // `TerminalSlot.dom.test.tsx` pins the chunk evaluation).
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
-import { TerminalSlot } from "./TerminalSlot";
+import { TerminalSlot, shouldRenderTerminal } from "./TerminalSlot";
 
 afterEach(cleanup);
 
@@ -34,5 +34,11 @@ describe("TerminalSlot", () => {
       />,
     );
     expect(screen.getByTestId("kb-term-open").textContent).toBe("Open terminal");
+  });
+  it("shouldRenderTerminal is true only for an available+admitted lane", () => {
+    expect(shouldRenderTerminal({ available: true, admitted: true })).toBe(true);
+    expect(shouldRenderTerminal({ available: true, admitted: false })).toBe(false);
+    expect(shouldRenderTerminal({ available: false, admitted: true })).toBe(false);
+    expect(shouldRenderTerminal({ available: false, admitted: false })).toBe(false);
   });
 });

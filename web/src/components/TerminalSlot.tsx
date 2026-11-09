@@ -80,6 +80,5 @@ export function TerminalSlot(props: TerminalSlotProps): ReactElement | null {
 export function shouldRenderTerminal(
   lane: TerminalSlotProps["lane"],
 ): boolean {
-  void lane;
-  return false;
+  return lane.available && lane.admitted;
 }
