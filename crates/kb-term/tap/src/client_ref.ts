@@ -59,7 +59,8 @@ export class RefViewer {
   constructor(opts: RefViewerOpts = {}) {
     this.watchdogMs = opts.watchdogMs ?? 1500;
     this.epoch = opts.epoch ?? null;
-    this.now = opts.now ?? (() => Date.now());
+    // Monotonic clock: the no-frame watchdog only measures elapsed time.
+    this.now = opts.now ?? (() => performance.now());
     this.lastFrameAt = this.now();
   }
 
