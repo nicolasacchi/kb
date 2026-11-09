@@ -1164,7 +1164,7 @@ fn attach_clipboard_and_typed_notified() {
 // ------------------------------------------------------------ CLI smoke tests
 
 #[test]
-fn cli_exit_codes() {
+fn exit_code_3_when_runner_unreachable() {
     if !term_int_gate() {
         return;
     }
@@ -1183,7 +1183,13 @@ fn cli_exit_codes() {
         err.contains("kb-termd user unit may not be running"),
         "{err}"
     );
+}
 
+#[test]
+fn exit_code_4_when_session_missing() {
+    if !term_int_gate() {
+        return;
+    }
     // Session not found -> exit 4.
     let dir = TempDir::new();
     let runner = FakeRunner::start(&dir, serde_json::json!([]), 0);
@@ -1199,7 +1205,7 @@ fn cli_exit_codes() {
 }
 
 #[test]
-fn cli_ls_and_new() {
+fn ls_json_roundtrips_runner_rows() {
     if !term_int_gate() {
         return;
     }
@@ -1221,7 +1227,7 @@ fn cli_ls_and_new() {
         }
     ]);
     let dir = TempDir::new();
-    let runner = FakeRunner::start(&dir, list, 0);
+    let runner = FakeRunner::start(&dir, list.clone(), 0);
     let sock = runner.sock.to_string_lossy().into_owned();
     let out = Command::new(bin_path())
         .args(["ls", "--runner-sock", &sock])
@@ -1239,15 +1245,51 @@ fn cli_ls_and_new() {
         "{text}"
     );
     assert!(text.contains("ijkl9012"), "{text}");
-    // --json prints raw rows.
+    // --json prints the raw runner rows: parse them back and compare.
     let out = Command::new(bin_path())
         .args(["ls", "--json", "--runner-sock", &sock])
         .stdin(Stdio::null())
         .output()
         .expect("spawn ls --json");
+    assert_eq!(out.status.code(), Some(0));
     let text = String::from_utf8_lossy(&out.stdout);
-    assert!(text.contains("abcd1234"), "json rows: {text}");
-    // new --no-attach launches and prints the id.
+    let parsed: serde_json::Value =
+        serde_json::from_str(&text).expect("ls --json must be valid JSON");
+    assert_eq!(parsed, list, "ls --json roundtrips the runner rows");
+}
+
+#[test]
+fn new_rejects_unknown_harness() {
+    if !term_int_gate() {
+        return;
+    }
+    let dir = TempDir::new();
+    let runner = FakeRunner::start(&dir, serde_json::json!([]), 0);
+    let sock = runner.sock.to_string_lossy().into_owned();
+    let out = Command::new(bin_path())
+        .args(["new", "badharness", "--no-attach", "--runner-sock", &sock])
+        .stdin(Stdio::null())
+        .output()
+        .expect("spawn new");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "unknown harness is a usage error"
+    );
+    assert!(
+        runner.recorded_launches().is_empty(),
+        "no launch must reach the runner"
+    );
+}
+
+#[test]
+fn new_launches_omp_and_prints_id() {
+    if !term_int_gate() {
+        return;
+    }
+    let dir = TempDir::new();
+    let runner = FakeRunner::start(&dir, serde_json::json!([]), 0);
+    let sock = runner.sock.to_string_lossy().into_owned();
     let out = Command::new(bin_path())
         .args(["new", "omp", "--no-attach", "--runner-sock", &sock])
         .stdin(Stdio::null())

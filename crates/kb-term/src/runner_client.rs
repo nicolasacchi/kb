@@ -52,6 +52,7 @@ pub fn run_dir_of(runner_sock: &Path) -> PathBuf {
     runner_sock
         .parent()
         .and_then(|p| p.parent())
+        .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("/run/kb-term"))
 }
 

@@ -305,8 +305,7 @@ async fn attach_session(mut ctx: AttachContext) -> u8 {
     let mut state = StreamState::default();
     let mut backoff = Backoff::new();
     let mut banner_printed = false;
-    let mut result = SessionResult::Detached;
-    'outer: loop {
+    let result = 'outer: loop {
         let resume = state.resume_info();
         match run_one_join(
             &mut ctx,
@@ -320,12 +319,10 @@ async fn attach_session(mut ctx: AttachContext) -> u8 {
         {
             SessionResult::Normal(code) => {
                 print_session_ended(code);
-                result = SessionResult::Normal(code);
-                break 'outer;
+                break 'outer SessionResult::Normal(code);
             }
             SessionResult::Detached => {
-                result = SessionResult::Detached;
-                break 'outer;
+                break 'outer SessionResult::Detached;
             }
             SessionResult::GridOwned(owner) => {
                 // Fallback: watch until a key takes the size back, then
@@ -335,8 +332,7 @@ async fn attach_session(mut ctx: AttachContext) -> u8 {
                     rewriter.reset();
                     continue 'outer;
                 }
-                result = SessionResult::Detached;
-                break 'outer;
+                break 'outer SessionResult::Detached;
             }
             SessionResult::Error(_) => {
                 // Tap unreachable / reset / gap: backoff, then re-join
@@ -346,7 +342,7 @@ async fn attach_session(mut ctx: AttachContext) -> u8 {
                 continue 'outer;
             }
         }
-    }
+    };
     if let Some(g) = raw.as_mut() {
         g.restore();
     }
@@ -381,6 +377,7 @@ async fn run_one_join(
         let args_id = ctx.args.id.clone();
         let viewer = ctx.viewer.clone();
         match runner_takesize(&mut ctx.runner, &args_id, ctx.local_size, &viewer).await {
+            Ok(()) => {}
             Err(RunnerClientError::Code { code, message }) if code == "grid-owned" => {
                 let owner = message
                     .strip_prefix("grid is owned by ")
@@ -1015,7 +1012,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn backoff_grows_then_caps() {
+    fn backoff_is_exponential_with_cap_and_resets_on_success() {
         let mut b = Backoff::new();
         // Zero jitter: 100, 200, 400, 800, 1600, 3200, then 5 s cap.
         let seq: Vec<u64> = (0..8).map(|_| b.next_delay(0).as_millis() as u64).collect();
