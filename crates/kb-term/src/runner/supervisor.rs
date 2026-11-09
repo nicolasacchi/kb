@@ -301,13 +301,16 @@ pub mod fake {
     use super::*;
     use std::sync::Mutex;
 
+    /// Recorded stop contexts, in order: `(id, pane_pid, server_pid)`.
+    type StopCtxs = Vec<(String, Option<u32>, Option<u32>)>;
+
     /// A fake [`Supervisor`] that records every call.
     #[derive(Default)]
     pub struct FakeSupervisor {
         /// `(method, id)` per call, in order.
         pub calls: Mutex<Vec<(String, String)>>,
         /// Every stop's context, in order: `(id, pane_pid, server_pid)`.
-        pub stop_ctxs: Mutex<Vec<(String, Option<u32>, Option<u32>)>>,
+        pub stop_ctxs: Mutex<StopCtxs>,
         /// What `stop` answers (the SIGKILL-path verdict).
         pub stop_sigkill: Mutex<bool>,
     }
