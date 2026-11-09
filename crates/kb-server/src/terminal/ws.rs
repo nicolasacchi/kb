@@ -530,7 +530,7 @@ pub(crate) async fn run_relay<S, U, F>(
                 if last_seen.elapsed() >= timers.idle_close_after {
                     let _ = tokio::time::timeout(Duration::from_millis(500),
                         sink.send(Message::Close(Some(CloseFrame {
-                            code: close_code::GOING_AWAY.into(),
+                            code: close_code::AWAY.into(),
                             reason: "idle".into(),
                         })))).await;
                     break;
