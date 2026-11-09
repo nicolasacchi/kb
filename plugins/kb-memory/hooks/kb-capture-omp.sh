@@ -681,6 +681,12 @@ cap_lineage() {
         if cap_is_ts_prefix "${comp%"_$root"}" && cap_is_plain_token "$root" && [ -n "${comp%"_$root"}" ] && [ "$root" != "$hid" ]; then
           found=1; root_idx=$idx; break
         elif cap_is_ts_prefix "${comp%"_$root"}" && [ -n "${comp##*_}" ] && [ "${comp%"_${comp##*_}"}" != "$comp" ]; then
+          # An own-id stem (id == hid, plain token) is skipped, not a dead
+          # end: keep scanning for a deeper root (Rust fold_lineage
+          # `continue` on id == header_id).
+          if [ "$root" = "$hid" ] && cap_is_plain_token "$root"; then
+            continue
+          fi
           # unsafe stem: no lineage at all
           printf '{}'; return 0
         fi

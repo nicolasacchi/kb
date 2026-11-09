@@ -280,6 +280,15 @@ mod tests {
             parent_header_id: None,
             expect: (Some("root0001"), Some("root0001")),
         },
+        Case {
+            name: "own-id-stem-skips-to-deeper-root",
+            session_file:
+                "/sessions/bucket/2026-09-01T10-00-00-000Z_child0011/2026-09-01T10-00-00-000Z_root0001/child0011.jsonl",
+            header_id: "child0011",
+            parent_session_file: None,
+            parent_header_id: None,
+            expect: (Some("root0001"), Some("root0001")),
+        },
     ];
 
     #[test]
