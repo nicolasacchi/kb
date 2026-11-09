@@ -4,6 +4,8 @@
 
 use std::future::Future;
 
+use clap::{Arg, ArgAction, ArgGroup, Command};
+
 /// The closed harness set for `new <harness>`. Single source of truth:
 /// [`kb_term::profiles::HARNESSES`] (the pinned copy of
 /// `kb_core::sessions::HARNESSES` at
@@ -138,7 +140,9 @@ fn cli() -> Command {
 fn main() {
     let matches = cli().get_matches();
     let code = match matches.subcommand() {
-        Some(("doctor", sub)) => kb_term::doctor::run(sub.get_flag("json"), sub.get_flag("strict")),
+        Some(("doctor", sub)) => {
+            kb_term::doctor::run(sub.get_flag("json"), sub.get_flag("strict")) as u8
+        }
         Some(("attach", sub)) => {
             let args = kb_term::attach::AttachArgs {
                 id: sub.get_one::<String>("id").cloned().unwrap_or_default(),

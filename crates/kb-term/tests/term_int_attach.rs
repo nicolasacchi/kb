@@ -17,7 +17,6 @@
 
 use std::io::Read;
 use std::io::Write;
-use std::os::unix::io::OwnedFd;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -256,13 +255,16 @@ impl FakeRunner {
                 Err(_) => return,
             };
             let reader = conn.try_clone().expect("clone conn");
+            let log3 = log2.clone();
+            let failures3 = failures2.clone();
+            let list3 = list.clone();
             std::thread::spawn(move || {
                 handle_runner_conn(
                     std::io::BufReader::new(reader),
                     conn,
-                    &log2,
-                    &failures2,
-                    list.clone(),
+                    &log3,
+                    &failures3,
+                    list3,
                 );
             });
         });
@@ -405,7 +407,7 @@ struct FakeTap {
 }
 impl FakeTap {
     fn start(dir: &TempDir, script: TapScript) -> FakeTap {
-        let sock = dir.file(format!("s/{}/tap.sock", script.session));
+        let sock = dir.file(&format!("s/{}/tap.sock", script.session));
         std::fs::create_dir_all(sock.parent().unwrap()).expect("mkdir tap dir");
         let _ = std::fs::remove_file(&sock);
         let listener = std::os::unix::net::UnixListener::bind(&sock).expect("bind tap");
@@ -530,7 +532,7 @@ fn handle_tap_conn(
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
     let mut sent: u64 = 0; // stream bytes sent on THIS connection
-    let mut write = |envs: &[Vec<u8>], stream: &mut std::os::unix::net::UnixStream| -> bool {
+    let write = |envs: &[Vec<u8>], stream: &mut std::os::unix::net::UnixStream| -> bool {
         for e in envs {
             if stream.write_all(e).is_err() {
                 return false;
