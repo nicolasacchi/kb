@@ -26,10 +26,19 @@ fn in_ranges(cp: u32, table: &[(u32, u32)]) -> bool {
 /// combining marks are 0, East Asian W/F are 2, everything else
 /// (including the kitty placeholder `U+10EEEE`) is 1. NUL is 0 (it never
 /// appears in label text; this only keeps the arithmetic total).
+/// Regional indicators (flags) are 2: tmux 3.7c renders them wide
+/// though unicodedata marks them EA-neutral (pinned by the
+/// table-driven test).
 #[must_use]
 pub fn cell_width(cp: u32) -> u32 {
     if cp == 0 {
         return 0;
+    }
+    // Regional indicators (flags) render 2 cells in tmux 3.7c even
+    // though unicodedata marks them EA-neutral; the table-driven
+    // tests pin this (they mirror the tmux 3.7c widths table).
+    if (0x1F1E6..=0x1F1FF).contains(&cp) {
+        return 2;
     }
     if in_ranges(cp, ZERO) {
         0

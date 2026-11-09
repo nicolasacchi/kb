@@ -814,17 +814,20 @@ async fn runner_takesize(
     Ok(())
 }
 
-/// The stdin pump: one task, read chunks over a channel.
+/// The stdin pump: one detached OS thread feeding bytes over a channel.
+/// (Never a tokio blocking-pool read: a parked blocking read on stdin
+/// would pin the runtime's shutdown, and the mirror must exit exactly
+/// when the session ends.)
 fn spawn_stdin() -> tokio::sync::mpsc::Receiver<Vec<u8>> {
     let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(16);
-    tokio::spawn(async move {
-        let mut stdin = tokio::io::stdin();
+    std::thread::spawn(move || {
+        let mut stdin = std::io::stdin().lock();
         let mut buf = [0u8; 8192];
         loop {
-            match stdin.read(&mut buf).await {
+            match std::io::Read::read(&mut stdin, &mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    if tx.send(buf[..n].to_vec()).await.is_err() {
+                    if tx.blocking_send(buf[..n].to_vec()).is_err() {
                         break;
                     }
                 }
