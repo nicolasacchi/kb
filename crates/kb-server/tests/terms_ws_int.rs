@@ -212,7 +212,7 @@ async fn ws_connect_retry(
     deadline: Duration,
 ) -> WsStream {
     let start = std::time::Instant::now();
-    let mut last = String::new();
+    let mut last: String;
     loop {
         let ticket = mint_ticket(addr, id).await;
         match ws_connect(addr, id, &ticket, from).await {
