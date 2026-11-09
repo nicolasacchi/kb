@@ -172,6 +172,33 @@ fn runner_response_and_session_info_match_golden() {
 }
 
 #[test]
+fn runner_response_list_payload_is_session_info_array() {
+    // `List` is the one response whose `data` is a typed array: pin that the
+    // golden parses as `Response::Ok` whose payload deserializes into
+    // `Vec<SessionInfo>` and re-serializes to the `session_info.json` golden
+    // (spec: SessionInfo is "what List returns inside data, as an array").
+    let bytes = read_golden("resp_list.json");
+    let resp: Response = serde_json::from_slice(&bytes)
+        .unwrap_or_else(|e| panic!("deserialize resp_list.json: {e}"));
+    let out = serde_json::to_vec(&resp).unwrap_or_else(|e| panic!("serialize resp_list.json: {e}"));
+    assert_eq!(out, bytes, "runner response golden resp_list.json");
+    match resp {
+        Response::Ok { data } => {
+            let infos: Vec<SessionInfo> = serde_json::from_value(data)
+                .expect("list payload must deserialize as a SessionInfo array");
+            assert_eq!(infos.len(), 1);
+            let back = serde_json::to_vec(&infos).expect("serialize SessionInfo list");
+            assert_eq!(
+                back,
+                read_golden("session_info.json"),
+                "list payload must match the session_info golden"
+            );
+        }
+        Response::Err { .. } => panic!("resp_list.json must be an Ok response"),
+    }
+}
+
+#[test]
 fn binary_frame_roundtrip() {
     let enc = encode_binary(0x0102030405060708, b"hi");
     assert_eq!(enc, vec![1, 2, 3, 4, 5, 6, 7, 8, b'h', b'i']);
