@@ -21,7 +21,7 @@ executed = 385
 executed = 245
 
 [nextest]
-executed = 3850
+executed = 5095
 
 [web-vitest]
 executed = 2130
@@ -41,5 +41,5 @@ executed = 3850
 executed = 280
 
 [term-int]
-executed = 14
+executed = 25
 
