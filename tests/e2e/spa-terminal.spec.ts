@@ -74,6 +74,10 @@ async function openTerminal(page: Page): Promise<void> {
   const errors: unknown[] = [];
   page.on("pageerror", (e) => errors.push(e));
   page.on("console", (m) => errors.push(`${m.type()}: ${m.text()}`));
+  page.on("requestfailed", (r) => errors.push(`reqfail: ${r.url()} ${r.failure()?.errorText ?? ""}`));
+  page.on("response", (r) => {
+    if (r.status() >= 400) errors.push(`http-${r.status()}: ${r.url()}`);
+  });
   await page.goto(`${BASE}/sessions/${SID}`);
   await expect(page.locator('[data-testid="kb-terminal-slot"]')).toBeVisible({ timeout: 15_000 });
   await page.locator('[data-testid="kb-term-open"]').click();
