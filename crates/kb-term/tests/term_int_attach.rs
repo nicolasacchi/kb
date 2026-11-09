@@ -225,6 +225,8 @@ struct RunnerLog {
     keys: Vec<Vec<u8>>,
     launches: Vec<serde_json::Value>,
     opened_viewers: std::collections::HashSet<String>,
+    /// Every request op seen, in order (for failure diagnostics).
+    ops: Vec<String>,
 }
 
 struct FakeRunner {
@@ -294,6 +296,9 @@ impl FakeRunner {
     fn recorded_opened(&self) -> std::collections::HashSet<String> {
         self.log.lock().unwrap().opened_viewers.clone()
     }
+    fn recorded_ops(&self) -> Vec<String> {
+        self.log.lock().unwrap().ops.clone()
+    }
 }
 
 impl Drop for FakeRunner {
@@ -334,6 +339,7 @@ fn handle_runner_conn(
         };
         let id = req.get("id").cloned().unwrap_or(serde_json::Value::Null);
         let op = req.get("op").and_then(|v| v.as_str()).unwrap_or("");
+        log.lock().unwrap().ops.push(op.to_string());
         let mut resp = match op {
             "ping" => serde_json::json!({"status": "ok", "data": {"pong": true}}),
             "list" => serde_json::json!({"status": "ok", "data": session_list}),
@@ -1064,7 +1070,8 @@ fn attach_t4_seed_then_3_rebuilds_last_segment_1_to_n_once() {
     assert_eq!(rig.runner.recorded_takes().len(), 1);
     assert!(
         !rig.runner.recorded_opened().is_empty(),
-        "the client opened the viewer (hidden-client keys need it)"
+        "the client opened the viewer (hidden-client keys need it); ops: {:?}",
+        rig.runner.recorded_ops()
     );
     assert_eq!(
         rig.runner.recorded_keys(),
@@ -1134,7 +1141,13 @@ fn attach_four_forced_drops_equals_undropped() {
         48,
     );
     let (code_d, out_d) = proc_d.0.wait_for_exit(Duration::from_secs(30));
-    assert_eq!(code_d, Some(0));
+    assert_eq!(
+        code_d,
+        Some(0),
+        "dropped run exits 0; ops: {:?}; tail: {:?}",
+        rig_d.runner.recorded_ops(),
+        String::from_utf8_lossy(&out_d[out_d.len().saturating_sub(1500)..])
+    );
     let report_d = model(&out_d, 3300);
     assert!(report_d.last_is_1_to_n);
     // Reconnects interleave stderr progress lines on the pty, so byte
@@ -1195,7 +1208,9 @@ fn attach_grid_owned_prints_banner_and_watches_until_key() {
     if !term_int_gate() {
         return;
     }
-    let rig = setup_rig(1, t4_script());
+    let mut script = t4_script();
+    script.exit_delay_ms = 3_000;
+    let rig = setup_rig(1, script);
     std::thread::sleep(Duration::from_millis(100));
     let mut proc = spawn_bin(
         &["attach", "abcd1234", "--runner-sock", &rig.sock_str],
