@@ -39,6 +39,7 @@ ci-all: ci-workspace ci-invariants api-docs-check types-check gen-ts-code-check 
 test-hook-omp:
     KB_REQUIRE_BUN=1 bash plugins/kb-memory/hooks/tests/test-omp-slate.sh
     KB_REQUIRE_BUN=1 bash plugins/kb-memory/hooks/tests/test-omp-beats.sh
+    bash plugins/kb-memory/hooks/tests/test-git-trailer.sh
 
 # The kb-term stand-in checker's unit tests (ci.yml's term-tap job).
 test-term-tools:

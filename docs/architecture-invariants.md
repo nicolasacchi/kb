@@ -1047,7 +1047,9 @@ CLI no attach or type surface. Pinned by
 byte-identical repeat reads, per-lane degradation, no transcript body,
 parent/child non-summing, 120-child paging, single-slate reads, tree
 default/cursor/child_count over HTTP) and `kb-cli/tests/cli_http/
-session_card.rs` (verbatim-text CLI contract).
+session_card.rs` (verbatim-text CLI contract). The kb-session-work/1
+work grouping is a surfaced-never-scored read over the same lineage
+columns, slate structure and job rows.
 
 **Episodic-memory retrieval (R0–R5).** Sessions are an *episodic* memory the
 agent PULLS on demand — distinct from the curated *semantic* memory (`kb

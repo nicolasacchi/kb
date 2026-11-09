@@ -83,6 +83,9 @@ pub mod narrative;
 /// commands a session ran, their outcomes, and the read-time verdict "was the
 /// code checked after its last edit". Pure; SURFACED, never scored.
 pub mod checks;
+/// kb-session-work/1 — the pure, unscored grouping of sessions into pieces
+/// of work by a fixed ladder of named terms (#11: surfaced, never scored).
+pub mod work;
 
 /// Session lineage fold (V0047): pure `(parent, root)` fold over the omp
 /// on-disk tree. SURFACED, never scored (invariant #11).

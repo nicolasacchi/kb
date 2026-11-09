@@ -23,12 +23,16 @@ export function TerminalSlot(_props: TerminalSlotProps): ReactElement | null {
   return null;
 }
 
-// The page renders the terminal wrapper `<details>` only when the slot
-// can render something: the lane must be available AND admitted. The
-// slot always returns null (no panel exists yet — T14 mounts it), so an
-// `available:true` lane alone never shows an empty Terminal section.
+// FXA4 — `shouldRenderTerminal` is the page's gate for the terminal
+// `<details>` wrapper. The slot renders NOTHING today (no panel exists
+// — T14 mounts it), so the gate MUST stay false: rendering the wrapper
+// whenever the lane is available+admitted would show an empty 'Terminal'
+// section. T14 flips this to `lane.available && lane.admitted` when the
+// panel actually renders. (Brief A4 §3.1: the wrapper renders only if
+// the slot renders something, which today is never.)
 export function shouldRenderTerminal(
   lane: TerminalSlotProps["lane"],
 ): boolean {
-  return lane.available === true && lane.admitted === true;
+  void lane;
+  return false;
 }

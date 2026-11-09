@@ -204,7 +204,7 @@ test.describe("A4 — session page + collapsed list", () => {
     await expect(page.locator(`[data-session-id="${child2}"]`)).toBeVisible();
   });
 
-  test("terminal slot absent when terminal is disabled", async ({
+  test("terminal slot absent when terminal is disabled (regression pin only)", async ({
     page,
   }) => {
     await page.setViewportSize({ width: 1280, height: 844 });
@@ -222,8 +222,11 @@ test.describe("A4 — session page + collapsed list", () => {
     );
     await page.goto(`${base}/sessions/${sid}`);
     await expect(page.locator('[data-testid="session-page"]')).toBeVisible();
+    // FXA4 regression pin only: the page wrapper never emits a terminal
+    // section while the slot renders nothing. The real pin is the vitest
+    // TerminalSlot/shouldRenderTerminal unit test.
     await expect(
-      page.locator('[data-testid="terminal-slot"]'),
+      page.locator('[data-testid="session-sec-terminal"]'),
     ).toHaveCount(0);
   });
 });

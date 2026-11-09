@@ -242,7 +242,7 @@ describe("SSE → TanStack invalidation bridge (invariant #23)", () => {
   // is enough — no burst gate, unlike the bursty artifact-churn kinds above.
   it("session.state directly invalidates the live-sessions cockpit query", () => {
     emit("session.state", { session_id: "sid-1", kb: "demo" });
-    expect(keys()).toEqual([["sessions", "live"], ["sessions", "card"]]);
+    expect(keys()).toEqual([["sessions", "live"], ["sessions", "card"], ["session"]]);
   });
 
   // SL4 — the slate bridge. These four cases pin the EXACT key set: a fifth
@@ -251,7 +251,7 @@ describe("SSE → TanStack invalidation bridge (invariant #23)", () => {
   // exact key set" line is guarding against.
   it("slate.updated directly invalidates the list and the named slate's board", () => {
     emit("slate.updated", { slug: "kb", seq: 66, kind: "found" });
-    expect(keys()).toEqual([["slates"], ["slate", "kb"], ["sessions", "card"], ["changes"]]);
+    expect(keys()).toEqual([["slates"], ["slate", "kb"], ["sessions", "card"], ["session"], ["changes"]]);
   });
 
   // ["slate", slug, "history"] is a strict EXTENSION of ["slate", slug], so
@@ -270,7 +270,7 @@ describe("SSE → TanStack invalidation bridge (invariant #23)", () => {
 
   it("a slate event with no slug falls back to the whole slate prefix", () => {
     emit("slate.updated", {});
-    expect(keys()).toEqual([["slates"], ["slate"], ["sessions", "card"], ["changes"]]);
+    expect(keys()).toEqual([["slates"], ["slate"], ["sessions", "card"], ["session"], ["changes"]]);
   });
 
   it("slate.updated is NOT burst-gated — two appends invalidate twice", () => {
@@ -282,10 +282,12 @@ describe("SSE → TanStack invalidation bridge (invariant #23)", () => {
       ["slates"],
       ["slate", "kb"],
       ["sessions", "card"],
+      ["session"],
       ["changes"],
       ["slates"],
       ["slate", "kb"],
       ["sessions", "card"],
+      ["session"],
     ]);
   });
 
@@ -333,5 +335,40 @@ describe("SSE → TanStack invalidation bridge (invariant #23)", () => {
     emitGap();
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy).toHaveBeenCalledWith();
+  });
+
+  // FXA4 — real-client pins (brief §7): seed the actual cache and observe
+  // isInvalidated, instead of re-implementing prefix matching against spy
+  // args. A bridge change to a wrong sibling key or exact-match would fail
+  // these while the spy cases above could still pass.
+  it("real cache: a seeded ['sessions','card','s1'] is invalidated by session.state", () => {
+    spy.mockRestore();
+    queryClient.setQueryData(["sessions", "card", "s1"], { schema: "kb-session-card/1" });
+    expect(queryClient.getQueryState(["sessions", "card", "s1"])?.isInvalidated).toBe(false);
+    emit("session.state", { session_id: "s1", kb: "demo" });
+    expect(queryClient.getQueryState(["sessions", "card", "s1"])?.isInvalidated).toBe(true);
+    queryClient.removeQueries({ queryKey: ["sessions", "card", "s1"] });
+  });
+
+  it("real cache: a seeded ['sessions','card','s1'] is invalidated by slate.updated", () => {
+    spy.mockRestore();
+    queryClient.setQueryData(["sessions", "card", "s1"], { schema: "kb-session-card/1" });
+    emit("slate.updated", { slug: "kb", seq: 7 });
+    expect(queryClient.getQueryState(["sessions", "card", "s1"])?.isInvalidated).toBe(true);
+    queryClient.removeQueries({ queryKey: ["sessions", "card", "s1"] });
+  });
+
+  it("real cache: a seeded ['session','s1'] detail is invalidated by session.state and slate.updated", () => {
+    spy.mockRestore();
+    queryClient.setQueryData(["session", "s1"], { detail: null });
+    emit("session.state", { session_id: "s1", kb: "demo" });
+    expect(queryClient.getQueryState(["session", "s1"])?.isInvalidated).toBe(true);
+    queryClient.invalidateQueries({ queryKey: ["session", "s1"] });
+    // invalidation is sticky; re-seed to confirm slate.updated independently
+    queryClient.removeQueries({ queryKey: ["session", "s1"] });
+    queryClient.setQueryData(["session", "s1"], { detail: null });
+    emit("slate.updated", { slug: "kb", seq: 8 });
+    expect(queryClient.getQueryState(["session", "s1"])?.isInvalidated).toBe(true);
+    queryClient.removeQueries({ queryKey: ["session", "s1"] });
   });
 });

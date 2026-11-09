@@ -127,3 +127,63 @@ fn doctor_hooks_strict_exits_nonzero_on_a_warn_and_default_does_not() {
         .collect();
     assert!(ids.contains(&"cli-skew"), "{ids:?}");
 }
+
+/// A6 — `git-trailer-sid-source` reports the `KB_SESSION_ID` rung: with
+/// `KB_SESSION_ID`/`KB_HARNESS` set (and the Claude/Grok vars removed),
+/// the check passes and its detail names `KB_SESSION_ID`; with all four
+/// removed it skips, and `--strict` does not turn red because of it.
+#[test]
+fn doctor_hooks_reports_the_kb_session_id_rung() {
+    let tmp = tempfile::tempdir().unwrap();
+    let run = |kb_sid: Option<&str>, strict: bool| {
+        let mut cmd = Command::cargo_bin("kb").unwrap();
+        cmd.args([
+            "doctor",
+            "--hooks",
+            "--repo",
+            tmp.path().to_str().unwrap(),
+            "--daemon",
+            &dead_endpoint(),
+            "--json",
+        ]);
+        if strict {
+            cmd.arg("--strict");
+        }
+        let mut cmd = cmd
+            .env_remove("CLAUDE_CODE_SESSION_ID")
+            .env_remove("GROK_SESSION_ID")
+            .env_remove("KB_SESSION_ID")
+            .env_remove("KB_HARNESS");
+        if let Some(sid) = kb_sid {
+            cmd = cmd.env("KB_SESSION_ID", sid).env("KB_HARNESS", "omp");
+        }
+        cmd.assert().get_output().stdout.clone()
+    };
+
+    let out = run(Some("sid-1"), false);
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&out).expect("--json should emit valid JSON");
+    let checks = parsed["checks"].as_array().expect("checks array");
+    let src = checks
+        .iter()
+        .find(|c| c["id"] == "git-trailer-sid-source")
+        .expect("git-trailer-sid-source check present");
+    assert_eq!(src["status"], "pass", "{src}");
+    assert!(
+        src["detail"].as_str().unwrap().contains("KB_SESSION_ID"),
+        "{src}"
+    );
+
+    // All four removed: the check skips, and `--strict` must not turn
+    // red because of it. (The run's exit code can still be 1 from the
+    // unrelated dead-daemon warn; the assertion is that THIS check is a
+    // skip, which `strict_exit_code` never counts.)
+    let out = run(None, true);
+    let parsed: serde_json::Value = serde_json::from_slice(&out).expect("--json under --strict");
+    let checks = parsed["checks"].as_array().expect("checks array");
+    let src = checks
+        .iter()
+        .find(|c| c["id"] == "git-trailer-sid-source")
+        .expect("git-trailer-sid-source check present");
+    assert_eq!(src["status"], "skip", "{src}");
+}

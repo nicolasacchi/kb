@@ -502,6 +502,96 @@ fn decide_git_trailer_hook(state: GitHookState, repo: &Path) -> HookCheck {
     }
 }
 
+/// A6 — which env rung `trailer-logic.sh` resolves the commit trailer's
+/// session id from. The check reports only variable NAMES, never id
+/// values.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct TrailerEnv {
+    claude: Option<String>,
+    grok: Option<String>,
+    kb_sid: Option<String>,
+    kb_harness: Option<String>,
+}
+
+impl TrailerEnv {
+    /// Read the four env vars. An empty string is treated as unset (bash
+    /// `-z` semantics), exactly like the script does.
+    fn from_env() -> Self {
+        fn present(name: &str) -> Option<String> {
+            std::env::var(name).ok().filter(|v| !v.is_empty())
+        }
+        Self {
+            claude: present("CLAUDE_CODE_SESSION_ID"),
+            grok: present("GROK_SESSION_ID"),
+            kb_sid: present("KB_SESSION_ID"),
+            kb_harness: present("KB_HARNESS"),
+        }
+    }
+}
+
+/// The same plain-token rule as `is_plain_token` in
+/// `kb_core::sessions::resume` and `kb_plain_token` in
+/// `trailer-logic.sh`: non-empty, at most 128 bytes, starts alphanumeric,
+/// then alphanumerics or `.` `_` `:` `-`.
+fn is_trailer_token(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 128
+        && s.as_bytes()[0].is_ascii_alphanumeric()
+        && s.as_bytes()
+            .iter()
+            .all(|&c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b':' | b'-'))
+}
+
+/// Decide `git-trailer-sid-source` from the env, in the bash ladder's
+/// order (Claude, Grok, `KB_SESSION_ID`, marker). Claude/Grok values are
+/// used raw like the script does; only the `KB_SESSION_ID` rung is
+/// token-validated because the script validates it.
+fn decide_trailer_sid_source(env: &TrailerEnv) -> HookCheck {
+    // Empty strings read as unset (bash `-z`), here as well as in
+    // `TrailerEnv::from_env`, so the decision never depends on how the
+    // struct was built.
+    fn present(s: &Option<String>) -> Option<&str> {
+        s.as_deref().filter(|v| !v.is_empty())
+    }
+    if present(&env.claude).is_some() {
+        return HookCheck::pass(
+            "git-trailer-sid-source",
+            "resolves from CLAUDE_CODE_SESSION_ID (Claude Code)",
+        );
+    }
+    if present(&env.grok).is_some() {
+        return HookCheck::pass(
+            "git-trailer-sid-source",
+            "resolves from GROK_SESSION_ID (Grok)",
+        );
+    }
+    if let Some(sid) = present(&env.kb_sid) {
+        if is_trailer_token(sid) {
+            let harness = present(&env.kb_harness).unwrap_or("unknown");
+            let mut detail = format!("resolves from KB_SESSION_ID (harness={harness})");
+            if present(&env.kb_harness) == Some("omp") {
+                detail.push_str(" — set by kb-omp.ts for the main agent");
+            }
+            return HookCheck::pass("git-trailer-sid-source", detail);
+        }
+        return HookCheck::warn(
+            "git-trailer-sid-source",
+            "KB_SESSION_ID is set but is not a plain token; trailer-logic.sh ignores it",
+        )
+        .with_fix("unset it or export the harness session id");
+    }
+    if present(&env.kb_harness) == Some("omp") {
+        return HookCheck::warn(
+            "git-trailer-sid-source",
+            "KB_HARNESS=omp but no KB_SESSION_ID: kb-omp.ts did not publish an identity here (not loaded, or a subagent context); commits fall back to the repo marker",
+        );
+    }
+    HookCheck::skip(
+        "git-trailer-sid-source",
+        "no session env in this shell; a commit made from a harness's own shell resolves via the rungs above, otherwise the repo marker (see repo-session-marker)",
+    )
+}
+
 // ============================================= d/e/g) daemon-backed checks
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -2427,6 +2517,9 @@ pub async fn hooks(
         &repo_path,
     ));
 
+    // c2) which env rung resolves the trailer's session id.
+    checks.push(decide_trailer_sid_source(&TrailerEnv::from_env()));
+
     // d/e/g) daemon-backed checks.
     let base = daemon
         .map(str::to_string)
@@ -2841,6 +2934,141 @@ mod tests {
         let state = detect_git_trailer_hook(tmp.path());
         let check = decide_git_trailer_hook(state, tmp.path());
         assert_eq!(check.status, CheckStatus::Pass);
+    }
+
+    /// A6 — one test per `decide_trailer_sid_source` decision.
+    fn trailer_env(
+        claude: Option<&str>,
+        grok: Option<&str>,
+        kb_sid: Option<&str>,
+        kb_harness: Option<&str>,
+    ) -> TrailerEnv {
+        TrailerEnv {
+            claude: claude.map(str::to_string),
+            grok: grok.map(str::to_string),
+            kb_sid: kb_sid.map(str::to_string),
+            kb_harness: kb_harness.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn trailer_sid_source_claude_passes() {
+        let c = decide_trailer_sid_source(&trailer_env(Some("claude-sid"), None, None, None));
+        assert_eq!(c.status, CheckStatus::Pass);
+        assert_eq!(c.id, "git-trailer-sid-source");
+        assert!(c.detail.contains("CLAUDE_CODE_SESSION_ID"), "{}", c.detail);
+        // The detail never carries the id value.
+        assert!(!c.detail.contains("claude-sid"), "{}", c.detail);
+    }
+
+    #[test]
+    fn trailer_sid_source_claude_unvalidated_still_passes() {
+        // Bash uses CLAUDE_CODE_SESSION_ID raw (no token validation), so
+        // doctor mirrors it: even a non-token value resolves here.
+        let c = decide_trailer_sid_source(&trailer_env(Some("not a token!"), None, None, None));
+        assert_eq!(c.status, CheckStatus::Pass);
+        assert!(c.detail.contains("CLAUDE_CODE_SESSION_ID"), "{}", c.detail);
+    }
+
+    #[test]
+    fn trailer_sid_source_grok_passes() {
+        let c = decide_trailer_sid_source(&trailer_env(
+            None,
+            Some("grok-sid"),
+            Some("kb-sid"),
+            Some("omp"),
+        ));
+        assert_eq!(c.status, CheckStatus::Pass);
+        assert!(c.detail.contains("GROK_SESSION_ID"), "{}", c.detail);
+        assert!(!c.detail.contains("grok-sid"), "{}", c.detail);
+    }
+
+    #[test]
+    fn trailer_sid_source_kb_omp_passes_with_omp_note() {
+        let c =
+            decide_trailer_sid_source(&trailer_env(None, None, Some("omp-main-1"), Some("omp")));
+        assert_eq!(c.status, CheckStatus::Pass);
+        assert!(c.detail.contains("KB_SESSION_ID"), "{}", c.detail);
+        assert!(c.detail.contains("harness=omp"), "{}", c.detail);
+        assert!(c.detail.contains("set by kb-omp.ts"), "{}", c.detail);
+        assert!(!c.detail.contains("omp-main-1"), "{}", c.detail);
+    }
+
+    #[test]
+    fn trailer_sid_source_kb_unknown_harness_passes() {
+        let c = decide_trailer_sid_source(&trailer_env(None, None, Some("sid-1"), None));
+        assert_eq!(c.status, CheckStatus::Pass);
+        assert!(c.detail.contains("harness=unknown"), "{}", c.detail);
+    }
+
+    #[test]
+    fn trailer_sid_source_invalid_token_warns() {
+        let c = decide_trailer_sid_source(&trailer_env(None, None, Some("x y"), Some("omp")));
+        assert_eq!(c.status, CheckStatus::Warn);
+        assert!(c.detail.contains("not a plain token"), "{}", c.detail);
+        assert!(c.fix.is_some());
+    }
+
+    #[test]
+    fn trailer_sid_source_omp_without_id_warns() {
+        let c = decide_trailer_sid_source(&trailer_env(None, None, None, Some("omp")));
+        assert_eq!(c.status, CheckStatus::Warn);
+        assert!(c.detail.contains("KB_HARNESS=omp"), "{}", c.detail);
+        assert!(c.detail.contains("KB_SESSION_ID"), "{}", c.detail);
+    }
+
+    #[test]
+    fn trailer_sid_source_nothing_skips() {
+        let c = decide_trailer_sid_source(&trailer_env(None, None, None, None));
+        assert_eq!(c.status, CheckStatus::Skip, "{}", c.detail);
+        assert!(c.detail.contains("repo marker"), "{}", c.detail);
+    }
+
+    #[test]
+    fn trailer_sid_source_empty_strings_are_unset() {
+        // bash `-z` semantics: empty strings behave exactly like absence.
+        let env = trailer_env(Some(""), Some(""), Some(""), Some(""));
+        let c = decide_trailer_sid_source(&env);
+        assert_eq!(c.status, CheckStatus::Skip, "{}", c.detail);
+    }
+
+    #[test]
+    fn trailer_sid_source_empty_harness_displays_unknown() {
+        // A hand-built env with an empty harness prints harness=unknown,
+        // never harness= (the same empty-as-unset rule as the other rungs).
+        let c = decide_trailer_sid_source(&trailer_env(None, None, Some("sid-1"), Some("")));
+        assert_eq!(c.status, CheckStatus::Pass);
+        assert!(c.detail.contains("harness=unknown"), "{}", c.detail);
+        assert!(!c.detail.contains("harness=)"), "{}", c.detail);
+    }
+
+    #[test]
+    fn is_trailer_token_matches_the_resume_rule() {
+        for ok in [
+            "550e8400-e29b-41d4-a716-446655440000",
+            "ses_x",
+            "a-p02",
+            "omp-main-1",
+            "a",
+            &"a".repeat(128),
+        ] {
+            assert!(is_trailer_token(ok), "{ok:?} should be a plain token");
+        }
+        for bad in [
+            "x;rm",
+            "-rf",
+            "",
+            &"a".repeat(129),
+            "x y",
+            "x\ny",
+            "é",
+            ".x",
+        ] {
+            assert!(
+                !is_trailer_token(bad),
+                "{bad:?} should not be a plain token"
+            );
+        }
     }
 
     #[test]

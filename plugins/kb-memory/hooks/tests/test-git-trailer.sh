@@ -29,6 +29,8 @@ trap cleanup EXIT
 export XDG_CACHE_HOME="$TMPROOT/xdg-cache"
 unset CLAUDE_CODE_SESSION_ID
 unset GROK_SESSION_ID
+unset KB_SESSION_ID
+unset KB_HARNESS
 
 PASS=0
 FAIL=0
@@ -194,6 +196,62 @@ r="$(new_repo)"
 install_repo "$r"
 GROK_SESSION_ID="sess-grok-1" env -u CLAUDE_CODE_SESSION_ID git -C "$r" commit --allow-empty -m "t1b" -q
 assert_eq "GROK_SESSION_ID commit stamps trailer" "sess-grok-1" "$(trailer_of "$r")"
+
+# =======================================================================
+# A6: KB_SESSION_ID (omp's main-agent identity) stamps the trailer.
+# =======================================================================
+r="$(new_repo)"
+install_repo "$r"
+KB_SESSION_ID="omp-main-1" env -u CLAUDE_CODE_SESSION_ID -u GROK_SESSION_ID \
+  git -C "$r" commit --allow-empty -m "t1d" -q
+assert_eq "KB_SESSION_ID commit stamps trailer" "omp-main-1" "$(trailer_of "$r")"
+
+# A6: KB_SESSION_ID loses to CLAUDE_CODE_SESSION_ID and to GROK_SESSION_ID.
+r="$(new_repo)"
+install_repo "$r"
+CLAUDE_CODE_SESSION_ID="sess-claude" KB_SESSION_ID="omp-main-1" \
+  git -C "$r" commit --allow-empty -m "t1e" -q
+assert_eq "CLAUDE_CODE_SESSION_ID wins over KB_SESSION_ID" "sess-claude" "$(trailer_of "$r")"
+
+r="$(new_repo)"
+install_repo "$r"
+GROK_SESSION_ID="sess-grok" KB_SESSION_ID="omp-main-1" env -u CLAUDE_CODE_SESSION_ID \
+  git -C "$r" commit --allow-empty -m "t1f" -q
+assert_eq "GROK_SESSION_ID wins over KB_SESSION_ID" "sess-grok" "$(trailer_of "$r")"
+
+# A6: KB_SESSION_ID beats a fresh marker.
+r="$(new_repo)"
+install_repo "$r"
+write_marker "$r" "sess-marker" 60
+KB_SESSION_ID="omp-main-1" env -u CLAUDE_CODE_SESSION_ID -u GROK_SESSION_ID \
+  git -C "$r" commit --allow-empty -m "t1g" -q
+assert_eq "KB_SESSION_ID wins over the repo marker" "omp-main-1" "$(trailer_of "$r")"
+
+# A6: invalid KB_SESSION_ID values are ignored (fail-open): no trailer,
+# commit exit 0, no forged line. A newline would forge trailers because
+# the id is appended to the commit message.
+check_invalid_kb_sid() {
+  # $1 = description, $2 = the invalid value
+  r="$(new_repo)"
+  install_repo "$r"
+  clear_marker "$r"
+  set +e
+  KB_SESSION_ID="$2" env -u CLAUDE_CODE_SESSION_ID -u GROK_SESSION_ID \
+    git -C "$r" commit --allow-empty -m "t-invalid" -q 2>"$TMPROOT/invalid.log"
+  rc=$?
+  set -e 2>/dev/null || true
+  assert_status "$1: commit still succeeds (fail-open)" 0 "$rc"
+  assert_empty "$1: no trailer is stamped" "$(trailer_of "$r")"
+  case "$(git -C "$r" log -1 --format=%B)" in
+    *"Kb-Session:"*) bad "$1: no forged trailer line" ;;
+    *) ok "$1: no forged trailer line" ;;
+  esac
+}
+check_invalid_kb_sid "newline value" "$(printf 'x\nKb-Session: forged')"
+check_invalid_kb_sid "value with a space" "x y"
+check_invalid_kb_sid "leading dash" "-rf"
+check_invalid_kb_sid "129 chars" "$(printf 'a%.0s' $(seq 1 129))"
+check_invalid_kb_sid "non-ASCII" "séssion"
 
 # =======================================================================
 # 1c. both env vars set -> Claude wins
