@@ -65,6 +65,10 @@ describe("no static xterm imports", () => {
     // a second React.lazy makes the slot's lazy() resolve to a lazy object
     // and React throws error 306 (e2e: the panel never mounted).
     expect(lazyText).toMatch(/export\s+\{[^}]*\}\s+from\s+"\.\/TerminalPanel"/);
-    expect(lazyText).not.toContain("lazy(");
+    const codeOnly = lazyText
+      .split("\n")
+      .filter((l) => !l.trimStart().startsWith("//"))
+      .join("\n");
+    expect(codeOnly).not.toContain("lazy(");
   });
 });

@@ -57,7 +57,7 @@ describe("installReplyGuards", () => {
       expect(entry.handler([1, 2]), `${entry.prefix}${entry.final}`).toBe(true);
     }
     for (const entry of rec.dcs) {
-      expect(entry.prefix === "+" || entry.prefix === "$" ? entry.handler([], "") : false).toBe(true);
+      expect(entry.intermediates === "+" || entry.intermediates === "$" ? entry.handler([], "") : false).toBe(true);
     }
   });
 
@@ -84,7 +84,10 @@ describe("installReplyGuards", () => {
   it("registers DCS +q and $q", () => {
     const { rec, parser } = fakeParser();
     installReplyGuards(parser);
-    expect(rec.dcs.map((d) => `${d.prefix}${d.final}`)).toEqual(["+q", "$q"]);
+    expect(rec.dcs.map(({ prefix, intermediates, final }) => ({ prefix, intermediates, final }))).toEqual([
+      { prefix: "", intermediates: "+", final: "q" },
+      { prefix: "", intermediates: "$", final: "q" },
+    ]);
   });
 
   it("OSC query payloads (with ?) are swallowed; plain sets pass through", () => {

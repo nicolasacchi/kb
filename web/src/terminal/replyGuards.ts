@@ -89,10 +89,11 @@ export function installReplyGuards(parser: ReplyParser): InstalledGuards {
   csi("", "", "x");
   csi("", "", "t", xtwinops);
   csi("?", "", "S");
-
-  // DCS `+q` (kitty graphics query) and `$q` (XTGETTCAP-shaped).
-  dcs("+", "", "q");
-  dcs("$", "", "q");
+  // DCS `+q` (XTGETTCAP-shaped) and `$q` (DECRQSS): the `+`/`$` are
+  // intermediate bytes (0x20-0x2f), never prefixes (0x3c-0x3f) — xterm's
+  // parser rejects a non-prefix byte in the prefix slot.
+  dcs("", "+", "q");
+  dcs("", "$", "q");
 
   // OSC: 4, 5, 10-19, 21, 52 — query payloads (`?` present) swallowed.
   for (const code of [4, 5, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 52]) {

@@ -14,7 +14,7 @@
 // focuses), no Escape binding, no global key handler.
 
 import { useEffect, useRef, useState } from "react";
-import { Terminal, type ITheme } from "@xterm/xterm";
+import { Terminal, type IFunctionIdentifier, type ITheme } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { ImageAddon } from "@xterm/addon-image";
 import { WebglAddon } from "@xterm/addon-webgl";
@@ -174,14 +174,24 @@ export function TerminalPanel(props: TerminalPanelProps) {
       } catch {
         // DOM renderer fallback.
       }
+      // xterm's IFunctionIdentifier: prefix/intermediates are OPTIONAL
+      // and validated when present (prefix 0x3c-0x3f, intermediates
+      // 0x20-0x2f); every other value — including the empty string —
+      // throws. Omit empty keys instead of sending them as "".
+      const functionId = (prefix: string, intermediates: string, final: string): IFunctionIdentifier => {
+        const id: IFunctionIdentifier = { final };
+        if (prefix !== "") id.prefix = prefix;
+        if (intermediates !== "") id.intermediates = intermediates;
+        return id;
+      };
       installReplyGuards({
         registerCsiHandler: (prefix, intermediates, final, handler) =>
-          term.parser.registerCsiHandler({ prefix, intermediates, final }, (params) =>
+          term.parser.registerCsiHandler(functionId(prefix, intermediates, final), (params) =>
             handler(flattenParams(params)),
           ),
         registerOscHandler: (code, handler) => term.parser.registerOscHandler(code, handler),
         registerDcsHandler: (prefix, intermediates, final, handler) =>
-          term.parser.registerDcsHandler({ prefix, intermediates, final }, (data, param) =>
+          term.parser.registerDcsHandler(functionId(prefix, intermediates, final), (data, param) =>
             handler(flattenParams(param), data),
           ),
       });
