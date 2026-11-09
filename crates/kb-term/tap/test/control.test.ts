@@ -1,7 +1,7 @@
 // Control-mode client tests (T5 tests 6-8). Unit level: a fake spawn whose
 // stdout is pushed by hand, so no tmux runs.
 import { test, expect } from 'bun:test';
-import { Control, ControlError, attachArgv, continueCommand, exitNeedsReseed, pauseCommand, type SpawnedProcess } from '../src/control.ts';
+import { Control, ControlError, THEME_BG, THEME_FG, attachArgv, colourReportCommands, continueCommand, exitNeedsReseed, pauseCommand, type SpawnedProcess } from '../src/control.ts';
 import { PAUSE_AFTER_SECS } from '../src/control.ts';
 
 class FakeStdout implements AsyncIterable<Uint8Array> {
@@ -94,6 +94,49 @@ test('attach_sets_pause_after_20', async () => {
   const joined = fake.writes.join('');
   expect(joined).toContain('refresh-client -f pause-after=20');
   c.stop();
+});
+
+test('colour_report_commands_are_the_fixed_theme_osc_replies', () => {
+  const esc = String.fromCharCode(27);
+  const bel = String.fromCharCode(7);
+  expect(colourReportCommands('%0')).toEqual([
+    `refresh-client -r '%0:${esc}]10;rgb:d4d4/d4d4/d4d4${bel}'`,
+    `refresh-client -r '%0:${esc}]11;rgb:1e1e/1e1e/1e1e${bel}'`,
+  ]);
+  // The colours equal the fixed kb theme (T9 responder defaults).
+  expect(THEME_FG).toBe('#d4d4d4');
+  expect(THEME_BG).toBe('#1e1e1e');
+});
+
+test('attach_reports_theme_colours_right_after_pause_after', async () => {
+  const fake = new FakeSpawn();
+  const c = new Control({ tmuxBin: '/fake/tmux-3.7c', socketPath: '/tmp/s.sock', sessionName: 's1', spawn: fake.fn, paneId: '%0' });
+  const starting = c.start();
+  fake.stdout.push(enc('%begin 1000 0 0\n%end 1000 0 0\n'));
+  fake.stdout.push(enc('%begin 1000 1 0\n%end 1000 1 0\n'));
+  fake.stdout.push(enc('%begin 1000 2 0\n%end 1000 2 0\n'));
+  await starting;
+  const esc = String.fromCharCode(27);
+  const bel = String.fromCharCode(7);
+  expect(fake.writes.join('')).toBe(
+    'refresh-client -f pause-after=20\n' +
+      `refresh-client -r '%0:${esc}]10;rgb:d4d4/d4d4/d4d4${bel}'\n` +
+      `refresh-client -r '%0:${esc}]11;rgb:1e1e/1e1e/1e1e${bel}'\n`,
+  );
+  c.stop();
+});
+
+test('attach_without_pane_id_sends_no_colour_report', async () => {
+  const fake = new FakeSpawn();
+  const c = await start(fake);
+  expect(fake.writes.join('')).not.toContain('refresh-client -r');
+  c.stop();
+});
+
+test('attach_rejects_a_non_pane_pane_id', async () => {
+  const fake = new FakeSpawn();
+  const c = new Control({ tmuxBin: '/fake/tmux-3.7c', socketPath: '/tmp/s.sock', sessionName: 's1', spawn: fake.fn, paneId: '0;rm' });
+  await expect(c.start()).rejects.toThrow('invalid pane id');
 });
 
 test('control_parses_begin_end_blocks_and_interleaved_output', async () => {

@@ -98,6 +98,15 @@ export interface ReseedOpts {
   quiescentMaxMs?: number;
   maxAttempts?: number;
   onReseeded?: (r: ReseededResult) => void;
+  /**
+   * Feed the post-B queued bytes to the twin after the mode restore
+   * (default true: the standalone T5 behaviour). createTapStack sets
+   * false: the TapServer's own twin chain is the single feeder and feeds
+   * the same bytes (post-withhold, through the ring) once the pause ends,
+   * so feeding the queued raw bytes as well would double-feed the twin
+   * and reintroduce withheld bytes.
+   */
+  feedQueued?: boolean;
 }
 
 export class ReseedError extends Error {
@@ -224,6 +233,8 @@ export class Reseeder {
   private readonly control: ControlLike;
   private readonly twin: Twin;
   private readonly now: () => number;
+
+  private readonly feedQueued: boolean;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly qstates = new Map<string, QuiescentState>();
   private readonly st: ReseedStats = {
@@ -251,7 +262,10 @@ export class Reseeder {
   constructor(control: ControlLike, twin: Twin, opts?: ReseedOpts) {
     this.control = control;
     this.twin = twin;
-    this.now = opts?.now ?? Date.now;
+    this.feedQueued = opts?.feedQueued ?? true;
+    // Monotonic clock: only elapsed time matters here, and a wall-clock
+    // backward step must not outlive a deadline.
+    this.now = opts?.now ?? (() => performance.now());
     this.sleep = opts?.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
     control.onOutput((pane, bytes) => this.noteOutput(bytes, pane));
   }
@@ -354,7 +368,10 @@ export class Reseeder {
         lastReason = err instanceof Error ? err.message : String(err);
       } finally {
         this.active = null;
-        this.st.queuedDroppedBytes += active.queue.reduce((n, b) => n + b.length, 0);
+        // Only count bytes as "dropped" when we owned feeding them
+        // (feedQueued false: the caller's chain feeds them, so they are
+        // not dropped at all).
+        if (this.feedQueued) this.st.queuedDroppedBytes += active.queue.reduce((n, b) => n + b.length, 0);
       }
     }
     this.st.givesUp++;
@@ -478,7 +495,11 @@ export class Reseeder {
     // %output can land in the queue after the check: JS code runs
     // atomically between awaits. Anything arriving after the close is
     // post-reseed stream and feeds the twin via the normal pipeline.
-    while (active.queue.length > 0) {
+    // With feedQueued false the caller (TapServer's twin chain) is the
+    // single feeder: the queued raw bytes are left un-fed (the ring
+    // already holds their post-withhold form), so the twin is fed exactly
+    // once and never sees withheld bytes.
+    while (this.feedQueued && active.queue.length > 0) {
       const batch = active.queue.splice(0, active.queue.length);
       for (const chunk of batch) await feedBytes(chunk);
     }

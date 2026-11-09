@@ -1,1 +1,1 @@
-{"t":"profile","xterm":"6.0.0","serialize":"0.14.0","width":"unicode-graphemes@0.4.0","cols":120,"rows":40,"scrollback":50000,"scroll_on_erase_in_display":true,"cell_px_w":9,"cell_px_h":18}
+{"t":"profile","xterm":"6.0.0","serialize":"0.14.0","width":"unicode-graphemes@0.4.0","image":"0.9.0","cols":120,"rows":40,"scrollback":50000,"scroll_on_erase_in_display":true,"cell_px_w":9,"cell_px_h":18,"theme":null}
