@@ -29,13 +29,15 @@
 # referenced as a shell variable inside `run:` — never interpolated into a
 # command body (see the GitHub Actions workflow-injection guidance).
 #
-# ── What a `v*` tag ships: BOTH halves ──────────────────────────────────────
-# One tag, two shipping surfaces, from this one file:
+# ── What a `v*` tag ships: ALL THREE halves ──────────────────────────────────
+# One tag, three shipping surfaces, from this one file:
 #
 #   kb       kb-<ver>-<triple>.tar.gz        kb, kb-embedder
 #            ghcr.io/nicolasacchi/kb:<ver>   + :latest
 #   kb-code  kb-code-<ver>-<triple>.tar.gz   kb-code-server, kb-code, kb-lip
 #            ghcr.io/nicolasacchi/kb-code:<ver>  + :latest
+#   kb-term  kb-term-<ver>-x86_64-unknown-linux-gnu.tar.gz
+#            kb-termd, kb-term, kb-tap, tmux 3.7c (host-side, no image)
 #
 # kb-code is the SIBLING read-first code-browsing daemon (crates/kb-code-server
 # + crates/kb-code-cli) and kb-lip its standalone opt-in LSP->HTTP adapter

@@ -1,6 +1,6 @@
 # kb-term install (host side)
 
-kb-term has three host pieces that `kb` itself cannot ship inside the kb
+kb-term has four host pieces that `kb` itself cannot ship inside the kb
 container: the runner `kb-termd`, the operator-local client `kb-term`
 (`attach|new|ls|doctor`), the compiled tap `kb-tap`, and a pinned private
 tmux 3.7c. The kb container image carries no tmux and no host `HOME`, so
@@ -44,6 +44,11 @@ KB_VERSION=0.44 sh install-kb-term.sh
 `install-kb-term.sh` only ships on tags built after kb-term shipped; for a
 tag without the archive the installer says so and points at the main-build
 path below. `PREFIX` (default `~/.local`) overrides the install root.
+Known limitation: the shipped systemd units, the tmpfiles file and the
+`kb-termd` config lookup assume the default `~/.local` layout, so with a
+custom `PREFIX` the operator must adjust the installed units (and the
+conf the runner reads) to match — the binaries alone landing in a custom
+`PREFIX` is not a working install.
 
 ## Install from a main-build artifact
 
@@ -51,9 +56,10 @@ A push to `main` builds the same archive via the `term-int` job in
 `.github/workflows/ci.yml` (packaging steps at the end of that job) and
 uploads it as an artifact. Main artifacts are
 **not** attested (only tag pushes are), so they carry a checksum but no
-provenance; the installer skips the attestation step only when
-`KB_INSECURE_SKIP_VERIFY=1` is set — keep that variable to the CI path.
-
+provenance. The documented path uses `KB_INSECURE_SKIP_VERIFY=1` — keep
+that variable to the CI path; without it, a present signed-in `gh` that
+cannot verify provenance fails closed, while absent or unsigned `gh` is
+checksum-only (the same as `install.sh`).
 ```bash
 gh run download <run-id> -n kb-term-main-<sha12> -D /tmp/kb-term-main
 KB_BASE_URL=file:///tmp/kb-term-main KB_VERSION=main-<sha12> \
