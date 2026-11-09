@@ -47,6 +47,12 @@ const CLIPBOARD_WINDOW_MS = 10_000;
 const DEFAULT_QUISCE_MS = 50;
 const DEFAULT_JOIN_WAIT_MS = 3000;
 
+/** The session id is spliced into the tap.sock path; only the runner's
+ * own id form is safe. Validated at the class boundary (main.ts does the
+ * same check for its CLI args); any other caller gets a throw, never a
+ * path traversal. */
+const SESSION_RE = /^[a-z0-9]{8,12}$/;
+
 export type Profile = 'desktop' | 'phone';
 
 /** Produces the seed bytes for a late joiner at the twin's current offset.
@@ -101,6 +107,10 @@ interface Viewer {
   sentOffset: number;
   lastTypedAt: number;
   pending: PendingControl[];
+  /** Total bytes of queued control frames (clipboards, markers): bounded
+   * by LAG_LIMIT like socket bytes, so a blocked viewer cannot grow
+   * memory without bound. */
+  pendingBytes: number;
   state: 'joining' | 'live';
 }
 
@@ -198,11 +208,24 @@ export class TapServer {
   /** Latched after any twin feed failure: joins then take the busy path
    * rather than lose the (twinOffset, head] gap. */
   private twinBroken = false;
-  /** Reseed pause gate (see setTwinPaused): twin feeds queue behind it. */
+  /** Reseed pause gate (see setTwinPaused): items enqueued while paused
+   * wait on this gate; items enqueued before the pause skip their twin
+   * leg if they execute while paused (the reseed capture re-supplies
+   * those bytes). */
   private twinGate: Promise<void> | null = null;
   private resumeGate: (() => void) | null = null;
+  private twinPaused = false;
+  /** Chain items enqueued but not yet settled (in-flight twin feeds). */
+  private twinInflight = 0;
+  /** A twin leg was skipped by a pause: its bytes are covered by the
+   * reseed capture, so twinOffset must resync to head once the chain has
+   * fully drained after the resume. */
+  private needsOffsetResync = false;
 
   constructor(opts: TapServerOpts) {
+    if (!SESSION_RE.test(opts.session)) {
+      throw new Error(`invalid session id for tap.sock path: ${JSON.stringify(opts.session)}`);
+    }
     this.session = opts.session;
     this.harness = opts.harness;
     this.boundSid = opts.boundSid ?? null;
@@ -225,7 +248,10 @@ export class TapServer {
     });
     this.testMode = opts.testMode ?? process.env.KB_TAP_TEST === '1';
     this.rewind = opts.rewind ?? 0;
-    this.now = opts.now ?? (() => Date.now());
+    // Monotonic clock: only elapsed time is ever measured (join deadline,
+    // clipboard window); a wall-clock backward step must not extend a
+    // deadline the way Date.now would.
+    this.now = opts.now ?? (() => performance.now());
     this.quiesceMs = opts.quiesceMs ?? envNumber('KB_TAP_QUIESCE_MS', DEFAULT_QUISCE_MS);
     this.joinWaitMs = opts.joinWaitMs ?? envNumber('KB_TAP_JOIN_WAIT_MS', DEFAULT_JOIN_WAIT_MS);
     this.getStripPending = opts.stripPending ?? (() => 0);
@@ -280,7 +306,9 @@ export class TapServer {
     const seq = this.ring.addMarker(build);
     for (const viewer of this.viewers.values()) {
       if (viewer.state !== 'live') continue;
-      viewer.pending.push({ offset: this.ring.head, frame: build(seq, this.ring.head) });
+      const frame = build(seq, this.ring.head);
+      viewer.pending.push({ offset: this.ring.head, frame });
+      viewer.pendingBytes += frame.length;
     }
     return seq;
   }
@@ -296,10 +324,23 @@ export class TapServer {
         // chunk larger than the ring cap retains only its tail in the
         // ring, but the twin must parse the whole stream.
         const twin = this.twin;
+        const duringPause = this.twinPaused;
+        const gate = duringPause ? this.twinGate : null;
+        this.twinInflight++;
         this.twinTail = this.twinTail
-          .then(() => this.twinGate ?? Promise.resolve())
-          .then(() => twin.feed(bytes))
-          .then(() => {
+          .then(() => gate ?? Promise.resolve())
+          .then(async () => {
+            // Pre-pause items that execute after the pause started are
+            // skipped: their bytes were emitted before the reseed's
+            // capture, so the capture (twin.reset() + capture feeds)
+            // already reflects them; re-feeding them after the reset
+            // would replay them onto the fresh twin. During-pause items
+            // pass through the gate and feed once resumed.
+            if (!duringPause && this.twinPaused) {
+              this.needsOffsetResync = true;
+              return;
+            }
+            await twin.feed(bytes);
             // Twin write callbacks fired in order (RACE RULE for the ground
             // tracker, shared with T6's gate): ground tracks exactly what
             // the twin has parsed through, before the offset advances.
@@ -310,6 +351,9 @@ export class TapServer {
             // Twin feed failed: latch broken so joins take the busy path
             // instead of losing the (twinOffset, head] gap.
             this.twinBroken = true;
+          })
+          .then(() => {
+            this.twinInflight--;
           });
       } else {
         this.twinOffset = end;
@@ -321,27 +365,88 @@ export class TapServer {
       for (const viewer of this.viewers.values()) {
         if (viewer.state !== 'live') continue;
         if (this.now() - viewer.lastTypedAt > CLIPBOARD_WINDOW_MS) continue;
-        viewer.pending.push({ offset: ev.offset, frame: encodeServerFrame({ t: 'clipboard', offset: ev.offset, data_b64: ev.data_b64 }) });
+        const frame = encodeServerFrame({ t: 'clipboard', offset: ev.offset, data_b64: ev.data_b64 });
+        viewer.pending.push({ offset: ev.offset, frame });
+        viewer.pendingBytes += frame.length;
       }
     }
     for (const conn of this.connections) this.serviceConnection(conn);
   }
 
   /** Pause/resume twin feeding for reseeds: while paused, twinOffset lags
-   * ring.head, so joins take the busy path; on resume the queued chain
-   * catches up and twinOffset advances to head. */
+   * ring.head, so joins take the busy path; on resume the gated chain
+   * catches up and twinOffset advances to head. Pair with
+   * drainTwinQueue() (below) for a true handover: the caller must drain
+   * before the reseed resets the twin. */
   setTwinPaused(paused: boolean): void {
     if (paused) {
+      this.twinPaused = true;
       if (this.twinGate === null) {
         const { promise, resolve } = Promise.withResolvers<void>();
         this.resumeGate = resolve;
         this.twinGate = promise;
       }
     } else {
+      this.twinPaused = false;
       this.resumeGate?.();
       this.resumeGate = null;
       this.twinGate = null;
+      if (this.needsOffsetResync) void this.resyncTwinOffset();
     }
+  }
+
+  /** Once the chain is fully idle after a resume, the twin reflects the
+   * capture/restore plus every post-B byte, so the parsed-byte counter can
+   * resync to head (skipped pre-pause bytes are covered by the capture).
+   * Re-checks idle after each await: new feeds re-arm the wait. */
+  private async resyncTwinOffset(): Promise<void> {
+    for (;;) {
+      if (this.twinInflight === 0) {
+        if (this.needsOffsetResync && !this.twinPaused && this.twin !== null) {
+          this.twinOffset = this.ring.head;
+          this.needsOffsetResync = false;
+        }
+        return;
+      }
+      await this.twinTail;
+    }
+  }
+
+  /** Await every twin feed enqueued so far. Must be called synchronously
+   * after setTwinPaused(true): the snapshot then covers exactly the
+   * pre-pause items, which skip their twin leg instead of feeding after
+   * the reseed's reset. Anything enqueued while paused is gated and is
+   * not part of this snapshot. */
+  async drainTwinQueue(): Promise<void> {
+    await this.twinTail;
+  }
+
+  /** The Twin facade handed to the Reseeder: capture/restore feeds go
+   * through the SAME ground tracker as the live chain, and reset()
+   * resets it too, so a pre-reset mid-sequence state cannot leak across
+   * a reseed. The Reseeder is the only user of this facade. */
+  reseedTwin(): Twin {
+    const twin = this.twin;
+    if (twin === null) throw new Error('reseed without a twin');
+    return {
+      term: twin.term,
+      serialize: twin.serialize,
+      cols: twin.cols,
+      rows: twin.rows,
+      widthPin: twin.widthPin,
+      feed: async (b: Uint8Array | string) => {
+        await twin.feed(b);
+        this.ground.push(typeof b === 'string' ? new TextEncoder().encode(b) : b);
+      },
+      reset: () => {
+        twin.reset();
+        this.ground.reset();
+      },
+      resize: (c: number, r: number) => twin.resize(c, r),
+      dispose: () => twin.dispose(),
+      repliesDropped: () => twin.repliesDropped(),
+      lineCount: (which: 'normal' | 'alt') => twin.lineCount(which),
+    };
   }
   /** Apply a grid change (audit F6): resize the twin and stamp a resize
    * marker at the current head; later profiles carry the new grid. */
@@ -366,6 +471,7 @@ export class TapServer {
     const seed = this.makeSeed(this.twin, scrollback, X);
     viewer.sentOffset = X;
     viewer.pending = [];
+    viewer.pendingBytes = 0;
     viewer.state = 'live';
     const conn = viewer.connection;
     const profile: ServerFrame = {
@@ -480,6 +586,7 @@ export class TapServer {
     // viewer and is still owed (serviceViewer emits it before the first
     // byte at `from` because its offset <= sentOffset).
     viewer.pending = this.ring.markersAfter(mseq).map((m) => ({ offset: m.offset, frame: m.frame }));
+    viewer.pendingBytes = viewer.pending.reduce((n, p) => n + p.frame.length, 0);
     viewer.state = 'live';
     this.writeText(viewer.connection, viewer.id, encodeServerFrame({ t: 'hello', proto: 'kb-term/1', session: this.session, epoch: this.epoch, harness: this.harness, bound_sid: this.boundSid }));
     this.serviceViewer(viewer);
@@ -519,6 +626,14 @@ export class TapServer {
         this.dropViewer(viewer, 'too-far-behind');
         return;
       }
+      // Pending control bytes (clipboards, markers) do not advance ring
+      // head, so the lag check above cannot see them. A blocked viewer
+      // would otherwise accumulate them without bound; account them
+      // under the same 8 MiB budget and drop on overflow.
+      if (viewer.pendingBytes > LAG_LIMIT) {
+        this.dropViewer(viewer, 'too-far-behind');
+        return;
+      }
       if (conn.pendingBacklog > LAG_LIMIT) {
         for (const id of [...conn.viewers]) {
           const v = this.viewers.get(id);
@@ -530,6 +645,7 @@ export class TapServer {
       const next = viewer.pending[0];
       if (next !== undefined && next.offset <= viewer.sentOffset) {
         viewer.pending.shift();
+        viewer.pendingBytes -= next.frame.length;
         if (!this.writeText(conn, viewer.id, next.frame)) return;
         continue;
       }
@@ -660,6 +776,7 @@ export class TapServer {
         // tiny fake clocks (a 0 sentinel would fake a recent typing there).
         lastTypedAt: -Infinity,
         pending: [],
+        pendingBytes: 0,
         state: 'joining',
       };
       this.viewers.set(id, viewer);

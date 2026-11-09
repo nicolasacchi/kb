@@ -167,7 +167,12 @@ export function createTapStack(opts: TapStackOpts): TapStack {
     spawn: opts.spawn,
     paneId: opts.paneId,
   });
-  const reseeder = new Reseeder(control, twin);
+  const reseeder = new Reseeder(control, server.reseedTwin(), { feedQueued: false });
+  // feedQueued false: the Reseeder's post-B queue exists only for the
+  // quiescence/A/B bookkeeping. The TapServer chain is the single twin
+  // feeder and feeds those bytes post-withhold after the pause ends, so
+  // the Reseeder must not feed the queued raw bytes too (that would
+  // double-feed the twin and reintroduce withheld bytes).
 
   const feedStrip = (pane: string, raw: Uint8Array): void => {
     let s = strips.get(pane);
@@ -189,17 +194,25 @@ export function createTapStack(opts: TapStackOpts): TapStack {
     lastPane = pane;
   });
 
+  // Serialized: a pause/exit during a slow reseed queues behind it
+  // instead of overwriting Reseeder.active or racing twin.reset().
+  let reseedChain: Promise<void> = Promise.resolve();
   const reseed = (pane: string | undefined): void => {
     if (pane === undefined || !PANE_ID_RE.test(pane)) return;
-    // Single twin-write owner (audit F4): pause the TapServer's feed chain
-    // so twin.reset()/capture feeds inside the reseed cannot interleave.
-    server.setTwinPaused(true);
-    void reseeder
-      .reseed(pane)
-      .catch((err: unknown) => {
+    reseedChain = reseedChain.then(async () => {
+      // Single twin-write owner: pause the TapServer's feed chain, drain
+      // the pre-pause items before the reseed's twin.reset(), and feed
+      // the capture through the ground-tracking reseedTwin facade.
+      server.setTwinPaused(true);
+      try {
+        await server.drainTwinQueue();
+        await reseeder.reseed(pane);
+      } catch (err: unknown) {
         console.error(`kb-tap: reseed failed: ${err instanceof Error ? err.message : String(err)}`);
-      })
-      .finally(() => server.setTwinPaused(false));
+      } finally {
+        server.setTwinPaused(false);
+      }
+    });
   };
   control.onPause((pane) => reseed(pane));
   control.onExit((reason) => {

@@ -46,6 +46,15 @@ export class GroundTracker {
     return this.total;
   }
 
+  /** Forget all tracking: back to ground with zero bytes seen. Reset on a
+   * reseed so pre-reset mid-sequence state cannot leak across
+   * twin.reset() (the twin starts from the capture, not the old stream). */
+  reset(): void {
+    this.state = 'ground';
+    this.utf8Pending = 0;
+    this.total = 0;
+  }
+
   private step(b: number): void {
     // UTF-8 continuation accounting (applies in ground state; escape states
     // never carry UTF-8 continuations because ESC abandons a partial one).
