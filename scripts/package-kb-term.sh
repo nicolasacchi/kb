@@ -29,12 +29,13 @@ say() { printf '%s\n' "$*"; }
 err() { printf 'package-kb-term: error: %s\n' "$*" >&2; exit 1; }
 
 require_executable() {
-  # $1 = variable name; fails naming the variable when unset or not executable.
+  # $1 = variable name; fails naming the variable when unset or not an
+  # executable regular file (an executable directory is not a binary).
   v="${!1:-}"
   if [ -z "$v" ]; then
     err "$1 is unset"
   fi
-  if [ ! -x "$v" ]; then
+  if [ ! -f "$v" ] || [ ! -x "$v" ]; then
     err "$1 ($v) is not an executable file"
   fi
 }
@@ -156,7 +157,10 @@ EOF
 
   archive="${name}.tar.gz"
   tar -czf "${out_dir}/${archive}" -C "${stage}" "${name}"
-  sha256sum "${out_dir}/${archive}" > "${out_dir}/${archive}.sha256"
+  # Bare file name in the sidecar, generated from inside the output dir, so
+  # a manual `sha256sum -c <archive>.sha256` works in the download dir even
+  # when OUT_DIR is an absolute path.
+  ( cd "${out_dir}" && sha256sum "${archive}" > "${archive}.sha256" )
   say "${out_dir}/${archive}"
 
   if [ -n "${GITHUB_OUTPUT:-}" ]; then
