@@ -403,17 +403,19 @@ test('seam_reseed_handover_feeds_post_B_bytes_exactly_once_post_withhold', async
     fake.stdout.push('%pause %0\n');
     await waitUntil(() => fake.writes.length >= 3, 'pause continue + reseed batch written');
     fake.stdout.push(block(2, [])); // continue ack
-    fake.stdout.push(block(3, ['A 0 5 0']));
+    fake.stdout.push(block(3, ['A 0 0 0']));
     fake.stdout.push(block(4, ['reseeded-content']));
     fake.stdout.push(block(5, []));
-    fake.stdout.push(block(6, ['B 0 5 0']));
+    fake.stdout.push(block(6, ['B 0 0 0']));
     fake.stdout.push(block(7, []));
     await waitUntil(() => rec.feeds.some((f) => f.includes('reseeded-content')), 'capture feed parked');
     // Post-B output, while the attempt is parked on the capture feed:
     // a withheld main-screen mouse enable (must never reach the twin)
     // plus plain bytes (must reach it exactly once, after the capture).
-    fake.stdout.push(octal('%0', 'AFTER-B\x1b[?1000htail'));
-    await waitUntil(() => stack.server.head >= 3 + 11, 'post-B bytes in ring');
+    // The leading CRLF puts them on a fresh line so they cannot
+    // overwrite the restored capture line in the seed.
+    fake.stdout.push(octal('%0', '\r\nAFTER-B\x1b[?1000htail'));
+    await waitUntil(() => stack.server.head >= 3 + 13, 'post-B bytes in ring');
     rec.releaseGated();
     await waitUntil(() => rec.feeds.some((f) => f.includes('AFTER-Btail')), 'post-B fed via chain');
 
@@ -437,9 +439,12 @@ test('seam_reseed_handover_feeds_post_B_bytes_exactly_once_post_withhold', async
     const socket2 = await openViewer(stack.server.sockPath, cap2);
     await waitUntil(() => cap2.texts.some((t) => t.includes('"t":"seed"')), 'post-reseed seed');
     const seedText = cap2.texts.find((t) => t.includes('"t":"seed"'));
-    const seedLen = seedText === undefined ? 0 : (JSON.parse(seedText) as Record<string, unknown>)['len'];
+    const seedLen = (seedText === undefined ? 0 : (JSON.parse(seedText) as Record<string, unknown>)['len']) as number;
     expect(typeof seedLen).toBe('number');
-    let skip = seedLen as number;
+    // The seed text frame and its binary payload frames are separate
+    // socket data events: wait for the payload bytes too.
+    await waitUntil(() => cap2.binaries.reduce((a, b) => a + b.length, 0) >= seedLen, 'seed bytes landed');
+    let skip = seedLen;
     const seedParts: Uint8Array[] = [];
     for (const b of cap2.binaries) {
       if (skip >= b.length) {

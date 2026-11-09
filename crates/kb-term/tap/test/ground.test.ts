@@ -11,7 +11,7 @@ test('reset restores ground and zeroes the byte counter', () => {
   const t = new GroundTracker();
   t.push(enc('\x1b[1;31')); // mid-CSI
   expect(t.atGround()).toBe(false);
-  expect(t.offset()).toBe(7);
+  expect(t.offset()).toBe(6);
   t.reset();
   expect(t.atGround()).toBe(true);
   expect(t.offset()).toBe(0);
