@@ -400,7 +400,7 @@ describe("SessionPage", () => {
     expect(container.textContent).not.toContain("→");
   });
 
-  it("FXA4: renders no terminal section for an available+admitted live lane", async () => {
+  it("T14: renders the terminal section for an available+admitted live lane", async () => {
     vi.stubGlobal(
       "fetch",
       mockFetch({
@@ -413,7 +413,7 @@ describe("SessionPage", () => {
     await waitFor(() =>
       expect(screen.getByTestId("session-sec-resume")).toBeTruthy(),
     );
-    expect(screen.queryByTestId("session-sec-terminal")).toBeNull();
+    expect(screen.getByTestId("session-sec-terminal")).toBeTruthy();
   });
 
   it("FXA4: capped-scan caption renders verbatim when the file list is empty", async () => {

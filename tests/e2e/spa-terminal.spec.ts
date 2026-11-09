@@ -71,10 +71,20 @@ async function bufferInfo(page: Page): Promise<BufInfo> {
 }
 
 async function openTerminal(page: Page): Promise<void> {
+  const errors: unknown[] = [];
+  page.on("pageerror", (e) => errors.push(e));
+  page.on("console", (m) => errors.push(`${m.type()}: ${m.text()}`));
   await page.goto(`${BASE}/sessions/${SID}`);
   await expect(page.locator('[data-testid="kb-terminal-slot"]')).toBeVisible({ timeout: 15_000 });
   await page.locator('[data-testid="kb-term-open"]').click();
-  await expect(page.locator('[data-kb-term]')).toBeVisible({ timeout: 15_000 });
+  try {
+    await expect(page.locator('[data-kb-term]')).toBeVisible({ timeout: 15_000 });
+  } catch (e) {
+    const slots = await page.evaluate(() => document.body.innerHTML.length);
+    // eslint-disable-next-line no-console
+    console.log(`[t14-open] bodyLen=${slots} errors=${JSON.stringify(errors.map(String)).slice(0, 4000)}`);
+    throw e;
+  }
 }
 
 test.describe("T14 — desktop terminal panel", () => {
