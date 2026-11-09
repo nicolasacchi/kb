@@ -154,6 +154,19 @@ fn spawn_stream_fake(
     script: Vec<Vec<u8>>,
     close_after: bool,
 ) -> StreamFake {
+    spawn_stream_fake_mode(dir, replies, script, close_after, None)
+}
+
+/// Like [`spawn_stream_fake`], but `stream_err = Some(code)` makes the
+/// fake answer the `stream` op with an error reply (code `code`)
+/// instead of an ok reply — the stream-error mapping pin.
+fn spawn_stream_fake_mode(
+    dir: &std::path::Path,
+    replies: HashMap<String, String>,
+    script: Vec<Vec<u8>>,
+    close_after: bool,
+    stream_err: Option<&'static str>,
+) -> StreamFake {
     let sock = dir.join("runner.sock");
     let listener = tokio::net::UnixListener::bind(&sock).unwrap();
     let conns = Arc::new(AtomicUsize::new(0));
@@ -188,6 +201,13 @@ fn spawn_stream_fake(
                 if op == "stream" {
                     reqs3.lock().unwrap().push(req);
                     let mut stream = reader.into_inner();
+                    if let Some(code) = stream_err {
+                        let err = format!(
+                            "{{\"status\":\"err\",\"code\":\"{code}\",\"message\":\"scripted stream error\"}}\n"
+                        );
+                        let _ = stream.write_all(err.as_bytes()).await;
+                        return;
+                    }
                     if stream
                         .write_all(b"{\"status\":\"ok\",\"data\":{}}\n")
                         .await
@@ -303,6 +323,53 @@ fn enabled_terminal() -> kb_core::config::TerminalSection {
         enabled: Some(true),
         ..Default::default()
     }
+}
+
+/// The bearer token this file's token-caller test installs into the
+/// daemon's token file (synthetic; never a real credential).
+const FIXTURE_TOKEN: &str = "test-token-fixture-deadbeef";
+
+/// Like [`boot`], but the daemon also accepts `FIXTURE_TOKEN` (the
+/// token file is written at the daemon's config path before serve),
+/// so a bearer-authenticated caller gets `IdentitySource::Token`.
+async fn boot_with_token(
+    terminal: kb_core::config::TerminalSection,
+    fake: &StreamFake,
+) -> (tempfile::TempDir, std::net::SocketAddr) {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = tmp.path().join("corpus");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(source.join("seed.md"), "# seed\n\none doc\n").unwrap();
+
+    use kb_core::config::{DaemonSection, DefaultsSection, KbConfig, KbName, UiSection};
+    let daemon_name = format!("test-{}", tmp.path().file_name().unwrap().to_string_lossy());
+    let mut kb_map: std::collections::BTreeMap<KbName, kb_core::config::KbSection> =
+        std::collections::BTreeMap::new();
+    kb_map.insert(KbName::new("smoke").unwrap(), kb_section(source));
+    let mut terminal = terminal;
+    terminal.runner_socket = Some(fake.socket.clone());
+    let cfg = KbConfig {
+        daemon: DaemonSection {
+            name: Some(daemon_name.clone()),
+        },
+        ui: UiSection::default(),
+        kb: kb_map,
+        defaults: DefaultsSection {
+            embedding_model: None,
+            disable_embedder_fallback: true,
+        },
+        terminal,
+        ..Default::default()
+    };
+
+    let paths = kb_core::paths::KbPaths::rooted_at(tmp.path(), daemon_name);
+    std::fs::create_dir_all(&paths.config).unwrap();
+    std::fs::write(paths.token_file(), FIXTURE_TOKEN).unwrap();
+    let (addr, _handle) = kb_server::serve_on_random_port_with_paths(cfg, paths)
+        .await
+        .expect("serve");
+    common::wait_http_up(addr).await;
+    (tmp, addr)
 }
 
 // --------------------------------------------------------------------------
@@ -718,7 +785,8 @@ async fn ws_ticket_bound_to_session_and_identity() {
         "wrong-user body must match unknown"
     );
 
-    // Expired: a 1-second TTL ticket waited out matches the same
+    // Expired: a 2-second TTL ticket waited out (a 25%+ margin: the
+    // old 1.2 s / 1 s pairing flaked ~20% live) matches the same
     // body (separate boot: the TTL is a config knob).
     let tmp2 = tempfile::tempdir().unwrap();
     let mut replies2 = HashMap::new();
@@ -727,7 +795,7 @@ async fn ws_ticket_bound_to_session_and_identity() {
     let (tmp2, addr2) = boot(
         kb_core::config::TerminalSection {
             enabled: Some(true),
-            ticket_ttl_secs: Some(1),
+            ticket_ttl_secs: Some(2),
             ..Default::default()
         },
         &fake2,
@@ -735,17 +803,31 @@ async fn ws_ticket_bound_to_session_and_identity() {
     .await;
     let _ = tmp2;
     let expiring = mint_ticket(addr2, TERM_ID, None).await;
-    tokio::time::sleep(Duration::from_millis(1200)).await;
-    let (status, expired_body) = ws_http_get(
-        addr2,
-        TERM_ID,
-        &expiring,
-        None,
-        Some(&origin_header(addr2)),
-        None,
-    )
-    .await;
-    assert_eq!(status, 403, "expired ticket must refuse");
+    // Poll until the GET is refused (25% margin trips if the TTL
+    // ever becomes unenforceable), up to a 5 s deadline: a test
+    // that never expires must fail here, not sleep blindly.
+    let (status, expired_body) = {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let (status, expired_body) = ws_http_get(
+                addr2,
+                TERM_ID,
+                &expiring,
+                None,
+                Some(&origin_header(addr2)),
+                None,
+            )
+            .await;
+            if status == 403 {
+                break (status, expired_body);
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "an expired ticket must refuse within 5 s"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    };
     assert_eq!(
         unknown_body, expired_body,
         "expired body must match unknown (no oracle)"
@@ -841,19 +923,39 @@ async fn ws_input_reaches_upstream_unchanged() {
     ws.send(Message::text(r#"{"t":"resumefrom","offset":42}"#))
         .await
         .unwrap();
-    // Give the relay a moment to forward both, then close the browser
-    // side (which drops the upstream).
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    // Deadline-bounded poll (no fixed sleep): both forwards must
+    // arrive within 5 s, in order. The fake records raw C->S bodies,
+    // which carry the tap's S2C viewer-id prefix (kb-server wraps
+    // every item); the frame bytes inside are byte-for-byte.
+    let strip_s2c = |body: &[u8]| -> Vec<u8> {
+        let id_len = body[0] as usize;
+        assert!(body.len() >= 1 + id_len, "wrapped body must hold its id");
+        body[1 + id_len..].to_vec()
+    };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let received = loop {
+        let got = fake.received.lock().unwrap().clone();
+        if got.len() >= 2 {
+            break got;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "browser input must reach the upstream within 5 s: {got:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
     drop(ws);
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    let received = fake.received.lock().unwrap().clone();
+    let frames: Vec<(u8, Vec<u8>)> = received
+        .into_iter()
+        .map(|(kind, body)| (kind, strip_s2c(&body)))
+        .collect();
     assert_eq!(
-        received,
+        frames,
         vec![
             (ENV_BINARY, key_bytes.to_vec()),
             (ENV_TEXT, br#"{"t":"resumefrom","offset":42}"#.to_vec()),
         ],
-        "browser input must reach the upstream byte-for-byte, in order: {received:?}"
+        "browser input must reach the upstream byte-for-byte, in order: {frames:?}"
     );
 }
 
@@ -1090,20 +1192,19 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Capture {
 async fn ws_does_not_log_ticket() {
     // The ticket rides the query string (browsers cannot set headers
     // on a WS handshake) and is consumed at the upgrade, so a logged
-    // copy is dead; on top of that the handler never logs it. This
-    // test pins the second half.
+    // copy is dead; on top of that the handler never logs it, AND
+    // tower-http's TraceLayer span no longer carries the URI query
+    // (router.rs installs a query-less span: queries hold
+    // credentials). Both halves are pinned here over
+    // `kb_server::terminal` + `tower_http` at TRACE.
     //
-    // The capturing subscriber is filtered to `kb_server::terminal`
-    // only: tower-http's `TraceLayer` records the full request URI in
-    // its span fields (including the query string, by design) and
-    // prints span fields as context on nested events — asserting the
-    // absence under `tower_http=trace` would fail for library, not
-    // handler, reasons. What the WS handler and relay emit never
-    // carries the ticket — pinned here.
+    // The subscriber is process-wide (tracing has only one global),
+    // so the liveness assertion is scoped to this test's own term id
+    // (`term=abcd1234` on the upgrade line), not just "some upgrade".
     let buf = Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
     let writer = Capture(buf.clone());
     let subscriber = tracing_subscriber::fmt()
-        .with_env_filter("kb_server::terminal=trace")
+        .with_env_filter("kb_server::terminal=trace,tower_http=trace")
         .with_writer(writer)
         .with_ansi(false)
         .without_time()
@@ -1130,16 +1231,24 @@ async fn ws_does_not_log_ticket() {
     };
     let _ = ws_read_n(&mut ws, 1).await;
     drop(ws);
-    // Let the close log line flush.
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let captured = String::from_utf8_lossy(&buf.lock().unwrap().clone()).to_string();
-    assert!(
-        captured.contains("terminal ws upgraded"),
-        "the capture must be live (the upgrade log line): {captured}"
-    );
+    // Poll (no fixed sleep) until THIS test's upgrade line appears
+    // — the capture is live and scoped to our term id — then pin the
+    // ticket's absence over the full captured buffer.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let captured = loop {
+        let captured = String::from_utf8_lossy(&buf.lock().unwrap().clone()).to_string();
+        if captured.contains("terminal ws upgraded") && captured.contains("term=abcd1234") {
+            break captured;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the capture must be live (this test's upgrade line): {captured}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
     assert!(
         !captured.contains(&ticket),
-        "the ticket must never appear in terminal logs: {captured}"
+        "the ticket must never appear in terminal/tower_http logs: {captured}"
     );
 }
 
@@ -1193,10 +1302,16 @@ async fn term_events_low_rate_and_ended_once() {
         created.is_empty(),
         "1000 data frames + exits: no term.created: {created:?}"
     );
-    assert!(
-        state.is_empty(),
-        "no sizechanged/ended state either (ended-only relay): {state:?}"
+    // 1000 binary data frames produced ZERO state events (low rate);
+    // the exit produced exactly one `ended` state alongside the
+    // single `term.ended` (spec 5).
+    assert_eq!(
+        state.len(),
+        1,
+        "exactly one ended term.state despite two exit frames: {events:?}"
     );
+    assert_eq!(state[0].payload["id"], TERM_ID, "state payload id");
+    assert_eq!(state[0].payload["state"], "ended", "the ended state");
     assert_eq!(
         ended.len(),
         1,
@@ -1226,13 +1341,16 @@ async fn terminal_emits_created_and_ended_once() {
     let (tmp, addr) = boot(enabled_terminal(), &fake).await;
     let _ = tmp;
 
+    // The launch BODY asks for 111x22, but the runner confirms
+    // 100x30: the created event must carry the RUNNER's dimensions
+    // (reply first, body second, defaults last).
     let c = client();
     let resp = c
         .post(format!("{}/api/terms", base_url(addr)))
         .header("Origin", origin_header(addr))
         .header("x-kb-intent", "terminal")
         .header("Content-Type", "application/json")
-        .body(r#"{"harness":"omp","cols":100,"rows":30}"#)
+        .body(r#"{"harness":"omp","cols":111,"rows":22}"#)
         .send()
         .await
         .unwrap();
@@ -1256,6 +1374,7 @@ async fn terminal_emits_created_and_ended_once() {
         .filter(|e| e.event == "term.created")
         .collect();
     let ended: Vec<_> = events.iter().filter(|e| e.event == "term.ended").collect();
+    let state: Vec<_> = events.iter().filter(|e| e.event == "term.state").collect();
     assert_eq!(created.len(), 1, "exactly one term.created: {events:?}");
     let keys: std::collections::HashSet<&str> = created[0]
         .payload
@@ -1272,9 +1391,308 @@ async fn terminal_emits_created_and_ended_once() {
     );
     assert_eq!(created[0].payload["id"], TERM_ID);
     assert_eq!(created[0].payload["harness"], "omp");
-    assert_eq!(created[0].payload["cols"], 100);
-    assert_eq!(created[0].payload["rows"], 30);
+    assert_eq!(
+        created[0].payload["cols"], 100,
+        "the runner's confirmed cols, not the body's 111: {}",
+        created[0].payload
+    );
+    assert_eq!(
+        created[0].payload["rows"], 30,
+        "the runner's confirmed rows, not the body's 22: {}",
+        created[0].payload
+    );
     assert_eq!(ended.len(), 1, "exactly one term.ended: {events:?}");
     assert_eq!(ended[0].payload["id"], TERM_ID);
     assert_eq!(ended[0].payload["exit_code"], 0);
+    assert_eq!(
+        state.len(),
+        1,
+        "the kill must emit the ended state alongside term.ended: {events:?}"
+    );
+    assert_eq!(state[0].payload["id"], TERM_ID);
+    assert_eq!(state[0].payload["state"], "ended");
+}
+// --------------------------------------------------------------------------
+// Review round 1: gate negatives, stream-error mapping, shutdown twin.
+// --------------------------------------------------------------------------
+
+#[tokio::test]
+async fn ws_caller_class_token_refused_and_ticket_survives() {
+    // A bearer (Token) caller is refused at the caller-class step
+    // (before the ticket is touched), and the refusal does NOT
+    // consume the ticket: the same ticket upgrades for the SPA
+    // caller.
+    let tmp = tempfile::tempdir().unwrap();
+    let mut replies = HashMap::new();
+    replies.insert("list".to_string(), list_reply(&[TERM_ID]));
+    let fake = spawn_stream_fake(
+        tmp.path(),
+        replies,
+        vec![s2c_envelope(ENV_TEXT, br#"{"t":"hello"}"#)],
+        false,
+    );
+    let (tmp, addr) = boot_with_token(enabled_terminal(), &fake).await;
+    let _ = tmp;
+    let ticket = mint_ticket(addr, TERM_ID, None).await;
+    // Same upgrade attempt with the bearer token attached.
+    let url = format!("{}/api/terms/{TERM_ID}/ws?ticket={ticket}", base_url(addr));
+    let resp = client()
+        .get(url)
+        .header("Upgrade", "websocket")
+        .header("Connection", "Upgrade")
+        .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .header("Sec-WebSocket-Version", "13")
+        .header("Origin", origin_header(addr))
+        .header("Authorization", format!("Bearer {FIXTURE_TOKEN}"))
+        .send()
+        .await
+        .unwrap();
+    let (status, text) = body_text(resp).await;
+    assert_eq!(status, 403, "token caller must refuse");
+    assert_problem(&text, "terminal-token-refused");
+    match ws_connect(addr, TERM_ID, &ticket, None, &origin_header(addr), None).await {
+        WsConnect::Ok(mut ws) => {
+            let (data, _) = ws_read_n(&mut ws, 1).await;
+            assert_eq!(data.len(), 1, "the ticket must survive the token refusal");
+        }
+        other => panic!("the ticket must survive the token refusal, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn ws_gate_order_negatives() {
+    // Order pins: (a) id shape (400) runs before the ticket, so a
+    // malformed id with a valid ticket is 400 and the ticket
+    // survives; (b) `from` parse (400) runs before the cap (503),
+    // so a malformed `from` at the cap is 400, never 503, and the
+    // ticket survives that too.
+    let tmp = tempfile::tempdir().unwrap();
+    let mut replies = HashMap::new();
+    replies.insert("list".to_string(), list_reply(&[TERM_ID]));
+    let fake = spawn_stream_fake(
+        tmp.path(),
+        replies,
+        vec![s2c_envelope(ENV_TEXT, br#"{"t":"hello"}"#)],
+        false,
+    );
+    let (tmp, addr) = boot(enabled_terminal(), &fake).await;
+    let _ = tmp;
+
+    let ticket = mint_ticket(addr, TERM_ID, None).await;
+    // (a) 7-char and 13-char ids: 400 invalid-id, ticket untouched.
+    for bad_id in ["abcd123", "abcd1234wxyz1"] {
+        let (status, text) = ws_http_get(
+            addr,
+            bad_id,
+            &ticket,
+            None,
+            Some(&origin_header(addr)),
+            None,
+        )
+        .await;
+        assert_eq!(status, 400, "id {bad_id} must 400 before the ticket");
+        assert_problem(&text, "bad-request");
+    }
+    match ws_connect(addr, TERM_ID, &ticket, None, &origin_header(addr), None).await {
+        WsConnect::Ok(mut ws) => {
+            let (data, _) = ws_read_n(&mut ws, 1).await;
+            assert_eq!(data.len(), 1, "the ticket must survive the id negatives");
+            drop(ws);
+        }
+        other => panic!("the ticket must survive the id negatives, got {other:?}"),
+    }
+
+    // (b) fill the cap, then a garbage `from` is 400 (from-parse
+    // before cap), and the ticket still survives.
+    let mut sockets = Vec::new();
+    for _ in 0..15 {
+        let ticket = mint_ticket(addr, TERM_ID, None).await;
+        match ws_connect(addr, TERM_ID, &ticket, None, &origin_header(addr), None).await {
+            WsConnect::Ok(ws) => sockets.push(ws),
+            other => panic!("cap fill must connect, got {other:?}"),
+        }
+    }
+    // One socket from (a) was dropped above (its slot frees
+    // asynchronously); fill whichever slot remains before minting.
+    let spare = mint_ticket(addr, TERM_ID, None).await;
+    match ws_connect(addr, TERM_ID, &spare, None, &origin_header(addr), None).await {
+        WsConnect::Ok(ws) => sockets.push(ws),
+        other => panic!("spare connect must fill the last slot, got {other:?}"),
+    }
+    // The cap is full: a malformed `from` must 400, not 503.
+    let capped = mint_ticket(addr, TERM_ID, None).await;
+    let (status, text) = ws_http_get(
+        addr,
+        TERM_ID,
+        &capped,
+        Some("abc"),
+        Some(&origin_header(addr)),
+        None,
+    )
+    .await;
+    assert_eq!(
+        status, 400,
+        "a malformed `from` at the cap must 400 (from-parse before cap): {text}"
+    );
+    // Free one slot and reuse the capped ticket (no `from`).
+    drop(sockets.remove(0));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match ws_connect(addr, TERM_ID, &capped, None, &origin_header(addr), None).await {
+            WsConnect::Ok(_) => break,
+            WsConnect::Http(503) if tokio::time::Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            other => panic!("the capped ticket must upgrade once a slot frees, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn ws_stream_errors_map_and_upstream_failure_consumes_ticket() {
+    // (a) Runner says not-found for the stream op -> 404; the ticket
+    // is consumed (auth runs before the upstream dial, spec 1: an
+    // unauthenticated probe cannot open runner streams).
+    let tmp = tempfile::tempdir().unwrap();
+    let mut replies = HashMap::new();
+    replies.insert("list".to_string(), list_reply(&[TERM_ID]));
+    let fake = spawn_stream_fake_mode(tmp.path(), replies, vec![], true, Some("not-found"));
+    let (tmp, addr) = boot(enabled_terminal(), &fake).await;
+    let _ = tmp;
+    let ticket = mint_ticket(addr, TERM_ID, None).await;
+    let (status, text) = ws_http_get(
+        addr,
+        TERM_ID,
+        &ticket,
+        None,
+        Some(&origin_header(addr)),
+        None,
+    )
+    .await;
+    assert_eq!(status, 404, "runner not-found must 404: {text}");
+    assert_problem(&text, "terminal-not-found");
+    let (status, text) = ws_http_get(
+        addr,
+        TERM_ID,
+        &ticket,
+        None,
+        Some(&origin_header(addr)),
+        None,
+    )
+    .await;
+    assert_eq!(
+        status, 403,
+        "a stream-open failure must consume the ticket (spec 1 order): {text}"
+    );
+
+    // (b) Runner unreachable (socket file gone) -> 502 (spec 1.6:
+    // runner unreachable is 502, not the REST ops' 503).
+    let tmp2 = tempfile::tempdir().unwrap();
+    let fake2 = spawn_stream_fake(tmp2.path(), HashMap::new(), vec![], true);
+    std::fs::remove_file(&fake2.socket).unwrap();
+    let (tmp2, addr2) = boot(enabled_terminal(), &fake2).await;
+    let _ = tmp2;
+    let ticket2 = mint_ticket(addr2, TERM_ID, None).await;
+    let (status, text) = ws_http_get(
+        addr2,
+        TERM_ID,
+        &ticket2,
+        None,
+        Some(&origin_header(addr2)),
+        None,
+    )
+    .await;
+    assert_eq!(status, 502, "runner unreachable must 502: {text}");
+}
+
+#[tokio::test]
+async fn ws_opened_after_shutdown_closes_1012_immediately() {
+    // Spec 8 #12 twin: a socket opened AFTER shutdown=true closes at
+    // once with 1012 (the watch resolves immediately when already
+    // true). The ticket is minted before shutdown posts.
+    let tmp = tempfile::tempdir().unwrap();
+    let mut replies = HashMap::new();
+    replies.insert("list".to_string(), list_reply(&[TERM_ID]));
+    let fake = spawn_stream_fake(
+        tmp.path(),
+        replies,
+        vec![s2c_envelope(ENV_TEXT, br#"{"t":"hello"}"#)],
+        false,
+    );
+    let (tmp, addr) = boot(enabled_terminal(), &fake).await;
+    let _ = tmp;
+    let ticket = mint_ticket(addr, TERM_ID, None).await;
+    let resp = client()
+        .post(format!("{}/api/shutdown", base_url(addr)))
+        .header("Origin", origin_header(addr))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 202, "shutdown acknowledges");
+    // The upgrade still completes (the daemon drains, not instant
+    // teardown), and the relay closes it 1012 at once.
+    let mut ws = match ws_connect(addr, TERM_ID, &ticket, None, &origin_header(addr), None).await {
+        WsConnect::Ok(w) => w,
+        other => panic!("connect after shutdown must upgrade, then 1012, got {other:?}"),
+    };
+    match ws_next(&mut ws, Duration::from_secs(5)).await {
+        WsOutcome::Close(code, reason) => {
+            assert_eq!(code, 1012, "after-shutdown close must be 1012");
+            assert_eq!(reason, "service restart", "1012 reason");
+        }
+        other => panic!("after-shutdown socket must close 1012 immediately, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn term_state_live_on_sizechanged() {
+    // A `sizechanged` frame emits exactly one live `term.state`;
+    // the surrounding binary data frames emit none (low rate pin).
+    let tmp = tempfile::tempdir().unwrap();
+    let mut replies = HashMap::new();
+    replies.insert("list".to_string(), list_reply(&[TERM_ID]));
+    let script = vec![
+        s2c_envelope(ENV_BINARY, &binary_frame(0, b"abc")),
+        s2c_envelope(ENV_TEXT, br#"{"t":"sizechanged","cols":120,"rows":40}"#),
+        s2c_envelope(ENV_BINARY, &binary_frame(3, b"def")),
+    ];
+    let fake = spawn_stream_fake(tmp.path(), replies, script, true);
+    let (tmp, addr) = boot(enabled_terminal(), &fake).await;
+    let _ = tmp;
+    let ticket = mint_ticket(addr, TERM_ID, None).await;
+    let mut ws = match ws_connect(addr, TERM_ID, &ticket, None, &origin_header(addr), None).await {
+        WsConnect::Ok(w) => w,
+        other => panic!("connect must succeed, got {other:?}"),
+    };
+    let (frames, close) = ws_read_n(&mut ws, 3).await;
+    assert_eq!(
+        frames.len(),
+        3,
+        "all three frames relay verbatim: {frames:?}"
+    );
+    assert_eq!(
+        close,
+        Some((1011, "upstream closed".to_string())),
+        "fake closes with no exit: 1011"
+    );
+    drop(ws);
+    let events = sse_term_events(addr, Duration::from_millis(1500)).await;
+    let state: Vec<_> = events.iter().filter(|e| e.event == "term.state").collect();
+    assert_eq!(
+        state.len(),
+        1,
+        "exactly one term.state for the sizechanged: {events:?}"
+    );
+    assert_eq!(state[0].payload["id"], TERM_ID);
+    assert_eq!(state[0].payload["state"], "live");
+    assert_eq!(state[0].payload["cols"], 120);
+    assert_eq!(state[0].payload["rows"], 40);
+    assert!(
+        events.iter().all(|e| e.event != "term.ended"),
+        "no exit means no ended: {events:?}"
+    );
+    assert!(
+        events.iter().all(|e| e.event != "term.created"),
+        "no launch means no created: {events:?}"
+    );
 }

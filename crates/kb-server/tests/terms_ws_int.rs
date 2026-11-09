@@ -279,20 +279,26 @@ async fn read_round(ws: &mut WsStream, max_binary: usize) -> Round {
     round
 }
 
-/// Check that sorted-ish intervals cover `[start..end)` contiguously:
-/// every next offset must be <= the running cursor (overlap is
-/// allowed — resume replays buffered bytes), and the cursor advances
-/// to the max end. Returns the covered end.
-fn cover(intervals: &[(u64, usize)], start: u64) -> u64 {
+/// Deduped contiguity: walk the intervals sorted by offset; a prefix
+/// already covered by the cursor must be fully contained (a duplicate
+/// resume replay — deduped bytes are not re-counted); otherwise the
+/// interval must start EXACTLY at the cursor (no gap). Returns the
+/// covered end. Unlike a permissive cover (offset <= cursor), this
+/// rejects a tap that resends everything twice.
+fn contiguous_after_dedupe(intervals: &[(u64, usize)], start: u64) -> u64 {
     let mut sorted: Vec<(u64, usize)> = intervals.to_vec();
     sorted.sort_by_key(|(o, _)| *o);
     let mut cursor = start;
     for (offset, len) in sorted {
-        assert!(
-            offset <= cursor,
+        let end = offset + len as u64;
+        if end <= cursor {
+            continue; // a duplicate replay already covered
+        }
+        assert_eq!(
+            offset, cursor,
             "gap: frame starts at {offset} but coverage cur is {cursor}"
         );
-        cursor = cursor.max(offset + len as u64);
+        cursor = end;
     }
     cursor
 }
@@ -439,19 +445,22 @@ async fn ws_real_tap_roundtrip() {
     exit_seen = exit_seen || got.exit_seen;
     drop(ws);
 
-    // No-gap + no-duplicate-after-dedupe: the union of all intervals
-    // covers [start..end) contiguously (overlaps were deduped by the
-    // offset walk). The harness is deterministic, so a gap here is a
-    // real byte loss.
+    // No-gap + no-duplicate-after-dedupe: the intervals, deduped by
+    // offset, cover [start..end) contiguously with no duplicate
+    // counted twice. The harness is deterministic, so a gap here is
+    // a real byte loss.
     let start = match seed_opt {
         Some(s) => s,
         None => all.first().map(|(o, _)| *o).unwrap_or(0),
     };
-    let end = cover(&all, start);
+    let end = contiguous_after_dedupe(&all, start);
     assert!(end > start, "(b) the tap must have delivered bytes");
-    drop(exit_seen);
+    assert!(
+        exit_seen,
+        "(b) the finite harness must exit by the end of the drain"
+    );
 
-    // (c) Shutdown sends 1012 on the still-open socket (if any) and
+    // (c) Shutdown sends Close 1012 on the still-open socket and
     // the tmux holder survives it.
     let ticket = mint_ticket(addr, &id).await;
     let mut ws = match ws_connect(addr, &id, &ticket, Some(end)).await {
@@ -466,6 +475,22 @@ async fn ws_real_tap_roundtrip() {
         .await
         .unwrap();
     assert_eq!(resp.status().as_u16(), 202, "shutdown acknowledges");
+    // The browser must RECEIVE Close 1012 with the documented
+    // reason: a mutant closing 1009/1000/never must fail here.
+    let close = loop {
+        match tokio::time::timeout(Duration::from_secs(5), ws.next()).await {
+            Ok(Some(Ok(Message::Close(Some(frame))))) => {
+                break (u16::from(frame.code), frame.reason.to_string());
+            }
+            Ok(Some(Ok(_))) => continue,
+            _ => break (0u16, String::new()),
+        }
+    };
+    assert_eq!(
+        close,
+        (1012, "service restart".to_string()),
+        "(c) shutdown must deliver Close(1012, service restart)"
+    );
     // The holder must be alive after the kb-server drain.
     let mut alive = false;
     for _ in 0..10 {
