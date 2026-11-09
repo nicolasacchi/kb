@@ -306,8 +306,8 @@ mod tests {
     /// `bind_runner_socket` forces 0600 even under a permissive caller
     /// umask AND restores the caller's umask afterwards (it temporarily
     /// sets 077 for the atomic-safe create, then puts the caller's back).
-    #[test]
-    fn bind_restores_caller_umask_and_forces_0600() {
+    #[tokio::test]
+    async fn bind_restores_caller_umask_and_forces_0600() {
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("runner").join("runner.sock");
         std::fs::create_dir_all(sock.parent().unwrap()).unwrap();
