@@ -63,7 +63,7 @@ describe("no static xterm imports", () => {
     const lazyText = nodeFs.readFileSync(dir + "TerminalPanel.lazy.ts", "utf8");
     // A plain re-export into the async chunk. Wrapping ./TerminalPanel in
     // a second React.lazy makes the slot's lazy() resolve to a lazy object
-    // and React throws error #306 (e2e: the panel never mounted).
+    // and React throws error 306 (e2e: the panel never mounted).
     expect(lazyText).toMatch(/export\s+\{[^}]*\}\s+from\s+"\.\/TerminalPanel"/);
     expect(lazyText).not.toContain("lazy(");
   });

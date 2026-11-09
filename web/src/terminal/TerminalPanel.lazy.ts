@@ -6,7 +6,7 @@
 // "Open terminal". The re-export must stay a plain re-export: wrapping
 // `./TerminalPanel` in a second `React.lazy` here makes the slot's
 // `lazy()` resolve to a lazy OBJECT rather than the component, and
-// React rejects that with error #306 ("Lazy element type must resolve
+// React rejects that with error 306 ("Lazy element type must resolve
 // to a class or function") — the whole panel then never mounts.
 
 export { TerminalPanel as default } from "./TerminalPanel";
