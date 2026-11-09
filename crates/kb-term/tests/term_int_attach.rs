@@ -817,10 +817,15 @@ impl PtyProc {
                             .take()
                             .and_then(|rx| rx.recv_timeout(Duration::from_secs(2)).ok())
                             .unwrap_or_default();
-                        let tail = String::from_utf8_lossy(&out[out.len().saturating_sub(600)..]);
+                        let text = String::from_utf8_lossy(&out).into_owned();
+                        let tail = &text[text.len().saturating_sub(2000)..];
                         panic!(
-                            "child did not exit within {timeout:?}; captured {} bytes, tail: {tail:?}",
-                            out.len()
+                            "child did not exit within {timeout:?}; captured {} bytes \
+                             (session-ended: {}, reconnecting: {}, ed3: {}), tail: {tail:?}",
+                            out.len(),
+                            text.contains("[session ended"),
+                            text.contains("reconnecting"),
+                            text.matches('\x1b[3J').count()
                         );
                     }
                     std::thread::sleep(Duration::from_millis(10));
