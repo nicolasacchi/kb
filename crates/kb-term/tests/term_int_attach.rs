@@ -126,7 +126,7 @@ fn picture_line(n: u32, cols: usize) -> Vec<u8> {
 }
 
 fn stream_line(n: u32, cols: usize) -> Vec<u8> {
-    if n % 50 == 0 {
+    if n.is_multiple_of(50) {
         picture_line(n, cols)
     } else {
         format!("L{n:06} line {n} lorem ipsum dolor sit amet").into_bytes()
@@ -231,8 +231,6 @@ struct FakeRunner {
     sock: PathBuf,
     log: Arc<Mutex<RunnerLog>>,
     thread: Option<std::thread::JoinHandle<()>>,
-    take_failures: Arc<Mutex<usize>>,
-    session_list: serde_json::Value,
 }
 
 impl FakeRunner {
@@ -274,8 +272,6 @@ impl FakeRunner {
             sock,
             log,
             thread: Some(thread),
-            take_failures,
-            session_list,
         }
     }
 
@@ -482,9 +478,6 @@ impl FakeTap {
         }
     }
 
-    fn recorded_controls(&self) -> Vec<serde_json::Value> {
-        self.controls.lock().unwrap().clone()
-    }
     fn recorded_opens(&self) -> Vec<serde_json::Value> {
         self.opens.lock().unwrap().clone()
     }
@@ -556,10 +549,7 @@ fn handle_tap_conn(
     let (seed_bytes, live_bytes) =
         build_t4(script.cols as usize, script.seed_lines, script.live_lines);
     let total = (seed_bytes.len() + live_bytes.len()) as u64;
-    let is_resume = resume
-        .as_ref()
-        .and_then(|r| r.as_object())
-        .map_or(false, |_| true);
+    let is_resume = resume.as_ref().is_some_and(|r| r.as_object().is_some());
     let resume_offset: u64 = resume
         .as_ref()
         .and_then(|r| r.get("offset"))

@@ -873,7 +873,7 @@ mod tests {
         rw.add_image(0x010203, 100, 50);
         let mut input = Vec::new();
         for row_idx in [0u8, 1] {
-            input.extend_from_slice(format!("\x1b[38;2;1;2;3m").as_bytes());
+            input.extend_from_slice("\x1b[38;2;1;2;3m".as_bytes());
             input.extend_from_slice(b"\x1b[58:2::1:2:3m");
             for c in 0..3 {
                 input.extend_from_slice(&cell(row_idx as usize, c));
