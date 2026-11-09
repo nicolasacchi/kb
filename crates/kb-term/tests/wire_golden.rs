@@ -5,8 +5,8 @@
 use std::path::{Path, PathBuf};
 
 use kb_term::wire::{
-    decode_binary, encode_binary, is_valid_term_id, ClientFrame, Harness, Request, Response,
-    ServerFrame, SessionInfo, WireError,
+    decode_binary, encode_binary, is_valid_sha256_hex, is_valid_term_id, ClientFrame, Harness,
+    Request, Response, ServerFrame, SessionInfo, WireError,
 };
 
 fn golden_dir() -> PathBuf {
@@ -216,12 +216,39 @@ fn term_id_charset() {
 }
 
 #[test]
+fn sha256_hex_charset() {
+    // The sha256 of the empty string (the Media golden key) is 64 lowercase
+    // hex characters.
+    assert!(is_valid_sha256_hex(
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    ));
+    assert!(!is_valid_sha256_hex(
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85"
+    ));
+    assert!(!is_valid_sha256_hex(
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b8550"
+    ));
+    assert!(!is_valid_sha256_hex(
+        "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    ));
+    assert!(!is_valid_sha256_hex(
+        "g3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    ));
+    assert!(!is_valid_sha256_hex(""));
+}
+
+#[test]
 fn golden_files_are_complete() {
     let mut expected: Vec<String> = server_goldens()
         .into_iter()
         .chain(client_goldens())
         .chain(request_goldens())
-        .chain(["resp_ok.json", "resp_err.json", "session_info.json"])
+        .chain([
+            "resp_ok.json",
+            "resp_err.json",
+            "resp_list.json",
+            "session_info.json",
+        ])
         .map(str::to_string)
         .collect();
     expected.sort();
