@@ -197,7 +197,7 @@ export class TermSession {
    * Send one keystroke payload. Returns false (and does not queue)
    * when the stream is not live — the caller drops it with a
    * transient caption. Binary (xterm `onBinary`) bytes are UTF-8
-   * decoded to the pinned string frame; never string1337ified.
+   * decoded to the pinned string frame.
    */
   sendInput(data: string | Uint8Array): boolean {
     if (this.phase !== "live" || this.socket === null || this.disposed) {
@@ -396,17 +396,20 @@ export class TermSession {
   }
 
   private enqueueWrite(data: Uint8Array): void {
+    // The `lib` target predates `Promise.withResolvers`, so the manual
+    // executor form is used here.
     this.writeQueue = this.writeQueue
       .catch(() => {})
-      .then(() => {
-        const { promise, resolve } = Promise.withResolvers<void>();
-        try {
-          this.sink.write(data, resolve);
-        } catch {
-          resolve();
-        }
-        return promise;
-      });
+      .then(
+        () =>
+          new Promise<void>((res) => {
+            try {
+              this.sink.write(data, res);
+            } catch {
+              res();
+            }
+          }),
+      );
   }
 
   private enqueueReset(): void { this.enqueueStep(() => this.sink.reset()); }
