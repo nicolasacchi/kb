@@ -377,9 +377,13 @@ test("omp_beat_ppid_is_the_host_process_pid", async () => {
     const text = readFileSync(PPID_LOG, "utf8");
     const lines = text.split("\n").filter((l) => l.startsWith("PPID="));
     expect(lines.length).toBeGreaterThanOrEqual(1);
-    const m = lines[lines.length - 1].match(/^PPID=(\d+) TERM=(.*)$/);
-    expect(m![1]).toBe(String(process.pid));
-    expect(m![2]).toBe("t13a");
+    // EVERY beat line, not just the last: an earlier beat with a wrong
+    // PPID must fail (asserting only the tail would let it pass silently).
+    for (const line of lines) {
+      const m = line.match(/^PPID=(\d+) TERM=(.*)$/);
+      expect(m![1]).toBe(String(process.pid));
+      expect(m![2]).toBe("t13a");
+    }
   } finally {
     if (prev === undefined) delete process.env.KB_TERM_ID;
     else process.env.KB_TERM_ID = prev;
