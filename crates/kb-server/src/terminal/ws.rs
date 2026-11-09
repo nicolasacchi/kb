@@ -685,7 +685,7 @@ mod relay_tests {
         }
     }
 
-    impl futures::Stream for MemSinkStream {
+    impl Stream for MemSinkStream {
         type Item = Result<Message, axum::Error>;
         fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
             self.get_mut().from_test.poll_recv(cx)

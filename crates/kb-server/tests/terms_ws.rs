@@ -286,9 +286,8 @@ async fn boot_with_handle(
     std::fs::create_dir_all(&source).unwrap();
     std::fs::write(source.join("seed.md"), "# seed\n\none doc\n").unwrap();
 
-    use kb_core::config::{
-        DaemonSection, DefaultsSection, KbConfig, KbName, TerminalSection, UiSection,
-    };
+    use kb_core::config::{DaemonSection, DefaultsSection, KbConfig, TerminalSection, UiSection};
+    use kb_core::types::KbName;
     let _ = TerminalSection::default();
     let daemon_name = format!("test-{}", tmp.path().file_name().unwrap().to_string_lossy());
     let mut kb_map: std::collections::BTreeMap<KbName, kb_core::config::KbSection> =
@@ -341,7 +340,8 @@ async fn boot_with_token(
     std::fs::create_dir_all(&source).unwrap();
     std::fs::write(source.join("seed.md"), "# seed\n\none doc\n").unwrap();
 
-    use kb_core::config::{DaemonSection, DefaultsSection, KbConfig, KbName, UiSection};
+    use kb_core::config::{DaemonSection, DefaultsSection, KbConfig, UiSection};
+    use kb_core::types::KbName;
     let daemon_name = format!("test-{}", tmp.path().file_name().unwrap().to_string_lossy());
     let mut kb_map: std::collections::BTreeMap<KbName, kb_core::config::KbSection> =
         std::collections::BTreeMap::new();
@@ -530,6 +530,7 @@ async fn ws_read_n(ws: &mut WsStream, n: usize) -> (Vec<Message>, Option<(u16, S
 // SSE helper.
 // --------------------------------------------------------------------------
 
+#[derive(Debug)]
 struct SseTerm {
     event: String,
     payload: serde_json::Value,
@@ -806,7 +807,7 @@ async fn ws_ticket_bound_to_session_and_identity() {
     // Poll until the GET is refused (25% margin trips if the TTL
     // ever becomes unenforceable), up to a 5 s deadline: a test
     // that never expires must fail here, not sleep blindly.
-    let (status, expired_body) = {
+    let (_status, expired_body) = {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
             let (status, expired_body) = ws_http_get(
@@ -929,7 +930,7 @@ async fn ws_input_reaches_upstream_unchanged() {
     // every item); the frame bytes inside are byte-for-byte.
     let strip_s2c = |body: &[u8]| -> Vec<u8> {
         let id_len = body[0] as usize;
-        assert!(body.len() >= 1 + id_len, "wrapped body must hold its id");
+        assert!(body.len() > id_len, "wrapped body must hold its id");
         body[1 + id_len..].to_vec()
     };
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);

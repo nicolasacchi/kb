@@ -140,7 +140,8 @@ async fn boot(
     std::fs::create_dir_all(&source).unwrap();
     std::fs::write(source.join("seed.md"), "# seed\n\none doc\n").unwrap();
 
-    use kb_core::config::{DaemonSection, DefaultsSection, KbConfig, KbName, UiSection};
+    use kb_core::config::{DaemonSection, DefaultsSection, KbConfig, UiSection};
+    use kb_core::types::KbName;
     let daemon_name = format!("test-{}", tmp.path().file_name().unwrap().to_string_lossy());
     let mut kb_map: std::collections::BTreeMap<KbName, kb_core::config::KbSection> =
         std::collections::BTreeMap::new();
@@ -403,7 +404,7 @@ async fn ws_real_tap_roundtrip() {
     let mut last_end = first
         .binary
         .iter()
-        .map(|(o, l)| o + l as u64)
+        .map(|(o, l)| *o + *l as u64)
         .max()
         .unwrap_or(0);
     let mut seed_opt = first.seed_offset;
@@ -421,7 +422,7 @@ async fn ws_real_tap_roundtrip() {
         let advanced = got
             .binary
             .iter()
-            .map(|(o, l)| o + l as u64)
+            .map(|(o, l)| *o + *l as u64)
             .max()
             .unwrap_or(last_end);
         assert!(
