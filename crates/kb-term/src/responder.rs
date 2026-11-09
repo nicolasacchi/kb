@@ -898,8 +898,18 @@ mod tests {
         let big = vec![b'A'; 4096];
         let reply = DA1_REPLY.to_vec();
         // Slave side: non-blocking reads until both items fully arrive.
+        // `std::fs::File` has no inherent non-blocking setter, so flip
+        // `O_NONBLOCK` with fcntl (same pattern as `open_pty`).
         let mut slave: std::fs::File = slave.into();
-        slave.set_nonblocking(true).unwrap();
+        unsafe {
+            use std::os::unix::io::AsRawFd as _;
+            let flags = libc::fcntl(slave.as_raw_fd(), libc::F_GETFL);
+            assert!(flags >= 0, "F_GETFL on slave");
+            assert_eq!(
+                libc::fcntl(slave.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK),
+                0
+            );
+        }
         let need = big.len() + reply.len();
         let mut got = Vec::new();
         // Queue the big item, and feed a DA1 query from the slave side
