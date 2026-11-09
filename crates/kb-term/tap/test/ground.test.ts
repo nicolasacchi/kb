@@ -5,6 +5,21 @@ import { test, expect } from 'bun:test';
 import { GroundTracker } from '../src/ground.ts';
 import { mulberry32, genStream, enc } from './helpers.ts';
 
+// reset() backs the reseed handover: pre-reset mid-sequence state must
+// not leak across twin.reset() (the twin restarts from the capture).
+test('reset restores ground and zeroes the byte counter', () => {
+  const t = new GroundTracker();
+  t.push(enc('\x1b[1;31')); // mid-CSI
+  expect(t.atGround()).toBe(false);
+  expect(t.offset()).toBe(7);
+  t.reset();
+  expect(t.atGround()).toBe(true);
+  expect(t.offset()).toBe(0);
+  t.push(enc('plain'));
+  expect(t.atGround()).toBe(true);
+  expect(t.offset()).toBe(5);
+});
+
 test('csi split at every byte offset: not ground until the final byte', () => {
   const bytes = enc('\x1b[1;31m');
   const t = new GroundTracker();

@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makePng } from './helpers-graphics.ts';
 import type { SpawnedProcess } from '../src/control.ts';
+import { makeTwin, type Twin } from '../src/twin.ts';
 import { EnvelopeDecoder, decodeTextFrame, encodeControlMessage, encodeEnvelope, ENV_CONTROL, ENV_TEXT, ENV_BINARY, parseS2C } from '../src/wire.ts';
 
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -307,6 +308,238 @@ test('seam_media_stub_advances_offsets_and_counts', async () => {
     socket.destroy();
   } finally {
     stack.stop();
+    rmSync(runDir, { recursive: true, force: true });
+  }
+});
+
+// --------------------------------------------------------- reseed seam
+
+/** %begin/%end reply block: lines are the command's reply lines. */
+function block(num: number, lines: string[]): string {
+  return `%begin 1000 ${num} 0\n${lines.map((l) => `${l}\n`).join('')}%end 1000 ${num} 0\n`;
+}
+
+/**
+ * A real twin behind a recording proxy: every feed call is recorded (so
+ * exactly-once and withheld-byte assertions are direct), one feed payload
+ * containing `gateOn` (substring) parks on a releasable deferred (so the
+ * test can land mid-attempt output deterministically), and resets are
+ * counted.
+ */
+function recordingTwin(inner: Twin, gateOn: string) {
+  const feeds: string[] = [];
+  let release: ((v: Promise<void>) => void) | null = null;
+  const rec = {
+    feeds,
+    resets: 0,
+    released: false,
+    releaseGated(): void {
+      rec.released = true;
+      release?.(inner.feed(enc('')));
+    },
+  };
+  const twin = {
+    term: inner.term,
+    serialize: inner.serialize,
+    cols: inner.cols,
+    rows: inner.rows,
+    widthPin: inner.widthPin,
+    feed: (b: Uint8Array | string): Promise<void> => {
+      const s = typeof b === 'string' ? b : Buffer.from(b).toString('utf-8');
+      feeds.push(s);
+      if (!rec.released && s.includes(gateOn)) {
+        return new Promise<void>((resolve) => {
+          release = (p: Promise<void>) => {
+            void p.then(() => inner.feed(b)).then(resolve);
+          };
+        });
+      }
+      return inner.feed(b);
+    },
+    reset: () => {
+      rec.resets++;
+      inner.reset();
+    },
+    resize: (c: number, r: number) => inner.resize(c, r),
+    dispose: () => inner.dispose(),
+    repliesDropped: () => inner.repliesDropped(),
+    lineCount: (w: 'normal' | 'alt') => inner.lineCount(w),
+  } as Twin;
+  return { rec, twin };
+}
+
+// Reseed through createTapStack: output after B must reach the twin
+// EXACTLY ONCE (only via the resumed chain, post-withhold), the withhold
+// mouse-enable must never be reintroduced, and the seed a late viewer
+// gets afterwards carries the capture + post-B bytes.
+test('seam_reseed_handover_feeds_post_B_bytes_exactly_once_post_withhold', async () => {
+  const runDir = mkdtempSync(join(tmpdir(), 'kbt7-main-'));
+  const fake = new FakeSpawn();
+  const inner = makeTwin(80, 24);
+  const { rec, twin } = recordingTwin(inner, 'reseeded');
+  const stack = createTapStack({
+    session: 'reseed001',
+    runDir,
+    harness: 'omp',
+    cols: 80,
+    rows: 24,
+    epoch: 'a'.repeat(32),
+    spawn: fake.fn,
+    twin,
+    quiesceMs: 0,
+    joinWaitMs: 3000,
+  });
+  const starting = stack.start();
+  fake.stdout.push(block(0, []));
+  fake.stdout.push(block(1, []));
+  await starting;
+  try {
+    const cap = capture();
+    const socket = await openViewer(stack.server.sockPath, cap);
+    await waitUntil(() => cap.texts.some((t) => t.includes('"t":"hello"')), 'pre-reseed hello');
+    fake.stdout.push(octal('%0', 'PRE'));
+    await waitUntil(() => rec.feeds.some((f) => f.includes('PRE')), 'PRE reached twin');
+
+    fake.stdout.push('%pause %0\n');
+    await waitUntil(() => fake.writes.length >= 3, 'pause continue + reseed batch written');
+    fake.stdout.push(block(2, [])); // continue ack
+    fake.stdout.push(block(3, ['A 0 5 0']));
+    fake.stdout.push(block(4, ['reseeded-content']));
+    fake.stdout.push(block(5, []));
+    fake.stdout.push(block(6, ['B 0 5 0']));
+    fake.stdout.push(block(7, []));
+    await waitUntil(() => rec.feeds.some((f) => f.includes('reseeded-content')), 'capture feed parked');
+    // Post-B output, while the attempt is parked on the capture feed:
+    // a withheld main-screen mouse enable (must never reach the twin)
+    // plus plain bytes (must reach it exactly once, after the capture).
+    fake.stdout.push(octal('%0', 'AFTER-B\x1b[?1000htail'));
+    await waitUntil(() => stack.server.head >= 3 + 11, 'post-B bytes in ring');
+    rec.releaseGated();
+    await waitUntil(() => rec.feeds.some((f) => f.includes('AFTER-Btail')), 'post-B fed via chain');
+
+    // Exactly once: the reseed queue must not have fed them too, and no
+    // feed may carry the withheld mouse enable.
+    expect(rec.feeds.filter((f) => f.includes('AFTER-B')).length).toBe(1);
+    expect(rec.feeds.filter((f) => f.includes('PRE')).length).toBe(1);
+    expect(rec.feeds.filter((f) => f.includes('reseeded-content')).length).toBe(1);
+    expect(rec.feeds.some((f) => f.includes('?1000h'))).toBe(false);
+    const afterIdx = rec.feeds.findIndex((f) => f.includes('AFTER-Btail'));
+    const capIdx = rec.feeds.findIndex((f) => f.includes('reseeded-content'));
+    expect(afterIdx).toBeGreaterThan(capIdx);
+    expect(rec.resets).toBe(1);
+    // The live viewer receives the post-B bytes exactly once, in order.
+    await waitUntil(() => Buffer.concat(cap.binaries.map((b) => Buffer.from(b))).toString('utf-8').includes('AFTER-Btail'), 'viewer live post-B');
+    const liveText = Buffer.concat(cap.binaries.map((b) => Buffer.from(b))).toString('utf-8');
+    expect(liveText.split('AFTER-Btail').length - 1).toBe(1);
+
+    // A late viewer joins and its seed carries capture + post-B bytes.
+    const cap2 = capture();
+    const socket2 = await openViewer(stack.server.sockPath, cap2);
+    await waitUntil(() => cap2.texts.some((t) => t.includes('"t":"seed"')), 'post-reseed seed');
+    const seedText = cap2.texts.find((t) => t.includes('"t":"seed"'));
+    const seedLen = seedText === undefined ? 0 : (JSON.parse(seedText) as Record<string, unknown>)['len'];
+    expect(typeof seedLen).toBe('number');
+    let skip = seedLen as number;
+    const seedParts: Uint8Array[] = [];
+    for (const b of cap2.binaries) {
+      if (skip >= b.length) {
+        skip -= b.length;
+        continue;
+      }
+      seedParts.push(b.slice(skip));
+      skip = 0;
+    }
+    const seedBytes = Buffer.concat(seedParts.map((b) => Buffer.from(b))).toString('utf-8');
+    expect(seedBytes).toContain('reseeded-content');
+    expect(seedBytes).toContain('AFTER-Btail');
+    socket.destroy();
+    socket2.destroy();
+  } finally {
+    stack.stop();
+    inner.dispose();
+    rmSync(runDir, { recursive: true, force: true });
+  }
+});
+
+// A second pause during a slow reseed must serialize behind it: the
+// second batch is not written until the first reseed completes, each
+// capture resets exactly once, and mid-flight output lands exactly once.
+test('seam_overlapping_pause_serializes_reseeds', async () => {
+  const runDir = mkdtempSync(join(tmpdir(), 'kbt7-main-'));
+  const fake = new FakeSpawn();
+  const inner = makeTwin(80, 24);
+  const { rec, twin } = recordingTwin(inner, 'first-capture');
+  const stack = createTapStack({
+    session: 'reseed002',
+    runDir,
+    harness: 'omp',
+    cols: 80,
+    rows: 24,
+    epoch: 'a'.repeat(32),
+    spawn: fake.fn,
+    twin,
+    quiesceMs: 0,
+    joinWaitMs: 3000,
+  });
+  const starting = stack.start();
+  fake.stdout.push(block(0, []));
+  fake.stdout.push(block(1, []));
+  await starting;
+  try {
+    fake.stdout.push(octal('%0', 'PRE'));
+    await waitUntil(() => rec.feeds.some((f) => f.includes('PRE')), 'PRE reached twin');
+
+    fake.stdout.push('%pause %0\n');
+    await waitUntil(() => fake.writes.length >= 3, 'first batch written');
+    fake.stdout.push(block(2, [])); // continue 1 ack
+    fake.stdout.push(block(3, ['A 0 5 0']));
+    fake.stdout.push(block(4, ['first-capture']));
+    fake.stdout.push(block(5, []));
+    fake.stdout.push(block(6, ['B 0 5 0']));
+    fake.stdout.push(block(7, []));
+    await waitUntil(() => rec.feeds.some((f) => f.includes('first-capture')), 'first capture parked');
+
+    // Second pause DURING the first (gated) reseed: its continue is
+    // written immediately, but its capture batch must queue behind the
+    // first reseed and NOT be written yet.
+    fake.stdout.push('%pause %0\n');
+    await waitUntil(() => fake.writes.length >= 4, 'second continue written');
+    // A wall-clock settle is required here: this asserts the ABSENCE of
+    // the second batch write, and the only way it could appear is via the
+    // (gated) first reseed completing.
+    await Bun.sleep(100);
+    expect(fake.writes.length).toBe(4);
+    // Mid-flight output during both reseeds.
+    fake.stdout.push(octal('%0', 'MID'));
+    await waitUntil(() => stack.server.head >= 6, 'MID in ring');
+
+    rec.releaseGated();
+    await waitUntil(() => fake.writes.length >= 5, 'second batch written after first reseed');
+    // Order of pending resolution: continue-2 ack, then the second batch.
+    fake.stdout.push(block(8, []));
+    fake.stdout.push(block(9, ['A 0 7 0']));
+    fake.stdout.push(block(10, ['second-capture']));
+    fake.stdout.push(block(11, []));
+    fake.stdout.push(block(12, ['B 0 7 0']));
+    fake.stdout.push(block(13, []));
+    await waitUntil(() => rec.feeds.some((f) => f.includes('second-capture')), 'second capture fed');
+    await waitUntil(() => rec.feeds.some((f) => f === 'MID'), 'MID fed exactly once');
+
+    expect(rec.feeds.filter((f) => f === 'MID').length).toBe(1);
+    expect(rec.feeds.filter((f) => f.includes('first-capture')).length).toBe(1);
+    expect(rec.feeds.filter((f) => f.includes('second-capture')).length).toBe(1);
+    expect(rec.resets).toBe(2);
+    const firstIdx = rec.feeds.findIndex((f) => f.includes('first-capture'));
+    const secondIdx = rec.feeds.findIndex((f) => f.includes('second-capture'));
+    expect(secondIdx).toBeGreaterThan(firstIdx);
+    // MID (enqueued during reseed 1) must feed before reseed 2's reset:
+    // reseed 2 drains the pre-pause chain, so MID resolves into the
+    // pre-capture twin and the second capture re-supplies its effect.
+    const midIdx = rec.feeds.findIndex((f) => f === 'MID');
+    expect(midIdx).toBeLessThan(secondIdx);
+  } finally {
+    stack.stop();
+    inner.dispose();
     rmSync(runDir, { recursive: true, force: true });
   }
 });
