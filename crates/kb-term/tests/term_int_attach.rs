@@ -253,6 +253,7 @@ impl FakeRunner {
                 return;
             }
             let conn = match listener.accept() {
+                Ok((c, _)) => c,
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     std::thread::sleep(Duration::from_millis(10));
                     continue;
