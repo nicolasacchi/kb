@@ -178,12 +178,6 @@ enum WsConnect {
     Other,
 }
 
-#[derive(Debug)]
-enum WsOutcome {
-    Data(Message),
-    Close(u16, String),
-    Ended,
-}
 
 async fn ws_connect(
     addr: std::net::SocketAddr,

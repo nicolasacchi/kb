@@ -1386,7 +1386,9 @@ async fn terminal_emits_created_and_ended_once() {
         .collect();
     assert_eq!(
         keys,
-        ["id", "harness", "cols", "rows"].into_iter().collect(),
+        ["id", "harness", "cols", "rows"]
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>(),
         "created payload keys: {}",
         created[0].payload
     );
