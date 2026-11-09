@@ -194,7 +194,6 @@ fn decide_binary(state: &StreamState, offset: u64) -> BinaryDecision {
 /// Everything the attach loop needs beyond the runner client.
 struct AttachContext {
     args: AttachArgs,
-    runner_sock: PathBuf,
     tap_path: PathBuf,
     viewer: String,
     /// The local pane size at start (for the Profile banner and takes).
@@ -212,7 +211,7 @@ impl AttachContext {
 pub async fn run_attach(args: AttachArgs) -> u8 {
     let env_sock = std::env::var("KB_TERM_RUNNER_SOCK").ok();
     let runner_sock = crate::runner_client::resolve_runner_socket(
-        args.runner_sock.as_deref().or_else(|| env_sock.as_deref()),
+        args.runner_sock.as_deref().or(env_sock.as_deref()),
     );
     let mut runner = match RunnerClient::connect(&runner_sock).await {
         Ok(c) => c,
@@ -258,7 +257,6 @@ pub async fn run_attach(args: AttachArgs) -> u8 {
         tap_path,
         viewer: view_id,
         local_size,
-        runner_sock: runner_sock.clone(),
         runner,
     };
     attach_session(ctx).await
@@ -334,9 +332,10 @@ async fn attach_session(mut ctx: AttachContext) -> u8 {
                 }
                 break 'outer SessionResult::Detached;
             }
-            SessionResult::Error(_) => {
+            SessionResult::Error(msg) => {
                 // Tap unreachable / reset / gap: backoff, then re-join
                 // with ResumeFrom{applied}.
+                eprintln!("kb-term: tap: {msg}; reconnecting");
                 let d = backoff.next_delay(jitter_ms());
                 tokio::time::sleep(d).await;
                 continue 'outer;
@@ -799,7 +798,7 @@ async fn connect_tap(
 pub async fn run_ls(args: LsArgs) -> u8 {
     let env_sock = std::env::var("KB_TERM_RUNNER_SOCK").ok();
     let runner_sock = crate::runner_client::resolve_runner_socket(
-        args.runner_sock.as_deref().or_else(|| env_sock.as_deref()),
+        args.runner_sock.as_deref().or(env_sock.as_deref()),
     );
     let mut runner = match RunnerClient::connect(&runner_sock).await {
         Ok(c) => c,
@@ -903,7 +902,7 @@ fn render_ls_rows(rows: &[serde_json::Value]) -> Vec<String> {
 pub async fn run_new(args: NewArgs) -> u8 {
     let env_sock = std::env::var("KB_TERM_RUNNER_SOCK").ok();
     let runner_sock = crate::runner_client::resolve_runner_socket(
-        args.runner_sock.as_deref().or_else(|| env_sock.as_deref()),
+        args.runner_sock.as_deref().or(env_sock.as_deref()),
     );
     let mut runner = match RunnerClient::connect(&runner_sock).await {
         Ok(c) => c,

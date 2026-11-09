@@ -4,8 +4,10 @@
 //! [`crate::wire`].
 //!
 //! Resolution order for the runner socket:
-//! `--runner-sock` (flag) > `$KB_TERM_RUNNER_SOCK` > `$KB_TERM_RUN_DIR`
-//! + `/runner/runner.sock` > `/run/kb-term/runner/runner.sock`.
+//! the `--runner-sock` flag, then `$KB_TERM_RUNNER_SOCK`, then
+//! `$KB_TERM_RUN_DIR` joined with `/runner/runner.sock`, and finally
+//! the default `/run/kb-term/runner/runner.sock`.
+//!
 //! The tap socket for a session derives from the same run dir:
 //! `<run-dir>/s/<id>/tap.sock` (mirroring `tap/src/viewers.ts:194`).
 
