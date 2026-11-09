@@ -55,13 +55,13 @@ impl Anchor {
     }
 
     /// Current pty size: (cols, rows, pixel_w, pixel_h).
-    pub fn winsize(&self) -> (u16, u16, u16, u16) {
+    pub fn winsize(&self) -> Result<(u16, u16, u16, u16), RunnerError> {
         self.client.winsize()
     }
 
     /// Resize the pty (cells and pixel fields) for a grid take.
-    pub fn set_winsize(&self, cols: u16, rows: u16) {
-        self.client.set_winsize(cols, rows);
+    pub fn set_winsize(&self, cols: u16, rows: u16) -> Result<(), RunnerError> {
+        self.client.set_winsize(cols, rows)
     }
 }
 

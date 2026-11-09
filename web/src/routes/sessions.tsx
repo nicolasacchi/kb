@@ -65,6 +65,7 @@ import { triggerDownload, sessionExportUrl } from "../lib/download";
 import { dayBucket, dayHeading } from "../lib/time";
 import {
   replayUrl,
+  SESSIONS_SCROLL_EPHEMERAL,
   sessionsProjectsHomeUrl,
   sessionsProjectUrl,
   sessionsTreeFromSearch,
@@ -118,7 +119,7 @@ export default function SessionsRoute() {
   // slots, and a back-nav to bare `/sessions` restores it. W7/LF-2 adds
   // `?follow=1` to the same set (KEY CONSTRAINTS #31): follow-mode toggles
   // are reader/list view state, not a distinct scrollable view.
-  useScrollRestoration(location.pathname + location.search, ["focus", "follow"]);
+  useScrollRestoration(location.pathname + location.search, SESSIONS_SCROLL_EPHEMERAL);
   // A1 — `folder=` is LEGACY-inbound-only (R12/C-17): the SPA never emits it
   // (sessionsUrl.ts never writes it), but an old bookmark/link keeps working.
   // W3.A — `project=` is the blessed P1-derived-key scoping axis this
@@ -1646,12 +1647,15 @@ function DecisionsSection({
   );
 }
 
-// P5 — the commits this session produced. Hidden when none.
+// P5 — the commits this session produced. Hidden when none. FXA4: the
+// prop is the minimal commit shape (kind/sha/subject) so the session page
+// can pass the card's CommitItem wire (which has no `trailers`) through
+// without fabricating fields; CommitOut satisfies it structurally.
 export function CommitsSection({
   commits,
   loading,
 }: {
-  commits: CommitOut[];
+  commits: Array<{ kind: string; sha?: string; subject?: string }>;
   loading: boolean;
 }) {
   if (loading || commits.length === 0) return null;

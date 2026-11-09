@@ -11,7 +11,7 @@
 #      Runtime into the `kb` binary too. cargo-dist models a workspace and
 #      builds its members together; steering it away from that (and keeping
 #      kb-embedder's static-ORT build isolated) is exactly the shape it makes
-#      awkward. Hand-rolled, the five `cargo build` steps below are explicit.
+#      awkward. Hand-rolled, the six `cargo build` steps below are explicit.
 #   2. SHA-pinned actions. ci.yml pins every action to a 40-char commit SHA
 #      (the Rust toolchain through .github/actions/setup-rust, which reads
 #      rust-toolchain.toml and pins dtolnay/rust-toolchain by SHA). cargo-dist GENERATES its own release workflow (via
@@ -29,21 +29,27 @@
 # referenced as a shell variable inside `run:` — never interpolated into a
 # command body (see the GitHub Actions workflow-injection guidance).
 #
-# ── What a `v*` tag ships: BOTH halves ──────────────────────────────────────
-# One tag, two shipping surfaces, from this one file:
+# ── What a `v*` tag ships: ALL THREE halves ──────────────────────────────────
+# One tag, three shipping surfaces, from this one file:
 #
 #   kb       kb-<ver>-<triple>.tar.gz        kb, kb-embedder
 #            ghcr.io/nicolasacchi/kb:<ver>   + :latest
 #   kb-code  kb-code-<ver>-<triple>.tar.gz   kb-code-server, kb-code, kb-lip
 #            ghcr.io/nicolasacchi/kb-code:<ver>  + :latest
+#   kb-term  kb-term-<ver>-x86_64-unknown-linux-gnu.tar.gz
+#            kb-termd, kb-term, kb-tap, tmux 3.7c (host-side, no image)
 #
 # kb-code is the SIBLING read-first code-browsing daemon (crates/kb-code-server
 # + crates/kb-code-cli) and kb-lip its standalone opt-in LSP->HTTP adapter
 # (crates/kb-lip) — a separate daemon that ships from the same repo and the
 # same tag, never a subcommand of `kb`.
 #
-# Tarball contents (v0.44 F2): each archive carries its binaries, an INSTALL
-# note AND the web reader under share/ — `share/kb/web/dist` +
+# A third archive, `kb-term-<ver>-x86_64-unknown-linux-gnu.tar.gz` (x86_64 Linux
+# only), ships the host-side kb-term runner, client, compiled tap and the pinned
+# tmux 3.7c, installed by `scripts/install-kb-term.sh` (docs/kb-term-install.md).
+#
+# Tarball contents (v0.44 F2): each kb/kb-code archive carries its binaries,
+# an INSTALL note AND the web reader under share/ — `share/kb/web/dist` +
 # `share/kb/sample-corpus` for kb, `share/kb-code/web-code/dist` for kb-code —
 # the layout the container images use. Both daemons resolve their SPA at
 # `<exe dir>/../share/<pkg>/…` with no env var (spa.rs resolve_spa_dist), and
@@ -470,7 +476,91 @@ jobs:
           set -euo pipefail
           gh release upload "$TAG" "$ARCHIVE" "${ARCHIVE}.sha256" --clobber
 
-      - name: Attest build provenance (both tarballs)
+      # ── kb-term host archive (x86_64 only) ──────────────────────────────
+      # Same shape as the kb/kb-code packages above, but the pinned tmux
+      # ships inside the archive (libexec, never on PATH) and the tap is a
+      # bun-compiled single binary. The builder steps mirror the term-tap /
+      # term-int jobs in ci.yml; scripts/package-kb-term.sh does the actual
+      # packaging (the same script term-int in ci.yml runs every PR, so a
+      # packaging bug shows up before release day).
+      - name: Setup Bun (kb-term tap)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.4"
+
+      - name: Build kb-term (runner + client)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        # Separate cargo invocation for the kb-term crate: it has no ONNX
+        # Runtime edge (invariant #26 does not apply here) and building it
+        # with kb-embedder would only lengthen the embedder link.
+        run: cargo build --release --locked -p kb-term --bins
+
+      - name: Install tap dependencies (bun, exact pins)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          cd crates/kb-term/tap
+          bun install
+
+      - name: Build the kb-tap binary
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        # The exact compile command of the term-tap job in ci.yml (checked
+        # there every PR).
+        run: |
+          cd crates/kb-term/tap
+          bun build --compile src/main.ts --outfile "$RUNNER_TEMP/kb-tap"
+
+      - name: Runner image id (tmux cache key)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        id: img
+        run: |
+          echo "key=${ImageOS}-${ImageVersion}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the pinned tmux binary
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/tmux-3.7c
+          # The sha256 pin lives inside scripts/ci/build-tmux.sh, so
+          # hashFiles covers the tarball; the image id covers the runner's
+          # libevent and ncurses. No restore-keys: a stale image entry is
+          # a wrong-lib entry.
+          key: tmux-3.7c-${{ hashFiles('scripts/ci/build-tmux.sh') }}-${{ runner.os }}-${{ steps.img.outputs.key }}
+
+      - name: Build the pinned tmux (or reuse the cache)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: scripts/ci/build-tmux.sh
+
+      - name: Package kb-term archive
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        id: pkg_term
+        env:
+          TARGET: ${{ matrix.target }}
+          KB_TERMD_BIN: target/release/kb-termd
+          KB_TERM_BIN: target/release/kb-term
+          KB_TAP_BIN: ${{ runner.temp }}/kb-tap
+          KB_TMUX_BIN: ${{ env.KB_TMUX_BIN }}
+          KB_GIT_SHA: ${{ env.KB_BUILD_SHA }}
+        run: |
+          set -euo pipefail
+          export KB_TERM_VERSION="${GITHUB_REF_NAME#v}"
+          export KB_TERM_TARGET="$TARGET"
+          export KB_BUN_VERSION="$(cat crates/kb-term/tap/.bun-version)"
+          export KB_TMUX_SRC_SHA256="$(sed -n 's/^TMUX_SHA256="\(.*\)"/\1/p' scripts/ci/build-tmux.sh | head -n1)"
+          scripts/package-kb-term.sh
+          # package-kb-term.sh writes archive=<name> to GITHUB_OUTPUT.
+
+      - name: Upload kb-term assets to the release
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          ARCHIVE: ${{ steps.pkg_term.outputs.archive }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" "$ARCHIVE" "${ARCHIVE}.sha256" --clobber
+
+      - name: Attest build provenance (all tarballs)
         # SHA-pinned like every other action here:
         #   gh api repos/actions/attest-build-provenance/git/ref/tags/v4.2.2
         #     -> 4d101475d8b20a2381f78447822ac1eab6504dd8 (commit)

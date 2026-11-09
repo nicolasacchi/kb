@@ -9,7 +9,7 @@ further down is the runbook for pushing the next tag.
 
 | Artifact | Path | What it does |
 |---|---|---|
-| Release workflow | [`.github/workflows/release.yml`](../.github/workflows/release.yml) | On a `v*` tag, ships **both halves** (see [What a `v*` tag ships](#what-a-v-tag-ships) below). |
+| Release workflow | [`.github/workflows/release.yml`](../.github/workflows/release.yml) | On a `v*` tag, ships **all three halves** (see [What a `v*` tag ships](#what-a-v-tag-ships) below). |
 | Installer | [`scripts/install.sh`](../scripts/install.sh) | POSIX `curl \| sh`-safe. Detects OS/arch, downloads the latest release tarball, installs both binaries into `~/.local/bin` (honors `$PREFIX`), verifies `kb --version`. |
 | Bootstrap command | [`../plugins/kb-memory/commands/kb-setup.md`](../plugins/kb-memory/commands/kb-setup.md) | `/kb-setup` inside Claude Code — guided first-run: install → daemon → `kb.toml` (memory + sessions) → start → verify. |
 
@@ -18,15 +18,16 @@ release pipeline and are unchanged by it.
 
 ## What a `v*` tag ships
 
-One tag, two shipping surfaces, one workflow. `release.yml` publishes:
+One tag, three shipping surfaces (kb, kb-code and the host-side kb-term), one workflow. `release.yml` publishes:
 
 | Half | Release assets (per target) | Image |
 |---|---|---|
 | **kb** | `kb-<ver>-<triple>.tar.gz` + `.sha256` — `kb`, `kb-embedder`, `INSTALL` | `ghcr.io/nicolasacchi/kb:<ver>` + `:latest` |
 | **kb-code** | `kb-code-<ver>-<triple>.tar.gz` + `.sha256` — `kb-code-server`, `kb-code`, `kb-lip`, `INSTALL` | `ghcr.io/nicolasacchi/kb-code:<ver>` + `:latest` |
+| **kb-term** | `kb-term-<ver>-x86_64-unknown-linux-gnu.tar.gz` + `.sha256` — `kb-termd`, `kb-term`, `kb-tap`, tmux 3.7c, `share/kb-term` | — (x86_64 only, no image) |
 
 `<triple>` is `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu` —
-four tarballs per release, each with a checksum sidecar. **kb-code** is the
+five tarballs per release, each with a checksum sidecar. **kb-code** is the
 sibling read-first code-browsing daemon (`crates/kb-code-server` +
 `crates/kb-code-cli`) and `kb-lip` its standalone opt-in LSP→HTTP adapter
 (`crates/kb-lip`): a separate daemon on its own port (4747), shipped from the
@@ -35,7 +36,7 @@ same repo and the same tag, never a `kb` subcommand.
 Both images come from the one repo-root `Dockerfile`; kb-code's is its
 `kb-code-runtime` target, kb's is the (deliberately last) `runtime` stage.
 
-**Both tarballs bundle their SPA** (since v0.44) under `share/`:
+The kb and kb-code tarballs bundle their SPA (since v0.44) under `share/`:
 `share/kb/web/dist` + `share/kb/sample-corpus`, and
 `share/kb-code/web-code/dist`. Each daemon resolves it at
 `<exe dir>/../share/<pkg>/…` when `KB_SPA_DIST` / `KB_CODE_SPA_DIST` is unset
@@ -111,7 +112,7 @@ Run top-to-bottom for any new `vX.Y.Z` tag.
      aarch64 prebuilt (see the matrix TODO in `release.yml`) — either wire
      `ORT_LIB_PATH=<dir>` pointing at a system libonnxruntime, or drop that matrix row.
    - both legs also uploaded `kb-code-<ver>-<triple>.tar.gz` + `.sha256`
-     (four tarballs + four checksums on the release in total). Spot-check one:
+     (five tarballs + five checksums on the release in total). Spot-check one:
      `tar tzf` should list `kb-code-server`, `kb-code`, `kb-lip`, `INSTALL` and
      `share/kb-code/web-code/dist/index.html` (the SPA ships in the tarball since v0.44).
    - `ghcr` pushed `ghcr.io/nicolasacchi/kb:<ver>` + `:latest` **and**

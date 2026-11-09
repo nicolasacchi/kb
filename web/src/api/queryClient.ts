@@ -176,6 +176,17 @@ export const queryClient = new QueryClient({
 //                                   the session page's own useInfiniteQuery).
 //                                   Same lifetime/ownership as the card above;
 //                                   distinct key (different response).
+//   ["session", sid]               FXA4 — one session's detail bundle
+//                                   (`hooks/useSessions.ts` `useSessionDetail`):
+//                                   the session page's ChecksSection/title/
+//                                   transcript-reader source. Singular prefix
+//                                   (deliberately NOT under ["sessions"]), so it
+//                                   does NOT ride useSessions' prefix
+//                                   invalidation: the bridge invalidates the
+//                                   whole ["session"] prefix on the same two
+//                                   kinds as the card (session.state,
+//                                   slate.updated). Finite lifetime,
+//                                   bridge-owned, no poll.
 //   ["readingProgress", kb]        per-kb progress map
 //   ["calendar", kb]               W2.10 — per-UTC-day event density for the
 //                                  gallery's activity calendar
@@ -578,6 +589,12 @@ export function startSseInvalidationBridge(): () => void {
     invalidate(["sessions", "live"]);
     // A4 — a live-state flip changes the card's `live` + `outcome` lanes.
     invalidate(["sessions", "card"]);
+    // FXA4 — the session page's ChecksSection/title/transcript reader ride
+    // `useSessionDetail` under the singular ["session", sid] prefix (NOT
+    // under ["sessions"]), so the prefix invalidations above never reach
+    // them: without this, staleTime Infinity leaves detail permanently
+    // diverged from the card. Same kinds, same low rate.
+    invalidate(["session"]);
   });
   // memory.* in full, plus session.captured for the session lens (its
   // queries key under the same ["memories", …] prefix) and
@@ -689,6 +706,9 @@ export function startSseInvalidationBridge(): () => void {
     // this: a purge drops the board's own entry, and no card names the
     // purged slate's successor.)
     invalidate(["sessions", "card"]);
+    // FXA4 — same singular-prefix reasoning as the session.state handler
+    // above: the page's detail query must not diverge from the card.
+    invalidate(["session"]);
   });
   // `slate.deleted {slug}` — a purge (loopback-only). The board's own entry
   // is dropped along with the row; invalidating both keeps a stale board

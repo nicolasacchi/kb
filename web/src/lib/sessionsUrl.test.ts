@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatSessionTurn,
   replayUrl,
+  SESSIONS_SCROLL_EPHEMERAL,
   sessionsProjectsHomeUrl,
   sessionsProjectUrl,
   sessionsUrl,
@@ -98,16 +99,23 @@ describe("sessionsUrl", () => {
   });
 });
 
-// A4 — the scroll-restoration key must DIFFER between flat and collapsed
-// (different lists), while `focus`/`follow` stay ephemeral. `tree` is
-// deliberately NOT in the route's ephemeralParams set.
-describe("tree scroll key", () => {
+// A4/FXA4 — the scroll-restoration key must DIFFER between flat and
+// collapsed (different lists), while `focus`/`follow` stay ephemeral.
+// Pins against the route's REAL ephemeral list (SESSIONS_SCROLL_EPHEMERAL,
+// imported by routes/sessions.tsx): adding "tree" there — exactly what
+// brief A4 §4 forbids — would fail the second test. MUTATION: appending
+// "tree" to SESSIONS_SCROLL_EPHEMERAL breaks these assertions.
+describe("tree scroll key (FXA4: pinned to the route list)", () => {
   it("tree=flat changes the scroll key; focus does not", () => {
-    const ephemeral = ["focus", "follow"];
-    const collapsed = normalizeScrollKey("/sessions", ephemeral);
-    const flat = normalizeScrollKey("/sessions?tree=flat", ephemeral);
+    expect(SESSIONS_SCROLL_EPHEMERAL).toEqual(["focus", "follow"]);
+    const collapsed = normalizeScrollKey("/sessions", SESSIONS_SCROLL_EPHEMERAL);
+    const flat = normalizeScrollKey("/sessions?tree=flat", SESSIONS_SCROLL_EPHEMERAL);
     expect(flat).toBe("/sessions?tree=flat");
     expect(flat).not.toBe(collapsed);
-    expect(normalizeScrollKey("/sessions?focus=sid-1", ephemeral)).toBe(collapsed);
+    expect(normalizeScrollKey("/sessions?focus=sid-1", SESSIONS_SCROLL_EPHEMERAL)).toBe(collapsed);
+  });
+
+  it("tree is absent from the ephemeral list (flat vs collapsed is a different list)", () => {
+    expect(SESSIONS_SCROLL_EPHEMERAL).not.toContain("tree");
   });
 });

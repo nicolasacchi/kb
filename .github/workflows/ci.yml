@@ -1550,7 +1550,7 @@ jobs:
       contents: read
     name: term-int (tmux 3.7c + integration)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     # No `needs:` — build the pinned tmux 3.7c (actions/cache, not
     # rust-cache) and smoke-test it; the cargo integration tests join
     # when crates/kb-term exists (T8). The pinned tmux is the only
@@ -1670,6 +1670,95 @@ jobs:
         with:
           name: witness-term-int
           path: ${{ runner.temp }}/witness
+
+      # ── kb-term release archive + installer (T19) ────────────────────────
+      # Same build+package+install calls the release workflow makes at tag
+      # time, so packaging regressions show up on the PR, not on release
+      # day. Reuses this job's existing steps above (Rust toolchain, rust-cache
+      # family term-int, Setup Bun, tap dependencies, pinned tmux cache):
+      # no new job, no new action. The release twin of these steps lives in
+      # .github/workflows/release.yml (binaries job, after kb-code upload).
+      - name: bash syntax checks
+        run: bash -n scripts/package-kb-term.sh scripts/ci/install-kb-term-selftest.sh
+
+      - name: Build kb-term (runner + client)
+        run: cargo build --release --locked -p kb-term --bins
+
+      - name: Build the kb-tap binary
+        # The exact compile command of the term-tap job above (checked
+        # there every PR).
+        run: |
+          cd crates/kb-term/tap
+          bun build --compile src/main.ts --outfile "$RUNNER_TEMP/kb-tap"
+
+      - name: Package kb-term archive
+        env:
+          KB_TERMD_BIN: target/release/kb-termd
+          KB_TERM_BIN: target/release/kb-term
+          KB_TAP_BIN: ${{ runner.temp }}/kb-tap
+          KB_TMUX_BIN: ${{ env.KB_TMUX_BIN }}
+          KB_GIT_SHA: ${{ github.sha }}
+          OUT_DIR: ${{ runner.temp }}/kb-term-out
+        run: |
+          set -euo pipefail
+          export KB_TERM_VERSION="main-${GITHUB_SHA::12}"
+          export KB_TERM_TARGET="x86_64-unknown-linux-gnu"
+          export KB_BUN_VERSION="$(cat crates/kb-term/tap/.bun-version)"
+          export KB_TMUX_SRC_SHA256="$(sed -n 's/^TMUX_SHA256="\(.*\)"/\1/p' scripts/ci/build-tmux.sh | head -n1)"
+          scripts/package-kb-term.sh
+
+      - name: Install the real archive with the real installer
+        run: |
+          set -euo pipefail
+          sha12="${GITHUB_SHA::12}"
+          out="${RUNNER_TEMP}/kb-term-out"
+          home_tmp="${RUNNER_TEMP}/kb-term-home"
+          mkdir -p "$out" "$home_tmp"
+          echo "KB_TERM_ARTIFACT_NAME=kb-term-main-${sha12}" >> "$GITHUB_ENV"
+          KB_BASE_URL="file://${out}" KB_VERSION="main-${sha12}" \
+            KB_INSECURE_SKIP_VERIFY=1 KB_TERM_SKIP_SYSTEMD=1 \
+            HOME="$home_tmp" XDG_CONFIG_HOME="$home_tmp/.config" \
+            sh scripts/install-kb-term.sh
+          P="${home_tmp}/.local"
+          test "$("$P/libexec/kb-term/tmux" -V)" = "tmux 3.7c"
+          "$P/bin/kb-term" --version >/dev/null
+          "$P/bin/kb-termd" --version >/dev/null
+          test "$(head -c4 "$P/bin/kb-tap" | od -An -tx1 | tr -d ' \n')" = "7f454c46"
+          test "$("$P/bin/kb-tap")" = "kb-tap placeholder"
+          # VERSIONS carries every build fact the packager records.
+          grep -q '^bun=' "$P/share/kb-term/VERSIONS"
+          grep -q '^git_sha=' "$P/share/kb-term/VERSIONS"
+          grep -q '^tmux_src_sha256=' "$P/share/kb-term/VERSIONS"
+          # INSTALL lists the tmux runtime libraries when the pinned tmux is
+          # dynamic (guarded so a static build does not flake the lane).
+          ldd_out="$(ldd "$P/libexec/kb-term/tmux" 2>/dev/null || true)"
+          case "$ldd_out" in
+            *'=>') grep -q 'Runtime libraries this tmux needs' "$P/share/kb-term/INSTALL" ;;
+          esac
+
+      - name: Archive manifest matches the selftest list
+        run: |
+          set -euo pipefail
+          sha12="${GITHUB_SHA::12}"
+          out="${RUNNER_TEMP}/kb-term-out"
+          listed="$(tar -tzf "${out}/kb-term-main-${sha12}-x86_64-unknown-linux-gnu.tar.gz" | grep -v '/$' | LC_ALL=C sort)"
+          expected="$(bash scripts/ci/install-kb-term-selftest.sh --print-manifest "main-${sha12}" "x86_64-unknown-linux-gnu" | LC_ALL=C sort)"
+          if [ "$listed" != "$expected" ]; then
+            echo "archive manifest mismatch:" >&2
+            diff <(echo "$expected") <(echo "$listed") >&2 || true
+            exit 1
+          fi
+          echo "archive manifest matches"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: github.event_name == 'push'
+        with:
+          name: ${{ env.KB_TERM_ARTIFACT_NAME }}
+          path: |
+            ${{ runner.temp }}/kb-term-out/kb-term-main-*.tar.gz
+            ${{ runner.temp }}/kb-term-out/kb-term-main-*.tar.gz.sha256
+          retention-days: 14
+          if-no-files-found: error
 
   supply-chain:
     permissions:

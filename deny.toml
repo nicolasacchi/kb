@@ -51,6 +51,15 @@ ignore = [
     { id = "RUSTSEC-2026-0398", reason = "zstd-safe Seekable::decompress: the seekable API is unused by arrow-ipc, lance and kb" },
     { id = "RUSTSEC-2026-0403", reason = "zstd-safe legacy-frame streaming decode: reached only by lance decoding kb's own self-written modern-format data files; a crafted legacy frame needs write access to kb's state dir" },
     { id = "RUSTSEC-2026-0410", reason = "zstd-sys WebAssembly allocator shim: kb builds only for x86_64/aarch64 Linux, never wasm" },
+    # libsqlite3-sys 0.38.2 (via rusqlite 0.40, workspace dep; refinery
+    # 0.10). rusqlite 0.41 / libsqlite3-sys >= 0.39.0 is blocked because
+    # refinery-core 0.10 accepts rusqlite <= 0.40, and links = "sqlite3"
+    # forbids two libsqlite3-sys lines coexisting, so the crates cannot
+    # move separately. Owner: the operator.
+    # Review by 2027-01-31, or sooner when a refinery release raises the
+    # rusqlite bound (re-check trigger: run `cargo deny check advisories`
+    # after the rusqlite bump, then delete this entry).
+    { id = "RUSTSEC-2026-0459", reason = "libsqlite3-sys 0.38.2 WAL page-size mismatch: the defect needs a sibling -wal with a different page size than the database; kb creates its own state DBs itself (WAL mode on, page size from its own creation) inside its state dir, so a foreign-sized WAL would need write access there, which is already full compromise; foreign reads are the opencode live adapter's READ_ONLY open of the operator's own opencode.db, which is in the same-host trust domain, and a -wal can also arrive via `kb restore` of a backup tarball from outside the state dir (reverse of the off-host copy); legit backups carry a VACUUM INTO snapshot with no -wal and a hostile tarball already fully controls restored state, so the limitation is: restore trusted backups only" },
     # (previously empty) RUSTSEC-2026-0194/0195 (quick-xml 0.39 via object_store) and
     # RUSTSEC-2023-0071 (rsa via opendal/reqsign) were ignored until v0.45 N7:
     # `lance` was declared with its default features, which compiled the cloud
