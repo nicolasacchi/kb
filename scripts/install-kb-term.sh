@@ -11,7 +11,11 @@
 #
 # Environment overrides:
 #   PREFIX       install root (default ~/.local); binaries land in $PREFIX/bin
-#   KB_VERSION   pin a release tag or a main build ("main-<sha12>")
+#                Known limitation: the shipped systemd units, the tmpfiles
+#                file and the kb-termd config lookup assume the default
+#                ~/.local layout; with a custom PREFIX the operator must
+#                adjust the installed units/conf to match (see
+#                docs/kb-term-install.md).
 #   KB_BASE_URL  fetch the archive from this directory URL instead of GitHub
 #                Releases (air-gapped mirror / CI smoke test). Requires
 #                KB_VERSION (a bare mirror has no "latest" concept).
@@ -196,6 +200,11 @@ render() {
       -e "s|__USER__|${u_esc}|g" \
       "$src" > "$tmpfile" || err "render ${dest} failed"
   chmod 0644 "$tmpfile"
+  # Fail BEFORE the rendered file reaches its destination: a surviving
+  # token aborts the install without leaving a half-rendered file behind.
+  # Scoped to this one rendered file, so an unrelated pre-existing file in
+  # a shared directory can never abort an install.
+  check_no_tokens "$tmpfile"
   mv -f "$tmpfile" "$dest" || err "move ${dest} failed"
 }
 
@@ -297,6 +306,22 @@ main() {
   info "bundled tmux matches its sidecar"
 
   step "installing into ${prefix}"
+  mkdir -p "${prefix}"
+
+  # Render the tmpfiles file and the units into the extraction staging dir
+  # first (render() fails on a surviving token before the file moves), then
+  # install the staged files. A token failure therefore aborts before any
+  # file is written to the destination instead of leaving a partial install.
+  # The `%h` systemd specifiers stay literal (they resolve to $HOME when
+  # the unit runs, not at install time).
+  rendered="${tmp}/rendered"
+  mkdir -p "${rendered}/tmpfiles.d" "${rendered}/systemd"
+  render "${root}/share/kb-term/tmpfiles.d/kb-term.conf" \
+         "${rendered}/tmpfiles.d/kb-term.conf"
+  for u in kb-termd.service kb-tap@.service kb-term@.service; do
+    render "${root}/share/kb-term/systemd/${u}" \
+           "${rendered}/systemd/${u}"
+  done
 
   for b in kb-termd kb-term kb-tap; do
     install_one "${root}/bin/${b}" "${bindir}/${b}" 0755
@@ -309,8 +334,9 @@ main() {
               "${prefix}/libexec/kb-term/tmux.sha256" 0644
   info "${prefix}/libexec/kb-term/tmux (tmux 3.7c — intentionally NOT put on PATH)"
 
-  # Share tree: overlay, tmux conf, VERSIONS, INSTALL, tmpfiles template and
-  # the unit templates (rendered, so no token survives in any installed copy).
+  # Share tree: overlay, tmux conf, VERSIONS, INSTALL and the rendered
+  # tmpfiles template + units (rendered in staging, so no token survives in
+  # any installed copy).
   install_one "${root}/share/kb-term/kb-term.conf" \
               "${prefix}/share/kb-term/kb-term.conf" 0644
   install_one "${root}/share/kb-term/omp/overlay.yml" \
@@ -319,22 +345,17 @@ main() {
               "${prefix}/share/kb-term/VERSIONS" 0644
   install_one "${root}/INSTALL" \
               "${prefix}/share/kb-term/INSTALL" 0644
-  render "${root}/share/kb-term/tmpfiles.d/kb-term.conf" \
-         "${prefix}/share/kb-term/tmpfiles.d/kb-term.conf"
+  install_one "${rendered}/tmpfiles.d/kb-term.conf" \
+              "${prefix}/share/kb-term/tmpfiles.d/kb-term.conf" 0644
 
-  # Units, rendered and installed both into the share tree and the live
-  # systemd user dir. The `%h` systemd specifiers stay literal (they resolve
-  # to $HOME when the unit runs, not at install time).
+  # Units go to both the share tree and the live systemd user dir.
   for u in kb-termd.service kb-tap@.service kb-term@.service; do
-    render "${root}/share/kb-term/systemd/${u}" \
-           "${prefix}/share/kb-term/systemd/${u}"
-    render "${root}/share/kb-term/systemd/${u}" "${unit_dir}/${u}"
+    install_one "${rendered}/systemd/${u}" \
+                "${prefix}/share/kb-term/systemd/${u}" 0644
+    install_one "${rendered}/systemd/${u}" "${unit_dir}/${u}" 0644
     info "${unit_dir}/${u}"
   done
   info "${prefix}/share/kb-term (units, tmpfiles.d, omp overlay, kb-term.conf)"
-
-  check_no_tokens "${prefix}/share/kb-term"
-  check_no_tokens "${unit_dir}"
 
   step "reloading systemd"
   if [ "${KB_TERM_SKIP_SYSTEMD:-}" = "1" ]; then
