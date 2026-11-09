@@ -115,7 +115,7 @@ fn jitter_ms() -> u64 {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos() as u64);
-    nanos ^ (u64::from(std::process::id()) * 0x9E37_79B9_7F4A_7C15)
+    nanos ^ u64::from(std::process::id()).wrapping_mul(0x9E37_79B9_7F4A_7C15)
 }
 
 // ---------------------------------------------------------- stream state
