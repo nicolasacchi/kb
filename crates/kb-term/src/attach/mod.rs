@@ -88,13 +88,13 @@ impl Backoff {
     }
 
     /// The delay before the next attempt, given a jitter in
-    /// milliseconds (added to the base; the cap still holds).
+    /// milliseconds. The TOTAL (jitter included) is capped at 5 s.
     /// Resets after a successful connect ([`Backoff::reset`]).
     pub fn next_delay(&mut self, jitter_ms: u64) -> Duration {
         let base_ms = 100u64.saturating_mul(1 << self.attempt.min(7));
         self.attempt += 1;
-        let base = Duration::from_millis(base_ms.min(5000));
-        base + Duration::from_millis(jitter_ms % 1000)
+        let total_ms = base_ms.min(5000).saturating_add(jitter_ms % 1000);
+        Duration::from_millis(total_ms.min(5000))
     }
 
     /// Reset after a successful connect.
@@ -209,10 +209,10 @@ impl AttachContext {
 }
 
 pub async fn run_attach(args: AttachArgs) -> u8 {
-    let env_sock = std::env::var("KB_TERM_RUNNER_SOCK").ok();
-    let runner_sock = crate::runner_client::resolve_runner_socket(
-        args.runner_sock.as_deref().or(env_sock.as_deref()),
-    );
+    // Only the CLI flag is passed; env fallback lives in
+    // `resolve_runner_socket` (an empty env var must not become an
+    // empty path).
+    let runner_sock = crate::runner_client::resolve_runner_socket(args.runner_sock.as_deref());
     let mut runner = match RunnerClient::connect(&runner_sock).await {
         Ok(c) => c,
         Err(e @ RunnerClientError::Unreachable(_)) => {
@@ -299,6 +299,19 @@ async fn attach_session(mut ctx: AttachContext) -> u8 {
     } else {
         Some(RawGuard::enter(0))
     };
+    // One stdin pump + filter per attach (never per join: a leaked
+    // pump from a dead join would keep stealing keystrokes).
+    let mut stdin_rx = if watch { None } else { Some(spawn_stdin()) };
+    let mut filter = InputFilter::new();
+    // Open the viewer's hidden client once per attach: the real runner
+    // rejects `keys` for a viewer that never opened (`no-viewer`).
+    let _ = ctx
+        .runner
+        .call(&Request::ViewerOpen {
+            id: ctx.args.id.clone(),
+            viewer: ctx.viewer.clone(),
+        })
+        .await;
     let mut rewriter = LabelRewriter::new(ctx.local_size.0, ctx.dim);
     let mut state = StreamState::default();
     let mut backoff = Backoff::new();
@@ -312,6 +325,8 @@ async fn attach_session(mut ctx: AttachContext) -> u8 {
             resume,
             &mut banner_printed,
             &mut backoff,
+            stdin_rx.as_mut(),
+            &mut filter,
         )
         .await
         {
@@ -323,14 +338,13 @@ async fn attach_session(mut ctx: AttachContext) -> u8 {
                 break 'outer SessionResult::Detached;
             }
             SessionResult::GridOwned(owner) => {
-                // Fallback: watch until a key takes the size back, then
-                // restart the attach (steps 3-5: a fresh join).
-                if run_fallback(&mut ctx, owner).await {
-                    state = StreamState::default();
-                    rewriter.reset();
-                    continue 'outer;
-                }
-                break 'outer SessionResult::Detached;
+                // The in-join fallback already watched (and took the
+                // size back on the first key): restart the attach
+                // (steps 3-5: a fresh join with a new leading ED3).
+                let _ = owner;
+                state = StreamState::default();
+                rewriter.reset();
+                continue 'outer;
             }
             SessionResult::Error(msg) => {
                 // Tap unreachable / reset / gap: backoff, then re-join
@@ -342,6 +356,13 @@ async fn attach_session(mut ctx: AttachContext) -> u8 {
             }
         }
     };
+    let _ = ctx
+        .runner
+        .call(&Request::ViewerClose {
+            id: ctx.args.id.clone(),
+            viewer: ctx.viewer.clone(),
+        })
+        .await;
     if let Some(g) = raw.as_mut() {
         g.restore();
     }
@@ -363,6 +384,8 @@ async fn run_one_join(
     resume: Option<ResumeInfo>,
     banner_printed: &mut bool,
     backoff: &mut Backoff,
+    mut stdin_rx: Option<&mut tokio::sync::mpsc::Receiver<Vec<u8>>>,
+    filter: &mut InputFilter,
 ) -> SessionResult {
     let mut conn = match connect_tap(&ctx.tap_path, &ctx.viewer, resume).await {
         Ok(c) => c,
@@ -372,6 +395,10 @@ async fn run_one_join(
     backoff.reset();
     // take-size BEFORE expecting the seed (runner socket, unless watch).
     let mut last_taken = ctx.local_size;
+    // The grid-owned fallback: the banner prints once, then the join
+    // keeps pumping the tap as a watcher, and the first stdin key
+    // takes the size back (force) and restarts the attach.
+    let mut grid_owned: Option<String> = None;
     if !ctx.is_watch() {
         let args_id = ctx.args.id.clone();
         let viewer = ctx.viewer.clone();
@@ -382,7 +409,8 @@ async fn run_one_join(
                     .strip_prefix("grid is owned by ")
                     .unwrap_or(&message)
                     .to_string();
-                return SessionResult::GridOwned(owner);
+                eprintln!("{}", fallback::grid_banner(&owner));
+                grid_owned = Some(owner);
             }
             Err(e) => {
                 eprintln!("kb-term: take_size: {e}");
@@ -390,13 +418,6 @@ async fn run_one_join(
             }
         }
     }
-    // The stdin pump (channel, unless watch).
-    let mut stdin_rx = if ctx.is_watch() {
-        None
-    } else {
-        Some(spawn_stdin())
-    };
-    let mut filter = InputFilter::new();
     // Signals.
     let mut sig_int =
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).ok();
@@ -405,16 +426,25 @@ async fn run_one_join(
     let mut sig_winch =
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change()).ok();
     let mut winch_deadline: Option<tokio::time::Instant> = None;
+    // A pending bare Esc becomes a key once idle for 20 ms.
+    let mut esc_deadline: Option<tokio::time::Instant> = None;
+    let mut sink: Vec<u8> = Vec::new();
     loop {
         tokio::select! {
             result = conn.read_next_envelope() => {
                 match result {
                     Ok(Some(env)) => {
-                        match handle_envelope(&env, ctx, rewriter, state, banner_printed).await {
+                        sink.clear();
+                        match handle_envelope(&env, ctx, rewriter, state, banner_printed, &mut sink) {
                             EnvelopeOutcome::Continue => {}
                             EnvelopeOutcome::Exited(code) => return SessionResult::Normal(code),
                             EnvelopeOutcome::DropAndResume => return SessionResult::Error("tap rejoin"),
                             EnvelopeOutcome::GapResume => return SessionResult::Error("tap gap"),
+                        }
+                        if !sink.is_empty() {
+                            if write_out(&sink).await.is_err() {
+                                return SessionResult::Detached;
+                            }
                         }
                     }
                     Ok(None) => return SessionResult::Error("tap closed"),
@@ -428,7 +458,29 @@ async fn run_one_join(
                 match filter.decide(&data) {
                     StdinDecision::Detach => return SessionResult::Detached,
                     StdinDecision::Forward(bytes) => {
-                        if !bytes.is_empty() {
+                        if filter.has_pending() {
+                            esc_deadline = Some(tokio::time::Instant::now() + Duration::from_millis(20));
+                        }
+                        if bytes.is_empty() {
+                            continue;
+                        }
+                        if grid_owned.is_some() {
+                            // Fallback take key: NOT forwarded; force the
+                            // size back and restart the attach.
+                            let size = RawGuard::size(0).unwrap_or(ctx.local_size);
+                            let args_id = ctx.args.id.clone();
+                            let viewer = ctx.viewer.clone();
+                            match ctx.runner.call(&Request::TakeSize {
+                                id: args_id,
+                                cols: size.0,
+                                rows: size.1,
+                                owner: viewer,
+                                force: true,
+                            }).await {
+                                Ok(_) => return SessionResult::GridOwned(grid_owned.unwrap_or_default()),
+                                Err(_) => return SessionResult::Detached,
+                            }
+                        } else {
                             send_keys(&mut ctx.runner, &ctx.args.id, &ctx.viewer, &bytes).await;
                             let _ = send_typed(&mut conn, &ctx.viewer).await;
                         }
@@ -438,7 +490,7 @@ async fn run_one_join(
             _ = async { match winch_deadline {
                 Some(d) => tokio::time::sleep_until(d).await,
                 None => std::future::pending::<()>().await,
-            } }, if !ctx.is_watch() => {
+            } }, if !ctx.is_watch() && grid_owned.is_none() => {
                 winch_deadline = None;
                 let size = RawGuard::size(0).unwrap_or(last_taken);
                 if size != last_taken {
@@ -455,8 +507,38 @@ async fn run_one_join(
             _ = async { match sig_term.as_mut() { Some(s) => s.recv().await, None => std::future::pending::<Option<()>>().await } } => {
                 return SessionResult::Detached;
             }
-            _ = async { match sig_winch.as_mut() { Some(s) => s.recv().await, None => std::future::pending::<Option<()>>().await } }, if !ctx.is_watch() => {
+            _ = async { match sig_winch.as_mut() { Some(s) => s.recv().await, None => std::future::pending::<Option<()>>().await } }, if !ctx.is_watch() && grid_owned.is_none() => {
                 winch_deadline = Some(tokio::time::Instant::now() + Duration::from_millis(100));
+            }
+            _ = async { match esc_deadline {
+                Some(d) => tokio::time::sleep_until(d).await,
+                None => std::future::pending::<()>().await,
+            } } => {
+                esc_deadline = None;
+                if filter.has_pending() {
+                    esc_deadline = Some(tokio::time::Instant::now() + Duration::from_millis(20));
+                    if let Some(bytes) = filter.take_expired_esc(Duration::from_millis(20)) {
+                        esc_deadline = None;
+                        if grid_owned.is_some() {
+                            let size = RawGuard::size(0).unwrap_or(ctx.local_size);
+                            let args_id = ctx.args.id.clone();
+                            let viewer = ctx.viewer.clone();
+                            match ctx.runner.call(&Request::TakeSize {
+                                id: args_id,
+                                cols: size.0,
+                                rows: size.1,
+                                owner: viewer,
+                                force: true,
+                            }).await {
+                                Ok(_) => return SessionResult::GridOwned(grid_owned.unwrap_or_default()),
+                                Err(_) => return SessionResult::Detached,
+                            }
+                        } else {
+                            send_keys(&mut ctx.runner, &ctx.args.id, &ctx.viewer, &bytes).await;
+                            let _ = send_typed(&mut conn, &ctx.viewer).await;
+                        }
+                    }
+                }
             }
         }
     }
@@ -498,12 +580,43 @@ enum EnvelopeOutcome {
     GapResume,
 }
 
-async fn handle_envelope(
+/// Narrow view of [`AttachContext`] for frame handling (tests can build
+/// this without a runner socket).
+struct FrameCtx<'a> {
+    viewer: &'a str,
+    is_watch: bool,
+    local_size: (u16, u16),
+}
+
+impl<'a> From<&'a AttachContext> for FrameCtx<'a> {
+    fn from(ctx: &'a AttachContext) -> Self {
+        FrameCtx {
+            viewer: ctx.viewer.as_str(),
+            is_watch: ctx.is_watch(),
+            local_size: ctx.local_size,
+        }
+    }
+}
+
+fn handle_envelope(
     env: &crate::wire::Envelope,
     ctx: &AttachContext,
     rewriter: &mut LabelRewriter,
     state: &mut StreamState,
     banner_printed: &mut bool,
+    sink: &mut Vec<u8>,
+) -> EnvelopeOutcome {
+    let fctx = FrameCtx::from(ctx);
+    handle_envelope_with(&fctx, env, rewriter, state, banner_printed, sink)
+}
+
+fn handle_envelope_with(
+    fctx: &FrameCtx<'_>,
+    env: &crate::wire::Envelope,
+    rewriter: &mut LabelRewriter,
+    state: &mut StreamState,
+    banner_printed: &mut bool,
+    sink: &mut Vec<u8>,
 ) -> EnvelopeOutcome {
     match env.kind {
         crate::wire::ENV_TEXT => {
@@ -511,7 +624,7 @@ async fn handle_envelope(
                 Ok(v) => v,
                 Err(_) => return EnvelopeOutcome::Continue,
             };
-            if id != ctx.viewer {
+            if id != fctx.viewer {
                 return EnvelopeOutcome::Continue;
             }
             let text = match std::str::from_utf8(body) {
@@ -520,7 +633,7 @@ async fn handle_envelope(
             };
             match crate::wire::decode_text_frame(text) {
                 Ok(TextFrame::Server(frame)) => {
-                    apply_server_frame(frame, ctx, rewriter, state, banner_printed).await
+                    apply_server_frame(frame, fctx, rewriter, state, banner_printed, sink)
                 }
                 Ok(TextFrame::Unknown(_)) | Ok(_) | Err(_) => EnvelopeOutcome::Continue,
             }
@@ -530,7 +643,7 @@ async fn handle_envelope(
                 Ok(v) => v,
                 Err(_) => return EnvelopeOutcome::Continue,
             };
-            if id != ctx.viewer {
+            if id != fctx.viewer {
                 return EnvelopeOutcome::Continue;
             }
             let (offset, payload) = match crate::wire::decode_binary(body) {
@@ -542,7 +655,7 @@ async fn handle_envelope(
                 BinaryDecision::Gap => EnvelopeOutcome::GapResume,
                 BinaryDecision::Accept => {
                     state.applied = Some(offset + payload.len() as u64);
-                    write_rewritten(rewriter, payload).await;
+                    write_rewritten(rewriter, payload, sink);
                     EnvelopeOutcome::Continue
                 }
                 BinaryDecision::PreSeed => {
@@ -556,7 +669,7 @@ async fn handle_envelope(
                     if used == 0 {
                         return EnvelopeOutcome::Continue;
                     }
-                    write_rewritten(rewriter, &payload[..used as usize]).await;
+                    write_rewritten(rewriter, &payload[..used as usize], sink);
                     if remaining - used == 0 {
                         state.applied = state.seed_x;
                         state.seed_remaining = None;
@@ -571,12 +684,13 @@ async fn handle_envelope(
     }
 }
 
-async fn apply_server_frame(
+fn apply_server_frame(
     frame: ServerFrame,
-    ctx: &AttachContext,
+    ctx: &FrameCtx<'_>,
     rewriter: &mut LabelRewriter,
     state: &mut StreamState,
     banner_printed: &mut bool,
+    sink: &mut Vec<u8>,
 ) -> EnvelopeOutcome {
     match frame {
         ServerFrame::Hello { epoch, .. } => {
@@ -584,13 +698,13 @@ async fn apply_server_frame(
                 state.epoch = Some(epoch);
                 state.applied = None;
                 state.mseq = None;
-                rewriter.reset();
+                rewriter.reset_stream();
             }
             EnvelopeOutcome::Continue
         }
         ServerFrame::Profile { cols, rows, .. } => {
             rewriter.set_cols(cols);
-            if !ctx.is_watch() && !*banner_printed {
+            if !ctx.is_watch && !*banner_printed {
                 let (lc, lr) = ctx.local_size;
                 if (cols, rows) != (lc, lr) {
                     eprintln!(
@@ -609,8 +723,11 @@ async fn apply_server_frame(
         ServerFrame::Seed { offset, len } => {
             state.seed_remaining = Some(len);
             state.seed_x = Some(offset);
-            rewriter.reset();
-            write_out(b"\x1b[3J").await;
+            // ImageDefs arrived before this Seed: keep them
+            // (`reset_stream` preserves defs) so the seed labels keep
+            // their pixel dims.
+            rewriter.reset_stream();
+            sink.extend_from_slice(b"\x1b[3J");
             EnvelopeOutcome::Continue
         }
         ServerFrame::Resize { seq, cols, .. } => {
@@ -633,7 +750,9 @@ async fn apply_server_frame(
             EnvelopeOutcome::Exited(code)
         }
         ServerFrame::Clipboard { data_b64, .. } => {
-            write_out(format!("\x1b]52;c;{data_b64}\x07").as_bytes()).await;
+            if let Some(osc52) = clipboard_osc52(&data_b64) {
+                sink.extend_from_slice(&osc52);
+            }
             EnvelopeOutcome::Continue
         }
         ServerFrame::Error { .. } => EnvelopeOutcome::DropAndResume,
@@ -645,20 +764,36 @@ fn bump_mseq(state: &mut StreamState, seq: u64) {
     state.mseq = Some(state.mseq.map_or(seq, |m| m.max(seq)));
 }
 
-async fn write_rewritten(rewriter: &mut LabelRewriter, payload: &[u8]) {
-    let mut out = Vec::new();
-    rewriter.feed(payload, &mut out);
-    write_out(&out).await;
+fn write_rewritten(rewriter: &mut LabelRewriter, payload: &[u8], sink: &mut Vec<u8>) {
+    rewriter.feed(payload, sink);
 }
 
-/// Best-effort stdout write (the mirror's whole output). An EPIPE
-/// here means the terminal went away; the exit path still prints the
-/// restore sequence and the shell gets it through the controlling
-/// tty's haze.
-async fn write_out(bytes: &[u8]) {
+/// Write the mirror's output bytes. An `Err` here (EPIPE: the terminal
+/// went away) means the caller must break the pump and restore the tty
+/// (spec §2.7): stdout errors are never swallowed.
+async fn write_out(bytes: &[u8]) -> Result<(), std::io::Error> {
     let mut stdout = tokio::io::stdout();
-    let _ = stdout.write_all(bytes).await;
-    let _ = stdout.flush().await;
+    stdout.write_all(bytes).await?;
+    stdout.flush().await
+}
+
+/// Build the local OSC 52 sequence for a tap `Clipboard` frame. The
+/// `data_b64` is attacker-visible terminal input: only strict canonical
+/// base64 is forwarded; anything else (control bytes, partial padding,
+/// non-alphabet chars) is dropped rather than written to the operator's
+/// terminal. `None` = drop.
+fn clipboard_osc52(data_b64: &str) -> Option<Vec<u8>> {
+    use base64::Engine as _;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(data_b64.as_bytes())
+        .ok()?;
+    // Canonical form: re-encoding must reproduce the input exactly
+    // (rejects partial padding and non-canonical trailing bits).
+    let canonical = base64::engine::general_purpose::STANDARD.encode(&decoded);
+    if canonical != data_b64 {
+        return None;
+    }
+    Some(format!("\x1b]52;c;{data_b64}\x07").into_bytes())
 }
 
 async fn runner_takesize(
@@ -678,42 +813,6 @@ async fn runner_takesize(
         .await?;
     let _ = data;
     Ok(())
-}
-
-/// The grid-owned fallback: banner, watch mode, the first key takes
-/// the size back (stdin is read only for the take key; the first
-/// keypress is NOT forwarded).
-async fn run_fallback(ctx: &mut AttachContext, owner: String) -> bool {
-    eprintln!("{}", fallback::grid_banner(&owner));
-    let mut rx = spawn_stdin();
-    let mut filter = InputFilter::new();
-    loop {
-        let Some(data) = rx.recv().await else {
-            return false;
-        };
-        match filter.decide(&data) {
-            StdinDecision::Detach => return false,
-            StdinDecision::Forward(bytes) => {
-                if bytes.is_empty() {
-                    continue;
-                }
-                let data = ctx
-                    .runner
-                    .call(&Request::TakeSize {
-                        id: ctx.args.id.clone(),
-                        cols: ctx.local_size.0,
-                        rows: ctx.local_size.1,
-                        owner: ctx.viewer.clone(),
-                        force: true,
-                    })
-                    .await;
-                match data {
-                    Ok(_) => return true,
-                    Err(_) => return false,
-                }
-            }
-        }
-    }
 }
 
 /// The stdin pump: one task, read chunks over a channel.
@@ -774,15 +873,15 @@ async fn connect_tap(
     resume: Option<ResumeInfo>,
 ) -> Result<TapConn, std::io::Error> {
     let mut stream = tokio::net::UnixStream::connect(path).await?;
-    let body = serde_json::json!({
-        "t": "viewer-open",
-        "viewer": viewer,
-        "profile": "desktop",
-        "resume": resume.map(|r| serde_json::json!({
-            "offset": r.offset, "mseq": r.mseq, "epoch": r.epoch
-        })),
-    })
-    .to_string();
+    // Serialize the typed control message (no hand-built JSON that
+    // could drift from the wire type).
+    let msg = ControlMessage::ViewerOpen {
+        viewer: viewer.to_string(),
+        profile: crate::wire::Profile::Desktop,
+        resume,
+    };
+    let body = serde_json::to_string(&msg)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     let env = crate::wire::encode_envelope(crate::wire::ENV_CONTROL, body.as_bytes())
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{e}")))?;
     stream.write_all(&env).await?;
@@ -796,10 +895,7 @@ async fn connect_tap(
 // ------------------------------------------------------------------- new/ls
 
 pub async fn run_ls(args: LsArgs) -> u8 {
-    let env_sock = std::env::var("KB_TERM_RUNNER_SOCK").ok();
-    let runner_sock = crate::runner_client::resolve_runner_socket(
-        args.runner_sock.as_deref().or(env_sock.as_deref()),
-    );
+    let runner_sock = crate::runner_client::resolve_runner_socket(args.runner_sock.as_deref());
     let mut runner = match RunnerClient::connect(&runner_sock).await {
         Ok(c) => c,
         Err(e @ RunnerClientError::Unreachable(_)) => {
@@ -879,9 +975,12 @@ fn render_ls_row(row: &serde_json::Value, out: &mut Vec<String>) {
         "running".to_string()
     };
     let owner = row.get("grid_owner").and_then(serde_json::Value::as_str);
+    // Only this process's own mirror owner counts as `self`; another
+    // `local:<pid>` (a different local attach) is foreign.
+    let self_owner = fallback::local_owner(std::process::id());
     let grid = match owner {
         None => "none".to_string(),
-        Some(o) if o.starts_with("local:") => "self".to_string(),
+        Some(o) if o == self_owner => "self".to_string(),
         Some(_) => "other".to_string(),
     };
     let bound = row
@@ -900,10 +999,7 @@ fn render_ls_rows(rows: &[serde_json::Value]) -> Vec<String> {
 }
 
 pub async fn run_new(args: NewArgs) -> u8 {
-    let env_sock = std::env::var("KB_TERM_RUNNER_SOCK").ok();
-    let runner_sock = crate::runner_client::resolve_runner_socket(
-        args.runner_sock.as_deref().or(env_sock.as_deref()),
-    );
+    let runner_sock = crate::runner_client::resolve_runner_socket(args.runner_sock.as_deref());
     let mut runner = match RunnerClient::connect(&runner_sock).await {
         Ok(c) => c,
         Err(e @ RunnerClientError::Unreachable(_)) => {
@@ -944,11 +1040,13 @@ pub async fn run_new(args: NewArgs) -> u8 {
         None => std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/")),
     };
     if !cwd.is_dir() {
+        // A bad `--cwd` is a usage failure (exit 2), not an internal
+        // error (1) or a runner failure (3).
         eprintln!(
             "kb-term: cwd {} is not an existing directory",
             cwd.display()
         );
-        return 1;
+        return 2;
     }
     for (v, name) in [(args.cols, "cols"), (args.rows, "rows")] {
         if let Some(n) = v {
@@ -1016,13 +1114,14 @@ mod tests {
         // Zero jitter: 100, 200, 400, 800, 1600, 3200, then 5 s cap.
         let seq: Vec<u64> = (0..8).map(|_| b.next_delay(0).as_millis() as u64).collect();
         assert_eq!(seq, vec![100, 200, 400, 800, 1600, 3200, 5000, 5000]);
-        // Injected jitter shifts the base but the cap still holds.
+        // Injected jitter shifts the base but the cap still holds
+        // (the total, jitter included, never exceeds 5 s).
         let mut b = Backoff::new();
         assert_eq!(b.next_delay(50).as_millis(), 150);
         for _ in 0..8 {
             b.next_delay(50);
         }
-        assert_eq!(b.next_delay(50).as_millis(), 5050);
+        assert_eq!(b.next_delay(50).as_millis(), 5000, "total capped at 5 s");
         // Reset restarts at 100 ms.
         b.reset();
         assert_eq!(b.next_delay(0).as_millis(), 100);
@@ -1069,18 +1168,20 @@ mod tests {
         };
         assert!(StreamState::resume_info(&s).is_none());
     }
-
     #[test]
     fn ls_rows_render() {
+        let self_owner = fallback::local_owner(std::process::id());
+        let foreign_local = fallback::local_owner(std::process::id().wrapping_add(1).max(9999));
+        assert_ne!(self_owner, foreign_local);
         let rows = vec![
             serde_json::json!({
                 "id": "abcd1234", "harness": "omp", "cols": 201, "rows": 48,
-                "pane_dead": false, "stale": false, "grid_owner": "local:1234",
+                "pane_dead": false, "stale": false, "grid_owner": self_owner,
                 "resume_sid": "deadbeefcafe", "exit_code": null
             }),
             serde_json::json!({
                 "id": "efgh5678", "harness": "claude", "cols": 80, "rows": 24,
-                "pane_dead": true, "stale": false, "grid_owner": "relay:9",
+                "pane_dead": true, "stale": false, "grid_owner": foreign_local,
                 "resume_sid": null, "exit_code": 3
             }),
             serde_json::json!({
@@ -1097,5 +1198,141 @@ mod tests {
                 "ijkl9012 ? - stale none -",
             ]
         );
+    }
+
+    fn fctx() -> FrameCtx<'static> {
+        FrameCtx {
+            viewer: "v",
+            is_watch: false,
+            local_size: (201, 48),
+        }
+    }
+
+    fn hello(epoch: &str) -> ServerFrame {
+        ServerFrame::Hello {
+            proto: crate::wire::PROTO.into(),
+            session: "s".into(),
+            epoch: epoch.into(),
+            harness: crate::wire::Harness::Omp,
+            bound_sid: None,
+        }
+    }
+
+    #[test]
+    fn epoch_change_restarts_with_fresh_ed3() {
+        let mut rw = LabelRewriter::new(201, true);
+        let mut state = StreamState::default();
+        let mut banner = false;
+        let mut sink: Vec<u8> = Vec::new();
+        // Epoch 1: seed emits the leading ED3.
+        apply_server_frame(
+            hello("00000001"),
+            &fctx(),
+            &mut rw,
+            &mut state,
+            &mut banner,
+            &mut sink,
+        );
+        apply_server_frame(
+            ServerFrame::Seed { offset: 0, len: 5 },
+            &fctx(),
+            &mut rw,
+            &mut state,
+            &mut banner,
+            &mut sink,
+        );
+        assert_eq!(sink, b"\x1b[3J");
+        // Epoch 2: the next Seed emits a fresh leading ED3.
+        sink.clear();
+        apply_server_frame(
+            hello("00000002"),
+            &fctx(),
+            &mut rw,
+            &mut state,
+            &mut banner,
+            &mut sink,
+        );
+        assert_eq!(state.applied, None, "new epoch clears applied");
+        apply_server_frame(
+            ServerFrame::Seed { offset: 0, len: 5 },
+            &fctx(),
+            &mut rw,
+            &mut state,
+            &mut banner,
+            &mut sink,
+        );
+        assert_eq!(sink, b"\x1b[3J", "fresh ED3 after epoch change");
+        // Same epoch again: the Seed still leads with ED3 (a rejoin
+        // always restarts at the seed step).
+        sink.clear();
+        apply_server_frame(
+            hello("00000002"),
+            &fctx(),
+            &mut rw,
+            &mut state,
+            &mut banner,
+            &mut sink,
+        );
+        apply_server_frame(
+            ServerFrame::Seed { offset: 0, len: 5 },
+            &fctx(),
+            &mut rw,
+            &mut state,
+            &mut banner,
+            &mut sink,
+        );
+        assert_eq!(sink, b"\x1b[3J");
+    }
+
+    #[test]
+    fn clipboard_validates_strict_base64() {
+        // Canonical base64 is forwarded as OSC 52.
+        assert_eq!(
+            clipboard_osc52("aGVsbG8=").expect("valid"),
+            b"\x1b]52;c;aGVsbG8=\x07",
+            "valid clipboard forwards"
+        );
+        // Control bytes / invalid chars / partial padding / whitespace
+        // are dropped (never reach the operator terminal).
+        assert_eq!(
+            clipboard_osc52("\x1b]52;c;evil\x07"),
+            None,
+            "ESC/BEL dropped"
+        );
+        assert_eq!(clipboard_osc52("aGVsbG8"), None, "partial padding dropped");
+        assert_eq!(clipboard_osc52("aGVs bG8="), None, "whitespace dropped");
+        assert_eq!(clipboard_osc52("****"), None, "non-alphabet dropped");
+    }
+
+    #[test]
+    fn clipboard_frame_drops_invalid_base64() {
+        let mut rw = LabelRewriter::new(201, true);
+        let mut state = StreamState::default();
+        let mut banner = false;
+        let mut sink: Vec<u8> = Vec::new();
+        apply_server_frame(
+            ServerFrame::Clipboard {
+                offset: 0,
+                data_b64: "\x1b]52;evil\x07".into(),
+            },
+            &fctx(),
+            &mut rw,
+            &mut state,
+            &mut banner,
+            &mut sink,
+        );
+        assert!(sink.is_empty(), "invalid clipboard emits nothing");
+        apply_server_frame(
+            ServerFrame::Clipboard {
+                offset: 0,
+                data_b64: "aGVsbG8=".into(),
+            },
+            &fctx(),
+            &mut rw,
+            &mut state,
+            &mut banner,
+            &mut sink,
+        );
+        assert_eq!(sink, b"\x1b]52;c;aGVsbG8=\x07");
     }
 }

@@ -29,7 +29,9 @@ pub const RUN_DIR_ENV: &str = "KB_TERM_RUN_DIR";
 /// the default.
 #[must_use]
 pub fn resolve_runner_socket(flag: Option<&str>) -> PathBuf {
-    if let Some(p) = flag {
+    // An empty flag (or env var) never becomes an empty path: fall
+    // through to the next source.
+    if let Some(p) = flag.filter(|p| !p.is_empty()) {
         return PathBuf::from(p);
     }
     if let Ok(p) = std::env::var(RUNNER_SOCK_ENV) {
@@ -226,14 +228,44 @@ mod tests {
     use super::*;
     use crate::wire::Harness;
 
+    /// Guards process env: restores the previous values on drop, and
+    /// serializes env-mutating tests so they cannot race each other.
+    struct EnvGuard {
+        saved: Vec<(&'static str, Option<String>)>,
+    }
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    impl EnvGuard {
+        fn take(keys: &[&'static str]) -> (std::sync::MutexGuard<'static, ()>, EnvGuard) {
+            let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let saved = keys.iter().map(|k| (*k, std::env::var(k).ok())).collect();
+            (lock, EnvGuard { saved })
+        }
+    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (key, old) in self.saved.drain(..) {
+                match old {
+                    Some(v) => std::env::set_var(key, v),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+
     #[test]
     fn runner_socket_resolution_order() {
         // The env fallback order is verified against the live env:
         // set/unset each and check the precedence.
+        let (_lock, _guard) = EnvGuard::take(&[RUNNER_SOCK_ENV, RUN_DIR_ENV]);
         std::env::remove_var(RUNNER_SOCK_ENV);
         std::env::remove_var(RUN_DIR_ENV);
         assert_eq!(
             resolve_runner_socket(None),
+            PathBuf::from(DEFAULT_RUNNER_SOCKET)
+        );
+        // An empty flag falls through (never an empty path).
+        assert_eq!(
+            resolve_runner_socket(Some("")),
             PathBuf::from(DEFAULT_RUNNER_SOCKET)
         );
         std::env::set_var(RUN_DIR_ENV, "/tmp/rundir");
@@ -252,8 +284,6 @@ mod tests {
             PathBuf::from("/tmp/flag.sock"),
             "the flag beats both envs"
         );
-        std::env::remove_var(RUNNER_SOCK_ENV);
-        std::env::remove_var(RUN_DIR_ENV);
     }
 
     #[test]

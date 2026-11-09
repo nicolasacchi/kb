@@ -9,13 +9,17 @@
 //! and every following row of the picture as an empty cleared row.
 //! Row counts and LF counts are preserved exactly.
 //!
-//! Buffering model: the current row (since the last LF) is held from
-//! its first byte — the label folds in any text preceding the
-//! placeholder, and a trailing `ESC[2K` after visible prefix text
-//! would erase it otherwise — and emitted at its LF. A row is a
-//! placeholder row iff it contains `U+10EEEE`. The hold is capped at
-//! 64 KiB and flushes raw beyond the cap. All state survives chunk
-//! boundaries.
+//! Buffering model: bytes pass through immediately (spec §3). The row
+//! is held from the first byte of picture evidence — once an SGR
+//! `38;2`/`38;5` or a `U+10EEEE` placeholder is seen, the bytes from
+//! that point to the row's LF are held while the row is scanned; a
+//! trailing proper prefix of a trigger is held back for the next feed
+//! so chunk boundaries cannot split a trigger. A row is a placeholder
+//! row iff it contains `U+10EEEE`. The hold is capped at 64 KiB and
+//! flushes raw beyond the cap (a capped placeholder row passes
+//! through unrewritten — the cap is a memory safety valve, not label
+//! logic; `label_hold_cap_flushes_placeholder_row_raw` pins it).
+//! All state survives chunk boundaries.
 
 use std::collections::HashMap;
 
@@ -173,11 +177,55 @@ fn find_placeholder(content: &[u8]) -> Option<usize> {
 }
 
 /// The row diacritic codepoint of the first placeholder cell (the char
-/// immediately after the first `U+10EEEE`).
+/// immediately after the first `U+10EEEE`). Decoded incrementally: only
+/// the first char is read, so invalid UTF-8 later in the row does not
+/// make the row look like a new picture (a `from_utf8` of the whole tail
+/// would bail and emit a label per row).
 fn first_comment_diacs(content: &[u8], at: usize) -> Option<u32> {
     let tail = &content[at + PLACEHOLDER.len()..];
-    let s = std::str::from_utf8(tail).ok()?;
-    s.chars().next().map(|c| c as u32)
+    for len in 1..=4usize {
+        if tail.len() < len {
+            break;
+        }
+        if let Ok(s) = std::str::from_utf8(&tail[..len]) {
+            return s.chars().next().map(|c| c as u32);
+        }
+    }
+    None
+}
+
+/// The start index of the earliest picture trigger in `seg`: an SGR
+/// `ESC[38;2` / `ESC[38;5` or a `U+10EEEE` placeholder.
+fn earliest_trigger(seg: &[u8]) -> Option<usize> {
+    const SGR_38_2: &[u8] = b"\x1b[38;2";
+    const SGR_38_5: &[u8] = b"\x1b[38;5";
+    let mut best: Option<usize> = None;
+    for pat in [SGR_38_2, SGR_38_5, PLACEHOLDER.as_slice()] {
+        if seg.len() >= pat.len() {
+            for i in 0..=seg.len() - pat.len() {
+                if &seg[i..i + pat.len()] == pat {
+                    best = Some(best.map_or(i, |b: usize| b.min(i)));
+                    break;
+                }
+            }
+        }
+    }
+    best
+}
+
+/// The length of the longest suffix of `bytes` that is a proper prefix
+/// of a picture trigger (`F4 8E BB AE`, or `ESC[38;2` / `ESC[38;5`).
+fn partial_prefix_suffix_len(bytes: &[u8]) -> usize {
+    const PATS: [&[u8]; 3] = [b"\x1b[38;2", b"\x1b[38;5", &PLACEHOLDER];
+    let mut longest = 0usize;
+    for pat in PATS {
+        for k in 1..pat.len() {
+            if bytes.len() >= k && bytes.ends_with(&pat[..k]) {
+                longest = longest.max(k);
+            }
+        }
+    }
+    longest
 }
 
 /// Result of scanning one held row for placeholder characteristics.
@@ -242,7 +290,16 @@ fn scan_row(content: &[u8], fg_in: Option<Fg>) -> RowScan {
 
 /// The stateful label rewriter.
 pub struct LabelRewriter {
+    /// Row bytes held from the picture trigger to the LF (only set
+    /// while `holding`).
     held: Vec<u8>,
+    /// Whether the current row is held (picture evidence seen, LF not yet).
+    holding: bool,
+    /// Unemitted tail bytes that are a proper prefix of a picture
+    /// trigger (`F4 8E BB AE` or `ESC[38;2` / `ESC[38;5`): held back
+    /// for the next feed so a trigger split across chunks still holds
+    /// from the trigger, not from the next chunk's middle.
+    partial_tail: Vec<u8>,
     flushing_raw: bool,
     cols: u16,
     dim: bool,
@@ -261,6 +318,8 @@ impl LabelRewriter {
     pub fn new(cols: u16, dim: bool) -> Self {
         Self {
             held: Vec::new(),
+            holding: false,
+            partial_tail: Vec::new(),
             flushing_raw: false,
             cols,
             dim,
@@ -286,25 +345,50 @@ impl LabelRewriter {
         self.defs.clear();
     }
 
-    /// Reset stream state (on a fresh join / new epoch).
-    pub fn reset(&mut self) {
+    /// Reset the byte stream state (on a fresh join, a new epoch, or a
+    /// Seed): held bytes, picture tracking and the sticky id colour are
+    /// discarded, but image definitions survive. The `Seed` arm must use
+    /// this rather than [`Self::reset`]: `Imagedef`s arrive before the
+    /// `Seed` on a join, and clearing them there would lose the
+    /// `WxH` seed labels.
+    pub fn reset_stream(&mut self) {
         self.held.clear();
+        self.holding = false;
+        self.partial_tail.clear();
         self.flushing_raw = false;
         self.last_fg = None;
         self.open_picture_fg = None;
+    }
+
+    /// Full reset (on a fresh join after fallback): stream state plus all
+    /// image definitions. `Gfxreset` uses [`Self::clear_images`].
+    pub fn reset(&mut self) {
+        self.reset_stream();
         self.defs.clear();
     }
 
-    /// Flush any held row raw (end of stream).
+    /// Flush any held bytes raw (end of stream).
     pub fn flush(&mut self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.partial_tail);
+        self.partial_tail.clear();
         out.extend_from_slice(&self.held);
         self.held.clear();
+        self.holding = false;
         self.flushing_raw = false;
     }
 
-    /// Feed bytes; append the rewritten output for every completed row.
+    /// Feed bytes; bytes pass through immediately until picture evidence
+    /// appears in the current row (an SGR `38;2` / `38;5` or a
+    /// `U+10EEEE` placeholder). From that point the row is held to its
+    /// LF and rewritten. A tail that is a proper prefix of one of those
+    /// triggers is held back for the next feed (never emitted early, so
+    /// a trigger split across chunks could not already have escaped).
     pub fn feed(&mut self, bytes: &[u8], out: &mut Vec<u8>) {
-        let mut rest = bytes;
+        let mut buf: Vec<u8> = Vec::new();
+        buf.extend_from_slice(&self.partial_tail);
+        buf.extend_from_slice(bytes);
+        self.partial_tail.clear();
+        let mut rest: &[u8] = &buf;
         while !rest.is_empty() {
             if self.flushing_raw {
                 // Stream raw until the row's LF.
@@ -321,32 +405,78 @@ impl LabelRewriter {
                 }
                 continue;
             }
-            match rest.iter().position(|&b| b == b'\n') {
-                Some(p) => {
-                    let seg = &rest[..=p];
-                    if self.held.len() + seg.len() > HOLD_CAP {
-                        out.extend_from_slice(&self.held);
+            if self.holding {
+                match rest.iter().position(|&b| b == b'\n') {
+                    Some(p) => {
+                        let seg = &rest[..=p];
+                        if self.held.len() + seg.len() > HOLD_CAP {
+                            out.extend_from_slice(&self.held);
+                            out.extend_from_slice(seg);
+                            self.held.clear();
+                        } else {
+                            self.held.extend_from_slice(seg);
+                            let row = std::mem::take(&mut self.held);
+                            self.emit_row(&row, out);
+                        }
+                        self.holding = false;
+                        rest = &rest[p + 1..];
+                    }
+                    None => {
+                        if self.held.len() + rest.len() > HOLD_CAP {
+                            out.extend_from_slice(&self.held);
+                            out.extend_from_slice(rest);
+                            self.held.clear();
+                            self.flushing_raw = true;
+                        } else {
+                            self.held.extend_from_slice(rest);
+                        }
+                        rest = &rest[rest.len()..];
+                    }
+                }
+                continue;
+            }
+            let lf = rest.iter().position(|&b| b == b'\n');
+            let seg_end = lf.unwrap_or(rest.len());
+            if let Some(i) = earliest_trigger(&rest[..seg_end]) {
+                out.extend_from_slice(&rest[..i]);
+                self.holding = true;
+                if let Some(p) = lf {
+                    let seg = &rest[i..=p];
+                    if seg.len() > HOLD_CAP {
                         out.extend_from_slice(seg);
-                        self.held.clear();
                     } else {
-                        self.held.extend_from_slice(seg);
-                        let row = std::mem::take(&mut self.held);
+                        let row = seg.to_vec();
                         self.emit_row(&row, out);
                     }
+                    self.holding = false;
                     rest = &rest[p + 1..];
-                }
-                None => {
-                    if self.held.len() + rest.len() > HOLD_CAP {
-                        out.extend_from_slice(&self.held);
-                        out.extend_from_slice(rest);
-                        self.held.clear();
+                } else {
+                    let seg = &rest[i..];
+                    if seg.len() > HOLD_CAP {
+                        out.extend_from_slice(seg);
                         self.flushing_raw = true;
                     } else {
-                        self.held.extend_from_slice(rest);
+                        self.held.extend_from_slice(seg);
                     }
                     rest = &rest[rest.len()..];
                 }
+                continue;
             }
+            if let Some(p) = lf {
+                // No picture in this LF segment: pass through verbatim.
+                out.extend_from_slice(&rest[..=p]);
+                rest = &rest[p + 1..];
+                continue;
+            }
+            let keep = partial_prefix_suffix_len(rest);
+            if keep > 0 {
+                self.partial_tail
+                    .extend_from_slice(&rest[rest.len() - keep..]);
+                out.extend_from_slice(&rest[..rest.len() - keep]);
+            } else {
+                out.extend_from_slice(rest);
+            }
+            rest = &rest[rest.len()..];
         }
     }
 
@@ -501,6 +631,10 @@ mod tests {
             3,
             "one ESC[39;59m per rewritten row"
         );
+        assert!(
+            out.windows(4).any(|w| w == b"\x1b[2m"),
+            "label is dim by default (ESC[2m)"
+        );
     }
 
     #[test]
@@ -646,7 +780,7 @@ mod tests {
     #[test]
     fn label_hold_cap_flushes_raw() {
         // A row far beyond the 64 KiB cap, no placeholder: the output
-        // equals the raw input (flushed raw, not lost).
+        // equals the raw input (flushed raw, not lost, row count kept).
         let mut rw = LabelRewriter::new(201, true);
         let mut input = Vec::new();
         input.resize(70_000, b'a');
@@ -655,6 +789,104 @@ mod tests {
         rw.feed(&input[..30_000], &mut out);
         rw.feed(&input[30_000..], &mut out);
         assert_eq!(out, input, "cap flush is byte-identical raw");
+    }
+
+    #[test]
+    fn label_hold_cap_flushes_placeholder_row_raw() {
+        // A placeholder row beyond the cap flushes RAW (placeholder
+        // bytes survive, no label is emitted): the cap path must not
+        // silently relabel or swallow the row.
+        let mut rw = LabelRewriter::new(201, true);
+        rw.add_image(0x010203, 100, 50);
+        let mut input = Vec::new();
+        input.extend_from_slice(b"\x1b[38;2;1;2;3m");
+        input.extend_from_slice(b"\x1b[58:2::1:2:3m");
+        while input.len() < 70_000 {
+            input.extend_from_slice(&PLACEHOLDER);
+            let mut buf = [0u8; 4];
+            input.extend_from_slice(
+                char::from_u32(super::super::tables::DIACRITICS[1])
+                    .unwrap()
+                    .encode_utf8(&mut buf)
+                    .as_bytes(),
+            );
+            input.extend_from_slice(
+                char::from_u32(super::super::tables::DIACRITICS[1])
+                    .unwrap()
+                    .encode_utf8(&mut buf)
+                    .as_bytes(),
+            );
+        }
+        input.extend_from_slice(b"\x1b[39;59m\r\n");
+        let out = feed_all(&mut rw, &input);
+        assert_eq!(out, input, "cap flush is byte-identical raw");
+        assert!(
+            out.windows(PLACEHOLDER.len()).any(|w| w == PLACEHOLDER),
+            "raw placeholder survives the cap flush"
+        );
+        assert_eq!(
+            count_occurrences(&out, b"[image"),
+            0,
+            "no label on cap flush"
+        );
+    }
+
+    #[test]
+    fn label_seed_preserves_image_defs() {
+        // ImageDef -> Seed -> picture: the seed reset must not drop the
+        // defs, so the seed label still carries the pixel dims.
+        let mut rw = LabelRewriter::new(201, true);
+        rw.add_image(0x66CF38, 360, 152);
+        rw.reset_stream();
+        let input = picture_row((0x66, 0xCF, 0x38), 0, 5, b"\r\n");
+        let out = feed_all(&mut rw, &input);
+        assert_eq!(count_occurrences(&out, b"[image 360x152, on web]"), 1);
+    }
+
+    #[test]
+    fn label_emits_immediately_until_picture_evidence() {
+        // Newline-less bytes without picture evidence pass through at
+        // once (spec §3 immediate passthrough), not held for a future
+        // byte. A trigger holds only from the trigger to the LF.
+        let mut rw = LabelRewriter::new(201, true);
+        let mut out = Vec::new();
+        rw.feed(b"plain text, no newline yet", &mut out);
+        assert_eq!(out, b"plain text, no newline yet");
+        rw.feed(b"; and more\r\n", &mut out);
+        assert_eq!(out, b"plain text, no newline yet; and more\r\n");
+        // A trigger with no LF yet: pre-trigger bytes are emitted at
+        // once, the trigger tail is held.
+        let mut rw = LabelRewriter::new(201, true);
+        let mut out = Vec::new();
+        rw.feed(b"prefix \x1b[38;2;1;2;3m", &mut out);
+        assert_eq!(out, b"prefix ");
+        rw.feed(b"\r\n", &mut out);
+        assert!(out.windows(7).any(|w| w == b"prefix "), "prefix emitted");
+    }
+
+    #[test]
+    fn label_diacritic_decodes_through_invalid_utf8() {
+        // A row whose later bytes are invalid UTF-8 still decodes its
+        // first row diacritic: the continuation row must NOT start a
+        // new picture (no second label).
+        let mut rw = LabelRewriter::new(201, true);
+        rw.add_image(0x010203, 100, 50);
+        let mut input = Vec::new();
+        for row_idx in [0u8, 1] {
+            input.extend_from_slice(format!("\x1b[38;2;1;2;3m").as_bytes());
+            input.extend_from_slice(b"\x1b[58:2::1:2:3m");
+            for c in 0..3 {
+                input.extend_from_slice(&cell(row_idx as usize, c));
+            }
+            input.extend_from_slice(&[0xFF, 0xFE]);
+            input.extend_from_slice(b"\x1b[39;59m\r\n");
+        }
+        let out = feed_all(&mut rw, &input);
+        assert_eq!(
+            count_occurrences(&out, b"[image 100x50, on web]"),
+            1,
+            "second row is a continuation despite invalid UTF-8"
+        );
     }
 
     #[test]

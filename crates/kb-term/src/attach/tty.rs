@@ -102,6 +102,9 @@ const BEL: u8 = b'\x07';
 /// (a partial reply must never reach the hidden client as bytes).
 pub struct InputFilter {
     pending: Vec<u8>,
+    /// When the held (incomplete) sequence started arriving. Only
+    /// meaningful while `pending` is non-empty.
+    pending_since: Option<std::time::Instant>,
     pending_lead: bool,
 }
 
@@ -111,6 +114,7 @@ impl InputFilter {
     pub fn new() -> Self {
         Self {
             pending: Vec::new(),
+            pending_since: None,
             pending_lead: false,
         }
     }
@@ -120,6 +124,7 @@ impl InputFilter {
     /// both bytes), then the reply filter.
     pub fn decide(&mut self, bytes: &[u8]) -> StdinDecision {
         let mut all = std::mem::take(&mut self.pending);
+        self.pending_since = None;
         all.extend_from_slice(bytes);
         let mut out = Vec::with_capacity(all.len());
         let mut i = 0;
@@ -144,6 +149,7 @@ impl InputFilter {
             // ESC [ / ESC ] / ESC <other>
             if i + 1 >= all.len() {
                 self.pending.extend_from_slice(&all[i..]);
+                self.pending_since = Some(std::time::Instant::now());
                 return StdinDecision::Forward(out);
             }
             match all[i + 1] {
@@ -154,6 +160,7 @@ impl InputFilter {
                     }
                     if j >= all.len() {
                         self.pending.extend_from_slice(&all[i..]);
+                        self.pending_since = Some(std::time::Instant::now());
                         return StdinDecision::Forward(out);
                     }
                     let params = &all[i + 2..j];
@@ -184,6 +191,7 @@ impl InputFilter {
                         continue;
                     }
                     self.pending.extend_from_slice(&all[i..]);
+                    self.pending_since = Some(std::time::Instant::now());
                     return StdinDecision::Forward(out);
                 }
                 _ => {
@@ -195,6 +203,32 @@ impl InputFilter {
             }
         }
         StdinDecision::Forward(out)
+    }
+
+    /// Whether an incomplete escape sequence is currently held.
+    #[must_use]
+    pub fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
+    /// Flush a held bare `ESC` once it has been idle for at least
+    /// `idle`. A lone Esc is a valid key and must not wait forever for
+    /// bytes that never arrive; a longer incomplete sequence still
+    /// waits (it may yet complete). Returns the flushed bytes (forward
+    /// these to the hidden client), or `None` when nothing expired.
+    pub fn take_expired_esc(&mut self, idle: std::time::Duration) -> Option<Vec<u8>> {
+        let is_bare_esc = self.pending == [ESC];
+        let expired = self
+            .pending_since
+            .map(|t| t.elapsed() >= idle)
+            .unwrap_or(false);
+        if is_bare_esc && expired {
+            self.pending.clear();
+            self.pending_since = None;
+            Some(vec![ESC])
+        } else {
+            None
+        }
     }
 }
 
@@ -270,8 +304,9 @@ mod tests {
         assert_eq!(filtered(b"\x1b[A"), b"\x1b[A");
         assert_eq!(filtered(b"\x1b[B"), b"\x1b[B");
         assert_eq!(filtered(b"\x1b[D"), b"\x1b[D");
-        // Kept: bare Esc.
-        assert_eq!(filtered(b"\x1b"), b"\x1b");
+        // Kept: bare Esc is held (it may still become a sequence), then
+        // flushed once idle: asserted below in
+        // `lone_esc_flushes_after_idle`.
         // Kept: Shift+Enter kitty form.
         assert_eq!(filtered(b"\x1b[13;2u"), b"\x1b[13;2u");
         // Kept: the F3 exception (r=1, 2<=c<=8).
@@ -296,6 +331,34 @@ mod tests {
         let mut f = InputFilter::new();
         assert_eq!(f.decide(b"\x1b"), StdinDecision::Forward(Vec::new()));
         assert_eq!(f.decide(b"[A"), StdinDecision::Forward(b"\x1b[A".to_vec()));
+    }
+
+    #[test]
+    fn lone_esc_flushes_after_idle() {
+        use std::time::Duration;
+        // A lone Esc is held immediately (nothing forwarded yet), and
+        // does NOT flush before the idle threshold.
+        let mut f = InputFilter::new();
+        assert_eq!(f.decide(b"\x1b"), StdinDecision::Forward(Vec::new()));
+        assert!(f.has_pending());
+        assert_eq!(f.take_expired_esc(Duration::from_secs(10)), None);
+        assert!(f.has_pending());
+        // Once idle past the threshold it flushes as the Esc key.
+        assert_eq!(
+            f.take_expired_esc(Duration::ZERO),
+            Some(vec![0x1B]),
+            "lone Esc forwards after idle"
+        );
+        assert!(!f.has_pending());
+        // A longer incomplete sequence (CSI prefix) never idle-flushes.
+        let mut f = InputFilter::new();
+        assert_eq!(f.decide(b"\x1b["), StdinDecision::Forward(Vec::new()));
+        assert_eq!(f.take_expired_esc(Duration::ZERO), None, "CSI waits");
+        assert!(f.has_pending());
+        // Nothing pending: no flush.
+        let mut f = InputFilter::new();
+        assert_eq!(f.decide(b"hi"), StdinDecision::Forward(b"hi".to_vec()));
+        assert_eq!(f.take_expired_esc(Duration::ZERO), None);
     }
 
     #[test]

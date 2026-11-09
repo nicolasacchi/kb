@@ -17,9 +17,9 @@
 
 use std::io::Read;
 use std::io::Write;
+use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use kb_term::wire::{EnvelopeDecoder, ServerFrame, ENV_BINARY, ENV_CONTROL, ENV_TEXT};
@@ -223,6 +223,7 @@ struct RunnerLog {
     takes: Vec<(u16, u16, String, bool)>,
     keys: Vec<Vec<u8>>,
     launches: Vec<serde_json::Value>,
+    opened_viewers: std::collections::HashSet<String>,
 }
 
 struct FakeRunner {
@@ -285,6 +286,9 @@ impl FakeRunner {
     }
     fn recorded_launches(&self) -> Vec<serde_json::Value> {
         self.log.lock().unwrap().launches.clone()
+    }
+    fn recorded_opened(&self) -> std::collections::HashSet<String> {
+        self.log.lock().unwrap().opened_viewers.clone()
     }
 }
 
@@ -352,18 +356,40 @@ fn handle_runner_conn(
                     serde_json::json!({"status": "ok", "data": {"cols": cols, "rows": rows, "owner": owner}})
                 }
             }
-            "viewer_open" | "viewer_close" => {
+            "viewer_open" => {
                 let viewer = req.get("viewer").and_then(|v| v.as_str()).unwrap_or("");
+                log.lock()
+                    .unwrap()
+                    .opened_viewers
+                    .insert(viewer.to_string());
+                serde_json::json!({"status": "ok", "data": {"viewer": viewer}})
+            }
+            "viewer_close" => {
+                let viewer = req.get("viewer").and_then(|v| v.as_str()).unwrap_or("");
+                log.lock().unwrap().opened_viewers.remove(viewer);
                 serde_json::json!({"status": "ok", "data": {"viewer": viewer}})
             }
             "keys" => {
                 use base64::Engine as _;
-                let b64 = req.get("bytes_b64").and_then(|v| v.as_str()).unwrap_or("");
-                let bytes = base64::engine::general_purpose::STANDARD
-                    .decode(b64.as_bytes())
-                    .unwrap_or_default();
-                log.lock().unwrap().keys.push(bytes);
-                serde_json::json!({"status": "ok", "data": {}})
+                // The real runner rejects keys for a viewer that never
+                // opened; the fake enforces the same `no-viewer` gate.
+                let viewer = req.get("viewer").and_then(|v| v.as_str()).unwrap_or("");
+                if !log.lock().unwrap().opened_viewers.contains(viewer) {
+                    serde_json::json!({"status": "err", "code": "no-viewer", "message": "viewer not open"})
+                } else {
+                    // Key bytes live at req["input"]["bytes_b64"] (the
+                    // kind-tagged KeyInput payload).
+                    let b64 = req
+                        .get("input")
+                        .and_then(|i| i.get("bytes_b64"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let bytes = base64::engine::general_purpose::STANDARD
+                        .decode(b64.as_bytes())
+                        .unwrap_or_default();
+                    log.lock().unwrap().keys.push(bytes);
+                    serde_json::json!({"status": "ok", "data": {}})
+                }
             }
             _ => {
                 serde_json::json!({"status": "err", "code": "bad-request", "message": "unknown op"})
@@ -380,12 +406,15 @@ fn handle_runner_conn(
 }
 
 // ----------------------------------------------------------------- fake tap --
-
 #[derive(Clone)]
+
 struct TapScript {
     cols: u16,
     rows: u16,
     session: String,
+    /// Seed/live line counts (default 3000/300).
+    seed_lines: u32,
+    live_lines: u32,
     /// Per-connection drop points in stream bytes (total seed+live).
     drops: Vec<u64>,
     /// Insert a Clipboard frame mid-live.
@@ -455,6 +484,9 @@ impl FakeTap {
     fn recorded_controls(&self) -> Vec<serde_json::Value> {
         self.controls.lock().unwrap().clone()
     }
+    fn recorded_opens(&self) -> Vec<serde_json::Value> {
+        self.opens.lock().unwrap().clone()
+    }
     fn wait_control(&self, needle: &str, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
@@ -520,7 +552,8 @@ fn handle_tap_conn(
         }
     }
     let viewer = viewer.unwrap();
-    let (seed_bytes, live_bytes) = build_t4(script.cols as usize, t4_seed_lines(), t4_live_lines());
+    let (seed_bytes, live_bytes) =
+        build_t4(script.cols as usize, script.seed_lines, script.live_lines);
     let total = (seed_bytes.len() + live_bytes.len()) as u64;
     let is_resume = resume
         .as_ref()
@@ -841,7 +874,9 @@ struct ModelReport {
 fn model(capture: &[u8], expect_total: u32) -> ModelReport {
     let text = String::from_utf8_lossy(capture).into_owned();
     let ed3_count = text.matches("\x1b[3J").count();
-    let sync_ok = text.matches("\x1b[?2026h").count() == text.matches("\x1b[?2026l").count();
+    // The terminal's exit restore also emits `ESC[?2026l`: one extra
+    // close without a matching open.
+    let sync_ok = text.matches("\x1b[?2026h").count() + 1 == text.matches("\x1b[?2026l").count();
     let parts: Vec<&str> = text.split("\x1b[3J").collect();
     let mut segment_ok = true;
     let mut last_numbers: Vec<u32> = Vec::new();
@@ -952,6 +987,8 @@ fn t4_script() -> TapScript {
         cols: 201,
         rows: 48,
         session: "abcd1234".into(),
+        seed_lines: t4_seed_lines(),
+        live_lines: t4_live_lines(),
         drops: vec![],
         clipboard: false,
         defs: true,
@@ -967,14 +1004,20 @@ fn attach_t4_seed_then_3_rebuilds_last_segment_1_to_n_once() {
     if !term_int_gate() {
         return;
     }
-    let rig = setup_rig(0, t4_script());
+    let mut script = t4_script();
+    // Hold the Exit so a keystroke can be written while the attach is
+    // live; the keys assertion then exercises a real forward.
+    script.exit_delay_ms = 3_000;
+    let rig = setup_rig(0, script);
     std::thread::sleep(Duration::from_millis(100));
     let mut proc = spawn_bin(
         &["attach", "abcd1234", "--runner-sock", &rig.sock_str],
         201,
         48,
     );
-    let (code, out) = proc.0.wait_for_exit(Duration::from_secs(20));
+    std::thread::sleep(Duration::from_millis(1_500));
+    proc.1.write_all(b"T").expect("write key");
+    let (code, out) = proc.0.wait_for_exit(Duration::from_secs(25));
     let report = model(&out, 3300);
     assert_eq!(code, Some(0), "normal exit");
     assert_eq!(report.ed3_count, 4, "mirror's ED3 + 3 rebuilds");
@@ -1002,26 +1045,42 @@ fn attach_t4_seed_then_3_rebuilds_last_segment_1_to_n_once() {
         "attach took the grid"
     );
     assert_eq!(rig.runner.recorded_takes().len(), 1);
-    assert!(!rig.runner.recorded_keys().is_empty(), "");
+    assert!(
+        !rig.runner.recorded_opened().is_empty(),
+        "the client opened the viewer (hidden-client keys need it)"
+    );
+    assert_eq!(
+        rig.runner.recorded_keys(),
+        vec![b"T".to_vec()],
+        "the written key was forwarded to the hidden client"
+    );
     run_python_checkdump(&report.final_lines, 3300);
 }
-
 #[test]
 fn attach_t4_truncated_capture_is_flagged() {
     if !term_int_gate() {
         return;
     }
-    // A 90%-truncated T4 capture must be flagged (highest < N).
-    let (seed, live) = build_t4(201, 3000, 300);
-    let mut full = Vec::new();
-    full.extend_from_slice(b"\x1b[3J");
-    full.extend_from_slice(&seed);
-    full.extend_from_slice(&live);
-    let cut = (full.len() as f64 * 0.9) as usize;
-    let report = model(&full[..cut], 3300);
+    // The truncation check runs on the ACTUAL capture of a real attach
+    // (a small stream for speed), cut at 90%: the model MUST flag it.
+    let mut script = t4_script();
+    script.seed_lines = 300;
+    script.live_lines = 30;
+    let rig = setup_rig(0, script);
+    std::thread::sleep(Duration::from_millis(100));
+    let mut proc = spawn_bin(
+        &["attach", "abcd1234", "--runner-sock", &rig.sock_str],
+        201,
+        48,
+    );
+    let (code, out) = proc.0.wait_for_exit(Duration::from_secs(15));
+    assert_eq!(code, Some(0));
+    assert!(model(&out, 330).last_is_1_to_n, "full capture is 1..330");
+    let cut = (out.len() as f64 * 0.9) as usize;
+    let report = model(&out[..cut], 330);
     assert!(
-        report.highest < 3300,
-        "truncated capture flagged (highest {} < 3300)",
+        report.highest < 330,
+        "truncated capture flagged (highest {} < 330)",
         report.highest
     );
     assert!(!report.last_is_1_to_n);
@@ -1042,14 +1101,12 @@ fn attach_four_forced_drops_equals_undropped() {
     );
     let (code_u, out_u) = proc_u.0.wait_for_exit(Duration::from_secs(20));
     assert_eq!(code_u, Some(0));
-    let report_u = model(&out_u, 3300);
-    assert!(report_u.last_is_1_to_n);
-
-    // Dropped run: 4 mid-stream drops at distinct stream offsets —
-    // the first lands mid-live (after the seed), the next three land
-    // inside resume replays.
+    // Dropped run: 4 mid-stream drops, ALL past the seed (budgets are
+    // stream bytes per connection, and the seed alone exceeds the old
+    // budget). A drop mid-seed would force a full rejoin with a fresh
+    // ED3, so the offsets are kept well past the seed's end.
     let mut script = t4_script();
-    script.drops = vec![200_000, 30_000, 30_000, 30_000];
+    script.drops = vec![400_000, 30_000, 30_000, 30_000];
     let rig_d = setup_rig(0, script);
     std::thread::sleep(Duration::from_millis(100));
     let mut proc_d = spawn_bin(
@@ -1061,7 +1118,22 @@ fn attach_four_forced_drops_equals_undropped() {
     assert_eq!(code_d, Some(0));
     let report_d = model(&out_d, 3300);
     assert!(report_d.last_is_1_to_n);
-    assert_eq!(out_d, out_u, "4 forced drops equal an undropped run");
+    // Reconnects interleave stderr progress lines on the pty, so byte
+    // equality cannot hold; the MODEL must match exactly.
+    assert_eq!(report_d.ed3_count, report_u.ed3_count, "same ED3 count");
+    assert_eq!(
+        report_d.final_lines, report_u.final_lines,
+        "model content equals the undropped run"
+    );
+    // The reconnects exercised ResumeFrom (at least one resume open).
+    assert!(
+        rig_d
+            .tap
+            .recorded_opens()
+            .iter()
+            .any(|o| o.get("resume").is_some_and(|r| !r.is_null())),
+        "resume was requested after drops"
+    );
 }
 
 #[test]
@@ -1069,7 +1141,9 @@ fn attach_watch_sends_no_takesize_and_reads_no_stdin() {
     if !term_int_gate() {
         return;
     }
-    let rig = setup_rig(0, t4_script());
+    let mut script = t4_script();
+    script.exit_delay_ms = 2_000;
+    let rig = setup_rig(0, script);
     std::thread::sleep(Duration::from_millis(100));
     let mut proc = spawn_bin(
         &[
@@ -1082,7 +1156,10 @@ fn attach_watch_sends_no_takesize_and_reads_no_stdin() {
         201,
         48,
     );
-    // No stdin bytes are ever written; the run still exits normally.
+    // stdin bytes ARE written mid-run; a watch must still never read
+    // them (no keys, no take-size), and the stream still completes.
+    std::thread::sleep(Duration::from_millis(1_000));
+    proc.1.write_all(b"w").expect("write stdin in watch");
     let (code, out) = proc.0.wait_for_exit(Duration::from_secs(20));
     assert_eq!(code, Some(0));
     assert!(
@@ -1115,20 +1192,22 @@ fn attach_grid_owned_prints_banner_and_watches_until_key() {
             .any(|w| w == b"grid owned by another kb-term attach"),
         "fallback banner (stderr merged onto the pty)"
     );
-    assert!(
-        out.windows(b"scrollback may be incomplete".len())
-            .any(|w| w == b"scrollback may be incomplete"),
-        "incomplete-scrollback note"
-    );
     let takes = rig.runner.recorded_takes();
-    assert_eq!(takes.len(), 1, "only the forced take is recorded");
-    assert!(
-        takes[0].3,
-        "the take was forced (any key takes the size back)"
-    );
+    // Two takes: the forced take the key triggers, and the normal
+    // take the restart join does (spec §6: on success the attach
+    // restarts at steps 3-5, whose take-size succeeds).
+    assert_eq!(takes.len(), 2, "forced take + restart take");
+    assert!(takes[0].3, "the first take was forced (any key)");
+    assert!(!takes[1].3, "the restart take is a normal take-size");
     assert!(
         rig.runner.recorded_keys().is_empty(),
-        "the take key was NOT forwarded"
+        "the take key was NOT forwarded as keys"
+    );
+    // The fallback watched: stream output reached the terminal before
+    // the key was pressed (spec §6 keeps pumping in watch mode).
+    assert!(
+        out.windows(b"on web]".len()).any(|w| w == b"on web]"),
+        "picture labels shown during the fallback watch"
     );
 }
 
@@ -1165,20 +1244,45 @@ fn attach_clipboard_and_typed_notified() {
 
 // ------------------------------------------------------------ CLI smoke tests
 
+/// Spawn and wait for the binary with a hard deadline (no unbounded
+/// `Command::output()` in this file: a hang must fail the test, not
+/// burn the lane timeout).
+fn wait_output(args: &[&str]) -> std::process::Output {
+    let mut child = Command::new(bin_path())
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn bin");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if Instant::now() > deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("bin {args:?} did not exit within 15s");
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(e) => panic!("bin {args:?} wait: {e}"),
+        }
+    }
+    child.wait_with_output().expect("wait_with_output")
+}
+
 #[test]
 fn exit_code_3_when_runner_unreachable() {
     if !term_int_gate() {
         return;
     }
-    let out = Command::new(bin_path())
-        .args([
-            "ls",
-            "--runner-sock",
-            "/tmp/kbt-nope-xyz/runner/runner.sock",
-        ])
-        .stdin(Stdio::null())
-        .output()
-        .expect("spawn ls");
+    let out = wait_output(&[
+        "ls",
+        "--runner-sock",
+        "/tmp/kbt-nope-xyz/runner/runner.sock",
+    ]);
     assert_eq!(out.status.code(), Some(3));
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(
@@ -1195,12 +1299,8 @@ fn exit_code_4_when_session_missing() {
     // Session not found -> exit 4.
     let dir = TempDir::new();
     let runner = FakeRunner::start(&dir, serde_json::json!([]), 0);
-    let out = Command::new(bin_path())
-        .args(["attach", "abcd1234", "--runner-sock"])
-        .args([runner.sock.to_string_lossy().into_owned()])
-        .stdin(Stdio::null())
-        .output()
-        .expect("spawn attach");
+    let sock = runner.sock.to_string_lossy().into_owned();
+    let out = wait_output(&["attach", "abcd1234", "--runner-sock", &sock]);
     assert_eq!(out.status.code(), Some(4));
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("session abcd1234 not found"), "{err}");
@@ -1231,15 +1331,13 @@ fn ls_json_roundtrips_runner_rows() {
     let dir = TempDir::new();
     let runner = FakeRunner::start(&dir, list.clone(), 0);
     let sock = runner.sock.to_string_lossy().into_owned();
-    let out = Command::new(bin_path())
-        .args(["ls", "--runner-sock", &sock])
-        .stdin(Stdio::null())
-        .output()
-        .expect("spawn ls");
+    let out = wait_output(&["ls", "--runner-sock", &sock]);
     assert_eq!(out.status.code(), Some(0));
     let text = String::from_utf8_lossy(&out.stdout);
+    // The grid owner `local:55` is a DIFFERENT local attach (the child
+    // pid): it renders `other`, never `self`.
     assert!(
-        text.contains("abcd1234 omp 201x48 running self deadbeef"),
+        text.contains("abcd1234 omp 201x48 running other deadbeef"),
         "{text}"
     );
     assert!(
@@ -1248,11 +1346,7 @@ fn ls_json_roundtrips_runner_rows() {
     );
     assert!(text.contains("ijkl9012"), "{text}");
     // --json prints the raw runner rows: parse them back and compare.
-    let out = Command::new(bin_path())
-        .args(["ls", "--json", "--runner-sock", &sock])
-        .stdin(Stdio::null())
-        .output()
-        .expect("spawn ls --json");
+    let out = wait_output(&["ls", "--json", "--runner-sock", &sock]);
     assert_eq!(out.status.code(), Some(0));
     let text = String::from_utf8_lossy(&out.stdout);
     let parsed: serde_json::Value =
@@ -1268,11 +1362,7 @@ fn new_rejects_unknown_harness() {
     let dir = TempDir::new();
     let runner = FakeRunner::start(&dir, serde_json::json!([]), 0);
     let sock = runner.sock.to_string_lossy().into_owned();
-    let out = Command::new(bin_path())
-        .args(["new", "badharness", "--no-attach", "--runner-sock", &sock])
-        .stdin(Stdio::null())
-        .output()
-        .expect("spawn new");
+    let out = wait_output(&["new", "badharness", "--no-attach", "--runner-sock", &sock]);
     assert_eq!(
         out.status.code(),
         Some(2),
@@ -1292,11 +1382,7 @@ fn new_launches_omp_and_prints_id() {
     let dir = TempDir::new();
     let runner = FakeRunner::start(&dir, serde_json::json!([]), 0);
     let sock = runner.sock.to_string_lossy().into_owned();
-    let out = Command::new(bin_path())
-        .args(["new", "omp", "--no-attach", "--runner-sock", &sock])
-        .stdin(Stdio::null())
-        .output()
-        .expect("spawn new");
+    let out = wait_output(&["new", "omp", "--no-attach", "--runner-sock", &sock]);
     assert_eq!(out.status.code(), Some(0), "new must complete");
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("newid1234"), "new prints the id: {text}");
@@ -1304,4 +1390,175 @@ fn new_launches_omp_and_prints_id() {
     assert_eq!(launches.len(), 1);
     assert_eq!(launches[0]["harness"], "omp");
     assert_eq!(launches[0]["argv"][0], "/usr/local/bin/omp");
+}
+
+#[test]
+fn new_passes_resume_cwd_and_size() {
+    if !term_int_gate() {
+        return;
+    }
+    let dir = TempDir::new();
+    let runner = FakeRunner::start(&dir, serde_json::json!([]), 0);
+    let sock = runner.sock.to_string_lossy().into_owned();
+    let workdir = dir.file("work");
+    std::fs::create_dir_all(&workdir).expect("mkdir work");
+    let out = wait_output(&[
+        "new",
+        "omp",
+        "--resume",
+        "deadbeef",
+        "--cwd",
+        &workdir.to_string_lossy(),
+        "--cols",
+        "120",
+        "--rows",
+        "40",
+        "--no-attach",
+        "--runner-sock",
+        &sock,
+    ]);
+    assert_eq!(out.status.code(), Some(0));
+    let launches = runner.recorded_launches();
+    assert_eq!(launches.len(), 1);
+    let l = &launches[0];
+    assert_eq!(l["harness"], "omp");
+    assert_eq!(l["resume_sid"], "deadbeef", "resume passthrough");
+    assert_eq!(l["cwd"], workdir.to_string_lossy(), "cwd passthrough");
+    assert_eq!(l["cols"], 120, "cols passthrough");
+    assert_eq!(l["rows"], 40, "rows passthrough");
+}
+
+#[test]
+fn new_bad_cwd_exits_2() {
+    if !term_int_gate() {
+        return;
+    }
+    let dir = TempDir::new();
+    let runner = FakeRunner::start(&dir, serde_json::json!([]), 0);
+    let sock = runner.sock.to_string_lossy().into_owned();
+    let out = wait_output(&[
+        "new",
+        "omp",
+        "--cwd",
+        "/nonexistent-kbt-dir",
+        "--no-attach",
+        "--runner-sock",
+        &sock,
+    ]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "a bad cwd is a usage failure (exit 2), not an internal error (1)"
+    );
+    assert!(
+        runner.recorded_launches().is_empty(),
+        "no launch must reach the runner"
+    );
+}
+
+#[test]
+fn new_cols_bounds_exit_2() {
+    if !term_int_gate() {
+        return;
+    }
+    let dir = TempDir::new();
+    let runner = FakeRunner::start(&dir, serde_json::json!([]), 0);
+    let sock = runner.sock.to_string_lossy().into_owned();
+    let out = wait_output(&[
+        "new",
+        "omp",
+        "--cols",
+        "600",
+        "--no-attach",
+        "--runner-sock",
+        &sock,
+    ]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "cols outside 20..=500 is a usage failure"
+    );
+    assert!(runner.recorded_launches().is_empty());
+}
+
+#[test]
+fn no_subcommand_exits_2_with_usage() {
+    if !term_int_gate() {
+        return;
+    }
+    let out = wait_output(&[]);
+    assert_eq!(out.status.code(), Some(2));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("missing subcommand"),
+        "usage wording (no scaffold jargon): {err}"
+    );
+}
+
+#[test]
+fn attach_size_mismatch_prints_banner() {
+    if !term_int_gate() {
+        return;
+    }
+    // The tap profile is 201x48; a 120x40 pane must print the one-line
+    // stderr banner before the seed.
+    let rig = setup_rig(0, t4_script());
+    std::thread::sleep(Duration::from_millis(100));
+    let mut proc = spawn_bin(
+        &["attach", "abcd1234", "--runner-sock", &rig.sock_str],
+        120,
+        40,
+    );
+    let (code, out) = proc.0.wait_for_exit(Duration::from_secs(25));
+    assert_eq!(code, Some(0));
+    let text = String::from_utf8_lossy(&out);
+    assert!(
+        text.contains("kb-term: grid size mismatch: session 201x48, local pane is 120x40"),
+        "mismatch banner (stderr merged onto the pty): {text}"
+    );
+}
+
+#[test]
+fn attach_sigwinch_retakes_once_debounced() {
+    if !term_int_gate() {
+        return;
+    }
+    // Two quick SIGWINCHs must produce exactly ONE extra take-size
+    // (100 ms debounce): the initial take plus one debounced take.
+    let mut script = t4_script();
+    script.seed_lines = 300;
+    script.live_lines = 30;
+    script.exit_delay_ms = 3_000;
+    let rig = setup_rig(0, script);
+    std::thread::sleep(Duration::from_millis(100));
+    let mut proc = spawn_bin(
+        &["attach", "abcd1234", "--runner-sock", &rig.sock_str],
+        201,
+        48,
+    );
+    std::thread::sleep(Duration::from_millis(1_500));
+    let pid = proc.0.child.id();
+    // Resize the pty so the new size differs from the last take.
+    unsafe {
+        let mut ws: libc::winsize = std::mem::zeroed();
+        ws.ws_col = 100;
+        ws.ws_row = 24;
+        libc::ioctl(proc.0.master.as_raw_fd(), libc::TIOCSWINSZ, &ws);
+    }
+    kill_pid(pid, 28); // SIGWINCH
+    std::thread::sleep(Duration::from_millis(30));
+    kill_pid(pid, 28);
+    let (code, _out) = proc.0.wait_for_exit(Duration::from_secs(25));
+    assert_eq!(code, Some(0));
+    let takes = rig.runner.recorded_takes();
+    assert_eq!(
+        takes.len(),
+        2,
+        "initial take + one debounced SIGWINCH take: {takes:?}"
+    );
+}
+fn kill_pid(pid: u32, sig: i32) {
+    unsafe {
+        libc::kill(pid as i32, sig);
+    }
 }

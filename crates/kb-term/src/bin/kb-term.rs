@@ -188,7 +188,7 @@ fn main() {
             block_on(kb_term::attach::run_ls(args))
         }
         _ => {
-            eprintln!("kb-term: not implemented yet (scaffold)");
+            eprintln!("kb-term: missing subcommand (see --help)");
             2
         }
     };
