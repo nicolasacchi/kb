@@ -225,6 +225,9 @@ struct RunnerLog {
     keys: Vec<Vec<u8>>,
     launches: Vec<serde_json::Value>,
     opened_viewers: std::collections::HashSet<String>,
+    /// Every viewer that EVER opened (the open-set above is live: ViewerClose
+    /// removes from it, hiding the attach's one ViewerOpen from late asserts).
+    ever_opened: std::collections::HashSet<String>,
     /// Every request op seen, in order (for failure diagnostics).
     ops: Vec<String>,
 }
@@ -294,7 +297,7 @@ impl FakeRunner {
         self.log.lock().unwrap().launches.clone()
     }
     fn recorded_opened(&self) -> std::collections::HashSet<String> {
-        self.log.lock().unwrap().opened_viewers.clone()
+        self.log.lock().unwrap().ever_opened.clone()
     }
     fn recorded_ops(&self) -> Vec<String> {
         self.log.lock().unwrap().ops.clone()
@@ -375,6 +378,7 @@ fn handle_runner_conn(
                     .unwrap()
                     .opened_viewers
                     .insert(viewer.to_string());
+                log.lock().unwrap().ever_opened.insert(viewer.to_string());
                 serde_json::json!({"status": "ok", "data": {"viewer": viewer}})
             }
             "viewer_close" => {
@@ -1069,9 +1073,12 @@ fn attach_t4_seed_then_3_rebuilds_last_segment_1_to_n_once() {
     );
     assert_eq!(rig.runner.recorded_takes().len(), 1);
     assert!(
-        rig.runner.recorded_ops().iter().any(|o| o == "viewer_open"),
-        "the client opened the viewer (hidden-client keys need it); ops: {:?}",
-        rig.runner.recorded_ops()
+        rig.runner
+            .recorded_opened()
+            .iter()
+            .any(|v| v.starts_with("local:")),
+        "the client opened a local:<pid> viewer (hidden-client keys need it); opened: {:?}",
+        rig.runner.recorded_opened()
     );
     assert_eq!(
         rig.runner.recorded_keys(),
