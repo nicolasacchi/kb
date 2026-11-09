@@ -19,10 +19,12 @@
 //! `profiles` plans per-harness launches (argv, allowlist pane env, omp
 //! overlay, exit steps) and `doctor` is the host-local diagnostic.
 
+pub mod attach;
 pub mod doctor;
 pub mod profiles;
 pub mod pty;
 pub mod responder;
 pub mod runner;
+pub mod runner_client;
 pub mod viewer;
 pub mod wire;
