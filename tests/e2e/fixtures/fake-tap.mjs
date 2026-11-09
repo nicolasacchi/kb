@@ -274,7 +274,7 @@ export async function installFakeTerminal(page, opts = {}) {
       if (exitCode !== null && cursor >= stream.length) {
         sendText(JSON.stringify({ t: "exit", seq: 1, code: exitCode, offset: stream.length }));
         closed = true;
-        setTimeout(() => ws.close(1000), 10);
+        setTimeout(() => ws.close({ code: 1000 }), 10);
         return;
       }
       if (gapAt !== null && !gapDone && cursor >= gapAt && cursor < stream.length) {
@@ -286,7 +286,7 @@ export async function installFakeTerminal(page, opts = {}) {
       if (opts.restartOnce && !restartDone && cursor > 0) {
         restartDone = true;
         closed = true;
-        ws.close(1012);
+        ws.close({ code: 1012 });
         return;
       }
       if (cursor >= stream.length) {
@@ -297,7 +297,7 @@ export async function installFakeTerminal(page, opts = {}) {
       if (dropsLeft > 0 && dropEvery !== null && cursor - connStart >= dropEvery) {
         dropsLeft -= 1;
         closed = true;
-        ws.close(1001);
+        ws.close({ code: 1001 });
         return;
       }
       const end = Math.min(stream.length, cursor + 2048);

@@ -29,8 +29,10 @@ async function bufferInfo(page: Page): Promise<BufInfo> {
           active: {
             length: number;
             baseY: number;
-            getLine(y: number): { translateToString(t: boolean): string } | null;
-            getCell(y: number, x: number): { getWidth(): number } | undefined;
+            getLine(y: number): {
+              translateToString(t: boolean): string;
+              getCell(x: number): { getWidth(): number } | undefined;
+            } | null;
           };
         };
         rows: number;
@@ -52,7 +54,7 @@ async function bufferInfo(page: Page): Promise<BufInfo> {
     const cellWidths: number[] = [];
     if (buf) {
       for (let x = 0; x < 40; x += 1) {
-        cellWidths.push(buf.getCell(0, x)?.getWidth() ?? -1);
+        cellWidths.push(buf.getLine(0)?.getCell(x)?.getWidth() ?? -1);
       }
     }
     return {
