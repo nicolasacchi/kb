@@ -1046,7 +1046,7 @@ mod relay_tests {
         let sink = MemSinkStream::new(to_test, from_relay, false);
         let upstream = MemUpstream::new(std::collections::VecDeque::new(), true);
         let sent = upstream.sent.clone();
-        let (tx, shutdown) = watch::channel(false);
+        let (mut tx, shutdown) = watch::channel(false);
         let relay = tokio::spawn(async move {
             run_relay(sink, upstream, shutdown, RelayTimers::default(), |_| {}).await;
         });
@@ -1095,7 +1095,7 @@ mod relay_tests {
         let mut out = out_rx;
         let sink = MemSinkStream::new(to_test, from_relay, false);
         let upstream = MemUpstream::new(std::collections::VecDeque::new(), true);
-        let (tx, shutdown) = watch::channel(false);
+        let (mut tx, shutdown) = watch::channel(false);
         let timers = RelayTimers {
             ping_every: Duration::from_millis(50),
             idle_close_after: Duration::from_millis(250),
