@@ -21,7 +21,9 @@ import {
   probeDecrc,
   dumpRows,
   isStageBAllowed,
+  STATE_ALLOWLIST,
   decscStageAAllowed,
+  decscStageBAllowed,
   COSMETIC_RESIDUALS,
   VISUAL_SAME_P16,
   BLANK_FLAG_ATTR,
@@ -283,7 +285,8 @@ async function runVariantStream(variant: Variant, spec: StreamSpec): Promise<voi
         }
         // stage B
         await viewer.feed(bytes.subarray(j.off));
-        const bState = diffState(refState, stateOf(viewer.term as never));
+        const viewerStateB = stateOf(viewer.term as never);
+        const bState = diffState(refState, viewerStateB);
         const bCells: Record<string, number> = {};
         const bExamples: Record<string, Array<{ a: { fg: number; bg: number; ch: string; width: number }; b: { fg: number; bg: number; ch: string; width: number } }>> = {};
         for (const which of ['normal', 'alt'] as const) {
@@ -297,7 +300,16 @@ async function runVariantStream(variant: Variant, spec: StreamSpec): Promise<voi
         }
         const bBad: string[] = [];
         for (const d of bState) {
-          if (!isStageBAllowed(variant, spec.name, d.cls)) bBad.push(`state:${d.cls}:${d.key}`);
+          if (isStageBAllowed(variant, spec.name, d.cls)) continue;
+          // DECSC raw coordinates that still DECRC-restore to the same
+          // viewport position are the documented seed limitation (absolute
+          // savedY differs by the ybase delta after ED3 trims; see
+          // decscStageBAllowed), not a convergence defect. Scoped to the
+          // coordinate keys only: a savedAttr/savedCharset/savedGlevel
+          // diff still fails here unless STATE_ALLOWLIST names it. The
+          // ESC 8 probe below remains the arbiter.
+          if (d.cls === 'DECSC saved cursor' && (d.key.endsWith('.savedX') || d.key.endsWith('.savedY')) && decscStageBAllowed(refState, viewerStateB)) continue;
+          bBad.push(`state:${d.cls}:${d.key}`);
         }
         for (const cls of Object.keys(bCells)) {
           // Every non-clean stage-B class goes through the named allowlists:
@@ -484,7 +496,11 @@ test('inside-frame joins: 0 allowed (gate resolves only after ?2026l)', async ()
     const h = s.indexOf('\x1b[?2026h');
     const l = h >= 0 ? s.indexOf('\x1b[?2026l', h) : -1;
     if (h >= 0 && l >= 0) {
-      const inside = h + 4;
+      // Cut just AFTER the complete ?2026h: the twin is then inside the
+      // frame at ground, so the refusal reason is 'sync-frame', not
+      // 'mid-sequence'. (An earlier cut at h+4 lands mid-escape, where the
+      // xterm has not applied the mode yet and the tracker is mid-sequence.)
+      const inside = h + '\x1b[?2026h'.length;
       const after = l + '\x1b[?2026l'.length;
       const twin = makeTwin(spec.cols, spec.rows);
       const ground = new GroundTracker();

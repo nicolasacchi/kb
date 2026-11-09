@@ -140,6 +140,34 @@ export function decscStageAAllowed(a: Record<string, unknown>, b: Record<string,
   }
   return true;
 }
+/**
+ * Stage-B DECSC rule (FXT6): compare DECRC-restored viewport positions, not
+ * raw absolute savedY. REF (full stream) and the seed viewer (seed + remainder)
+ * can share exactly the viewport slot while their absolute savedY differs by
+ * the ybase delta (different history lengths after ED3 trims): no CUP can
+ * reconcile that, DECRC ignores it, and the viewport position is what the
+ * user sees. This is the semantics the pre-FXT6 clamped comparison already
+ * enforced for stage B (stateOf clamped savedX/savedY to the viewport);
+ * FXT6's raw-in-viewport strictness applies to stage A only, where the seed
+ * must match its twin exactly wherever a CUP can express it. The ESC 8 probe
+ * remains stage B's ultimate arbiter. Returns true only when EVERY buffer's
+ * restored position agrees; the caller scopes this to savedX/savedY keys so a
+ * savedAttr/savecharset diff still fails.
+ */
+export function decscStageBAllowed(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  const cols = Number(a.__cols ?? 0);
+  const rows = Number(a.__rows ?? 0);
+  if (!cols || !rows) return false;
+  for (const name of ['normal', 'alt']) {
+    const A = { savedX: Number(a[`${name}.savedX`]), savedY: Number(a[`${name}.savedY`]), ybase: Number(a[`${name}.ybase`]) };
+    const B = { savedX: Number(b[`${name}.savedX`]), savedY: Number(b[`${name}.savedY`]), ybase: Number(b[`${name}.ybase`]) };
+    if (A.savedX === B.savedX && A.savedY === B.savedY) continue;
+    const ra = decrcRestored(A, cols, rows);
+    const rb = decrcRestored(B, cols, rows);
+    if (ra[0] !== rb[0] || ra[1] !== rb[1]) return false;
+  }
+  return true;
+}
 
 /** Visual colour equality for masked fg/bg words (bits 0-25, mode bits
  * 24-25): P16 vs P256 palette indices < 16 carry the same colour, only
