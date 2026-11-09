@@ -444,15 +444,14 @@ test('seam_reseed_handover_feeds_post_B_bytes_exactly_once_post_withhold', async
     // The seed text frame and its binary payload frames are separate
     // socket data events: wait for the payload bytes too.
     await waitUntil(() => cap2.binaries.reduce((a, b) => a + b.length, 0) >= seedLen, 'seed bytes landed');
-    let skip = seedLen;
+    // The seed payload is the first seedLen binary bytes on this
+    // connection (the seed text frame precedes them).
+    let remaining = seedLen;
     const seedParts: Uint8Array[] = [];
     for (const b of cap2.binaries) {
-      if (skip >= b.length) {
-        skip -= b.length;
-        continue;
-      }
-      seedParts.push(b.slice(skip));
-      skip = 0;
+      if (remaining <= 0) break;
+      seedParts.push(b.slice(0, remaining));
+      remaining -= b.length;
     }
     const seedBytes = Buffer.concat(seedParts.map((b) => Buffer.from(b))).toString('utf-8');
     expect(seedBytes).toContain('reseeded-content');
