@@ -426,27 +426,23 @@ pub(crate) async fn run_relay<S, U, F>(
     loop {
         tokio::select! {
             biased;
-            // (a) shutdown watch FIRST: close 1012 and return.
-            r = shutdown.wait_for(|&down| down) => {
-                // `wait_for` resolves to a borrow guard (watch::Ref,
-                // !Send). Drop it before the first await so the relay
-                // future stays Send (required by spawn and the
-                // on_upgrade callback).
-                drop(r);
-                let _ = tokio::time::timeout(Duration::from_millis(500),
-                    sink.send(Message::Close(Some(CloseFrame {
-                        code: close_code::RESTART.into(),
-                        reason: "service restart".into(),
-                    })))).await;
+            // (a) shutdown watch FIRST: close 1012 and return. The
+            // branch yields a bool (already-true with no new change,
+            // or a change observed, or the sender dropped) - never a
+            // watch::Ref, whose !Send guard cannot cross an await.
+            _ = async {
+                if *shutdown.borrow() {
+                    true
+                } else {
+                    shutdown.changed().await.is_ok() || *shutdown.borrow()
+                }
+            } => {
+                send_close(&mut sink, close_code::RESTART, "service restart").await;
                 break;
             }
             // Slow consumer signalled by the reader: close 1013.
             _ = slow_rx.recv() => {
-                let _ = tokio::time::timeout(Duration::from_millis(500),
-                    sink.send(Message::Close(Some(CloseFrame {
-                        code: close_code::AGAIN.into(),
-                        reason: "slow consumer".into(),
-                    })))).await;
+                send_close(&mut sink, close_code::AGAIN, "slow consumer").await;
                 break;
             }
             // (b) browser -> upstream, verbatim (Pong/Ping refresh
@@ -545,6 +541,25 @@ pub(crate) async fn run_relay<S, U, F>(
     drop(browser_tx);
     drop(upstream_rx);
     let _ = tokio::time::timeout(Duration::from_millis(200), reader).await;
+}
+
+/// Send one close frame, bounded so a silent peer cannot stall the
+/// relay's teardown. A close send can never carry a watch::Ref: the
+/// shutdown arm resolves (true/false already-true/changed) before
+/// calling this, so run_relay's future stays Send.
+async fn send_close<S>(sink: &mut S, code: axum::extract::ws::CloseCode, reason: &'static str)
+where
+    S: SinkExt<Message> + Unpin,
+    <S as Sink<Message>>::Error: std::fmt::Debug,
+{
+    let _ = tokio::time::timeout(
+        Duration::from_millis(500),
+        sink.send(Message::Close(Some(CloseFrame {
+            code: code.into(),
+            reason: reason.into(),
+        }))),
+    )
+    .await;
 }
 
 // -- exit / sizechanged sniffing (a COPY is parsed; the original is
