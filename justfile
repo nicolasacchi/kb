@@ -485,8 +485,12 @@ redeploy CONFIG:
 redeploy-code:
     #!/usr/bin/env bash
     set -euo pipefail
-    echo ">>> building release binary (kb-code-server)"
-    {{prio}} cargo build --release -p kb-code-server
+    echo ">>> building release binaries (kb-code-server + kb-code-cli)"
+    # Build the CLI too: building only the server left ~/.local/bin/kb-code
+    # stuck at an old build (2026-09-25) while the daemon gained verbs the
+    # CLI could not call (review sync/find/retrack/verify). One cargo
+    # invocation so the two binaries always come from the same tree.
+    {{prio}} cargo build --release -p kb-code-server -p kb-code-cli
     echo ">>> building web-code SPA bundle"
     # Always `npm ci` here (not `redeploy`'s `[ -d node_modules ] || npm ci`
     # shortcut) — a pull that only bumps package-lock.json without touching
