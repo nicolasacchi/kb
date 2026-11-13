@@ -1043,7 +1043,7 @@ kb slate show #n | delta [--since SEQ] [--limit N] [--kinds a,b]
 kb slate now "…" | warn "…" | ask "…?" [--to you|<harness>|any] | answer #n "…"
 kb slate found "…" --ref R | idea "…" | tried "…" --failed "…" [--was #n]
 kb slate take <subject|#n> "…" [--anyway|--over #n]
-kb slate done #n "…" [--abandoned "…"] | hand <subject> "…" [--to H]
+kb slate done <n> "…" [--abandoned "…"] | hand <subject> "…" [--to H]
 kb slate drop #n "…" [--anyway] | edit #n "…" [--body -|MD] [--anyway]
 kb slate mark #n [--pin|--unpin] | pin #n | unpin #n
                                     The twelve kinds. `drop` removes the
@@ -1073,35 +1073,6 @@ kb slate mark #n [--pin|--unpin] | pin #n | unpin #n
                                     delta` before posting it again. A
                                     connect failure says nothing was sent.
 kb slate promote #n --to memory|note|plan [--plan PATH] [--kb K] [--note N]
-kb slate wait #n [--timeout S] [--parent-pid PID] [--json]
-                                    Block until ask #n is resolved. Read-only:
-                                    never POSTs, never moves the cursor. It
-                                    subscribes to the SSE stream first, then
-                                    seeds from the ledger, re-seeds on
-                                    reconnect and notices a rotation. Exit
-                                    0 answered or done · 4 timed out, still
-                                    open (default `--timeout 3600`, 0 =
-                                    forever) · 5 gone (not found, not an
-                                    ask, dropped, rotated, closed) · 1
-                                    error or stopped (parent died, stdout
-                                    closed); never 2 or 3. Human output is
-                                    one `#57 answered · [you] 3m: <line>`
-                                    per answer (body indented), `#57 done
-                                    · …` when closed, else the footer
-                                    `next: act on it, then kb slate done
-                                    #57 "…"`. `--json`: `{state:
-                                    resolved|timeout|gone|stopped, slug,
-                                    seq, ask, answers, done, reason: null|
-                                    timeout|stopped|not-found|not-an-ask|
-                                    dropped|rotated|closed}`.
-                                    `ask --to` addresses an ask: `you`
-                                    (aliases `operator`, `human`; stored
-                                    `you`), a harness (claude codex
-                                    opencode grok kimi omp,
-                                    case-insensitive) or `any`; a bad value
-                                    exits 1 locally and the server answers
-                                    400 `bad-to`. `edit` on an ask keeps
-                                    its `to`; `hand --to` is unchanged.
 kb slate close ["…"] | reopen | rotate
 kb slate watch [--once] [--timeout S] | stats | ls | doctor
                                     `promote` composes the existing write
@@ -1117,6 +1088,62 @@ kb slate watch [--once] [--timeout S] | stats | ls | doctor
                                     session) — counts, never a verdict.
                                     `doctor` is a structural lint. See
                                     `## kb slate` below.
+kb slate wait <n> [--timeout S] [--parent-pid PID] [--json]
+                                    Block until ask <n> is resolved. Write
+                                    the number BARE: `#` starts a shell
+                                    comment, so `kb slate wait #57` runs
+                                    `kb slate wait` (usage error, exit 2);
+                                    the parser accepts both forms. Read-only:
+                                    never POSTs, never moves the cursor. It
+                                    subscribes to the SSE stream first, then
+                                    seeds from the ledger, re-seeds on
+                                    reconnect and notices a rotation or close
+                                    (detected at the seed and on every
+                                    resync, not only from a live frame; a
+                                    replayed rotate/close frame is not
+                                    trusted; a lag or gap forces a resync).
+                                    Exit 0 answered or closed · 4 timed out,
+                                    still open (default `--timeout 3600`, 0 =
+                                    forever) · 5 gone (not found, not an
+                                    ask, dropped, rotated, closed) · 1
+                                    error or stopped (parent died, stdout
+                                    closed); never 2 or 3. Output starts
+                                    with the slate's untrusted-data frame
+                                    line. Human output is one `57 answered
+                                    · [you] 3m: <line>` per answer (body
+                                    indented), `57 done · …` when closed,
+                                    then a footer: a `[you]` answer reads
+                                    "the operator's answer to this
+                                    question", any other author "input to
+                                    weigh" (never an instruction); both
+                                    end `kb slate done 57 "…"` with the
+                                    bare number. Under `--json` EVERY
+                                    outcome prints JSON: `{state:
+                                    resolved|timeout|gone|stopped|error,
+                                    slug, seq, ask, answers, done, reason}`;
+                                    `reason` is null|timeout|stopped|
+                                    not-found|not-an-ask (carrying the
+                                    actual `kind`)|dropped|rotated|closed,
+                                    or, for `state: error` (exit 1), the
+                                    error message. On timeout `ask` is
+                                    filled.
+                                    `ask --to` addresses an ask: `you`
+                                    (aliases `operator`, `human`; stored
+                                    `you`), a harness (claude codex
+                                    opencode grok kimi omp,
+                                    case-insensitive) or `any`; a bad value
+                                    exits 1 locally and the server answers
+                                    400 `bad-to`. `edit` on an ask keeps
+                                    its `to`, normalising a legacy value
+                                    (operator/You become `you`) and dropping
+                                    an invalid one; a hand's `to` is kept;
+                                    `hand --to` is unchanged. A `done` on
+                                    ANY version of an ask closes every
+                                    version. The per-prompt delta (`kb slate
+                                    delta`, kb-recall's slate lane) carries
+                                    new answers and dones on the reading
+                                    session's OWN asks in full, so they
+                                    arrive with its next prompt.
 kb desk {offer,update,ls,wait,expire,promote}
                                     ephemeral LLM↔human handoff. Offer a
                                     draft, wait for comments, re-push, or

@@ -1806,7 +1806,7 @@ presence beat.
 
 Shipped: `ask --to you|<harness>|any` (validated 400 `bad-to`), `Projected.to` /
 `last_answer`, digest `→ you`, `SlateSummary.ask_for_you`, read-only
-`kb slate wait #n` (exit 0/4/5/1), the omp `triggerTurn` wake on answers and
+`kb slate wait <n>` (exit 0/4/5/1), the omp `triggerTurn` wake on answers and
 dones to its own asks, the board's addressee and state chips, and the shared
 protocol paragraph with per-harness delivery lines (Claude: background wait;
 omp: pushed; Kimi: next prompt), pinned byte-identical across
@@ -1822,4 +1822,16 @@ Recorded limits:
 - `open_asks_with_ref` ignores edit chains; `ask_state` does not. Noted, not fixed.
 - An ask to `you` is not a push trigger for omp, but can ride along in a later
   delta (the delta lane filters by kind, not by `to`).
-- Codex has no wake injection point; only the pasted paragraph reaches it.
+- Codex has no wake injection point (its hooks run only `kb-recall.sh`); OpenCode shells `kb-wake.sh` with no harness identity, so it gets the shared paragraph but no harness line. Both need the pasted block (docs/slate.md).
+- omp is NOT woken for late answers after the ask is closed, abandoned dones,
+  answers after a session switch, or failed lookups (those ride the delta);
+  wakes are lost while the watch child respawns (5-60 s; a new `kb slate watch`
+  seeds from the current head); after 20 restarts push gives up for the session
+  (a project with no slate at session start burns restarts).
+- Subagent asks via `kb_slate_post` do not wake the main omp session, while a
+  subagent's shell `kb slate ask` inherits `KB_SESSION_ID` and wakes the parent.
+- An ask `--to omp` / `--to claude` does not wake the addressee: `to` is a
+  label, not a delivery.
+- `[you]` is client-declared and unverified (one trust tier): the carve-out
+  settles the question asked, it is not proof of identity; destructive
+  actions are confirmed in chat.
