@@ -1079,7 +1079,7 @@ struct CaptureWriter {
 impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CaptureWriter {
     type Writer = CaptureWriter;
 
-    fn make_writer_for(&self, _meta: &tracing::Metadata<'_>) -> Self::Writer {
+    fn make_writer(&'a self) -> Self::Writer {
         self.clone()
     }
 }
