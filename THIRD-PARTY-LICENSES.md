@@ -4846,7 +4846,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- [ammonia 4.2.4](https://github.com/rust-ammonia/ammonia)
+- [ammonia 4.2.5](https://github.com/rust-ammonia/ammonia)
 
 ```
 Copyright (c) 2015-2022 The ammonia Developers
