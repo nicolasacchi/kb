@@ -600,7 +600,7 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
 
-      - name: Install Chromium + Firefox
+      - name: Install Chromium + Firefox + WebKit
         # --with-deps is load-bearing: a hosted runner does not ship the
         # browsers' system libraries, and without it they install fine and
         # then die at launch with `error while loading shared libraries:
@@ -616,8 +616,12 @@ jobs:
         # timing differs from Blink's in ways no amount of Chromium testing
         # can catch, and that divergence is exactly what broke authoring a
         # comment from a text selection on Firefox for Android.
+        #
+        # WebKit joins for the `webkit-iphone15` project (spa-terminal-phone
+        # only): the phone terminal's pointer scroller is exercised on the
+        # engine iOS Safari runs.
         working-directory: tests/e2e
-        run: npx playwright install --with-deps chromium firefox
+        run: npx playwright install --with-deps chromium firefox webkit
 
       - name: Run Playwright tests
         # V72-C3 — capture to a file (in addition to the live `list` output)

@@ -13,6 +13,9 @@ import type { ReporterDescription } from "@playwright/test";
 // one retry is honest here in a way it would not be if a spec recurred.
 const isCI = !!process.env.CI;
 
+// T17 - the phone terminal spec runs on the phone projects only.
+const PHONE_SPEC = /spa-terminal-phone\.spec\.ts/;
+
 // v0.44 F1 -- when KB_WITNESS_DIR is set (CI), ALSO write Playwright's JSON
 // report there. scripts/ci/witness.py decides the lane from that file
 // (unexpected == 0 and executed >= the ci/test-floors.toml floor), not from
@@ -80,6 +83,7 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
+      testIgnore: PHONE_SPEC,
       use: { ...devices["Desktop Chrome"] },
     },
     // A GECKO slice, not a second full suite. It exists because the
@@ -97,6 +101,7 @@ export default defineConfig({
     {
       name: "firefox",
       grep: /@selection/,
+      testIgnore: PHONE_SPEC,
       use: {
         ...devices["Desktop Firefox"],
         // Touch emulation so the mobile-shaped specs exercise the same
@@ -109,6 +114,31 @@ export default defineConfig({
         // to 127.0.0.1 directly, so they need no host mapping.
         launchOptions: {},
       },
+    },
+    // T17 - the phone terminal view. Only spa-terminal-phone.spec.ts runs on
+    // these three projects (and the two projects above ignore that file, so
+    // their counts do not move). Touch is on; the Chromium ones keep the
+    // shared launch args, WebKit must override them like firefox does (the
+    // host-resolver switch is Chromium-only).
+    {
+      name: "chromium-pixel7",
+      testMatch: PHONE_SPEC,
+      use: { ...devices["Pixel 7"], hasTouch: true },
+    },
+    {
+      name: "chromium-iphone15",
+      testMatch: PHONE_SPEC,
+      use: (() => {
+        // An iPhone-shaped viewport and UA on Chromium: drop the WebKit default.
+        const { defaultBrowserType: _ignored, ...iphone } = devices["iPhone 15"];
+        void _ignored;
+        return { ...iphone, browserName: "chromium" as const, hasTouch: true };
+      })(),
+    },
+    {
+      name: "webkit-iphone15",
+      testMatch: PHONE_SPEC,
+      use: { ...devices["iPhone 15"], hasTouch: true, launchOptions: {} },
     },
   ],
 });

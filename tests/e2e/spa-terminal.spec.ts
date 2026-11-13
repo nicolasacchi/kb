@@ -382,13 +382,12 @@ test.describe("T14 — desktop terminal panel", () => {
   test("narrow viewport: fit still too wide at fontSize 10 overflows-x auto", async ({
     page,
   }) => {
-    await page.setViewportSize({ width: 320, height: 600 });
+    // Just above the 860 px phone breakpoint (T17: at and below it the panel
+    // is the phone view in a Sheet, covered by spa-terminal-phone.spec.ts),
+    // so this is still the desktop panel on a narrow content column.
+    await page.setViewportSize({ width: 861, height: 700 });
     await installFakeTerminal(page, { total: 300, seedLines: 100 });
-    // At 320 px the session page collapses its sections (mobile); open the
-    // Terminal section by hand, the panel itself is the same desktop panel.
-    await openTerminal(page, async () => {
-      await page.locator('[data-testid="session-sec-terminal"] > summary').click();
-    });
+    await openTerminal(page);
     await expect
       .poll(async () => (await bufferInfo(page)).phase, { timeout: 30_000 })
       .toBe("live");

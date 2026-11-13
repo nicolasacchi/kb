@@ -131,7 +131,14 @@ function fixtureCard() {
 
 /**
  * Install the fake terminal. Returns a stats object:
- * `{ tickets, ticketRequests, sockets, froms, inputs, closes }`.
+ * `{ tickets, ticketRequests, sockets, froms, inputs, closes }`, plus the
+ * T17 controls (all additive, inert unless used):
+ *   - `dropNow(code = 1001)`: close every open socket from the relay side.
+ *   - `refuse(status | null)`: answer ticket requests with `status` (e.g.
+ *     503, a retryable failure) until called with null; every request is
+ *     still counted in `tickets`.
+ *   - `holdAt` option + `release()`: the stream pauses at that absolute
+ *     byte offset until released, so a test can act while it is "live".
  */
 export async function installFakeTerminal(page, opts = {}) {
   const total = opts.total ?? 2000;
@@ -162,6 +169,9 @@ export async function installFakeTerminal(page, opts = {}) {
     stream = Buffer.concat([cells, Buffer.from("\r\n", "utf8"), stream]);
   }
 
+  let holdAt = opts.holdAt ?? null;
+  let refuseStatus = null;
+  const liveSockets = new Set();
   const stats = {
     tickets: 0,
     ticketRequests: [],
@@ -169,6 +179,15 @@ export async function installFakeTerminal(page, opts = {}) {
     froms: [],
     inputs: [],
     closes: [],
+    dropNow: (code = 1001) => {
+      for (const entry of [...liveSockets]) entry.drop(code);
+    },
+    refuse: (status) => {
+      refuseStatus = status;
+    },
+    release: () => {
+      holdAt = null;
+    },
   };
   let dropsLeft = opts.drops ?? 0;
   let restartDone = false;
@@ -225,6 +244,9 @@ export async function installFakeTerminal(page, opts = {}) {
       method: route.request().method(),
       headers: route.request().headers(),
     });
+    if (refuseStatus !== null) {
+      return route.fulfill({ status: refuseStatus, body: "" });
+    }
     if (ticketStatus !== null) {
       return route.fulfill({ status: ticketStatus, body: "" });
     }
@@ -242,6 +264,14 @@ export async function installFakeTerminal(page, opts = {}) {
     const from = fromParam === null ? 0 : Number(fromParam);
     stats.froms.push(fromParam === null ? null : from);
     let closed = false;
+    const entry = {
+      drop: (code) => {
+        if (closed) return;
+        closed = true;
+        ws.close({ code });
+      },
+    };
+    liveSockets.add(entry);
     ws.onMessage((msg) => {
       stats.inputs.push(String(msg.toString()));
     });
@@ -249,6 +279,7 @@ export async function installFakeTerminal(page, opts = {}) {
     ws.onClose((code) => {
       stats.closes.push(code);
       closed = true;
+      liveSockets.delete(entry);
     });
     const sendText = (t) => {
       if (!closed) ws.send(t);
@@ -314,7 +345,11 @@ export async function installFakeTerminal(page, opts = {}) {
         ws.close({ code: 1001 });
         return;
       }
-      const end = Math.min(stream.length, cursor + 2048);
+      if (holdAt !== null && cursor >= holdAt) {
+        setTimeout(() => pump(), 20);
+        return;
+      }
+      const end = Math.min(holdAt ?? stream.length, stream.length, cursor + 2048);
       sendBinary(cursor, stream.subarray(cursor, end));
       cursor = end;
       setTimeout(() => pump(), pace);
