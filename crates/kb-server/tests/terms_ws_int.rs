@@ -201,6 +201,48 @@ async fn ws_connect(
     }
 }
 
+/// Where the runner socket and run dir live, for the failure report.
+static DIAG_PATHS: std::sync::OnceLock<(PathBuf, PathBuf)> = std::sync::OnceLock::new();
+
+/// Failure report for a stream open that never succeeded: the runner's
+/// own reply to a raw `stream` request (its error code), the session
+/// directory listing and whether tap.sock accepts a connection.
+async fn diagnose_stream(id: &str) -> String {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    let Some((sock, run_dir)) = DIAG_PATHS.get() else {
+        return "no diagnostics registered".to_string();
+    };
+    let mut out = String::new();
+    match tokio::net::UnixStream::connect(sock).await {
+        Ok(mut s) => {
+            let req = format!("{{\"op\":\"stream\",\"id\":\"{id}\",\"from\":null}}\n");
+            let _ = s.write_all(req.as_bytes()).await;
+            let mut r = tokio::io::BufReader::new(s);
+            let mut line = String::new();
+            let got = tokio::time::timeout(Duration::from_secs(3), r.read_line(&mut line)).await;
+            out.push_str(&format!("runner stream reply: {got:?} {line:?}\n"));
+        }
+        Err(e) => out.push_str(&format!("runner socket connect: {e}\n")),
+    }
+    let dir = run_dir.join("s").join(id);
+    let names: Vec<String> = std::fs::read_dir(&dir)
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    out.push_str(&format!(
+        "session dir {} entries: {names:?}\n",
+        dir.display()
+    ));
+    match tokio::net::UnixStream::connect(dir.join("tap.sock")).await {
+        Ok(_) => out.push_str("tap.sock: connect ok\n"),
+        Err(e) => out.push_str(&format!("tap.sock: connect error: {e}\n")),
+    }
+    out
+}
+
 /// Connect with a fresh ticket, retrying transient upstream-open
 /// failures (the tap/pane startup race) until `deadline`; on
 /// exhaustion panics with the last handshake outcome so a failed
@@ -219,10 +261,10 @@ async fn ws_connect_retry(
             WsConnect::Ok(ws) => return *ws,
             WsConnect::Other(e) => last = e,
         }
-        assert!(
-            start.elapsed() < deadline,
-            "ws connect for {id} never succeeded: last = {last}"
-        );
+        if start.elapsed() >= deadline {
+            let diag = diagnose_stream(id).await;
+            panic!("ws connect for {id} never succeeded: last = {last}\n{diag}");
+        }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 }
@@ -391,6 +433,8 @@ async fn ws_real_tap_roundtrip() {
             panic!("real launch failed ({code}): {message}")
         }
     };
+
+    let _ = DIAG_PATHS.set((sock_path.clone(), run_dir.clone()));
 
     // --- the real kb-server on top of the real runner ----------------
     let (_srv_tmp, addr, _handle) = boot(

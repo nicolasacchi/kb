@@ -1148,15 +1148,19 @@ async fn ws_shutdown_sends_close_1012_and_drain_finishes_fast() {
     }
     // The server's serve JoinHandle must complete well under
     // GRACEFUL_DRAIN_SECS (5s) — the shutdown arm alone suffices.
+    // The bound only has to separate "the relay does not hold the drain"
+    // from the 5 s drain backstop (a relay that ignored shutdown would
+    // finish at ~5 s): 4 s leaves headroom for a loaded CI runner.
     let start = std::time::Instant::now();
-    let joined = tokio::time::timeout(Duration::from_secs(3), handle).await;
+    let joined = tokio::time::timeout(Duration::from_secs(4), handle).await;
     assert!(
         joined.is_ok(),
-        "the serve JoinHandle must finish within 3s of shutdown (spec 7 proof)"
+        "the serve JoinHandle must finish within 4s of shutdown (spec 7 proof; backstop is 5s)"
     );
     assert!(
-        start.elapsed() < Duration::from_secs(3),
-        "drain must be fast"
+        start.elapsed() < Duration::from_secs(4),
+        "drain must be fast, took {:?}",
+        start.elapsed()
     );
 }
 
@@ -1646,12 +1650,16 @@ async fn ws_stream_errors_map_and_upstream_failure_consumes_ticket() {
 
     // (b) Runner unreachable (socket file gone) -> 502 (spec 1.6:
     // runner unreachable is 502, not the REST ops' 503).
+    // The ticket mint needs the runner's `list`, so the socket file is
+    // removed only AFTER the mint: the stream open then finds no runner.
     let tmp2 = tempfile::tempdir().unwrap();
-    let fake2 = spawn_stream_fake(tmp2.path(), HashMap::new(), vec![], true);
-    std::fs::remove_file(&fake2.socket).unwrap();
+    let mut replies2 = HashMap::new();
+    replies2.insert("list".to_string(), list_reply(&[TERM_ID]));
+    let fake2 = spawn_stream_fake(tmp2.path(), replies2, vec![], true);
     let (tmp2, addr2) = boot(enabled_terminal(), &fake2).await;
     let _ = tmp2;
     let ticket2 = mint_ticket(addr2, TERM_ID, None).await;
+    std::fs::remove_file(&fake2.socket).unwrap();
     let (status, text) = ws_http_get(
         addr2,
         TERM_ID,
