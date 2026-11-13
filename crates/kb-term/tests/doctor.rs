@@ -320,6 +320,100 @@ fn doctor_probe_timeout_kills_hanging_binary() {
         "run_with_timeout must kill near its own deadline, took {elapsed:?}"
     );
 }
+/// A child emitting >64 KiB does not block on a full pipe: output is
+/// drained incrementally and each stream is capped at 64 KiB, so the
+/// probe returns promptly with a truncated (not full) capture.
+#[test]
+fn doctor_probe_caps_output_and_never_blocks_on_pipe() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = fake_exe(
+        dir.path(),
+        "loud",
+        "#!/bin/sh\nhead -c 200000 /dev/zero | tr '\\000' 'x'\n",
+    );
+    let start = std::time::Instant::now();
+    let got = doctor::run_with_timeout(&fake, &[], &[], std::time::Duration::from_secs(10))
+        .expect("loud binary exits");
+    assert!(got.0, "loud binary exits zero");
+    assert!(
+        got.1.len() <= 64 * 1024,
+        "stdout capped at 64 KiB, got {} bytes",
+        got.1.len()
+    );
+    assert_eq!(got.1.len(), 64 * 1024, "loud output truncated at cap");
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(10),
+        "must not block on a full pipe"
+    );
+}
+
+/// A grandchild holding stdout past the deadline must not hold the
+/// probe past the deadline: the process group is killed, not just
+/// the direct child, and the grandchild is really gone afterwards.
+#[test]
+fn doctor_probe_timeout_kills_process_group() {
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("gc.pid");
+    let fake = fake_exe(
+        dir.path(),
+        "forker",
+        &format!(
+            "#!/bin/sh\nsh -c 'echo $$ > {}; exec sleep 30' &\nexec sleep 30\n",
+            pid_file.display()
+        ),
+    );
+    let start = std::time::Instant::now();
+    let got = doctor::run_with_timeout(&fake, &[], &[], std::time::Duration::from_secs(2));
+    assert!(got.is_none(), "forked sleeper must yield None at deadline");
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(8),
+        "process-group kill must return near the deadline, took {:?}",
+        start.elapsed()
+    );
+    let gc: u32 = std::fs::read_to_string(&pid_file)
+        .expect("grandchild wrote its pid")
+        .trim()
+        .parse()
+        .unwrap();
+    let gone_by = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let mut gone = false;
+    while std::time::Instant::now() < gone_by {
+        gone = match std::fs::read_to_string(format!("/proc/{gc}/stat")) {
+            Ok(st) => {
+                st.rsplit(')')
+                    .next()
+                    .and_then(|s| s.split_whitespace().next())
+                    == Some("Z")
+            }
+            Err(_) => true,
+        };
+        if gone {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(gone, "the grandchild must be killed with the group");
+}
+
+/// The child EXITS normally but a background grandchild still holds
+/// stdout: the call must still return by the deadline (not block until
+/// the grandchild exits, 30 s here).
+#[test]
+fn doctor_probe_exit_with_grandchild_holding_stdout_returns_by_deadline() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = fake_exe(
+        dir.path(),
+        "bgjob",
+        "#!/bin/sh\nsh -c 'sleep 30' &\necho ok\n",
+    );
+    let start = std::time::Instant::now();
+    let _ = doctor::run_with_timeout(&fake, &[], &[], std::time::Duration::from_secs(2));
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(8),
+        "a grandchild holding stdout must not block past the deadline, took {:?}",
+        start.elapsed()
+    );
+}
 
 #[test]
 fn doctor_exit_codes() {

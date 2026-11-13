@@ -62,6 +62,11 @@ impl Harness {
             Harness::Omp => "omp",
         }
     }
+
+    /// The harness named by `s` (its lowercase wire name), or `None`.
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|h| h.as_str() == s)
+    }
 }
 
 /// Whether `s` is a valid terminal session id.
@@ -71,6 +76,20 @@ pub fn is_valid_term_id(s: &str) -> bool {
     (8..=12).contains(&s.len())
         && s.chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+}
+
+/// Whether `s` is a valid sha256 hex digest (a media key).
+///
+/// Media keys ([`ServerFrame::Imagedef`] and [`Request::Media`]) are 64
+/// lowercase hex characters. Callers validate client-supplied keys here, at
+/// the boundary, before building a path from one; the same boundary
+/// discipline applies to [`is_valid_term_id`] for session ids and to argv
+/// entries (built from the allowlisted profiles table, never from an
+/// unvalidated client string).
+pub fn is_valid_sha256_hex(s: &str) -> bool {
+    s.len() == 64
+        && s.chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
 }
 
 /// Server-to-client text frames (tag `t`, lowercase variant names, snake_case
@@ -126,7 +145,7 @@ pub enum ServerFrame {
         id: u32,
         /// Image generation.
         gen: u32,
-        /// sha256 of the image bytes.
+        /// sha256 of the image bytes, as a hex64 key (see [`is_valid_sha256_hex`]).
         sha256: String,
         /// MIME type, e.g. `"image/png"`.
         mime: String,
@@ -591,7 +610,8 @@ pub enum Request {
     Launch {
         /// Harness to run.
         harness: Harness,
-        /// Extra argv, if any.
+        /// Extra argv entries, if any (callers validate argv entries at the
+        /// boundary before use).
         argv: Option<Vec<String>>,
         /// Resume session id, if any.
         resume_sid: Option<String>,
@@ -710,7 +730,7 @@ pub enum Request {
     },
     /// Fetch media by sha256.
     Media {
-        /// sha256 of the media bytes.
+        /// sha256 of the media bytes, as a hex64 key (see [`is_valid_sha256_hex`]).
         sha256: String,
     },
 }
@@ -782,24 +802,35 @@ pub struct GridData {
 pub struct EmptyData {}
 
 /// Session facts returned by `Request::List` inside `Response::Ok` `data`.
+///
+/// Every fact is `Option` and serializes `None` as an explicit `null`:
+/// a stale socket (which answers nothing) appears with all facts null
+/// and `stale: true`, so ONE type covers live and stale sessions (the
+/// kb-server mirror spells the same shape).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionInfo {
     /// Session id.
     pub id: String,
     /// Harness running in the session.
-    pub harness: Harness,
+    #[serde(default)]
+    pub harness: Option<Harness>,
     /// Working directory.
-    pub cwd: String,
+    #[serde(default)]
+    pub cwd: Option<String>,
     /// Start time as unix seconds.
-    pub started_unix: i64,
+    #[serde(default)]
+    pub started_unix: Option<i64>,
     /// Resume session id, if any.
     pub resume_sid: Option<String>,
     /// Pane pid.
-    pub pane_pid: u32,
+    #[serde(default)]
+    pub pane_pid: Option<u32>,
     /// Grid columns.
-    pub cols: u16,
+    #[serde(default)]
+    pub cols: Option<u16>,
     /// Grid rows.
-    pub rows: u16,
+    #[serde(default)]
+    pub rows: Option<u16>,
     /// Whether bracketed paste is enabled in the pane.
     pub bracket_paste_flag: bool,
     /// Whether the pane is dead.

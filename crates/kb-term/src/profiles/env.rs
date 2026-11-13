@@ -1,5 +1,5 @@
-//! Pane-environment allowlist, forbidden-name lists and the login-shell
-//! defence (unset prelude + prefix snippet).
+//! Pane-environment allowlist, forbidden-name lists and the
+//! server-env defence (unset prelude + prefix snippet).
 //!
 //! The pane env is built from scratch: only [`ALLOWED`] names are copied
 //! out of the runner's env, plus per-harness profile env and the
@@ -8,6 +8,12 @@
 //! terminal identity from env first. `TMUX`, `TMUX_PANE` and `TERM` are
 //! tmux-owned (tmux sets them itself) and are in NEITHER forbidden list:
 //! never put them in the plan env, never unset them.
+//!
+//! The pane shell is the non-login `/bin/sh -c`: no user profile is ever
+//! sourced for a pane. The unset prelude + prefix snippet therefore
+//! defend server-env inheritance — a tmux server inherits the env of
+//! the first client that starts it, and `new-session -e` only adds — not
+//! a login-profile reintroduction the launcher cannot have.
 
 /// Exact env names copied from the runner env into the pane env.
 pub const ALLOWED: &[&str] = &[
@@ -34,7 +40,7 @@ pub const ALLOWED: &[&str] = &[
 ];
 
 /// Outer-terminal identity names that must never reach the harness and
-/// must be unset after any login-shell profile runs.
+/// must be unset by the wrapper before exec (server-env inheritance).
 pub const FORBIDDEN_EXACT: &[&str] = &[
     "KITTY_WINDOW_ID",
     "KITTY_PID",
@@ -69,6 +75,21 @@ pub const NEVER_FORWARD: &[&str] = &[
     "KB_JOB_ULID",
 ];
 
+/// Per-harness profile-env names owned by `profiles::plan` (verified
+/// knobs in `profiles/table.rs`). Callers may never name them via
+/// `extra_passthrough` or caller env: the profile value is authoritative.
+pub const PROFILE_OWNED: &[&str] = &[
+    "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN",
+    "PI_IMAGE_PROTOCOL",
+    "PI_FORCE_IMAGE_PROTOCOL",
+    "PI_CONFIG_FILES",
+];
+
+/// Whether `name` is a profile-owned env name.
+pub fn is_profile_owned(name: &str) -> bool {
+    PROFILE_OWNED.contains(&name)
+}
+
 /// Whether `name` is on the copy allowlist (exact match, never prefix:
 /// `LC_TERMINAL` shares the `LC_` shape but is NOT allowed).
 pub fn is_allowed_name(name: &str) -> bool {
@@ -91,7 +112,8 @@ pub fn is_valid_env_identifier(name: &str) -> bool {
 }
 
 /// Whether an `extra_passthrough` name is acceptable: `^[A-Z][A-Z0-9_]{0,63}$`,
-/// on neither forbidden list, and not a never-forward identity name.
+/// on neither forbidden list, not a never-forward identity name, and not
+/// a profile-owned name (the profile value is authoritative).
 pub fn validate_passthrough(name: &str) -> bool {
     let mut chars = name.chars();
     match chars.next() {
@@ -104,7 +126,7 @@ pub fn validate_passthrough(name: &str) -> bool {
     if name.len() > 64 {
         return false;
     }
-    !is_forbidden_name(name) && !NEVER_FORWARD.contains(&name)
+    !is_forbidden_name(name) && !NEVER_FORWARD.contains(&name) && !is_profile_owned(name)
 }
 
 /// The allowlist-filtered copy of `base_env`, sorted by name.
@@ -130,9 +152,11 @@ pub fn lookup(base_env: &[(String, String)], name: &str) -> Option<String> {
         .map(|(_, v)| v.clone())
 }
 
-/// Defence after any login-shell profile: every `FORBIDDEN_EXACT` name
-/// plus every concrete forbidden-prefixed name present in `base_env`,
-/// sorted (golden-stable). Never names a tmux-owned variable.
+/// Server-env defence: every `FORBIDDEN_EXACT` name plus every concrete
+/// forbidden-prefixed name present in `base_env`, sorted (golden-stable).
+/// Never names a tmux-owned variable. The wrapper unsets these before
+/// exec so a tmux server that inherited forbidden names from its first
+/// client cannot pass them to the pane.
 pub fn unset_after_login(base_env: &[(String, String)]) -> Vec<String> {
     let mut names: Vec<String> = FORBIDDEN_EXACT.iter().map(|s| s.to_string()).collect();
     for (k, _) in base_env {
@@ -160,8 +184,8 @@ pub fn shell_unset_prelude(names: &[String]) -> Result<String, String> {
 }
 
 /// POSIX loop unsetting every currently-set variable whose name starts
-/// with a `FORBIDDEN_PREFIX` (covers names a login profile introduces
-/// that were never in `base_env`).
+/// with a `FORBIDDEN_PREFIX` (covers server-inherited names that were
+/// never in `base_env`).
 pub fn shell_unset_prefixes_snippet() -> String {
     format!(
         "for v in $(env | sed -n 's/^\\([A-Za-z_][A-Za-z0-9_]*\\)=.*/\\1/p' | grep -E '^({})'); do unset \"$v\"; done; ",

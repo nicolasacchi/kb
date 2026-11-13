@@ -14,6 +14,13 @@ updated_unix: number, closed: boolean,
  */
 topics: Array<string>, counts: SlateCounts, 
 /**
+ * AW2 — asks addressed `to: "you"` that are on the board and still
+ * UNANSWERED (the operator's queue). Derived at read time from the
+ * projection; an answered ask is waiting for its asker, not for you.
+ * Attention sums stay client-side (§9).
+ */
+ask_for_you: number, 
+/**
  * D27 (v0.42) — how many distinct sessions have REPORTED a cursor
  * here (`meta.cursors.len()`). Served, never "read": it is
  * attribution, not acknowledgement, and nothing expires it (D5).

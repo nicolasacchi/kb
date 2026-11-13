@@ -35,6 +35,16 @@
    "nexit1"
   ]
  },
+ "omp-session-images-long.jsonl": {
+  "dmodel": "omp",
+  "ids": [
+   "j1",
+   "j2",
+   "te2",
+   "j3",
+   "j4"
+  ]
+ },
  "omp-session-images.jsonl": {
   "dmodel": "omp",
   "ids": [

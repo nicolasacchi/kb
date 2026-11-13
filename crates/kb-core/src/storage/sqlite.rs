@@ -4296,10 +4296,13 @@ impl Db {
 
     /// V0047 — fill ONLY NULL `parent_session_id` / `root_session_id` /
     /// `project_slug` on omp rows matching `session_id` or `segment_of`.
-    /// Returns `(would_change, changed, unmatched)` summed over `items`
-    /// (`(session_id, parent, root, slug)` each). `apply=false` writes
-    /// nothing. Never overwrites a non-NULL value; never touches a
-    /// non-omp row. A second apply reports `(0, 0)` once filled.
+    /// Returns `(would_change, changed, unmatched)`: `would_change` and
+    /// `changed` count ROWS (one per row whose NULL columns an item
+    /// would fill — an item can match several rows), while `unmatched`
+    /// counts ITEMS (one per item with no matching row).
+    /// `apply=false` writes nothing. Never overwrites a non-NULL value;
+    /// never touches a non-omp row. A second apply reports `(0, 0)` once
+    /// filled.
     pub fn sessions_backfill_tree(
         &mut self,
         apply: bool,
@@ -6397,47 +6400,112 @@ impl Db {
         Ok(rows)
     }
 
+    /// A3 — the session ids of a session's children (the id-only form of
+    /// [`Self::sessions_children_page`], for unions that need no row
+    /// payload). Same predicate, same `is_newest = 1` scoping.
+    pub fn sessions_children_ids(
+        &self,
+        root_of: Option<&str>,
+        parent_of: Option<&str>,
+    ) -> Result<Vec<String>> {
+        debug_assert!(
+            root_of.is_some() != parent_of.is_some(),
+            "sessions_children_ids requires exactly one of root_of/parent_of"
+        );
+        let row = match (root_of, parent_of) {
+            (Some(_), None) => self.conn.prepare_cached(
+                "SELECT session_id FROM sessions
+                 WHERE is_newest = 1 AND root_session_id = ?1
+                 ORDER BY started_at ASC, session_id ASC",
+            )?,
+            (None, Some(_)) => self.conn.prepare_cached(
+                "SELECT session_id FROM sessions
+                 WHERE is_newest = 1 AND parent_session_id = ?1
+                 ORDER BY started_at ASC, session_id ASC",
+            )?,
+            _ => unreachable!("exactly one of root_of/parent_of must be Some"),
+        };
+        let arg = root_of.or(parent_of).expect("exactly one is Some");
+        let mut stmt = row;
+        let rows = stmt
+            .query_map(params![arg], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
     /// A3 — for each requested session id, the number of newest-capture
     /// rows that are THAT row's children by the card predicate — the ONE
     /// definition both surfaces use (`GET /api/sessions` `child_count`
     /// and the card's `summary.child_total` / `children.total`): a root
     /// (`root_session_id IS NULL`) counts its whole flood
     /// (`root_session_id = id`, any depth); a non-root counts its direct
-    /// children (`parent_session_id = id`). The UNION dedups a root's
-    /// direct children, which carry both keys, to one row each. Zero
-    /// counts are omitted (callers read a missing id as 0).
+    /// children (`parent_session_id = id`). Each requested id's OWN root
+    /// status decides which branch counts it — a row with
+    /// `parent_session_id` set but `root_session_id` NULL is a root by the
+    /// card predicate, so its parent-branch rows are NOT its children.
+    /// Ids with no newest capture count their direct children (the only
+    /// branch a card could ever have matched for them; the card itself
+    /// 404s for those). Zero counts are omitted (callers read a missing
+    /// id as 0).
     pub fn sessions_child_counts(&self, ids: &[String]) -> Result<Vec<(String, u32)>> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
+        // Resolve each requested id's own root status first, mirroring
+        // `children_predicate`: `root_session_id IS NULL` on the id's own
+        // newest capture means it counts its flood; anything else (a
+        // rooted capture, or no capture at all) counts direct children.
+        // Counting both branches for every id (the old UNION) double-counts
+        // a root whose parent is set but whose root is NULL.
         let ph = vec!["?"; ids.len()].join(",");
         let sql = format!(
-            "SELECT key, COUNT(*) FROM (\
-               SELECT session_id, root_session_id AS key FROM sessions \
-               WHERE is_newest = 1 AND root_session_id IS NOT NULL \
-                 AND root_session_id IN ({ph}) \
-               UNION \
-               SELECT session_id, parent_session_id AS key FROM sessions \
-               WHERE is_newest = 1 AND parent_session_id IS NOT NULL \
-                 AND parent_session_id IN ({ph}))\
-             GROUP BY key"
+            "SELECT session_id, root_session_id IS NULL FROM sessions \
+             WHERE is_newest = 1 AND session_id IN ({ph})"
         );
-        let binds: Vec<Box<dyn rusqlite::ToSql>> = ids
-            .iter()
-            .map(|id| Box::new(id.clone()) as Box<dyn rusqlite::ToSql>)
-            .chain(
-                ids.iter()
-                    .map(|id| Box::new(id.clone()) as Box<dyn rusqlite::ToSql>),
-            )
-            .collect();
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt
-            .query_map(
-                rusqlite::params_from_iter(binds.iter().map(|b| b.as_ref())),
-                |r| Ok((r.get::<_, String>(0)?, i64_as_u32_sat(r.get(1)?))),
-            )?
+        let status = stmt
+            .query_map(rusqlite::params_from_iter(ids.iter()), |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? != 0))
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(rows)
+        drop(stmt);
+        let is_root: std::collections::HashMap<&str, bool> = status
+            .iter()
+            .map(|(id, root)| (id.as_str(), *root))
+            .collect();
+        let mut root_ids: Vec<&str> = Vec::new();
+        let mut parent_ids: Vec<&str> = Vec::new();
+        for id in ids {
+            if is_root.get(id.as_str()).copied().unwrap_or(false) {
+                root_ids.push(id.as_str());
+            } else {
+                parent_ids.push(id.as_str());
+            }
+        }
+        let mut out: Vec<(String, u32)> = Vec::new();
+        for (branch, members) in [
+            ("root_session_id", root_ids),
+            ("parent_session_id", parent_ids),
+        ] {
+            if members.is_empty() {
+                continue;
+            }
+            let ph = vec!["?"; members.len()].join(",");
+            let sql = format!(
+                "SELECT {branch}, COUNT(*) FROM sessions \
+                 WHERE is_newest = 1 AND {branch} IS NOT NULL \
+                   AND {branch} IN ({ph}) \
+                 GROUP BY {branch}"
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            let rows = stmt
+                .query_map(rusqlite::params_from_iter(members.iter()), |r| {
+                    Ok((r.get::<_, String>(0)?, i64_as_u32_sat(r.get(1)?)))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            out.extend(rows);
+        }
+        Ok(out)
     }
 
     /// Map a `sessions` row in the canonical column order shared by
@@ -17982,6 +18050,47 @@ mod tests {
             counts,
             vec![("child-1".to_string(), 1), ("tree-root".to_string(), 3),]
         );
+    }
+    #[test]
+    fn child_counts_do_not_count_parent_branch_for_root_null_rows() {
+        // FXA3 defect 1: a row with `parent_session_id` set but
+        // `root_session_id` NULL whose parent exists is a ROOT by the
+        // card predicate — its children are its flood (rows with
+        // `root_session_id = id`), never its direct children. The old
+        // UNION counted both branches, so the parent's list child_count
+        // and the stray's own child_count diverged from their card
+        // children totals. This fixture is the exact shape: P (root) is
+        // the parent of X (root NULL), and X is the parent of Y
+        // (root NULL). By the card predicate P's flood is empty (X's
+        // root is NULL) and X's flood is empty (Y's root is NULL, even
+        // though Y's parent is X).
+        let mut db = db();
+        db.sessions_upsert(&session_row("art-p", "stray-parent", 1_000))
+            .unwrap();
+        let mut x = session_row("art-x", "stray-child", 1_100);
+        x.parent_session_id = Some("stray-parent".into());
+        db.sessions_upsert(&x).unwrap();
+        let mut y = session_row("art-y", "stray-grandchild", 1_200);
+        y.parent_session_id = Some("stray-child".into());
+        db.sessions_upsert(&y).unwrap();
+        // Card totals for both rows: flood counts, both zero.
+        assert_eq!(
+            db.sessions_children_count(Some("stray-parent"), None)
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            db.sessions_children_count(Some("stray-child"), None)
+                .unwrap(),
+            0
+        );
+        // List child counts must agree: neither id gets a count entry
+        // (zero counts are omitted). The old UNION returned
+        // ("stray-child", 1) for Y and ("stray-parent", 1) for X.
+        let counts = db
+            .sessions_child_counts(&["stray-parent".into(), "stray-child".into()])
+            .unwrap();
+        assert_eq!(counts, Vec::<(String, u32)>::new());
     }
 
     #[test]

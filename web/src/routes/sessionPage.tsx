@@ -432,8 +432,12 @@ export default function SessionPage() {
 
       {/* A5 — the code-side lane (`kbc-session-card/1`), fetched
           cross-origin through the doclens client. Renders nothing when
-          the corpus has no code_url. */}
-      <CodeLaneSection sid={sid} kb={card.kb} />
+          the corpus has no code_url. For a subagent child the ROOT sid is
+          passed (kb-code does no root resolution and trailer attribution
+          stamps the MAIN sid); a root row has root_session_id null and
+          falls back to its own sid. Deliberately NOT the parent fallback
+          `treeTarget` uses above. */}
+      <CodeLaneSection sid={sum.root_session_id ?? sid} kb={card.kb} />
       {/* FXA4 — the card's `research` and `live` lanes are fetched but
           intentionally not rendered as sections on A4: brief §3's section
           list omits them (the inspector already surfaces research via its

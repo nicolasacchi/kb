@@ -253,6 +253,31 @@ check_invalid_kb_sid "leading dash" "-rf"
 check_invalid_kb_sid "129 chars" "$(printf 'a%.0s' $(seq 1 129))"
 check_invalid_kb_sid "non-ASCII" "séssion"
 
+# A6: an INVALID KB_SESSION_ID is IGNORED and falls through to a fresh
+# marker (brief: invalid value falls to the marker, never an error).
+# Also: an empty-string KB_SESSION_ID behaves exactly like unset.
+check_invalid_kb_sid_falls_to_marker() {
+  # $1 = description, $2 = the invalid value
+  r="$(new_repo)"
+  install_repo "$r"
+  write_marker "$r" "sess-marker-fallback" 60
+  set +e
+  KB_SESSION_ID="$2" env -u CLAUDE_CODE_SESSION_ID -u GROK_SESSION_ID \
+    git -C "$r" commit --allow-empty -m "t-invalid-marker" -q 2>"$TMPROOT/invalid-marker.log"
+  rc=$?
+  set -e 2>/dev/null || true
+  assert_status "$1: commit still succeeds (fail-open)" 0 "$rc"
+  assert_eq "$1: fresh marker stamps trailer" "sess-marker-fallback" "$(trailer_of "$r")"
+}
+check_invalid_kb_sid_falls_to_marker "invalid value falls to marker" "x y"
+
+r="$(new_repo)"
+install_repo "$r"
+write_marker "$r" "sess-marker-fallback-empty" 60
+KB_SESSION_ID="" env -u CLAUDE_CODE_SESSION_ID -u GROK_SESSION_ID \
+  git -C "$r" commit --allow-empty -m "t-empty-marker" -q
+assert_eq "empty KB_SESSION_ID falls to the marker like unset" "sess-marker-fallback-empty" "$(trailer_of "$r")"
+
 # =======================================================================
 # 1c. both env vars set -> Claude wins
 # =======================================================================

@@ -14,7 +14,8 @@
 //    trailing `\r` is stripped from non-`%output` control lines.
 //  * `%output %P <value>`: the value is everything after the single space
 //    following the pane id. Octal escapes decode; a backslash not followed by
-//    three octal digits is literal (stats.badEscapes++).
+//    three octal digits (or an over-range escape above \377, which is not a
+//    byte) is literal (stats.badEscapes++).
 //  * `%extended-output %P <age> ... : <value>`: the value is the data after the
 //    first ` : `; the age parses after the pane id. Missing ` : ` (or a
 //    non-integer age) counts stats.malformed++ and yields 'other'.
@@ -55,8 +56,9 @@ function decodeValueCounted(v: Uint8Array): { data: Uint8Array; bad: number } {
     const b = v[i];
     if (b !== BS) { out[o++] = b; continue; }
     if (i + 3 < v.length && isOctal(v[i + 1]) && isOctal(v[i + 2]) && isOctal(v[i + 3])) {
-      out[o++] = ((v[i + 1] - 0x30) << 6) | ((v[i + 2] - 0x30) << 3) | (v[i + 3] - 0x30);
-      i += 3;
+      const val = ((v[i + 1] - 0x30) << 6) | ((v[i + 2] - 0x30) << 3) | (v[i + 3] - 0x30);
+      if (val <= 0xff) { out[o++] = val; i += 3; }
+      else { bad++; out[o++] = b; }   // >\377 is not a byte: backslash literal, counted
     } else {
       bad++;          // malformed escape: emit the backslash literally
       out[o++] = b;
@@ -88,11 +90,15 @@ export class ControlDecoder {
     }
     this.buf.set(chunk, this.len); this.len += chunk.length;
     for (;;) {
-      const nl = this.buf.indexOf(NL, 0);
+      // Search only the live region (buf[0,len)): the buffer is reused across
+      // calls and consume() erases the consumed tail, but the oversize discard
+      // paths below also blank the buffer, so a stale byte past len is never
+      // visible here. (subarray is a view; indexOf runs on the view.)
+      const nl = this.buf.subarray(0, this.len).indexOf(NL);
       // indexOf from 0 each scan is fine: lines are consumed in order.
       const end = nl === -1 ? this.len : nl;
       if (this.discarding) {
-        if (nl === -1) { this.len = 0; break; }
+        if (nl === -1) { this.buf.fill(0); this.len = 0; break; }
         // drop through the newline and resync
         this.consume(nl + 1);
         this.discarding = false;
@@ -101,14 +107,14 @@ export class ControlDecoder {
       if (end > LINE_MAX) {
         // oversize line: discard it (to the next \n) and count it once
         this.stats.oversizeLines++;
-        if (nl === -1) { this.discarding = true; this.len = 0; break; }
+        if (nl === -1) { this.buf.fill(0); this.discarding = true; this.len = 0; break; }
         this.consume(nl + 1);
         continue;
       }
       if (nl === -1) {
         if (this.len > LINE_MAX) {
           this.stats.oversizeLines++;
-          this.discarding = true; this.len = 0;
+          this.buf.fill(0); this.discarding = true; this.len = 0;
         }
         break;
       }
@@ -191,11 +197,12 @@ export class ControlDecoder {
     }
     if (line.startsWith('%pause ') || line.startsWith('%continue ')) {
       const kind: 'pause' | 'continue' = line.startsWith('%pause') ? 'pause' : 'continue';
-      const pane = line.split(' ')[1] ?? '';
+      const m = splitTokens(line);
+      const pane = m && m.length > 1 ? m[1] : '';
       events.push(kind === 'pause' ? { kind, pane } : { kind, pane });
       return;
     }
-    if (line.startsWith('%exit')) {
+    if (line === '%exit' || line.startsWith('%exit ')) {
       const reason = line === '%exit' ? '' : line.slice('%exit'.length).trim();
       events.push({ kind: 'exit', reason });
       return;

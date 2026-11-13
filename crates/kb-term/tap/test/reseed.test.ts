@@ -3,6 +3,7 @@
 import { test, expect } from 'bun:test';
 import { makeTwin, type Twin } from '../src/twin.ts';
 import { MAX_RESEED_ATTEMPTS, MODE_FORMATS, QUIESCENT_MAX_MS, QUIESCENT_MS, Reseeder, ReseedError, modeRestoreBytes, type ReseedStats } from '../src/reseed.ts';
+import { ControlError } from '../src/control.ts';
 import { dumpRows, stateOf } from './support/compare.ts';
 
 interface PendingCmd {
@@ -45,6 +46,13 @@ class FakeControl {
     if (!c) throw new Error('no pending command to resolve');
     c.resolve(lines);
   }
+
+  /** reject the oldest outstanding command (e.g. the -a capture failing) */
+  rejectNext(err: Error): void {
+    const c = this.cmds.shift();
+    if (!c) throw new Error('no pending command to reject');
+    c.reject(err);
+  }
 }
 
 function setup(cols = 80, rows = 24): { control: FakeControl; twin: Twin; reseeder: Reseeder } {
@@ -70,6 +78,23 @@ async function resolveAttempt(
   control.resolveNext(a); // A
   control.resolveNext(capture); // capture
   control.resolveNext(altCapture ?? []); // -a capture
+  control.resolveNext(b); // B
+  control.resolveNext(mode); // mode query
+  await tick();
+}
+
+/** drive one attempt whose -a capture rejects (tmux lacks -a support) */
+async function rejectAltAttempt(
+  control: FakeControl,
+  capture: string[],
+  a: string[],
+  b: string[],
+  mode: string[],
+  altError: Error,
+): Promise<void> {
+  control.resolveNext(a); // A
+  control.resolveNext(capture); // capture
+  control.rejectNext(altError); // -a capture rejects
   control.resolveNext(b); // B
   control.resolveNext(mode); // mode query
   await tick();
@@ -269,19 +294,54 @@ test('reseed_waits_for_quiescence', async () => {
     const r = await done;
     expect(r.quiescent).toBe(true);
 
-    // A complete ?2026l (even split across two chunks) skips the wait.
+    // A complete ?2026l (even split across two chunks) arriving DURING the
+    // wait short-circuits it: the frame end is fresh (at/after the wait
+    // start). Recent output first, so the silence rule alone would pay the
+    // full 50ms. (This is the fixed fast-path contract: a frame end that
+    // landed BEFORE reseed() does not count -- see the stale phase below.)
     control.now = 0;
     const reseeder2 = new Reseeder(control, twin, opts);
-    reseeder2.noteOutput(new TextEncoder().encode('\x1b[?20'), '%0');
-    reseeder2.noteOutput(new TextEncoder().encode('26l'), '%0');
+    reseeder2.noteOutput(new TextEncoder().encode('noise'), '%0');
     sleepAdvances.length = 0;
-    const done2 = reseeder2.reseed('%0', { ...opts, quiescentMs: 50, quiescentMaxMs: 2000 });
+    let injected = false;
+    const done2 = reseeder2.reseed('%0', {
+      now: () => control.now,
+      sleep: (ms: number) => {
+        sleepAdvances.push(ms);
+        control.now += ms;
+        if (!injected) {
+          injected = true;
+          reseeder2.noteOutput(new TextEncoder().encode('\x1b[?20'), '%0');
+          reseeder2.noteOutput(new TextEncoder().encode('26l'), '%0');
+        }
+        return Promise.resolve();
+      },
+      quiescentMs: 50,
+      quiescentMaxMs: 2000,
+    });
     await tick();
-    expect(control.now).toBe(0);
-    expect(sleepAdvances.length).toBe(0);
+    expect(sleepAdvances.length).toBe(1);
+    expect(control.now).toBeLessThan(50);
     await resolveAttempt(control, ['hello'], ['A 0 5 0'], ['B 0 5 0']);
     const r2 = await done2;
     expect(r2.quiescent).toBe(true);
+
+    // Regression: a frame end that landed BEFORE this wait started (a
+    // producer that ended its burst milliseconds before reseed()) must
+    // NOT satisfy the wait -- it pays the silence rule, not the fast
+    // path. The old start-qms grace window returned instantly here.
+    control.now = 95;
+    const reseederStale = new Reseeder(control, twin, opts);
+    reseederStale.noteOutput(new TextEncoder().encode('burst\x1b[?2026l'), '%0');
+    control.now = 98;
+    sleepAdvances.length = 0;
+    const doneStale = reseederStale.reseed('%0', opts);
+    await tick();
+    expect(sleepAdvances.length).toBeGreaterThan(0);
+    expect(control.now).toBeGreaterThanOrEqual(145);
+    await resolveAttempt(control, ['hello'], ['A 0 5 0'], ['B 0 5 0']);
+    const rStale = await doneStale;
+    expect(rStale.quiescent).toBe(true);
 
     // Output keeps arriving: proceed after QUIESCENT_MAX_MS with false.
     control.now = 0;
@@ -310,7 +370,7 @@ test('reseed_waits_for_quiescence', async () => {
     const done4 = reseeder2.reseed('%0', opts);
     await tick();
     // The write must only land after 50ms past the fresh output.
-    expect(control.writes.length).toBe(4);
+    expect(control.writes.length).toBe(5);
     expect(control.now).toBeGreaterThanOrEqual(150);
     await resolveAttempt(control, ['hello'], ['A 0 5 0'], ['B 0 5 0']);
     const r4 = await done4;
@@ -426,6 +486,173 @@ test('reseed_rejects_invalid_pane_id_before_any_write', async () => {
     await expect(reseeder.reseed('0', { quiescentMs: 0 })).rejects.toThrow(/invalid pane id/);
     await expect(reseeder.reseed('', { quiescentMs: 0 })).rejects.toThrow(/invalid pane id/);
     expect(control.writes.length).toBe(0);
+  } finally {
+    twin.dispose();
+  }
+});
+
+test('reseed_alt_failure_carries_tmux_error_lines', async () => {
+  const { control, twin, reseeder } = setup();
+  try {
+    // alternate_on=1 but the -a capture rejects: the reason must carry
+    // the tmux %error lines, not an invented fixed string.
+    const altErr = new ControlError('unknown option', ['%error unknown option -a', 'usage: capture-pane ...']);
+    const done = reseeder.reseed('%0', { quiescentMs: 0 });
+    const settled = done.then(() => null, (e: unknown) => e);
+    await tick();
+    for (let i = 0; i < MAX_RESEED_ATTEMPTS; i++) {
+      await rejectAltAttempt(control, ['hello'], ['A 0 5 0'], ['B 0 5 0'], ['M 1 0 23 1 1 0 0 0 0'], altErr);
+    }
+    const err = await settled;
+    expect(err).toBeInstanceOf(ReseedError);
+    expect((err as ReseedError).reason).toContain('%error unknown option -a');
+    expect(reseeder.stats().altUnsupported).toBe(MAX_RESEED_ATTEMPTS);
+  } finally {
+    twin.dispose();
+  }
+});
+
+test('reseed_catch_preserves_control_error_lines', async () => {
+  const { control, twin, reseeder } = setup();
+  try {
+    // The primary capture (not the -a one) rejects: the catch in reseed()
+    // must keep the %error lines, not just the bare message.
+    const capErr = new ControlError('bad target', ['%error can\'t find pane: %9']);
+    const done = reseeder.reseed('%0', { quiescentMs: 0 });
+    const settled = done.then(() => null, (e: unknown) => e);
+    await tick();
+    for (let i = 0; i < MAX_RESEED_ATTEMPTS; i++) {
+      control.resolveNext(['A 0 5 0']);
+      control.rejectNext(capErr);
+      control.resolveNext([]);
+      control.resolveNext(['B 0 5 0']);
+      control.resolveNext(['M 0 0 23 1 1 0 0 0 0']);
+      await tick();
+    }
+    const err = await settled;
+    expect(err).toBeInstanceOf(ReseedError);
+    expect((err as ReseedError).reason).toContain("can't find pane: %9");
+  } finally {
+    twin.dispose();
+  }
+});
+
+test('reseed_non_alt_marks_alt_unsupported_in_result', async () => {
+  const { control, twin, reseeder } = setup();
+  try {
+    // A non-alt reseed with a broken -a capture proceeds (altUnsupported
+    // counted) AND says so in the result, not only in stats().
+    const altErr = new ControlError('no -a here', ['%error no -a capture']);
+    const done = reseeder.reseed('%0', { quiescentMs: 0 });
+    await tick();
+    await rejectAltAttempt(control, ['hello'], ['A 0 5 0'], ['B 0 5 0'], ['M 0 0 23 1 1 0 0 0 0'], altErr);
+    const r = await done;
+    expect(r.attempts).toBe(1);
+    expect(r.altUnsupported).toBe(true);
+    expect(reseeder.stats().altUnsupported).toBe(1);
+  } finally {
+    twin.dispose();
+  }
+});
+
+test('reseed_bad_marker_reason_names_the_offending_line', async () => {
+  const { control, twin, reseeder } = setup();
+  try {
+    const done = reseeder.reseed('%0', { quiescentMs: 0 });
+    const settled = done.then(() => null, (e: unknown) => e);
+    await tick();
+    for (let i = 0; i < MAX_RESEED_ATTEMPTS; i++) {
+      await resolveAttempt(control, ['hello'], ['X bogus'], ['B 0 5 0']);
+    }
+    const err = await settled;
+    expect(err).toBeInstanceOf(ReseedError);
+    expect((err as ReseedError).reason).toContain('X bogus');
+    expect(reseeder.stats().badMarkerRetries).toBe(MAX_RESEED_ATTEMPTS);
+  } finally {
+    twin.dispose();
+  }
+});
+
+test('reseed_empty_marker_reason_says_empty', async () => {
+  const { control, twin, reseeder } = setup();
+  try {
+    const done = reseeder.reseed('%0', { quiescentMs: 0 });
+    const settled = done.then(() => null, (e: unknown) => e);
+    await tick();
+    for (let i = 0; i < MAX_RESEED_ATTEMPTS; i++) {
+      await resolveAttempt(control, ['hello'], [], ['B 0 5 0']);
+    }
+    const err = await settled;
+    expect(err).toBeInstanceOf(ReseedError);
+    expect((err as ReseedError).reason).toContain('empty');
+  } finally {
+    twin.dispose();
+  }
+});
+
+test('reseed_malformed_mode_line_retries_and_counts', async () => {
+  const { control, twin, reseeder } = setup();
+  try {
+    // A mode line that arrived but does not parse (wrong tag) retries
+    // like a bad marker, counted in badModeRetries.
+    const done = reseeder.reseed('%0', { quiescentMs: 0 });
+    await tick();
+    await resolveAttempt(control, ['hello'], ['A 0 5 0'], ['B 0 5 0'], ['X 1 2 3 4 5 6 7 8 9']);
+    await resolveAttempt(control, ['hello'], ['A 0 5 0'], ['B 0 5 0'], ['M 0 0 23 1 1 0 0 0 0']);
+    const r = await done;
+    expect(r.attempts).toBe(2);
+    expect(reseeder.stats().badModeRetries).toBe(1);
+  } finally {
+    twin.dispose();
+  }
+});
+
+test('reseed_partial_mode_line_retries_and_counts', async () => {
+  const { control, twin, reseeder } = setup();
+  try {
+    // A mode line with an unparseable flag token is malformed in full:
+    // a partial state must not silently drift the twin.
+    const done = reseeder.reseed('%0', { quiescentMs: 0 });
+    await tick();
+    await resolveAttempt(control, ['hello'], ['A 0 5 0'], ['B 0 5 0'], ['M 0 0 23 1 1 0 0 0 x']);
+    await resolveAttempt(control, ['hello'], ['A 0 5 0'], ['B 0 5 0'], ['M 0 0 23 1 1 0 0 0 0']);
+    const r = await done;
+    expect(r.attempts).toBe(2);
+    expect(reseeder.stats().badModeRetries).toBe(1);
+  } finally {
+    twin.dispose();
+  }
+});
+
+test('reseed_garbage_alternate_token_retries_and_counts', async () => {
+  const { control, twin, reseeder } = setup();
+  try {
+    // The alternate-screen token is not a 0/1 flag: the line is malformed
+    // even though every other field parses, so it retries like any bad mode.
+    const done = reseeder.reseed('%0', { quiescentMs: 0 });
+    await tick();
+    await resolveAttempt(control, ['hello'], ['A 0 5 0'], ['B 0 5 0'], ['M x 0 23 1 1 0 0 0 0']);
+    await resolveAttempt(control, ['hello'], ['A 0 5 0'], ['B 0 5 0'], ['M 0 0 23 1 1 0 0 0 0']);
+    const r = await done;
+    expect(r.attempts).toBe(2);
+    expect(reseeder.stats().badModeRetries).toBe(1);
+  } finally {
+    twin.dispose();
+  }
+});
+
+test('reseed_missing_mode_line_counts_but_proceeds', async () => {
+  const { control, twin, reseeder } = setup();
+  try {
+    // An empty mode reply carries no evidence (fakes pass []): counted,
+    // so the discard is not silent, but the restore proceeds CUP-only.
+    const done = reseeder.reseed('%0', { quiescentMs: 0 });
+    await tick();
+    await resolveAttempt(control, ['hello'], ['A 0 5 0'], ['B 0 5 0'], []);
+    const r = await done;
+    expect(r.attempts).toBe(1);
+    expect(r.mode).toBeNull();
+    expect(reseeder.stats().badModeRetries).toBe(1);
   } finally {
     twin.dispose();
   }

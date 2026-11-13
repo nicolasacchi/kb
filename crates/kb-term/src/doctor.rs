@@ -6,8 +6,9 @@
 //!
 //! Std-only for metadata (no libc: the current uid comes from
 //! `/proc/self` via `MetadataExt`), subprocess timeouts by spawn +
-//! `try_wait` poll loop + kill. Never prints env values, tokens or
-//! credential paths: details carry names/versions/paths only.
+//! `try_wait` poll loop + process-group kill, piped output drained
+//! incrementally (64 KiB cap per stream). Never prints env values,
+//! tokens or credential paths: details carry names/versions/paths only.
 
 use sha2::{Digest, Sha256};
 use std::io::Read;
@@ -152,12 +153,21 @@ pub fn to_json(checks: &[Check]) -> String {
 
 /// Run `exe args` with an allowlisted env and a hard deadline:
 /// `None` on timeout/spawn failure (the caller maps it to FAIL/WARN).
+/// Piped output is drained incrementally (64 KiB cap per stream, so a
+/// child writing more than 64 KiB never blocks on a full pipe). The
+/// deadline covers the WHOLE call including collecting the output: if
+/// the child exits but a grandchild still holds a pipe open (a
+/// background job started by a login shell), the call waits only until
+/// the deadline, then kills the process group and returns `None` (no
+/// partial capture). The kill is `kill -s KILL -- -<pgid>`, falling back
+/// to killing the direct child when that command fails.
 pub fn run_with_timeout(
     exe: &Path,
     args: &[&str],
     env: &[(String, String)],
     timeout: Duration,
 ) -> Option<(bool, String, String)> {
+    use std::os::unix::process::CommandExt;
     let mut child = Command::new(exe)
         .args(args)
         .env_clear()
@@ -165,30 +175,92 @@ pub fn run_with_timeout(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .process_group(0)
         .spawn()
         .ok()?;
+    let pid = child.id();
+    let (Some(stdout_pipe), Some(stderr_pipe)) = (child.stdout.take(), child.stderr.take()) else {
+        kill_probe_group(pid, &mut child);
+        return None;
+    };
+    const CAP: usize = 64 * 1024;
+    let out_rx = drain(stdout_pipe, CAP);
+    let err_rx = drain(stderr_pipe, CAP);
     let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let out = child.wait_with_output().ok()?;
+                let remaining = |d: Instant| d.saturating_duration_since(Instant::now());
+                let out = out_rx.recv_timeout(remaining(deadline));
+                let err = err_rx.recv_timeout(remaining(deadline));
+                let (Ok(out), Ok(err)) = (out, err) else {
+                    // A grandchild still holds a pipe at the deadline.
+                    kill_probe_group(pid, &mut child);
+                    return None;
+                };
                 return Some((
                     status.success(),
-                    String::from_utf8_lossy(&out.stdout).into_owned(),
-                    String::from_utf8_lossy(&out.stderr).into_owned(),
+                    String::from_utf8_lossy(&out).into_owned(),
+                    String::from_utf8_lossy(&err).into_owned(),
                 ));
             }
             Ok(None) => {
                 if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    kill_probe_group(pid, &mut child);
                     return None;
                 }
                 std::thread::sleep(Duration::from_millis(10));
             }
-            Err(_) => return None,
+            Err(_) => {
+                kill_probe_group(pid, &mut child);
+                return None;
+            }
         }
     }
+}
+
+/// Kill the probe's whole process group (std-only: `/bin/kill`), falling
+/// back to the direct child when the command fails, then reap the child.
+fn kill_probe_group(pid: u32, child: &mut std::process::Child) {
+    let killed = std::process::Command::new("/bin/kill")
+        .args(["-s", "KILL", "--", &format!("-{pid}")])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !killed {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+}
+
+/// Drain `r` on a thread (keeping at most `cap` bytes) and deliver the
+/// capture over a channel when the pipe closes.
+fn drain<R: std::io::Read + Send + 'static>(
+    mut r: R,
+    cap: usize,
+) -> std::sync::mpsc::Receiver<Vec<u8>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = vec![0u8; 8192];
+        let mut out = Vec::new();
+        loop {
+            match r.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if out.len() < cap {
+                        let room = cap - out.len();
+                        out.extend_from_slice(&buf[..n.min(room)]);
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        let _ = tx.send(out);
+    });
+    rx
 }
 
 /// First non-empty output line, trimmed.
@@ -667,7 +739,11 @@ fn probe_run_layout() -> RunLayoutProbe {
 }
 
 /// `$SHELL -lc env` names: `None` when `$SHELL` is unset or the shell
-/// cannot run.
+/// cannot run. Advisory only: production panes run under the non-login
+/// `/bin/sh -c` (no profile is sourced). This probe reports what the
+/// operator's own login shell would expose, so a WARN here means "your
+/// login shell sets outer-terminal vars", not "a pane would inherit
+/// them" — the wrapper's server-env defence handles the pane path.
 pub fn probe_login_env(shell: &str) -> Option<Vec<String>> {
     let (ok, stdout, _) = run_with_timeout(
         Path::new(shell),
@@ -698,7 +774,7 @@ pub fn decide_login_env(shell: Option<&str>, forbidden: &[String], shell_ok: boo
     let mut notes: Vec<String> = Vec::new();
     if !forbidden.is_empty() {
         notes.push(format!(
-            "login shell reintroduces named vars: {}",
+            "login shell sets outer-terminal vars (advisory; panes use non-login /bin/sh -c): {}",
             forbidden.join(", ")
         ));
     }

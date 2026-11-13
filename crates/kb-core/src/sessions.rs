@@ -328,12 +328,13 @@ pub struct SessionActivity {
     /// V0045/seg1 — the same record's `segmentIdx` (1-based part index; a
     /// JSON number or a numeric string). `None` unless `segment_of` is set.
     pub segment_idx: Option<i64>,
-    /// V0047 — the FIRST `adapter-meta` record's `parentSessionId` (the
-    /// parent session, plain-token validated). SURFACED, never scored.
+    /// V0047 — the first valid `parentSessionId` on an `adapter-meta`
+    /// record (locked per id; a later record fills an id an earlier
+    /// one lacked; plain-token validated). SURFACED, never scored.
     pub parent_session_id: Option<String>,
-    /// V0047 — the FIRST `adapter-meta` record's `rootSessionId` (the tree
-    /// root, plain-token validated; a value equal to the record's own
-    /// `sessionId` is ignored). SURFACED, never scored.
+    /// V0047 — the first valid `rootSessionId` on an `adapter-meta`
+    /// record (locked per id like `parent_session_id`; a root equal to
+    /// the record's own `sessionId` is ignored). SURFACED, never scored.
     pub root_session_id: Option<String>,
     /// OL IDEA3 -- the verification commands the MAIN transcript ran, the
     /// counted edits and the successful pushes, folded by
@@ -816,35 +817,35 @@ fn parse_session_activity_lines<S: AsRef<str>>(
 
         // V0047 — session lineage: the adapter-meta record's
         // `parentSessionId` / `rootSessionId`, plain-token validated
-        // key-by-key (an invalid parent never blocks a valid root). A root
-        // equal to the record's own `sessionId` is ignored. Reads the first
-        // adapter-meta record carrying valid keys for each id (the same
-        // `is_none()` first-writer idiom as the neighbours above, not a
-        // strict first-record lock). SURFACED, never scored
+        // key-by-key (an invalid parent never blocks a valid root). A
+        // root equal to the record's own `sessionId` is ignored. Each
+        // id is locked independently with the same `is_none()`
+        // first-writer idiom as the neighbours above (not a strict
+        // first-record lock): a later adapter-meta record can still
+        // fill an id the first one lacked. SURFACED, never scored
         // (invariant #11).
         if act.parent_session_id.is_none()
-            && act.root_session_id.is_none()
             && v.get("type").and_then(|x| x.as_str()) == Some("adapter-meta")
         {
-            if act.parent_session_id.is_none() {
-                let raw = v
-                    .get("parentSessionId")
-                    .and_then(|x| x.as_str())
-                    .map(str::trim);
-                if raw.is_some_and(crate::sessions::lineage::is_plain_token_pub) {
-                    act.parent_session_id = raw.map(str::to_string);
-                }
+            let raw = v
+                .get("parentSessionId")
+                .and_then(|x| x.as_str())
+                .map(str::trim);
+            if raw.is_some_and(crate::sessions::lineage::is_plain_token_pub) {
+                act.parent_session_id = raw.map(str::to_string);
             }
-            if act.root_session_id.is_none() {
-                let raw = v
-                    .get("rootSessionId")
-                    .and_then(|x| x.as_str())
-                    .map(str::trim);
-                let own = v.get("sessionId").and_then(|x| x.as_str()).map(str::trim);
-                if let Some(r) = raw {
-                    if crate::sessions::lineage::is_plain_token_pub(r) && Some(r) != own {
-                        act.root_session_id = Some(r.to_string());
-                    }
+        }
+        if act.root_session_id.is_none()
+            && v.get("type").and_then(|x| x.as_str()) == Some("adapter-meta")
+        {
+            let raw = v
+                .get("rootSessionId")
+                .and_then(|x| x.as_str())
+                .map(str::trim);
+            let own = v.get("sessionId").and_then(|x| x.as_str()).map(str::trim);
+            if let Some(r) = raw {
+                if crate::sessions::lineage::is_plain_token_pub(r) && Some(r) != own {
+                    act.root_session_id = Some(r.to_string());
                 }
             }
         }
@@ -3719,6 +3720,35 @@ mod tests {
         }
     }
 
+    // T20/FXT20 — an image reference is surfaced (Item::Image) but never
+    // scored: it enters neither the index digest nor the closure.
+    #[test]
+    fn image_refs_are_never_in_the_digest_or_the_closure() {
+        let prose =
+            "The header moved down by one row, and the search box stayed put exactly where it was.";
+        let jsonl = [
+            r#"{"type":"user","uuid":"00000001-0000-4000-8000-000000000001","timestamp":"2026-06-04T09:00:10.000Z","message":{"role":"user","content":"look at the screenshot"}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"The header moved down by one row, and the search box stayed put exactly where it was."}]}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"image","source":{"type":"blob_ref","media_type":"image/png","sha256":"abababababababababababababababababababababababababababababababab"}}]}}"#,
+        ]
+        .join("\n");
+        let parse = parse_session_html_full(
+            &wrapper("s1", &jsonl),
+            "session-20260524T100000Z-s1.html",
+            0,
+        );
+        let dig = session_digest(&parse);
+        for noise in ["[image", "blob:", "abababab", "inline"] {
+            assert!(
+                !dig.contains(noise),
+                "digest must not carry image {noise:?}: {dig}"
+            );
+        }
+        let closed = closing_assistant_text(&jsonl).expect("a closure from the prose turn");
+        assert_eq!(closed, prose);
+        assert!(!closed.contains("blob:"), "{closed}");
+    }
+
     #[test]
     fn recollect_order_lets_a_stronger_match_beat_a_committing_session() {
         // The documented #1 failure mode to avoid: a high-error, no-commit
@@ -4009,6 +4039,33 @@ mod tests {
         );
         assert_eq!(a.parent_session_id.as_deref(), Some("P1"));
         assert_eq!(a.root_session_id, None);
+    }
+
+    #[test]
+    fn parse_lineage_ids_lock_independently_across_adapter_meta_records() {
+        // rec1 carries only the root, rec2 only the parent. A joint
+        // first-record lock would drop the parent (rec2 is skipped once
+        // the root is set); each id now fills from its own first valid
+        // record.
+        let jsonl = concat!(
+            r#"{"sessionId":"S1","type":"adapter-meta","harness":"omp","rootSessionId":"R1"}"#,
+            "\n",
+            r#"{"sessionId":"S1","type":"adapter-meta","harness":"omp","parentSessionId":"P1"}"#,
+            "\n",
+        );
+        let a = parse_session_activity(jsonl);
+        assert_eq!(a.parent_session_id.as_deref(), Some("P1"));
+        assert_eq!(a.root_session_id.as_deref(), Some("R1"));
+        // And the mirror order: parent first, root second.
+        let jsonl = concat!(
+            r#"{"sessionId":"S1","type":"adapter-meta","harness":"omp","parentSessionId":"P0"}"#,
+            "\n",
+            r#"{"sessionId":"S1","type":"adapter-meta","harness":"omp","rootSessionId":"R0"}"#,
+            "\n",
+        );
+        let a = parse_session_activity(jsonl);
+        assert_eq!(a.parent_session_id.as_deref(), Some("P0"));
+        assert_eq!(a.root_session_id.as_deref(), Some("R0"));
     }
 
     #[test]
