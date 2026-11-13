@@ -101,11 +101,14 @@ describe("SlateCard addressed asks", () => {
     expect(screen.getByTestId("slate-last-answer").textContent).toContain("omp/ab12");
   });
 
-  it("offers answer on desktop only", () => {
+  it("offers answer on desktop and on mobile (D35), on an ask only", () => {
     mount(ask(), false, () => {});
     expect(document.querySelector('[data-act="answer"]')).toBeTruthy();
     cleanup();
     mount(ask(), true, () => {});
+    expect(document.querySelector('[data-act="answer"]')).toBeTruthy();
+    cleanup();
+    mount(ask({ kind: "hand", to: "omp", answers: undefined }), true, () => {});
     expect(document.querySelector('[data-act="answer"]')).toBeNull();
   });
 

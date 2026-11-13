@@ -67,6 +67,9 @@ export type ComposerSeed = {
   supersedes?: number;
   /// Set by "answer" — the ask this answers.
   re?: number;
+  /// The answered ask's line, echoed in the sheet: on the phone the sheet
+  /// covers the board, so the question would otherwise be out of sight.
+  reLine?: string;
   /// Prefill for an ask's addressee (an edit of an addressed ask).
   to?: string;
 };
@@ -176,8 +179,9 @@ export default function SlateComposer({
       if (!mobile && needsSubject && subject.trim()) post.subject = subject.trim();
       if (!mobile && kind === "tried" && failed.trim()) post.failed = failed.trim();
       if (!mobile && refs.length) post.refs = refs;
+      // Mobile addresses asks too (operator ruling 2026-11-13, design D35);
+      // a hand edit never reaches the phone (edit is desktop-only).
       const keepsTo =
-        !mobile &&
         to !== "any" &&
         (kind === "ask" || (kind === "hand" && seed?.supersedes !== undefined));
       if (keepsTo) post.to = to;
@@ -211,7 +215,11 @@ export default function SlateComposer({
       >
         <header className="slate-composer__head">
           <h2 className="slate-composer__title">
-            {editing ? `Rewrite #${seed!.supersedes}` : "Post"}
+            {editing
+              ? `Rewrite #${seed!.supersedes}`
+              : seed?.re !== undefined && kind === "answer"
+                ? `Answer #${seed.re}`
+                : "Post"}
           </h2>
           <button
             type="button"
@@ -222,6 +230,12 @@ export default function SlateComposer({
             <Icon.X />
           </button>
         </header>
+
+        {seed?.re !== undefined && kind === "answer" && seed.reLine && (
+          <p className="slate-composer__re" data-testid="slate-composer-re">
+            <span className="slate-composer__re-n">#{seed.re}</span> {seed.reLine}
+          </p>
+        )}
 
         {closed && (
           <p className="slate-composer__note" role="alert">
@@ -304,7 +318,7 @@ export default function SlateComposer({
           </datalist>
         </div>
 
-        {!mobile && kind === "ask" && (
+        {kind === "ask" && (
           <div className="slate-composer__row">
             <label className="slate-composer__lbl" htmlFor={`${uid}-to`}>
               To

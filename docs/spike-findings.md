@@ -1811,7 +1811,8 @@ dones to its own asks, the board's addressee and state chips, and the shared
 protocol paragraph with per-harness delivery lines (Claude: background wait;
 omp: pushed; Kimi: next prompt), pinned byte-identical across
 `memory-protocol.txt`, `CLAUDE.memory.md` and `kb-omp.ts`. D31 is reversed for
-Claude Code as an opt-in per-ask wait; D26 is amended for omp.
+Claude Code as an opt-in per-ask wait; D26 is amended for omp. D35 (operator ruling,
+2026-11-13): the phone answers asks and sets an ask's `to`.
 
 Recorded limits:
 - Claude as an ANSWERER mid-turn stays pull (an omp ask reaches a working Claude

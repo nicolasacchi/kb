@@ -232,7 +232,8 @@ export default function SlateBoardRoute() {
           { kind: "done", line: `done #${c.seq}`, re: c.seq, prov: SPA_PROV },
           { targetKind: c.kind, holder: c.who.tag },
         ),
-      onAnswer: (c) => openComposer({ kind: "answer", re: c.seq, topic: c.topic }),
+      onAnswer: (c) =>
+        openComposer({ kind: "answer", re: c.seq, reLine: c.line, topic: c.topic }),
       // `take #n` on an open hand copies the hand's subject and sets `re`;
       // the hand then renders acknowledged (rules matrix "`take #n` on a
       // hand"). The subject is prefilled from the hand, not invented here.

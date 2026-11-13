@@ -791,6 +791,18 @@
   font-size: var(--fs-xs);
   color: var(--warn);
 }
+/* The answered ask, echoed in the sheet (D35: on the phone the sheet covers
+   the board). */
+.slate-composer__re {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--ink-dim);
+  overflow-wrap: anywhere;
+}
+.slate-composer__re-n {
+  font-family: var(--font-mono);
+  color: var(--ink-strong);
+}
 .slate-composer__chips {
   display: flex;
   flex-wrap: wrap;

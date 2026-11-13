@@ -85,11 +85,24 @@ describe("SlateComposer to edge cases", () => {
     expect((screen.getByLabelText("To") as HTMLSelectElement).value).toBe("omp");
   });
 
-  it("mobile has no to select and sends none", async () => {
-    const { onSubmit } = mountC({ kind: "ask", to: "you" }, true);
-    expect(screen.queryByLabelText("To")).toBeNull();
+  it("mobile addresses an ask too (D35)", async () => {
+    const { onSubmit } = mountC({ kind: "ask" }, true);
+    fireEvent.change(screen.getByLabelText("To"), { target: { value: "omp" } });
     fireEvent.change(screen.getByLabelText("Line"), { target: { value: "q?" } });
     const body = await post(onSubmit);
+    expect(body.to).toBe("omp");
+    expect("body" in body).toBe(false);
+  });
+
+  it("an answer seed echoes the ask in the mobile sheet and posts re, no to", async () => {
+    const { onSubmit } = mountC({ kind: "answer", re: 57, reLine: "which db?" }, true);
+    expect(screen.getByRole("heading", { name: "Answer #57" })).toBeTruthy();
+    expect(screen.getByTestId("slate-composer-re").textContent).toContain("which db?");
+    expect(screen.queryByLabelText("To")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Line"), { target: { value: "pg" } });
+    const body = await post(onSubmit);
+    expect(body.kind).toBe("answer");
+    expect(body.re).toBe(57);
     expect("to" in body).toBe(false);
   });
 

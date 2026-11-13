@@ -58,8 +58,8 @@ type Props = {
   /// design). Absent ⇒ the caption query omits `?repo=` and a multi-repo
   /// kb-code 400s `repo_required`, which the hook already renders `unknown`.
   repo?: string | null;
-  /// Desktop shows every action; mobile shows mark/drop/done only (rules
-  /// matrix "Mobile" — a reader with a capture slot).
+  /// Desktop shows every action; mobile shows mark/drop/done and answer
+  /// (rules matrix "Mobile" — a reader with a capture slot; D35).
   mobile?: boolean;
   /// Pin is a UI convenience shown when the identity is the operator; the
   /// daemon checks only `origin: human` (§10 "Actions").
@@ -420,9 +420,11 @@ export default function SlateCard({
         </>
       )}
 
-      {/* Actions (§10). MOBILE is mark / drop / done only — edit and pin are
-          desktop-only, so the phone stays "a reader with a capture slot"
-          (rules matrix "Mobile"). `done` is offered on the three kinds that
+      {/* Actions (§10). MOBILE is mark / drop / done plus answer on an ask
+          (operator ruling 2026-11-13, design D35: the operator answers agents'
+          questions from the phone); edit, pin and take stay desktop-only, so
+          the phone stays "a reader with a capture slot" (rules matrix
+          "Mobile"). `done` is offered on the three kinds that
           can be CLOSED (take, ask, hand); the daemon's re-target matrix is
           wider, but offering `done` on a found would be a button whose
           meaning nobody can state. */}
@@ -481,7 +483,7 @@ export default function SlateCard({
             <Icon.Pin /> {card.pinned ? "unpin" : "pin"}
           </button>
         )}
-        {!mobile && actions.onAnswer && card.kind === "ask" && (
+        {actions.onAnswer && card.kind === "ask" && (
           <button
             type="button"
             className="slate-card__act"

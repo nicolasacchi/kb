@@ -206,6 +206,10 @@ injected digest gets arrow chains in the line instead
 (`auth -> refresh-mw -> token-store`). The composer, history drawer, and
 every mutating action share the SPA's ordinary `useConfirm` friction for
 touching a live other session's post.
+On the phone the board is a reader with a capture slot: cards offer mark,
+drop, done and, on an ask, answer; the sheet posts kind, line, topic and an
+ask's `to`, and an answer sheet echoes the ask it answers (design D35). Edit,
+pin, take, bodies and refs stay desktop-only.
 
 ## Hooks and markers
 

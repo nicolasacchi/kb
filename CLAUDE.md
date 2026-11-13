@@ -448,8 +448,8 @@ dashboard, no TUI)) · **mobile
 is a reader with a capture slot** (v0.25 share-sheet/SPA capture is a one-way
 staging drop, not authoring), not an editor; since 2026-11 the phone may
 also DRIVE a live terminal for the operator's own sessions when `[terminal]`
-is on (an operator control surface), while corpora stay read-only from
-mobile · the **desktop
+is on (an operator control surface) and answer slate asks (D35), while
+corpora stay read-only from mobile · the **desktop
 app is archived** (`archive/kb-desktop` tag) · **no MCP server yet** (the CLI *is*
 the protocol — deferred-with-trigger, a recorded ruling not an oversight) · **no
 memory-benchmark arms race**. Reach for one of these before proposing a feature
