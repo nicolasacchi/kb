@@ -1,7 +1,7 @@
 // Goldens (KBT-STRIP). Every golden runs: one chunk, every 2-way split, every 3-way split (short ones),
 // and byte-by-byte; all must give the identical output.
 import { test, expect, afterAll } from 'bun:test';
-import { QueryStripper, stripAll, csiQuery, CSI_CAP, OSC_CAP, DCS_CAP, APC_SNIFF } from '../src/strip.ts';
+import { QueryStripper, stripAll, csiQuery, decideApc, CSI_CAP, OSC_CAP, DCS_CAP, APC_SNIFF } from '../src/strip.ts';
 import { E, enc, run, eq, hexs, wrap, metric, writeMetrics, cat } from './helpers.ts';
 import { parse } from './oracle.ts';
 import { goldens } from './goldens.ts';
@@ -55,7 +55,7 @@ test('every strip-list shape is hit: stripped counters by label', () => {
   for (const [, input] of goldens) s.push(bytes(input));
   s.flush();
   metric('strip_labels', s.kinds); metric('strip_total_over_goldens', s.stripped);
-  for (const k of ['DA1', 'DA2', 'DA3', 'XTVERSION', 'DSR', 'DECDSR', 'DECRQM', 'XTGETTCAP', 'DECRQSS', 'DECREQTPARM', 'DECID', 'OSC4?', 'OSC5?', 'OSC10?', 'OSC11?', 'OSC12?', 'OSC52?', 'OSC7501?', 'OSC99?', 'OSC1337?', 'OSC5522-read', 'XTWINOPS', 'KITTYKBD', 'KITTYGFX-query', 'XTSMGRAPHICS', 'DECRQCRA', 'XTQMODKEYS', 'DECRQTSR', 'DECRQPSR', 'APC-25a1', 'OSC21?', 'DCS-tmux-nested'])
+  for (const k of ['DA1', 'DA2', 'DA3', 'XTVERSION', 'DSR', 'DECDSR', 'DECRQM', 'XTGETTCAP', 'DECRQSS', 'DECREQTPARM', 'DECID', 'OSC4?', 'OSC5?', 'OSC10?', 'OSC11?', 'OSC12?', 'OSC13?', 'OSC14?', 'OSC15?', 'OSC16?', 'OSC17?', 'OSC18?', 'OSC19?', 'OSC52?', 'OSC7501?', 'OSC99?', 'OSC1337?', 'OSC5522-read', 'XTWINOPS', 'KITTYKBD', 'KITTYGFX-query', 'XTSMGRAPHICS', 'DECRQCRA', 'XTQMODKEYS', 'DECRQTSR', 'DECRQPSR', 'APC-25a1', 'OSC21?', 'DCS-tmux-nested'])
     expect(s.kinds[k] ?? 0).toBeGreaterThan(0);
 });
 
@@ -250,6 +250,34 @@ test('c1_is_deleted_and_aborts_in_progress', () => {
   expect(s.pending()).toBe(1);
   expect(s.push(B(0xa9)).length).toBe(2);
   expect(s.pending()).toBe(0);
+});
+
+test('decideApc_public_surface_matches_reference_brief', () => {
+  // The brief's public surface exports decideApc (1:1 port); pin its decisions.
+  expect(decideApc([], false)).toEqual(['more', '']);
+  expect(decideApc([], true)).toEqual(['pass', '']);
+  const q = Array.from(enc('Gi=1,a=q;AAAA'));
+  expect(decideApc(q, true)).toEqual(['drop', 'KITTYGFX-query']);
+  expect(decideApc(q.slice(0, 4), false)).toEqual(['more', '']);
+  expect(decideApc(Array.from(enc('Gi=1;AAAA')), true)).toEqual(['pass', '']);
+  expect(decideApc(Array.from(enc('25a1;x')), true)).toEqual(['drop', 'APC-25a1']);
+  expect(decideApc(Array.from(enc('25a')), false)).toEqual(['more', '']);
+  expect(decideApc(Array.from(enc('Gxyz')), true)).toEqual(['pass', '']);
+});
+
+test('twin_sites_sniff_esc_lone_raw_c1_abort_can', () => {
+  // SNIFF twin of the OSC ESC+not-ST rule: a partial DCS aborted by ESC+not-ST
+  // is dropped, never forwarded (mutant 12 forwards it).
+  expect(eq(stripAll(enc(`X${E}P1;1;${E}Y`)), enc(`X${E}Y`))).toBe(true);
+  // Lone-raw C1 twin of the heldC2 rule: a raw 0x9b mid-CSI deletes and aborts
+  // the sequence, so the 'c' after it is plain text (mutant 13 would splice
+  // 'ESC[c' into a stripped DA1 and emit nothing).
+  expect(eq(stripAll(B(0x1b, 0x5b, 0x9b, 0x63)), enc('c'))).toBe(true);
+  // abort()-CAN twin of the PASS CAN rule: a cap-passed string aborted by a
+  // deleted C1 gets a CAN so the receiver also leaves the string state
+  // (mutant 14 omits the CAN).
+  const big = `${E}]52;c;${'A'.repeat(300)}`;
+  expect(eq(stripAll(B(...enc(big), 0x9b, 0x78)), enc(big + '\x18x'))).toBe(true);
 });
 
 afterAll(() => writeMetrics('goldens'));
