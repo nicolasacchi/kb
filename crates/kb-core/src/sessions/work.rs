@@ -151,26 +151,14 @@ fn rep_row<'a>(node: &Node, rows: &[&'a WorkSession]) -> Option<&'a WorkSession>
         .min_by(|a, b| (a.started_at, &a.session_id).cmp(&(b.started_at, &b.session_id)))
 }
 
-/// Does node `i` carry a job ulid on any of its rows?
-fn node_carries_job(i: usize, nodes: &[Node], rows: &[&WorkSession]) -> bool {
-    nodes[i]
-        .rows
-        .iter()
-        .any(|&ri| !rows[ri].job_ulids.is_empty())
-}
-
-/// A cwd_time candidate: a single node with no strong edge, read as the
-/// safe under-linking case. Alongside the singleton-component check in
-/// the weak phase, a node carrying lineage stamps (`root`/`parent`) or
-/// a job ulid is excluded even when its strong phase added no edge (for
-/// instance a lone child whose root is outside the window stays alone
-/// instead of joining the weak chain). Covered by the
-/// `lone_stamped_node_stays_out_of_cwd_time` test.
-fn is_cwd_candidate(i: usize, nodes: &[Node], rows: &[&WorkSession]) -> bool {
-    nodes[i].root_session_id.is_none()
-        && nodes[i].parent_session_id.is_none()
-        && !node_carries_job(i, nodes, rows)
-}
+// The weak `cwd_time` phase links ONLY between singleton components
+// (a single node with no strong edge), per the brief's step 3. The
+// singleton check in the weak phase below is the entire candidacy
+// predicate: lineage stamps and job-ulid presence are NOT additional
+// bars. A unique ulid adds no edge (the job phase only unions when
+// more than one node carries it) and a lone stamped child whose root
+// is outside the window likewise gets no tree union, so excluding
+// either from the weak chain would under-link against the brief.
 
 fn find(parent: &mut [usize], mut x: usize) -> usize {
     while parent[x] != x {
@@ -199,6 +187,21 @@ fn node_order(nodes: &[Node], a: usize, b: usize) -> std::cmp::Ordering {
         &nodes[b].kb,
         &nodes[b].id,
     ))
+}
+
+/// The member display order: `(started_at, kb, session_id)` where the
+/// session id is the member's REPRESENTATIVE row id (what the wire
+/// shows), per the brief's step 4. `node_order` orders by logical id
+/// (`segment_of` for chains) and is used for the group key and the
+/// internal weak-chain sequencing; the member list uses this one.
+fn member_order(nodes: &[Node], rows: &[&WorkSession], a: usize, b: usize) -> std::cmp::Ordering {
+    let ra = rep_row(&nodes[a], rows)
+        .map(|r| r.session_id.as_str())
+        .unwrap_or("");
+    let rb = rep_row(&nodes[b], rows)
+        .map(|r| r.session_id.as_str())
+        .unwrap_or("");
+    (nodes[a].started_at, &nodes[a].kb, ra).cmp(&(nodes[b].started_at, &nodes[b].kb, rb))
 }
 
 /// Group `sessions` into pieces of work. Deterministic: inputs are sorted
@@ -358,15 +361,15 @@ pub fn group_work(sessions: &[WorkSession], takes: &[TakeEdge]) -> WorkOutcome {
     };
     {
         let mut by_cwd: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-        for i in 0..nodes.len() {
+        for (i, node) in nodes.iter().enumerate() {
             let root = find(&mut parent, i);
             if comp_sizes.get(&root).copied().unwrap_or(0) != 1 {
                 continue;
             }
-            if !is_cwd_candidate(i, &nodes, &rows) {
-                continue;
-            }
-            if let Some(cwd) = nodes[i].cwd.clone() {
+            // No stamp/ulid bar: a singleton with no strong edge is a
+            // candidate regardless of lineage stamps or a unique ulid
+            // (brief step 3).
+            if let Some(cwd) = node.cwd.clone() {
                 if !cwd.is_empty() {
                     by_cwd.entry(cwd).or_default().push(i);
                 }
@@ -399,7 +402,7 @@ pub fn group_work(sessions: &[WorkSession], takes: &[TakeEdge]) -> WorkOutcome {
         let term = terms.first().copied().unwrap_or("alone");
 
         let mut members = members.clone();
-        members.sort_by(|&a, &b| node_order(&nodes, a, b));
+        members.sort_by(|&a, &b| member_order(&nodes, &rows, a, b));
         // Root first: a node whose logical id is one of the component's
         // root ids leads the member list.
         let root_ids: HashSet<(String, String)> = members
@@ -451,12 +454,12 @@ pub fn group_work(sessions: &[WorkSession], takes: &[TakeEdge]) -> WorkOutcome {
             .take(WORK_MEMBERS_CAP)
             .map(|&i| {
                 let node = &nodes[i];
-                // A lone `alone` component contributed no edge, so its member
-                // must not claim a tree placement (e.g. a single child whose
-                // root is outside the window). Multi-member groups keep the
-                // lineage-derived child/root roles.
                 let (role, via) = if term == "alone" {
-                    ("member", "alone")
+                    // No edge contributed, so `via` stays `alone`, but a
+                    // lone child is still a child: its parent stamp is
+                    // the role source (brief tree role rule).
+                    let role = if node.is_child() { "child" } else { "member" };
+                    (role, "alone")
                 } else if node.is_child() {
                     ("child", "tree")
                 } else if root_ids.contains(&(node.kb.clone(), node.id.clone())) {
@@ -647,8 +650,7 @@ fn component_terms(
     // joined only by the weak phase attribute as [segment, cwd_time].
     let has_strong =
         terms.contains(&TERMS[0]) || terms.contains(&TERMS[2]) || terms.contains(&TERMS[3]);
-    if !has_strong && members.len() > 1 && members.iter().all(|&i| is_cwd_candidate(i, nodes, rows))
-    {
+    if !has_strong && members.len() > 1 {
         let mut seq: Vec<usize> = members.to_vec();
         seq.sort_by(|&a, &b| node_order(nodes, a, b));
         let mut chained = false;
@@ -1005,7 +1007,7 @@ mod tests {
     }
 
     #[test]
-    fn lone_orphan_child_is_alone_not_a_tree_placement() {
+    fn lone_orphan_child_is_alone_but_keeps_child_role() {
         let mut lone = ws("smoke", "only-child", 100, 200);
         lone.root_session_id = Some("root-x".to_string());
         lone.parent_session_id = Some("root-x".to_string());
@@ -1014,23 +1016,69 @@ mod tests {
         let g = &out.groups[0];
         assert_eq!(g.term, "alone");
         assert_eq!(g.terms, Vec::<&str>::new());
-        assert_eq!(g.members[0].role, "member");
+        // The parent stamp is the role source even when no edge landed:
+        // role=child, via=alone.
+        assert_eq!(g.members[0].role, "child");
         assert_eq!(g.members[0].via, "alone");
         // The lineage stamp still counts as a subagent.
         assert_eq!(g.counts.subagents, 1);
     }
 
     #[test]
-    fn lone_stamped_node_stays_out_of_cwd_time() {
-        // The candidate predicate under-links on purpose: a lone stamped
-        // node never joins the weak cwd_time chain.
+    fn lone_stamped_node_joins_cwd_time() {
+        // Brief step 3: candidacy is "single node with no strong edge"
+        // only. A lone stamped child whose root is outside the window
+        // contributed no strong edge, so it joins the weak chain.
         let mut lone = ws("smoke", "lone", 1000, 1100);
         lone.root_session_id = Some("root-x".to_string());
         lone.parent_session_id = Some("root-x".to_string());
         let near = ws("smoke", "near", 1200, 1300);
         let out = group_work(&[lone, near], &[]);
-        assert_eq!(out.groups.len(), 2, "{out:?}");
-        assert!(out.groups.iter().all(|g| g.term != "cwd_time"), "{out:?}");
+        assert_eq!(out.groups.len(), 1, "{out:?}");
+        let g = &out.groups[0];
+        assert_eq!(g.term, "cwd_time");
+        assert_eq!(g.members_total, 2);
+    }
+
+    #[test]
+    fn unique_ulid_node_joins_cwd_time() {
+        // A unique ulid adds no edge (the job phase unions only when
+        // more than one node carries it), so the node is a singleton
+        // with no strong edge and joins the weak chain.
+        let mut one = ws("smoke", "one", 1000, 1100);
+        one.job_ulids = vec!["ulid-unique".to_string()];
+        let near = ws("smoke", "near", 1200, 1300);
+        let out = group_work(&[one, near], &[]);
+        assert_eq!(out.groups.len(), 1, "{out:?}");
+        assert_eq!(out.groups[0].term, "cwd_time", "{out:?}");
+    }
+
+    #[test]
+    fn members_sort_by_rep_session_id_not_logical_id() {
+        // Chain `b` (rep `b-p01`) vs peer `b-p00` at equal
+        // started_at/kb: the member list orders by the displayed
+        // (rep) session id, so `b-p00` precedes `b-p01`. Group them
+        // with a shared job ulid so ordering (not the weak chain)
+        // decides.
+        let mut b1 = ws("smoke", "b-p01", 1000, 1100);
+        b1.segment_of = Some("b".to_string());
+        b1.job_ulids = vec!["ulid-share".to_string()];
+        let mut b2 = ws("smoke", "b-p02", 1050, 1150);
+        b2.segment_of = Some("b".to_string());
+        b2.job_ulids = vec!["ulid-share".to_string()];
+        let mut peer = ws("smoke", "b-p00", 1000, 1100);
+        peer.job_ulids = vec!["ulid-share".to_string()];
+        // Input order is deliberately shuffled.
+        let out = group_work(&[b1, b2, peer], &[]);
+        assert_eq!(out.groups.len(), 1, "{out:?}");
+        let ids: Vec<&str> = out.groups[0]
+            .members
+            .iter()
+            .map(|m| m.session_id.as_str())
+            .collect();
+        // The `b` chain is ONE logical member surfaced as its earliest
+        // row (`b-p01`); `b-p02` is a later part of that same node.
+        assert_eq!(ids, ["b-p00", "b-p01"], "{out:?}");
     }
 
     // invariant:11 work grouping is surfaced, never scored

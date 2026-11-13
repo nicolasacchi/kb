@@ -3063,6 +3063,9 @@ mod tests {
                 "WorkGroup",
                 "group_work",
                 "kb-session-work",
+                // A3 — the derived `child_count` on session rows is
+                // surfaced, never scored (invariant #11 amendment).
+                "child_count",
             ] {
                 assert!(
                     !src.contains(needle),

@@ -692,8 +692,11 @@ async fn annotate_child_counts(state: &Arc<KbHandles>, rows: &mut [SessionOut]) 
     }
     let mut counts: HashMap<String, u32> = HashMap::new();
     for per_kb in super::buffered_join(futs, state.fanout_cap).await {
+        // First-wins by session id: the same parent captured in two kbs
+        // (per-kb `is_newest` cannot see across DBs) contributes its
+        // count once — summing would double-count its children.
         for (k, n) in per_kb {
-            *counts.entry(k).or_insert(0) += n;
+            counts.entry(k).or_insert(n);
         }
     }
     apply_child_counts(rows, &counts);
@@ -719,10 +722,12 @@ fn parse_collapse(raw: Option<&str>) -> Result<bool, Response> {
         )))),
     }
 }
-/// A3 — `?tree=` grammar: absent | `collapsed` = only rows with no tree
-/// root (the DEFAULT — subagent children hide and trees read as their
+/// A3 — `?tree=` grammar: absent | empty | `collapsed` = only rows with no
+/// tree root (the DEFAULT — subagent children hide and trees read as their
 /// roots); `flat` = every row; anything else is a 400 naming the allowed
-/// values.
+/// values. An empty value (`?tree=`) is an alias for `collapsed`
+/// (matches `?collapse=` treating empty as its default), pinned by
+/// `parse_tree(Some("")) == Ok(true)`.
 #[allow(clippy::result_large_err)]
 fn parse_tree(raw: Option<&str>) -> Result<bool, Response> {
     match raw.map(str::trim) {
@@ -3041,8 +3046,11 @@ pub async fn work(
         takes.extend(take_edges_from_posts(slug, posts));
     }
 
-    // Row → core input. Titles come from the ledger's display-name source
-    // (`SessionOut::from_row`): the persisted `title` column.
+    // Row → core input. Member titles use the sessions display-name
+    // ladder (`display_name_of`, the same one `SessionOut::from_row`
+    // uses): persisted title, then first user prompt, then
+    // `session <8>`. Every member keeps a title, so the SPA never has
+    // to fall back to a raw id.
     let work_sessions: Vec<kb_core::sessions::work::WorkSession> = scanned
         .into_iter()
         .map(|(kb, row, ulids)| kb_core::sessions::work::WorkSession {
@@ -3056,7 +3064,11 @@ pub async fn work(
             active_secs: row.active_secs,
             harness: row.harness.clone(),
             cwd: row.cwd.clone(),
-            title: row.title.clone(),
+            title: Some(display_name_of(
+                row.title.as_deref(),
+                row.first_user_prompt.as_deref(),
+                &row.session_id,
+            )),
             job_ulids: ulids,
         })
         .collect();
@@ -3316,6 +3328,20 @@ mod work_tests {
         assert!(!text.contains("LEAK-MARKER"), "slate text leaked: {text}");
         assert!(!text.contains("takeover body"), "slate text leaked: {text}");
     }
+    #[test]
+    fn work_member_titles_use_display_name_ladder() {
+        // Unit pin of the sessions-wide ladder itself. The route mapping
+        // is pinned end-to-end by `sessions_work_member_titles_fall_back_
+        // through_display_name_ladder` (tests/end_to_end.rs).
+        use super::display_name_of;
+        assert_eq!(display_name_of(Some("T"), Some("P"), "sid-12345678"), "T");
+        assert_eq!(display_name_of(Some("  "), Some("P"), "sid-12345678"), "P");
+        assert_eq!(display_name_of(None, Some("P"), "sid-12345678"), "P");
+        assert_eq!(
+            display_name_of(None, None, "sid-12345678"),
+            "session sid-1234"
+        );
+    }
 }
 
 /// A narrative thread (P7) — a run of sessions in one folder that form a
@@ -3381,16 +3407,19 @@ pub async fn threads(State(state): State<Arc<KbHandles>>) -> impl IntoResponse {
     }
     // PF-R1 — the operator-configurable `[server] fanout_cap` (default 8,
     // byte-identical to the old hardcoded `super::FANOUT_CAP`).
-    let all: Vec<SessionOut> = super::buffered_join(futs, state.fanout_cap)
+    let mut all: Vec<SessionOut> = super::buffered_join(futs, state.fanout_cap)
         .await
         .into_iter()
         .flatten()
         .collect();
+    // Every serialized row carries `child_count` (same derivation as the
+    // list and detail routes) — `from_row` leaves it at 0, so annotate
+    // before clustering, exactly like `list_page`/`get` do.
+    annotate_child_counts(&state, &mut all).await;
     Json(ThreadsResponse {
         threads: cluster_threads(all),
     })
 }
-
 /// Cluster sessions into threads: group by `cwd`, sort each group ascending,
 /// split on gaps via `kb_core::sessions::thread_boundaries`, emit newest-first.
 fn cluster_threads(sessions: Vec<SessionOut>) -> Vec<ThreadOut> {
@@ -5513,7 +5542,8 @@ pub struct BackfillProjectKeyResponse {
 /// lineage columns (`parent_session_id` / `root_session_id` /
 /// `project_slug`) on omp rows, from the CLI's host-side tree walk.
 /// Cap 500 items/request (400 over cap, never truncation); 400 on unsafe
-/// tokens. Same operator posture as `backfill-project-key`.
+/// tokens. Counts: `would_change`/`changed` are rows, `unmatched` is
+/// items. Same operator posture as `backfill-project-key`.
 #[derive(Debug, Deserialize, Default)]
 pub struct BackfillTreeParams {
     #[serde(default)]

@@ -22,6 +22,10 @@
 //! A child whose root is known never gets `parent: None` except for a
 //! self-parent (a parent equal to the child's own id is dropped) or an
 //! unsafe id; the directory fallback floors `parent` at `root`.
+//! A bucket dir that contains `_` (`my_bucket`) is never a stem: a
+//! `<ts>_<id>` component requires a timestamp-shaped prefix (digits,
+//! `-`, `T`, `:`, `Z`, `.`, starting with a digit and carrying `-` or
+//! `T`), so a top-level file inside `my_bucket` yields `{None, None}`.
 
 /// Folded lineage for one session file: `(parent, root)` session ids.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,11 +53,24 @@ fn is_plain_token(s: &str) -> bool {
 }
 
 /// The id after the FINAL `_` of a `<ts>_<id>` ancestor component, if the
-/// component looks like one (a non-empty prefix and a plain-token suffix).
+/// component is one: the prefix (the part before that `_`) must have a
+/// timestamp shape. A bucket dir that merely contains `_` (`my_bucket`,
+/// prefix `my`) is NOT a `<ts>-<id>` stem, so a top-level file inside it
+/// stays `{None, None}` as brief step 4 requires (the `is_plain_token`
+/// check on the suffix stays the caller's job).
+fn is_ts_prefix(prefix: &str) -> bool {
+    !prefix.is_empty()
+        && prefix.as_bytes()[0].is_ascii_digit()
+        && prefix
+            .bytes()
+            .all(|b| b.is_ascii_digit() || matches!(b, b'-' | b'T' | b':' | b'Z' | b'.'))
+        && prefix.bytes().any(|b| b == b'-' || b == b'T')
+}
+
 fn stem_id(component: &str) -> Option<&str> {
     let pos = component.rfind('_')?;
     let (prefix, suffix) = component.split_at(pos);
-    if prefix.is_empty() {
+    if !is_ts_prefix(prefix) {
         return None;
     }
     let id = &suffix[1..];
@@ -246,6 +263,32 @@ mod tests {
             parent_header_id: Some("root0001"),
             expect: (Some("root0001"), Some("root0001")),
         },
+        Case {
+            name: "underscore-bucket-top-level",
+            session_file: "/sessions/bucket/my_bucket/2026-09-01T10-00-00-000Z_child0009.jsonl",
+            header_id: "child0009",
+            parent_session_file: None,
+            parent_header_id: None,
+            expect: (None, None),
+        },
+        Case {
+            name: "underscore-bucket-with-real-stem",
+            session_file:
+                "/sessions/bucket/my_bucket/2026-09-01T10-00-00-000Z_root0001/child0010.jsonl",
+            header_id: "child0010",
+            parent_session_file: None,
+            parent_header_id: None,
+            expect: (Some("root0001"), Some("root0001")),
+        },
+        Case {
+            name: "own-id-stem-skips-to-deeper-root",
+            session_file:
+                "/sessions/bucket/2026-09-01T10-00-00-000Z_child0011/2026-09-01T10-00-00-000Z_root0001/child0011.jsonl",
+            header_id: "child0011",
+            parent_session_file: None,
+            parent_header_id: None,
+            expect: (Some("root0001"), Some("root0001")),
+        },
     ];
 
     #[test]
@@ -282,7 +325,12 @@ mod tests {
     /// `claude_project_slug` (the pre-existing Claude Code slug helper)
     /// does not trip the `project_slug` needle. The V0047 lineage field
     /// itself appears as `project_slug` standalone (column, struct
-    /// field, variable), so real lineage reads still match.
+    /// field, variable), so real lineage reads still match. Two needles
+    /// are scanned OUTSIDE this word-boundary rule because the `project_`
+    /// prefix of `meta_project_slug` (and its `kb-project-slug` marker)
+    /// hides a lineage read through the slug parser from it: the char
+    /// before `project_slug` inside `meta_project_slug` is `_`, an ident
+    /// char. They are checked with plain `contains`, not `contains_word`.
     fn contains_word(src: &str, needle: &str) -> bool {
         fn is_ident(c: u8) -> bool {
             c.is_ascii_alphanumeric() || c == b'_'
@@ -308,12 +356,24 @@ mod tests {
             ("sessions/projects.rs", include_str!("projects.rs")),
         ];
         for (name, src) in RANKERS {
-            for needle in ["parent_session_id", "root_session_id", "project_slug"] {
+            for needle in [
+                "parent_session_id",
+                "root_session_id",
+                "project_slug",
+                "child_count",
+            ] {
                 assert!(
                     !contains_word(src, needle),
                     "{name} names `{needle}` -- session lineage is SURFACED, NEVER SCORED \
                      (V0047's own header, invariant #11): it may be rendered beside a row, \
                      never folded into a rank, a sort key or a filter"
+                );
+            }
+            for needle in ["meta_project_slug", "kb-project-slug"] {
+                assert!(
+                    !src.contains(needle),
+                    "{name} names `{needle}` -- session lineage must not be reached \
+                     through the project-slug parser either"
                 );
             }
             assert!(

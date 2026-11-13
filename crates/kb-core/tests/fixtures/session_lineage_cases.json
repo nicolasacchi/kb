@@ -71,4 +71,30 @@
     "parent_header_id": "root0001",
     "expect": {"parent": "root0001", "root": "root0001"}
   }
+  ,
+  {
+    "name": "underscore-bucket-top-level",
+    "session_file": "/sessions/bucket/my_bucket/2026-09-01T10-00-00-000Z_child0009.jsonl",
+    "header_id": "child0009",
+    "parent_session_file": null,
+    "parent_header_id": null,
+    "expect": {"parent": null, "root": null}
+  },
+  {
+    "name": "underscore-bucket-with-real-stem",
+    "session_file": "/sessions/bucket/my_bucket/2026-09-01T10-00-00-000Z_root0001/child0010.jsonl",
+    "header_id": "child0010",
+    "parent_session_file": null,
+    "parent_header_id": null,
+    "expect": {"parent": "root0001", "root": "root0001"}
+  }
+  ,
+  {
+    "name": "own-id-stem-skips-to-deeper-root",
+    "session_file": "/sessions/bucket/2026-09-01T10-00-00-000Z_child0011/2026-09-01T10-00-00-000Z_root0001/child0011.jsonl",
+    "header_id": "child0011",
+    "parent_session_file": null,
+    "parent_header_id": null,
+    "expect": {"parent": "root0001", "root": "root0001"}
+  }
 ]
