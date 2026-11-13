@@ -1556,10 +1556,10 @@ mod tests {
             },
         );
         let lane = summary_from(Err(kb_core::Error::Storage("x".into())), &out, Vec::new());
-        assert_eq!(lane.available, false);
+        assert!(!lane.available);
         assert_eq!(lane.reason.as_deref(), Some("children unreadable"));
         let lane = summary_from(Ok(3), &out, Vec::new());
-        assert_eq!(lane.available, true);
+        assert!(lane.available);
         assert_eq!(lane.child_total, 3);
         assert_eq!(lane.title.as_deref(), Some("synthetic title"));
     }

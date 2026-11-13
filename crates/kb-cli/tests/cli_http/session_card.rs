@@ -89,15 +89,15 @@ impl Fixture {
     fn cmd_no_daemon(&self, args: &[&str]) -> Command {
         let mut full = vec!["sessions"];
         full.extend_from_slice(args);
-        Command::cargo_bin("kb")
-            .unwrap()
-            .env("KB_TEST_HTTP_TIMEOUT_SECS", common::http_timeout_secs())
+        let mut cmd = Command::cargo_bin("kb").unwrap();
+        cmd.env("KB_TEST_HTTP_TIMEOUT_SECS", common::http_timeout_secs())
             .env("XDG_CACHE_HOME", &self.cache)
             .env_remove("KB_SESSION_ID")
             .env_remove("KB_HARNESS")
             .env_remove("CLAUDE_CODE_SESSION_ID")
             .env_remove("GROK_SESSION_ID")
-            .args(&full)
+            .args(&full);
+        cmd
     }
 
     fn ok(&self, args: &[&str]) -> String {

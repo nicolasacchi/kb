@@ -1076,7 +1076,9 @@ mod tests {
             .iter()
             .map(|m| m.session_id.as_str())
             .collect();
-        assert_eq!(ids, ["b-p00", "b-p01", "b-p02"], "{out:?}");
+        // The `b` chain is ONE logical member surfaced as its earliest
+        // row (`b-p01`); `b-p02` is a later part of that same node.
+        assert_eq!(ids, ["b-p00", "b-p01"], "{out:?}");
     }
 
     // invariant:11 work grouping is surfaced, never scored
