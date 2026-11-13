@@ -316,6 +316,41 @@ describe("TermSession", () => {
     expect(h.sockets).toHaveLength(0);
   });
 
+  it("ticket 404 with a terminal-not-found problem blocks as 'terminal not found'", async () => {
+    const h = setup();
+    h.setMintError(new TermsApiError(404, "urn:kb:errors:terminal-not-found", "Not Found"));
+    h.session.start();
+    await flush();
+    expect(h.session.getState().phase).toBe("blocked");
+    expect(h.session.getState().caption).toBe("blocked: terminal not found");
+    expect(h.timers.filter((t) => !t.cleared && !t.fired)).toEqual([]);
+    expect(h.sockets).toHaveLength(0);
+  });
+
+  it("a seed cut short by a lost socket rejoins FULL (no stale from)", async () => {
+    const h = setup();
+    const s = await goLive(h);
+    // A later seed on the same socket (server re-seed) is interrupted
+    // after 2 of 50 bytes; the stale applied offset must not survive.
+    s.pushText({ t: "seed", offset: 500, len: 50 });
+    s.pushBinary(500, "ab");
+    await flush();
+    expect(h.session.getState().applied).toBe(0);
+    s.closeFromServer(1006);
+    h.fire(h.pendingTimer(250)?.ms ?? 250);
+    await flush();
+    expect(h.urls[1]).not.toContain("from=");
+    const s2 = h.sockets[1];
+    s2.pushText({ t: "hello", proto: "kb-term/1", session: "s1", epoch: "E1", harness: "omp", bound_sid: null });
+    s2.pushText({ t: "seed", offset: 0, len: 3 });
+    s2.pushBinary(0, "abc");
+    await flush();
+    expect(h.session.getState().applied).toBe(3);
+    s2.pushBinary(3, "de");
+    await flush();
+    expect(h.session.getState().applied).toBe(5);
+  });
+
   it("ticket 403 blocks with 'not permitted'", async () => {
     const h = setup();
     h.setMintError(new TermsApiError(403, "urn:kb:errors:terminal-intent-required", "Forbidden"));

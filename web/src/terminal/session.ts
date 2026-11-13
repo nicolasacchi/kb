@@ -238,7 +238,15 @@ export class TermSession {
       this.mintAbort = null;
       if (this.disposed) return;
       if (e instanceof TermsApiError) {
-        if (e.status === 404) return this.block("terminal disabled");
+        if (e.status === 404) {
+          // A bodiless 404 is the disabled gate; a problem+json
+          // `terminal-not-found` means the terminal itself is gone.
+          return this.block(
+            e.type !== null && e.type.endsWith("terminal-not-found")
+              ? "terminal not found"
+              : "terminal disabled",
+          );
+        }
         if (e.status === 403) return this.block("not permitted");
       }
       // Any other failure (incl. 429 ticket-table-full) is retryable.
@@ -249,6 +257,9 @@ export class TermSession {
     if (this.disposed || this.isSettled()) return;
     const url = wsUrl(this.termId, ticket, from);
     const gen = ++this.socketGen;
+    // A seed cut short by the previous socket must not swallow this
+    // connection's data frames as seed payload.
+    this.seeding = false;
     const socket = this.fx.openSocket(url, {
       onMessageBinary: (frame) => {
         if (gen === this.socketGen) this.onBinary(frame);
@@ -504,6 +515,10 @@ export class TermSession {
           break;
         }
         this.enqueueReset();
+        // The terminal was just reset: until the seed payload is fully
+        // written nothing is applied, so a socket lost mid-seed
+        // rejoins FULL instead of resuming from a stale offset.
+        this.applied = 0;
         this.seeding = true;
         this.seedOffset = frame.offset;
         this.seedLen = frame.len;
