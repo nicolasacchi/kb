@@ -1481,8 +1481,12 @@ async fn ws_gate_order_negatives() {
     let _ = tmp;
 
     let ticket = mint_ticket(addr, TERM_ID, None).await;
-    // (a) 7-char and 13-char ids: 400 invalid-id, ticket untouched.
-    for bad_id in ["abcd123", "abcd1234wxyz1"] {
+    // (a) ids outside the kb grammar `^[a-z0-9]{1,32}$` (uppercase, a
+    // dash, 33 chars): 400 bad-request, ticket untouched. (A 7- or
+    // 13-char lowercase id is IN the grammar: see the 404 pin in
+    // `ws_stream_errors_map_and_upstream_failure_consumes_ticket`.)
+    let too_long = "a".repeat(33);
+    for bad_id in ["ABCD1234", "abcd-123", too_long.as_str()] {
         let (status, text) = ws_http_get(
             addr,
             bad_id,
@@ -1610,6 +1614,32 @@ async fn ws_stream_errors_map_and_upstream_failure_consumes_ticket() {
         status, 403,
         "a stream-open failure must consume the ticket (spec 1 order): {text}"
     );
+
+    // (a2) R6: ids inside the kb grammar that the runner never minted
+    // (7 and 13 chars) map to 404 through the runner's `invalid-id` /
+    // `not-found` refusals, never 400 (grammar) and never 502.
+    for code in ["invalid-id", "not-found"] {
+        for odd in ["abcd123", "abcd1234wxyz1"] {
+            let tmp3 = tempfile::tempdir().unwrap();
+            let mut replies3 = HashMap::new();
+            replies3.insert("list".to_string(), list_reply(&[odd]));
+            let fake3 = spawn_stream_fake_mode(tmp3.path(), replies3, vec![], true, Some(code));
+            let (tmp3, addr3) = boot(enabled_terminal(), &fake3).await;
+            let _ = tmp3;
+            let ticket3 = mint_ticket(addr3, odd, None).await;
+            let (status, text) = ws_http_get(
+                addr3,
+                odd,
+                &ticket3,
+                None,
+                Some(&origin_header(addr3)),
+                None,
+            )
+            .await;
+            assert_eq!(status, 404, "id {odd} + runner {code} must 404: {text}");
+            assert_problem(&text, "terminal-not-found");
+        }
+    }
 
     // (b) Runner unreachable (socket file gone) -> 502 (spec 1.6:
     // runner unreachable is 502, not the REST ops' 503).

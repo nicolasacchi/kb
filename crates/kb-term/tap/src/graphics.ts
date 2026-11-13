@@ -510,9 +510,6 @@ export class GraphicsExtractor {
       out.reset();
     }
     items.push({ kind: 'mediadef', mediaKind: this.mediaKind, sha256, len });
-    // Stub in the viewer stream (xterm.js ignores it; the SPA expands it).
-    // It starts the next bytes segment so adjacent bytes coalesce.
-    out.pushBytes(buildMediaStub(this.mediaKind, sha256, len));
   }
 
   private syncKittyStats(): void {

@@ -732,3 +732,118 @@ test('viewers_unknown_fields_in_control_and_text_close_offender', async () => {
   expect(server.viewerCount).toBe(1);
   await server.close();
 });
+// Twin never catches up (feed hangs or rejects): the join deadline must
+// expire into error{busy} and close, with no join counted. Deleting the
+// twinOffset/twinBroken arm of the deadline check would degrade this into
+// a lossy join past what the twin parsed.
+test('viewers_join_busy_when_twin_feed_hangs_or_rejects', async () => {
+  for (const mode of ['hang', 'reject'] as const) {
+    const clock = fakeClock();
+    const stubTwin = {
+      feed: mode === 'hang'
+        ? () => new Promise<void>(() => {})
+        : async () => { throw new Error('twin feed failed'); },
+      serialize: { serialize: () => '' },
+    } as unknown as Twin;
+    const server = new TapServer({ session: 'stuck0001', harness: 'omp', epoch: 'e'.repeat(32), twin: stubTwin, now: clock.now, quiesceMs: 0, joinWaitMs: 200, makeSeed: () => new Uint8Array(0) });
+    const t = new MockTransport();
+    server.feed([{ kind: 'bytes', data: enc('stuck') }]);
+    openViewer(server, t, 'v1');
+    clock.advance(1000); // past the join deadline
+    await waitUntil(() => collect(t).some((f) => f.text?.t === 'error' && f.text.code === 'busy'), `busy error (${mode})`);
+    expect(server.viewerCount).toBe(0);
+    expect(server.stats.joins).toBe(0);
+    expect(server.stats.degradedJoins).toBe(0);
+    await server.close();
+  }
+});
+
+// setTwinPaused gates every twin feed: while paused joins go busy, and
+// once resumed the gated chunk feeds exactly once and joins land.
+test('viewers_twin_pause_gate_busy_then_lands', async () => {
+  const clock = fakeClock();
+  const stubTwin = { feed: async () => {}, serialize: { serialize: () => '' } } as unknown as Twin;
+  const server = new TapServer({ session: 'pause0001', harness: 'omp', epoch: 'e'.repeat(32), twin: stubTwin, now: clock.now, quiesceMs: 0, joinWaitMs: 200, makeSeed: () => enc('SEED') });
+  const t = new MockTransport();
+  server.setTwinPaused(true);
+  server.feed([{ kind: 'bytes', data: enc('PAUSED') }]);
+  openViewer(server, t, 'v1');
+  clock.advance(1000); // past the join deadline
+  await waitUntil(() => collect(t).some((f) => f.text?.t === 'error' && f.text.code === 'busy'), 'busy while paused');
+  expect(server.viewerCount).toBe(0);
+  expect(server.stats.joins).toBe(0);
+  server.setTwinPaused(false);
+  const t2 = new MockTransport();
+  openViewer(server, t2, 'v2');
+  await waitUntil(() => kinds(t2).includes('seed'), 'join lands after resume');
+  expect(server.stats.joins).toBe(1);
+  const binaries = collect(t2).filter((f) => f.binary);
+  expect(binaries.length).toBe(1);
+  expect(Buffer.from(binaries[0].binary!.payload).toString('utf-8')).toBe('SEED');
+  // A chunk enqueued BEFORE the pause but executed after it (same-tick
+  // %output + %pause) is skipped by the chain: its bytes are the reseed
+  // capture's responsibility. After the resume + chain drain, the twin
+  // offset must resync to head or no join would ever land again.
+  server.feed([{ kind: 'bytes', data: enc('LATE') }]);
+  server.setTwinPaused(true);
+  await server.drainTwinQueue();
+  server.setTwinPaused(false);
+  const t3 = new MockTransport();
+  openViewer(server, t3, 'v3');
+  await waitUntil(() => kinds(t3).includes('seed'), 'join after skip resync');
+  expect(server.stats.joins).toBe(2);
+  await server.close();
+});
+
+// Brief rule 4: the phone profile advertises the 20000-line scrollback.
+test('viewers_phone_profile_carries_phone_scrollback', async () => {
+  const twin = makeTwin(120, 40);
+  const clock = fakeClock();
+  let seenScrollback = -1;
+  const server = new TapServer({
+    session: 'phon00001',
+    harness: 'omp',
+    epoch: 'e'.repeat(32),
+    twin,
+    now: clock.now,
+    quiesceMs: 0,
+    joinWaitMs: 5000,
+    makeSeed: (_t: Twin, sb: number) => {
+      seenScrollback = sb;
+      return new Uint8Array(0);
+    },
+  });
+  const t = new MockTransport();
+  openViewer(server, t, 'pv', 'phone');
+  await waitUntil(() => kinds(t).includes('seed'), 'phone join');
+  const profile = collect(t).find((f) => f.text?.t === 'profile')?.text;
+  expect(profile).toMatchObject({ t: 'profile', scrollback: 20000 });
+  expect(seenScrollback).toBe(20000);
+  await server.close();
+  twin.dispose();
+});
+
+// Clipboard fan-out must be accounted under the 8 MiB drop budget: a
+// blocked viewer that never drains would otherwise accumulate unbounded
+// pending control bytes (head does not advance - the bytes are withheld).
+test('viewers_blocked_viewer_dropped_on_clipboard_pending_overflow', async () => {
+  const clock = fakeClock(1_000_000);
+  const stubTwin = { feed: async () => {}, serialize: { serialize: () => '' } } as unknown as Twin;
+  const server = new TapServer({ session: 'clip00001', harness: 'omp', epoch: 'e'.repeat(32), twin: stubTwin, now: clock.now, quiesceMs: 0, joinWaitMs: 5000, makeSeed: () => new Uint8Array(0) });
+  const t = new MockTransport();
+  const conn = openViewer(server, t, 'v1');
+  await waitUntil(() => kinds(t).includes('hello'), 'join before flood');
+  server.feedTransport(conn, encodeEnvelope(ENV_CONTROL, enc(encodeControlMessage({ t: 'typed', viewer: 'v1' }))));
+  t.alwaysBlock = true;
+  t.clear();
+  const dataB64 = 'A'.repeat(900_000);
+  // Each clipboard frame is ~900 KiB of pending control bytes. The first
+  // one is handed off to the (blocked) transport and shifted out; the
+  // rest accumulate: 10 queued x ~900 KiB crosses the 8 MiB budget.
+  for (let i = 0; i < 11 && server.viewerCount === 1; i++) {
+    server.feed([{ kind: 'bytes', data: enc(`${E}]52;c;${dataB64}\x07`) }]);
+  }
+  expect(server.viewerCount).toBe(0);
+  expect(collect(t).some((f) => f.text?.t === 'error' && f.text.code === 'too-far-behind')).toBe(true);
+  await server.close();
+});

@@ -3,21 +3,25 @@
 // (tap.sock), and joins late viewers atomically: hello, profile, imagedefs,
 // seed, then live bytes from exactly the offset the seed corresponds to.
 //
-// Quiescence (brief rule 4): a join waits until the twin has parsed through
-// ring.head AND synchronized output is OFF; preferred additionally no output
-// for KB_TAP_QUIESCE_MS (default 50), bounded by KB_TAP_JOIN_WAIT_MS
-// (default 3000). If sync is still ON at the bound the viewer gets
-// error{busy} and is closed; if merely noisy it joins degraded and counts
-// stats.degradedJoins. A join never falls inside a synchronized frame.
+// Quiescence (brief rule 4, T6 gate): a join waits until the twin has parsed
+// through ring.head AND synchronized output is OFF AND the ground tracker is
+// at ground AND no query-strip bytes are held; preferred additionally no
+// output for KB_TAP_QUIESCE_MS (default 50), bounded by KB_TAP_JOIN_WAIT_MS
+// (default 3000). If sync is still ON, the twin lags, or the twin broke, the
+// viewer gets error{busy} and is closed; if merely noisy (twin caught up)
+// it joins degraded and counts stats.degradedJoins. A join never falls
+// inside a synchronized frame or mid-escape.
 
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, unlinkSync, chmodSync } from 'node:fs';
 import { connect, createServer, type Server, type Socket } from 'node:net';
 import { join as pathJoin } from 'node:path';
 import { buildMediaStub, type GfxItem, type ImageDef } from './graphics.ts';
-import { Ring } from './ring.ts';
-import type { Twin } from './twin.ts';
+import { GroundTracker } from './ground.ts';
 import { Withholder } from './withhold.ts';
+import { Ring } from './ring.ts';
+import { buildSeed } from './seed.ts';
+import type { Twin } from './twin.ts';
 import {
   ENV_BINARY,
   ENV_CONTROL,
@@ -43,12 +47,18 @@ const CLIPBOARD_WINDOW_MS = 10_000;
 const DEFAULT_QUISCE_MS = 50;
 const DEFAULT_JOIN_WAIT_MS = 3000;
 
+/** The session id is spliced into the tap.sock path; only the runner's
+ * own id form is safe. Validated at the class boundary (main.ts does the
+ * same check for its CLI args); any other caller gets a throw, never a
+ * path traversal. */
+const SESSION_RE = /^[a-z0-9]{8,12}$/;
+
 export type Profile = 'desktop' | 'phone';
 
-/** Produces the seed bytes for a late joiner. T6's makeSeed lands here. */
-export type SeedMaker = (twin: Twin, scrollback: number) => Uint8Array;
-
-const defaultSeed: SeedMaker = (twin, _scrollback) => new TextEncoder().encode(twin.serialize.serialize());
+/** Produces the seed bytes for a late joiner at the twin's current offset.
+ * The production default builds T6's state-restore seed (serialize body +
+ * tail) via `buildSeed`; tests inject a recording stub. */
+export type SeedMaker = (twin: Twin, scrollback: number, atOffset: number) => Uint8Array;
 
 export interface Transport {
   /** Hand the bytes to the transport/socket buffer and report backpressure.
@@ -78,6 +88,9 @@ export interface TapServerOpts {
   now?: () => number;
   quiesceMs?: number;
   joinWaitMs?: number;
+  /** Held query-strip bytes (main wires the per-pane pipeline's pending here);
+   * a join never counts as quiescent while these are undecided. */
+  stripPending?: () => number;
   /** Test only: shrink the ring so >cap chunk handling is reachable. */
   ringCap?: number;
 }
@@ -94,6 +107,10 @@ interface Viewer {
   sentOffset: number;
   lastTypedAt: number;
   pending: PendingControl[];
+  /** Total bytes of queued control frames (clipboards, markers): bounded
+   * by LAG_LIMIT like socket bytes, so a blocked viewer cannot grow
+   * memory without bound. */
+  pendingBytes: number;
   state: 'joining' | 'live';
 }
 
@@ -112,7 +129,9 @@ class NetTransport implements Transport {
     return this.socket.write(bytes);
   }
   close(): void {
-    this.socket.destroy();
+    // end (not destroy): a busy frame written immediately before close must
+    // reach the client before the FIN.
+    this.socket.end();
   }
   onDrain(cb: () => void): void {
     this.socket.on('drain', cb);
@@ -166,8 +185,8 @@ export class TapServer {
   private readonly session: string;
   private readonly harness: string;
   private readonly boundSid: string | null;
-  private readonly cols: number;
-  private readonly rows: number;
+  private cols: number;
+  private rows: number;
   private readonly twin: Twin | null;
   private readonly makeSeed: SeedMaker;
   private readonly testMode: boolean;
@@ -175,17 +194,38 @@ export class TapServer {
   private readonly now: () => number;
   private readonly quiesceMs: number;
   private readonly joinWaitMs: number;
+  private readonly getStripPending: () => number;
 
   private readonly viewers = new Map<string, Viewer>();
   private readonly connections = new Set<Connection>();
   private readonly defsByKey = new Map<string, ImageDef>();
   private readonly pendingJoins = new Set<Promise<unknown>>();
+  private readonly ground = new GroundTracker();
   private twinOffset = 0;
   private twinTail: Promise<void> = Promise.resolve();
   private lastFeedAt = 0;
   private server: Server | null = null;
+  /** Latched after any twin feed failure: joins then take the busy path
+   * rather than lose the (twinOffset, head] gap. */
+  private twinBroken = false;
+  /** Reseed pause gate (see setTwinPaused): items enqueued while paused
+   * wait on this gate; items enqueued before the pause skip their twin
+   * leg if they execute while paused (the reseed capture re-supplies
+   * those bytes). */
+  private twinGate: Promise<void> | null = null;
+  private resumeGate: (() => void) | null = null;
+  private twinPaused = false;
+  /** Chain items enqueued but not yet settled (in-flight twin feeds). */
+  private twinInflight = 0;
+  /** A twin leg was skipped by a pause: its bytes are covered by the
+   * reseed capture, so twinOffset must resync to head once the chain has
+   * fully drained after the resume. */
+  private needsOffsetResync = false;
 
   constructor(opts: TapServerOpts) {
+    if (!SESSION_RE.test(opts.session)) {
+      throw new Error(`invalid session id for tap.sock path: ${JSON.stringify(opts.session)}`);
+    }
     this.session = opts.session;
     this.harness = opts.harness;
     this.boundSid = opts.boundSid ?? null;
@@ -195,12 +235,26 @@ export class TapServer {
     this.cols = opts.cols ?? 120;
     this.rows = opts.rows ?? 40;
     this.twin = opts.twin ?? null;
-    this.makeSeed = opts.makeSeed ?? defaultSeed;
+    // T6's state-restore seed is the production default; tests inject a stub
+    // maker (buildSeed requires a real twin's xterm internals, stub twins
+    // cannot serve it).
+    this.makeSeed = opts.makeSeed ?? ((twin, scrollback, atOffset) => {
+      const seed = buildSeed(twin, {
+        scrollback: scrollback === 20000 ? 20000 : 50000,
+        atOffset,
+        ground: this.ground,
+      });
+      return seed.bytes;
+    });
     this.testMode = opts.testMode ?? process.env.KB_TAP_TEST === '1';
     this.rewind = opts.rewind ?? 0;
-    this.now = opts.now ?? (() => Date.now());
+    // Monotonic clock: only elapsed time is ever measured (join deadline,
+    // clipboard window); a wall-clock backward step must not extend a
+    // deadline the way Date.now would.
+    this.now = opts.now ?? (() => performance.now());
     this.quiesceMs = opts.quiesceMs ?? envNumber('KB_TAP_QUIESCE_MS', DEFAULT_QUISCE_MS);
     this.joinWaitMs = opts.joinWaitMs ?? envNumber('KB_TAP_JOIN_WAIT_MS', DEFAULT_JOIN_WAIT_MS);
+    this.getStripPending = opts.stripPending ?? (() => 0);
     this.lastFeedAt = this.now();
     this.ring = new Ring(opts.ringCap);
   }
@@ -252,7 +306,9 @@ export class TapServer {
     const seq = this.ring.addMarker(build);
     for (const viewer of this.viewers.values()) {
       if (viewer.state !== 'live') continue;
-      viewer.pending.push({ offset: this.ring.head, frame: build(seq, this.ring.head) });
+      const frame = build(seq, this.ring.head);
+      viewer.pending.push({ offset: this.ring.head, frame });
+      viewer.pendingBytes += frame.length;
     }
     return seq;
   }
@@ -268,16 +324,40 @@ export class TapServer {
         // chunk larger than the ring cap retains only its tail in the
         // ring, but the twin must parse the whole stream.
         const twin = this.twin;
+        const duringPause = this.twinPaused;
+        const gate = duringPause ? this.twinGate : null;
+        this.twinInflight++;
         this.twinTail = this.twinTail
-          .then(() => twin.feed(bytes))
-          .then(() => {
+          .then(() => gate ?? Promise.resolve())
+          .then(async () => {
+            // Pre-pause items that execute after the pause started are
+            // skipped: their bytes were emitted before the reseed's
+            // capture, so the capture (twin.reset() + capture feeds)
+            // already reflects them; re-feeding them after the reset
+            // would replay them onto the fresh twin. During-pause items
+            // pass through the gate and feed once resumed.
+            if (!duringPause && this.twinPaused) {
+              this.needsOffsetResync = true;
+              return;
+            }
+            await twin.feed(bytes);
+            // Twin write callbacks fired in order (RACE RULE for the ground
+            // tracker, shared with T6's gate): ground tracks exactly what
+            // the twin has parsed through, before the offset advances.
+            this.ground.push(bytes);
             if (end > this.twinOffset) this.twinOffset = end;
           })
           .catch(() => {
-            // Twin feed failed: twinOffset stalls; joins degrade/busy.
+            // Twin feed failed: latch broken so joins take the busy path
+            // instead of losing the (twinOffset, head] gap.
+            this.twinBroken = true;
+          })
+          .then(() => {
+            this.twinInflight--;
           });
       } else {
         this.twinOffset = end;
+        this.ground.push(bytes);
       }
     }
     this.lastFeedAt = this.now();
@@ -285,11 +365,98 @@ export class TapServer {
       for (const viewer of this.viewers.values()) {
         if (viewer.state !== 'live') continue;
         if (this.now() - viewer.lastTypedAt > CLIPBOARD_WINDOW_MS) continue;
-        viewer.pending.push({ offset: ev.offset, frame: encodeServerFrame({ t: 'clipboard', offset: ev.offset, data_b64: ev.data_b64 }) });
+        const frame = encodeServerFrame({ t: 'clipboard', offset: ev.offset, data_b64: ev.data_b64 });
+        viewer.pending.push({ offset: ev.offset, frame });
+        viewer.pendingBytes += frame.length;
       }
     }
     for (const conn of this.connections) this.serviceConnection(conn);
   }
+
+  /** Pause/resume twin feeding for reseeds: while paused, twinOffset lags
+   * ring.head, so joins take the busy path; on resume the gated chain
+   * catches up and twinOffset advances to head. Pair with
+   * drainTwinQueue() (below) for a true handover: the caller must drain
+   * before the reseed resets the twin. */
+  setTwinPaused(paused: boolean): void {
+    if (paused) {
+      this.twinPaused = true;
+      if (this.twinGate === null) {
+        const { promise, resolve } = Promise.withResolvers<void>();
+        this.resumeGate = resolve;
+        this.twinGate = promise;
+      }
+    } else {
+      this.twinPaused = false;
+      this.resumeGate?.();
+      this.resumeGate = null;
+      this.twinGate = null;
+      if (this.needsOffsetResync) void this.resyncTwinOffset();
+    }
+  }
+
+  /** Once the chain is fully idle after a resume, the twin reflects the
+   * capture/restore plus every post-B byte, so the parsed-byte counter can
+   * resync to head (skipped pre-pause bytes are covered by the capture).
+   * Re-checks idle after each await: new feeds re-arm the wait. */
+  private async resyncTwinOffset(): Promise<void> {
+    for (;;) {
+      if (this.twinInflight === 0) {
+        if (this.needsOffsetResync && !this.twinPaused && this.twin !== null) {
+          this.twinOffset = this.ring.head;
+          this.needsOffsetResync = false;
+        }
+        return;
+      }
+      await this.twinTail;
+    }
+  }
+
+  /** Await every twin feed enqueued so far. Must be called synchronously
+   * after setTwinPaused(true): the snapshot then covers exactly the
+   * pre-pause items, which skip their twin leg instead of feeding after
+   * the reseed's reset. Anything enqueued while paused is gated and is
+   * not part of this snapshot. */
+  async drainTwinQueue(): Promise<void> {
+    await this.twinTail;
+  }
+
+  /** The Twin facade handed to the Reseeder: capture/restore feeds go
+   * through the SAME ground tracker as the live chain, and reset()
+   * resets it too, so a pre-reset mid-sequence state cannot leak across
+   * a reseed. The Reseeder is the only user of this facade. */
+  reseedTwin(): Twin {
+    const twin = this.twin;
+    if (twin === null) throw new Error('reseed without a twin');
+    return {
+      term: twin.term,
+      serialize: twin.serialize,
+      cols: twin.cols,
+      rows: twin.rows,
+      widthPin: twin.widthPin,
+      feed: async (b: Uint8Array | string) => {
+        await twin.feed(b);
+        this.ground.push(typeof b === 'string' ? new TextEncoder().encode(b) : b);
+      },
+      reset: () => {
+        twin.reset();
+        this.ground.reset();
+      },
+      resize: (c: number, r: number) => twin.resize(c, r),
+      dispose: () => twin.dispose(),
+      repliesDropped: () => twin.repliesDropped(),
+      lineCount: (which: 'normal' | 'alt') => twin.lineCount(which),
+    };
+  }
+  /** Apply a grid change (audit F6): resize the twin and stamp a resize
+   * marker at the current head; later profiles carry the new grid. */
+  setGrid(cols: number, rows: number): void {
+    this.cols = cols;
+    this.rows = rows;
+    this.twin?.resize(cols, rows);
+    this.recordMarker((seq, offset) => encodeServerFrame({ t: 'resize', seq, offset, cols, rows }));
+  }
+
 
   // ---------------------------------------------------------- join / resume
 
@@ -297,10 +464,14 @@ export class TapServer {
   joinNow(viewer: Viewer): void {
     if (this.twin === null) throw new Error('join without a twin');
     const X = this.ring.head;
+    // Never seed past what the twin parsed: setting sentOffset to head while
+    // twinOffset lags would lose the (twinOffset, head] gap (audit F3).
+    if (this.twinOffset !== X || this.twinBroken) throw new Error('join beyond twin offset');
     const scrollback = viewer.profile === 'phone' ? 20000 : 50000;
-    const seed = this.makeSeed(this.twin, scrollback);
+    const seed = this.makeSeed(this.twin, scrollback, X);
     viewer.sentOffset = X;
     viewer.pending = [];
+    viewer.pendingBytes = 0;
     viewer.state = 'live';
     const conn = viewer.connection;
     const profile: ServerFrame = {
@@ -350,12 +521,24 @@ export class TapServer {
     const deadline = this.now() + this.joinWaitMs;
     let degraded = false;
     for (;;) {
-      const quiescent = !this.withholder.syncOn && this.twinOffset === this.ring.head && this.now() - this.lastFeedAt >= this.quiesceMs;
+      // One gate, T6's rule: twin parsed through head, synchronized output
+      // off, ground (not mid-escape), no stripper-held bytes, plus the
+      // silence preference. twinOffset is the parsed-byte counter (the
+      // QuiescentJoinGate's equivalent: ground advances with twin writes).
+      const quiescent = !this.withholder.syncOn && this.twinOffset === this.ring.head && this.ground.atGround() && this.getStripPending() === 0 && this.now() - this.lastFeedAt >= this.quiesceMs;
       if (quiescent) break;
       if (this.now() >= deadline) {
-        if (this.withholder.syncOn) {
+        // Degraded join is only sound when the twin is caught up: joining
+        // otherwise would set sentOffset past twinOffset and lose the gap
+        // (and a broken twin can never catch up). Those cases take the busy
+        // path (error + close) instead of degrading into data loss.
+        if (this.withholder.syncOn || this.twinOffset !== this.ring.head || this.twinBroken) {
           this.writeText(viewer.connection, viewer.id, encodeServerFrame({ t: 'error', code: 'busy', msg: 'join deferred: frame in progress' }));
           this.closeViewer(viewer);
+          // A dropped join is terminal: end the connection once no viewer
+          // remains on it, so the client sees the busy frame and the socket
+          // closes (the header contract: "error{busy} and is closed").
+          if (viewer.connection.viewers.size === 0) viewer.connection.transport.close();
           return { ok: false, reason: 'busy' };
         }
         degraded = true;
@@ -403,6 +586,7 @@ export class TapServer {
     // viewer and is still owed (serviceViewer emits it before the first
     // byte at `from` because its offset <= sentOffset).
     viewer.pending = this.ring.markersAfter(mseq).map((m) => ({ offset: m.offset, frame: m.frame }));
+    viewer.pendingBytes = viewer.pending.reduce((n, p) => n + p.frame.length, 0);
     viewer.state = 'live';
     this.writeText(viewer.connection, viewer.id, encodeServerFrame({ t: 'hello', proto: 'kb-term/1', session: this.session, epoch: this.epoch, harness: this.harness, bound_sid: this.boundSid }));
     this.serviceViewer(viewer);
@@ -442,6 +626,14 @@ export class TapServer {
         this.dropViewer(viewer, 'too-far-behind');
         return;
       }
+      // Pending control bytes (clipboards, markers) do not advance ring
+      // head, so the lag check above cannot see them. A blocked viewer
+      // would otherwise accumulate them without bound; account them
+      // under the same 8 MiB budget and drop on overflow.
+      if (viewer.pendingBytes > LAG_LIMIT) {
+        this.dropViewer(viewer, 'too-far-behind');
+        return;
+      }
       if (conn.pendingBacklog > LAG_LIMIT) {
         for (const id of [...conn.viewers]) {
           const v = this.viewers.get(id);
@@ -453,6 +645,7 @@ export class TapServer {
       const next = viewer.pending[0];
       if (next !== undefined && next.offset <= viewer.sentOffset) {
         viewer.pending.shift();
+        viewer.pendingBytes -= next.frame.length;
         if (!this.writeText(conn, viewer.id, next.frame)) return;
         continue;
       }
@@ -583,6 +776,7 @@ export class TapServer {
         // tiny fake clocks (a 0 sentinel would fake a recent typing there).
         lastTypedAt: -Infinity,
         pending: [],
+        pendingBytes: 0,
         state: 'joining',
       };
       this.viewers.set(id, viewer);

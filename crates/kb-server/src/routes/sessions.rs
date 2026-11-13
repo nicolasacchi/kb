@@ -8599,10 +8599,13 @@ pub struct BeatBody {
     pub last_line: Option<String>,
     #[serde(default)]
     pub detail: Option<BeatDetail>,
-    /// T13 — optional kb-term echo (`KB_TERM_ID`). Unknown/invalid/unverified
-    /// values are dropped silently; the beat is always accepted (never a 400).
+    /// T13 — optional kb-term echo (`KB_TERM_ID`). Deliberately a `Value`,
+    /// like `BeatDetail::paths`/`background`: a non-string claim (e.g.
+    /// `{"term": 123}`) is dropped by [`verified_term`], never a reason to
+    /// 400 the beat. Unknown/invalid/unverified string claims are likewise
+    /// dropped silently; the beat is always accepted (never a 400).
     #[serde(default)]
-    pub term: Option<String>,
+    pub term: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -8980,10 +8983,13 @@ fn maybe_refresh_term_dir(state: Arc<KbHandles>) {
                 return;
             }
         };
+        // A malformed `Ok` shape must never wipe the directory: only a
+        // parseable list (Some) triggers the success-only `replace`.
         if let Ok(crate::terminal::wire::RunnerReply::Ok { data }) = reply {
-            let now = chrono::Utc::now().timestamp();
-            let items: Vec<(String, i64)> = parse_term_items(&data);
-            state2.terminals.term_dir.replace(items, now);
+            if let Some(items) = parse_term_items(&data) {
+                let now = chrono::Utc::now().timestamp();
+                state2.terminals.term_dir.replace(items, now);
+            }
         }
         state2
             .terminals
@@ -8995,10 +9001,11 @@ fn maybe_refresh_term_dir(state: Arc<KbHandles>) {
 /// T13 — extract `(id, pane_pid)` pairs from a runner `list` reply `data`.
 ///
 /// Tolerates both wire shapes (a bare array or a `{"terms": array}`
-/// envelope), mirroring `terms::list_contains`. A malformed shape yields
-/// no items; the old directory is kept untouched by the caller's
-/// success-only `replace`.
-fn parse_term_items(data: &serde_json::Value) -> Vec<(String, i64)> {
+/// envelope), mirroring `terms::list_contains`. `None` = malformed shape:
+/// the caller must skip its success-only `replace` so the old directory is
+/// kept untouched. A valid empty array is `Some(vec![])` and a replace with
+/// it is correct (the runner really has no terms).
+fn parse_term_items(data: &serde_json::Value) -> Option<Vec<(String, i64)>> {
     fn from_items(items: &[serde_json::Value]) -> Vec<(String, i64)> {
         items
             .iter()
@@ -9010,12 +9017,12 @@ fn parse_term_items(data: &serde_json::Value) -> Vec<(String, i64)> {
             .collect()
     }
     if let Some(items) = data.as_array() {
-        return from_items(items);
+        return Some(from_items(items));
     }
     if let Some(items) = data.get("terms").and_then(|v| v.as_array()) {
-        return from_items(items);
+        return Some(from_items(items));
     }
-    Vec::new()
+    None
 }
 
 /// `POST /api/sessions/beat` — LSC-2/3's push intake: map one lifecycle
@@ -9070,14 +9077,17 @@ pub async fn beat(State(state): State<Arc<KbHandles>>, Json(body): Json<BeatBody
     let tool_update = tool_update_for(&body.event, body.detail.as_ref(), at_unix, now_unix);
     let background = sanitize_background(&body.event, body.detail.as_ref());
     let terminal_enabled = state.config.read().await.terminal.enabled();
+    // A non-string `term` claim (a `Value`) extracts to `None` here, so it
+    // is dropped like any other unverified claim — never a 400.
+    let term_str = body.term.as_ref().and_then(serde_json::Value::as_str);
     let term = verified_term(
         &state.terminals.term_dir,
         terminal_enabled,
-        body.term.as_deref(),
+        term_str,
         body.pid,
     );
     if terminal_enabled && term.is_none() {
-        if let Some(raw) = body.term.as_deref() {
+        if let Some(raw) = term_str {
             let known = state.terminals.term_dir.pane_pid(raw);
             if crate::terminal::binding::is_valid_term_id(raw)
                 && (known.is_none() || known != body.pid)
@@ -10988,6 +10998,47 @@ mod lsc2_tests {
         let dir = crate::terminal::binding::TermDirectory::new();
         dir.replace([("other".to_string(), 4242)], 1_000_000);
         assert_eq!(verified_term(&dir, true, Some("abc123"), Some(4242)), None);
+    }
+    #[test]
+    fn beat_drops_a_non_string_term_instead_of_400ing() {
+        // `{"term": 123}` must deserialize (term is a `Value`) and the claim
+        // extracts to `None` — the beat is accepted with no binding.
+        let body: BeatBody = serde_json::from_value(serde_json::json!({
+            "session_id": "s", "harness": "claude", "event": "start",
+            "at": "2026-08-21T20:41:02Z", "term": 123,
+        }))
+        .expect("a non-string term must not reject deserialization");
+        assert_eq!(body.term.as_ref().and_then(serde_json::Value::as_str), None);
+        let dir = crate::terminal::binding::TermDirectory::new();
+        dir.replace([("abc123".to_string(), 4242)], 1_000_000);
+        assert_eq!(
+            verified_term(
+                &dir,
+                true,
+                body.term.as_ref().and_then(serde_json::Value::as_str),
+                Some(4242)
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn malformed_runner_ok_never_replaces_the_directory() {
+        // The success-only gate: None means the caller must skip replace.
+        let dir = crate::terminal::binding::TermDirectory::new();
+        dir.replace([("abc123".to_string(), 4242)], 1_000_000);
+        assert!(parse_term_items(&serde_json::json!({"oops": 1})).is_none());
+        assert_eq!(
+            parse_term_items(&serde_json::json!([])),
+            Some(Vec::new()),
+            "valid empty array is Some (a real empty directory)"
+        );
+        assert_eq!(
+            parse_term_items(&serde_json::json!({"terms": [{"id": "abc123", "pane_pid": 4242}]})),
+            Some(vec![("abc123".to_string(), 4242)])
+        );
+        // …and the primed map still resolves since no replace ran.
+        assert_eq!(dir.pane_pid("abc123"), Some(4242));
     }
 
     #[test]

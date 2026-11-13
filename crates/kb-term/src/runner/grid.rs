@@ -4,6 +4,15 @@
 //! `window-size manual` plus explicit `resize-window`; watching and typing
 //! never touch the grid — only `take_size` does. The anchor and every
 //! hidden client get the new winsize (cells and pixel fields).
+//!
+//! Crash window (accepted): `take_size` resizes the window before
+//! recording `@kb_owner_grid`, so a crash between the two steps leaves
+//! the new size with a stale or missing owner. This is deliberate: the
+//! window size is truth (reconciled by discovery), and the owner is
+//! advisory — recording the owner first would claim a size that was
+//! never applied and refuse every other owner against a phantom. A
+//! replay (same owner retake, or a forced take) repairs the pair, so
+//! `take_size` is idempotent-safe under retry.
 
 use std::path::Path;
 
@@ -153,7 +162,7 @@ where
     if !out.ok {
         return Err(RunnerError::NotFound(format!("no holder for {id}")));
     }
-    runner.apply_client_winsizes(id, cols, rows).await;
+    runner.apply_client_winsizes(id, cols, rows).await?;
     Ok(())
 }
 
@@ -195,6 +204,41 @@ where
         rows,
         owner: Some(owner.to_string()),
     })
+}
+
+/// Legacy `resize{id, cols, rows}` RPC (no owner claim on the wire):
+/// obeys the grid-ownership policy — bounds via `valid_size`
+/// (`bad-size`), and any existing `@kb_owner_grid` owner refuses the
+/// resize (`grid-owned`), because the legacy op cannot prove it is the
+/// owner. With no owner recorded it takes the grid through
+/// `apply_size`, so the anchor AND every viewer pty get the new
+/// winsize (cells + pixel fields), exactly like `take_size`.
+pub async fn resize_legacy<S, T>(
+    runner: &Runner<S>,
+    tmux: &T,
+    id: &str,
+    cols: u16,
+    rows: u16,
+) -> Result<(), RunnerError>
+where
+    S: crate::runner::supervisor::Supervisor,
+    T: Tmux,
+{
+    if !valid_size(cols, rows) {
+        return Err(RunnerError::BadSize(format!(
+            "cols {cols} rows {rows} out of 20..=500 x 5..=200"
+        )));
+    }
+    let _lock = runner.id_lock(id).await;
+    let lock = _lock.lock().await;
+    let sock = runner.holder_socket(id);
+    let current = grid_state(tmux, &sock).await?;
+    if let Some(cur) = current.owner {
+        return Err(RunnerError::GridOwned(format!("grid is owned by {cur}")));
+    }
+    apply_size(runner, tmux, id, cols, rows).await?;
+    drop(lock);
+    Ok(())
 }
 
 /// Release the grid: clears the option only if the owner matches.
@@ -379,5 +423,74 @@ mod tests {
                 .code(),
             "grid-owned"
         );
+    }
+
+    #[tokio::test]
+    async fn legacy_resize_obeys_ownership_and_bounds() {
+        // The legacy `resize{id,cols,rows}` RPC carries no owner claim,
+        // so it must refuse whenever an owner is recorded (`grid-owned`,
+        // no resize), and apply through `apply_size` (resize-window +
+        // client winsizes) when no owner is set. Bounds are `bad-size`.
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = RunnerConfig::test_config(
+            dir.path().join("run"),
+            "/bin/true".to_string(),
+            dir.path().join("conf"),
+        );
+        let runner: Runner<DirectSupervisor> = Runner::direct(cfg);
+        let fake = FakeTmux::new();
+        let id = "abcd1234";
+        let sock = runner.holder_socket(id);
+        // No owner: legacy resize applies (window moves, fake tracks it).
+        resize_legacy(&runner, &fake, id, 80, 24).await.unwrap();
+        assert_eq!(
+            grid_state(&fake, &sock).await.unwrap(),
+            GridState {
+                cols: 80,
+                rows: 24,
+                owner: None
+            }
+        );
+        // Take as `a`: legacy resize now refuses, size unchanged.
+        take_size(&runner, &fake, id, 100, 30, "a", false)
+            .await
+            .unwrap();
+        let before = size_calls(&fake);
+        let err = resize_legacy(&runner, &fake, id, 80, 24).await.unwrap_err();
+        assert_eq!(err.code(), "grid-owned");
+        assert!(err.message().contains('a'), "message names the owner");
+        assert_eq!(size_calls(&fake), before, "refused resize must not resize");
+        assert_eq!(
+            grid_state(&fake, &sock).await.unwrap(),
+            GridState {
+                cols: 100,
+                rows: 30,
+                owner: Some("a".to_string())
+            }
+        );
+        // Release by the owner: legacy resize applies again.
+        release_size(&runner, &fake, id, "a").await.unwrap();
+        resize_legacy(&runner, &fake, id, 120, 40).await.unwrap();
+        assert_eq!(
+            grid_state(&fake, &sock).await.unwrap(),
+            GridState {
+                cols: 120,
+                rows: 40,
+                owner: None
+            }
+        );
+        // Bounds -> bad-size through the real resize_legacy (no writes).
+        let before_bounds = size_calls(&fake);
+        for (cols, rows) in [(19u16, 30u16), (501, 30), (100, 4), (100, 201)] {
+            let err = resize_legacy(&runner, &fake, id, cols, rows)
+                .await
+                .unwrap_err();
+            assert_eq!(
+                err.code(),
+                "bad-size",
+                "legacy resize {cols}x{rows} must be bad-size"
+            );
+        }
+        assert_eq!(size_calls(&fake), before_bounds);
     }
 }

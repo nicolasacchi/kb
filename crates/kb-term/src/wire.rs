@@ -100,9 +100,10 @@ pub enum ServerFrame {
         serialize: String,
         /// Width table, e.g. `"unicode-graphemes@0.4.0"`.
         width: String,
-        /// Image protocol version, e.g. `"0.9.0"`.
+        /// Image protocol version, e.g. `"0.9.0"`. Required on read: the
+        /// TS decoder requires every field of a known frame (a missing
+        /// field is a bad-frame on both sides).
         image: String,
-        /// Grid columns.
         cols: u16,
         /// Grid rows.
         rows: u16,
@@ -344,31 +345,34 @@ pub fn decode_text_frame(raw: &str) -> Result<TextFrame, WireError> {
         "viewer-open" | "viewer-close" | "typed" | "stats" => {
             let msg: ControlMessage =
                 serde_json::from_str(raw).map_err(|_| WireError::MalformedJson)?;
-            if let ControlMessage::ViewerOpen { resume, .. } = &msg {
-                if let Some(r) = resume {
+            match &msg {
+                ControlMessage::ViewerOpen {
+                    resume: Some(r), ..
+                } => {
                     check_js_safe(&[r.offset, r.mseq])?;
                 }
-            } else if let ControlMessage::Stats {
-                joins,
-                degraded_joins,
-                viewers,
-            } = &msg
-            {
-                let mut vals = [0u64; 3];
-                let mut n = 0;
-                if let Some(v) = joins {
-                    vals[n] = *v;
-                    n += 1;
+                ControlMessage::Stats {
+                    joins,
+                    degraded_joins,
+                    viewers,
+                } => {
+                    let mut vals = [0u64; 3];
+                    let mut n = 0;
+                    if let Some(v) = joins {
+                        vals[n] = *v;
+                        n += 1;
+                    }
+                    if let Some(v) = degraded_joins {
+                        vals[n] = *v;
+                        n += 1;
+                    }
+                    if let Some(v) = viewers {
+                        vals[n] = *v;
+                        n += 1;
+                    }
+                    check_js_safe(&vals[..n])?;
                 }
-                if let Some(v) = degraded_joins {
-                    vals[n] = *v;
-                    n += 1;
-                }
-                if let Some(v) = viewers {
-                    vals[n] = *v;
-                    n += 1;
-                }
-                check_js_safe(&vals[..n])?;
+                _ => {}
             }
             Ok(TextFrame::Control(msg))
         }
@@ -392,7 +396,9 @@ fn check_server_offsets(frame: &ServerFrame) -> Result<(), WireError> {
     }
 }
 
-/// Resume coordinates in a `viewer-open` control message.
+/// Resume coordinates in a `viewer-open` control message. All three fields
+/// are required on read, matching the TS validator (a partial nested
+/// resume is a bad-frame on both sides).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResumeInfo {

@@ -26349,6 +26349,66 @@ async fn beat_binds_a_kb_term_terminal_and_live_status_names_it() {
 }
 
 #[tokio::test]
+async fn beat_triggers_an_async_directory_refresh_and_late_binds() {
+    // FXT13: the async beat-triggered path (maybe_refresh_term_dir) has no
+    // test elsewhere — both T13 e2e cases prime the directory with a GET
+    // /api/terms first. Here there is NO prior GET /api/terms: the first
+    // beat may miss, but it must spawn the refresh; polling beats until the
+    // directory populates then binds. A GET /api/terms is never sent.
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("list".to_string(), runner_list_reply(&["abc123"]));
+    let fake_dir = tempfile::tempdir().unwrap();
+    let fake = spawn_fake_runner(fake_dir.path(), replies);
+    let (_tmp, addr) = boot_with_terminal(&fake).await;
+    let client = reqwest::Client::new();
+    // First beat: the directory is still empty, so it may miss the bind —
+    // but it must trigger the async refresh.
+    post_term_beat(
+        &client,
+        addr,
+        "main-1",
+        "start",
+        Some("abc123"),
+        Some(4242),
+        serde_json::json!({}),
+    )
+    .await;
+    // Poll with a hard deadline until the async refresh lands (the runner
+    // was contacted and a later beat binds). Bounded so a hang cannot burn
+    // the lane timeout.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let row = live_status_row(&client, addr, "main-1", false).await;
+        if row["term"] == "abc123" {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "async refresh never populated the directory; conns: {}",
+            fake.conns.load(std::sync::atomic::Ordering::SeqCst)
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // Subsequent beats verify against the (now populated) directory.
+        post_term_beat(
+            &client,
+            addr,
+            "main-1",
+            "prompt",
+            Some("abc123"),
+            Some(4242),
+            serde_json::json!({}),
+        )
+        .await;
+    }
+    assert!(
+        fake.conns.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+        "the beat must have triggered a runner list via the async refresh"
+    );
+    let row = live_status_row(&client, addr, "main-1", false).await;
+    assert_eq!(row["term"], "abc123", "{row}");
+}
+
+#[tokio::test]
 async fn beat_term_is_dropped_without_the_terminal_surface() {
     let (_tmp, addr) = boot_with_token().await;
     let client = reqwest::Client::new();

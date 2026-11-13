@@ -193,6 +193,32 @@ test('wire_missing_optional_fields_accepted_like_rust', () => {
   expect(() => decodeTextFrame('{"t":"viewer-open","viewer":"v1","profile":"desktop","resume":"x"}')).toThrow(FrameError);
 });
 
+// Every ServerFrame seq/offset field plus profile.image used to carry a
+// Rust serde default; those defaults are dropped so a missing field is a
+// bad-frame on BOTH sides (mirrors the Rust
+// decode_text_frame_rejects_missing_required_fields vectors).
+test('wire_missing_marker_fields_rejected_like_rust', () => {
+  const sha = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+  const cases = [
+    `{"t":"imagedef","id":1,"gen":1,"sha256":"${sha}","mime":"image/png","w":1,"h":1,"cols":1,"rows":1,"offset":1}`,
+    `{"t":"imagedef","seq":1,"id":1,"gen":1,"sha256":"${sha}","mime":"image/png","w":1,"h":1,"cols":1,"rows":1}`,
+    '{"t":"resize","cols":80,"rows":24}',
+    '{"t":"resize","seq":1,"cols":80,"rows":24}',
+    '{"t":"sizechanged","seq":1,"cols":80,"rows":24,"by":"v1"}',
+    '{"t":"gfxreset","gen":1,"offset":1}',
+    '{"t":"exit","code":0,"offset":1}',
+    '{"t":"exit","seq":1,"code":0}',
+    '{"t":"clipboard","data_b64":""}',
+    '{"t":"profile","xterm":"6.0.0","serialize":"0.14.0","width":"unicode-graphemes@0.4.0","cols":120,"rows":40,"scrollback":50000,"scroll_on_erase_in_display":true,"cell_px_w":9,"cell_px_h":18,"theme":null}',
+    // Partial nested resume: both sides require offset/mseq/epoch.
+    '{"t":"viewer-open","viewer":"v1","profile":"desktop","resume":{}}',
+    '{"t":"viewer-open","viewer":"v1","profile":"desktop","resume":{"offset":1}}',
+  ];
+  for (const raw of cases) {
+    expect(() => decodeTextFrame(raw), raw).toThrow(FrameError);
+  }
+});
+
 // Text-frame u64 offsets/seqs at or above 2^53 reject in both decoders
 // (the Rust `decode_text_frame` post-deserialize cap mirrors this test).
 test('wire_text_offsets_at_2pow53_rejected_like_rust', () => {

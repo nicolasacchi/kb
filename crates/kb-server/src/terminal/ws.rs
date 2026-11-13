@@ -47,6 +47,7 @@ use axum::{
 use futures::{Sink, SinkExt, StreamExt};
 use tokio::sync::{mpsc, watch};
 
+use super::binding::is_valid_term_id;
 use super::events;
 use super::gate::{
     caller_class_admitted, check_origin, disabled, Problem, ERR_TERMINAL_ORIGIN_REFUSED,
@@ -131,17 +132,6 @@ impl Upstream for TermStream {
     ) -> Pin<Box<dyn Future<Output = Result<(), StreamError>> + Send + 'a>> {
         Box::pin(TermStream::send(self, item))
     }
-}
-
-fn is_valid_term_id(s: &str) -> bool {
-    // The canonical wire bounds (`kb-term`'s
-    // `wire::is_valid_term_id`, also enforced by the runner at its
-    // RPC entry): 8..=12 chars from `[a-z0-9]`. A wider local
-    // validator would let ids through the WS gate only to fail at
-    // the runner as a 502 BadReply instead of this consistent 400.
-    (8..=12).contains(&s.len())
-        && s.chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
 }
 
 /// The one 403 body for every ticket failure (no oracle: unknown,
@@ -941,17 +931,23 @@ mod relay_tests {
     }
 
     #[test]
-    fn term_id_validator_mirrors_the_canonical_bounds() {
-        // The WS gate must reject exactly what the runner would:
-        // lengths 7 and 13 (and 1..=16 in the old local validator)
-        // are 400s here, not 502s at the runner.
-        assert!(!super::is_valid_term_id("abcd123"), "len 7");
-        assert!(super::is_valid_term_id("abcd1234"), "len 8");
-        assert!(super::is_valid_term_id("abcd1234wxyz"), "len 12");
-        assert!(!super::is_valid_term_id("abcd1234wxyz1"), "len 13");
+    fn term_id_validator_is_the_one_kb_side_grammar() {
+        // R6: the WS gate uses binding.rs's validator (`^[a-z0-9]{1,32}$`).
+        // An id inside the grammar that the runner never minted (7 or 13
+        // chars) passes the shape check and is a runner 404 downstream,
+        // never a 400 here and never a 502.
+        assert!(super::is_valid_term_id("abcd123"), "len 7 is in grammar");
+        assert!(
+            super::is_valid_term_id("abcd1234wxyz1"),
+            "len 13 is in grammar"
+        );
+        assert!(super::is_valid_term_id("a"), "len 1");
+        assert!(super::is_valid_term_id(&"a".repeat(32)), "len 32");
+        assert!(!super::is_valid_term_id(&"a".repeat(33)), "len 33");
         assert!(!super::is_valid_term_id("ABCD1234"), "uppercase");
         assert!(!super::is_valid_term_id(""), "empty");
         assert!(!super::is_valid_term_id("abcd 1234"), "space");
+        assert!(!super::is_valid_term_id("abcd-123"), "dash");
     }
 
     #[test]

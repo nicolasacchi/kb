@@ -23,7 +23,7 @@ use crate::state::KbHandles;
 
 /// Cap on the ended-id dedup set. Over the cap the oldest entries are
 /// dropped wholesale (a lost entry only risks an idempotent
-/// duplicate); ids are 8..=12 chars, so 1024 entries is a few KiB.
+/// duplicate); ids are at most 32 chars, so 1024 entries is a few tens of KiB.
 pub(crate) const ENDED_SET_CAP: usize = 1024;
 
 /// The `term.ended` dedup set (id -> ended). Logic: `true` when the

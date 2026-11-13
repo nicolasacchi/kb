@@ -364,12 +364,22 @@ struct PumpShared {
 pub struct PumpHandle {
     tx: mpsc::Sender<Vec<u8>>,
     shared: Arc<PumpShared>,
+    /// Reader task handle (shared across clones; `close` aborts it).
+    reader: Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    /// Writer task handle (shared across clones; `close` aborts it).
+    writer: Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 impl PumpHandle {
     /// Queue one item to the writer (whole, never split). Bounded at 2 s:
     /// a stuck client answers `busy-pty` instead of hanging the RPC.
     pub async fn write(&self, item: Vec<u8>) -> Result<(), RunnerError> {
+        // Fail fast after `close()`/pump exit: an aborted writer would
+        // take the receiver away (send then fails) but only once the
+        // abort lands, so the closed flag is the deterministic guard.
+        if self.shared.closed.load(Ordering::Relaxed) {
+            return Err(RunnerError::BusyPty("client pty closed".to_string()));
+        }
         tokio::time::timeout(Duration::from_secs(2), self.tx.send(item))
             .await
             .map_err(|_| RunnerError::BusyPty("client writer busy".to_string()))?
@@ -416,11 +426,30 @@ impl PumpHandle {
     pub fn quiet_for(&self) -> Option<Duration> {
         self.last_output().map(|t| t.elapsed())
     }
+
+    /// Abort both pump tasks (drops the reader/writer dups so the pty
+    /// master closes and the client gets SIGHUP). Callers that drop a
+    /// client handle (teardown) must call this: dropping the handle
+    /// alone leaves the tasks' fds open past teardown.
+    pub fn close(&self) {
+        if let Some(h) = self.reader.lock().unwrap().take() {
+            h.abort();
+        }
+        if let Some(h) = self.writer.lock().unwrap().take() {
+            h.abort();
+        }
+        self.shared.closed_reason.store(4, Ordering::Relaxed);
+        self.shared.closed.store(true, Ordering::Relaxed);
+    }
 }
 
 /// Start the pump: a read loop feeding `master` through the responder and
 /// a single writer task owning `writer`. `master` and `writer` are two
-/// fds for the same pty (dups).
+/// fds for the same pty (dups): the read loop and the writer need
+/// independent fds so a blocked writer never blocks reads.
+///
+/// Contract note: the T9 brief pinned `spawn_pump(master, cfg)` (one fd);
+/// this two-fd form is the merged reality later units code against.
 pub fn spawn_pump(
     master: AsyncFd<std::fs::File>,
     writer: AsyncFd<std::fs::File>,
@@ -435,8 +464,9 @@ pub fn spawn_pump(
         closed_errno: AtomicI32::new(0),
     });
     let (tx, mut rx) = mpsc::channel::<Vec<u8>>(64);
-    // Writer task: one per client, whole items only.
-    tokio::spawn(async move {
+    // Writer task: one per client, whole items only (see
+    // `pump_writer_items_are_atomic_under_concurrent_reply`).
+    let writer = tokio::spawn(async move {
         while let Some(item) = rx.recv().await {
             if write_all_async(&writer, &item).await.is_err() {
                 break;
@@ -445,7 +475,7 @@ pub fn spawn_pump(
     });
     let write_tx = tx.clone();
     let read_shared = shared.clone();
-    tokio::spawn(async move {
+    let reader = tokio::spawn(async move {
         let mut responder = Responder::new(cfg);
         let mut buf = vec![0u8; 65536];
         loop {
@@ -478,19 +508,20 @@ pub fn spawn_pump(
                     responder.feed(&buf[..n], &mut out);
                     let added = responder.queries_answered() - before;
                     if added > 0 {
+                        // The counter measures answers, not successful
+                        // writes: count even when the queue is full/
+                        // closed (a dropped reply is still an answered
+                        // query; drained/identity stats must not
+                        // undercount a busy writer).
+                        read_shared
+                            .queries_answered
+                            .fetch_add(added, Ordering::Relaxed);
                         // Replies queue into the same writer as keys.
                         // Await the send (2 s bound, like
                         // PumpHandle::write) so a reply is never
-                        // silently dropped while still counted; the
-                        // counter only moves for replies actually queued.
-                        let sent = tokio::time::timeout(Duration::from_secs(2), write_tx.send(out))
-                            .await
-                            .is_ok_and(|r| r.is_ok());
-                        if sent {
-                            read_shared
-                                .queries_answered
-                                .fetch_add(added, Ordering::Relaxed);
-                        }
+                        // silently dropped.
+                        let _ =
+                            tokio::time::timeout(Duration::from_secs(2), write_tx.send(out)).await;
                     }
                 }
                 // `try_io` maps a `WouldBlock` read to `Err(TryIoError)`
@@ -510,7 +541,12 @@ pub fn spawn_pump(
         }
         read_shared.closed.store(true, Ordering::Relaxed);
     });
-    PumpHandle { tx, shared }
+    PumpHandle {
+        tx,
+        shared,
+        reader: Arc::new(std::sync::Mutex::new(Some(reader))),
+        writer: Arc::new(std::sync::Mutex::new(Some(writer))),
+    }
 }
 
 async fn write_all_async(fd: &AsyncFd<std::fs::File>, item: &[u8]) -> Result<(), ()> {
@@ -850,5 +886,116 @@ mod tests {
         assert!(got, "pump must reach 2 answered queries");
         assert_eq!(handle.queries_answered(), 2);
         assert!(handle.bytes_drained() > 0);
+    }
+
+    #[tokio::test]
+    async fn pump_writer_items_are_atomic_under_concurrent_reply() {
+        // A large keys item queued while a query reply lands on the
+        // same writer: each must arrive as ONE contiguous run on the
+        // slave. The single writer task gives this by construction;
+        // without it (two writers writing items in byte chunks) the
+        // reply bytes interleave inside the keys item. The integration
+        // test proves delivery only; this proves whole-item atomicity.
+        use std::io::{Read as _, Write as _};
+        let (master, slave) = crate::pty::open_pty(80, 24, 720, 432).unwrap();
+        let reader = crate::pty::async_fd_dup(&master).unwrap();
+        let writer = crate::pty::async_fd_dup(&master).unwrap();
+        let handle = spawn_pump(reader, writer, ResponderCfg::default());
+        let big = vec![b'A'; 4096];
+        let reply = DA1_REPLY.to_vec();
+        // Slave side: non-blocking reads until both items fully arrive.
+        // `std::fs::File` has no inherent non-blocking setter, so flip
+        // `O_NONBLOCK` with fcntl (same pattern as `open_pty`).
+        let mut slave: std::fs::File = slave.into();
+        unsafe {
+            use std::os::unix::io::AsRawFd as _;
+            let flags = libc::fcntl(slave.as_raw_fd(), libc::F_GETFL);
+            assert!(flags >= 0, "F_GETFL on slave");
+            assert_eq!(
+                libc::fcntl(slave.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK),
+                0
+            );
+            // Canonical mode buffers master->slave input until a
+            // newline, so the newline-free items would never become
+            // readable on the slave; raw mode delivers both bytes.
+            let mut tio: libc::termios = std::mem::zeroed();
+            assert_eq!(
+                libc::tcgetattr(slave.as_raw_fd(), &mut tio),
+                0,
+                "tcgetattr on slave"
+            );
+            tio.c_lflag &= !(libc::ICANON | libc::ECHO);
+            assert_eq!(
+                libc::tcsetattr(slave.as_raw_fd(), libc::TCSANOW, &tio),
+                0,
+                "tcsetattr on slave"
+            );
+        }
+        let need = big.len() + reply.len();
+        let mut got = Vec::new();
+        // Queue the big item, and feed a DA1 query from the slave side
+        // so a reply races the big item through the writer.
+        handle.write(big.clone()).await.unwrap();
+        slave.write_all(b"\x1b[c").unwrap();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while got.len() < need && tokio::time::Instant::now() < deadline {
+            let mut buf = [0u8; 512];
+            match slave.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => got.extend_from_slice(&buf[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                Err(_) => break,
+            }
+        }
+        assert_eq!(got.len(), need, "both items must arrive in full");
+        // Each item must be one contiguous run (order either way).
+        assert!(
+            got.windows(big.len()).any(|w| w == big),
+            "keys item must be one contiguous run"
+        );
+        assert!(
+            got.windows(reply.len()).any(|w| w == reply),
+            "reply must be one contiguous run"
+        );
+        handle.close();
+    }
+
+    #[tokio::test]
+    async fn pump_handle_close_aborts_tasks_and_fails_writes() {
+        // close() aborts both tasks (teardown path): a live pump answers
+        // a query, then after close() the tasks are gone — writes fail
+        // and no further queries are answered.
+        use std::io::Write as _;
+        let (master, slave) = crate::pty::open_pty(80, 24, 720, 432).unwrap();
+        let reader = crate::pty::async_fd_dup(&master).unwrap();
+        let writer = crate::pty::async_fd_dup(&master).unwrap();
+        let handle = spawn_pump(reader, writer, ResponderCfg::default());
+        let mut slave: std::fs::File = slave.into();
+        slave.write_all(b"\x1b[c").unwrap();
+        let got = tokio::time::timeout(Duration::from_secs(5), async {
+            while handle.queries_answered() < 1 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .is_ok();
+        assert!(got, "pump must answer before close");
+        handle.close();
+        assert!(handle.is_closed(), "close marks the pump closed");
+        let err = handle.write(vec![b'x']).await;
+        assert!(
+            err.is_err(),
+            "writes after close must fail (writer task aborted)"
+        );
+        let before = handle.queries_answered();
+        let _ = slave.write_all(b"\x1b[c");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            handle.queries_answered(),
+            before,
+            "aborted reader answers nothing more"
+        );
     }
 }
