@@ -880,14 +880,16 @@ GET  /api/sessions[?cursor=<unix>&limit=N   Cross-kb list of captured Claude
                                             own. When none is known it is an
                                             honest not-resumable sentence.
                                             `tree=` (A3) is closed:
-                                            absent/`collapsed` (the default)
-                                            hides subagent children
+                                            absent/empty/`collapsed` (the
+                                            default) hides subagent children
                                             (`root_session_id IS NULL` in SQL
                                             before LIMIT, so the keyset
                                             cursor stays coherent; NULL-root
                                             rows stay visible), `flat` shows
                                             every row; any other value is a
-                                            400. Every row carries
+                                            400. (An empty `tree=` value is an
+                                            explicit alias for `collapsed`,
+                                            not a 400.) Every row carries
                                             `child_count`: how many children
                                             it has by the card predicate
                                             (a root counts its whole flood,

@@ -1026,11 +1026,14 @@ module reads it and the V0047 lineage columns it carries
 (`parent_session_id`/`root_session_id`/`project_slug`) are display-only,
 never a rank, sort or filter term of any ranking module (pinned by
 `checks::no_ranking_module_reads_session_evidence`'s `card::` /
-`SessionCard` needles). No transcript BODY or raw turns ride the card
+`SessionCard` needles, `lineage::no_ranking_module_reads_session_lineage`'s
+`child_count` needle, and the FXA3 checks.rs `child_count` needle). No
+transcript BODY or raw turns ride the card
 (stored, capped, derived fields only; reading stays in `session-view/1`
 anchors). Lineage turns `collapse` into shape: `GET /api/sessions`
-gains a closed `tree=collapsed|flat` param (collapsed is the default —
-the omp subagent flood hides behind its roots) and a per-row
+gains a closed `tree=collapsed|flat` param (collapsed is the default;
+an empty value aliases it) — the omp subagent flood hides behind its
+roots) and a per-row
 `child_count` that uses the ONE card predicate (a root counts its whole
 flood, any depth; a non-root counts its direct children), so list and
 card agree on the number for every row including mid-tree nodes; omp

@@ -356,7 +356,12 @@ mod tests {
             ("sessions/projects.rs", include_str!("projects.rs")),
         ];
         for (name, src) in RANKERS {
-            for needle in ["parent_session_id", "root_session_id", "project_slug"] {
+            for needle in [
+                "parent_session_id",
+                "root_session_id",
+                "project_slug",
+                "child_count",
+            ] {
                 assert!(
                     !contains_word(src, needle),
                     "{name} names `{needle}` -- session lineage is SURFACED, NEVER SCORED \
