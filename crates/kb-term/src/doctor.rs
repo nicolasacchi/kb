@@ -154,7 +154,7 @@ pub fn to_json(checks: &[Check]) -> String {
 /// Run `exe args` with an allowlisted env and a hard deadline:
 /// `None` on timeout/spawn failure (the caller maps it to FAIL/WARN).
 /// Piped output is drained incrementally (64 KiB cap per stream, so a
-/// >64 KiB child never blocks on a full pipe) and the process group is
+/// child writing more than 64 KiB never blocks on a full pipe) and the process group is
 /// killed on timeout (a grandchild holding stdout or inheriting the
 /// group cannot hold `run_with_timeout` past the deadline).
 pub fn run_with_timeout(
