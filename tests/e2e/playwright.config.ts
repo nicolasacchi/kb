@@ -25,6 +25,16 @@ if (process.env.KB_WITNESS_DIR) {
   reporters.push(["json", { outputFile: `${process.env.KB_WITNESS_DIR}/pw-e2e.json` }]);
 }
 
+/** Chromium flags of the T15 picture projects: the shared host mapping plus SwiftShader WebGL. */
+const GFX_ARGS = [
+  "--host-resolver-rules=MAP kb-host.test 127.0.0.1",
+  "--use-angle=swiftshader",
+  "--use-gl=angle",
+  "--enable-unsafe-swiftshader",
+  "--ignore-gpu-blocklist",
+  "--enable-webgl",
+];
+
 /**
  * Playwright config for kb's iframe + SSE smoke. The test boots the kb-server
  * binary via globalSetup (tests/e2e/global-setup.ts) and tears it down in
@@ -80,7 +90,44 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
+      // The T15 picture specs run only in the chromium-gfx-dpr* projects below.
+      grepInvert: /@gfx/,
       use: { ...devices["Desktop Chrome"] },
+    },
+    // T15 - kitty placeholder pictures. WebGL runs on SwiftShader (CI has no
+    // GPU), so these prove the raster path, not a real GPU. Project-level
+    // `launchOptions` REPLACE the shared ones, so the host-resolver rule is
+    // repeated here. DPR 2/3 need a REAL --force-device-scale-factor (an
+    // emulated deviceScaleFactor never reaches the ResizeObserver
+    // devicePixelContentBoxSize that @xterm/addon-webgl sizes its canvas from),
+    // hence viewport:null + an explicit window size and no deviceScaleFactor.
+    {
+      name: "chromium-gfx-dpr1",
+      grep: /@gfx-dpr1/,
+      use: {
+        ...devices["Desktop Chrome"],
+        launchOptions: { args: GFX_ARGS },
+      },
+    },
+    {
+      name: "chromium-gfx-dpr2",
+      grep: /@gfx-dpr2/,
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: null,
+        deviceScaleFactor: undefined,
+        launchOptions: { args: [...GFX_ARGS, "--force-device-scale-factor=2", "--window-size=900,620"] },
+      },
+    },
+    {
+      name: "chromium-gfx-dpr3",
+      grep: /@gfx-dpr3/,
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: null,
+        deviceScaleFactor: undefined,
+        launchOptions: { args: [...GFX_ARGS, "--force-device-scale-factor=3", "--window-size=900,620"] },
+      },
     },
     // A GECKO slice, not a second full suite. It exists because the
     // selection→comment path is the one place where an engine's own event

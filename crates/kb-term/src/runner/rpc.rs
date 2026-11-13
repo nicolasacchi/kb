@@ -7,8 +7,8 @@
 //!
 //! Ops implemented in T8: list, launch, kill, resize, read, history, ping.
 //! T9 adds: viewer_open, viewer_close, keys, paste, enter, take_size,
-//! release_size, grid. Media arrives in a later unit and reports
-//! `bad-request` here.
+//! release_size, grid. Media (raw bytes after a `{"len":N}` header) is
+//! answered by the connection handler in `server`, not by `dispatch`.
 //!
 //! Success payloads for the T9 ops (viewer, paste, grid, empty) are
 //! typed `Serialize` structs from [`crate::wire`] (`ViewerData`,
@@ -296,9 +296,12 @@ async fn dispatch_inner<S: Supervisor>(
             })
             .map_err(|e| RunnerError::Internal(e.to_string()))?)
         }
-        // Later units own media; an honest bad-request, not a silent no-op.
+        // `media` carries raw bytes after its header line, which the
+        // envelope-only dispatch cannot express: the connection handler
+        // answers it (`server::respond_media`) before dispatch. Reaching
+        // this arm means a caller bypassed that path.
         Request::Media { .. } => Err(RunnerError::BadRequest(
-            "op not implemented by this unit".to_string(),
+            "media is streamed by the connection handler".to_string(),
         )),
     }
 }

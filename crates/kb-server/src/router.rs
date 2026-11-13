@@ -14,6 +14,7 @@ use crate::middleware::{
 };
 use crate::routes;
 use crate::state::KbHandles;
+use crate::terminal;
 use axum::{
     extract::DefaultBodyLimit,
     http::Method,
@@ -477,6 +478,7 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
         // posture is safe here. Static, registered before `/{session_id}`.
         .route("/terms", get(routes::terms::list))
         .route("/terms", post(routes::terms::launch))
+        .route("/terms/media/{sha256}", get(terminal::media::serve))
         .route("/terms/{id}/ticket", post(routes::terms::ticket))
         .route("/terms/{id}/paste", post(routes::terms::paste))
         .route("/terms/{id}/enter", post(routes::terms::enter))
