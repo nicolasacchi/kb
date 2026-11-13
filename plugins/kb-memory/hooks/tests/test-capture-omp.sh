@@ -634,6 +634,60 @@ if printf '%s\n' "$img_body" | jq -e '[.. | objects | select(.type == "image")] 
 else
   bad "an image block kept its data key"
 fi
+img_user_text="$(printf '%s\n' "$img_body" | jq -r 'select(.type == "user") | .message.content[0].text // empty' | head -1)"
+if [ "$img_user_text" = "look at this screenshot" ]; then
+  ok "user text entry body preserved alongside the image block"
+else
+  bad "user text body wrong: $img_user_text"
+fi
+img_tool_text="$(printf '%s\n' "$img_body" | jq -r 'select(.message.content | map(select(.type == "tool_result")) | length == 1) | .message.content[0].content[0].text // empty' | head -1)"
+if [ "$img_tool_text" = "opened the picture" ]; then
+  ok "tool_result text entry body preserved alongside the image block"
+else
+  bad "tool_result text body wrong: $img_tool_text"
+fi
+img_tool_sha="$(printf '%s\n' "$img_body" | jq -r 'select(.message.content | map(select(.type == "tool_result")) | length == 1) | .message.content[0].content[1].source.sha256 // empty' | head -1)"
+if [ "$img_tool_sha" = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd" ]; then
+  ok "tool_result image carries the invented blob sha"
+else
+  bad "tool_result image sha wrong: $img_tool_sha"
+fi
+
+echo
+echo "== T20: omp images longer than 2000 chars keep intent + cap beside the image =="
+LONG_SESSION="$TMPROOT/long-images.jsonl"
+{
+  title='{"type":"title","v":1,"title":"long images test"}'
+  pad_len=$((256 - ${#title} - 1))
+  printf '%s%*s\n' "$title" "$pad_len" ''
+  cat "$SCRIPT_DIR/fixtures/omp-session-images-long.jsonl"
+} >"$LONG_SESSION"
+LONG_OUTDIR="$TMPROOT/sessions-long-images"
+mkdir -p "$LONG_OUTDIR"
+KB_SESSIONS_DIR="$LONG_OUTDIR" "$CAPTURE" "$LONG_SESSION" >/dev/null 2>&1
+long_out="$(find "$LONG_OUTDIR" -name 'session-*-imgsess2.html' | head -1)"
+long_body="$(sed -n '/<pre>/,/<\/pre>/p' "$long_out" 2>/dev/null | sed '1d;$s|</pre>$||')"
+if [ -n "$long_out" ]; then
+  ok "long images fixture captured"
+else
+  bad "long images fixture produced no capture file"
+fi
+if printf '%s\n' "$long_body" | jq -e 'select(.message.content | map(select(.type == "tool_result")) | length == 1) | .message.content[0].content[0].text | startswith("[intent] Checking the picture ladder\n")' >/dev/null 2>&1; then
+  ok "tool_result text keeps the intent prefix beside the image"
+else
+  bad "intent prefix missing beside image"
+fi
+n_y="$(printf '%s\n' "$long_body" | grep -o 'y\{2000\}' | wc -l | tr -d ' ')"
+if [ "${n_y:-0}" -ge 1 ]; then
+  ok "tool_result text still capped at 2000 chars beside the image"
+else
+  bad "tool_result cap broken beside image"
+fi
+if printf '%s\n' "$long_body" | jq -e 'select(.message.content | map(select(.type == "tool_result")) | length == 1) | .message.content[0].content | map(select(.type == "image")) | length == 1' >/dev/null 2>&1; then
+  ok "capped tool_result still keeps its image block"
+else
+  bad "image missing on capped tool_result"
+fi
 
 echo
 echo "passed=$PASS failed=$FAIL"
