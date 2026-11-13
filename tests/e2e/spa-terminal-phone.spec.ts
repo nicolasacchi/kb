@@ -24,6 +24,9 @@ type Stats = {
 
 const VP = "[data-kb-term-viewport]";
 const LINE = (i: number) => `L${String(i).padStart(6, "0")}`;
+// "L000001\r\n": the stream offset after N lines. (The fake's SEED is sliced at
+// 8 bytes per line, so seed sizes below are in its own unit.)
+const LINE_BYTES = 9;
 
 async function num(page: Page, name: string): Promise<number> {
   const v = await page.locator(VP).getAttribute(`data-kb-term-${name}`);
@@ -39,6 +42,18 @@ async function openPhone(page: Page, opts: Record<string, unknown>): Promise<Sta
   await page.locator('[data-testid="kb-term-open"]').click();
   await expect(page.locator(VP)).toBeVisible({ timeout: 15_000 });
   await expect(page.locator(VP)).toHaveAttribute("data-kb-term-phase", "live", { timeout: 30_000 });
+  // The seed is applied before it is parsed: wait for the buffer to stop growing
+  // so a test never measures a position that is still moving under it.
+  let last = -1;
+  let since = Date.now();
+  for (let i = 0; i < 200; i += 1) {
+    await page.waitForTimeout(50);
+    const len = await num(page, "len");
+    if (len !== last) {
+      last = len;
+      since = Date.now();
+    } else if (Date.now() - since >= 400) break;
+  }
   return stats;
 }
 
@@ -199,7 +214,9 @@ test.describe("T17 phone terminal: layout and gestures @phone", () => {
     expect(await num(page, "vy")).toBe(vy);
 
     // Back to the left edge, then a vertical drag with a 6 px cross-axis wobble.
-    await drag(page, { x0: 100, y0: 200, x1: 400, y1: 200 });
+    await page.evaluate(() => {
+      (document.querySelector("[data-kb-term-viewport]")!.parentElement as HTMLElement).scrollLeft = 0;
+    });
     await expect.poll(() => num(page, "sl")).toBe(0);
     const cellH = await cellHeight(page);
     await drag(page, { x0: 200, y0: 100, x1: 200, y1: 100 + 10 * cellH, wobble: 6, holdMs: 200 });
@@ -297,14 +314,24 @@ test.describe("T17 phone terminal: reconnect @phone", () => {
   test("resume after four drops: no gap, strictly increasing from, Read text equals the stream", async ({ page }) => {
     const TOTAL = 2000;
     const stats = await openPhone(page, { total: TOTAL, seedLines: 500, drops: 4, dropEvery: 1024, rewind: 37 });
-    const len = TOTAL * 8;
+    const len = TOTAL * LINE_BYTES;
     await expect(page.locator(VP)).toHaveAttribute("data-kb-term-offset", String(len), { timeout: 60_000 });
     expect(await page.locator(VP).getAttribute("data-kb-term-gaps")).toBe("0");
     expect(await page.locator(VP).getAttribute("data-kb-term-resets")).toBe("1");
     const froms = stats.froms.filter((f) => f !== null) as number[];
     expect(froms.length).toBeGreaterThanOrEqual(4);
     for (let i = 1; i < froms.length; i += 1) expect(froms[i]).toBeGreaterThan(froms[i - 1]);
-    const text = await readText(page);
+    // The offset counts bytes handed to xterm; wait for them to be parsed.
+    let text = "";
+    await expect
+      .poll(
+        async () => {
+          text = await readText(page);
+          return text.includes(`${LINE(TOTAL)}\n`);
+        },
+        { timeout: 30_000 },
+      )
+      .toBe(true);
     const expected = Array.from({ length: TOTAL }, (_, i) => LINE(i + 1));
     // The Read view hard-breaks at the grid width and right-trims, exactly like
     // the numbered stream (8 columns per line), so the lines are the stream.
@@ -330,7 +357,7 @@ test.describe("T17 phone terminal: reconnect @phone", () => {
     stats.release();
     await page.evaluate(() => window.dispatchEvent(new Event("online")));
     await expect.poll(() => stats.sockets, { timeout: 3_000 }).toBeGreaterThan(sockets);
-    await expect(page.locator(VP)).toHaveAttribute("data-kb-term-offset", String(1200 * 8), { timeout: 10_000 });
+    await expect(page.locator(VP)).toHaveAttribute("data-kb-term-offset", String(1200 * LINE_BYTES), { timeout: 10_000 });
   });
 
   test("a resume while scrolled up leaves the viewport where it was and offers Jump to latest", async ({ page }) => {
@@ -347,7 +374,7 @@ test.describe("T17 phone terminal: reconnect @phone", () => {
     stats.dropNow();
     await expect.poll(() => stats.sockets, { timeout: 15_000 }).toBeGreaterThan(sockets);
     stats.release();
-    await expect(page.locator(VP)).toHaveAttribute("data-kb-term-offset", String(TOTAL * 8), { timeout: 30_000 });
+    await expect(page.locator(VP)).toHaveAttribute("data-kb-term-offset", String(TOTAL * LINE_BYTES), { timeout: 30_000 });
     expect(await num(page, "vy")).toBe(vy);
     expect(await page.locator(VP).getAttribute("data-kb-term-resets")).toBe("1");
     await expect(page.locator('[data-testid="kb-term-phone-jump"]')).toBeVisible();
@@ -401,14 +428,16 @@ test.describe("T17 phone terminal: host and lifecycle @phone", () => {
     await expect(page.locator("[data-kb-term]")).toBeVisible();
     await expect(page.locator("[data-kb-term] .xterm")).toHaveCount(1);
     await page.setViewportSize(size);
-    // The session page closes its collapsible sections again below the breakpoint.
+    // The session page closes its collapsible sections again below the breakpoint
+    // (React flips `open` in the commit that renders the Sheet): reopen it after.
+    await expect(page.locator("[data-kb-sheet]")).toBeAttached();
     await page.evaluate(() => {
       (document.querySelector('[data-testid="session-sec-terminal"]') as HTMLDetailsElement).open = true;
     });
     await expect(page.locator(VP)).toBeVisible();
     await expect(page.locator(`${VP} .xterm`)).toHaveCount(1);
     stats.release();
-    await expect(page.locator(VP)).toHaveAttribute("data-kb-term-offset", String(1500 * 8), { timeout: 30_000 });
+    await expect(page.locator(VP)).toHaveAttribute("data-kb-term-offset", String(1500 * LINE_BYTES), { timeout: 30_000 });
     expect(stats.sockets).toBe(1);
     expect(stats.tickets).toBe(1);
     expect(await page.locator(VP).getAttribute("data-kb-term-resets")).toBe("1");
