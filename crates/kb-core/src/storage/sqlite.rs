@@ -6413,12 +6413,12 @@ impl Db {
             "sessions_children_ids requires exactly one of root_of/parent_of"
         );
         let row = match (root_of, parent_of) {
-            (Some(r), None) => self.conn.prepare_cached(
+            (Some(_), None) => self.conn.prepare_cached(
                 "SELECT session_id FROM sessions
                  WHERE is_newest = 1 AND root_session_id = ?1
                  ORDER BY started_at ASC, session_id ASC",
             )?,
-            (None, Some(p)) => self.conn.prepare_cached(
+            (None, Some(_)) => self.conn.prepare_cached(
                 "SELECT session_id FROM sessions
                  WHERE is_newest = 1 AND parent_session_id = ?1
                  ORDER BY started_at ASC, session_id ASC",

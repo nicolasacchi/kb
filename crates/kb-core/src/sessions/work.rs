@@ -151,14 +151,14 @@ fn rep_row<'a>(node: &Node, rows: &[&'a WorkSession]) -> Option<&'a WorkSession>
         .min_by(|a, b| (a.started_at, &a.session_id).cmp(&(b.started_at, &b.session_id)))
 }
 
-/// The weak `cwd_time` phase links ONLY between singleton components
-/// (a single node with no strong edge), per the brief's step 3. The
-/// singleton check in the weak phase below is the entire candidacy
-/// predicate: lineage stamps and job-ulid presence are NOT additional
-/// bars. A unique ulid adds no edge (the job phase only unions when
-/// more than one node carries it) and a lone stamped child whose root
-/// is outside the window likewise gets no tree union, so excluding
-/// either from the weak chain would under-link against the brief.
+// The weak `cwd_time` phase links ONLY between singleton components
+// (a single node with no strong edge), per the brief's step 3. The
+// singleton check in the weak phase below is the entire candidacy
+// predicate: lineage stamps and job-ulid presence are NOT additional
+// bars. A unique ulid adds no edge (the job phase only unions when
+// more than one node carries it) and a lone stamped child whose root
+// is outside the window likewise gets no tree union, so excluding
+// either from the weak chain would under-link against the brief.
 
 fn find(parent: &mut [usize], mut x: usize) -> usize {
     while parent[x] != x {
@@ -361,7 +361,7 @@ pub fn group_work(sessions: &[WorkSession], takes: &[TakeEdge]) -> WorkOutcome {
     };
     {
         let mut by_cwd: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-        for i in 0..nodes.len() {
+        for (i, node) in nodes.iter().enumerate() {
             let root = find(&mut parent, i);
             if comp_sizes.get(&root).copied().unwrap_or(0) != 1 {
                 continue;
@@ -369,7 +369,7 @@ pub fn group_work(sessions: &[WorkSession], takes: &[TakeEdge]) -> WorkOutcome {
             // No stamp/ulid bar: a singleton with no strong edge is a
             // candidate regardless of lineage stamps or a unique ulid
             // (brief step 3).
-            if let Some(cwd) = nodes[i].cwd.clone() {
+            if let Some(cwd) = node.cwd.clone() {
                 if !cwd.is_empty() {
                     by_cwd.entry(cwd).or_default().push(i);
                 }
