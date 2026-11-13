@@ -27,8 +27,10 @@ impl Default for SupervisorKind {
     }
 }
 
-/// kb-termd configuration. `pane_shell` exists for the launch profiles
-/// (T10); there is no flag for it.
+/// kb-termd configuration. `pane_shell`/`pane_shell_args` are the
+/// non-login pane shell (`/bin/sh -c`): the gate wrapper is POSIX-only
+/// and deliberately NOT a login shell, so no user profile is ever
+/// sourced for a pane. There is no flag for either field.
 #[derive(Debug, Clone)]
 pub struct RunnerConfig {
     /// Base dir: `<run-dir>/s/*.sock` holders, `<run-dir>/runner/runner.sock`.
@@ -73,6 +75,10 @@ pub struct RunnerConfig {
     pub pane_shell: PathBuf,
     /// Args for `pane_shell` (the T10 launch profiles consume both).
     pub pane_shell_args: Vec<String>,
+    /// Test-only: honour verbatim caller argv (fixture programs) instead
+    /// of the profile argv. Set ONLY by the test harness; production
+    /// `kb-termd` never sets it and the ambient env never gates it.
+    pub allow_verbatim_probe: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -179,6 +185,7 @@ impl RunnerConfig {
             enter_max_wait_ms: cli.enter_max_wait_ms,
             pane_shell: PathBuf::from("/bin/sh"),
             pane_shell_args: vec!["-c".to_string()],
+            allow_verbatim_probe: false,
         }
     }
 
@@ -206,6 +213,7 @@ impl RunnerConfig {
             enter_max_wait_ms: 5000,
             pane_shell: PathBuf::from("/bin/sh"),
             pane_shell_args: vec!["-c".to_string()],
+            allow_verbatim_probe: false,
         }
     }
     /// The responder profile for the anchor and every hidden client.

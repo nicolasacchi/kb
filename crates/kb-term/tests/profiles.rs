@@ -74,6 +74,10 @@ fn profiles_extra_passthrough_rejects_forbidden_names() {
         "TERM_PROGRAM",
         "TMUX",
         "KB_SESSION_ID",
+        "PI_FORCE_IMAGE_PROTOCOL",
+        "PI_CONFIG_FILES",
+        "PI_IMAGE_PROTOCOL",
+        "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN",
     ] {
         let mut req = request("claude", dir.path(), &env);
         let names = vec![bad.to_string()];

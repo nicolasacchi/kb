@@ -255,6 +255,27 @@ pub async fn exit_keys<S: Supervisor>(
         .unwrap_or_else(|_| vec!["C-c".to_string(), "C-c".to_string(), "C-d".to_string()]);
     Ok(keys)
 }
+/// Read the `@kb_exit_steps` option as structured steps (kill RPC).
+/// `None` when the option is absent or unparseable (older holders).
+pub async fn exit_steps<S: Supervisor>(
+    runner: &Runner<S>,
+    id: &str,
+) -> Option<Vec<crate::profiles::OwnedExitStep>> {
+    let sock = runner.holder_socket(id);
+    let out = runner
+        .tmux
+        .run(&sock, &["show-options", "-gqv", "@kb_exit_steps"], None)
+        .await
+        .ok()?;
+    if !out.ok {
+        return None;
+    }
+    let raw = out.stdout.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    serde_json::from_str(raw).ok()
+}
 
 /// Read the `@kb_anchor_pid` option (kill/adopt paths).
 pub async fn anchor_pid<S: Supervisor>(runner: &Runner<S>, id: &str) -> Option<u32> {

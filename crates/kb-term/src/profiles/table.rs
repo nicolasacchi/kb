@@ -120,7 +120,10 @@ pub fn row(harness: &str) -> Option<&'static Row> {
 
 /// The exact argv kb-core's resume table prints, as a vector (no
 /// quoting). grok appends `--cwd <cwd>` only when `cwd` is absolute with
-/// no control characters, mirroring `grok_cwd_arg`'s gating.
+/// no control characters, mirroring `grok_cwd_arg`'s gating. A relative
+/// or control-character cwd is silently dropped (no `--cwd`): this
+/// mirrors kb-core's `grok_cwd_arg`, which returns `None` for those
+/// shapes rather than emitting an unsafe `--cwd` value.
 pub fn resume_tail(harness: &str, sid: &str, cwd: Option<&str>) -> Result<Vec<String>, PlanError> {
     let r = row(harness).ok_or(PlanError::UnknownHarness)?;
     if !is_plain_token(sid) {

@@ -6,8 +6,9 @@
 //!
 //! Std-only for metadata (no libc: the current uid comes from
 //! `/proc/self` via `MetadataExt`), subprocess timeouts by spawn +
-//! `try_wait` poll loop + kill. Never prints env values, tokens or
-//! credential paths: details carry names/versions/paths only.
+//! `try_wait` poll loop + process-group kill, piped output drained
+//! incrementally (64 KiB cap per stream). Never prints env values,
+//! tokens or credential paths: details carry names/versions/paths only.
 
 use sha2::{Digest, Sha256};
 use std::io::Read;
@@ -152,12 +153,17 @@ pub fn to_json(checks: &[Check]) -> String {
 
 /// Run `exe args` with an allowlisted env and a hard deadline:
 /// `None` on timeout/spawn failure (the caller maps it to FAIL/WARN).
+/// Piped output is drained incrementally (64 KiB cap per stream, so a
+/// >64 KiB child never blocks on a full pipe) and the process group is
+/// killed on timeout (a grandchild holding stdout or inheriting the
+/// group cannot hold `run_with_timeout` past the deadline).
 pub fn run_with_timeout(
     exe: &Path,
     args: &[&str],
     env: &[(String, String)],
     timeout: Duration,
 ) -> Option<(bool, String, String)> {
+    use std::os::unix::process::CommandExt;
     let mut child = Command::new(exe)
         .args(args)
         .env_clear()
@@ -165,21 +171,32 @@ pub fn run_with_timeout(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .process_group(0)
         .spawn()
         .ok()?;
+    let pid = child.id();
+    let stdout_pipe = child.stdout.take()?;
+    let stderr_pipe = child.stderr.take()?;
+    const CAP: usize = 64 * 1024;
+    let stdout_thread = drain(stdout_pipe, CAP);
+    let stderr_thread = drain(stderr_pipe, CAP);
     let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let out = child.wait_with_output().ok()?;
+                let out = stdout_thread.join().unwrap_or_default();
+                let err = stderr_thread.join().unwrap_or_default();
                 return Some((
                     status.success(),
-                    String::from_utf8_lossy(&out.stdout).into_owned(),
-                    String::from_utf8_lossy(&out.stderr).into_owned(),
+                    String::from_utf8_lossy(&out).into_owned(),
+                    String::from_utf8_lossy(&err).into_owned(),
                 ));
             }
             Ok(None) => {
                 if Instant::now() >= deadline {
+                    let _ = std::process::Command::new("/bin/kill")
+                        .args(["-KILL", &format!("-{pid}")])
+                        .output();
                     let _ = child.kill();
                     let _ = child.wait();
                     return None;
@@ -189,6 +206,29 @@ pub fn run_with_timeout(
             Err(_) => return None,
         }
     }
+}
+
+fn drain<R: std::io::Read + Send + 'static>(
+    mut r: R,
+    cap: usize,
+) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut buf = vec![0u8; 8192];
+        let mut out = Vec::new();
+        loop {
+            match r.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if out.len() < cap {
+                        let room = cap - out.len();
+                        out.extend_from_slice(&buf[..n.min(room)]);
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        out
+    })
 }
 
 /// First non-empty output line, trimmed.
@@ -667,7 +707,11 @@ fn probe_run_layout() -> RunLayoutProbe {
 }
 
 /// `$SHELL -lc env` names: `None` when `$SHELL` is unset or the shell
-/// cannot run.
+/// cannot run. Advisory only: production panes run under the non-login
+/// `/bin/sh -c` (no profile is sourced). This probe reports what the
+/// operator's own login shell would expose, so a WARN here means "your
+/// login shell sets outer-terminal vars", not "a pane would inherit
+/// them" — the wrapper's server-env defence handles the pane path.
 pub fn probe_login_env(shell: &str) -> Option<Vec<String>> {
     let (ok, stdout, _) = run_with_timeout(
         Path::new(shell),
@@ -698,7 +742,7 @@ pub fn decide_login_env(shell: Option<&str>, forbidden: &[String], shell_ok: boo
     let mut notes: Vec<String> = Vec::new();
     if !forbidden.is_empty() {
         notes.push(format!(
-            "login shell reintroduces named vars: {}",
+            "login shell sets outer-terminal vars (advisory; panes use non-login /bin/sh -c): {}",
             forbidden.join(", ")
         ));
     }
