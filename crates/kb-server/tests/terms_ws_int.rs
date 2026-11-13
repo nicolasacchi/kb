@@ -204,6 +204,21 @@ async fn ws_connect(
 /// Where the runner socket and run dir live, for the failure report.
 static DIAG_PATHS: std::sync::OnceLock<(PathBuf, PathBuf)> = std::sync::OnceLock::new();
 
+/// The tail of the tap's captured stderr (see the wrapper in the test).
+fn tap_stderr_tail() -> String {
+    let Some((_, run_dir)) = DIAG_PATHS.get() else {
+        return "tap stderr: no diagnostics registered".to_string();
+    };
+    let text = std::fs::read_to_string(run_dir.join("tap.err")).unwrap_or_default();
+    let tail: Vec<&str> = text.lines().rev().take(40).collect();
+    let tail: Vec<&str> = tail.into_iter().rev().collect();
+    format!(
+        "tap stderr (last {} lines):\n{}",
+        tail.len(),
+        tail.join("\n")
+    )
+}
+
 /// Failure report for a stream open that never succeeded: the runner's
 /// own reply to a raw `stream` request (its error code), the session
 /// directory listing and whether tap.sock accepts a connection.
@@ -290,6 +305,9 @@ async fn mint_ticket(addr: std::net::SocketAddr, id: &str) -> String {
 /// `exit` text frame passed through.
 #[derive(Default, Debug)]
 struct Round {
+    /// Every frame seen, summarised (`text:<t>`, `binary@<offset>`, ...),
+    /// so a round that saw no data names what it did see.
+    seen: Vec<String>,
     binary: Vec<(u64, usize)>,
     seed_offset: Option<u64>,
     exit_seen: bool,
@@ -298,15 +316,33 @@ struct Round {
 
 async fn read_round(ws: &mut WsStream, max_binary: usize) -> Round {
     let mut round = Round::default();
-    for _ in 0..(max_binary * 3 + 10) {
-        let msg = match tokio::time::timeout(WS_DEADLINE, ws.next()).await {
-            Err(_) => break,
-            Ok(None) => break,
-            Ok(Some(Err(_))) => break,
+    for i in 0..(max_binary * 3 + 10) {
+        // The tap holds a join until its twin is quiescent (up to its
+        // 3 s join wait), so the FIRST frame of a round gets a generous
+        // deadline; later frames are already flowing.
+        let wait = if i == 0 {
+            Duration::from_secs(10)
+        } else {
+            WS_DEADLINE
+        };
+        let msg = match tokio::time::timeout(wait, ws.next()).await {
+            Err(_) => {
+                round.seen.push(format!("timeout after {wait:?}"));
+                break;
+            }
+            Ok(None) => {
+                round.seen.push("stream ended".to_string());
+                break;
+            }
+            Ok(Some(Err(e))) => {
+                round.seen.push(format!("error {e:?}"));
+                break;
+            }
             Ok(Some(Ok(m))) => m,
         };
         match msg {
             Message::Binary(b) => {
+                round.seen.push(format!("binary len {}", b.len()));
                 if b.len() >= 8 {
                     let mut hdr = [0u8; 8];
                     hdr.copy_from_slice(&b[..8]);
@@ -315,6 +351,10 @@ async fn read_round(ws: &mut WsStream, max_binary: usize) -> Round {
                 }
             }
             Message::Text(t) => {
+                round.seen.push(format!(
+                    "text {}",
+                    t.as_str().chars().take(80).collect::<String>()
+                ));
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(t.as_str()) {
                     match v.get("t").and_then(|x| x.as_str()) {
                         Some("seed") => {
@@ -328,7 +368,8 @@ async fn read_round(ws: &mut WsStream, max_binary: usize) -> Round {
                     }
                 }
             }
-            Message::Close(_) => {
+            Message::Close(c) => {
+                round.seen.push(format!("close {c:?}"));
                 round.closed = true;
                 break;
             }
@@ -388,7 +429,24 @@ async fn ws_real_tap_roundtrip() {
     let mut cfg = RunnerConfig::test_config(run_dir.clone(), tmux_bin.clone(), conf_path());
     cfg.require_tap = true;
     cfg.tap_ready_secs = 30;
-    cfg.tap_bin = Some(tap_bin);
+    // The supervisor starts the tap with stderr discarded; run it through
+    // a one-line wrapper that appends stderr to a file so a failure can
+    // print what the tap said.
+    let wrapper = run_dir.join("kb-tap-wrapper.sh");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nexec '{}' \"$@\" 2>>'{}'\n",
+            tap_bin.display(),
+            run_dir.join("tap.err").display()
+        ),
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    cfg.tap_bin = Some(wrapper);
     let runner = Arc::new(Runner::direct(cfg));
     let sock_path = run_dir.join("runner").join("runner.sock");
     let listener = tokio::net::UnixListener::bind(&sock_path).unwrap();
@@ -399,6 +457,8 @@ async fn ws_real_tap_roundtrip() {
         sock_path.clone(),
         shutdown_rx,
     ));
+
+    let _ = DIAG_PATHS.set((sock_path.clone(), run_dir.clone()));
 
     // --- launch via the runner's own dispatch (kb-server REST sends
     // harness-shaped launches without argv; the wire argv validation
@@ -430,11 +490,12 @@ async fn ws_real_tap_roundtrip() {
             data["pane_pid"].as_u64().unwrap_or(0),
         ),
         kb_term::wire::Response::Err { code, message } => {
-            panic!("real launch failed ({code}): {message}")
+            panic!(
+                "real launch failed ({code}): {message}\n{}",
+                tap_stderr_tail()
+            )
         }
     };
-
-    let _ = DIAG_PATHS.set((sock_path.clone(), run_dir.clone()));
 
     // --- the real kb-server on top of the real runner ----------------
     let (_srv_tmp, addr, _handle) = boot(
@@ -450,11 +511,14 @@ async fn ws_real_tap_roundtrip() {
     // seed the tap announces for the fresh buffer).
     let mut ws = ws_connect_retry(addr, &id, None, Duration::from_secs(10)).await;
     let first = read_round(&mut ws, 40).await;
-    let first_off = first
-        .binary
-        .first()
-        .map(|(o, _)| *o)
-        .expect("the harness must emit binary frames");
+    let first_off = match first.binary.first() {
+        Some((o, _)) => *o,
+        None => panic!(
+            "the harness must emit binary frames; the round saw {:?}\n{}",
+            first.seen,
+            tap_stderr_tail()
+        ),
+    };
     match first.seed_offset {
         Some(seed) => assert_eq!(first_off, seed, "(a) first binary = seed offset"),
         None => assert_eq!(first_off, 0, "(a) first binary offset is 0"),
