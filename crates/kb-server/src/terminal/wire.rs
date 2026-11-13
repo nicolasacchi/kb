@@ -322,6 +322,26 @@ mod tests {
                 include_str!("../../../kb-term/tests/golden/req_take_size.json"),
             ),
             (
+                "req_viewer_open",
+                include_str!("../../../kb-term/tests/golden/req_viewer_open.json"),
+            ),
+            (
+                "req_viewer_close",
+                include_str!("../../../kb-term/tests/golden/req_viewer_close.json"),
+            ),
+            (
+                "req_release_size",
+                include_str!("../../../kb-term/tests/golden/req_release_size.json"),
+            ),
+            (
+                "req_resize",
+                include_str!("../../../kb-term/tests/golden/req_resize.json"),
+            ),
+            (
+                "req_grid",
+                include_str!("../../../kb-term/tests/golden/req_grid.json"),
+            ),
+            (
                 "resp_ok",
                 include_str!("../../../kb-term/tests/golden/resp_ok.json"),
             ),
