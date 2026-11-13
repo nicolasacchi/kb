@@ -915,6 +915,7 @@ pub(crate) async fn turn_slate(
     // The same safety cap `delta` applies before rendering.
     batch.posts.truncate(READ_LIMIT_CAP);
     let (text, _cut) = slate::render_delta_batch(
+        &batch.replies,
         &batch.posts,
         &batch.hides,
         &loaded.posts,
@@ -1214,6 +1215,7 @@ pub async fn delta(
     let filtered = kinds.is_some();
     if let Some(want) = &kinds {
         batch.posts.retain(|p| want.contains(&p.kind));
+        batch.replies.retain(|r| want.contains(&r.kind));
         batch.hides.retain(|h| {
             loaded
                 .posts
@@ -1233,7 +1235,13 @@ pub async fn delta(
     }
     // Rendered from the FILTERED set, so `text` and `posts` can never
     // disagree about what the caller was told.
-    let (text, cut) = slate::render_delta_batch(&batch.posts, &batch.hides, &loaded.posts, budget);
+    let (text, cut) = slate::render_delta_batch(
+        &batch.replies,
+        &batch.posts,
+        &batch.hides,
+        &loaded.posts,
+        budget,
+    );
 
     no_store_json(
         StatusCode::OK,

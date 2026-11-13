@@ -2173,3 +2173,61 @@ async fn an_answered_ask_is_not_closed_again_and_missing_slates_are_noops() {
     assert_eq!(dones.len(), 1, "only the xyz ask got a done: {raw:?}");
     assert_eq!(dones[0]["re"], 2);
 }
+
+/// The per-prompt delta carries an answer to the READING session's own
+/// ask in full, even though the ask is already behind its cursor; another
+/// session's delta stays empty, and reading writes nothing.
+#[tokio::test]
+async fn the_delta_carries_answers_to_the_sessions_own_asks() {
+    let (_tmp, addr, _paths) = boot().await;
+    let client = reqwest::Client::new();
+    assert_eq!(
+        post(
+            &client,
+            addr,
+            "orchard",
+            body("ask", "which gate?", Some("sess-a"))
+        )
+        .await
+        .0,
+        201
+    );
+    let mut ans = body("answer", "the review gate", Some("sess-b"));
+    ans["re"] = json!(1);
+    assert_eq!(post(&client, addr, "orchard", ans).await.0, 201);
+
+    let mine = get_json(
+        &client,
+        addr,
+        "/api/slates/orchard/delta?since=1&session=sess-a",
+    )
+    .await;
+    let text = mine["text"].as_str().unwrap();
+    assert!(
+        text.contains("ANSWER #2 → your ask #1") && text.contains("the review gate"),
+        "{text}"
+    );
+    let other = get_json(
+        &client,
+        addr,
+        "/api/slates/orchard/delta?since=1&session=sess-c",
+    )
+    .await;
+    assert_eq!(other["text"], "", "{other}");
+    // idempotent read: asking again says the same thing
+    let again = get_json(
+        &client,
+        addr,
+        "/api/slates/orchard/delta?since=1&session=sess-a",
+    )
+    .await;
+    assert_eq!(again["text"], mine["text"]);
+    // past the cursor there is nothing new
+    let past = get_json(
+        &client,
+        addr,
+        "/api/slates/orchard/delta?since=2&session=sess-a",
+    )
+    .await;
+    assert_eq!(past["text"], "", "{past}");
+}

@@ -3274,9 +3274,148 @@ fn apply_budget(d: &mut SlateDigest, opts: &ProjectOpts) {
 pub struct DeltaBatch {
     pub posts: Vec<Projected>,
     pub hides: Vec<HideEntry>,
+    /// Replies to the READING session's OWN asks that landed in this batch
+    /// (design D7: "answers to the session's own asks, in full"). `answer`
+    /// and `done` are surface ops that are never shown on the board, so
+    /// without this lane an answer on an already-seen ask would produce an
+    /// empty delta. Empty unless the opts carry a `session_id`. Rendered
+    /// into `text` only; never on the wire as JSON.
+    #[cfg_attr(feature = "ts-export", ts(skip))]
+    #[serde(default)]
+    pub replies: Vec<OwnReply>,
     pub head_seq: u64,
     pub text: String,
     pub truncated: bool,
+}
+
+/// One reply (`answer`, or a `done` by someone else) to an ask the reading
+/// session authored. Derived at read time from the ledger; never stored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OwnReply {
+    pub seq: u64,
+    pub kind: Kind,
+    /// The post it replied to, as written (`re`).
+    pub re: u64,
+    /// The head seq of the session's logical ask the reply resolves to.
+    pub ask: u64,
+    pub line: String,
+    pub body: Option<String>,
+    /// `author_tag` of the replier.
+    pub tag: String,
+    /// True for an operator (`origin: human`) reply.
+    pub human: bool,
+    pub age_secs: i64,
+}
+
+/// Longest reply body the delta renders (chars); the full text is
+/// `kb slate show #seq`.
+const REPLY_BODY_CAP: usize = 600;
+
+/// The new `answer`s / others' non-abandoned `done`s in `new_posts` that
+/// answer an ask authored by `session`. Same chain rule as [`ask_state`]:
+/// the reply's `re` may name ANY version of the edited ask. Undropped only
+/// (judged on the full ledger), and a session's own posts are never news to
+/// itself.
+fn own_replies(posts: &[Post], new_posts: &[Post], session: &str, now_unix: i64) -> Vec<OwnReply> {
+    let dropped = dropped_set(posts);
+    let by_seq: HashMap<u64, &Post> = posts.iter().map(|p| (p.seq, p)).collect();
+    let root_of = |mut seq: u64| {
+        for _ in 0..64 {
+            match by_seq.get(&seq).and_then(|p| p.supersedes) {
+                Some(prev) if prev < seq && by_seq.contains_key(&prev) => seq = prev,
+                _ => break,
+            }
+        }
+        seq
+    };
+    let mut out = Vec::new();
+    for p in new_posts {
+        let wanted = match p.kind {
+            Kind::Answer => true,
+            Kind::Done => p.abandoned.is_none(),
+            _ => false,
+        };
+        let Some(re) = p.re.filter(|_| wanted && !dropped.contains(&p.seq)) else {
+            continue;
+        };
+        if p.prov.session_id.as_deref() == Some(session) {
+            continue;
+        }
+        if by_seq.get(&re).is_none_or(|t| t.kind != Kind::Ask) {
+            continue;
+        }
+        let root = root_of(re);
+        let members: Vec<&Post> = posts
+            .iter()
+            .filter(|x| x.kind == Kind::Ask && root_of(x.seq) == root)
+            .collect();
+        if !members
+            .iter()
+            .any(|m| m.prov.session_id.as_deref() == Some(session))
+        {
+            continue;
+        }
+        let head = members
+            .iter()
+            .filter(|m| !dropped.contains(&m.seq))
+            .map(|m| m.seq)
+            .max()
+            .unwrap_or(re);
+        out.push(OwnReply {
+            seq: p.seq,
+            kind: p.kind,
+            re,
+            ask: head,
+            line: p.line.trim().replace(['\n', '\r', '\t'], " "),
+            body: p
+                .body
+                .as_deref()
+                .map(str::trim)
+                .filter(|b| !b.is_empty())
+                .map(str::to_string),
+            tag: author_tag(p),
+            human: p.prov.origin == Origin::Human,
+            age_secs: (now_unix - p.at).max(0),
+        });
+    }
+    out
+}
+
+/// The delta lines for [`OwnReply`]s. `ANSWER #60 → your ask #57 · [you 2m ·
+/// operator's answer]: <line>`; a `done` reads `DONE #61 closed your ask #57
+/// · [tag age]: <line>`. One short phrase tells the reader how much weight
+/// the reply carries: the operator's answer vs input to weigh.
+fn render_reply_lines(replies: &[OwnReply], out: &mut Vec<String>) {
+    for r in replies {
+        let who = format!("{} {}", r.tag, fmt_age(r.age_secs));
+        let line = match r.kind {
+            Kind::Done => format!(
+                "DONE #{} closed your ask #{} · [{who}]: {}",
+                r.seq, r.ask, r.line
+            ),
+            _ => {
+                let weight = if r.human {
+                    "operator's answer"
+                } else {
+                    "input to weigh"
+                };
+                format!(
+                    "ANSWER #{} → your ask #{} · [{who} · {weight}]: {}",
+                    r.seq, r.ask, r.line
+                )
+            }
+        };
+        out.push(line);
+        if let Some(b) = &r.body {
+            let capped: String = b.chars().take(REPLY_BODY_CAP).collect();
+            for l in capped.lines() {
+                out.push(format!("{CONT_INDENT}{l}"));
+            }
+            if b.chars().count() > REPLY_BODY_CAP {
+                out.push(format!("{CONT_INDENT}…(kb slate show #{})", r.seq));
+            }
+        }
+    }
 }
 
 /// The folding cursor behind [`project_append`]. Holds the posts seen so
@@ -3366,10 +3505,15 @@ pub fn project_append(state: &mut ProjectState, new_posts: &[Post]) -> DeltaBatc
     state.shown = after;
     state.digest = digest;
     let head_seq = state.head_seq();
-    let (text, truncated) = render_delta(&posts, &hides, &state.posts, BUDGET_DELTA);
+    let replies = match state.opts.session_id.as_deref() {
+        Some(sid) => own_replies(&state.posts, new_posts, sid, state.now_unix),
+        None => Vec::new(),
+    };
+    let (text, truncated) = render_delta(&replies, &posts, &hides, &state.posts, BUDGET_DELTA);
     DeltaBatch {
         posts,
         hides,
+        replies,
         head_seq,
         text,
         truncated,
@@ -3395,12 +3539,13 @@ pub fn project_finish(state: ProjectState) -> SlateDigest {
 /// route that honours `?budget=`/`?limit=` never grows a second delta
 /// formatter that could drift from the hook lane's.
 pub fn render_delta_batch(
+    replies: &[OwnReply],
     posts: &[Projected],
     hides: &[HideEntry],
     all: &[Post],
     budget: usize,
 ) -> (String, bool) {
-    render_delta(posts, hides, all, budget)
+    render_delta(replies, posts, hides, all, budget)
 }
 
 /// The delta's own text: new lines then the hides, opened by the two-line
@@ -3409,12 +3554,15 @@ pub fn render_delta_batch(
 /// instructions from another session (D26 drift), so even a tiny budget
 /// yields the frame followed by the truncation marker, never bare text.
 fn render_delta(
+    replies: &[OwnReply],
     posts: &[Projected],
     hides: &[HideEntry],
     all: &[Post],
     budget: usize,
 ) -> (String, bool) {
     let mut out: Vec<String> = Vec::new();
+    // Replies to the reader's own asks come first, right after the frame.
+    render_reply_lines(replies, &mut out);
     for p in posts {
         let kw = match p.kind {
             Kind::Now => "NOW ",
@@ -4327,6 +4475,128 @@ mod tests {
         }
         // an answer's seq is not an ask
         assert_eq!(ask_state(&l, 4), AskState::NotAnAsk { kind: Kind::Answer });
+    }
+
+    // --- own-ask replies in the delta ---------------------------------
+
+    fn rp(
+        seq: u64,
+        kind: Kind,
+        re: Option<u64>,
+        sup: Option<u64>,
+        sess: &str,
+        human: bool,
+    ) -> Post {
+        let origin = if human { Origin::Human } else { Origin::Agent };
+        Post::mint(
+            PostBody {
+                re,
+                supersedes: sup,
+                prov: prov("claude", Some(sess), origin),
+                ..body(
+                    kind,
+                    if kind == Kind::Ask {
+                        "which one?"
+                    } else {
+                        "the left one"
+                    },
+                )
+            },
+            seq,
+            NOW - 600 + seq as i64,
+        )
+    }
+
+    /// The delta `session` gets for `fresh`, with `seen` as its baseline.
+    fn delta_for(session: &str, seen: &[Post], fresh: &[Post]) -> DeltaBatch {
+        let o = ProjectOpts {
+            session_id: Some(session.into()),
+            ..opts()
+        };
+        let mut st = ProjectState::new(NOW, &LivePolicy::default(), &[], &o);
+        if !seen.is_empty() {
+            let _ = project_append(&mut st, seen);
+        }
+        project_append(&mut st, fresh)
+    }
+
+    #[test]
+    fn an_answer_on_the_sessions_own_shown_ask_appears_in_full() {
+        let ask = rp(1, Kind::Ask, None, None, "aaaa1111", false);
+        let mut ans = rp(2, Kind::Answer, Some(1), None, "bbbb2222", true);
+        ans.body = Some("because the left one is older".into());
+        let b = delta_for("aaaa1111", std::slice::from_ref(&ask), &[ans.clone()]);
+        assert!(b.text.starts_with(DELTA_FRAME), "{}", b.text);
+        assert!(
+            b.text.contains("ANSWER #2 → your ask #1 · [you ")
+                && b.text.contains("operator's answer]: the left one"),
+            "{}",
+            b.text
+        );
+        assert!(
+            b.text.contains("because the left one is older"),
+            "{}",
+            b.text
+        );
+        // another author's answer is input to weigh
+        let agent = rp(2, Kind::Answer, Some(1), None, "cccc3333", false);
+        let b = delta_for("aaaa1111", std::slice::from_ref(&ask), &[agent]);
+        assert!(b.text.contains("input to weigh]"), "{}", b.text);
+        assert!(!b.text.contains("operator's answer"), "{}", b.text);
+        // a session that did NOT author the ask hears nothing of it
+        let b = delta_for("dddd4444", std::slice::from_ref(&ask), &[ans.clone()]);
+        assert_eq!(b.text, "", "{}", b.text);
+        assert!(b.replies.is_empty());
+        // no session id => no replies lane at all
+        let mut st = ProjectState::new(NOW, &LivePolicy::default(), &[], &opts());
+        let _ = project_append(&mut st, &[ask]);
+        assert_eq!(project_append(&mut st, &[ans]).text, "");
+    }
+
+    #[test]
+    fn a_reply_aimed_at_an_older_version_of_an_edited_ask_resolves_over_the_chain() {
+        let seen = [
+            rp(1, Kind::Ask, None, None, "aaaa1111", false),
+            rp(2, Kind::Ask, None, Some(1), "aaaa1111", false),
+        ];
+        let ans = rp(3, Kind::Answer, Some(1), None, "bbbb2222", false);
+        let b = delta_for("aaaa1111", &seen, &[ans]);
+        assert!(b.text.contains("ANSWER #3 → your ask #2 ·"), "{}", b.text);
+    }
+
+    #[test]
+    fn dropped_answers_and_own_or_abandoned_dones_are_not_news() {
+        let ask = rp(1, Kind::Ask, None, None, "aaaa1111", false);
+        // dropped in the same batch
+        let ans = rp(2, Kind::Answer, Some(1), None, "bbbb2222", false);
+        let drop = rp(3, Kind::Drop, Some(2), None, "bbbb2222", false);
+        let b = delta_for("aaaa1111", std::slice::from_ref(&ask), &[ans, drop]);
+        assert!(b.replies.is_empty(), "{}", b.text);
+        // a done by the session itself
+        let own_done = rp(2, Kind::Done, Some(1), None, "aaaa1111", false);
+        let b = delta_for("aaaa1111", std::slice::from_ref(&ask), &[own_done]);
+        assert!(b.replies.is_empty(), "{}", b.text);
+        // an abandoned done by someone else closes nothing
+        let mut ab = rp(2, Kind::Done, Some(1), None, "bbbb2222", false);
+        ab.abandoned = Some("red".into());
+        let b = delta_for("aaaa1111", std::slice::from_ref(&ask), &[ab]);
+        assert!(b.replies.is_empty(), "{}", b.text);
+        // a done by someone else is reported
+        let done = rp(2, Kind::Done, Some(1), None, "bbbb2222", false);
+        let b = delta_for("aaaa1111", &[ask], &[done]);
+        assert!(
+            b.text.contains("DONE #2 closed your ask #1 · ["),
+            "{}",
+            b.text
+        );
+    }
+
+    #[test]
+    fn replies_already_behind_the_cursor_are_not_repeated() {
+        let ask = rp(1, Kind::Ask, None, None, "aaaa1111", false);
+        let ans = rp(2, Kind::Answer, Some(1), None, "bbbb2222", false);
+        let b = delta_for("aaaa1111", &[ask, ans], &[]);
+        assert_eq!(b.text, "");
     }
 
     #[test]
@@ -5807,7 +6077,8 @@ mod tests {
         let posts = delta_posts(&[(Kind::Warn, "frost tonight")]);
         let mut st = ProjectState::new(NOW, &LivePolicy::default(), &[], &opts());
         let batch = project_append(&mut st, &posts);
-        let (text, truncated) = render_delta_batch(&batch.posts, &batch.hides, &posts, 10);
+        let (text, truncated) =
+            render_delta_batch(&batch.replies, &batch.posts, &batch.hides, &posts, 10);
         assert!(text.starts_with(DELTA_FRAME), "{text}");
         assert!(truncated);
     }
