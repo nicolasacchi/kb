@@ -307,7 +307,12 @@ for (const [title, dom, edge] of [
 
 // ---------------------------------------------------------------- (j) halo
 
-/** Pixels in a band around each picture, outside the picture box, that differ from the background. */
+/**
+ * Pixels in a band around each picture, outside the picture box, that differ
+ * from the background. The band reaches half a cell past the box on every
+ * side: far enough to catch a glyph spilling out of a placeholder cell, not
+ * far enough to reach a neighbouring text row's descenders.
+ */
 function dirtyOutside(img: Img, m: Metrics, truths: Truth[]): number {
   const bg = backgroundOf(img, m);
   const pad = 3;
@@ -317,10 +322,10 @@ function dirtyOutside(img: Img, m: Metrics, truths: Truth[]): number {
     const bx1 = Math.round((m.screen.x + (t.col0 + t.c) * m.cw) * m.dpr) + pad;
     const by0 = Math.round((m.screen.y + t.line0 * m.ch) * m.dpr) - pad;
     const by1 = Math.round((m.screen.y + (t.line0 + t.r) * m.ch) * m.dpr) + pad;
-    const x0 = Math.max(0, bx0 - Math.round(m.cw * m.dpr));
-    const x1 = Math.min(img.w, bx1 + Math.round(m.cw * m.dpr));
-    const y0 = Math.max(0, by0 - Math.round(m.ch * m.dpr));
-    const y1 = Math.min(img.h, by1 + Math.round(m.ch * m.dpr));
+    const x0 = Math.max(0, bx0 - Math.round(0.5 * m.cw * m.dpr));
+    const x1 = Math.min(img.w, bx1 + Math.round(0.5 * m.cw * m.dpr));
+    const y0 = Math.max(0, by0 - Math.round(0.5 * m.ch * m.dpr));
+    const y1 = Math.min(img.h, by1 + Math.round(0.5 * m.ch * m.dpr));
     for (let y = y0; y < y1; y += 1) {
       for (let x = x0; x < x1; x += 1) {
         if (x >= bx0 && x < bx1 && y >= by0 && y < by1) continue;
