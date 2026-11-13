@@ -394,6 +394,77 @@ async fn post_without_intent_header_is_refused() {
     );
 }
 
+/// Every mutating terms route must demand `X-Kb-Intent: terminal`, and
+/// every terms route (GET included) must demand an Origin: a handler that
+/// passed `mutating=false` to the gate, or skipped it, would let one
+/// through without either and open the runner.
+#[tokio::test]
+async fn every_terms_route_enforces_intent_and_origin() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    let posts: Vec<(&str, &str)> = vec![
+        ("", "{\"harness\":\"omp\",\"cwd\":\"/work/proj\"}"),
+        ("/abcd1234/ticket", "{}"),
+        ("/abcd1234/paste", "{\"text\":\"hi\"}"),
+        ("/abcd1234/enter", "{}"),
+        ("/abcd1234/keys", "{\"keys\":[\"Enter\"]}"),
+        ("/abcd1234/kill", "{}"),
+        ("/abcd1234/take-size", "{\"cols\":80,\"rows\":24}"),
+        ("/abcd1234/release-size", "{}"),
+        ("/abcd1234/resize", "{\"cols\":80,\"rows\":24}"),
+        ("/abcd1234/viewer-close", "{}"),
+    ];
+    for (suffix, body) in &posts {
+        for intent in [None, Some("nope")] {
+            let mut req = c
+                .post(format!("{}/api/terms{suffix}", base_url(addr)))
+                .header("Origin", origin_header(addr))
+                .header("Content-Type", "application/json")
+                .body(body.to_string());
+            if let Some(v) = intent {
+                req = req.header("x-kb-intent", v);
+            }
+            let resp = req.send().await.unwrap();
+            assert_eq!(
+                resp.status().as_u16(),
+                403,
+                "POST {suffix} intent {intent:?}"
+            );
+            let (_s, text) = body_text(resp).await;
+            assert_problem(&text, "terminal-intent-required");
+        }
+        // No Origin at all, even with the intent header: refused.
+        let resp = c
+            .post(format!("{}/api/terms{suffix}", base_url(addr)))
+            .header("x-kb-intent", "terminal")
+            .header("Content-Type", "application/json")
+            .body(body.to_string())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 403, "POST {suffix} without Origin");
+        let (_s, text) = body_text(resp).await;
+        assert_problem(&text, "terminal-origin-refused");
+    }
+    for suffix in ["", "/abcd1234/read", "/abcd1234/history", "/abcd1234/grid"] {
+        let resp = c
+            .get(format!("{}/api/terms{suffix}", base_url(addr)))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 403, "GET {suffix} without Origin");
+        let (_s, text) = body_text(resp).await;
+        assert_problem(&text, "terminal-origin-refused");
+    }
+    assert_eq!(
+        fake.conns.load(Ordering::SeqCst),
+        0,
+        "a refused request must never dial the runner"
+    );
+}
+
 #[tokio::test]
 async fn get_routes_do_not_need_the_intent_header() {
     let mut replies = std::collections::HashMap::new();
@@ -932,6 +1003,191 @@ async fn relay_payloads_carry_the_requested_fields() {
     assert_eq!(take["id"], TERM_ID);
     assert_eq!(take["cols"], 80);
     assert_eq!(take["rows"], 24);
+}
+
+#[tokio::test]
+async fn every_relay_carries_the_exact_runner_request() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("list".to_string(), list_reply(&[TERM_ID]));
+    replies.insert("launch".to_string(), ok_reply("{\"id\":\"abcd1234\"}"));
+    replies.insert("viewer_open".to_string(), ok_reply("{\"viewer\":\"spa\"}"));
+    replies.insert("viewer_close".to_string(), ok_reply("{\"viewer\":\"spa\"}"));
+    replies.insert(
+        "paste".to_string(),
+        ok_reply("{\"paste_only\":false,\"bracketed\":true}"),
+    );
+    replies.insert("enter".to_string(), ok_reply("{}"));
+    replies.insert("keys".to_string(), ok_reply("{}"));
+    replies.insert(
+        "kill".to_string(),
+        ok_reply("{\"exit_code\":null,\"forced\":false}"),
+    );
+    replies.insert(
+        "take_size".to_string(),
+        ok_reply("{\"cols\":80,\"rows\":24,\"owner\":\"kb-term\"}"),
+    );
+    replies.insert("read".to_string(), ok_reply("{\"text\":\"\"}"));
+    replies.insert("history".to_string(), ok_reply("{\"text\":\"\"}"));
+    replies.insert(
+        "grid".to_string(),
+        ok_reply("{\"cols\":120,\"rows\":40,\"owner\":null}"),
+    );
+    replies.insert("release_size".to_string(), ok_reply("{}"));
+    replies.insert("resize".to_string(), ok_reply("{}"));
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), replies);
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+
+    // Drive one route, return exactly the runner requests it produced.
+    async fn drive(
+        fake: &FakeRunner,
+        addr: std::net::SocketAddr,
+        method: &str,
+        suffix: &str,
+        body: &str,
+    ) -> Vec<serde_json::Value> {
+        let before = fake.reqs.lock().unwrap().len();
+        let url = format!("{}/api/terms{suffix}", base_url(addr));
+        let req = if method == "GET" {
+            client().get(url)
+        } else {
+            client()
+                .post(url)
+                .header("Content-Type", "application/json")
+                .body(body.to_string())
+        };
+        let resp = req
+            .header("Origin", origin_header(addr))
+            .header("x-kb-intent", "terminal")
+            .send()
+            .await
+            .unwrap();
+        let status = resp.status().as_u16();
+        assert!(
+            (200..300).contains(&status),
+            "{method} {suffix} must succeed, got {status}"
+        );
+        fake.reqs.lock().unwrap()[before..].to_vec()
+    }
+    let id = TERM_ID;
+    let open = serde_json::json!({"op": "viewer_open", "id": id, "viewer": "spa"});
+
+    assert_eq!(
+        drive(&fake, addr, "GET", "", "").await,
+        vec![serde_json::json!({"op": "list"})]
+    );
+    assert_eq!(
+        drive(
+            &fake,
+            addr,
+            "POST",
+            "",
+            "{\"harness\":\"omp\",\"cwd\":\"/work/proj\"}"
+        )
+        .await,
+        vec![serde_json::json!({
+            "op": "launch", "harness": "omp", "argv": null, "resume_sid": null,
+            "cwd": "/work/proj", "cols": null, "rows": null, "env": null,
+            "exit_keys": null,
+        })]
+    );
+    assert_eq!(
+        drive(&fake, addr, "POST", &format!("/{id}/ticket"), "{}").await,
+        vec![serde_json::json!({"op": "list"})]
+    );
+    assert_eq!(
+        drive(
+            &fake,
+            addr,
+            "POST",
+            &format!("/{id}/paste"),
+            "{\"text\":\"hello\"}"
+        )
+        .await,
+        vec![
+            open.clone(),
+            serde_json::json!({"op": "paste", "id": id, "viewer": "spa", "text": "hello"}),
+        ]
+    );
+    assert_eq!(
+        drive(&fake, addr, "POST", &format!("/{id}/enter"), "{}").await,
+        vec![
+            open.clone(),
+            serde_json::json!({
+                "op": "enter", "id": id, "viewer": "spa",
+                "blocked": false, "from_composer": true,
+            }),
+        ]
+    );
+    assert_eq!(
+        drive(
+            &fake,
+            addr,
+            "POST",
+            &format!("/{id}/keys"),
+            "{\"keys\":[\"C-c\",\"Enter\"]}"
+        )
+        .await,
+        vec![
+            open.clone(),
+            serde_json::json!({
+                "op": "keys", "id": id, "viewer": "spa",
+                "input": {"kind": "named", "named": ["C-c", "Enter"]},
+            }),
+        ]
+    );
+    assert_eq!(
+        drive(
+            &fake,
+            addr,
+            "POST",
+            &format!("/{id}/take-size"),
+            "{\"cols\":80,\"rows\":24}"
+        )
+        .await,
+        vec![serde_json::json!({
+            "op": "take_size", "id": id, "cols": 80, "rows": 24,
+            "owner": "kb-term", "force": false,
+        })]
+    );
+    assert_eq!(
+        drive(&fake, addr, "GET", &format!("/{id}/read"), "").await,
+        vec![serde_json::json!({"op": "read", "id": id})]
+    );
+    assert_eq!(
+        drive(&fake, addr, "GET", &format!("/{id}/history"), "").await,
+        vec![serde_json::json!({"op": "history", "id": id})]
+    );
+    assert_eq!(
+        drive(&fake, addr, "GET", &format!("/{id}/grid"), "").await,
+        vec![serde_json::json!({"op": "grid", "id": id})]
+    );
+    assert_eq!(
+        drive(&fake, addr, "POST", &format!("/{id}/release-size"), "{}").await,
+        vec![serde_json::json!({"op": "release_size", "id": id, "owner": "kb-term"})]
+    );
+    assert_eq!(
+        drive(
+            &fake,
+            addr,
+            "POST",
+            &format!("/{id}/resize"),
+            "{\"cols\":100,\"rows\":30}"
+        )
+        .await,
+        vec![serde_json::json!({"op": "resize", "id": id, "cols": 100, "rows": 30})]
+    );
+    assert_eq!(
+        drive(&fake, addr, "POST", &format!("/{id}/viewer-close"), "{}").await,
+        vec![serde_json::json!({"op": "viewer_close", "id": id, "viewer": "spa"})]
+    );
+    assert_eq!(
+        drive(&fake, addr, "POST", &format!("/{id}/kill"), "{}").await,
+        vec![
+            serde_json::json!({"op": "kill", "id": id, "grace_secs": null}),
+            serde_json::json!({"op": "viewer_close", "id": id, "viewer": "spa"}),
+        ]
+    );
 }
 
 #[tokio::test]
