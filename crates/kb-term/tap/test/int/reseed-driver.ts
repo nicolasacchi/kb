@@ -349,9 +349,10 @@ async function main(): Promise<void> {
           note('HOOK_PAUSE_SEEN');
           r = await hookReseed;
         } else {
-          // Fallback: tmux did not emit %pause for the explicit pause in
-          // this run. The metric records it; the manual continue and
-          // reseed keep the recovery exercised; the metric records the miss.
+          // Fallback: the onPause hook did not fire within 10s (a %pause
+          // inside the refresh-client reply block would land in
+          // pauseReplyLines instead). The manual continue and reseed keep
+          // the recovery exercised; pauseHookContinued=false records the miss.
           fallbackTaken = true;
           note('HOOK_PAUSE_MISSED_FALLBACK');
           await control.cmd(continueCommand(pane));

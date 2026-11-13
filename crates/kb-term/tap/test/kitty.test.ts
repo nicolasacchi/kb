@@ -190,9 +190,12 @@ test('dropped_multichunk_start_does_not_splice_into_pending', () => {
 });
 
 test('dropped_transmit_starts_do_not_abort_pending', () => {
-  // Each dropped start (bad format, bad medium, compressed, missing/bad i,
-  // bad base64 charset, m=1 oversize) must leave a legitimate pending
-  // multi-chunk transfer resumable, with abortedTransfer still 0.
+  // Each dropped SINGLE-chunk start (bad format, bad medium, compressed,
+  // missing/bad i, bad base64 charset, single-chunk oversize) must leave a
+  // legitimate pending multi-chunk transfer resumable, with abortedTransfer
+  // still 0. The exception is a dropped start with m=1: it is a counted
+  // abort (abortedTransfer 1, the next chunk is an orphanChunk), pinned by
+  // the m=1 block below and by dropped_multichunk_start_does_not_splice_into_pending.
   const badStarts = [
     ['bad_format', 'a=t,f=24,i=555', 'AAAA', 'unsupportedFormat'],
     ['bad_format32', 'a=t,f=32,i=555', 'AAAA', 'unsupportedFormat'],
