@@ -216,13 +216,11 @@ export class KittyReassembler {
   }
 
   private pushTransmitStart(parsed: ParsedKitty): KittyResult | null {
-    // A new transmit aborts any pending one (counted), even if the new one drops.
-    if (this.pending !== null) {
-      this.counts.abortedTransfer++;
-      this.pending = null;
-    }
     const keys = parsed.keys;
-    // Format/medium/compressed gates (fail closed; never open a named path).
+    // Format/medium/compressed/id/base64 gates (fail closed; never open a named path).
+    // A dropped start does NOT abort a pending transfer: only a transmit that
+    // actually starts a transfer (m=1 pending created, or single-chunk transmit)
+    // aborts the previous pending one, counted abortedTransfer.
     if (keys.get('f') !== '100') {
       this.counts.unsupportedFormat++;
       return { kind: 'drop', reason: 'unsupportedFormat' };
@@ -248,16 +246,24 @@ export class KittyReassembler {
     }
     const more = keys.get('m') === '1';
     if (more) {
-      const est = estimatedDecoded(b64.length);
-      if (est > this.maxImageBytes) {
+      if (exactDecodedLen(b64.length, trailingPad(b64)) > this.maxImageBytes) {
         this.counts.oversize++;
         return { kind: 'drop', reason: 'oversize' };
+      }
+      if (this.pending !== null) {
+        this.counts.abortedTransfer++;
+        this.pending = null;
       }
       this.pending = { id, parts: [b64], b64Len: b64.length };
       this.counts.chunks++;
       return null;
     }
-    return this.finishTransmit(id, b64);
+    const res = this.finishTransmit(id, b64);
+    if (res.kind === 'transmit' && this.pending !== null) {
+      this.counts.abortedTransfer++;
+      this.pending = null;
+    }
+    return res;
   }
 
   private pushContinuation(parsed: ParsedKitty): KittyResult | null {
@@ -272,7 +278,10 @@ export class KittyReassembler {
     const more = keys.get('m') === '1';
     if (more) {
       const totalLen = pend.b64Len + b64.length;
-      if (estimatedDecoded(totalLen) > this.maxImageBytes) {
+      const pad = b64.length > 0
+        ? trailingPad(b64)
+        : (pend.parts.length > 0 ? trailingPad(pend.parts[pend.parts.length - 1]!) : 0);
+      if (exactDecodedLen(totalLen, pad) > this.maxImageBytes) {
         this.pending = null;
         this.counts.oversize++;
         return { kind: 'drop', reason: 'oversize' };
@@ -319,7 +328,18 @@ function latin1String(b: Uint8Array): string {
   return s;
 }
 
-function estimatedDecoded(b64Len: number): number {
-  // Upper bound on decoded bytes for a base64 string of this length.
-  return Math.ceil(b64Len / 4) * 3;
+function trailingPad(b64: string): number {
+  let n = 0;
+  for (let i = b64.length - 1; i >= 0 && b64[i] === '='; i--) n++;
+  return n;
+}
+
+// Exact decoded length for a base64 string (or concatenated prefix) of
+// totalLen chars whose trailing padding is pad: 3*floor(len/4) - pad.
+// The final finish step checks the true decoded length; this incremental
+// check must not use the ceil upper bound, which drops a valid image whose
+// true length equals the cap up to 2 bytes early.
+function exactDecodedLen(totalLen: number, pad: number): number {
+  const v = 3 * Math.floor(totalLen / 4) - pad;
+  return v < 0 ? 0 : v;
 }

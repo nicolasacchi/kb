@@ -1,6 +1,6 @@
 // Graphics extractor pins (KBT-GFX).
 import { test, expect, afterAll } from 'bun:test';
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -406,7 +406,8 @@ test('no_esc_chunk_is_zero_copy', () => {
 });
 
 test('iip_and_sixel_stored_and_stubbed', () => {
-  const { store, sess } = mkStore();
+  let gt = 5_000_000;
+  const { store, sess } = mkStore({ now: () => gt });
   const ex = new GraphicsExtractor(store);
   const iipBel = enc('\x1b]1337;File=name=test.png;size=8:inline=1:AAAA\x07');
   const iipSt = enc('\x1b]1337;File=name=two.png:inline=1:BBBB\x1b\\');
@@ -421,6 +422,10 @@ test('iip_and_sixel_stored_and_stubbed', () => {
   expect(store.readSeq(sha1)).toEqual(iipBel);
   expect(store.readSeq(sha2)).toEqual(iipSt);
   expect(store.readSeq(sha3)).toEqual(sixel);
+  // Write-once mtime: first stores land at the injected now.
+  expect(statSync(join(sess, 'seq', sha1)).mtimeMs).toBe(5_000_000);
+  expect(statSync(join(sess, 'seq', sha2)).mtimeMs).toBe(5_000_000);
+  expect(statSync(join(sess, 'seq', sha3)).mtimeMs).toBe(5_000_000);
   const stub1 = buildMediaStub('iip', sha1, iipBel.length);
   // Ownership: the stub is NOT spliced into the extractor's bytes; it is
   // rebuilt and fed exactly once, from the mediadef item, by TapServer.feed
@@ -439,10 +444,14 @@ test('iip_and_sixel_stored_and_stubbed', () => {
   expect(parseMediaStub(buildMediaStub('sixel', sha3, sixel.length))).toEqual({ mediaKind: 'sixel', sha256: sha3, len: sixel.length });
   expect(parseMediaStub(enc('not a stub'))).toBeNull();
   // Same payload twice writes once: re-push same sixel with a fresh extractor on the same store.
+  // The re-put must touch mtime to the new injected now while content stays.
   const ex2 = new GraphicsExtractor(store);
   const before = readdirSync(join(sess, 'seq')).length;
+  gt = 6_000_000;
   ex2.push(sixel);
   expect(store.readSeq(sha3)).toEqual(sixel);
+  expect(readFileSync(join(sess, 'seq', sha3))).toEqual(Buffer.from(sixel));
+  expect(statSync(join(sess, 'seq', sha3)).mtimeMs).toBe(6_000_000);
   expect(ex2.stats.sixel).toBe(1);
   // Write-once: a second push of the same payload writes nothing new.
   expect(readdirSync(join(sess, 'seq')).length).toBe(before);
