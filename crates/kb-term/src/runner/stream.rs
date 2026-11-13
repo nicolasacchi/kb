@@ -198,13 +198,18 @@ mod tests {
         std::fs::create_dir_all(&session_dir).unwrap();
         let fake_path = session_dir.join("tap.sock");
         let listener = tokio::net::UnixListener::bind(&fake_path).unwrap();
-        // Fake tap: record the join, then echo every further chunk back.
+        // Fake tap: record the join (handed to the test at once through a
+        // oneshot: the echo loop below only ends when the splice closes,
+        // which the test triggers AFTER reading the join), then echo
+        // every further chunk back.
+        let (join_tx, join_rx) = tokio::sync::oneshot::channel::<Vec<u8>>();
         let tap_task = tokio::spawn(async move {
             let (mut conn, _) = tokio::time::timeout(DEADLINE, listener.accept())
                 .await
                 .expect("accept deadline")
                 .expect("accept");
             let join = read_chunk(&mut conn).await;
+            let _ = join_tx.send(join);
             let mut buf = vec![0u8; 8192];
             loop {
                 let n = match tokio::time::timeout(DEADLINE, conn.read(&mut buf)).await {
@@ -216,7 +221,6 @@ mod tests {
                     break;
                 }
             }
-            join
         });
         let cfg =
             RunnerConfig::test_config(run_dir, "/bin/true".to_string(), tmp.path().join("conf"));
@@ -229,10 +233,10 @@ mod tests {
         let (tap_read, tap_write) = tap.into_split();
         let (client_read, client_write) = client_end.into_split();
         let splice = tokio::spawn(splice(tap_read, tap_write, client_read, client_write));
-        let join = tokio::time::timeout(DEADLINE, tap_task)
+        let join = tokio::time::timeout(DEADLINE, join_rx)
             .await
             .expect("fake tap deadline")
-            .expect("fake tap task");
+            .expect("fake tap join");
         let (viewer, profile) = viewer_open(&join);
         assert_eq!(viewer, id, "the join names this session as the viewer");
         assert_eq!(profile, Profile::Desktop);
@@ -252,6 +256,7 @@ mod tests {
         let _ = tokio::time::timeout(DEADLINE, splice)
             .await
             .expect("splice end deadline");
+        let _ = tokio::time::timeout(DEADLINE, tap_task).await;
     }
 
     #[tokio::test]
