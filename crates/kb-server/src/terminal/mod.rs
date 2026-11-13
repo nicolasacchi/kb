@@ -13,6 +13,7 @@
 
 pub mod binding;
 pub mod gate;
+pub mod media;
 pub mod runner_client;
 pub mod ticket;
 pub mod wire;
