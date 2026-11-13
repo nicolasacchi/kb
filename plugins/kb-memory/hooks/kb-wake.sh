@@ -74,11 +74,21 @@ else
 fi
 
 # Per-harness slate-ask delivery line (the shared paragraph is already in
-# memory-protocol.txt). This hook is Claude Code's SessionStart; omp's
-# extension also runs it with KB_HARNESS=omp and carries its own line in
-# kb-omp.ts, so only an unset/claude harness gets the Claude line.
-if [ -n "$protocol" ] && [ "${KB_HARNESS:-claude}" = "claude" ]; then
-  protocol="$protocol"$'\n''Claude Code: after an addressed ask, run kb slate wait #n as a BACKGROUND Bash command (run_in_background, never &), main conversation only, not in a subagent, not under claude -p; its exit re-invokes you (0 answered, 4 timed out, 5 gone). If the operator answers in chat, stop the waiter first, then done #n "chat: <answer>".'
+# memory-protocol.txt). Only a POSITIVE Claude signal gets the background
+# `kb slate wait` line: KB_HARNESS=claude, or (KB_HARNESS unset AND
+# CLAUDE_PLUGIN_ROOT set / the Claude SessionStart payload's hook_event_name).
+# An unset harness is never assumed Claude: OpenCode shells this script with
+# no KB_HARNESS and has no run_in_background (a foreground wait would block
+# its turn), and omp carries its own line in kb-omp.ts.
+hook_event="$(printf '%s' "$input" | jq -r '.hook_event_name // empty' 2>/dev/null)"
+is_claude=0
+if [ "${KB_HARNESS:-}" = "claude" ]; then
+  is_claude=1
+elif [ -z "${KB_HARNESS:-}" ] && { [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] || [ "$hook_event" = "SessionStart" ]; }; then
+  is_claude=1
+fi
+if [ -n "$protocol" ] && [ "$is_claude" = "1" ]; then
+  protocol="$protocol"$'\n''Claude Code: after an addressed ask, run kb slate wait <n> as a BACKGROUND Bash command (run_in_background, never &), main conversation only, not in a subagent, not under claude -p; its exit re-invokes you: 0 answered or closed (read it, act; close with done if it settles it) · 4 still open after the timeout: do not relaunch, it stays on the board · 5 gone (dropped/closed/rotated): go with your default · 1 error: do not relaunch. If the operator answers in chat, stop the waiter (task-stop its background task id), then done <n> "chat: <gist>".'
 fi
 
 # kb-cli defaults to http://127.0.0.1:4000 — KB_DAEMON_URL lets a project

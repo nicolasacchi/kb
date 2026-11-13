@@ -22,6 +22,7 @@ FAIL=0
 ok() { PASS=$((PASS + 1)); printf 'ok      - %s\n' "$1"; }
 bad() { FAIL=$((FAIL + 1)); printf 'not ok  - %s\n' "$1"; }
 
+unset KB_HARNESS CLAUDE_PLUGIN_ROOT KB_SESSION_ID
 mkdir -p "$TMPROOT/bin"
 export PATH="$TMPROOT/bin:$PATH"
 
@@ -75,7 +76,7 @@ case "$base_out" in
 esac
 
 case "$base_out" in
-  *'Addressed asks: ask'*'Kimi: answers to your asks arrive at your next prompt'*)
+  *'Addressed asks: ask'*'Kimi: answers to your own asks arrive in full in the slate delta of your next prompt'*)
     ok "Kimi slate-ask paragraph + delivery line are injected" ;;
   *) bad "Kimi slate-ask paragraph + delivery line are injected (got: $base_out)" ;;
 esac

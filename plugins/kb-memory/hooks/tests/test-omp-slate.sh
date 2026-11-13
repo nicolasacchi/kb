@@ -240,6 +240,8 @@ test("the slate-ask paragraph and omp delivery line ride the post tool descripti
   expect(d).toContain(M.SLATE_ASK_PROTOCOL);
   expect(d).toContain(M.SLATE_ASK_DELIVERY_OMP);
   expect(M.SLATE_ASK_DELIVERY_OMP).toContain("never run kb slate wait");
+  expect(d).toContain("never run kb slate wait"); // the tool description, not just the const
+  expect(d).not.toContain("BACKGROUND Bash"); // the Claude-only line never rides omp
 });
 
 test("watch events carry re/to; asks for someone else are skipped, omp/any/absent are kept", () => {
@@ -286,8 +288,9 @@ test("the wake text: operator answer vs other author vs done, and the caps", () 
   const human = M.slateResolutionText(JSON.stringify({ kind: "answer", re: 40, line: "go with B", body: "because C", prov: { origin: "human", harness: "claude", session_id: "op" } }));
   expect(human).toContain("Your slate ask #40 was answered by [you]: go with B");
   expect(human).toContain("  because C");
-  expect(human).toContain("operator's answer to your question");
-  expect(human).toContain("kb_slate_post done #40");
+  expect(human).toContain("operator's answer to that question and nothing more");
+  expect(human).not.toContain("input to weigh");
+  expect(human).toContain("kb_slate_post done 40");
   const agent = M.slateResolutionText(JSON.stringify({ kind: "answer", re: 40, line: "B", prov: { harness: "claude", session_id: "abcd1234" } }));
   expect(agent).toContain("[claude/abcd]");
   expect(agent).not.toContain("operator's answer");
@@ -513,8 +516,8 @@ test(
     expect(w.length).toBe(2);
     expect(w[0].m.customType).toBe("kb-slate");
     expect(w[0].m.content).toContain("Your slate ask #40 was answered by [you]: go with B");
-    expect(w[0].m.content).toContain("operator's answer to your question");
-    expect(w[0].m.content).toContain("kb_slate_post done #40");
+    expect(w[0].m.content).toContain("operator's answer to that question and nothing more");
+    expect(w[0].m.content).toContain("kb_slate_post done 40");
     // A done means the ask is already closed: no close instruction.
     expect(w[1].m.content).toContain("Your slate ask #40 was closed by [you]: chat: B");
     expect(w[1].m.content).not.toContain("kb_slate_post done");

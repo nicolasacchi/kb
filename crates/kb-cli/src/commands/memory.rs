@@ -2836,8 +2836,11 @@ mod tests {
             "--to <harness>",
             "[you] on YOUR OWN ask",
             "and nothing more",
-            "done #n \"chat: <answer>\" (never drop)",
-            "done #n \"went with <default>\"",
+            "Never post as [you] yourself (no --as you / --origin human)",
+            "answered on the board \u{21d2} done <n> \"<what you did>\"",
+            "done <n> \"chat: <one-line gist>\" (never drop)",
+            "done <n> \"went with <default>\"",
+            "Write the number bare (kb slate wait 57, done 57 \"\u{2026}\"): # starts a shell comment",
         ] {
             assert!(para.contains(needle), "paragraph lost: {needle}");
         }
@@ -2852,13 +2855,76 @@ mod tests {
         // Per-harness delivery lines stay harness-scoped.
         let proto = std::fs::read_to_string(dir.join("memory-protocol.txt")).unwrap();
         assert!(
-            !proto.contains("kb slate wait"),
+            !proto.contains("kb slate wait <n>") && !proto.contains("BACKGROUND"),
             "wait advice is Claude-only, injected by kb-wake.sh"
         );
+        // The Claude line exists twice (kb-wake.sh, CLAUDE.memory.md with
+        // markdown backticks): the same text after the harness prefix, and
+        // its exit codes are the CLI's own constants.
         let wake = std::fs::read_to_string(dir.join("kb-wake.sh")).unwrap();
-        assert!(wake.contains("run kb slate wait #n as a BACKGROUND Bash command"));
-        let omp_line = ts.contains("never run kb slate wait.");
-        assert!(omp_line, "omp copy must forbid running wait");
+        let tail = |text: &str, strip: &[char]| -> String {
+            let line = text
+                .lines()
+                .find(|l| l.contains("after an addressed ask, run"))
+                .expect("Claude wait line");
+            let from = line.find("after an addressed ask, run").unwrap();
+            line[from..]
+                .replace(strip, "")
+                .trim_end_matches('\'')
+                .to_string()
+        };
+        let wake_line = tail(&wake, &[]);
+        let md = std::fs::read_to_string(dir.join("CLAUDE.memory.md")).unwrap();
+        let md_line = tail(&md, &['`']);
+        assert_eq!(
+            wake_line, md_line,
+            "the two Claude wait lines drifted apart"
+        );
+        use crate::commands::slate::{EXIT_WAIT_GONE, EXIT_WAIT_TIMEOUT};
+        for needle in [
+            "kb slate wait <n> as a BACKGROUND Bash command (run_in_background, never &)"
+                .to_string(),
+            "0 answered or closed (read it, act; close with done if it settles it)".to_string(),
+            format!("{EXIT_WAIT_TIMEOUT} still open after the timeout: do not relaunch"),
+            format!("{EXIT_WAIT_GONE} gone (dropped/closed/rotated): go with your default"),
+            "1 error: do not relaunch".to_string(),
+            "task-stop its background task id".to_string(),
+            "done <n> \"chat: <gist>\"".to_string(),
+        ] {
+            assert!(wake_line.contains(&needle), "Claude line lost: {needle}");
+        }
+        // omp's delivery line is the exported const, and it rides the tool
+        // description next to the paragraph.
+        assert!(
+            ts.contains("SLATE_ASK_DELIVERY_OMP =\n  \"omp: answers and dones on your own asks")
+                && ts.contains("never run kb slate wait.\";"),
+            "omp delivery line must forbid running wait"
+        );
+        assert!(
+            ts.contains("SLATE_ASK_PROTOCOL +\n        \" \" +\n        SLATE_ASK_DELIVERY_OMP"),
+            "the post tool description must carry paragraph + omp line"
+        );
+    }
+
+    /// AW6 — the SessionStart protocol (memory-protocol.txt + the Claude
+    /// line) is injected into EVERY Claude session. Growth is a decision:
+    /// raise this ceiling deliberately, with the paragraph it pays for.
+    #[test]
+    fn session_start_protocol_text_stays_under_its_size_ceiling() {
+        const CEILING: usize = 4700;
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/kb-memory/hooks");
+        let proto = std::fs::read_to_string(dir.join("memory-protocol.txt")).unwrap();
+        let wake = std::fs::read_to_string(dir.join("kb-wake.sh")).unwrap();
+        let line = wake
+            .lines()
+            .find(|l| l.contains("Claude Code: after an addressed ask"))
+            .expect("Claude line");
+        let total = proto.trim_end().len() + 1 + line.len();
+        assert!(
+            total <= CEILING,
+            "SessionStart protocol is {total} bytes, over the {CEILING} ceiling"
+        );
     }
 
     /// v044-X3 (F8 carry) — the wake hooks inject `memory-protocol.txt` as the

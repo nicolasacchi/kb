@@ -29,6 +29,10 @@ FAIL=0
 ok() { PASS=$((PASS + 1)); printf 'ok      - %s\n' "$1"; }
 bad() { FAIL=$((FAIL + 1)); printf 'not ok  - %s\n' "$1"; }
 
+# Identity env must not leak in from the caller's shell (an omp session exports
+# KB_HARNESS=omp; a Claude one CLAUDE_PLUGIN_ROOT): each case sets its own.
+unset KB_HARNESS CLAUDE_PLUGIN_ROOT KB_SESSION_ID
+
 mkdir -p "$TMPROOT/bin"
 export PATH="$TMPROOT/bin:$PATH"
 
@@ -68,7 +72,16 @@ run_wake() {
   local cache="$1"
   export XDG_CACHE_HOME="$cache"
   mkdir -p "$cache"
-  printf '%s' "{\"session_id\":\"$SID\",\"cwd\":\"$CWD\",\"source\":\"startup\"}" | "$WAKE"
+  printf '%s' "{\"session_id\":\"$SID\",\"cwd\":\"$CWD\",\"source\":\"startup\",\"hook_event_name\":\"SessionStart\"}" | "$WAKE"
+}
+
+# A non-Claude caller: no hook_event_name (OpenCode's plugin shells the hook
+# with a bare {session_id,cwd} payload) and no harness env.
+run_wake_foreign() {
+  local cache="$1"
+  export XDG_CACHE_HOME="$cache"
+  mkdir -p "$cache"
+  printf '%s' "{\"session_id\":\"$SID\",\"cwd\":\"$CWD\"}" | "$WAKE"
 }
 
 echo "== kb-wake.sh slate HYBRID block test matrix =="
@@ -86,7 +99,7 @@ case "$base_out" in
 esac
 
 case "$base_out" in
-  *'Addressed asks: ask'*'kb slate wait #n as a BACKGROUND Bash command'*)
+  *'Addressed asks: ask'*'kb slate wait <n> as a BACKGROUND Bash command'*)
     ok "Claude slate-ask paragraph + delivery line are injected" ;;
   *) bad "Claude slate-ask paragraph + delivery line are injected (got: $base_out)" ;;
 esac
@@ -98,6 +111,29 @@ esac
 case "$omp_out" in
   *'kb slate wait #n as a BACKGROUND'*) bad "a non-claude harness must NOT get the Claude wait line" ;;
   *) ok "a non-claude harness does not get the Claude wait line" ;;
+esac
+
+# Positive Claude signals only: payload hook_event_name (above), or
+# CLAUDE_PLUGIN_ROOT; never "harness unset" (OpenCode shells this hook with
+# KB_HARNESS unset and cannot background a wait).
+oc_out="$(run_wake_foreign "$TMPROOT/cache-oc")"
+case "$oc_out" in
+  *'Addressed asks: ask'*) ok "unset harness + non-Claude payload still gets the shared paragraph" ;;
+  *) bad "unset harness + non-Claude payload still gets the shared paragraph" ;;
+esac
+case "$oc_out" in
+  *'kb slate wait <n> as a BACKGROUND'*) bad "unset harness + non-Claude payload must NOT get the Claude wait line" ;;
+  *) ok "unset harness + non-Claude payload does not get the Claude wait line" ;;
+esac
+plug_out="$(CLAUDE_PLUGIN_ROOT=/x run_wake_foreign "$TMPROOT/cache-plug")"
+case "$plug_out" in
+  *'kb slate wait <n> as a BACKGROUND'*) ok "CLAUDE_PLUGIN_ROOT alone is a Claude signal" ;;
+  *) bad "CLAUDE_PLUGIN_ROOT alone is a Claude signal" ;;
+esac
+omp2_out="$(KB_HARNESS=omp CLAUDE_PLUGIN_ROOT=/x run_wake "$TMPROOT/cache-omp2")"
+case "$omp2_out" in
+  *'kb slate wait <n> as a BACKGROUND'*) bad "an explicit non-claude KB_HARNESS wins over Claude-looking signals" ;;
+  *) ok "an explicit non-claude KB_HARNESS wins over Claude-looking signals" ;;
 esac
 
 # --- 1. non-empty slate text: appended AFTER the memory index -------------
