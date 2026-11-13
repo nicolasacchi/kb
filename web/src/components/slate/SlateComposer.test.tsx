@@ -106,6 +106,35 @@ describe("SlateComposer to edge cases", () => {
     expect("to" in body).toBe(false);
   });
 
+  it("mobile with no seed defaults to idea and can post", async () => {
+    const { onSubmit } = mountC({}, true);
+    expect((screen.getByLabelText("Kind") as HTMLSelectElement).value).toBe("idea");
+    fireEvent.change(screen.getByLabelText("Line"), { target: { value: "try x" } });
+    const body = await post(onSubmit);
+    expect(body.kind).toBe("idea");
+  });
+
+  it("switching an answer seed to ask drops re and the answer title", async () => {
+    const { onSubmit } = mountC({ kind: "answer", re: 57, reLine: "which db?" }, true);
+    fireEvent.change(screen.getByLabelText("Kind"), { target: { value: "ask" } });
+    expect(screen.queryByTestId("slate-composer-re")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Post" })).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("To"), { target: { value: "omp" } });
+    fireEvent.change(screen.getByLabelText("Line"), { target: { value: "and then?" } });
+    const body = await post(onSubmit);
+    expect(body.kind).toBe("ask");
+    expect(body.to).toBe("omp");
+    expect("re" in body).toBe(false);
+  });
+
+  it("the answer sheet is named by its title and described by the ask", () => {
+    mountC({ kind: "answer", re: 57, reLine: "which db?" }, true);
+    const dlg = screen.getByRole("dialog", { name: "Answer #57" });
+    expect(dlg.getAttribute("aria-describedby")).toBe(
+      screen.getByTestId("slate-composer-re").id,
+    );
+  });
+
   it("editing a hand keeps its to", async () => {
     const { onSubmit } = mountC({ kind: "hand", line: "pass it", subject: "s", to: "omp", supersedes: 5 });
     expect(screen.queryByLabelText("To")).toBeNull();
