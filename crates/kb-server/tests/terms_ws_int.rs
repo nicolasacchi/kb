@@ -30,6 +30,7 @@ use kb_term::runner::server::serve;
 use kb_term::runner::Runner;
 use kb_term::wire::{Harness, Request};
 use tokio::sync::broadcast;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::Message;
 
 const WS_DEADLINE: Duration = Duration::from_millis(2000);
@@ -188,13 +189,12 @@ async fn ws_connect(
     if let Some(f) = from {
         url.push_str(&format!("&from={f}"));
     }
-    let req = axum::http::Request::builder()
-        .uri(url)
-        .header("Origin", format!("http://{addr}"))
-        .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
-        .header("Sec-WebSocket-Version", "13")
-        .body(())
-        .unwrap();
+    // The URL string's `IntoClientRequest` supplies Host / Connection /
+    // Upgrade / key / version (a bare `http::Request` lacks them and
+    // tungstenite refuses it: `InvalidHeader("host")`).
+    let mut req = url.into_client_request().unwrap();
+    req.headers_mut()
+        .insert("Origin", format!("http://{addr}").parse().unwrap());
     match tokio_tungstenite::connect_async_with_config(req, None, false).await {
         Ok((ws, _resp)) => WsConnect::Ok(Box::new(ws)),
         Err(e) => WsConnect::Other(format!("{e:?}")),

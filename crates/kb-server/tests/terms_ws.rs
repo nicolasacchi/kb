@@ -22,6 +22,7 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 
 use futures::{SinkExt, StreamExt};
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::Message;
 
 const TERM_ID: &str = "abcd1234";
@@ -437,7 +438,7 @@ type WsStream =
 enum WsConnect {
     Ok(Box<WsStream>),
     Http(u16),
-    Other,
+    Other(String),
 }
 
 #[derive(Debug)]
@@ -461,23 +462,21 @@ async fn ws_connect(
         url.push_str("&from=");
         url.push_str(f);
     }
-    let mut builder = axum::http::Request::builder()
-        .uri(url)
-        .header("Origin", origin)
-        .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
-        .header("Sec-WebSocket-Version", "13");
+    // `IntoClientRequest` on the URL string fills in the mandatory
+    // Host / Connection / Upgrade / Sec-WebSocket-* headers; a bare
+    // `http::Request` without them is refused by tungstenite itself
+    // (`InvalidHeader("host")`) before any byte reaches the server.
+    let mut req = url.into_client_request().unwrap();
+    req.headers_mut().insert("Origin", origin.parse().unwrap());
     if let Some(u) = remote_user {
-        builder = builder.header("Remote-User", u);
+        req.headers_mut().insert("Remote-User", u.parse().unwrap());
     }
-    // Tungstenite fills in `Upgrade` / `Connection` itself; the key and
-    // version above pin the handshake shape axum expects.
-    let req = builder.body(()).unwrap();
     match tokio_tungstenite::connect_async_with_config(req, None, false).await {
         Ok((ws, _resp)) => WsConnect::Ok(Box::new(ws)),
         Err(tokio_tungstenite::tungstenite::error::Error::Http(resp)) => {
             WsConnect::Http(resp.status().as_u16())
         }
-        Err(_) => WsConnect::Other,
+        Err(e) => WsConnect::Other(format!("{e:?}")),
     }
 }
 
