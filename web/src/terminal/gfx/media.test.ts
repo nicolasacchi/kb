@@ -17,6 +17,7 @@ interface Harness {
   calls: Array<{ url: string; headers: Record<string, string>; credentials?: string }>;
   revoked: string[];
   sleeps: number[];
+  clock: { t: number };
 }
 
 function harness(
@@ -27,6 +28,7 @@ function harness(
   const revoked: string[] = [];
   const sleeps: number[] = [];
   let minted = 0;
+  const clock = { t: 0 };
   const fetchImpl = ((input: RequestInfo | URL, init?: RequestInit) => {
     calls.push({
       url: String(input),
@@ -50,8 +52,9 @@ function harness(
       sleeps.push(ms);
       return Promise.resolve();
     },
+    now: () => clock.t,
   });
-  return { cache, calls, revoked, sleeps };
+  return { cache, calls, revoked, sleeps, clock };
 }
 
 const png = (n = 8): Response => new Response(new Uint8Array(n), { status: 200 });
@@ -146,8 +149,12 @@ describe("MediaCache", () => {
     expect(h.sleeps).toEqual([200, 400, 800]);
     // One first try plus three retries.
     expect(h.calls).toHaveLength(4);
-    // The failure is NOT cached: a later load asks the network again.
-    expect(h.cache.peek(sha(1))).toBeUndefined();
+    // The failure is shown as missing but NOT sticky: inside the cooldown no
+    // request is made, after it a later load asks the network again.
+    expect(h.cache.peek(sha(1))).toBe("missing");
+    await h.cache.load(sha(1));
+    expect(h.calls).toHaveLength(4);
+    h.clock.t = FAILURE_COOLDOWN_MS;
     await h.cache.load(sha(1));
     expect(h.calls).toHaveLength(8);
   });
@@ -163,7 +170,11 @@ describe("MediaCache", () => {
     const h = harness(() => new Response(null, { status: 403 }));
     expect(await h.cache.load(sha(1))).toBe("missing");
     expect(h.sleeps).toEqual([]);
-    expect(h.cache.peek(sha(1))).toBeUndefined();
+    // Shown as missing, but not sticky (retried after the cooldown).
+    expect(h.cache.peek(sha(1))).toBe("missing");
+    h.clock.t = FAILURE_COOLDOWN_MS;
+    await h.cache.load(sha(1));
+    expect(h.calls).toHaveLength(2);
   });
 
   it("undecodable bytes are missing, sticky, and their url is revoked", async () => {
