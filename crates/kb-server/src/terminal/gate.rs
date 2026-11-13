@@ -36,10 +36,11 @@ pub(crate) const ERR_TERMINAL_RUNNER_UNAVAILABLE: &str =
 /// terminal.
 pub(crate) const ERR_TERMINAL_NOT_FOUND: &str = "urn:kb:errors:terminal-not-found";
 /// `urn:kb:errors:terminal-conflict` — the runner reports a conflict
-/// (`blocked`, `grid_owned`).
+/// (`blocked`, `grid-owned`, `paste-only`, `busy`, `busy-pty`,
+/// `too-many-viewers`).
 pub(crate) const ERR_TERMINAL_CONFLICT: &str = "urn:kb:errors:terminal-conflict";
 /// `urn:kb:errors:terminal-refused` — the runner refuses the operation
-/// (`multi_line_refused`).
+/// (`multi-line-refused`).
 pub(crate) const ERR_TERMINAL_REFUSED: &str = "urn:kb:errors:terminal-refused";
 /// `urn:kb:errors:terminal-bad-reply` — anything else from the runner.
 pub(crate) const ERR_TERMINAL_BAD_REPLY: &str = "urn:kb:errors:terminal-bad-reply";
