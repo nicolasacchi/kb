@@ -200,16 +200,22 @@ export function TerminalPanel(props: TerminalPanelProps) {
         return true;
       });
       term.attachCustomKeyEventHandler((ev) => {
+        // xterm consults this handler for keydown, keypress AND keyup. A
+        // Shift+Enter must be swallowed on all three (the keypress would
+        // otherwise still emit a bare \r), but the CSI-u is sent once, on
+        // the keydown.
         if (
-          ev.type === "keydown" &&
           ev.key === "Enter" &&
           ev.shiftKey &&
           !ev.ctrlKey &&
           !ev.metaKey &&
           !ev.altKey
         ) {
-          if (sessionRef.current?.sendInput("\u001b[13;2u") ?? false) {
-            lastTypedRef.current = Date.now();
+          if (ev.type === "keydown") {
+            ev.preventDefault();
+            if (sessionRef.current?.sendInput("\u001b[13;2u") ?? false) {
+              lastTypedRef.current = Date.now();
+            }
           }
           return false;
         }

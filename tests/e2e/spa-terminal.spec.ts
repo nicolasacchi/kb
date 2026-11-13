@@ -72,7 +72,10 @@ async function bufferInfo(page: Page): Promise<BufInfo> {
   });
 }
 
-async function openTerminal(page: Page): Promise<unknown[]> {
+async function openTerminal(
+  page: Page,
+  beforeSlot?: () => Promise<void>,
+): Promise<unknown[]> {
   const errors: unknown[] = [];
   page.on("pageerror", (e) => errors.push(e));
   // Surface uncaught page errors in the CI log even when the panel mounts:
@@ -84,6 +87,7 @@ async function openTerminal(page: Page): Promise<unknown[]> {
     if (r.status() >= 400) errors.push(`http-${r.status()}: ${r.url()}`);
   });
   await page.goto(`${BASE}/sessions/${SID}`);
+  if (beforeSlot) await beforeSlot();
   await expect(page.locator('[data-testid="kb-terminal-slot"]')).toBeVisible({ timeout: 15_000 });
   await page.locator('[data-testid="kb-term-open"]').click();
   try {
@@ -107,12 +111,19 @@ test.describe("T14 — desktop terminal panel", () => {
     // before the click.
     const requests: string[] = [];
     page.on("request", (r) => requests.push(r.url()));
+    // Only failures that belong to the terminal count: uncaught page errors,
+    // failed requests and >=400 answers on /api/terms. (The fake serves no
+    // session-detail endpoints, so unrelated card 404s and GL driver
+    // warnings are expected noise.)
     const errors: unknown[] = [];
     page.on("pageerror", (e) => errors.push(e));
-    page.on("console", (m) => errors.push(`${m.type()}: ${m.text()}`));
-    page.on("requestfailed", (r) => errors.push(`reqfail: ${r.url()}`));
+    page.on("requestfailed", (r) => {
+      if (/\/api\/terms/.test(r.url())) errors.push(`reqfail: ${r.url()}`);
+    });
     page.on("response", (r) => {
-      if (r.status() >= 400) errors.push(`http-${r.status()}: ${r.url()}`);
+      if (r.status() >= 400 && /\/api\/terms/.test(r.url())) {
+        errors.push(`http-${r.status()}: ${r.url()}`);
+      }
     });
     await page.goto(`${BASE}/sessions/${SID}`);
     await expect(page.locator('[data-testid="kb-terminal-slot"]')).toBeVisible({ timeout: 15_000 });
@@ -373,7 +384,11 @@ test.describe("T14 — desktop terminal panel", () => {
   }) => {
     await page.setViewportSize({ width: 320, height: 600 });
     await installFakeTerminal(page, { total: 300, seedLines: 100 });
-    await openTerminal(page);
+    // At 320 px the session page collapses its sections (mobile); open the
+    // Terminal section by hand, the panel itself is the same desktop panel.
+    await openTerminal(page, async () => {
+      await page.locator('[data-testid="session-sec-terminal"] > summary').click();
+    });
     await expect
       .poll(async () => (await bufferInfo(page)).phase, { timeout: 30_000 })
       .toBe("live");

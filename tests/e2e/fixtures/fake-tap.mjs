@@ -173,6 +173,9 @@ export async function installFakeTerminal(page, opts = {}) {
   let dropsLeft = opts.drops ?? 0;
   let restartDone = false;
   let gapDone = false;
+  // Once per install (not per socket): the full rejoin after the grid
+  // change must not receive the second Profile again.
+  let secondProfileSent = false;
   const dropEvery = opts.dropEvery ?? null;
 
   const card = fixtureCard();
@@ -268,7 +271,6 @@ export async function installFakeTerminal(page, opts = {}) {
       cursor = Math.max(0, from - rewind);
     }
     const connStart = cursor;
-    let secondProfileSent = false;
     const pump = () => {
       if (closed) return;
       if (exitCode !== null && cursor >= stream.length) {

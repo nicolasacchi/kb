@@ -2,7 +2,7 @@
 // terminal list. Ledger entry in `web/src/api/queryClient.ts` (the
 // next documented #23 exception: 15 s staleTime plus direct
 // invalidation on `term.created|term.ended|term.state`, which fire
-// only on a lifecycle/state CHANGE). No `refetchInterval`.
+// only on a lifecycle/state CHANGE). The query never polls.
 import { useQuery } from "@tanstack/react-query";
 import { listTerms, type TermRow } from "../api/terms";
 

@@ -6,7 +6,7 @@
 // == 1 after proves the boundary. A child row (`via: "root"`) shows
 // link text and no button.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 let mockEvalCount = 0;
@@ -89,7 +89,7 @@ describe("TerminalSlot (T14 seam)", () => {
     (screen.getByTestId("kb-term-open") as HTMLButtonElement).click();
     expect(await screen.findByTestId("mock-panel")).toBeTruthy();
     (screen.getByTestId("mock-panel-close") as HTMLButtonElement).click();
-    expect(screen.queryByTestId("mock-panel")).toBeNull();
+    await waitFor(() => expect(screen.queryByTestId("mock-panel")).toBeNull());
     expect(screen.getByTestId("kb-term-open").textContent).toBe("Open terminal");
   });
 });
