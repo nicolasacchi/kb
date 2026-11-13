@@ -1200,6 +1200,74 @@ async fn the_slate_list_reports_open_counts_and_topics() {
     assert_eq!(meadow["counts"]["found"], 1);
 }
 
+/// AW2: `ask_for_you` counts the operator's UNANSWERED addressed asks, and
+/// `ask --to` is validated on the wire (`bad-to`).
+#[tokio::test]
+async fn the_slate_list_counts_unanswered_asks_addressed_to_you() {
+    let (_tmp, addr, _paths) = boot().await;
+    let client = reqwest::Client::new();
+    let ask_to = |line: &str, to: Option<&str>| {
+        let mut b = body("ask", line, Some("sess-a"));
+        if let Some(t) = to {
+            b["to"] = json!(t);
+        }
+        b
+    };
+    assert_eq!(
+        post(&client, addr, "orchard", ask_to("one?", Some("you")))
+            .await
+            .0,
+        201
+    );
+    assert_eq!(
+        post(&client, addr, "orchard", ask_to("two?", Some("you")))
+            .await
+            .0,
+        201
+    );
+    assert_eq!(
+        post(&client, addr, "orchard", ask_to("three?", Some("omp")))
+            .await
+            .0,
+        201
+    );
+    assert_eq!(
+        post(&client, addr, "orchard", ask_to("four?", None))
+            .await
+            .0,
+        201
+    );
+
+    let (status, v) = post(&client, addr, "orchard", ask_to("five?", Some("operator"))).await;
+    assert_eq!(status, 400, "{v}");
+    assert_eq!(v["code"], "bad-to", "{v}");
+
+    let list = |c: reqwest::Client| async move {
+        let rows: Vec<Value> =
+            serde_json::from_value(get_json(&c, addr, "/api/slates").await).unwrap();
+        rows.into_iter().find(|r| r["slug"] == "orchard").unwrap()
+    };
+    let row = list(client.clone()).await;
+    assert_eq!(row["ask_for_you"], 2, "{row}");
+    assert_eq!(row["counts"]["ask_open"], 4);
+
+    // Answering #1 moves it out of the operator's queue (it now waits on
+    // its asker) but not off the board.
+    let mut ans = body("answer", "yes", Some("sess-b"));
+    ans["re"] = json!(1);
+    assert_eq!(post(&client, addr, "orchard", ans).await.0, 201);
+    let row = list(client.clone()).await;
+    assert_eq!(row["ask_for_you"], 1, "{row}");
+    assert_eq!(row["counts"]["ask_open"], 4);
+
+    // The board carries `to` and `last_answer`.
+    let board = get_json(&client, addr, "/api/slates/orchard?view=board").await;
+    let asks = board["sections"]["ask"].as_array().unwrap().clone();
+    let first = asks.iter().find(|c| c["seq"] == 1).unwrap();
+    assert_eq!(first["to"], "you");
+    assert_eq!(first["last_answer"]["line"], "yes");
+}
+
 /// The 400 lints the pure engine owns, seen through the wire: every one
 /// names itself with a `code` and says what to do instead.
 #[tokio::test]

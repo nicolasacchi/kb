@@ -107,6 +107,11 @@ pub struct SlateSummary {
     /// Distinct non-null topics across the CURRENT generation, sorted.
     pub topics: Vec<String>,
     pub counts: SlateCounts,
+    /// AW2 — asks addressed `to: "you"` that are on the board and still
+    /// UNANSWERED (the operator's queue). Derived at read time from the
+    /// projection; an answered ask is waiting for its asker, not for you.
+    /// Attention sums stay client-side (§9).
+    pub ask_for_you: usize,
     /// D27 (v0.42) — how many distinct sessions have REPORTED a cursor
     /// here (`meta.cursors.len()`). Served, never "read": it is
     /// attribution, not acknowledgement, and nothing expires it (D5).
@@ -703,6 +708,12 @@ fn summarize(
             _ => {}
         }
     }
+    let ask_for_you = d
+        .sections
+        .ask
+        .iter()
+        .filter(|p| p.to.as_deref() == Some("you") && p.answers.unwrap_or(0) == 0)
+        .count();
     SlateSummary {
         slug: slug.to_string(),
         head_seq: loaded.meta.head_seq,
@@ -715,6 +726,7 @@ fn summarize(
         closed: loaded.meta.closed(),
         topics: topics_of(&loaded.posts),
         counts,
+        ask_for_you,
         sessions_served: loaded.meta.cursors.len(),
         generation_posts: loaded.posts.len(),
     }
