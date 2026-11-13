@@ -257,7 +257,9 @@ export async function installFakeTerminal(page, opts = {}) {
       if (!closed) ws.send(binary(off, payload));
     };
     sendText(helloFrame(opts.epoch));
-    sendText(profileFrame(profilePatch));
+    // After the grid change every later socket announces the CURRENT
+    // grid (a real tap would), else each rejoin would flip it back.
+    sendText(profileFrame(secondProfileSent ? { ...(profilePatch ?? {}), ...secondProfile } : profilePatch));
     const full = from === 0;
     let cursor;
     if (full) {
