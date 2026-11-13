@@ -1434,7 +1434,7 @@ GET  /api/terms                             SPA-only terminal relays
                                             `[terminal] refuse_token_callers`
                                             in docs/configuration.md).
                                             Terminal ids are
-                                            `[a-z0-9]{1,16}` (else
+                                            `[a-z0-9]{1,32}` (else
                                             400); every response carries
                                             `Cache-Control: no-store`.
                                             No CLI verb; agents never
@@ -1448,7 +1448,13 @@ POST   /api/terms                           Launch: body `{harness,
                                             harnesses; `resume_sid`/
                                             `cwd` are non-empty, <= 512
                                             bytes, no control chars;
-                                            `cwd` is absolute. 201 with
+                                            `cwd` is absolute. `cwd`
+                                            defaults to `/`; `cols`/
+                                            `rows` default to the
+                                            runner's own 120x40 when
+                                            omitted (the relay sends
+                                            `null` so the runner's
+                                            default applies). 201 with
                                             the runner's reply.
 POST   /api/terms/{id}/ticket               Mint a single-use
                                             WebSocket ticket: the runner's
@@ -1466,31 +1472,92 @@ POST   /api/terms/{id}/ticket               Mint a single-use
                                             caller; consumed once at
                                             the upgrade.
 POST   /api/terms/{id}/paste                Body `{text}`; decoded
-                                            text over 32 KiB is 413.
+                                            text over 32 KiB is 413
+                                            (the cap counts bytes, so
+                                            multibyte characters count
+                                            by their byte length).
                                             Relayed verbatim.
 POST   /api/terms/{id}/enter                Body `{}`. Relays the
                                             beat-derived entered flag
                                             (currently the constant
                                             unblocked; T13 replaces it).
+                                            The relay always sends
+                                            `from_composer: true`, so a
+                                            composer Enter after a
+                                            paste-only paste (`/` or
+                                            `@`) is refused with
+                                            `paste-only` (409) and
+                                            nothing is written. The
+                                            relay also opens its hidden
+                                            `spa` viewer idempotently
+                                            (same for paste/keys) so
+                                            input works without an
+                                            explicit viewer-open call.
 POST   /api/terms/{id}/keys                 Body `{keys:[...]}` — 1..=32
                                             entries, each <= 16 bytes of
                                             `[A-Za-z0-9_-]`.
-POST   /api/terms/{id}/kill                 Kill the terminal.
+POST   /api/terms/{id}/kill                 Kill the terminal. A
+                                            successful kill also closes
+                                            the relay's `spa` viewer
+                                            best-effort.
 POST   /api/terms/{id}/take-size            Body `{cols,rows}`. Takes
                                             (or reports) the grid.
+                                            Sent with `force: false`:
+                                            a foreign grid owner
+                                            surfaces `grid-owned`
+                                            (409) instead of being
+                                            stomped.
 GET    /api/terms/{id}/read                 Relay the runner read.
 GET    /api/terms/{id}/history              Relay the runner history.
+GET    /api/terms/{id}/grid                 Relay the runner grid
+                                            report (`cols`, `rows`,
+                                            `owner`).
+POST   /api/terms/{id}/release-size         Body `{}`. Releases the
+                                            grid held by the relay's
+                                            `kb-term` owner (the same
+                                            owner `take-size` uses).
+POST   /api/terms/{id}/resize               Body `{cols,rows}`.
+                                            Resizes the session grid.
+POST   /api/terms/{id}/viewer-close         Body `{}`. Closes the
+                                            relay's hidden `spa` viewer.
                                             Error table: unreachable or
                                             timed-out runner → 503
                                             `terminal-runner-unavailable`
                                             (the socket path never
-                                            leaks); `not_found` → 404;
-                                            `blocked` → 409;
-                                            `multi_line_refused` → 422;
-                                            `grid_owned` → 409 with the
-                                            runner's message;
-                                            `bad_request` → 400;
-                                            anything else → 502.
+                                            leaks); the runner's dash
+                                            codes map as follows:
+                                            `not-found`/`no-session`/
+                                            `no-viewer` → 404;
+                                            `blocked`/`grid-owned`/
+                                            `paste-only`/`busy`/
+                                            `busy-pty`/
+                                            `too-many-viewers` → 409
+                                            (with the runner's message);
+                                            `multi-line-refused` → 422;
+                                            `invalid-id`/
+                                            `invalid-harness`/
+                                            `bad-request`/`bad-viewer`/
+                                            `bad-input`/`bad-key`/
+                                            `bad-text`/`bad-size` →
+                                            400; `too-large` → 413;
+                                            `tap-timeout`/`tmux-version`
+                                            → 503; `tmux-failed`/
+                                            `internal`/anything else →
+                                            502. Budgets: one request
+                                            line up to 128 KiB (a 32 KiB
+                                            paste with JSON escaping
+                                            fits); one runner reply up
+                                            to 17 MiB (the runner
+                                            truncates read/history at
+                                            16 MiB). Relay deadlines
+                                            are per-op: the configured
+                                            `runner_timeout_secs` is the
+                                            floor for input ops; launch,
+                                            kill, read and history get
+                                            60 s, enter 15 s, list 30 s,
+                                            so a successful long op is
+                                            never raced by a 5 s
+                                            client timeout.
 GET  /api/sessions/by-artifact/{kb}/{aid}   W2/R11 — the canonical
                                             artifact→session join
                                             (`SessionsGetByArtifactIds`, #11):
@@ -2748,6 +2815,10 @@ POST   /api/terms/{id}/kill                 kill terminal [terminal]
 POST   /api/terms/{id}/take-size            take grid [terminal]
 GET    /api/terms/{id}/read                 relay read [terminal]
 GET    /api/terms/{id}/history              relay history [terminal]
+GET    /api/terms/{id}/grid                 relay grid report [terminal]
+POST   /api/terms/{id}/release-size         release grid [terminal]
+POST   /api/terms/{id}/resize               resize grid [terminal]
+POST   /api/terms/{id}/viewer-close         close spa viewer [terminal]
 
 # admin
 GET    /api/kb/{kb}/quarantine              parser-quarantined artifacts
