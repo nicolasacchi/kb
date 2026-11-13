@@ -172,6 +172,23 @@ test('valid_m1_start_interrupts_pending_and_b_completes', () => {
   expect(r.stats.orphanChunk).toBe(1);
 });
 
+test('dropped_multichunk_start_does_not_splice_into_pending', () => {
+  // A (id 9) is pending; B (id 5) is a dropped multi-chunk start (f=24).
+  // B's a-less continuations must never complete A with spliced bytes.
+  const png = makePng(8, 8, 7);
+  const parts = transmitApcs(9, png, 64);
+  expect(parts.length).toBeGreaterThan(2);
+  const r = new KittyReassembler();
+  expect(r.push(parseKittyControl(parts[0]!.subarray(3, parts[0]!.length - 2)))).toBeNull();
+  expect(r.push(pc('a=t,f=24,i=5,m=1', 'AAAA'))).toEqual({ kind: 'drop', reason: 'unsupportedFormat' });
+  const b1 = r.push(pc('m=1', 'AAAA'));
+  const b2 = r.push(pc('m=0', 'AAAA'));
+  expect(b1 === null || b1.kind !== 'transmit').toBe(true);
+  expect(b2 === null || b2.kind !== 'transmit').toBe(true);
+  expect(r.stats.transmits).toBe(0);
+  expect(r.stats.abortedTransfer).toBe(1);
+});
+
 test('dropped_transmit_starts_do_not_abort_pending', () => {
   // Each dropped start (bad format, bad medium, compressed, missing/bad i,
   // bad base64 charset, m=1 oversize) must leave a legitimate pending
@@ -213,25 +230,19 @@ test('dropped_transmit_starts_do_not_abort_pending', () => {
       throw new Error(`${name}: expected stats.${reason} === 1, got ${r.stats[reason]}`);
     }
   }
-  // m=1 oversize start also does not abort the pending transfer.
+  // An m=1 oversize start is a dropped MULTI-chunk start: its continuations
+  // cannot be told from the pending transfer's, so it aborts the pending
+  // transfer (counted) instead of letting them splice into it.
   {
     const png = makePng(8, 8, 7);
     const parts = transmitApcs(9, png, 16);
     const r = new KittyReassembler({ maxImageBytes: 500 });
     expect(r.push(parseKittyControl(parts[0]!.subarray(3, parts[0]!.length - 2)))).toBeNull();
-    // First chunk alone decodes to well under 500, so this is not the pending
-    // transfer; craft an oversize m=1 start with a huge payload.
     const huge = Buffer.alloc(800).toString('base64'); // 800 decoded bytes > 500
     expect(r.push(pc('a=t,f=100,i=555,m=1', huge))).toEqual({ kind: 'drop', reason: 'oversize' });
-    expect(r.stats.abortedTransfer).toBe(0);
-    let result: KittyResult | null = null;
-    for (let i = 1; i < parts.length; i++) {
-      result = r.push(parseKittyControl(parts[i]!.subarray(3, parts[i]!.length - 2)));
-    }
-    expect(result!.kind).toBe('transmit');
-    expect(r.stats.abortedTransfer).toBe(0);
-    expect(r.stats.transmits).toBe(1);
-    if (result!.kind === 'transmit') expect(result!.png).toEqual(png);
+    expect(r.stats.abortedTransfer).toBe(1);
+    expect(r.push(pc('m=1', 'AAAA'))).toEqual({ kind: 'drop', reason: 'orphanChunk' });
+    expect(r.stats.transmits).toBe(0);
   }
   // Single-chunk dropped starts (bad PNG / oversize) also leave pending alone.
   {

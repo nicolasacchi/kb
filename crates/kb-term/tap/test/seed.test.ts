@@ -257,3 +257,16 @@ test('size and build-time bounds on a 60k-line twin', async () => {
     twin.dispose();
   }
 }, 900_000);
+
+test('omitted pending fails closed (twin-behind), never silently zero', async () => {
+  const { twin, ground } = await gatePair();
+  try {
+    const omitted = undefined as unknown as number;
+    expect(() => buildSeed(twin, { scrollback: 50000, atOffset: 1, ground, pending: omitted })).toThrow(/twin-behind/);
+    expect(isQuiescent(twin, ground, omitted)).toBe(false);
+    expect(isQuiescent(twin, ground, Number.NaN)).toBe(false);
+    expect(isQuiescent(twin, ground, 0)).toBe(true);
+  } finally {
+    twin.dispose();
+  }
+});

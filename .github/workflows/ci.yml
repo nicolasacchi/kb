@@ -1678,7 +1678,11 @@ jobs:
           KB_TMUX_STATIC: "0"
           KB_TMUX_OUT: ${{ runner.temp }}/tmux-3.7c-dynamic
         run: |
-          scripts/ci/build-tmux.sh
+          # GITHUB_ENV is unset for this one invocation on purpose: the
+          # build script's export_result would otherwise repoint KB_TMUX_BIN
+          # at the dynamic tmux for every later step, and the T19 packaging
+          # check below must package the static pinned tmux release.yml ships.
+          env -u GITHUB_ENV scripts/ci/build-tmux.sh
           test "$(cat "$KB_TMUX_OUT/LINKAGE")" = "dynamic"
           grep -F -- "linkage=dynamic" "$KB_TMUX_OUT/BUILD-INFO" >/dev/null
           grep -F -- "--- ldd ---" "$KB_TMUX_OUT/BUILD-INFO" >/dev/null
@@ -1728,6 +1732,10 @@ jobs:
           OUT_DIR: ${{ runner.temp }}/kb-term-out
         run: |
           set -euo pipefail
+          test "$KB_TMUX_BIN" = "$RUNNER_TEMP/tmux-3.7c/bin/tmux" || {
+            echo "packaging must use the static pinned tmux, got $KB_TMUX_BIN" >&2
+            exit 1
+          }
           export KB_TERM_VERSION="main-${GITHUB_SHA::12}"
           export KB_TERM_TARGET="x86_64-unknown-linux-gnu"
           export KB_BUN_VERSION="$(cat crates/kb-term/tap/.bun-version)"

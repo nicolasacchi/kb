@@ -678,9 +678,13 @@ fn term_int_reseed_after_long_pause() {
     assert_json_ok(&json, &stderr);
     // Bounded equality: the pause drops output by design, so exact
     // emitted-ref equality is structurally unwinnable. The gate is (a)
-    // history proximity vs the byte-0 file reference within 2%, and (b)
+    // history proximity vs the byte-0 file reference within 2%, (b)
     // exact determinism (a second reseed of the idle pane reproduces the
-    // identical twin). The emitted-ref comparison still runs as a metric.
+    // identical twin), and (c) bounded cellsDiff + mode-state agreement of
+    // the reseeded twin against the byte-0 file reference (a
+    // deterministically wrong reseed with truncated cells fails even
+    // though padTo pads the line count). The emitted-ref comparison and
+    // pauseHookContinued are recorded as metrics only.
     assert_eq!(
         json["metric"]["historyClose"],
         serde_json::json!(true),
@@ -690,6 +694,11 @@ fn term_int_reseed_after_long_pause() {
         json["metric"]["deterministic"],
         serde_json::json!(true),
         "a second reseed of the idle pane must reproduce the identical twin: {json}"
+    );
+    assert_eq!(
+        json["metric"]["fileRefCellsOk"],
+        serde_json::json!(true),
+        "reseeded cells must match the byte-0 file reference within the bound: {json}"
     );
     assert!(
         json["metric"]["seedEqualsEmittedRef"].is_boolean(),

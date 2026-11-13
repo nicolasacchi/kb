@@ -216,11 +216,26 @@ export class KittyReassembler {
   }
 
   private pushTransmitStart(parsed: ParsedKitty): KittyResult | null {
+    const res = this.classifyTransmitStart(parsed);
+    // A dropped single-chunk start leaves a pending transfer alone, but a
+    // dropped start that announces continuations (m=1) would have its
+    // a-less chunks routed into the UNRELATED pending transfer (they are
+    // indistinguishable), splicing two images. Fail closed: abort the
+    // pending transfer (counted); the dropped transfer's chunks then
+    // become counted orphanChunk drops.
+    if (res !== null && res.kind === 'drop' && parsed.keys.get('m') === '1' && this.pending !== null) {
+      this.counts.abortedTransfer++;
+      this.pending = null;
+    }
+    return res;
+  }
+
+  private classifyTransmitStart(parsed: ParsedKitty): KittyResult | null {
     const keys = parsed.keys;
     // Format/medium/compressed/id/base64 gates (fail closed; never open a named path).
-    // A dropped start does NOT abort a pending transfer: only a transmit that
-    // actually starts a transfer (m=1 pending created, or single-chunk transmit)
-    // aborts the previous pending one, counted abortedTransfer.
+    // A dropped single-chunk start does NOT abort a pending transfer (see
+    // pushTransmitStart for the m=1 exception); a transmit that actually
+    // starts a transfer aborts the previous pending one, counted abortedTransfer.
     if (keys.get('f') !== '100') {
       this.counts.unsupportedFormat++;
       return { kind: 'drop', reason: 'unsupportedFormat' };

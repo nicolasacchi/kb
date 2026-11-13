@@ -99,7 +99,7 @@ function serializeBody(twin: Twin, scrollback: number): string {
  * deliberately no default -- a caller that omits it must not silently
  * assert zero (FXT6 review round 2). */
 export function isQuiescent(twin: Twin, ground: GroundTracker, pending: number): boolean {
-  if (pending > 0) return false;
+  if (!Number.isSafeInteger(pending) || pending !== 0) return false;
   if (syncOn(twin)) return false;
   return ground.atGround();
 }
@@ -112,7 +112,9 @@ export function isQuiescent(twin: Twin, ground: GroundTracker, pending: number):
  * REQUIRED, like isQuiescent -- no opt-out default.
  */
 export function quiescentReason(twin: Twin, ground: GroundTracker, pending: number): JoinPoint['reason'] {
-  if (pending > 0) return 'twin-behind';
+  // Fail closed on a non-numeric/negative `pending` (a JS caller that omits
+  // it): only an explicit integer 0 asserts "twin parsed through".
+  if (!Number.isSafeInteger(pending) || pending !== 0) return 'twin-behind';
   if (syncOn(twin)) return 'sync-frame';
   if (!ground.atGround()) return 'mid-sequence';
   return null;

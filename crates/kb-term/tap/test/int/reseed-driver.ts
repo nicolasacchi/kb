@@ -27,6 +27,14 @@ const streamFile = arg('stream')!;
 const scenario = arg('scenario')!;
 const expectBytes = Number(arg('expect-bytes') ?? '0');
 const quiescentOpts = arg('quiescent') === 'off' ? { quiescentMs: 0 } : {};
+/** Bounded cells gate for the pause scenario against the byte-0 file
+ *  reference. A correct reseed differs only in the bottom padding padTo
+ *  adds for an in-flight gap (CI measured 29 cells at the 29-line gap); a
+ *  truncated/wrong-cell feed pads a much larger blank tail versus the
+ *  flood reference (half-capture ~550k cells). 5000 (~217 flood rows)
+ *  separates the two by orders of magnitude. Do not widen it to get
+ *  green: investigate. */
+const FILE_REF_CELLS_BOUND = 5000;
 
 const note = (...a: unknown[]): void => {
   console.error(...a);
@@ -172,11 +180,13 @@ async function main(): Promise<void> {
   });
   const reseedTwin = makeTwin(cols, rows);
   const reseeder = new Reseeder(control, reseedTwin);
-  // The %pause -> continue -> reseed recovery wiring (pause scenario):
-  // Control's dispatch writes the quoted continue the moment %pause
-  // arrives; once the pane settles, reseed. The pause case below awaits
-  // this promise (with a manual-continue fallback if tmux never emits
-  // %pause for the explicit pause in this run).
+  // The %pause -> continue -> reseed hook wiring (pause scenario):
+  // Control's dispatch writes the quoted continue when %pause arrives;
+  // once the pane settles, reseed. On CI tmux 3.7c the hook never fires
+  // for the explicit pause (HOOK_PAUSE_MISSED_FALLBACK), so the manual
+  // fallback below is what runs; the hook path itself is unit-pinned in
+  // control.test.ts and only recorded here as the pauseHookContinued
+  // metric.
   let hookReseed: Promise<ReseededResult> | null = null;
   let fallbackTaken = false;
   control.onPause((p) => {
@@ -297,8 +307,9 @@ async function main(): Promise<void> {
         // >40s of verified stopped-client lag (CI 42439069928: the entire
         // 30MB flood drained post-resume undropped) -- see the PR body. The
         // documented per-pane pause (`refresh-client -A '<pane>:pause'`,
-        // pauseCommand) pauses the pane deterministically here so the same
-        // %pause -> continue -> reseed recovery path is exercised.
+        // pauseCommand) pauses the pane deterministically here, so the
+        // explicit pause, the halt, the manual continue and the reseed are
+        // exercised (the %pause hook path is unit-pinned, not asserted here).
         note('STALLED');
         touchReady();
         const bytesAtStop = emittedTotal;
@@ -313,7 +324,7 @@ async function main(): Promise<void> {
         // halts: this is the stall policy's observable surface, since
         // `pause-after` auto-engagement never fired on 3.7c (see the PR
         // body evidence for the >40s stopped-client runs).
-        await control.cmd(pauseCommand(pane));
+        const pauseReplyLines = await control.cmd(pauseCommand(pane));
         note('PAUSE_CMD_SENT');
         // Observe the halt. With the flood still flowing, a healthy drain
         // exceeds 200 KiB in 1.5s by orders of magnitude; a paused pane
@@ -325,10 +336,10 @@ async function main(): Promise<void> {
         if (growthWhilePaused > 200_000) {
           throw new Error(`pane did not pause: ${growthWhilePaused} bytes still flowed`);
         }
-        // Recover through the %pause -> continue -> reseed wiring: the
-        // dispatch hook has already written the quoted continue; the
-        // onPause handler reseeds once the pane settles. Wait briefly for
-        // the hook event so the manual path is only the fallback.
+        // Recover: if tmux delivered %pause to the hook, it already wrote
+        // the quoted continue and reseeds once the pane settles; wait
+        // briefly for it, else take the manual continue + reseed fallback
+        // (the usual outcome on CI; recorded, not asserted).
         const hookDeadline = Date.now() + 10_000;
         while (!hookReseed && Date.now() < hookDeadline) await sleep(50);
         let r: ReseededResult;
@@ -340,7 +351,7 @@ async function main(): Promise<void> {
         } else {
           // Fallback: tmux did not emit %pause for the explicit pause in
           // this run. The metric records it; the manual continue and
-          // reseed keep the recovery path exercised either way.
+          // reseed keep the recovery exercised; the metric records the miss.
           fallbackTaken = true;
           note('HOOK_PAUSE_MISSED_FALLBACK');
           await control.cmd(continueCommand(pane));
@@ -358,27 +369,39 @@ async function main(): Promise<void> {
         // emitted-ref length 1483, cellsDiff 48518 -- the client received
         // only ~35 KB of the flood while the capture holds the pane's
         // full screen). The gate is (a) history proximity vs the byte-0
-        // file reference within 2%, and (b) exact determinism: a second
-        // reseed of the idle pane reproduces the identical twin. The
-        // emitted-ref comparison still runs and is recorded as a metric.
+        // file reference within 2%, (b) exact determinism: a second
+        // reseed of the idle pane reproduces the identical twin, and (c)
+        // a bounded cellsDiff + mode-state agreement of the reseeded twin
+        // against the byte-0 file reference (so a deterministically wrong
+        // reseed that feeds truncated cells fails even though padTo pads
+        // the line count and the two reseeds agree). The emitted-ref
+        // comparison and pauseHookContinued are recorded as metrics only.
         out.compare = await compareAt(r);
         note('COMPARED');
         const hash1 = stateHash(reseedTwin);
         const refFull = await fileRef();
         const refHistory = refFull.lineCount('normal') - rows;
+        // Content gate (c): line-count proximity alone cannot catch a
+        // truncated feed because padTo pads with blank rows.
+        const fileCompare = compareTwins(reseedTwin, refFull, r, reseeder.stats());
+        const fileRefCellsOk = fileCompare.cellsDiff <= FILE_REF_CELLS_BOUND && fileCompare.modeStateOk;
         refFull.dispose();
         const historyGap = Math.abs(r.historySize - refHistory);
         const historyClose = historyGap <= Math.max(100, Math.floor(refHistory / 50));
         const r2 = await reseeder.reseed(pane);
         const hash2 = stateHash(reseedTwin);
         const deterministic = hash1 === hash2;
-        out.ok = r.attempts >= 1 && r2.attempts >= 1 && deterministic && historyClose;
+        out.ok = r.attempts >= 1 && r2.attempts >= 1 && deterministic && historyClose && fileRefCellsOk;
         out.metric = {
           seedEqualsEmittedRef: (out.compare as CompareOut).ok,
           deterministic,
           historyGap,
           historyClose,
           pauseHookContinued,
+          pauseReplyLines,
+          fileRefCellsOk,
+          fileRefCellsDiff: fileCompare.cellsDiff,
+          fileRefModeStateOk: fileCompare.modeStateOk,
         };
         break;
       }
