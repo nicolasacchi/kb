@@ -635,5 +635,18 @@ describe("nextDelay (T17)", () => {
     gone.session.kick();
     await flush();
     expect(gone.sockets.length).toBe(1);
+
+    const ended = setup();
+    const es = await goLive(ended);
+    es.pushText({ t: "exit", seq: 3, code: 0, offset: 105 });
+    expect(ended.session.getState().phase).toBe("ended");
+    es.closeFromServer(1000);
+    await flush();
+    const sockets = ended.sockets.length;
+    const tickets = ended.mintedTickets.length;
+    ended.session.kick();
+    await flush();
+    expect(ended.sockets.length).toBe(sockets);
+    expect(ended.mintedTickets.length).toBe(tickets);
   });
 });

@@ -44,17 +44,12 @@ import type { TerminalPanelProps } from "./TerminalPanel.lazy";
 import { osc52ClipboardText, writeClipboardText } from "./clipboard";
 import { PhoneTerminal, attachTerm, type PhoneMode } from "./phone/PhoneTerminal";
 import { readFont } from "./phone/fontSteps";
+import { scrollbackFor } from "./phone/scrollback";
+import { bindNetworkKicks } from "./networkKicks";
+import { createPortal } from "react-dom";
 import "./terminal.css";
 
 const TRANSIENT_MS = 2_000;
-/** Phone history cap (client-side trim only; the join still ships the server seed). */
-const PHONE_SCROLLBACK_CAP = 20_000;
-
-/** The scrollback a terminal created for this form factor carries. */
-function scrollbackFor(profile: ProfileFrame, phone: boolean): number {
-  return phone ? Math.min(profile.scrollback, PHONE_SCROLLBACK_CAP) : profile.scrollback;
-}
-
 /** Esc inside the terminal belongs to the terminal, never to the Sheet. */
 function terminalOwnsEscape(e: KeyboardEvent): boolean {
   return e.target instanceof Element && e.target.closest("[data-kb-term-root]") !== null;
@@ -370,19 +365,11 @@ export function TerminalPanel(props: TerminalPanelProps) {
 
     // T17: a returning network (`online`, a bfcache `pageshow`, the tab
     // turning visible) skips a pending reconnect backoff once.
-    const kick = (): void => session.kick();
-    const onVisible = (): void => {
-      if (document.visibilityState === "visible") session.kick();
-    };
-    window.addEventListener("online", kick);
-    window.addEventListener("pageshow", kick);
-    document.addEventListener("visibilitychange", onVisible);
+    const unbindKicks = bindNetworkKicks(window, document, () => session.kick());
 
     return () => {
       dead = true;
-      window.removeEventListener("online", kick);
-      window.removeEventListener("pageshow", kick);
-      document.removeEventListener("visibilitychange", onVisible);
+      unbindKicks();
       if (transientTimer !== null) window.clearTimeout(transientTimer);
       session.dispose();
       sessionRef.current = null;
@@ -462,7 +449,9 @@ export function TerminalPanel(props: TerminalPanelProps) {
   };
 
   if (isMobile) {
-    return (
+    // Portaled so a collapsed ancestor <details> can never hide a modal sheet
+    // (and strand its body scroll lock) when the viewport crosses the breakpoint.
+    return createPortal(
       <Sheet
         open
         detent={detent}
@@ -482,7 +471,8 @@ export function TerminalPanel(props: TerminalPanelProps) {
           caption={transient ?? state.caption}
           onClose={closePanel}
         />
-      </Sheet>
+      </Sheet>,
+      document.body,
     );
   }
 

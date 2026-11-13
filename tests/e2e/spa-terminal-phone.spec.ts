@@ -428,12 +428,16 @@ test.describe("T17 phone terminal: host and lifecycle @phone", () => {
     await expect(page.locator("[data-kb-term]")).toBeVisible();
     await expect(page.locator("[data-kb-term] .xterm")).toHaveCount(1);
     await page.setViewportSize(size);
-    // The session page closes its collapsible sections again below the breakpoint
-    // (React flips `open` in the commit that renders the Sheet): reopen it after.
+    // The session page closes its collapsible section below the breakpoint; the
+    // sheet is portaled, so it stays visible without anyone reopening it.
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => (document.querySelector('[data-testid="session-sec-terminal"]') as HTMLDetailsElement).open,
+        ),
+      )
+      .toBe(false);
     await expect(page.locator("[data-kb-sheet]")).toBeAttached();
-    await page.evaluate(() => {
-      (document.querySelector('[data-testid="session-sec-terminal"]') as HTMLDetailsElement).open = true;
-    });
     await expect(page.locator(VP)).toBeVisible();
     await expect(page.locator(`${VP} .xterm`)).toHaveCount(1);
     stats.release();
