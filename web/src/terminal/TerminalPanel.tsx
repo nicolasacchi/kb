@@ -24,7 +24,8 @@ import { mintTicket } from "../api/terms";
 import { installReplyGuards } from "./replyGuards";
 import { profileMatchesBundle } from "./pins";
 import { computeFontSize } from "./fit";
-import { ImageDefStore } from "./imageDefs";
+import { attachGfx, type GfxHandle, type OpenPicture } from "./gfx";
+import { Lightbox } from "./Lightbox";
 import { countHits, findNext, type FindHit } from "./find";
 import { useTerms } from "./useTerms";
 import type { ImageDefFrame, ProfileFrame } from "./wire";
@@ -116,7 +117,11 @@ export function TerminalPanel(props: TerminalPanelProps) {
   const [findQuery, setFindQuery] = useState("");
   const [findNote, setFindNote] = useState("");
   const findHitRef = useRef<FindHit>({ line: 0, col: -1, length: 0 });
-  const imageDefsRef = useRef(new ImageDefStore());
+  // T15 — the picture layer for the CURRENT xterm instance (null before the
+  // Profile builds the terminal and after teardown).
+  const gfxRef = useRef<GfxHandle | null>(null);
+  const [gfx, setGfx] = useState<GfxHandle | null>(null);
+  const [picture, setPicture] = useState<OpenPicture | null>(null);
   const { terms } = useTerms();
   const rowState = terms.find((t) => t.id === props.termId)?.state ?? null;
 
@@ -131,6 +136,13 @@ export function TerminalPanel(props: TerminalPanelProps) {
     const writeClipboardIfRecent = (data: string): void => {
       const text = osc52ClipboardText(data, lastTypedRef.current, Date.now());
       if (text !== null) void writeClipboardText(text);
+    };
+
+    const disposeGfx = (): void => {
+      gfxRef.current?.dispose();
+      gfxRef.current = null;
+      setGfx(null);
+      setPicture(null);
     };
 
     const createTerminal = (profile: ProfileFrame): boolean => {
@@ -171,6 +183,14 @@ export function TerminalPanel(props: TerminalPanelProps) {
       } catch {
         // DOM renderer fallback.
       }
+      // T15: the placeholder renderer, media cache and tap-to-open layer.
+      const handle = attachGfx(term, {
+        compact: profile.scrollback <= 20_000,
+        bg: term.options.theme?.background ?? "",
+        onOpenPicture: (p) => setPicture(p),
+      });
+      gfxRef.current = handle;
+      setGfx(handle);
       // xterm's IFunctionIdentifier: prefix/intermediates are OPTIONAL
       // and validated when present (prefix 0x3c-0x3f, intermediates
       // 0x20-0x2f); every other value — including the empty string —
@@ -287,6 +307,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
       callbacks: {
         onState: (s) => {
           if (!dead) setState(s);
+          if (s.phase === "live") gfxRef.current?.markLive();
         },
         onTransient: (message) => {
           if (dead) return;
@@ -308,6 +329,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
           ) {
             if (hostClick) host.removeEventListener("click", hostClick);
             hostClick = null;
+            disposeGfx();
             existing.dispose();
             termRef.current = null;
             (host as TermSeam).__kbTerm = undefined;
@@ -315,7 +337,13 @@ export function TerminalPanel(props: TerminalPanelProps) {
           }
         },
         onImageDef: (def: ImageDefFrame) => {
-          imageDefsRef.current.put(def);
+          gfxRef.current?.onImageDef(def);
+        },
+        onGfxReset: (gen: number) => {
+          gfxRef.current?.onGfxReset(gen);
+        },
+        onFullJoin: () => {
+          gfxRef.current?.onFullJoin();
         },
         onSizeChanged: (cols, rows, by) => {
           if (dead) return;
@@ -349,6 +377,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
       hostClick = null;
       session.dispose();
       sessionRef.current = null;
+      disposeGfx();
       const term = termRef.current;
       termRef.current = null;
       (host as TermSeam).__kbTerm = undefined;
@@ -421,6 +450,10 @@ export function TerminalPanel(props: TerminalPanelProps) {
             }
             sessionRef.current?.dispose();
             sessionRef.current = null;
+            gfxRef.current?.dispose();
+            gfxRef.current = null;
+            setGfx(null);
+            setPicture(null);
             termRef.current?.dispose();
             termRef.current = null;
             if (hostRef.current) (hostRef.current as TermSeam).__kbTerm = undefined;
@@ -459,6 +492,9 @@ export function TerminalPanel(props: TerminalPanelProps) {
         data-kb-term-scrollback={scrollback > 0 ? scrollback : undefined}
         ref={hostRef}
       />
+      {gfx !== null ? (
+        <Lightbox picture={picture} media={gfx.media} onClose={() => setPicture(null)} />
+      ) : null}
     </div>
   );
 }

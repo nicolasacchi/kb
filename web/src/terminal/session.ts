@@ -92,6 +92,14 @@ export interface SessionCallbacks {
   onState(state: SessionState): void;
   onProfile?(profile: ProfileFrame): void;
   onImageDef?(def: ImageDefFrame): void;
+  /** T15 — a `gfxreset` frame (kitty delete-all): the pictures stay addressable. */
+  onGfxReset?(gen: number): void;
+  /**
+   * T15 — fired on the first frame of a FULL join (nothing applied yet: a
+   * fresh connect, a stale epoch, a gap or a cut seed), before that join's
+   * `imagedef` frames. Never fired for a resume (`from=` with a held offset).
+   */
+  onFullJoin?(): void;
   onSizeChanged?(cols: number, rows: number, by: string): void;
   onClipboard?(dataB64: string): void;
   /** Transient caption-only notice (e.g. dropped input while not live). */
@@ -492,6 +500,9 @@ export class TermSession {
           this.applied = 0;
         }
         this.epoch = frame.epoch;
+        // Nothing applied (fresh connect, stale epoch, gap, cut seed): this
+        // connection is a FULL join and its seed re-announces every picture.
+        if (this.applied === 0) this.cb.onFullJoin?.();
         break;
       }
       case "profile":
@@ -545,6 +556,7 @@ export class TermSession {
         this.cb.onSizeChanged?.(frame.cols, frame.rows, frame.by);
         break;
       case "gfxreset":
+        this.cb.onGfxReset?.(frame.gen);
         break;
       case "clipboard":
         this.cb.onClipboard?.(frame.data_b64);

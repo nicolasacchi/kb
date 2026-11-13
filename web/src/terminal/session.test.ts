@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { encodeBinaryFrame } from "./wire";
 import {
   TermSession,
+  type SessionCallbacks,
   type SessionEffects,
   type SessionSocket,
   type SocketHandlers,
@@ -55,7 +56,7 @@ const PROFILE = {
   scroll_on_erase_in_display: true, cell_px_w: 9, cell_px_h: 18, theme: null,
 };
 
-function setup(opts: { random?: () => number } = {}) {
+function setup(opts: { random?: () => number; callbacks?: Partial<SessionCallbacks> } = {}) {
   const calls: Array<[string, ...unknown[]]> = [];
   const sink: TermSink = {
     write: (data, done) => {
@@ -105,6 +106,7 @@ function setup(opts: { random?: () => number } = {}) {
     callbacks: {
       onState: () => {},
       onTransient: (m) => transients.push(m),
+      ...opts.callbacks,
     },
   });
   const pendingTimer = (ms: number): FakeTimer | undefined =>
@@ -582,5 +584,47 @@ describe("TermSession", () => {
     await flush();
     // One throw is swallowed; the second write still lands.
     expect(h.calls.filter((c) => c[0] === "write").map((c) => c[1])).toContainEqual([...new TextEncoder().encode("b")]);
+  });
+
+  it("T15: onFullJoin fires on a full join before its imagedefs, never on a resume", async () => {
+    const order: string[] = [];
+    const h = setup({
+      callbacks: {
+        onFullJoin: () => order.push("fulljoin"),
+        onImageDef: (d) => order.push(`imagedef:${d.id}`),
+        onGfxReset: (g) => order.push(`gfxreset:${g}`),
+      },
+    });
+    h.session.start();
+    await flush();
+    const s = h.sockets[0];
+    s.pushText({ t: "hello", proto: "kb-term/1", session: "s1", epoch: "E1", harness: "omp", bound_sid: null });
+    s.pushText(PROFILE);
+    s.pushText({
+      t: "imagedef", seq: 1, id: 7, gen: 1, sha256: "a".repeat(64), mime: "image/png",
+      w: 4, h: 4, cols: 2, rows: 1, offset: 0,
+    });
+    s.pushText({ t: "seed", offset: 100, len: 5 });
+    s.pushBinary(100, "hello");
+    s.pushText({ t: "gfxreset", seq: 2, gen: 3, offset: 105 });
+    await flush();
+    expect(order).toEqual(["fulljoin", "imagedef:7", "gfxreset:3"]);
+    // Resume: from=105 held, same epoch -> no onFullJoin.
+    s.closeFromServer(1000);
+    h.fire(h.pendingTimer(250)?.ms ?? 250);
+    await flush();
+    const s2 = h.sockets[1];
+    expect(h.urls[1]).toContain("from=105");
+    s2.pushText({ t: "hello", proto: "kb-term/1", session: "s1", epoch: "E1", harness: "omp", bound_sid: null });
+    await flush();
+    expect(order.filter((o) => o === "fulljoin")).toHaveLength(1);
+    // Epoch change: the next hello discards the offset -> a full join again.
+    s2.closeFromServer(1000);
+    h.fire(h.pendingTimer(500)?.ms ?? 500);
+    await flush();
+    const s3 = h.sockets[2];
+    s3.pushText({ t: "hello", proto: "kb-term/1", session: "s1", epoch: "E2", harness: "omp", bound_sid: null });
+    await flush();
+    expect(order.filter((o) => o === "fulljoin")).toHaveLength(2);
   });
 });
