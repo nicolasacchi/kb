@@ -80,10 +80,12 @@ pub enum RunnerRequest {
         resume_sid: Option<String>,
         /// Working directory.
         cwd: String,
-        /// Grid columns.
-        cols: u16,
-        /// Grid rows.
-        rows: u16,
+        /// Grid columns (`None` means the runner's default).
+        #[serde(default)]
+        cols: Option<u16>,
+        /// Grid rows (`None` means the runner's default).
+        #[serde(default)]
+        rows: Option<u16>,
         /// Extra environment for the harness pane.
         #[serde(default)]
         env: Option<std::collections::BTreeMap<String, String>>,
@@ -392,5 +394,60 @@ mod tests {
             "{\"op\":\"kill\",\"id\":\"abcd1234\",\"future_field\":true}"
         )
         .is_err());
+    }
+    /// A launch request that omits `cols`/`rows` parses as `None`
+    /// (the runner's 120x40 default), and serializes both back as
+    /// explicit `null` — the mirror shape of the upstream
+    /// `Option<u16>` + `#[serde(default)]`. The golden
+    /// (`req_launch.json`, 120/40) still round-trips as `Some`.
+    #[test]
+    fn launch_size_may_be_omitted() {
+        let req: RunnerRequest =
+            serde_json::from_str("{\"op\":\"launch\",\"harness\":\"omp\",\"cwd\":\"/work/proj\"}")
+                .unwrap();
+        match req {
+            RunnerRequest::Launch {
+                cols,
+                rows,
+                argv,
+                resume_sid,
+                env,
+                exit_keys,
+                ..
+            } => {
+                assert_eq!(cols, None);
+                assert_eq!(rows, None);
+                assert_eq!(argv, None);
+                assert_eq!(resume_sid, None);
+                assert_eq!(env, None);
+                assert_eq!(exit_keys, None);
+            }
+            other => panic!("must be launch, got {other:?}"),
+        }
+        let out = serde_json::to_string(&RunnerRequest::Launch {
+            harness: Harness::Omp,
+            argv: None,
+            resume_sid: None,
+            cwd: "/work/proj".to_string(),
+            cols: None,
+            rows: None,
+            env: None,
+            exit_keys: None,
+        })
+        .unwrap();
+        assert!(out.contains(r#""cols":null"#), "{out}");
+        assert!(out.contains(r#""rows":null"#), "{out}");
+        let expected = RunnerRequest::Launch {
+            harness: Harness::Omp,
+            argv: None,
+            resume_sid: None,
+            cwd: "/work/proj".to_string(),
+            cols: None,
+            rows: None,
+            env: None,
+            exit_keys: None,
+        };
+        let back: RunnerRequest = serde_json::from_str(&out).unwrap();
+        assert_eq!(back, expected);
     }
 }
