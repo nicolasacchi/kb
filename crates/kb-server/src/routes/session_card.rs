@@ -871,6 +871,7 @@ async fn memory_lane(
             let mut id_futs: Vec<super::CorpusFut<'_, Result<Vec<String>, kb_core::Error>>> = Vec::new();
             for sid in &read_ids {
                 let sid = sid.clone();
+                let kb_name = kb_name.clone();
                 id_futs.push(Box::pin(async move {
                     match ctx
                         .storage
