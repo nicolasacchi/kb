@@ -1109,9 +1109,10 @@ kb slate wait <n> [--timeout S] [--parent-pid PID] [--json]
                                     error or stopped (parent died, stdout
                                     closed); never 2 or 3. Output starts
                                     with the slate's untrusted-data frame
-                                    line. Human output is one `57 answered
-                                    · [you] 3m: <line>` per answer (body
-                                    indented), `57 done · …` when closed,
+                                    line on a resolved ask. Human output is
+                                    one `#57 answered · [you] 3m: <line>`
+                                    per answer (body indented), `#57 done ·
+                                    …` when closed,
                                     then a footer: a `[you]` answer reads
                                     "the operator's answer to this
                                     question", any other author "input to
@@ -1120,7 +1121,8 @@ kb slate wait <n> [--timeout S] [--parent-pid PID] [--json]
                                     bare number. Under `--json` EVERY
                                     outcome prints JSON: `{state:
                                     resolved|timeout|gone|stopped|error,
-                                    slug, seq, ask, answers, done, reason}`;
+                                    slug, seq, ask, answers, done, reason,
+                                    kind}`;
                                     `reason` is null|timeout|stopped|
                                     not-found|not-an-ask (carrying the
                                     actual `kind`)|dropped|rotated|closed,

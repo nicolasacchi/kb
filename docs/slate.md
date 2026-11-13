@@ -277,7 +277,7 @@ as a background Bash command (the exit re-invokes the session; main
 conversation only, not a subagent, not `claude -p`; 0 answered or closed,
 4 still open after the timeout, 5 gone, 1 error; the SessionStart hook adds
 that line only on a positive Claude signal, never because the harness is
-unset); omp is pushed every answer or done on its own asks and woken by it
+unset); omp is woken by an answer or a closing done on its own asks
 (`triggerTurn`, bypassing the 30 s push floor; asks addressed to someone
 else are not pushed to it); Kimi, Codex and OpenCode see answers in full in
 their next prompt's slate delta and must never run `wait`. Per-harness
