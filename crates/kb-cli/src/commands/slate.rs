@@ -978,9 +978,33 @@ pub async fn plain(ctx: &Ctx, kind: &str, line: &str) -> Result<()> {
     append(ctx, post_body(ctx, kind, line)).await.map(|_| ())
 }
 
-/// `ask "…?"` — the `?` is enforced server-side (`ask-needs-question`).
-pub async fn ask(ctx: &Ctx, line: &str) -> Result<()> {
-    append(ctx, post_body(ctx, "ask", line)).await.map(|_| ())
+/// `ask "…?" [--to you|<harness>|any]` — the `?` is enforced server-side
+/// (`ask-needs-question`), and so is the addressee (`bad-to`).
+pub async fn ask(ctx: &Ctx, line: &str, to: Option<&str>) -> Result<()> {
+    let mut b = post_body(ctx, "ask", line);
+    if let Some(t) = to {
+        b["to"] = json!(normalize_ask_to(t)?);
+    }
+    append(ctx, b).await.map(|_| ())
+}
+
+/// The addressee as stored: `operator` and `human` are spellings of `you`;
+/// everything else must already be `you`, `any` or a harness. Checked here
+/// so a typo fails before the network, and again by the daemon.
+pub(crate) fn normalize_ask_to(raw: &str) -> Result<String> {
+    let t = raw.trim().to_ascii_lowercase();
+    let t = match t.as_str() {
+        "operator" | "human" => "you".to_string(),
+        _ => t,
+    };
+    if kb_core::slate::valid_ask_to(&t) {
+        Ok(t)
+    } else {
+        bail!(
+            "--to takes you (alias: operator, human), any, or a harness ({}); got {raw:?}",
+            kb_core::sessions::HARNESSES.join(", ")
+        )
+    }
 }
 
 /// `found "…" --ref R` — a found with no ref is a 400 by design
@@ -1150,6 +1174,12 @@ pub(crate) fn edit_body(
     };
     if !refs.is_empty() {
         v["refs"] = json!(refs);
+    }
+    // An edited ask keeps its addressee.
+    if v["kind"] == "ask" {
+        if let Some(to) = target.get("to").and_then(Value::as_str) {
+            v["to"] = json!(to);
+        }
     }
     if anyway {
         v["anyway"] = json!(true);
@@ -1709,6 +1739,357 @@ async fn wait_stop(parent_pid: Option<u32>) -> WatchStop {
             return stop;
         }
         tokio::time::sleep(Duration::from_secs(PARENT_POLL_SECS)).await;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// wait (AW3) — block until ONE ask is resolved. A pure client read: it never
+// POSTs and never touches the cursor. Exit codes are its own contract (never
+// 2/3, which belong to `call`'s refusals).
+// ---------------------------------------------------------------------------
+
+pub const EXIT_WAIT_TIMEOUT: i32 = 4;
+pub const EXIT_WAIT_GONE: i32 = 5;
+
+/// Why a waited-on ask can never resolve.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum GoneReason {
+    NotFound,
+    NotAnAsk(String),
+    Dropped,
+    Rotated,
+    Closed,
+}
+
+impl GoneReason {
+    fn wire(&self) -> &'static str {
+        match self {
+            GoneReason::NotFound => "not-found",
+            GoneReason::NotAnAsk(_) => "not-an-ask",
+            GoneReason::Dropped => "dropped",
+            GoneReason::Rotated => "rotated",
+            GoneReason::Closed => "closed",
+        }
+    }
+
+    fn human(&self, seq: u64) -> String {
+        match self {
+            GoneReason::NotFound => format!("#{seq} is not on this slate"),
+            GoneReason::NotAnAsk(k) => format!("#{seq} is a {k}, not an ask"),
+            GoneReason::Dropped => format!("#{seq} was dropped"),
+            GoneReason::Rotated => format!("the slate was rotated; #{seq} is gone"),
+            GoneReason::Closed => format!("the slate was closed; #{seq} is still unresolved"),
+        }
+    }
+}
+
+/// How one pass over the ledger reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum Verdict {
+    Pending,
+    Resolved(kb_core::slate::AskState),
+    Gone(GoneReason),
+}
+
+/// `expected_id` is the `e_…` id seen at the first seed: a seq that now
+/// holds a different post means the ledger was rotated under us.
+pub(crate) fn evaluate_wait(
+    posts: &[kb_core::slate::Post],
+    seq: u64,
+    expected_id: Option<&str>,
+) -> Verdict {
+    use kb_core::slate::AskState;
+    if let (Some(id), Some(p)) = (expected_id, posts.iter().find(|p| p.seq == seq)) {
+        if p.id != id {
+            return Verdict::Gone(GoneReason::Rotated);
+        }
+    }
+    match kb_core::slate::ask_state(posts, seq) {
+        AskState::NotFound => Verdict::Gone(GoneReason::NotFound),
+        AskState::NotAnAsk { kind } => Verdict::Gone(GoneReason::NotAnAsk(kind.to_string())),
+        AskState::Dropped { .. } => Verdict::Gone(GoneReason::Dropped),
+        AskState::Open { .. } => Verdict::Pending,
+        s @ AskState::Resolved { .. } => Verdict::Resolved(s),
+    }
+}
+
+/// What an SSE frame means to a waiter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum FrameClass {
+    Ignore,
+    Update,
+    Gone(GoneReason),
+}
+
+pub(crate) fn classify_wait_frame(
+    event: Option<&str>,
+    data: Option<&str>,
+    slug: &str,
+) -> FrameClass {
+    if event != Some("slate.updated") {
+        return FrameClass::Ignore;
+    }
+    let envelope: Value = serde_json::from_str(data.unwrap_or("{}")).unwrap_or(Value::Null);
+    let payload = envelope.get("payload").unwrap_or(&envelope);
+    if payload.get("slug").and_then(Value::as_str) != Some(slug) {
+        return FrameClass::Ignore;
+    }
+    match payload.get("kind").and_then(Value::as_str) {
+        Some("rotate") => FrameClass::Gone(GoneReason::Rotated),
+        Some("close") => FrameClass::Gone(GoneReason::Closed),
+        _ => FrameClass::Update,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum WaitOutcome {
+    Resolved(kb_core::slate::AskState),
+    TimedOut,
+    Gone(GoneReason),
+    Stopped,
+}
+
+/// 0 resolved · 4 timed out · 5 gone · 1 stopped. Never 2 or 3.
+pub(crate) fn wait_exit_code(o: &WaitOutcome) -> i32 {
+    match o {
+        WaitOutcome::Resolved(_) => 0,
+        WaitOutcome::TimedOut => EXIT_WAIT_TIMEOUT,
+        WaitOutcome::Gone(_) => EXIT_WAIT_GONE,
+        WaitOutcome::Stopped => EXIT_ERROR,
+    }
+}
+
+fn wait_post_line(seq: u64, verb: &str, p: &kb_core::slate::Post, now: i64) -> String {
+    let mut s = format!(
+        "#{seq} {verb} · [{}] {}: {}",
+        kb_core::slate::author_tag(p),
+        kb_core::slate::fmt_age((now - p.at).max(0)),
+        p.line.trim()
+    );
+    if let Some(b) = p.body.as_deref().filter(|b| !b.trim().is_empty()) {
+        for l in b.trim_end().lines() {
+            s.push_str("\n  ");
+            s.push_str(l);
+        }
+    }
+    s
+}
+
+/// The human text for a finished wait. Pure (`now` is an argument).
+pub(crate) fn render_wait(seq: u64, o: &WaitOutcome, timeout_secs: u64, now: i64) -> String {
+    use kb_core::slate::AskState;
+    match o {
+        WaitOutcome::Resolved(AskState::Resolved { answers, done, .. }) => {
+            let mut out: Vec<String> = answers
+                .iter()
+                .map(|a| wait_post_line(seq, "answered", a, now))
+                .collect();
+            match done {
+                Some(d) => out.push(wait_post_line(seq, "done", d, now)),
+                None => out.push(format!("next: act on it, then kb slate done #{seq} \"…\"")),
+            }
+            out.join("\n")
+        }
+        WaitOutcome::Resolved(_) => format!("#{seq} resolved"),
+        WaitOutcome::TimedOut => format!(
+            "#{seq} still open after {} — no answer yet",
+            kb_core::slate::fmt_age(timeout_secs as i64)
+        ),
+        WaitOutcome::Gone(r) => r.human(seq),
+        WaitOutcome::Stopped => format!("#{seq} wait stopped (parent gone or stdout closed)"),
+    }
+}
+
+/// `--json`: `{state, slug, ask, answers, done, reason}`.
+pub(crate) fn wait_json(slug: &str, seq: u64, o: &WaitOutcome) -> Value {
+    use kb_core::slate::AskState;
+    let (state, reason) = match o {
+        WaitOutcome::Resolved(_) => ("resolved", Value::Null),
+        WaitOutcome::TimedOut => ("timeout", json!("timeout")),
+        WaitOutcome::Gone(r) => ("gone", json!(r.wire())),
+        WaitOutcome::Stopped => ("stopped", json!("stopped")),
+    };
+    let (ask, answers, done) = match o {
+        WaitOutcome::Resolved(AskState::Resolved {
+            head,
+            answers,
+            done,
+        }) => (json!(head), json!(answers), json!(done)),
+        _ => (Value::Null, json!([]), Value::Null),
+    };
+    json!({
+        "state": state,
+        "slug": slug,
+        "seq": seq,
+        "ask": ask,
+        "answers": answers,
+        "done": done,
+        "reason": reason,
+    })
+}
+
+/// A GET that reports the status instead of exiting on non-2xx (`call`
+/// exits the process with the slate's refusal codes, which a waiter must
+/// not do: its exit codes are its own).
+async fn get_status(ctx: &Ctx, tail: &str, query: &[(&str, String)]) -> Result<(u16, Value)> {
+    let url = ctx.url(tail);
+    let req = ctx.client(15)?.get(&url).query(query);
+    let resp = crate::http::send_noting_transport(req, &format!("GET {url}"), None).await?;
+    let status = resp.status().as_u16();
+    let text = resp.text().await.unwrap_or_default();
+    Ok((
+        status,
+        serde_json::from_str(&text).unwrap_or(Value::String(text)),
+    ))
+}
+
+/// `Ok(None)` = the slate is gone (404). Other non-2xx is an error.
+async fn fetch_posts_since(ctx: &Ctx, since: u64) -> Result<Option<Vec<kb_core::slate::Post>>> {
+    let (status, body) = get_status(ctx, "/posts", &[("since", since.to_string())]).await?;
+    if status == 404 {
+        return Ok(None);
+    }
+    if !(200..300).contains(&status) {
+        bail!("GET posts: HTTP {status}: {body}");
+    }
+    Ok(Some(
+        serde_json::from_value(body).context("decoding the slate's posts")?,
+    ))
+}
+
+fn note_wait(msg: &str) {
+    let mut err = std::io::stderr().lock();
+    let _ = writeln!(err, "[kb slate wait] {msg}");
+}
+
+/// `kb slate wait #n [--timeout S] [--parent-pid PID]` — block until the
+/// logical ask `#n` is answered or closed. Subscribes to the SSE stream
+/// FIRST, then seeds from the ledger (one `posts` page always suffices:
+/// `LEDGER_MAX_POSTS` == the route's read cap), so nothing between the two
+/// can be missed. Seeds from `since=0`, not `n-1`, so answers aimed at an
+/// older version of an edited ask are seen. Exit: 0 resolved · 4 timed out ·
+/// 5 gone · 1 error or stopped.
+pub async fn wait(ctx: &Ctx, seq: u64, timeout_secs: u64, parent_pid: Option<u32>) -> Result<()> {
+    install_parent_death_signal()?;
+    let outcome = wait_loop(ctx, seq, timeout_secs, parent_pid).await?;
+    if let WaitOutcome::Stopped = outcome {
+        note_wait("parent gone or stdout closed; exiting");
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let text = if ctx.json {
+        serde_json::to_string_pretty(&wait_json(&ctx.slug, seq, &outcome))?
+    } else {
+        render_wait(seq, &outcome, timeout_secs, now)
+    };
+    let _ = write_stdout_line(&text);
+    let code = wait_exit_code(&outcome);
+    if code != 0 {
+        std::process::exit(code);
+    }
+    Ok(())
+}
+
+async fn wait_loop(
+    ctx: &Ctx,
+    seq: u64,
+    timeout_secs: u64,
+    parent_pid: Option<u32>,
+) -> Result<WaitOutcome> {
+    if current_stop(parent_pid).is_some() {
+        return Ok(WaitOutcome::Stopped);
+    }
+    let deadline =
+        (timeout_secs > 0).then(|| tokio::time::Instant::now() + Duration::from_secs(timeout_secs));
+    let query = watch_query(&ctx.slug);
+    let mut expected_id: Option<String> = None;
+    let mut backoff = 1u64;
+    let mut connected_once = false;
+    eprintln!("[kb slate wait] {} #{seq}", ctx.slug);
+    loop {
+        if current_stop(parent_pid).is_some() {
+            return Ok(WaitOutcome::Stopped);
+        }
+        let resp = match open_events_stream(&ctx.base, ctx.bearer.as_deref(), None, &query).await {
+            Ok(r) => r,
+            Err(e) if !connected_once => return Err(e),
+            Err(e) => {
+                eprintln!("[kb slate wait] {e}; retrying in {backoff}s …");
+                if sleep_or_done(deadline, backoff, parent_pid).await {
+                    return Ok(done_outcome(parent_pid));
+                }
+                backoff = (backoff * 2).min(30);
+                continue;
+            }
+        };
+        connected_once = true;
+        backoff = 1;
+        let mut reader = FrameReader::from_response(resp);
+        // Seed AFTER subscribing.
+        let Some(mut posts) = fetch_posts_since(ctx, 0).await? else {
+            return Ok(WaitOutcome::Gone(GoneReason::NotFound));
+        };
+        if expected_id.is_none() {
+            expected_id = posts.iter().find(|p| p.seq == seq).map(|p| p.id.clone());
+        }
+        match evaluate_wait(&posts, seq, expected_id.as_deref()) {
+            Verdict::Pending => {}
+            Verdict::Resolved(s) => return Ok(WaitOutcome::Resolved(s)),
+            Verdict::Gone(r) => return Ok(WaitOutcome::Gone(r)),
+        }
+        loop {
+            let frame = tokio::select! {
+                biased;
+                _ = sleep_until_opt(deadline) => return Ok(WaitOutcome::TimedOut),
+                _ = wait_stop(parent_pid) => return Ok(WaitOutcome::Stopped),
+                f = reader.next_frame() => f,
+            };
+            let frame = match frame {
+                Ok(Some(f)) => f,
+                Ok(None) => break,
+                Err(e) => {
+                    eprintln!("[kb slate wait] stream error: {e}");
+                    break;
+                }
+            };
+            match classify_wait_frame(frame.event.as_deref(), frame.data.as_deref(), &ctx.slug) {
+                FrameClass::Ignore => continue,
+                FrameClass::Gone(r) => return Ok(WaitOutcome::Gone(r)),
+                FrameClass::Update => {}
+            }
+            let last = posts.last().map(|p| p.seq).unwrap_or(0);
+            match fetch_posts_since(ctx, last).await {
+                Ok(Some(more)) => posts.extend(more),
+                Ok(None) => return Ok(WaitOutcome::Gone(GoneReason::NotFound)),
+                Err(e) => {
+                    eprintln!("[kb slate wait] {e}; resyncing");
+                    break;
+                }
+            }
+            match evaluate_wait(&posts, seq, expected_id.as_deref()) {
+                Verdict::Pending => {}
+                Verdict::Resolved(s) => return Ok(WaitOutcome::Resolved(s)),
+                Verdict::Gone(r) => return Ok(WaitOutcome::Gone(r)),
+            }
+        }
+        eprintln!("[kb slate wait] stream closed; reconnecting in {backoff}s …");
+        if sleep_or_done(deadline, backoff, parent_pid).await {
+            return Ok(done_outcome(parent_pid));
+        }
+        backoff = (backoff * 2).min(30);
+    }
+}
+
+/// `sleep_or_done` fired: a stop condition beats the deadline.
+fn done_outcome(parent_pid: Option<u32>) -> WaitOutcome {
+    if current_stop(parent_pid).is_some() {
+        WaitOutcome::Stopped
+    } else {
+        WaitOutcome::TimedOut
     }
 }
 
@@ -2906,5 +3287,180 @@ mod tests {
         ] {
             assert!(looks_token_shaped(slug).is_none(), "{slug}");
         }
+    }
+
+    // --- AW3: ask --to, edit carries it, wait ---------------------------------
+
+    #[test]
+    fn ask_to_normalises_aliases_and_refuses_the_rest() {
+        for (raw, want) in [
+            ("you", "you"),
+            ("Operator", "you"),
+            ("human", "you"),
+            ("any", "any"),
+            ("omp", "omp"),
+            (" Claude ", "claude"),
+        ] {
+            assert_eq!(normalize_ask_to(raw).unwrap(), want, "{raw}");
+        }
+        for bad in ["", "me", "gpt", "all"] {
+            assert!(normalize_ask_to(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn edit_carries_the_addressee_of_an_ask_only() {
+        let ask = json!({"kind": "ask", "line": "ok?", "to": "you"});
+        let v = edit_body(&ask, 5, "really ok?".into(), None, None, &[], false);
+        assert_eq!(v["to"], "you");
+        let hand = json!({"kind": "hand", "line": "x", "subject": "s", "to": "omp"});
+        let v = edit_body(&hand, 5, "y".into(), None, None, &[], false);
+        assert!(
+            v.get("to").is_none(),
+            "hand's --to is not part of this change"
+        );
+    }
+
+    fn wp(seq: u64, kind: &str, re: Option<u64>, line: &str, human: bool) -> kb_core::slate::Post {
+        let mut v = json!({
+            "seq": seq, "id": format!("e_{seq:012x}"), "at": 1_000 + seq as i64,
+            "kind": kind, "line": line,
+            "prov": {"harness": "claude", "session_id": "aaaa1111",
+                     "origin": if human { "human" } else { "agent" }},
+        });
+        if let Some(r) = re {
+            v["re"] = json!(r);
+        }
+        serde_json::from_value(v).unwrap()
+    }
+
+    #[test]
+    fn evaluate_wait_reads_pending_resolved_and_gone() {
+        let ask = wp(1, "ask", None, "ok?", false);
+        assert_eq!(
+            evaluate_wait(std::slice::from_ref(&ask), 1, None),
+            Verdict::Pending
+        );
+        assert_eq!(
+            evaluate_wait(std::slice::from_ref(&ask), 9, None),
+            Verdict::Gone(GoneReason::NotFound)
+        );
+        let found = wp(2, "found", None, "f", false);
+        assert!(matches!(
+            evaluate_wait(&[ask.clone(), found], 2, None),
+            Verdict::Gone(GoneReason::NotAnAsk(k)) if k == "found"
+        ));
+        let ans = wp(2, "answer", Some(1), "yes", true);
+        assert!(matches!(
+            evaluate_wait(&[ask.clone(), ans.clone()], 1, None),
+            Verdict::Resolved(_)
+        ));
+        let drop = wp(3, "drop", Some(1), "x", false);
+        assert_eq!(
+            evaluate_wait(&[ask.clone(), drop], 1, None),
+            Verdict::Gone(GoneReason::Dropped)
+        );
+        // Same seq, different id: the ledger was rotated under us.
+        let other = wp(1, "ask", None, "another?", false);
+        let stale_id = ask.id.clone();
+        let other = kb_core::slate::Post {
+            id: "e_ffffffffffff".into(),
+            ..other
+        };
+        assert_eq!(
+            evaluate_wait(&[other], 1, Some(&stale_id)),
+            Verdict::Gone(GoneReason::Rotated)
+        );
+    }
+
+    #[test]
+    fn wait_frames_classify_by_slug_and_kind() {
+        let f =
+            |slug: &str, kind: &str| json!({"payload": {"slug": slug, "kind": kind}}).to_string();
+        let c = |ev: Option<&str>, data: String| classify_wait_frame(ev, Some(&data), "kb");
+        assert_eq!(
+            c(Some("slate.updated"), f("kb", "answer")),
+            FrameClass::Update
+        );
+        assert_eq!(
+            c(Some("slate.updated"), f("other", "answer")),
+            FrameClass::Ignore
+        );
+        assert_eq!(c(Some("hello"), f("kb", "answer")), FrameClass::Ignore);
+        assert_eq!(
+            c(Some("slate.updated"), f("kb", "rotate")),
+            FrameClass::Gone(GoneReason::Rotated)
+        );
+        assert_eq!(
+            c(Some("slate.updated"), f("kb", "close")),
+            FrameClass::Gone(GoneReason::Closed)
+        );
+        // An unwrapped payload is read too.
+        let bare = json!({"slug": "kb", "kind": "ask"}).to_string();
+        assert_eq!(c(Some("slate.updated"), bare), FrameClass::Update);
+    }
+
+    #[test]
+    fn wait_exit_codes_never_use_2_or_3() {
+        let resolved = WaitOutcome::Resolved(kb_core::slate::AskState::NotFound);
+        let all = [
+            (resolved, 0),
+            (WaitOutcome::TimedOut, 4),
+            (WaitOutcome::Gone(GoneReason::Dropped), 5),
+            (WaitOutcome::Gone(GoneReason::Closed), 5),
+            (WaitOutcome::Stopped, 1),
+        ];
+        for (o, want) in all {
+            let got = wait_exit_code(&o);
+            assert_eq!(got, want, "{o:?}");
+            assert!(got != EXIT_NOT_FOUND && got != EXIT_REFUSED);
+        }
+    }
+
+    #[test]
+    fn wait_render_names_who_answered_and_what_to_do_next() {
+        let ask = wp(57, "ask", None, "ship it?", false);
+        let ans = wp(58, "answer", Some(57), "yes, ship", true);
+        let st = kb_core::slate::ask_state(&[ask.clone(), ans.clone()], 57);
+        let now = ans.at + 180;
+        let out = render_wait(57, &WaitOutcome::Resolved(st), 3600, now);
+        assert_eq!(
+            out,
+            "#57 answered · [you] 3m: yes, ship\nnext: act on it, then kb slate done #57 \"…\""
+        );
+        // A done closes the loop; no next-step footer.
+        let done = wp(59, "done", Some(57), "chat: yes", false);
+        let st = kb_core::slate::ask_state(&[ask, ans, done], 57);
+        let out = render_wait(57, &WaitOutcome::Resolved(st), 3600, now);
+        assert!(out.contains("#57 done · [claude/"), "{out}");
+        assert!(!out.contains("next:"), "{out}");
+        assert_eq!(
+            render_wait(57, &WaitOutcome::TimedOut, 3600, now),
+            "#57 still open after 1h — no answer yet"
+        );
+    }
+
+    #[test]
+    fn wait_json_has_the_pinned_shape() {
+        let ask = wp(1, "ask", None, "ok?", false);
+        let ans = wp(2, "answer", Some(1), "yes", true);
+        let st = kb_core::slate::ask_state(&[ask, ans], 1);
+        let v = wait_json("kb", 1, &WaitOutcome::Resolved(st));
+        assert_eq!(v["state"], "resolved");
+        assert_eq!(v["slug"], "kb");
+        assert_eq!(v["ask"]["seq"], 1);
+        assert_eq!(v["answers"][0]["line"], "yes");
+        assert!(v["done"].is_null() && v["reason"].is_null());
+        let v = wait_json("kb", 1, &WaitOutcome::Gone(GoneReason::Rotated));
+        assert_eq!(
+            (v["state"].as_str(), v["reason"].as_str()),
+            (Some("gone"), Some("rotated"))
+        );
+        assert_eq!(v["answers"], json!([]));
+        let v = wait_json("kb", 1, &WaitOutcome::TimedOut);
+        assert_eq!(
+            (v["state"].as_str(), v["reason"].as_str()),
+            (Some("timeout"), Some("timeout"))
+        );
     }
 }

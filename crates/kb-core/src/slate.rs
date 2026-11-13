@@ -1086,6 +1086,7 @@ pub fn open_asks_with_ref(posts: &[Post], reference: &str) -> Vec<u64> {
 /// written. `open_asks_with_ref` deliberately does NOT use this (it ignores
 /// chains and the `asks/close` route depends on that exact behaviour).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)] // short-lived read result, never stored in bulk
 pub enum AskState {
     /// No such seq on this ledger.
     NotFound,
@@ -4099,13 +4100,13 @@ mod tests {
     fn ask_state_matrix() {
         let ask = aw(1, Kind::Ask, None, None);
         let found = aw(2, Kind::Found, None, None);
-        assert_eq!(ask_state(&[ask.clone()], 9), AskState::NotFound);
+        assert_eq!(ask_state(std::slice::from_ref(&ask), 9), AskState::NotFound);
         assert_eq!(
             ask_state(&[ask.clone(), found], 2),
             AskState::NotAnAsk { kind: Kind::Found }
         );
         assert!(matches!(
-            ask_state(&[ask.clone()], 1),
+            ask_state(std::slice::from_ref(&ask), 1),
             AskState::Open { .. }
         ));
 
