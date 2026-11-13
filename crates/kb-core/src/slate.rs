@@ -1114,54 +1114,59 @@ struct AskResolution<'a> {
     done: Option<&'a Post>,
 }
 
-/// `seq` must be an `ask` present in `by_seq`.
-fn resolve_ask<'a>(
-    posts: &'a [Post],
-    by_seq: &HashMap<u64, &'a Post>,
-    dropped: &HashSet<u64>,
-    seq: u64,
-) -> Option<AskResolution<'a>> {
-    let mut members: HashSet<u64> = HashSet::new();
-    members.insert(seq);
-    // Back to the chain root (seqs strictly decrease; bounded anyway).
-    let mut cur = seq;
-    for _ in 0..64 {
-        match by_seq.get(&cur).and_then(|p| p.supersedes) {
-            Some(prev) if prev < cur && by_seq.contains_key(&prev) => {
-                members.insert(prev);
-                cur = prev;
-            }
-            _ => break,
-        }
-    }
-    // Forward: ledger order is seq order, so one pass finds every
-    // descendant (including a branch that superseded an older version).
-    for p in posts {
-        if p.kind == Kind::Ask && p.supersedes.is_some_and(|t| members.contains(&t)) {
-            members.insert(p.seq);
-        }
-    }
-    let head = members.iter().max().and_then(|s| by_seq.get(s).copied())?;
-    let dropped_member = members
+/// `seq` must be an `ask` present in `d.by_seq`.
+///
+/// ONE definition of the logical ask, shared with the board: its members are
+/// every ask in the chain rooted at `chain_root(seq)` (branches included).
+/// The ask is `Dropped` only when EVERY member that could still be the
+/// visible head (not superseded by a live edit) is hidden by the
+/// whole-post-drop rule; dropping one branch of a branched edit leaves the
+/// other branch a live ask, exactly as the board shows it, and `head` is the
+/// newest such visible leaf.
+fn resolve_ask<'a>(d: &Derived<'a>, seq: u64) -> Option<AskResolution<'a>> {
+    let root = d.chain_root(seq);
+    let members: HashSet<u64> = d
+        .posts
         .iter()
-        .filter(|s| dropped.contains(s))
-        .min()
-        .copied();
-    let live_superseded: HashSet<u64> = posts
+        .filter(|p| p.kind == Kind::Ask && d.chain_root(p.seq) == root)
+        .map(|p| p.seq)
+        .chain(std::iter::once(seq))
+        .collect();
+    let leaves: Vec<u64> = members
         .iter()
-        .filter(|p| !dropped.contains(&p.seq))
+        .copied()
+        .filter(|s| !d.superseded_by.contains_key(s))
+        .collect();
+    let visible_leaf = leaves.iter().copied().filter(|s| !d.drop_hidden(*s)).max();
+    let head_seq = visible_leaf.or_else(|| members.iter().max().copied())?;
+    let head = d.by_seq.get(&head_seq).copied()?;
+    let dropped_member = if visible_leaf.is_none() {
+        members
+            .iter()
+            .filter(|s| d.dropped.contains(s))
+            .min()
+            .copied()
+    } else {
+        None
+    };
+    let live_superseded: HashSet<u64> = d
+        .posts
+        .iter()
+        .filter(|p| !d.dropped.contains(&p.seq))
         .filter_map(|p| p.supersedes)
         .collect();
-    let answers = posts
+    let answers = d
+        .posts
         .iter()
-        .filter(|p| p.kind == Kind::Answer && !dropped.contains(&p.seq))
+        .filter(|p| p.kind == Kind::Answer && !d.dropped.contains(&p.seq))
         .filter(|p| !live_superseded.contains(&p.seq))
         .filter(|p| p.re.is_some_and(|t| members.contains(&t)))
         .collect();
-    let done = posts
+    let done = d
+        .posts
         .iter()
         .rev()
-        .filter(|p| p.kind == Kind::Done && p.abandoned.is_none() && !dropped.contains(&p.seq))
+        .filter(|p| p.kind == Kind::Done && p.abandoned.is_none() && !d.dropped.contains(&p.seq))
         .find(|p| p.re.is_some_and(|t| members.contains(&t)));
     Some(AskResolution {
         head,
@@ -1180,8 +1185,8 @@ pub fn ask_state(posts: &[Post], seq: u64) -> AskState {
     if target.kind != Kind::Ask {
         return AskState::NotAnAsk { kind: target.kind };
     }
-    let dropped = dropped_set(posts);
-    let Some(r) = resolve_ask(posts, &by_seq, &dropped, seq) else {
+    let d = Derived::build(posts, 0, &LivePolicy::default(), &[]);
+    let Some(r) = resolve_ask(&d, seq) else {
         return AskState::NotFound;
     };
     if let Some(m) = r.dropped_member {
@@ -1486,6 +1491,10 @@ struct Derived<'a> {
     pin_state: HashMap<u64, bool>,
     /// target → the `done` that CLOSED it (`--abandoned` never closes).
     done_by: HashMap<u64, u64>,
+    /// ask chain root → the `done` that closed ANY version of that logical
+    /// ask (a `done` aimed at an older version hides the edited head too, so
+    /// board, `ask_for_you` and `ask_state` agree).
+    ask_done_by_root: HashMap<u64, u64>,
     /// hand → the take that acknowledged it.
     ack_by: HashMap<u64, u64>,
     /// take → the take that reclaimed it with `--over`.
@@ -1562,7 +1571,7 @@ impl<'a> Derived<'a> {
                 _ => {}
             }
         }
-        Self {
+        let mut d = Self {
             posts,
             by_seq,
             dropped,
@@ -1573,12 +1582,21 @@ impl<'a> Derived<'a> {
             marks,
             pin_state,
             done_by,
+            ask_done_by_root: HashMap::new(),
             ack_by,
             over_by,
             activity: SessionActivity::build(posts, presence),
             now_unix,
             policy: *policy,
-        }
+        };
+        let by_root: HashMap<u64, u64> = d
+            .done_by
+            .iter()
+            .filter(|(t, _)| d.by_seq.get(t).is_some_and(|x| x.kind == Kind::Ask))
+            .map(|(t, by)| (d.chain_root(*t), *by))
+            .collect();
+        d.ask_done_by_root = by_root;
+        d
     }
 }
 
@@ -1616,6 +1634,14 @@ impl Derived<'_> {
         None
     }
 
+    /// The whole-post-drop part of [`Self::hidden_reason`] alone: the post, a
+    /// dropped later edit of it, or a dropped ancestor.
+    fn drop_hidden(&self, seq: u64) -> bool {
+        self.dropped.contains(&seq)
+            || self.dropped_superseded_by.contains_key(&seq)
+            || self.dropped_ancestor(seq).is_some()
+    }
+
     /// Why this post is not on the board, or `None` when it is.
     fn hidden_reason(&self, seq: u64) -> Option<(HideReason, u64)> {
         if self.dropped.contains(&seq) {
@@ -1626,6 +1652,11 @@ impl Derived<'_> {
         }
         if let Some(&by) = self.done_by.get(&seq) {
             return Some((HideReason::Done, by));
+        }
+        if self.by_seq.get(&seq).is_some_and(|p| p.kind == Kind::Ask) {
+            if let Some(&by) = self.ask_done_by_root.get(&self.chain_root(seq)) {
+                return Some((HideReason::Done, by));
+            }
         }
         // Whole-post drop (SLATE2): a version whose newer edit was dropped
         // is part of the same logical post, so it goes with it. Reverting an
@@ -2633,7 +2664,7 @@ fn build_projected(
     };
     let acknowledged = (p.kind == Kind::Hand).then(|| d.ack_by.contains_key(&p.seq));
     let resolution = (p.kind == Kind::Ask)
-        .then(|| resolve_ask(d.posts, &d.by_seq, &d.dropped, p.seq))
+        .then(|| resolve_ask(d, p.seq))
         .flatten();
     let answers = (p.kind == Kind::Ask).then(|| resolution.as_ref().map_or(0, |r| r.answers.len()));
     let last_answer = resolution
@@ -4192,6 +4223,110 @@ mod tests {
         l.push(aw(4, Kind::Drop, Some(2), None));
         assert!(matches!(ask_state(&l, 1), AskState::Dropped { .. }));
         assert!(matches!(ask_state(&l, 2), AskState::Dropped { .. }));
+    }
+
+    fn board_ask_seqs(posts: &[Post]) -> Vec<u64> {
+        project_now(posts)
+            .sections
+            .ask
+            .iter()
+            .map(|p| p.seq)
+            .collect()
+    }
+
+    #[test]
+    fn done_on_an_older_version_hides_the_edited_head() {
+        // #1 ask, #2 edits #1, #3 `done #1`
+        let l = vec![
+            aw(1, Kind::Ask, None, None),
+            aw(2, Kind::Ask, None, Some(1)),
+            aw(3, Kind::Done, Some(1), None),
+        ];
+        assert!(board_ask_seqs(&l).is_empty(), "head must leave the board");
+        for n in [1, 2] {
+            assert!(matches!(
+                ask_state(&l, n),
+                AskState::Resolved { done: Some(_), .. }
+            ));
+        }
+        // abandoned keeps it open on both
+        let mut ab = l.clone();
+        ab[2].abandoned = Some("red".into());
+        assert_eq!(board_ask_seqs(&ab), vec![2]);
+        assert!(matches!(ask_state(&ab, 2), AskState::Open { .. }));
+        // a dropped done reopens it on both
+        let mut dr = l.clone();
+        dr.push(aw(4, Kind::Drop, Some(3), None));
+        assert_eq!(board_ask_seqs(&dr), vec![2]);
+        assert!(matches!(ask_state(&dr, 1), AskState::Open { .. }));
+    }
+
+    #[test]
+    fn branched_edit_has_one_logical_ask_and_one_dropped_rule() {
+        // #2 and #3 both edit #1
+        let l = vec![
+            aw(1, Kind::Ask, None, None),
+            aw(2, Kind::Ask, None, Some(1)),
+            aw(3, Kind::Ask, None, Some(1)),
+        ];
+        assert_eq!(board_ask_seqs(&l), vec![2, 3]);
+        // a done on EITHER branch closes the logical ask everywhere
+        let mut done = l.clone();
+        done.push(aw(4, Kind::Done, Some(2), None));
+        assert!(board_ask_seqs(&done).is_empty());
+        // dropping one branch leaves the other live, and ask_state agrees
+        let mut dr = l.clone();
+        dr.push(aw(4, Kind::Drop, Some(2), None));
+        assert_eq!(board_ask_seqs(&dr), vec![3]);
+        for n in [1, 2, 3] {
+            match ask_state(&dr, n) {
+                AskState::Open { head } => assert_eq!(head.seq, 3),
+                s => panic!("#{n}: {s:?}"),
+            }
+        }
+        // dropping the root drops every branch
+        let mut dr = l.clone();
+        dr.push(aw(4, Kind::Drop, Some(1), None));
+        assert!(board_ask_seqs(&dr).is_empty());
+        assert!(matches!(ask_state(&dr, 3), AskState::Dropped { .. }));
+        // dropping the newest of a linear chain drops the logical ask
+        let mut lin = vec![
+            aw(1, Kind::Ask, None, None),
+            aw(2, Kind::Ask, None, Some(1)),
+            aw(3, Kind::Ask, None, Some(2)),
+        ];
+        lin.push(aw(4, Kind::Drop, Some(3), None));
+        assert!(board_ask_seqs(&lin).is_empty());
+        assert!(matches!(ask_state(&lin, 1), AskState::Dropped { .. }));
+    }
+
+    #[test]
+    fn ask_state_matrix_answer_midchain_edit_of_edit_dropped_done() {
+        let l = vec![
+            aw(1, Kind::Ask, None, None),
+            aw(2, Kind::Ask, None, Some(1)),
+            aw(3, Kind::Ask, None, Some(2)), // edit of an edit
+            aw(4, Kind::Answer, Some(2), None),
+            aw(5, Kind::Done, Some(3), None),
+            aw(6, Kind::Drop, Some(5), None), // dropped done on a member
+        ];
+        // a mid-chain edit resolves the whole chain, head is #3
+        for n in [1, 2, 3] {
+            match ask_state(&l, n) {
+                AskState::Resolved {
+                    head,
+                    answers,
+                    done,
+                } => {
+                    assert_eq!(head.seq, 3, "#{n}");
+                    assert_eq!(answers.len(), 1);
+                    assert!(done.is_none(), "the done was dropped");
+                }
+                s => panic!("#{n}: {s:?}"),
+            }
+        }
+        // an answer's seq is not an ask
+        assert_eq!(ask_state(&l, 4), AskState::NotAnAsk { kind: Kind::Answer });
     }
 
     #[test]
