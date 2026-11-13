@@ -102,7 +102,7 @@ export default function SlatesRoute() {
                     {relativeAge(s.updated_unix)}
                   </span>
                 </Link>
-                {(s.ask_for_you ?? 0) > 0 && (
+                {!s.closed && (s.ask_for_you ?? 0) > 0 && (
                   <Link
                     className="slates-row__foryou"
                     to={`/slates/${encodeURIComponent(s.slug)}`}

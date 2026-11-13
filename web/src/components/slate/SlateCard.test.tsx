@@ -113,4 +113,41 @@ describe("SlateCard addressed asks", () => {
     mount(ask({ kind: "hand", to: "omp", answers: undefined }));
     expect(document.querySelector(".slate-card__askstate")).toBeNull();
   });
+
+  it("a hand with to and last_answer gets no ask chips or answer block", () => {
+    mount(
+      ask({
+        kind: "hand",
+        to: "omp",
+        answers: 1,
+        last_answer: { seq: 9, line: "pg", who: agent, age_secs: 30 },
+      }),
+    );
+    expect(document.querySelector(".slate-card__to")).toBeNull();
+    expect(document.querySelector(".slate-card__askstate")).toBeNull();
+    expect(screen.queryByTestId("slate-last-answer")).toBeNull();
+  });
+
+  it("author_ended shows the asker-ended chip and text", () => {
+    mount(ask({ answers: 1, author_ended: true }));
+    expect(screen.getByText("answered — asker ended")).toBeTruthy();
+    expect(screen.getByText("asker ended")).toBeTruthy();
+    expect(screen.queryByText(/waiting for asker/)).toBeNull();
+  });
+
+  it("a human asker says waiting for you", () => {
+    mount(
+      ask({
+        answers: 1,
+        who: { origin: "human", harness: "spa", session_short: "", tag: "you" },
+      }),
+    );
+    expect(screen.getByText("answered — waiting for you")).toBeTruthy();
+    expect(screen.queryByText("asker ended")).toBeNull();
+  });
+
+  it("the addressee chip has an accessible name", () => {
+    mount(ask({ to: "omp" }));
+    expect(screen.getByLabelText("addressed to omp")).toBeTruthy();
+  });
 });

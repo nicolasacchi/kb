@@ -176,7 +176,11 @@ export default function SlateComposer({
       if (!mobile && needsSubject && subject.trim()) post.subject = subject.trim();
       if (!mobile && kind === "tried" && failed.trim()) post.failed = failed.trim();
       if (!mobile && refs.length) post.refs = refs;
-      if (kind === "ask" && to !== "any") post.to = to;
+      const keepsTo =
+        !mobile &&
+        to !== "any" &&
+        (kind === "ask" || (kind === "hand" && seed?.supersedes !== undefined));
+      if (keepsTo) post.to = to;
       if (seed?.supersedes !== undefined) post.supersedes = seed.supersedes;
       if (seed?.re !== undefined) post.re = seed.re;
       await onSubmit(post);
@@ -300,7 +304,7 @@ export default function SlateComposer({
           </datalist>
         </div>
 
-        {kind === "ask" && (
+        {!mobile && kind === "ask" && (
           <div className="slate-composer__row">
             <label className="slate-composer__lbl" htmlFor={`${uid}-to`}>
               To
@@ -311,7 +315,7 @@ export default function SlateComposer({
               value={to}
               onChange={(e) => setTo(e.target.value)}
             >
-              {ASK_TO_OPTIONS.map((t) => (
+              {(ASK_TO_OPTIONS.includes(to) ? ASK_TO_OPTIONS : [...ASK_TO_OPTIONS, to]).map((t) => (
                 <option key={t} value={t}>
                   {t}
                 </option>

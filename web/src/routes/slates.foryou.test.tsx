@@ -50,4 +50,19 @@ describe("/slates questions for you", () => {
     expect(c.getAttribute("href")).toBe("/slates/c");
     expect(screen.getByTestId("slate-foryou-d").textContent).toBe("3 questions for you");
   });
+
+  it("hides the count on a closed slate", () => {
+    vi.mocked(useSlates).mockReturnValue({
+      slates: [{ ...row("z", 2), closed: true }],
+      attention: 0,
+      loading: false,
+      error: null,
+    } as never);
+    render(
+      <MemoryRouter>
+        <SlatesRoute />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByTestId("slate-foryou-z")).toBeNull();
+  });
 });

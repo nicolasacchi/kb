@@ -419,7 +419,15 @@
   border-style: dashed;
   color: var(--ink-dim);
 }
+.slate-card__askended {
+  padding: 1px 8px;
+  border: 1px dashed var(--rule-hi);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xs);
+  color: var(--ink-dim);
+}
 .slate-card__lastanswer {
+  overflow-wrap: anywhere;
   margin: 4px 0 0;
   padding-left: 8px;
   border-left: 2px solid var(--rule-hi);

@@ -388,8 +388,8 @@ function CoverageRail({ kb, comments, desk, slates, sessions, reviewCount, onRev
     .filter((s) => !s.closed && s.counts.now > 0 && (kb == null || s.slug === kb))
     .slice(0, 2);
   const forYouRows = slates.filter(
-    (s) => !s.closed && (s.ask_for_you ?? 0) > 0 && (kb == null || s.slug === kb),
-  );
+    (s) => !s.closed && (s.ask_for_you ?? 0) > 0,
+  ); // fleet-wide queue: slate slugs are project names, not corpus names
   const totalOpen = comments?.total_open ?? 0;
   const empty =
     totalOpen === 0 &&

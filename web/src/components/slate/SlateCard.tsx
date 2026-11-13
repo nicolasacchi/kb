@@ -197,6 +197,11 @@ export default function SlateCard({
   const refs = card.refs ?? [];
   const isAsk = card.kind === "ask";
   const answered = (card.answers ?? 0) > 0;
+  const answeredText = card.author_ended
+    ? "answered — asker ended"
+    : card.who.origin === "human"
+      ? "answered — waiting for you"
+      : "answered — waiting for asker";
   const seen = seenChipFor(card);
   const rawRefs = useMemo(
     () => (card.refs ?? []).map((r) => r.raw),
@@ -326,6 +331,7 @@ export default function SlateCard({
           <span
             className={`slate-card__to${card.to === "you" ? " is-you" : ""}`}
             data-to={card.to}
+            aria-label={`addressed to ${card.to}`}
             title={card.to === "you" ? "A question for the operator" : `Addressed to ${card.to}`}
           >
             → {card.to}
@@ -337,11 +343,21 @@ export default function SlateCard({
             data-state={answered ? "answered" : "open"}
             title={
               answered
-                ? "Answered, but still on the board until the asker posts done"
+                ? card.author_ended
+                  ? "Answered, but the asking session ended — close it yourself"
+                  : "Answered, but still on the board until the asker posts done"
                 : "No answer yet"
             }
           >
-            {answered ? "answered — waiting for asker" : "open"}
+            {answered ? answeredText : "open"}
+          </span>
+        )}
+        {isAsk && answered && card.author_ended && (
+          <span
+            className="slate-card__askended"
+            title="The asking session has ended; close this ask yourself"
+          >
+            asker ended
           </span>
         )}
         {card.answers !== undefined && card.answers > 0 && (
