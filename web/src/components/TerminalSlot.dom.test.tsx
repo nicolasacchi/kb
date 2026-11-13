@@ -67,12 +67,14 @@ describe("TerminalSlot (T14 seam)", () => {
       <MemoryRouter>
         <TerminalSlot
           sid="child-sid"
+          rootSid="root-sid"
           harness="omp"
           lane={{ available: true, term_id: "t1", harness: "omp", state: "working", admitted: true, via: "root" }}
         />
       </MemoryRouter>,
     );
     expect(screen.getByTestId("session-term-root-link").textContent).toContain("Terminal");
+    expect(screen.getByTestId("session-term-root-link").getAttribute("href")).toBe("/sessions/root-sid");
     expect(screen.queryByTestId("kb-term-open")).toBeNull();
     expect(screen.queryByTestId("mock-panel")).toBeNull();
     expect(mockEvalCount).toBe(0);

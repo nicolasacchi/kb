@@ -7,7 +7,7 @@
   flex-direction: column;
   gap: var(--pad-2);
   background: var(--bg-panel-2);
-  border: var(--pad-1) solid var(--rule);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-md);
   padding: var(--pad-2);
 }
@@ -27,7 +27,7 @@
 }
 
 .kb-term__chip {
-  border: var(--pad-1) solid var(--rule-hi);
+  border: 1px solid var(--rule-hi);
   border-radius: var(--radius-pill);
   padding: var(--pad-1);
   color: var(--ink-mute);
@@ -47,7 +47,7 @@
 .kb-term__btn {
   background: var(--bg-card);
   color: var(--ink);
-  border: var(--pad-1) solid var(--rule-hi);
+  border: 1px solid var(--rule-hi);
   border-radius: var(--radius-sm);
   font-size: var(--fs-xs);
   padding: var(--pad-1) var(--pad-2);
@@ -67,7 +67,7 @@
 .kb-term__findinput {
   background: var(--bg-card);
   color: var(--ink);
-  border: var(--pad-1) solid var(--rule-hi);
+  border: 1px solid var(--rule-hi);
   border-radius: var(--radius-sm);
   font-size: var(--fs-xs);
   padding: var(--pad-1) var(--pad-2);
@@ -79,11 +79,10 @@
 }
 
 .kb-term__view {
-  height: var(--spine-h);
+  /* No fixed height: xterm sizes .xterm-screen to rows x cell height
+   * and the host must follow it, or the screen paints over whatever
+   * follows the panel. */
   min-height: var(--pad-4);
+  max-width: 100%;
   background: var(--bg);
-}
-
-.kb-term__view .xterm {
-  height: 100%;
 }

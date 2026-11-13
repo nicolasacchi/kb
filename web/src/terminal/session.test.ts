@@ -131,8 +131,9 @@ async function goLive(h: ReturnType<typeof setup>): Promise<FakeSocket> {
   const s = h.sockets[h.sockets.length - 1];
   s.pushText({ t: "hello", proto: "kb-term/1", session: "s1", epoch: "E1", harness: "omp", bound_sid: null });
   s.pushText(PROFILE);
-  s.pushText({ t: "seed", offset: 100, len: 5 });
-  s.pushBinary(100, "hello");
+  // Seed captured at stream position X=105; live bytes continue at X.
+  s.pushText({ t: "seed", offset: 105, len: 5 });
+  s.pushBinary(105, "hello");
   await flush();
   return s;
 }
@@ -264,7 +265,7 @@ describe("TermSession", () => {
     expect(h.session.getState().attempt).toBe(0);
   });
 
-  it("a resumed (seedless) connection becomes live on its first data frame and accepts input", async () => {
+  it("a resumed (seedless) connection is live from hello and accepts input", async () => {
     const h = setup();
     const s = await goLive(h);
     s.closeFromServer(1000);
@@ -273,8 +274,9 @@ describe("TermSession", () => {
     const s2 = h.sockets[h.sockets.length - 1];
     expect(h.urls[h.urls.length - 1]).toContain("from=105");
     s2.pushText({ t: "hello", proto: "kb-term/1", session: "s1", epoch: "E1", harness: "omp", bound_sid: null });
-    // Not resumed until data arrives.
-    expect(h.session.getState().phase).toBe("reconnecting");
+    // hello is the connection's first frame: live (a resume of an idle
+    // terminal is answered with hello alone).
+    expect(h.session.getState().phase).toBe("live");
     s2.pushBinary(105, "x");
     expect(h.session.getState().phase).toBe("live");
     expect(h.session.sendInput("y")).toBe(true);
@@ -342,8 +344,8 @@ describe("TermSession", () => {
     expect(h.urls[1]).not.toContain("from=");
     const s2 = h.sockets[1];
     s2.pushText({ t: "hello", proto: "kb-term/1", session: "s1", epoch: "E1", harness: "omp", bound_sid: null });
-    s2.pushText({ t: "seed", offset: 0, len: 3 });
-    s2.pushBinary(0, "abc");
+    s2.pushText({ t: "seed", offset: 3, len: 3 });
+    s2.pushBinary(3, "abc");
     await flush();
     expect(h.session.getState().applied).toBe(3);
     s2.pushBinary(3, "de");
@@ -416,15 +418,75 @@ describe("TermSession", () => {
     expect(s.sent).toEqual(['{"t":"input","data":"x"}']);
   });
 
-  it("the 1500ms first-frame watchdog fires only before the first applied frame", async () => {
+  it("the first-frame watchdog budget exceeds the tap's 3000ms join wait", async () => {
     const h = setup();
     h.session.start();
     await flush();
-    expect(h.pendingTimer(1500)).toBeDefined();
-    h.fire(1500);
+    const wd = h.timers.find((t) => !t.cleared && !t.fired && t.ms > 3000 && t.ms !== 5000);
+    expect(wd).toBeDefined();
+    h.fire(wd!.ms);
     expect(h.sockets[0].closeCodes).toEqual([1000]);
     await flush();
     expect(h.session.getState().phase).toBe("reconnecting");
+  });
+
+  it("a full join slower than 3500ms (quiescence wait) attaches: one ticket, one socket, live", async () => {
+    const h = setup();
+    h.session.start();
+    await flush();
+    const s = h.sockets[0];
+    // 3500 ms of silence: the watchdog must not have fired (fake clock).
+    const wd = h.timers.find((t) => !t.cleared && !t.fired && t.ms > 3500);
+    expect(wd).toBeDefined();
+    s.pushText({ t: "hello", proto: "kb-term/1", session: "s1", epoch: "E1", harness: "omp", bound_sid: null });
+    s.pushText(PROFILE);
+    s.pushText({ t: "seed", offset: 4, len: 4 });
+    s.pushBinary(4, "abcd");
+    await flush();
+    expect(h.mintedTickets).toEqual(["tick-1"]);
+    expect(h.sockets).toHaveLength(1);
+    expect(h.session.getState().phase).toBe("live");
+  });
+
+  it("a hello-only resume stays live for 30s with no reconnect and accepts input", async () => {
+    const h = setup();
+    const s = await goLive(h);
+    s.closeFromServer(1000);
+    h.fire(250);
+    await flush();
+    const s2 = h.sockets[h.sockets.length - 1];
+    expect(h.urls[h.urls.length - 1]).toContain("from=105");
+    s2.pushText({ t: "hello", proto: "kb-term/1", session: "s1", epoch: "E1", harness: "omp", bound_sid: null });
+    // Fire every watchdog-sized timer: none may remain pending.
+    expect(h.timers.filter((t) => !t.cleared && !t.fired && t.ms > 5000 && t.ms < 10_000)).toEqual([]);
+    expect(h.mintedTickets).toHaveLength(2);
+    expect(h.sockets).toHaveLength(2);
+    expect(h.session.getState().phase).toBe("live");
+    expect(h.session.sendInput("x")).toBe(true);
+  });
+
+  it("the first live byte after a seed is written, not dropped as overlap", async () => {
+    const h = setup();
+    const s = await goLive(h);
+    expect(h.session.getState().applied).toBe(105);
+    s.pushBinary(105, "k");
+    await flush();
+    expect(h.session.getState().applied).toBe(106);
+    expect(h.calls.at(-1)).toEqual(["write", [107]]);
+  });
+
+  it("a seed chunk straddling the declared seed length rejoins FULL", async () => {
+    const h = setup();
+    h.session.start();
+    await flush();
+    const s = h.sockets[0];
+    s.pushText({ t: "hello", proto: "kb-term/1", session: "s1", epoch: "E1", harness: "omp", bound_sid: null });
+    s.pushText({ t: "seed", offset: 3, len: 3 });
+    s.pushBinary(3, "abcdef");
+    await flush();
+    expect(h.session.getState().gaps).toBe(1);
+    expect(s.closeCodes).toEqual([1000]);
+    expect(h.session.getState().applied).toBe(0);
   });
 
   it("a short binary frame is a protocol error and rejoins FULL", async () => {
@@ -540,7 +602,7 @@ describe("TermSession", () => {
     await flush();
     expect(h.mintedTickets).toEqual(["tick-1", "tick-2"]);
     expect(h.sockets).toHaveLength(2);
-    expect(h.timers.filter((t) => !t.cleared && !t.fired && t.ms === 1500)).toHaveLength(1);
+    expect(h.timers.filter((t) => !t.cleared && !t.fired && t.ms === 6000)).toHaveLength(1);
   });
 
   it("malformed resize/seed/profile do not poison the write queue", async () => {

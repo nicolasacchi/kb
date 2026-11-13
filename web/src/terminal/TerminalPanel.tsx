@@ -256,7 +256,13 @@ export function TerminalPanel(props: TerminalPanelProps) {
       },
       resize: (cols: number, rows: number): void => {
         const term = termRef.current;
-        if (term && (term.cols !== cols || term.rows !== rows)) term.resize(cols, rows);
+        if (!term) return;
+        if (term.cols !== cols || term.rows !== rows) term.resize(cols, rows);
+        // Keep the chip, the observer's fit input and the fontSize in
+        // step with the grid the size owner just set.
+        gridRef.current = { cols, rows };
+        setGrid(gridRef.current);
+        fitNow(term, host, cols);
       },
     };
 

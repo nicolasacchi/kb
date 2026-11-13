@@ -379,6 +379,58 @@ test.describe("T14 — desktop terminal panel", () => {
     expect(stats.froms[1]).toBeNull();
   });
 
+  test("layout: the host follows the xterm screen and nothing paints over what follows", async ({
+    page,
+  }) => {
+    await installFakeTerminal(page, { total: 300, seedLines: 100 });
+    await openTerminal(page);
+    await expect
+      .poll(async () => (await bufferInfo(page)).phase, { timeout: 30_000 })
+      .toBe("live");
+    const geo = await page.evaluate(() => {
+      const host = document.querySelector("[data-kb-term]") as HTMLElement;
+      const screen = host.querySelector(".xterm-screen") as HTMLElement;
+      const sec = document.querySelector('[data-testid="session-sec-terminal"]') as HTMLElement;
+      const next = sec.nextElementSibling as HTMLElement | null;
+      return {
+        host: host.getBoundingClientRect().height,
+        screen: screen.getBoundingClientRect().height,
+        secBottom: sec.getBoundingClientRect().bottom,
+        screenBottom: screen.getBoundingClientRect().bottom,
+        nextTop: next ? next.getBoundingClientRect().top : null,
+      };
+    });
+    expect(geo.host).toBeGreaterThanOrEqual(geo.screen - 1);
+    expect(geo.screenBottom).toBeLessThanOrEqual(geo.secBottom + 1);
+    if (geo.nextTop !== null) expect(geo.nextTop).toBeGreaterThanOrEqual(geo.screenBottom - 1);
+  });
+
+  test("a mid-stream resize marker updates the grid chip, the term and the fit", async ({
+    page,
+  }) => {
+    await installFakeTerminal(page, {
+      total: 300,
+      seedLines: 100,
+      midResize: { cols: 80, rows: 24 },
+    });
+    await openTerminal(page);
+    await expect(page.locator('[data-testid="kb-term-grid"]')).toHaveText("80x24", {
+      timeout: 30_000,
+    });
+    await expect
+      .poll(async () => (await bufferInfo(page)).rows, { timeout: 30_000 })
+      .toBe(24);
+    await expect
+      .poll(async () =>
+        page.evaluate(() => {
+          const host = document.querySelector("[data-kb-term]") as HTMLElement;
+          const screen = host.querySelector(".xterm-screen") as HTMLElement;
+          return screen.getBoundingClientRect().width <= host.clientWidth + 1;
+        }),
+      )
+      .toBe(true);
+  });
+
   test("narrow viewport: fit still too wide at fontSize 10 overflows-x auto", async ({
     page,
   }) => {

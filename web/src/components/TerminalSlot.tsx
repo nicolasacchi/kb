@@ -20,6 +20,9 @@ import type { TerminalLane } from "../api/sessions";
 
 export type TerminalSlotProps = {
   sid: string;
+  // The root session that owns the terminal (card summary's
+  // root_session_id); used by the `via: "root"` link on a child page.
+  rootSid?: string;
   termId?: string;
   harness: string;
   state?: string;
@@ -36,9 +39,12 @@ export function TerminalSlot(props: TerminalSlotProps): ReactElement | null {
   const termId = props.termId ?? lane.term_id;
   if (!lane.available || !lane.admitted) return null;
   if (lane.via === "root") {
+    if (!props.rootSid) {
+      return <span data-testid="session-term-root-link">Terminal in parent session</span>;
+    }
     return (
       <Link
-        to={`/sessions/${encodeURIComponent(props.sid)}`}
+        to={`/sessions/${encodeURIComponent(props.rootSid)}`}
         data-testid="session-term-root-link"
       >
         Terminal in parent session

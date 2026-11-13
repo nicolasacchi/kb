@@ -10,7 +10,8 @@
 // Served wire shape (what the browser sees after kb-server strips the
 // viewer-id prefix): binary frames = 8-byte BE u64 offset + payload;
 // text frames = `{"t": ...}` JSON. Join sends `hello`, `profile`,
-// `seed{offset:0,len}` and the seed payload in chunks all at offset 0;
+// `seed{offset:X,len}` (X = stream position = len) and the seed payload
+// in chunks all at offset X, with live bytes continuing at X;
 // resume sends `hello` only and replays from `?from=` (minus the
 // optional rewind overlap). The fake records ticket requests, socket
 // URLs/`from` values, client input frames and close codes for
@@ -143,6 +144,8 @@ export async function installFakeTerminal(page, opts = {}) {
   const ticketStatus = opts.ticketStatus ?? null;
   const profilePatch = opts.profilePatch ?? null;
   const secondProfile = opts.secondProfile ?? null;
+  const midResize = opts.midResize ?? null;
+  let midResizeSent = false;
   const seedByteLen = LINE_LEN * seedLines;
   // The numbered-line stream, optionally with reply-guard queries
   // spliced in right after the seed region. The query bytes are real
@@ -264,9 +267,13 @@ export async function installFakeTerminal(page, opts = {}) {
     let cursor;
     if (full) {
       const seed = stream.subarray(0, seedByteLen);
-      sendText(JSON.stringify({ t: "seed", offset: 0, len: seed.length }));
+      // Like the tap: the seed is captured at X = the stream position
+      // (here the seed byte length) and every seed chunk carries X;
+      // live bytes continue from exactly X.
+      const X = seed.length;
+      sendText(JSON.stringify({ t: "seed", offset: X, len: seed.length }));
       for (let i = 0; i < seed.length; i += 4096) {
-        sendBinary(0, seed.subarray(i, Math.min(seed.length, i + 4096)));
+        sendBinary(X, seed.subarray(i, Math.min(seed.length, i + 4096)));
       }
       cursor = seed.length;
     } else {
@@ -294,6 +301,12 @@ export async function installFakeTerminal(page, opts = {}) {
       ) {
         secondProfileSent = true;
         sendText(profileFrame(secondProfile));
+        setTimeout(() => pump(), pace);
+        return;
+      }
+      if (midResize !== null && !midResizeSent && cursor > seedByteLen) {
+        midResizeSent = true;
+        sendText(JSON.stringify({ t: "resize", seq: 2, offset: cursor, cols: midResize.cols, rows: midResize.rows }));
         setTimeout(() => pump(), pace);
         return;
       }

@@ -8,9 +8,12 @@
 //
 //   * A `seed` frame arrives on a full join. Only then is
 //     `term.reset()` queued (in write order) and `applied` set to
-//     `seed.offset + seed.len` once the seed payload is written. Seed
-//     payload binary frames all carry `offset == seed.offset`, so
-//     they are written without advancing `applied` per chunk.
+//     `seed.offset` (the stream position X the tap captured the seed
+//     at; live bytes continue from exactly X) once the seed payload is
+//     written. Seed payload binary frames all carry
+//     `offset == seed.offset`, so they are written without advancing
+//     `applied` per chunk. A chunk larger than the remaining seed
+//     length (a straddle) is a protocol error: close and rejoin FULL.
 //   * On a resume (no seed), data frames advance `applied` exactly:
 //     `off == applied` writes and advances; `off < applied` skips the
 //     rewind overlap and writes the rest; `off > applied` is a GAP —
@@ -28,8 +31,8 @@
 //     uses the same backoff as any unexpected close. Unmount closes
 //     the socket with 1000, cancels timers, and mints no further
 //     tickets.
-//   * Liveness is the 1500 ms no-frame watchdog between socket open
-//     and the first applied frame/seed of that connection. There is
+//   * Liveness is the FIRST_FRAME_WATCHDOG_MS no-frame watchdog between
+//     socket open and the first frame of that connection (hello counts). There is
 //     no steady-state client timer: T12's relay pings the browser at
 //     the WS layer every 25 s (browsers answer Pong automatically),
 //     so `onclose` is the steady-state signal.
@@ -105,7 +108,9 @@ export interface TermSessionOptions {
   callbacks: SessionCallbacks;
 }
 
-const FIRST_FRAME_WATCHDOG_MS = 1500;
+// Must exceed the tap's join wait (3000 ms default: a full join waits
+// for twin quiescence before writing anything) plus handshake time.
+const FIRST_FRAME_WATCHDOG_MS = 6000;
 const LIVE_BEFORE_RESET_MS = 5000;
 const BASE_BACKOFF_MS = 250;
 const MAX_BACKOFF_MS = 10_000;
@@ -341,7 +346,7 @@ export class TermSession {
       this.watchdog = null;
       if (this.disposed || gen !== this.socketGen || this.socket === null) return;
       if (this.isSettled()) return;
-      // No first applied frame/seed within 1500 ms of open: treat as a
+      // No first frame within the watchdog budget of open: treat as a
       // dead connection and rejoin (resume from `applied` when known).
       this.closeForRejoin();
       this.scheduleReconnect();
@@ -445,11 +450,20 @@ export class TermSession {
     }
     const { offset, payload } = decoded;
     if (this.seeding) {
+      if (payload.length > this.seedLen - this.seedWritten) {
+        // Straddle: a chunk running past the declared seed length.
+        this.seeding = false;
+        this.gaps += 1;
+        this.applied = 0;
+        this.closeForRejoin();
+        this.scheduleReconnect();
+        return;
+      }
       this.enqueueWrite(payload);
       this.seedWritten += payload.length;
       if (this.seedWritten >= this.seedLen) {
         this.seeding = false;
-        this.applied = this.seedOffset + this.seedLen;
+        this.applied = this.seedOffset;
         this.markLive();
       }
     } else if (offset === this.applied) {
@@ -492,6 +506,9 @@ export class TermSession {
           this.applied = 0;
         }
         this.epoch = frame.epoch;
+        // The tap marks the viewer live before writing hello, and a
+        // resume of an idle terminal is answered with hello alone.
+        this.markLive();
         break;
       }
       case "profile":
