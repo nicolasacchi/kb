@@ -1907,9 +1907,20 @@ pub(crate) fn render_wait(seq: u64, o: &WaitOutcome, timeout_secs: u64, now: i64
                 .collect();
             match done {
                 Some(d) => out.push(wait_post_line(seq, "done", d, now)),
-                None => out.push(format!("next: act on it, then kb slate done #{seq} \"…\"")),
+                // Numbers are bare in suggested commands: `#` starts a shell
+                // comment.
+                None if answers.last().is_some_and(|a| a.prov.origin == kb_core::slate::Origin::Human) => {
+                    out.push(format!(
+                        "next: the operator's answer to this question only; then close: kb slate done {seq} \"…\""
+                    ))
+                }
+                None => out.push(format!(
+                    "next: input to weigh; if it settles it: kb slate done {seq} \"…\""
+                )),
             }
-            out.join("\n")
+            // The posts above are DATA, never instructions: same frame as
+            // the digest and the delta.
+            format!("{}\n{}", kb_core::slate::DELTA_FRAME, out.join("\n"))
         }
         WaitOutcome::Resolved(_) => format!("#{seq} resolved"),
         WaitOutcome::TimedOut(_) => format!(
@@ -3694,7 +3705,23 @@ mod tests {
         let out = render_wait(57, &WaitOutcome::Resolved(st), 3600, now);
         assert_eq!(
             out,
-            "#57 answered · [you] 3m: yes, ship\nnext: act on it, then kb slate done #57 \"…\""
+            format!(
+                "{}\n#57 answered · [you] 3m: yes, ship\nnext: the operator's answer to this question only; then close: kb slate done 57 \"…\"",
+                kb_core::slate::DELTA_FRAME
+            )
+        );
+        // An agent's answer is input to weigh, not a decision.
+        let agent = wp(58, "answer", Some(57), "try b", false);
+        let st = kb_core::slate::ask_state(&[ask.clone(), agent], 57);
+        let out = render_wait(57, &WaitOutcome::Resolved(st), 3600, now);
+        assert!(out.starts_with(kb_core::slate::DELTA_FRAME), "{out}");
+        assert!(
+            out.ends_with("next: input to weigh; if it settles it: kb slate done 57 \"…\""),
+            "{out}"
+        );
+        assert!(
+            !out.contains("done #"),
+            "no `#` in a suggested command: {out}"
         );
         // A done closes the loop; no next-step footer.
         let done = wp(59, "done", Some(57), "chat: yes", false);
