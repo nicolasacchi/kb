@@ -438,7 +438,7 @@ type WsStream =
 enum WsConnect {
     Ok(Box<WsStream>),
     Http(u16),
-    Other(String),
+    Other,
 }
 
 #[derive(Debug)]
@@ -476,7 +476,11 @@ async fn ws_connect(
         Err(tokio_tungstenite::tungstenite::error::Error::Http(resp)) => {
             WsConnect::Http(resp.status().as_u16())
         }
-        Err(e) => WsConnect::Other(format!("{e:?}")),
+        Err(e) => {
+            // Name the cause in the captured test output.
+            eprintln!("ws handshake failed: {e:?}");
+            WsConnect::Other
+        }
     }
 }
 
