@@ -95,3 +95,19 @@
   padding: var(--pad-1) var(--pad-2);
   cursor: pointer;
 }
+
+.kb-code-lane__head {
+  display: grid;
+  gap: var(--pad-1);
+  justify-items: start;
+}
+
+.kb-code-lane__head button {
+  font: inherit;
+  color: var(--ink-strong);
+  background: var(--term-bg);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: var(--pad-1) var(--pad-2);
+  cursor: pointer;
+}

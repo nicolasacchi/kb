@@ -541,7 +541,12 @@ GET  /api/session-card?sid=                kbc-session-card/1: one read
                                             unknown `repo` is a 400 (never
                                             echoes the rejected `sid`); any
                                             well-formed `sid` is a 200, even
-                                            with empty lanes. No paths, no
+                                            with empty lanes. `?repo=NAME`
+                                            scopes commits and reviews
+                                            (including the doc-authored half);
+                                            findings and presence are
+                                            session-scoped only and ignore
+                                            the filter. No paths, no
                                             file contents, no text.
 GET  /api/kb/ui                            OL S1: kb's `theme_family` +
                                             `theme` from `GET /api/settings`
