@@ -34,6 +34,8 @@ use crate::wire::{Harness, Request};
 /// defend server-env inheritance (a tmux server inherits its first
 /// client's env); they do not defend a login-profile threat the
 /// launcher cannot have.
+pub const GATE_SCRIPT: &str =
+    "T=$1; S=$2; shift 2; \"$T\" -S \"$S\" wait-for kbterm-go; exec \"$@\"";
 
 /// The default exit keys (the omp sequence; per-harness tables are T10).
 pub const DEFAULT_EXIT_KEYS: [&str; 3] = ["C-c", "C-c", "C-d"];

@@ -85,6 +85,7 @@ pub struct LaunchPlan {
     /// Forbidden exact names + concrete forbidden-prefixed names
     /// present in `base_env` (the wrapper unsets these before exec to
     /// defend server-env inheritance; the pane shell is non-login).
+    pub unset_after_login: Vec<String>,
     /// omp only: absolute overlay path (mode 0600).
     pub overlay_path: Option<PathBuf>,
     pub experimental: bool,
