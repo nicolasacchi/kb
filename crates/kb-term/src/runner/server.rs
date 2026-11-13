@@ -333,7 +333,7 @@ mod tests {
         let sock = runner.cfg.run_dir.join("runner").join("runner.sock");
         let sha = "ab".repeat(32);
         let payload: Vec<u8> = (0u8..=255).chain([10, 13, 0]).collect();
-        let img = runner.sessions_dir().join("abcd1234").join("img");
+        let img = runner.sessions_dir().join("abcd1234").join("store").join("img");
         std::fs::create_dir_all(&img).unwrap();
         std::fs::write(img.join(&sha), &payload).unwrap();
 

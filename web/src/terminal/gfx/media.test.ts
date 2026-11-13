@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  FAILURE_COOLDOWN_MS,
   idsToPrefetch,
   MAX_CONCURRENT_FETCHES,
   MEDIA_BUDGET_BYTES,
@@ -250,5 +251,53 @@ describe("prefetch window", () => {
     expect(idsToPrefetch([], [])).toEqual([]);
     expect(idsToPrefetch([], new Set([4]))).toEqual([4]);
     expect(idsToPrefetch(cells, [])).not.toContain(77);
+  });
+});
+
+describe("MediaCache.dispose (T15 r1 M3)", () => {
+  it("revokes URLs of loads settling after dispose and starts no queued fetch", async () => {
+    const releases: Array<() => void> = [];
+    const h = harness(
+      () =>
+        new Promise<Response>((res) => {
+          releases.push(() => res(png()));
+        }),
+    );
+    const loads = [1, 2, 3, 4, 5].map((n) => h.cache.load(sha(n)));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.calls).toHaveLength(MAX_CONCURRENT_FETCHES);
+    h.cache.dispose();
+    for (const r of releases) r();
+    const outs = await Promise.all(loads);
+    expect(outs.every((o) => o === "missing")).toBe(true);
+    expect(h.cache.size).toBe(0);
+    expect(h.calls).toHaveLength(MAX_CONCURRENT_FETCHES);
+    expect(h.cache.usedBytes).toBe(0);
+  });
+});
+
+describe("MediaCache transient failures (T15 r1 M2)", () => {
+  it("peek reports missing after giving up and load retries after the cooldown", async () => {
+    let clock = 0;
+    let n = 0;
+    const cache = new MediaCache({
+      fetchImpl: (() => {
+        n += 1;
+        return Promise.resolve(n <= 4 ? new Response(null, { status: 503 }) : png());
+      }) as typeof fetch,
+      createObjectURL: () => "blob:x",
+      revokeObjectURL: () => {},
+      decode: () => Promise.resolve(),
+      sleep: () => Promise.resolve(),
+      now: () => clock,
+    });
+    expect(await cache.load(sha(1))).toBe("missing");
+    expect(cache.peek(sha(1))).toBe("missing");
+    expect(await cache.load(sha(1))).toBe("missing");
+    expect(n).toBe(4);
+    clock = FAILURE_COOLDOWN_MS;
+    expect(await cache.load(sha(1))).not.toBe("missing");
+    expect(n).toBe(5);
   });
 });

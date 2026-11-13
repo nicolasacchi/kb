@@ -20,6 +20,8 @@ export const MEDIA_BUDGET_BYTES = 96 * 1024 * 1024;
 export const MEDIA_BUDGET_COMPACT_BYTES = 32 * 1024 * 1024;
 /** A transient failure is retried after each of these waits, then gives up. */
 export const NETWORK_RETRY_DELAYS_MS: readonly number[] = [200, 400, 800];
+/** A load that gave up is asked again only after this long (transient failures are not sticky). */
+export const FAILURE_COOLDOWN_MS = 5000;
 /** The prefetch window: this many screens above the viewport, ... */
 export const PREFETCH_SCREENS_ABOVE = 1;
 /** ... and this many screens from the viewport top downwards (viewport + one below). */
@@ -44,6 +46,8 @@ export interface MediaCacheOptions {
   decode?: (url: string) => Promise<void>;
   /** Backoff wait (injectable so tests never sleep). */
   sleep?: (ms: number) => Promise<void>;
+  /** Clock for the failure cooldown (ms; injectable). */
+  now?: () => number;
 }
 
 interface Entry {
@@ -74,6 +78,11 @@ export class MediaCache {
   private readonly rmUrl: (url: string) => void;
   private readonly decode: (url: string) => Promise<void>;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly clock: () => number;
+  private disposed = false;
+  private readonly abort = new AbortController();
+  /** Keys whose load gave up (transient / denied): shown as missing, retried after the cooldown. */
+  private readonly failedAt = new Map<string, number>();
 
   /** Loaded pictures, least recently used first (Map insertion order). */
   private readonly entries = new Map<string, Entry>();
@@ -93,6 +102,7 @@ export class MediaCache {
     this.mkUrl = opts.createObjectURL ?? ((b: Blob) => URL.createObjectURL(b));
     this.rmUrl = opts.revokeObjectURL ?? ((u: string) => URL.revokeObjectURL(u));
     this.decode = opts.decode ?? decodeImage;
+    this.clock = opts.now ?? ((): number => Date.now());
     this.sleep = opts.sleep ?? ((ms: number) => new Promise<void>((res) => setTimeout(res, ms)));
   }
 
@@ -118,7 +128,20 @@ export class MediaCache {
       this.touch(sha, hit);
       return { url: hit.url, blob: hit.blob };
     }
-    return this.gone.has(sha) ? "missing" : undefined;
+    return this.gone.has(sha) || this.failedAt.has(sha) ? "missing" : undefined;
+  }
+
+  /** True while any key sits in the transient-failure state (a retry is owed). */
+  get hasFailures(): boolean {
+    return this.failedAt.size > 0;
+  }
+
+  /** Start a retry for `sha` if it failed transiently, the cooldown has passed and nothing is in flight. */
+  retryIfDue(sha: string): void {
+    const at = this.failedAt.get(sha);
+    if (at === undefined || this.disposed || this.inflight.has(sha) || this.gone.has(sha)) return;
+    if (this.clock() - at < FAILURE_COOLDOWN_MS) return;
+    void this.load(sha);
   }
 
   /** Whether a fetch for `sha` is running or queued. */
@@ -132,7 +155,11 @@ export class MediaCache {
       this.touch(sha, hit);
       return Promise.resolve({ url: hit.url, blob: hit.blob });
     }
-    if (this.gone.has(sha) || !SHA256_RE.test(sha)) return Promise.resolve("missing");
+    if (this.disposed || this.gone.has(sha) || !SHA256_RE.test(sha)) return Promise.resolve("missing");
+    const failed = this.failedAt.get(sha);
+    if (failed !== undefined && this.clock() - failed < FAILURE_COOLDOWN_MS) {
+      return Promise.resolve("missing");
+    }
     const flying = this.inflight.get(sha);
     if (flying !== undefined) return flying;
     const p = this.run(sha).finally(() => {
@@ -158,11 +185,13 @@ export class MediaCache {
   /** Clear a sticky `missing` so the next `load` asks the store again. */
   forget(sha: string): void {
     this.gone.delete(sha);
+    this.failedAt.delete(sha);
   }
 
   /** Revoke every unpinned picture and clear every sticky `missing` (full join). */
   forgetAll(): void {
     this.gone.clear();
+    this.failedAt.clear();
     for (const [sha, entry] of [...this.entries]) {
       if ((this.pins.get(sha) ?? 0) > 0) continue;
       this.drop(sha, entry);
@@ -171,7 +200,12 @@ export class MediaCache {
 
   /** Panel teardown: revoke EVERYTHING (pins included) and stop notifying. */
   dispose(): void {
+    this.disposed = true;
+    this.abort.abort();
+    // Queued loads must not start new fetches: wake them so they bail out.
+    for (const w of this.waiting.splice(0)) w();
     this.gone.clear();
+    this.failedAt.clear();
     this.pins.clear();
     this.listeners.clear();
     for (const [sha, entry] of [...this.entries]) this.drop(sha, entry);
@@ -223,13 +257,15 @@ export class MediaCache {
         this.emit();
         return "missing";
       }
-      if (out.kind === "denied") return "missing";
-      // Network error / 5xx: wait and retry, then give up WITHOUT caching
-      // the failure (a later `load` asks again).
-      if (attempt >= NETWORK_RETRY_DELAYS_MS.length) return "missing";
+      if (out.kind === "denied") return this.giveUp(sha);
+      // Network error / 5xx: wait and retry, then give up. The failure is
+      // remembered with a timestamp (shown as missing, asked again after
+      // the cooldown), never sticky like a 404.
+      if (attempt >= NETWORK_RETRY_DELAYS_MS.length) return this.giveUp(sha);
       await this.sleep(NETWORK_RETRY_DELAYS_MS[attempt]);
+      if (this.disposed) return "missing";
     }
-    if (got === undefined) return "missing";
+    if (got === undefined || this.disposed) return "missing";
     const blob = got;
     const url = this.mkUrl(blob);
     try {
@@ -241,6 +277,11 @@ export class MediaCache {
       this.emit();
       return "missing";
     }
+    if (this.disposed) {
+      this.rmUrl(url);
+      return "missing";
+    }
+    this.failedAt.delete(sha);
     const entry: Entry = { url, blob, bytes: blob.size };
     this.entries.set(sha, entry);
     this.totalBytes += entry.bytes;
@@ -249,12 +290,24 @@ export class MediaCache {
     return { url, blob };
   }
 
+  private giveUp(sha: string): MediaResult {
+    if (this.disposed) return "missing";
+    this.failedAt.set(sha, this.clock());
+    this.emit();
+    return "missing";
+  }
+
   private async attemptFetch(sha: string): Promise<Attempt> {
     await this.acquire();
+    if (this.disposed) {
+      this.release();
+      return { kind: "retry" };
+    }
     try {
       const res = await this.doFetch(`${currentDaemonBase()}/api/terms/media/${sha}`, {
         headers: { [TERMINAL_INTENT_HEADER]: TERMINAL_INTENT_VALUE },
         credentials: "same-origin",
+        signal: this.abort.signal,
       });
       if (res.status === 404 || res.status === 415) return { kind: "gone" };
       if (res.status >= 500) return { kind: "retry" };

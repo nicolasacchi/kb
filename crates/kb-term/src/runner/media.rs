@@ -1,14 +1,15 @@
 //! The `media` op: read one stored picture by its sha256.
 //!
 //! The tap writes each decoded kitty picture once, content-addressed,
-//! under `<run-dir>/s/<id>/img/<sha256>` (hex64 lowercase). A viewer asks
+//! under `<run-dir>/s/<id>/store/img/<sha256>` (hex64 lowercase; the tap's
+//! session dir defaults to `<run-dir>/s/<id>/store`). A viewer asks
 //! for the bytes by hash alone, so the lookup walks the per-session
 //! directories of the runner's own sessions dir; nothing in the request
 //! reaches a path except the validated hash.
 //!
 //! Hard rules: the hash must be 64 lowercase hex characters before any
 //! file system access; only regular files are read (a symlink at the
-//! candidate path, at the `img` directory or at a session directory is
+//! candidate path, at the `store` or `img` directory or at a session directory is
 //! skipped, never followed); the read is capped at [`MAX_MEDIA_BYTES`]
 //! (the kitty transmit cap), so an oversized file is `too-large`, never
 //! truncated. The reply is the usual envelope header with `{"len":N}`
@@ -53,7 +54,12 @@ pub fn read_media(sessions_dir: &Path, sha: &str) -> Result<Vec<u8>, RunnerError
             Ok(t) if t.is_dir() => {}
             _ => continue,
         }
-        let img_dir = entry.path().join("img");
+        let store_dir = entry.path().join("store");
+        match std::fs::symlink_metadata(&store_dir) {
+            Ok(m) if m.is_dir() => {}
+            _ => continue,
+        }
+        let img_dir = store_dir.join("img");
         match std::fs::symlink_metadata(&img_dir) {
             Ok(m) if m.is_dir() => {}
             _ => continue,
@@ -68,10 +74,26 @@ pub fn read_media(sessions_dir: &Path, sha: &str) -> Result<Vec<u8>, RunnerError
                 "stored picture exceeds the media cap".to_string(),
             ));
         }
-        let file = match std::fs::File::open(&path) {
+        use std::os::unix::fs::OpenOptionsExt;
+        let file = match std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&path)
+        {
             Ok(f) => f,
             Err(_) => continue,
         };
+        // Re-check on the open descriptor: the path may have been swapped
+        // between the lstat above and the open.
+        match file.metadata() {
+            Ok(m) if m.is_file() && m.len() <= MAX_MEDIA_BYTES => {}
+            Ok(m) if m.is_file() => {
+                return Err(RunnerError::TooLarge(
+                    "stored picture exceeds the media cap".to_string(),
+                ));
+            }
+            _ => continue,
+        }
         let mut buf = Vec::with_capacity(meta.len() as usize);
         if file
             .take(MAX_MEDIA_BYTES + 1)
@@ -97,7 +119,7 @@ mod tests {
     const SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     fn store(dir: &Path, id: &str, sha: &str, bytes: &[u8]) {
-        let img = dir.join(id).join("img");
+        let img = dir.join(id).join("store").join("img");
         std::fs::create_dir_all(&img).unwrap();
         std::fs::write(img.join(sha), bytes).unwrap();
     }
@@ -138,7 +160,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let secret = dir.path().join("secret.txt");
         std::fs::write(&secret, b"top secret").unwrap();
-        let img = dir.path().join("abcd1234").join("img");
+        let img = dir.path().join("abcd1234").join("store").join("img");
         std::fs::create_dir_all(&img).unwrap();
         std::os::unix::fs::symlink(&secret, img.join(SHA)).unwrap();
         let err = read_media(dir.path(), SHA).unwrap_err();
@@ -151,7 +173,7 @@ mod tests {
         let elsewhere = dir.path().join("elsewhere");
         std::fs::create_dir_all(&elsewhere).unwrap();
         std::fs::write(elsewhere.join(SHA), b"outside").unwrap();
-        let sess = dir.path().join("abcd1234");
+        let sess = dir.path().join("abcd1234").join("store");
         std::fs::create_dir_all(&sess).unwrap();
         std::os::unix::fs::symlink(&elsewhere, sess.join("img")).unwrap();
         let err = read_media(dir.path(), SHA).unwrap_err();
@@ -161,7 +183,7 @@ mod tests {
     #[test]
     fn a_picture_over_the_cap_is_too_large() {
         let dir = tempfile::tempdir().unwrap();
-        let img = dir.path().join("abcd1234").join("img");
+        let img = dir.path().join("abcd1234").join("store").join("img");
         std::fs::create_dir_all(&img).unwrap();
         let f = std::fs::File::create(img.join(SHA)).unwrap();
         f.set_len(MAX_MEDIA_BYTES + 1).unwrap();
@@ -175,5 +197,47 @@ mod tests {
         // `Bad` is not a valid session id, so its pictures are invisible.
         store(dir.path(), "Bad", SHA, b"nope");
         assert_eq!(read_media(dir.path(), SHA).unwrap_err().code(), "not-found");
+    }
+
+    #[test]
+    fn a_symlinked_store_dir_is_never_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = dir.path().join("elsewhere");
+        std::fs::create_dir_all(elsewhere.join("img")).unwrap();
+        std::fs::write(elsewhere.join("img").join(SHA), b"outside").unwrap();
+        let sess = dir.path().join("abcd1234");
+        std::fs::create_dir_all(&sess).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, sess.join("store")).unwrap();
+        assert_eq!(read_media(dir.path(), SHA).unwrap_err().code(), "not-found");
+    }
+
+    #[test]
+    fn reads_the_taps_real_layout_and_not_the_legacy_one() {
+        // Exactly where the tap writes: <sessions>/<id>/store/img/<sha>.
+        let dir = tempfile::tempdir().unwrap();
+        let img = dir.path().join("abcd1234").join("store").join("img");
+        std::fs::create_dir_all(&img).unwrap();
+        std::fs::write(img.join(SHA), b"tap-bytes").unwrap();
+        assert_eq!(read_media(dir.path(), SHA).unwrap(), b"tap-bytes");
+        // The pre-fix layout (<id>/img) is not served.
+        let d2 = tempfile::tempdir().unwrap();
+        let old = d2.path().join("abcd1234").join("img");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join(SHA), b"x").unwrap();
+        assert_eq!(read_media(d2.path(), SHA).unwrap_err().code(), "not-found");
+    }
+
+    #[test]
+    fn layout_matches_the_tap_source() {
+        let main = include_str!("../../tap/src/main.ts");
+        let store = include_str!("../../tap/src/imagestore.ts");
+        assert!(
+            main.contains("pathJoin(opts.runDir, 's', opts.session, 'store')"),
+            "tap session dir layout changed; update runner/media.rs"
+        );
+        assert!(
+            store.contains("join(this.sessionDir, 'img')"),
+            "tap image dir layout changed; update runner/media.rs"
+        );
     }
 }

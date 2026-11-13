@@ -19,7 +19,7 @@
 import type { Terminal } from "@xterm/xterm";
 import type { ImageDefFrame } from "../wire";
 import { ImageDefStore } from "./imageDefs";
-import { idsToPrefetch, MediaCache, prefetchWindow, type MediaCacheOptions } from "./media";
+import { FAILURE_COOLDOWN_MS, idsToPrefetch, MediaCache, prefetchWindow, type MediaCacheOptions } from "./media";
 import { normalizeBg, PlaceholderRenderer, type GfxTerm, type Metrics } from "./renderer";
 
 /** A tap on a picture: what the lightbox needs to show it. */
@@ -90,6 +90,7 @@ export function attachGfx(term: Terminal, opts: AttachGfxOptions): GfxHandle {
   const pendingSeed = new Set<number>();
   let prefetchRaf = 0;
   let openTimer: ReturnType<typeof setTimeout> | undefined;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
   const prefetchNow = (): void => {
     if (disposed || pendingSeed.size === 0) return;
@@ -114,7 +115,17 @@ export function attachGfx(term: Terminal, opts: AttachGfxOptions): GfxHandle {
     t.onScroll(schedulePrefetch),
     t.onRender(schedulePrefetch),
     defs.onChange(() => renderer.schedule()),
-    media.onChange(() => renderer.schedule()),
+    media.onChange(() => {
+      renderer.schedule();
+      // A given-up load owes a retry after the cooldown even if the panel
+      // sits idle: schedule one render for then (it re-asks via the cache).
+      if (media.hasFailures && retryTimer === undefined && !disposed) {
+        retryTimer = setTimeout(() => {
+          retryTimer = undefined;
+          if (!disposed) renderer.schedule();
+        }, FAILURE_COOLDOWN_MS + 50);
+      }
+    }),
   ];
 
   // Tap to open: pointerdown/up on the screen element, capture + passive.
@@ -189,6 +200,8 @@ export function attachGfx(term: Terminal, opts: AttachGfxOptions): GfxHandle {
       prefetchRaf = 0;
       if (openTimer !== undefined) clearTimeout(openTimer);
       openTimer = undefined;
+      if (retryTimer !== undefined) clearTimeout(retryTimer);
+      retryTimer = undefined;
       for (const s of subs) {
         if (typeof s === "function") s();
         else s.dispose();

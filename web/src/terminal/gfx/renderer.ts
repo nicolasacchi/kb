@@ -301,6 +301,9 @@ export class PlaceholderRenderer {
     for (const [key, g] of groups) {
       const def = this.defs.get(g.id);
       const loaded = def === undefined ? undefined : this.media.peek(def.sha);
+      // A load that gave up shows "image unavailable" and is asked again
+      // once its cooldown has passed (no-op otherwise).
+      if (def !== undefined && loaded === "missing") this.media.retryIfDue(def.sha);
       const kind: GroupKind =
         def === undefined || loaded === "missing"
           ? "missing"

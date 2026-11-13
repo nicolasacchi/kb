@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Terminal } from "@xterm/xterm";
+import { FAILURE_COOLDOWN_MS } from "./media";
 import { attachGfx, TAP_MAX_MS, type GfxHandle, type OpenPicture } from "./attach";
 import { FakeTerm } from "./fakeTerm";
 import type { ImageDefFrame } from "../wire";
@@ -228,5 +229,73 @@ describe("attachGfx store lifecycle", () => {
     s.handle.dispose();
     s.handle.dispose();
     expect(s.fake.liveDecorations).toBe(0);
+  });
+});
+
+describe("attachGfx giving-up loads (T15 r1 M2)", () => {
+  function failing(statuses: number[]) {
+    const fake = new FakeTerm(20, 10);
+    let clock = 1000;
+    let calls = 0;
+    const handle = attachGfx(fake.asTerm() as unknown as Terminal, {
+      compact: false,
+      bg: "#000000",
+      fetchImpl: (() => {
+        calls += 1;
+        const st = statuses[calls - 1];
+        return Promise.resolve(
+          st === undefined
+            ? new Response(new Uint8Array(4), { status: 200 })
+            : new Response(null, { status: st }),
+        );
+      }) as typeof fetch,
+      mediaOptions: {
+        createObjectURL: () => "blob:test/pic",
+        revokeObjectURL: () => {},
+        decode: () => Promise.resolve(),
+        sleep: () => Promise.resolve(),
+        now: () => clock,
+      },
+      measure: () => ({ cw: 10, ch: 20, dpr: 1, viewportY: fake.viewportY }),
+      requestFrame: () => 0,
+      cancelFrame: () => {},
+    });
+    return { fake, handle, calls: () => calls, advance: (ms: number) => (clock += ms) };
+  }
+
+  it("shows 'image unavailable' after retries run out, then recovers after the cooldown", async () => {
+    const s = failing([503, 503, 503, 503]);
+    s.handle.markLive();
+    s.handle.onImageDef(frame(ID));
+    await tick();
+    expect(s.calls()).toBe(4);
+    s.fake.picture(ID, 1, 2, 4, 3);
+    s.handle.renderer.render();
+    const miss = s.fake.screen.querySelector(".kbgfx-missing");
+    expect(miss?.textContent).toBe("image unavailable");
+    expect(s.fake.screen.querySelector(".kbgfx-pending")).toBeNull();
+    // Inside the cooldown: no new fetch.
+    s.handle.renderer.render();
+    await tick();
+    expect(s.calls()).toBe(4);
+    s.advance(FAILURE_COOLDOWN_MS + 1);
+    s.handle.renderer.render();
+    await tick();
+    expect(s.calls()).toBe(5);
+    s.handle.renderer.render();
+    expect(s.fake.screen.querySelector(".kbgfx-img")).not.toBeNull();
+    s.handle.dispose();
+  });
+
+  it("a denied (403) load shows 'image unavailable'", async () => {
+    const s = failing([403]);
+    s.handle.markLive();
+    s.handle.onImageDef(frame(ID));
+    await tick();
+    s.fake.picture(ID, 1, 2, 4, 3);
+    s.handle.renderer.render();
+    expect(s.fake.screen.querySelector(".kbgfx-missing")?.textContent).toBe("image unavailable");
+    expect(s.fake.screen.querySelector(".kbgfx-pending")).toBeNull();
+    s.handle.dispose();
   });
 });
