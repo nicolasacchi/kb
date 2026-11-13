@@ -595,6 +595,8 @@ pub enum StorageMsg {
     /// V0047 — fill NULL lineage columns from the CLI's tree walk
     /// (`Db::sessions_backfill_tree`). Items are
     /// `(session_id, parent, root, slug)`; bumps only on change.
+    /// Returns `(would_change, changed, unmatched)`: rows; rows; items
+    /// (see `Db::sessions_backfill_tree` for the units).
     SessionsBackfillTree {
         apply: bool,
         items: Vec<crate::storage::sqlite::BackfillTreeItem>,
@@ -1183,6 +1185,13 @@ pub enum StorageMsg {
         root_of: Option<String>,
         parent_of: Option<String>,
         reply: oneshot::Sender<Result<u64>>,
+    },
+    /// A3 — the ids of a session's children
+    /// (`Db::sessions_children_ids`).
+    SessionsChildrenIds {
+        root_of: Option<String>,
+        parent_of: Option<String>,
+        reply: oneshot::Sender<Result<Vec<String>>>,
     },
     /// A3 — resume targets per session id (`Db::sessions_root_of`).
     SessionsRootOf {
@@ -3558,6 +3567,16 @@ impl StorageActor {
                         .sessions_children_count(root_of.as_deref(), parent_of.as_deref()),
                 );
             }
+            StorageMsg::SessionsChildrenIds {
+                root_of,
+                parent_of,
+                reply,
+            } => {
+                let _ = reply.send(
+                    self.db
+                        .sessions_children_ids(root_of.as_deref(), parent_of.as_deref()),
+                );
+            }
             StorageMsg::SessionsRootOf { ids, reply } => {
                 let _ = reply.send(self.db.sessions_root_of(&ids));
             }
@@ -4626,8 +4645,8 @@ impl StorageHandle {
             .await
     }
 
-    /// V0047 — `(would_change, changed, unmatched)` of the tree backfill;
-    /// `apply = false` writes nothing. See
+    /// V0047 — `(would_change, changed, unmatched)` of the tree backfill
+    /// (rows; rows; items); `apply = false` writes nothing. See
     /// [`StorageMsg::SessionsBackfillTree`].
     pub async fn sessions_backfill_tree(
         &self,
@@ -5659,6 +5678,20 @@ impl StorageHandle {
         parent_of: Option<String>,
     ) -> Result<u64> {
         self.send_and_await(|reply| StorageMsg::SessionsChildrenCount {
+            root_of,
+            parent_of,
+            reply,
+        })
+        .await
+    }
+    /// A3 — the ids of a session's children (see
+    /// `Db::sessions_children_ids`).
+    pub async fn sessions_children_ids(
+        &self,
+        root_of: Option<String>,
+        parent_of: Option<String>,
+    ) -> Result<Vec<String>> {
+        self.send_and_await(|reply| StorageMsg::SessionsChildrenIds {
             root_of,
             parent_of,
             reply,

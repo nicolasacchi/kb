@@ -61,5 +61,33 @@ else
 fi
 
 echo
+echo "== T20: codex image-only user message writes no record =="
+ONLY_OUTDIR="$TMPROOT/sessions-only"
+mkdir -p "$ONLY_OUTDIR"
+PATH="$REAL_PATH" KB_SESSIONS_DIR="$ONLY_OUTDIR" bash "$CAPTURE" \
+  "$SCRIPT_DIR/fixtures/codex-rollout-images-only.jsonl" >/dev/null 2>&1
+only_out="$(find "$ONLY_OUTDIR" -name 'session-*.html' | head -1)"
+if [ -n "$only_out" ]; then
+  ok "image-only rollout still lands its adapter-meta capture"
+else
+  bad "image-only rollout wrote nothing (expected the adapter-meta capture)"
+fi
+if [ -n "$only_out" ] && grep -q '"type":"adapter-meta"' "$only_out"; then
+  ok "image-only capture carries its adapter-meta record"
+else
+  bad "image-only capture missing adapter-meta"
+fi
+if [ -n "$only_out" ] && grep -q '"type":"user"' "$only_out"; then
+  bad "image-only codex message leaked a user record"
+else
+  ok "image-only codex message writes no user record"
+fi
+if [ -n "$only_out" ] && grep -q '"type":"image"' "$only_out"; then
+  bad "image block survived from an image-only message"
+else
+  ok "no image block survives from an image-only message"
+fi
+
+echo
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -42,6 +42,11 @@ export function CodeLaneSection({ sid, kb, repo }: CodeLaneSectionProps) {
   } else {
     body = (
       <>
+        <div className="kb-code-lane__head">
+          <button type="button" onClick={() => void q.refetch()}>
+            Refresh
+          </button>
+        </div>
         <div className="kb-code-lane__block">
           <h3 className="kb-code-lane__h">Commits · {card.commits.total}</h3>
           {!card.commits.available ? (

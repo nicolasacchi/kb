@@ -541,7 +541,12 @@ GET  /api/session-card?sid=                kbc-session-card/1: one read
                                             unknown `repo` is a 400 (never
                                             echoes the rejected `sid`); any
                                             well-formed `sid` is a 200, even
-                                            with empty lanes. No paths, no
+                                            with empty lanes. `?repo=NAME`
+                                            scopes commits and reviews
+                                            (including the doc-authored half);
+                                            findings and presence are
+                                            session-scoped only and ignore
+                                            the filter. No paths, no
                                             file contents, no text.
 GET  /api/kb/ui                            OL S1: kb's `theme_family` +
                                             `theme` from `GET /api/settings`
@@ -880,14 +885,16 @@ GET  /api/sessions[?cursor=<unix>&limit=N   Cross-kb list of captured Claude
                                             own. When none is known it is an
                                             honest not-resumable sentence.
                                             `tree=` (A3) is closed:
-                                            absent/`collapsed` (the default)
-                                            hides subagent children
+                                            absent/empty/`collapsed` (the
+                                            default) hides subagent children
                                             (`root_session_id IS NULL` in SQL
                                             before LIMIT, so the keyset
                                             cursor stays coherent; NULL-root
                                             rows stay visible), `flat` shows
                                             every row; any other value is a
-                                            400. Every row carries
+                                            400. (An empty `tree=` value is an
+                                            explicit alias for `collapsed`,
+                                            not a 400.) Every row carries
                                             `child_count`: how many children
                                             it has by the card predicate
                                             (a root counts its whole flood,
@@ -1542,7 +1549,9 @@ POST /api/sessions/backfill-tree             V0047 — fill NULL
                                             would_change, changed,
                                             unmatched, kbs[{kb,
                                             would_change, changed,
-                                            unmatched}], degraded[]}.
+                                            unmatched}], degraded[]}:
+                                            the counts are rows (would_change/
+                                            changed) and items (unmatched).
 GET  /api/why?path=<file>                   R2 — the WHY assembler: the past
                                             sessions that touched a file + their
                                             prompt/decisions/commits. Basename-
