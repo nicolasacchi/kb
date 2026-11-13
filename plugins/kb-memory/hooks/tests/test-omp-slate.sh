@@ -66,6 +66,18 @@ if [ "${1:-}" != "slate" ]; then echo "unexpected: $*" >&2; exit 1; fi
 case "${2:-}" in
   watch)
     case "${KB_FAKE_WATCH_MODE:-}" in
+      file)
+        # Scenario script: one raw post per line, or `SLEEP <secs>`; then idle.
+        while IFS= read -r l; do
+          case "$l" in
+            SLEEP\ *) sleep "${l#SLEEP }" ;;
+            "") ;;
+            *) printf '%s\n' "$l" ;;
+          esac
+        done <"$KB_FAKE_WATCH_FILE"
+        sleep 60
+        exit 0
+        ;;
       resolve)
         printf '%s\n' '{"seq":20,"kind":"ask","line":"for the operator?","to":"you","prov":{"harness":"claude","session_id":"other-session-0001"}}'
         printf '%s\n' '{"seq":21,"kind":"answer","re":40,"line":"go with B","body":"because C","prov":{"harness":"claude","origin":"human","session_id":"op-web"}}'
@@ -86,6 +98,15 @@ case "${2:-}" in
     exit 0
     ;;
   show)
+    if [ -n "${KB_FAKE_SHOW_DIR:-}" ]; then
+      d="$KB_FAKE_SHOW_DIR"
+      [ -f "$d/delay" ] && sleep "$(cat "$d/delay")"
+      if [ -f "$d/fail-${3:-0}" ]; then
+        n="$(cat "$d/fail-${3:-0}")"
+        if [ "$n" -gt 0 ]; then echo $((n - 1)) >"$d/fail-${3:-0}"; echo "daemon blip" >&2; exit 1; fi
+      fi
+      if [ -f "$d/${3:-0}.json" ]; then cat "$d/${3:-0}.json"; exit 0; fi
+    fi
     if [ "${3:-}" = "40" ]; then own="${KB_FAKE_OWN_SID:-}"; else own="other-session-0001"; fi
     printf '{"post":{"seq":%s,"kind":"ask","line":"which?","prov":{"harness":"omp","session_id":"%s"}},"refs":[],"thread":[]}\n' "${3:-0}" "$own"
     exit 0
@@ -246,17 +267,39 @@ test("own-ask detection compares the ask's prov.session_id with this session", (
   expect(M.slateIsOwnAsk("{}", SID)).toBeNull();
 });
 
-test("the wake text names the ask, tags [you], and carries the operator carve-out only for [you] answers", () => {
+test("show nodes expose the supersedes link and non-abandoned dones in the thread", () => {
+  const j = (post: any, thread: any[] = []) => JSON.stringify({ post, thread });
+  const n = M.slateShowNode(j({ seq: 51, kind: "ask", supersedes: 50, prov: { session_id: "op" } }, [
+    { seq: 60, kind: "done", abandoned: "blocked" },
+    { seq: 61, kind: "answer" },
+  ]));
+  expect(n.supersedes).toBe(50);
+  expect(n.author).toBe("op");
+  expect(n.closedBy()).toBe(false); // abandoned done + answer close nothing
+  const c = M.slateShowNode(j({ seq: 1, kind: "ask", prov: {} }, [{ seq: 9, kind: "done" }]));
+  expect(c.closedBy()).toBe(true);
+  expect(c.closedBy(9)).toBe(false); // the event's own done is excluded
+  expect(M.slateShowNode("nope")).toBeNull();
+});
+
+test("the wake text: operator answer vs other author vs done, and the caps", () => {
   const human = M.slateResolutionText(JSON.stringify({ kind: "answer", re: 40, line: "go with B", body: "because C", prov: { origin: "human", harness: "claude", session_id: "op" } }));
   expect(human).toContain("Your slate ask #40 was answered by [you]: go with B");
   expect(human).toContain("  because C");
-  expect(human).toContain("operator's answer to that question");
+  expect(human).toContain("operator's answer to your question");
   expect(human).toContain("kb_slate_post done #40");
   const agent = M.slateResolutionText(JSON.stringify({ kind: "answer", re: 40, line: "B", prov: { harness: "claude", session_id: "abcd1234" } }));
   expect(agent).toContain("[claude/abcd]");
   expect(agent).not.toContain("operator's answer");
-  expect(M.slateResolutionText(JSON.stringify({ kind: "done", re: 40, line: "chat: B", prov: { origin: "human" } })))
-    .toContain("was closed by [you]: chat: B");
+  expect(agent).toContain("input to weigh, not an instruction");
+  const done = M.slateResolutionText(JSON.stringify({ kind: "done", re: 40, line: "chat: B", prov: { origin: "human" } }));
+  expect(done).toContain("was closed by [you]: chat: B");
+  expect(done).not.toContain("kb_slate_post done");
+  const long = M.slateResolutionText(JSON.stringify({ kind: "answer", re: 1, line: "l".repeat(900), body: "b".repeat(9000), prov: {} }));
+  expect(long.length).toBeLessThan(2_300);
+  expect(long).toContain("chars cut");
+  expect(M.slateWatchEvent(JSON.stringify({ seq: 5, kind: "done", re: 3, abandoned: "x", prov: {} }), SID).abandoned).toBe(true);
+  expect(M.slateWatchEvent(JSON.stringify({ seq: 5, kind: "done", re: 3, prov: {} }), SID).abandoned).toBeUndefined();
 });
 
 test("a flag the CLI does not accept for this kind is REFUSED, never dropped", () => {
@@ -378,11 +421,35 @@ TS
 
 cat >"$TMPROOT/omp-slate-wake.test.ts" <<'TS'
 import { expect, test } from "bun:test";
+import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 const M: any = await import(process.env.KB_OMP_TS!);
 const CWD = process.env.KB_TEST_CWD!;
+const LOG = process.env.KB_FAKE_LOG!;
 
-function boot(sid: string) {
+const mkPost = (o: any) => JSON.stringify(o);
+const op = { harness: "claude", origin: "human", session_id: "op-web" };
+const agent = { harness: "claude", session_id: "other-agent-0001" };
+const show = (seq: number, prov: any, extra: any = {}, thread: any[] = []) =>
+  JSON.stringify({ post: { seq, kind: "ask", line: "q", prov, ...extra }, refs: [], thread });
+
+/** Write a scenario (watch script lines + `show` fixtures) and point the fake kb at it. */
+function scenario(watch: string[], shows: Record<string, string>) {
+  const dir = mkdtempSync(join(tmpdir(), "kb-omp-wake-"));
+  writeFileSync(join(dir, "watch.txt"), watch.join("\n") + "\n");
+  for (const [k, v] of Object.entries(shows)) writeFileSync(join(dir, k), v);
+  process.env.KB_FAKE_WATCH_MODE = "file";
+  process.env.KB_FAKE_WATCH_FILE = join(dir, "watch.txt");
+  process.env.KB_FAKE_SHOW_DIR = dir;
+  return dir;
+}
+
+const calls = (re: RegExp) => readFileSync(LOG, "utf8").split("\n").filter((l) => re.test(l)).length;
+
+function boot(initialSid: string) {
+  let sid = initialSid;
   process.env.KB_FAKE_OWN_SID = sid;
   const ctx: any = {
     cwd: CWD,
@@ -397,45 +464,68 @@ function boot(sid: string) {
     string: () => chain, number: () => chain, boolean: () => chain, array: () => chain,
   };
   const handlers = new Map<string, any>();
+  const commands = new Map<string, any>();
   const sent: { m: any; opts: any; at: number }[] = [];
   M.default({
     zod: z,
     on: (e: string, h: any) => handlers.set(e, h),
     registerTool: () => {},
-    registerCommand: () => {},
+    registerCommand: (n: string, o: any) => commands.set(n, o),
     registerFlag: () => {},
     getFlag: () => undefined,
     appendEntry: () => {},
     sendMessage: (m: any, opts: any) => sent.push({ m, opts, at: Date.now() }),
     sendUserMessage: () => {},
   });
-  return { ctx, handlers, sent };
+  const setSid = (s: string) => { sid = s; };
+  const wakes = () => sent.filter((s) => s.opts?.triggerTurn === true);
+  const stats = async () => {
+    const before = sent.length;
+    await commands.get("kb-slate").handler("", ctx);
+    return String(sent[before]?.m?.content ?? "");
+  };
+  return { ctx, handlers, sent, setSid, wakes, stats };
 }
 
 test(
-  "own-ask answers and dones wake with triggerTurn at once; others' answers keep the cadence; an ask to: you is not pushed",
+  "own-ask answers and dones wake with triggerTurn at once; others' answers keep the cadence; an ask to: you queues nothing",
   async () => {
-    process.env.KB_FAKE_WATCH_MODE = "resolve";
-    const { ctx, handlers, sent } = boot("omp-session-wake");
+    const A = "omp-session-wake";
+    scenario(
+      [
+        mkPost({ seq: 20, kind: "ask", line: "for the operator?", to: "you", prov: agent }),
+        "SLEEP 3",
+        mkPost({ seq: 21, kind: "answer", re: 40, line: "go with B", body: "because C", prov: op }),
+        mkPost({ seq: 22, kind: "answer", re: 41, line: "someone elses", prov: agent }),
+        mkPost({ seq: 23, kind: "done", re: 40, line: "chat: B", prov: op }),
+      ],
+      { "40.json": show(40, { harness: "omp", session_id: A }), "41.json": show(41, agent) },
+    );
+    const { ctx, handlers, sent, wakes } = boot(A);
     const t0 = Date.now();
     await handlers.get("session_start")({}, ctx);
     const deadline = Date.now() + 25_000;
     while (Date.now() < deadline && sent.length < 3) await Bun.sleep(100);
     await handlers.get("session_shutdown")({}, ctx);
 
-    const wakes = sent.filter((s) => s.opts?.triggerTurn === true);
+    const w = wakes();
     const plain = sent.filter((s) => !s.opts);
-    expect(wakes.length).toBe(2);
-    expect(wakes[0].m.customType).toBe("kb-slate");
-    expect(wakes[0].m.content).toContain("Your slate ask #40 was answered by [you]: go with B");
-    expect(wakes[1].m.content).toContain("Your slate ask #40 was closed by [you]: chat: B");
-    // Both resolutions delivered inside one rate window: the 30 s floor is bypassed.
-    expect(wakes[1].at - wakes[0].at).toBeLessThan(5_000);
+    expect(w.length).toBe(2);
+    expect(w[0].m.customType).toBe("kb-slate");
+    expect(w[0].m.content).toContain("Your slate ask #40 was answered by [you]: go with B");
+    expect(w[0].m.content).toContain("operator's answer to your question");
+    expect(w[0].m.content).toContain("kb_slate_post done #40");
+    // A done means the ask is already closed: no close instruction.
+    expect(w[1].m.content).toContain("Your slate ask #40 was closed by [you]: chat: B");
+    expect(w[1].m.content).not.toContain("kb_slate_post done");
+    expect(w[1].at - w[0].at).toBeLessThan(5_000);
     // Someone else's answer (#41) still rides the ordinary path: no options, debounced >= 2 s.
     expect(plain.length).toBe(1);
-    expect(plain[0].at - t0).toBeGreaterThanOrEqual(1_900);
-    // The ask to: you never produced a message of its own.
-    expect(sent.every((s) => !String(s.m.content).includes("for the operator?"))).toBe(true);
+    // The `to: you` ask arrived 3 s BEFORE the resolutions; had it queued a
+    // push, a plain delivery would have landed at ~2 s, ahead of every wake.
+    expect(sent[0].opts?.triggerTurn).toBe(true);
+    expect(plain[0].at).toBeGreaterThan(w[0].at);
+    expect(plain[0].at - t0).toBeGreaterThanOrEqual(4_900);
   },
   60_000,
 );
@@ -444,11 +534,256 @@ test(
   "asks addressed to you or claude never start the push cadence",
   async () => {
     process.env.KB_FAKE_WATCH_MODE = "elsewhere";
+    delete process.env.KB_FAKE_SHOW_DIR;
     const { ctx, handlers, sent } = boot("omp-session-elsewhere");
     await handlers.get("session_start")({}, ctx);
     await Bun.sleep(6_000);
     await handlers.get("session_shutdown")({}, ctx);
     expect(sent.length).toBe(0);
+  },
+  30_000,
+);
+
+test(
+  "session switch stops the old pusher: its asks wake nobody, the new session gets its own pusher",
+  async () => {
+    const A = "omp-sw-A", B = "omp-sw-B";
+    scenario(
+      ["SLEEP 2.5", mkPost({ seq: 30, kind: "answer", re: 40, line: "late", prov: op })],
+      { "40.json": show(40, { harness: "omp", session_id: A }) },
+    );
+    const { ctx, handlers, setSid, sent, wakes } = boot(A);
+    await handlers.get("session_start")({}, ctx);
+    expect(typeof handlers.get("session_switch")).toBe("function");
+    expect(typeof handlers.get("session_branch")).toBe("function");
+    await Bun.sleep(300);
+    setSid(B);
+    await handlers.get("session_switch")({ reason: "new" }, ctx);
+    await Bun.sleep(5_500);
+    await handlers.get("session_shutdown")({}, ctx);
+    expect(wakes().length).toBe(0);
+    expect(sent.some((s) => String(s.m.content).includes("Your slate ask"))).toBe(false);
+    const log = readFileSync(LOG, "utf8");
+    expect(log).toContain(`--session-id ${A}`);
+    expect(log).toContain(`slate watch --json --harness omp --cwd ${CWD} --session-id ${B}`);
+  },
+  30_000,
+);
+
+test(
+  "a lookup that resolves after the session changed (or shut down) sends nothing",
+  async () => {
+    const A = "omp-live-A";
+    const dir = scenario(
+      [mkPost({ seq: 31, kind: "answer", re: 40, line: "late", prov: op })],
+      { "40.json": show(40, { harness: "omp", session_id: A }), delay: "1.5" },
+    );
+    // (a) the live session id changes while `show` is in flight, with no handler call at all.
+    let b = boot(A);
+    await b.handlers.get("session_start")({}, b.ctx);
+    await Bun.sleep(600);
+    b.setSid("omp-live-B");
+    await Bun.sleep(3_500);
+    expect(b.wakes().length).toBe(0);
+    b.setSid(A);
+    await b.handlers.get("session_shutdown")({}, b.ctx);
+    // (b) shutdown while `show` is in flight.
+    b = boot(A);
+    await b.handlers.get("session_start")({}, b.ctx);
+    await Bun.sleep(600);
+    await b.handlers.get("session_shutdown")({}, b.ctx);
+    await Bun.sleep(3_500);
+    expect(b.wakes().length).toBe(0);
+    // control: with the delay and no interference the same scenario DOES wake.
+    b = boot(A);
+    await b.handlers.get("session_start")({}, b.ctx);
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline && b.wakes().length === 0) await Bun.sleep(100);
+    await b.handlers.get("session_shutdown")({}, b.ctx);
+    expect(b.wakes().length).toBe(1);
+    void dir;
+  },
+  40_000,
+);
+
+test(
+  "ownership follows the supersedes chain to its ROOT author (operator rewrite, older version, foreign ask rewritten by us)",
+  async () => {
+    const A = "omp-chain-A";
+    const mine = { harness: "omp", session_id: A };
+    scenario(
+      [
+        // operator rewrote omp's #50 into #51 and answered #51
+        mkPost({ seq: 52, kind: "answer", re: 51, line: "B", prov: op }),
+        // an answer to the OLDER version #50 itself
+        mkPost({ seq: 53, kind: "answer", re: 50, line: "B again", prov: op }),
+        // omp rewrote a FOREIGN ask #60 into #61 and someone answered #61
+        mkPost({ seq: 54, kind: "answer", re: 61, line: "not for us", prov: op }),
+      ],
+      {
+        "50.json": show(50, mine),
+        "51.json": show(51, op, { supersedes: 50 }),
+        "60.json": show(60, agent),
+        "61.json": show(61, mine, { supersedes: 60 }),
+      },
+    );
+    const { ctx, handlers, wakes, sent } = boot(A);
+    await handlers.get("session_start")({}, ctx);
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline && wakes().length < 2) await Bun.sleep(100);
+    await Bun.sleep(1_500);
+    await handlers.get("session_shutdown")({}, ctx);
+    const w = wakes();
+    expect(w.length).toBe(2);
+    // the two lookups race (the chain walk takes an extra show), so order is not asserted
+    const texts = w.map((x) => String(x.m.content)).join("\n");
+    expect(texts).toContain("Your slate ask #51 was answered");
+    expect(texts).toContain("Your slate ask #50 was answered");
+    expect(sent.some((s) => String(s.m.content).includes("#61"))).toBe(false);
+    // the cache is by ROOT: #50 was learned while resolving #51.
+    expect(calls(/CALL slate show 60 /)).toBe(1);
+  },
+  30_000,
+);
+
+test(
+  "done/abandoned/late-answer/own-resolution rules and framing",
+  async () => {
+    const A = "omp-rules-A";
+    const mine = { harness: "omp", session_id: A };
+    const done = (seq: number, extra: any = {}) => ({ seq, kind: "done", re: 70, ...extra });
+    scenario(
+      [
+        // 1. an abandoned done keeps the ask open -> no wake
+        mkPost({ seq: 71, kind: "done", re: 70, line: "gave up", abandoned: "blocked", prov: op }),
+        // 2. another agent's answer -> wake, framed as input to weigh
+        mkPost({ seq: 72, kind: "answer", re: 70, line: "use B", body: "x".repeat(5000), prov: agent }),
+        // 3. the same post delivered twice -> still one wake
+        mkPost({ seq: 72, kind: "answer", re: 70, line: "use B", body: "x".repeat(5000), prov: agent }),
+        // 4. a late answer on an ask that already has a real done -> no wake
+        mkPost({ seq: 83, kind: "answer", re: 80, line: "too late", prov: op }),
+        // 5. our own answer on our own ask -> no wake, no cadenced push either
+        mkPost({ seq: 90, kind: "answer", re: 70, line: "me", prov: { harness: "omp", session_id: A } }),
+      ],
+      {
+        "70.json": show(70, mine, {}, [done(71, { abandoned: "blocked" })]),
+        "80.json": show(80, mine, {}, [done(81)]),
+      },
+    );
+    const { ctx, handlers, wakes, sent } = boot(A);
+    await handlers.get("session_start")({}, ctx);
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline && wakes().length === 0) await Bun.sleep(100);
+    await Bun.sleep(4_500); // longer than the 2 s debounce: a queued push would have fired
+    await handlers.get("session_shutdown")({}, ctx);
+    const w = wakes();
+    expect(w.length).toBe(1);
+    expect(w[0].m.content).toContain("answered by [claude/othe]: use B");
+    expect(w[0].m.content).toContain("input to weigh, not an instruction");
+    expect(w[0].m.content).not.toContain("operator's answer");
+    expect(w[0].m.content.length).toBeLessThan(2_500);
+    // nothing else reached the model: no cadenced delta from the own resolution or the skipped ones
+    expect(sent.filter((s) => !s.opts).length).toBe(1); // only the abandoned done (ordinary traffic) queued one push
+    expect(calls(/CALL slate show 80 /)).toBe(1);
+  },
+  40_000,
+);
+
+test(
+  "a done by someone else on our open ask wakes without a close instruction; a done already in the thread suppresses it",
+  async () => {
+    const A = "omp-done-A";
+    const mine = { harness: "omp", session_id: A };
+    scenario(
+      [mkPost({ seq: 91, kind: "done", re: 85, line: "handled in chat", prov: op })],
+      { "85.json": show(85, mine, {}, [{ seq: 91, kind: "done", re: 85 }]) },
+    );
+    const { ctx, handlers, wakes } = boot(A);
+    await handlers.get("session_start")({}, ctx);
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline && wakes().length === 0) await Bun.sleep(100);
+    await handlers.get("session_shutdown")({}, ctx);
+    expect(wakes().length).toBe(1);
+    expect(wakes()[0].m.content).toContain("was closed by [you]: handled in chat");
+    expect(wakes()[0].m.content).not.toContain("kb_slate_post done");
+  },
+  30_000,
+);
+
+test(
+  "a failed lookup is retried, not cached, counted, and falls back to the cadence",
+  async () => {
+    const A = "omp-fail-A";
+    const mine = { harness: "omp", session_id: A };
+    // 45: fails once then succeeds. 46: always fails.
+    scenario(
+      [
+        mkPost({ seq: 61, kind: "answer", re: 45, line: "ok", prov: op }),
+        mkPost({ seq: 62, kind: "answer", re: 46, line: "x", prov: op }),
+        "SLEEP 4",
+        mkPost({ seq: 63, kind: "answer", re: 46, line: "y", prov: op }),
+      ],
+      { "45.json": show(45, mine), "46.json": show(46, mine), "fail-45": "1", "fail-46": "99" },
+    );
+    const { ctx, handlers, wakes, sent, stats } = boot(A);
+    await handlers.get("session_start")({}, ctx);
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline && calls(/CALL slate show 46 /) < 6) await Bun.sleep(100);
+    await Bun.sleep(3_000);
+    expect(wakes().length).toBe(1);
+    expect(wakes()[0].m.content).toContain("#45");
+    expect(calls(/CALL slate show 45 /)).toBe(2); // one failure, one retry
+    expect(calls(/CALL slate show 46 /)).toBe(6); // 3 attempts x 2 events: the failure was not cached
+    // fell back to the cadenced delta without triggerTurn
+    expect(sent.filter((s) => !s.opts).length).toBeGreaterThanOrEqual(1);
+    expect(await stats()).toMatch(/failures 2\b/);
+    await handlers.get("session_shutdown")({}, ctx);
+  },
+  60_000,
+);
+
+test(
+  "KB_SLATE_PUSH=0 blocks wakes, also when set mid-session",
+  async () => {
+    const A = "omp-off-A";
+    scenario(
+      ["SLEEP 2", mkPost({ seq: 64, kind: "answer", re: 40, line: "x", prov: op })],
+      { "40.json": show(40, { harness: "omp", session_id: A }) },
+    );
+    const { ctx, handlers, sent } = boot(A);
+    await handlers.get("session_start")({}, ctx);
+    process.env.KB_SLATE_PUSH = "0";
+    try {
+      await Bun.sleep(5_000);
+    } finally {
+      delete process.env.KB_SLATE_PUSH;
+    }
+    await handlers.get("session_shutdown")({}, ctx);
+    expect(sent.length).toBe(0);
+  },
+  30_000,
+);
+
+test(
+  "a seq that goes backwards (ledger purge) clears the seq-keyed caches",
+  async () => {
+    const A = "omp-purge-A";
+    scenario(
+      [
+        mkPost({ seq: 100, kind: "answer", re: 40, line: "first life", prov: op }),
+        "SLEEP 1",
+        mkPost({ seq: 3, kind: "found", line: "after the purge", prov: agent }),
+        mkPost({ seq: 100, kind: "answer", re: 40, line: "second life", prov: op }),
+      ],
+      { "40.json": show(40, { harness: "omp", session_id: A }) },
+    );
+    const { ctx, handlers, wakes } = boot(A);
+    await handlers.get("session_start")({}, ctx);
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline && wakes().length < 2) await Bun.sleep(100);
+    await handlers.get("session_shutdown")({}, ctx);
+    expect(wakes().length).toBe(2);
+    expect(wakes()[1].m.content).toContain("second life");
   },
   30_000,
 );
@@ -543,12 +878,6 @@ if grep -q 'CALL slate show 40 --json --harness omp' "$KB_FAKE_LOG"; then
   ok "own-ask detection resolves the ask with \`kb slate show <re> --json\`"
 else
   bad "no kb slate show call recorded"
-fi
-if [ "$(grep -c 'CALL slate show 40 ' "$KB_FAKE_LOG")" = "1" ]; then
-  ok "the own-ask lookup is cached per ask (show 40 ran once for two resolutions)"
-else
-  bad "show 40 was not cached"
-  grep 'CALL slate show' "$KB_FAKE_LOG"
 fi
 
 : >"$KB_FAKE_LOG"
