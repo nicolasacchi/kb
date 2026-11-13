@@ -4,14 +4,19 @@
 // live references). It FAILS CLOSED: every internal path read is asserted,
 // and any missing path throws Error('seed: xterm internals changed: <path>').
 // The matrix uses the spike's safe(..., default) diagnostics instead; the
-// seed builder never returns defaults. INTERNALS_PATHS lists every static
-// path this module reads; test/matrix/pins.test.ts asserts each one
-// exists on a fresh terminal, so an xterm upgrade that renames an internal
-// breaks the pinned build loudly instead of silently producing wrong
-// seeds. The wrap-cell line fields (_data, _combined, _extendedAttrs) are
-// instance fields read via lines.get(i) (readWrapCell, which throws
-// fail-closed when they go missing) rather than static paths: the pin
-// test asserts them on a content line instead.
+// seed builder never returns defaults. INTERNALS_PATHS lists every
+// fail-closed static path this module reads; test/matrix/pins.test.ts
+// asserts each one exists on a fresh terminal, so an xterm upgrade that
+// renames an internal breaks the pinned build loudly instead of silently
+// producing wrong seeds. Two reads are deliberately outside that list:
+// the diagnostic-only `_core._charsetService.charset` (read tolerantly;
+// it feeds charsetJson/charsetSets for state comparison, never seed
+// bytes, and its absence must never fail a capture) and `lines.length`
+// (a derived count feeding only Seed.scrollbackLines). The wrap-cell
+// line fields (_data, _combined, _extendedAttrs) are instance fields
+// read via lines.get(i) (readWrapCell, which throws fail-closed when
+// they go missing) rather than static paths: the pin test asserts them
+// on a content line instead.
 //
 // Charset note: designation characters are not retained by xterm's
 // CharsetService (only the built character maps), so designations cannot

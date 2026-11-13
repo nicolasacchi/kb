@@ -240,6 +240,10 @@ export function decideDcs(d: number[], ended: boolean): [Decision, string] {
   return decideDcsView({ get: (i) => d[i], n: d.length }, ended);
 }
 
+export function decideApc(d: number[], ended: boolean): [Decision, string] {
+  return decideApcView({ get: (i) => d[i], n: d.length }, ended);
+}
+
 /** data = bytes after ESC _ */
 function decideApcView(d: DataView, ended: boolean): [Decision, string] {
   if (d.n === 0) return [ended ? 'pass' : 'more', ''];
@@ -515,8 +519,11 @@ export class QueryStripper {
    *
    * A stage sitting in ground state is an identity pass for input free of the
    * bytes that can affect it (ESC for the unwrap stages and the stripper, high
-   * bytes for the C1 filter): skipping the per-byte walk then is a memcpy, not
-   * a semantic change, and the differential suite proves it byte-for-byte.
+   * bytes for the C1 filter): skipping the per-byte state-machine walk then is
+   * not a semantic change (the differential suite proves it byte-for-byte).
+   * Note the skipped walk is the only saving: runMachines still copies the
+   * bytes one by one into the exchange buffers (inBuf, outAppendCh). The only
+   * memcpy in this path is the push-level prefix copy via outAppend.
    */
   private runMachines(chunk: Uint8Array, start: number, end: number): void {
     this.inBuf.reset();

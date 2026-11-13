@@ -107,6 +107,11 @@ pub struct SlateSummary {
     /// Distinct non-null topics across the CURRENT generation, sorted.
     pub topics: Vec<String>,
     pub counts: SlateCounts,
+    /// AW2 — asks addressed `to: "you"` that are on the board and still
+    /// UNANSWERED (the operator's queue). Derived at read time from the
+    /// projection; an answered ask is waiting for its asker, not for you.
+    /// Attention sums stay client-side (§9).
+    pub ask_for_you: usize,
     /// D27 (v0.42) — how many distinct sessions have REPORTED a cursor
     /// here (`meta.cursors.len()`). Served, never "read": it is
     /// attribution, not acknowledgement, and nothing expires it (D5).
@@ -670,6 +675,34 @@ pub async fn list(
     no_store_json(StatusCode::OK, rows)
 }
 
+/// The operator's unanswered addressed asks, counted per LOGICAL ask: a
+/// branched edit (two live edits of one root) shows two board rows but is
+/// one question. `answers`/`done` are already chain-wide and a `done` on any
+/// version hides every version (kb_core's `ask_done_by_root`), so this is the
+/// same definition the board and `ask_state` use.
+fn ask_for_you_count(d: &slate::SlateDigest, posts: &[Post]) -> usize {
+    let supersedes: std::collections::HashMap<u64, u64> = posts
+        .iter()
+        .filter_map(|p| p.supersedes.map(|t| (p.seq, t)))
+        .collect();
+    let root = |mut seq: u64| {
+        for _ in 0..64 {
+            match supersedes.get(&seq) {
+                Some(&prev) if prev < seq => seq = prev,
+                _ => break,
+            }
+        }
+        seq
+    };
+    d.sections
+        .ask
+        .iter()
+        .filter(|p| p.to.as_deref() == Some("you") && p.answers.unwrap_or(0) == 0)
+        .map(|p| root(p.seq))
+        .collect::<std::collections::HashSet<u64>>()
+        .len()
+}
+
 fn summarize(
     slug: &SlateSlug,
     loaded: &Loaded,
@@ -703,6 +736,14 @@ fn summarize(
             _ => {}
         }
     }
+    let ask_for_you = if loaded.meta.closed() {
+        // A closed slate refuses every write (409), so nothing on it can be
+        // answered: the operator's queue is empty by definition. `ask_open`
+        // keeps counting what the board shows.
+        0
+    } else {
+        ask_for_you_count(&d, &loaded.posts)
+    };
     SlateSummary {
         slug: slug.to_string(),
         head_seq: loaded.meta.head_seq,
@@ -715,6 +756,7 @@ fn summarize(
         closed: loaded.meta.closed(),
         topics: topics_of(&loaded.posts),
         counts,
+        ask_for_you,
         sessions_served: loaded.meta.cursors.len(),
         generation_posts: loaded.posts.len(),
     }
@@ -873,6 +915,7 @@ pub(crate) async fn turn_slate(
     // The same safety cap `delta` applies before rendering.
     batch.posts.truncate(READ_LIMIT_CAP);
     let (text, _cut) = slate::render_delta_batch(
+        &batch.replies,
         &batch.posts,
         &batch.hides,
         &loaded.posts,
@@ -1172,6 +1215,7 @@ pub async fn delta(
     let filtered = kinds.is_some();
     if let Some(want) = &kinds {
         batch.posts.retain(|p| want.contains(&p.kind));
+        batch.replies.retain(|r| want.contains(&r.kind));
         batch.hides.retain(|h| {
             loaded
                 .posts
@@ -1191,7 +1235,13 @@ pub async fn delta(
     }
     // Rendered from the FILTERED set, so `text` and `posts` can never
     // disagree about what the caller was told.
-    let (text, cut) = slate::render_delta_batch(&batch.posts, &batch.hides, &loaded.posts, budget);
+    let (text, cut) = slate::render_delta_batch(
+        &batch.replies,
+        &batch.posts,
+        &batch.hides,
+        &loaded.posts,
+        budget,
+    );
 
     no_store_json(
         StatusCode::OK,

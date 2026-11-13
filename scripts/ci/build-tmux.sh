@@ -81,6 +81,16 @@ cached_so_the_build_is_a_noop() {
     if [ "${version}" = "tmux ${TMUX_VERSION}" ]; then
       say "tmux ${TMUX_VERSION} cached at ${OUT}/bin/tmux"
       linkage="$(cat "${OUT}/LINKAGE" 2>/dev/null || echo unknown)"
+      case "${linkage}" in
+        static|dynamic) ;;
+        *)
+          # Fail closed on unknown linkage state: a cache entry that
+          # does not say exactly how its binary is linked is not
+          # trusted — rebuild from the pinned tarball instead of
+          # silently skipping the runtime-library install.
+          say "tmux ${TMUX_VERSION} cache has unexpected LINKAGE '${linkage}'; rebuilding"
+          return 1 ;;
+      esac
       if [ "${linkage}" = "dynamic" ]; then
         install_runtime_libs
       fi

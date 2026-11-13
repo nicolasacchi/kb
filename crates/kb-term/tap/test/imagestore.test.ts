@@ -1,6 +1,6 @@
 // ImageStore pins (KBT-GFX).
 import { test, expect, afterAll } from 'bun:test';
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync, existsSync, appendFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync, existsSync, appendFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -40,18 +40,30 @@ test('put_is_atomic_and_dedupes', () => {
   expect(store.has(sha)).toBe(true);
   // No .tmp left.
   expect(countFiles(join(sess, 'img')).filter((n) => n.startsWith('.tmp-'))).toEqual([]);
-  const mtime1 = readFileSync(join(sess, 'img', sha));
-  expect(mtime1).toEqual(Buffer.from(bytes));
-  // Re-put touches mtime to the injected now and writes nothing.
+  expect(readFileSync(join(sess, 'img', sha))).toEqual(Buffer.from(bytes));
+  // First put sets mtime to the injected now.
+  expect(statSync(join(sess, 'img', sha)).mtimeMs).toBe(1_000_000);
+  // Re-put touches mtime to the injected now and writes nothing: re-putting
+  // near-identical (different) bytes under the same sha leaves the original
+  // content untouched, proving the write-once path does not overwrite.
   t = 2_000_000;
-  const second = store.putPng(sha, bytes);
+  const different = new Uint8Array(bytes);
+  different[different.length - 1]! ^= 0xff;
+  const second = store.putPng(sha, different);
   expect(second.written).toBe(false);
   expect(countFiles(join(sess, 'img')).filter((n) => n.startsWith('.tmp-'))).toEqual([]);
-  // putSeq dedupes the same way.
+  expect(readFileSync(join(sess, 'img', sha))).toEqual(Buffer.from(bytes));
+  expect(statSync(join(sess, 'img', sha)).mtimeMs).toBe(2_000_000);
+  // putSeq dedupes the same way: touch mtime, write nothing, preserve content.
   const seqBytes = enc('\x1b]1337;File=test:AAAA\x07');
   const seqSha = shaOf(seqBytes);
   expect(store.putSeq(seqSha, seqBytes).written).toBe(true);
-  expect(store.putSeq(seqSha, seqBytes).written).toBe(false);
+  expect(statSync(join(sess, 'seq', seqSha)).mtimeMs).toBe(2_000_000);
+  t = 3_000_000;
+  const seqDifferent = enc('\x1b]1337;File=test:BBBB\x07');
+  expect(store.putSeq(seqSha, seqDifferent).written).toBe(false);
+  expect(readFileSync(join(sess, 'seq', seqSha))).toEqual(Buffer.from(seqBytes));
+  expect(statSync(join(sess, 'seq', seqSha)).mtimeMs).toBe(3_000_000);
   expect(store.readSeq(seqSha)).toEqual(seqBytes);
   expect(store.hasSeq(seqSha)).toBe(true);
   expect(store.readPng('0'.repeat(64))).toBeNull();
