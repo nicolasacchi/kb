@@ -14,6 +14,11 @@
 //! `{"status":"ok","data":...}` / `{"status":"err","code","message"}` with
 //! unknown fields tolerated (additive-reader rule), and every field
 //! serializes `None` as an explicit `null` (no `skip_serializing_if`).
+//!
+//! Post-merge reconciliation (FXT8): this mirror deliberately crosses the
+//! kb-server boundary that T8's brief kept closed — the relay needs the
+//! shared wire shapes to type its JSON, so the mirror is justified, kept
+//! in lock-step by the golden round-trip below (not a second contract).
 
 use serde::{Deserialize, Serialize};
 
@@ -235,24 +240,34 @@ pub enum RunnerReply {
 }
 
 /// Session facts returned by `list` inside `RunnerReply::Ok` `data`.
+///
+/// Every fact is `Option` and serializes `None` as an explicit `null`,
+/// exactly like kb-term's `wire::SessionInfo`: a stale socket appears
+/// with all facts null and `stale: true`. One type covers both.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionInfo {
     /// Session id.
     pub id: String,
     /// Harness running in the session.
-    pub harness: Harness,
+    #[serde(default)]
+    pub harness: Option<Harness>,
     /// Working directory.
-    pub cwd: String,
+    #[serde(default)]
+    pub cwd: Option<String>,
     /// Start time as unix seconds.
-    pub started_unix: i64,
+    #[serde(default)]
+    pub started_unix: Option<i64>,
     /// Resume session id, if any.
     pub resume_sid: Option<String>,
     /// Pane pid.
-    pub pane_pid: u32,
+    #[serde(default)]
+    pub pane_pid: Option<u32>,
     /// Grid columns.
-    pub cols: u16,
+    #[serde(default)]
+    pub cols: Option<u16>,
     /// Grid rows.
-    pub rows: u16,
+    #[serde(default)]
+    pub rows: Option<u16>,
     /// Whether bracketed paste is enabled in the pane.
     pub bracket_paste_flag: bool,
     /// Whether the pane is dead.
@@ -392,5 +407,33 @@ mod tests {
             "{\"op\":\"kill\",\"id\":\"abcd1234\",\"future_field\":true}"
         )
         .is_err());
+    }
+
+    /// The runner's `list` reply `data` is an array of `SessionInfo`s
+    /// (stale sockets included with null facts and `stale: true`), and
+    /// this mirror must deserialize that array.
+    #[test]
+    fn list_data_array_parses_as_session_infos() {
+        let golden = include_str!("../../../kb-term/tests/golden/session_info.json").trim_end();
+        let reply: RunnerReply =
+            serde_json::from_str(&format!("{{\"status\":\"ok\",\"data\":[{}]}}", golden)).unwrap();
+        match &reply {
+            RunnerReply::Ok { data } => {
+                let infos: Vec<SessionInfo> = serde_json::from_value(data.clone()).unwrap();
+                assert_eq!(infos.len(), 1);
+                assert_eq!(infos[0].id, "abcd1234");
+                assert_eq!(infos[0].harness, Some(Harness::Omp));
+            }
+            RunnerReply::Err { .. } => panic!("must not err"),
+        }
+        let stale_json = r#"{"id":"deadbeef","harness":null,"cwd":null,"started_unix":null,"resume_sid":null,"pane_pid":null,"cols":null,"rows":null,"bracket_paste_flag":false,"pane_dead":false,"exit_code":null,"grid_owner":null,"conf_version":0,"anchor_pid":null,"stale":true}"#;
+        let stale: SessionInfo = serde_json::from_str(stale_json).unwrap();
+        assert!(stale.stale);
+        assert!(stale.harness.is_none() && stale.pane_pid.is_none());
+        assert_eq!(
+            serde_json::to_string(&stale).unwrap(),
+            stale_json,
+            "stale SessionInfo must round-trip byte-identically (explicit nulls)"
+        );
     }
 }

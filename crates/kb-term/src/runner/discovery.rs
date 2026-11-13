@@ -75,6 +75,36 @@ impl Serialize for SessionEntry {
     }
 }
 
+/// Convert one discovered entry into the wire [`SessionInfo`] the list RPC
+/// promises its consumers (`Request::List` answers `SessionInfo`s).
+///
+/// Stale sockets (which answer nothing) convert to a `SessionInfo` with
+/// all facts null and `stale: true`, so the reply round-trips through
+/// both `SessionInfo` contracts (kb-term's [`crate::wire`] and the
+/// kb-server mirror) for live and stale entries alike.
+pub fn session_entry_info(entry: &SessionEntry) -> crate::wire::SessionInfo {
+    crate::wire::SessionInfo {
+        id: entry.id.clone(),
+        harness: entry
+            .harness
+            .as_deref()
+            .and_then(crate::wire::Harness::parse),
+        cwd: entry.cwd.clone(),
+        started_unix: entry.started_unix,
+        resume_sid: entry.resume_sid.clone(),
+        pane_pid: entry.pane_pid,
+        cols: entry.cols,
+        rows: entry.rows,
+        bracket_paste_flag: entry.bracket_paste_flag,
+        pane_dead: entry.pane_dead,
+        exit_code: entry.exit_code,
+        grid_owner: entry.grid_owner.clone(),
+        conf_version: entry.conf_version,
+        anchor_pid: entry.anchor_pid,
+        stale: entry.stale,
+    }
+}
+
 /// Glob `<run-dir>/s/*.sock` and describe every holder.
 pub async fn list_sessions<S: Supervisor>(runner: &Runner<S>) -> Vec<SessionEntry> {
     let dir = runner.sessions_dir();
@@ -310,5 +340,67 @@ mod tests {
         assert!(json.contains("\"harness\":\"omp\""));
         assert!(json.contains("\"anchor_pid\":99"));
         assert!(json.contains("\"conf_version\":2"));
+    }
+
+    /// The list RPC's `SessionInfo` array parses as `SessionInfo`s for
+    /// live entries AND stale sockets (null facts, `stale: true`): one
+    /// type covers both, and every entry round-trips.
+    #[test]
+    fn list_entries_convert_to_deserializable_session_info() {
+        use crate::wire::SessionInfo;
+        let live = SessionEntry {
+            id: "abcd1234".to_string(),
+            harness: Some("omp".to_string()),
+            cwd: Some("/work/proj".to_string()),
+            started_unix: Some(1_234_567_890),
+            resume_sid: Some("resume-1".to_string()),
+            pane_pid: Some(4242),
+            pane_dead: false,
+            exit_code: None,
+            cols: Some(120),
+            rows: Some(40),
+            bracket_paste_flag: true,
+            grid_owner: None,
+            conf_version: 2,
+            anchor_pid: Some(99),
+            stale: false,
+        };
+        let info = session_entry_info(&live);
+        assert_eq!(info.id, "abcd1234");
+        assert_eq!(info.harness, Some(crate::wire::Harness::Omp));
+        assert_eq!(info.pane_pid, Some(4242));
+        assert!(!info.stale);
+        let json = serde_json::to_string(&info).unwrap();
+        let back: SessionInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, info, "SessionInfo must round-trip");
+        let stale = SessionEntry {
+            id: "deadbeef".to_string(),
+            harness: None,
+            cwd: None,
+            started_unix: None,
+            resume_sid: None,
+            pane_pid: None,
+            pane_dead: false,
+            exit_code: None,
+            cols: None,
+            rows: None,
+            bracket_paste_flag: false,
+            grid_owner: None,
+            conf_version: 0,
+            anchor_pid: None,
+            stale: true,
+        };
+        let info = session_entry_info(&stale);
+        assert!(info.stale);
+        assert_eq!(info.id, "deadbeef");
+        assert!(
+            info.harness.is_none() && info.cwd.is_none() && info.pane_pid.is_none(),
+            "stale facts must be explicit nulls"
+        );
+        let json = serde_json::to_string(&info).unwrap();
+        assert!(json.contains("\"harness\":null"), "explicit null: {json}");
+        assert!(json.contains("\"stale\":true"));
+        let back: SessionInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, info, "stale SessionInfo must round-trip");
     }
 }

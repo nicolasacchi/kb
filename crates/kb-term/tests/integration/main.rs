@@ -542,6 +542,37 @@ async fn term_int_list_is_state_free() {
         .output();
 }
 
+// The list RPC reply `data` is an array of `SessionInfo`s that
+// round-trips through the wire type (live entries carry their facts).
+#[tokio::test(flavor = "multi_thread")]
+async fn term_int_list_data_parses_as_session_infos() {
+    let Some(tmux_bin) = require_tmux() else {
+        return;
+    };
+    let tr = TestRunner::new(tmux_bin);
+    boot_runner(&tr).await;
+    let cwd = tr.dir.path().to_string_lossy().into_owned();
+    let req = common::launch_req(vec!["/bin/cat".to_string()], cwd);
+    let id = match rpc::dispatch(&tr.runner, &req).await {
+        Response::Ok { data } => data["id"].as_str().unwrap().to_string(),
+        Response::Err { code, message } => panic!("launch failed ({code}): {message}"),
+    };
+    match rpc::dispatch(&tr.runner, &Request::List {}).await {
+        Response::Ok { data } => {
+            let infos: Vec<kb_term::wire::SessionInfo> =
+                serde_json::from_value(data).expect("list data must parse as SessionInfo array");
+            let info = infos
+                .iter()
+                .find(|s| s.id == id)
+                .expect("launched session must appear in list");
+            assert_eq!(info.harness, Some(kb_term::wire::Harness::Omp));
+            assert!(info.pane_pid.is_some() && info.cols.is_some() && info.rows.is_some());
+            assert!(!info.stale, "a live session must not read stale");
+        }
+        Response::Err { code, message } => panic!("list failed ({code}): {message}"),
+    }
+}
+
 // 8. Runner restart keeps the session and re-anchors it.
 #[tokio::test(flavor = "multi_thread")]
 async fn term_int_runner_restart_keeps_the_session_and_recreates_the_anchor() {

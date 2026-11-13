@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use tokio::process::Command;
 
-use super::{kill_group, RunnerError};
+use super::{kill_group, pid_alive, RunnerError};
 
 /// Context a kill passes to the supervisor's stop path.
 #[derive(Debug, Clone, Default)]
@@ -30,8 +30,14 @@ pub trait Supervisor: Send + Sync {
     fn start_holder(&self, id: &str) -> impl Future<Output = Result<(), RunnerError>> + Send;
     /// Start the tap for `id` (no-op when no tap binary is configured).
     fn start_tap(&self, id: &str) -> impl Future<Output = Result<(), RunnerError>> + Send;
-    /// Stop the tap and the holder for `id`, reaping strays.
-    fn stop(&self, id: &str, ctx: StopCtx) -> impl Future<Output = Result<(), RunnerError>> + Send;
+    /// Stop the tap and the holder for `id`, reaping strays. Returns
+    /// `true` when the SIGKILL path ran (something survived SIGTERM);
+    /// the kill RPC derives `forced` from this instead of the pane exit.
+    fn stop(
+        &self,
+        id: &str,
+        ctx: StopCtx,
+    ) -> impl Future<Output = Result<bool, RunnerError>> + Send;
 }
 
 /// The systemd supervisor: one `kb-term@<id>` unit per holder.
@@ -46,20 +52,42 @@ impl Supervisor for SystemdSupervisor {
         systemctl(&["start", &format!("kb-tap@{id}.service")]).await
     }
 
-    async fn stop(&self, id: &str, _ctx: StopCtx) -> Result<(), RunnerError> {
+    async fn stop(&self, id: &str, _ctx: StopCtx) -> Result<bool, RunnerError> {
         systemctl(&[
             "stop",
             &format!("kb-tap@{id}.service"),
             &format!("kb-term@{id}.service"),
         ])
-        .await
+        .await?;
+        // systemd reaps the cgroup itself (`KillMode=control-group` +
+        // `SendSIGKILL=yes`); there is no runner-side SIGKILL path to
+        // report, so the answer is always "not needed".
+        Ok(false)
     }
+}
+
+/// The minimal bus environment `systemctl --user` needs to reach the user
+/// bus: `HOME` and `XDG_RUNTIME_DIR` (plus `DBUS_SESSION_BUS_ADDRESS`
+/// when the runner inherited one). A cleared environment carries none of
+/// these, which breaks `systemctl --user` entirely.
+fn bus_env_for<F: Fn(&str) -> Option<String>>(get: F) -> Vec<(String, String)> {
+    ["HOME", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"]
+        .into_iter()
+        .filter_map(|k| get(k).map(|v| (k.to_string(), v)))
+        .collect()
+}
+
+/// The bus environment for `systemctl --user`, from this process's env.
+fn systemctl_env() -> Vec<(String, String)> {
+    bus_env_for(|k| std::env::var(k).ok())
 }
 
 async fn systemctl(args: &[&str]) -> Result<(), RunnerError> {
     let mut cmd = Command::new("systemctl");
-    cmd.arg("--user").args(args).env_clear();
-    cmd.env("HOME", std::env::var("HOME").unwrap_or_default());
+    cmd.arg("--user").args(args);
+    for (k, v) in systemctl_env() {
+        cmd.env(k, v);
+    }
     let out = tokio::time::timeout(Duration::from_secs(10), cmd.output())
         .await
         .map_err(|_| RunnerError::TmuxFailed("systemctl timed out".to_string()))?
@@ -178,7 +206,7 @@ impl Supervisor for DirectSupervisor {
         Ok(())
     }
 
-    async fn stop(&self, id: &str, ctx: StopCtx) -> Result<(), RunnerError> {
+    async fn stop(&self, id: &str, ctx: StopCtx) -> Result<bool, RunnerError> {
         // Stop the tap first (it is attached to the holder).
         let tap = self.taps.lock().unwrap().remove(id);
         if let Some(mut held) = tap {
@@ -186,9 +214,9 @@ impl Supervisor for DirectSupervisor {
         }
         // Direct-mode kill of a holder: SIGTERM the server and the pane
         // process group (the pane child is its own session leader, so
-        // pgid == pane_pid), wait 2 s, then SIGKILL both and reap the
-        // Child. `forced` is the caller's diagnosis; this path always
-        // SIGKILLs whatever survived the SIGTERM grace.
+        // pgid == pane_pid), then poll liveness: only what STILL lives
+        // after the SIGTERM gets SIGKILL. Returns `true` when the
+        // SIGKILL path ran.
         //
         // The pane/server signals come from `ctx` BEFORE the holders-map
         // lookup: after a runner restart the map is empty (the holder is
@@ -201,49 +229,66 @@ impl Supervisor for DirectSupervisor {
         if let Some(server) = ctx.server_pid {
             kill_group(server, libc::SIGTERM);
         }
-        let holder = self.holders.lock().unwrap().remove(id);
-        match holder {
-            Some(mut held) => {
-                // The holder was setsid'd, so its pgid is the child pid.
-                let pid = held.child.id().unwrap_or(0);
-                if pid != 0 {
-                    kill_group(pid, libc::SIGTERM);
-                }
-                tokio::time::sleep(Duration::from_secs(2)).await;
-                if let Some(pane) = ctx.pane_pid {
-                    kill_group(pane, libc::SIGKILL);
-                }
-                if let Some(server) = ctx.server_pid {
-                    kill_group(server, libc::SIGKILL);
-                }
-                if pid != 0 {
-                    kill_group(pid, libc::SIGKILL);
-                }
-                kill_held(&mut held).await;
+        let mut holder = self.holders.lock().unwrap().remove(id);
+        let child_pid = holder.as_ref().and_then(|h| h.child.id()).unwrap_or(0);
+        if child_pid != 0 {
+            kill_group(child_pid, libc::SIGTERM);
+        }
+        let sigkill =
+            wait_groups_dead(ctx.pane_pid, ctx.server_pid, child_pid, holder.as_mut()).await;
+        if sigkill {
+            if let Some(pane) = ctx.pane_pid {
+                kill_group(pane, libc::SIGKILL);
             }
-            None => {
-                // No held Child (kill-after-restart): still run the
-                // SIGKILL grace against the pane/server groups, then
-                // return.
-                tokio::time::sleep(Duration::from_secs(2)).await;
-                if let Some(pane) = ctx.pane_pid {
-                    kill_group(pane, libc::SIGKILL);
-                }
-                if let Some(server) = ctx.server_pid {
-                    kill_group(server, libc::SIGKILL);
-                }
+            if let Some(server) = ctx.server_pid {
+                kill_group(server, libc::SIGKILL);
+            }
+            if child_pid != 0 {
+                kill_group(child_pid, libc::SIGKILL);
             }
         }
-        Ok(())
+        if let Some(mut held) = holder {
+            if sigkill {
+                kill_held(&mut held).await;
+            } else {
+                let _ = held.child.wait().await;
+            }
+        }
+        Ok(sigkill)
     }
+}
+
+/// Poll (up to 2 s, 50 ms apart) until the pane, server and holder-child
+/// process groups are dead. Returns `true` when anything still lives and
+/// therefore needs SIGKILL. A held Child is probed with `try_wait`
+/// first, so an already-exited child is never signalled again.
+async fn wait_groups_dead(
+    pane_pid: Option<u32>,
+    server_pid: Option<u32>,
+    child_pid: u32,
+    mut holder: Option<&mut Held>,
+) -> bool {
+    for _ in 0..40 {
+        let child_alive = match holder.as_deref_mut() {
+            Some(h) => matches!(h.child.try_wait(), Ok(None)),
+            None => child_pid != 0 && pid_alive(child_pid),
+        };
+        if !pane_pid.is_some_and(pid_alive) && !server_pid.is_some_and(pid_alive) && !child_alive {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    true
 }
 
 async fn kill_held(held: &mut Held) {
     // Close the control stdin so a control-mode client sees EOF, SIGTERM
-    // the process group, and wait() so no zombie remains.
+    // the process group (unless it already exited — `try_wait` first so
+    // an exited child is never signalled), and wait() so no zombie
+    // remains.
     drop(held.stdin.take());
     let pid = held.child.id().unwrap_or(0);
-    if pid != 0 {
+    if pid != 0 && matches!(held.child.try_wait(), Ok(None)) {
         kill_group(pid, libc::SIGTERM);
         tokio::time::sleep(Duration::from_millis(200)).await;
         kill_group(pid, libc::SIGKILL);
@@ -256,11 +301,18 @@ pub mod fake {
     use super::*;
     use std::sync::Mutex;
 
+    /// Recorded stop contexts, in order: `(id, pane_pid, server_pid)`.
+    type StopCtxs = Vec<(String, Option<u32>, Option<u32>)>;
+
     /// A fake [`Supervisor`] that records every call.
     #[derive(Default)]
     pub struct FakeSupervisor {
         /// `(method, id)` per call, in order.
         pub calls: Mutex<Vec<(String, String)>>,
+        /// Every stop's context, in order: `(id, pane_pid, server_pid)`.
+        pub stop_ctxs: Mutex<StopCtxs>,
+        /// What `stop` answers (the SIGKILL-path verdict).
+        pub stop_sigkill: Mutex<bool>,
     }
 
     impl FakeSupervisor {
@@ -286,32 +338,93 @@ pub mod fake {
             Ok(())
         }
 
-        async fn stop(&self, id: &str, _ctx: StopCtx) -> Result<(), RunnerError> {
+        async fn stop(&self, id: &str, ctx: StopCtx) -> Result<bool, RunnerError> {
             self.calls
                 .lock()
                 .unwrap()
                 .push(("stop".to_string(), id.to_string()));
-            Ok(())
+            self.stop_ctxs
+                .lock()
+                .unwrap()
+                .push((id.to_string(), ctx.pane_pid, ctx.server_pid));
+            Ok(*self.stop_sigkill.lock().unwrap())
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// `systemctl --user` needs HOME + XDG_RUNTIME_DIR (+ the bus address
+    /// when inherited); a cleared environment breaks the user bus, so the
+    /// forwarded set is exactly these three, nothing else.
+    #[test]
+    fn systemctl_forwards_exactly_the_user_bus_env() {
+        let env: Vec<(String, String)> = bus_env_for(|k| match k {
+            "HOME" => Some("/home/user".to_string()),
+            "XDG_RUNTIME_DIR" => Some("/run/user/1000".to_string()),
+            "DBUS_SESSION_BUS_ADDRESS" => Some("unix:path=/run/user/1000/bus".to_string()),
+            "PATH" => Some("/usr/bin".to_string()),
+            _ => None,
+        });
+        assert_eq!(
+            env,
+            vec![
+                ("HOME".to_string(), "/home/user".to_string()),
+                ("XDG_RUNTIME_DIR".to_string(), "/run/user/1000".to_string()),
+                (
+                    "DBUS_SESSION_BUS_ADDRESS".to_string(),
+                    "unix:path=/run/user/1000/bus".to_string()
+                ),
+            ],
+            "only the bus trio, never PATH or anything else"
+        );
+        // When the bus address was not inherited it is absent, not empty.
+        let env: Vec<(String, String)> = bus_env_for(|k| match k {
+            "HOME" => Some("/home/user".to_string()),
+            "XDG_RUNTIME_DIR" => Some("/run/user/1000".to_string()),
+            _ => None,
+        });
+        assert_eq!(
+            env,
+            vec![
+                ("HOME".to_string(), "/home/user".to_string()),
+                ("XDG_RUNTIME_DIR".to_string(), "/run/user/1000".to_string()),
+            ]
+        );
+    }
 
     #[test]
     fn unit_files_pin_the_lifecycle() {
         let holder = include_str!("../../share/systemd/kb-term@.service");
         for needle in [
             "Description=kb-term holder %i",
-            "ExecStart=%h/.local/libexec/kb-term/tmux -D -S /run/kb-term/s/%i.sock -f %h/.local/share/kb-term/kb-term.conf",
+            "Environment=KB_TMUX_BIN=%h/.local/libexec/kb-term/tmux",
+            // The holder must exec the pinned tmux by path (it is never
+            // on PATH), never a bare `tmux` lookup resolved against the
+            // user manager's PATH.
+            "ExecStart=/bin/sh -c '\"$KB_TMUX_BIN\" -D -S /run/kb-term/s/%i.sock -f %h/.local/share/kb-term/kb-term.conf || exit 1; exec sleep infinity'",
             "Restart=no",
             "KillMode=control-group",
             "SendSIGKILL=yes",
             "TimeoutStopSec=10",
+            // The holder must stay foreground (Type=exec with the tmux
+            // server behind a `sleep infinity` main process): a bare
+            // `Type=simple` + detached `tmux -D` start makes the unit
+            // inactive immediately and `systemctl stop` a no-op.
+            "Type=exec",
         ] {
             assert!(holder.contains(needle), "kb-term@ must contain `{needle}`");
         }
+        assert!(
+            !holder.contains("Type=simple"),
+            "kb-term@ must not use Type=simple (tmux -D exits at once)"
+        );
+        assert!(
+            holder.contains("sleep infinity"),
+            "kb-term@ must keep a foreground main process"
+        );
         assert!(
             !holder.contains("[Install]"),
             "kb-term@ must not have an [Install] section"
@@ -321,7 +434,10 @@ mod tests {
         for needle in [
             "PartOf=kb-term@%i.service",
             "After=kb-term@%i.service",
-            "ExecStart=%h/.local/bin/kb-tap --session %i --run-dir /run/kb-term",
+            // The tap needs the pinned tmux and the session's harness,
+            // discovered from the holder's `@kb_harness` at start.
+            "Environment=KB_TMUX_BIN=%h/.local/libexec/kb-term/tmux",
+            "ExecStart=/bin/sh -c 'h=$(%h/.local/libexec/kb-term/tmux -S /run/kb-term/s/%i.sock show-options -gqv @kb_harness); exec %h/.local/bin/kb-tap --session %i --run-dir /run/kb-term --harness \"$h\"'",
             "Restart=on-failure",
             "RestartSec=1",
         ] {
@@ -330,9 +446,14 @@ mod tests {
 
         let runner_unit = include_str!("../../share/systemd/kb-termd.service");
         for needle in [
+            // Config flows into kb-termd via the unit invocation.
+            "Environment=KB_TMUX_BIN=%h/.local/libexec/kb-term/tmux",
+            "Environment=KB_TERM_RUN_DIR=/run/kb-term",
             "ExecStart=%h/.local/bin/kb-termd --supervisor systemd",
             "Restart=on-failure",
             "KillMode=process",
+            // No tmpfiles dirs, no start (and no silent Restart loop).
+            "ConditionPathExists=/run/kb-term",
         ] {
             assert!(
                 runner_unit.contains(needle),
