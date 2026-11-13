@@ -347,17 +347,17 @@ impl UnixRunner {
         // Read exactly one reply line (bounded like `round_trip`).
         let (reply, rest) = read_reply_line(&mut stream).await?;
         let text = String::from_utf8(reply).map_err(|_| StreamError::BadReply)?;
-        let viewer: String;
-        match serde_json::from_str::<RunnerReply>(text.trim()).map_err(|_| StreamError::BadReply)? {
+        let viewer: String = match serde_json::from_str::<RunnerReply>(text.trim())
+            .map_err(|_| StreamError::BadReply)?
+        {
             RunnerReply::Ok { data } => {
                 // A missing or malformed viewer is a bad reply: never
                 // fall back to a shared id (the multi-viewer bug).
-                viewer = data
-                    .get("viewer")
+                data.get("viewer")
                     .and_then(|v| v.as_str())
                     .filter(|v| valid_viewer_id(v))
                     .map(str::to_string)
-                    .ok_or(StreamError::BadReply)?;
+                    .ok_or(StreamError::BadReply)?
             }
             RunnerReply::Err { code, .. }
                 if code == "not-found" || code == "no-session" || code == "invalid-id" =>
@@ -365,7 +365,7 @@ impl UnixRunner {
                 return Err(StreamError::NotFound);
             }
             RunnerReply::Err { .. } => return Err(StreamError::BadReply),
-        }
+        };
         // Any bytes the reply read buffered past the newline are the
         // first spliced envelopes; seed the stream with them.
         let (pending, read_buf) = decode_seed(rest)?;
