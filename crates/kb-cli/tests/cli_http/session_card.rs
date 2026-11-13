@@ -89,6 +89,7 @@ impl Fixture {
     fn cmd_no_daemon(&self, args: &[&str]) -> Command {
         let mut full = vec!["sessions"];
         full.extend_from_slice(args);
+        full.extend_from_slice(&["--daemon", "http://127.0.0.1:1"]);
         let mut cmd = Command::cargo_bin("kb").unwrap();
         cmd.env("KB_TEST_HTTP_TIMEOUT_SECS", common::http_timeout_secs())
             .env("XDG_CACHE_HOME", &self.cache)
@@ -202,9 +203,8 @@ async fn kb_sessions_card_missing_session_fails() {
 
 /// `kb sessions card` with no daemon is a clear daemon-not-found error
 /// (brief S4). Without this pin, replacing `require_daemon` with a
-/// fallback URL would break the contract while staying green. (The
-/// default-daemon probe misses in CI: nothing listens on 4000 there by
-/// construction.)
+/// fallback URL would break the contract while staying green. Points at
+/// the repo-convention dead port so it never probes the default daemon.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn kb_sessions_card_no_daemon_is_a_clear_error() {
     let fx = boot().await;

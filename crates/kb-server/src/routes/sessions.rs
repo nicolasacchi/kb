@@ -3330,9 +3330,9 @@ mod work_tests {
     }
     #[test]
     fn work_member_titles_use_display_name_ladder() {
-        // `display_name_of` is the sessions-wide ladder; the work route
-        // maps rows through it, so a NULL-title row shows its first
-        // user prompt (then `session <8>`), never a raw id.
+        // Unit pin of the sessions-wide ladder itself. The route mapping
+        // is pinned end-to-end by `sessions_work_member_titles_fall_back_
+        // through_display_name_ladder` (tests/end_to_end.rs).
         use super::display_name_of;
         assert_eq!(display_name_of(Some("T"), Some("P"), "sid-12345678"), "T");
         assert_eq!(display_name_of(Some("  "), Some("P"), "sid-12345678"), "P");

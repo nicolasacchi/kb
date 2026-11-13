@@ -6503,6 +6503,71 @@ async fn sessions_work_honors_limit_and_reports_truncated() {
     assert_eq!(full["scan_capped"], false, "{full}");
 }
 
+/// FXA6 defect 4 — the work route maps each row's member title through
+/// the sessions display-name ladder (persisted title, then first user
+/// prompt, then `session <8>`). Reverting the route to `row.title.clone()`
+/// leaves both NULL-title members without a `title` key, so this fails.
+#[tokio::test]
+async fn sessions_work_member_titles_fall_back_through_display_name_ladder() {
+    let (_tmp, cfg, paths) = fixture_corpus();
+    let now = chrono::Utc::now().timestamp();
+    let mut a = work_seed_named(&paths, "art-ttl-a", "ttl-a", now - 3600, "/work/ttla", None);
+    a.title = None;
+    a.first_user_prompt = Some("synthetic first prompt".into());
+    let mut b = work_seed_named(
+        &paths,
+        "art-ttl-b",
+        "titleless-abcdef",
+        now - 3500,
+        "/work/ttlb",
+        None,
+    );
+    b.title = None;
+    b.first_user_prompt = None;
+    {
+        let sm = KbName::new("smoke").unwrap();
+        let mut db = kb_core::storage::sqlite::Db::open(&paths.kb_sqlite(&sm)).unwrap();
+        db.sessions_upsert(&a).unwrap();
+        db.sessions_upsert(&b).unwrap();
+    }
+    std::fs::create_dir_all(&paths.config).unwrap();
+    std::fs::write(paths.token_file(), FIXTURE_TOKEN).unwrap();
+    let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths.clone())
+        .await
+        .expect("serve");
+    common::wait_docs_listed(addr, "smoke", 4).await;
+    let body: serde_json::Value = reqwest::Client::new()
+        .get(url(addr, "/api/sessions/work"))
+        .header("Authorization", format!("Bearer {FIXTURE_TOKEN}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let title_of = |sid: &str| -> Option<String> {
+        body["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|g| g["members"].as_array().unwrap().iter())
+            .find(|m| m["session_id"] == sid)
+            .unwrap_or_else(|| panic!("member {sid} missing: {body}"))["title"]
+            .as_str()
+            .map(str::to_string)
+    };
+    assert_eq!(
+        title_of("ttl-a").as_deref(),
+        Some("synthetic first prompt"),
+        "{body}"
+    );
+    assert_eq!(
+        title_of("titleless-abcdef").as_deref(),
+        Some("session titleles"),
+        "{body}"
+    );
+}
+
 /// FXA6 — `scan_capped`: exactly `WORK_SCAN_CAP` (2000) scanned rows
 /// report `scan_capped: true` (a hardcoded `false` would pass the
 /// other tests but fail here).
