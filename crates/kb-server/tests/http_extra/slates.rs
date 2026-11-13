@@ -1268,6 +1268,111 @@ async fn the_slate_list_counts_unanswered_asks_addressed_to_you() {
     assert_eq!(first["last_answer"]["line"], "yes");
 }
 
+/// AW2 review: `ask_for_you` counts LOGICAL asks. An edited ask is one
+/// question, a `done` on an OLDER version closes the whole chain (board and
+/// count agree), a branched edit counts once, and a closed slate has nothing
+/// the operator can answer.
+#[tokio::test]
+async fn ask_for_you_counts_logical_asks_and_is_zero_on_a_closed_slate() {
+    let (_tmp, addr, _paths) = boot().await;
+    let client = reqwest::Client::new();
+    let row = |c: reqwest::Client, slug: &'static str| async move {
+        let rows: Vec<Value> =
+            serde_json::from_value(get_json(&c, addr, "/api/slates").await).unwrap();
+        rows.into_iter().find(|r| r["slug"] == slug).unwrap()
+    };
+    let ask_to_you = |line: &str, supersedes: Option<u64>| {
+        let mut b = body("ask", line, Some("sess-a"));
+        b["to"] = json!("you");
+        if let Some(s) = supersedes {
+            b["supersedes"] = json!(s);
+        }
+        b
+    };
+
+    // #1 ask, #2 edits #1: one question, one board row.
+    assert_eq!(
+        post(&client, addr, "orchard", ask_to_you("one?", None))
+            .await
+            .0,
+        201
+    );
+    assert_eq!(
+        post(
+            &client,
+            addr,
+            "orchard",
+            ask_to_you("one, reworded?", Some(1))
+        )
+        .await
+        .0,
+        201
+    );
+    let r = row(client.clone(), "orchard").await;
+    assert_eq!(
+        (r["ask_for_you"].as_u64(), r["counts"]["ask_open"].as_u64()),
+        (Some(1), Some(1)),
+        "{r}"
+    );
+
+    // Branched edit: #3 also edits #1 -> two rows, still ONE question.
+    assert_eq!(
+        post(
+            &client,
+            addr,
+            "orchard",
+            ask_to_you("one, other wording?", Some(1))
+        )
+        .await
+        .0,
+        201
+    );
+    let r = row(client.clone(), "orchard").await;
+    assert_eq!(r["ask_for_you"], 1, "{r}");
+
+    // A done aimed at the OLDEST version closes every version.
+    let mut done = body("done", "handled in chat", Some("sess-a"));
+    done["re"] = json!(1);
+    let (status, v) = post(&client, addr, "orchard", done).await;
+    assert_eq!(status, 201, "{v}");
+    let r = row(client.clone(), "orchard").await;
+    assert_eq!(
+        (r["ask_for_you"].as_u64(), r["counts"]["ask_open"].as_u64()),
+        (Some(0), Some(0)),
+        "{r}"
+    );
+    let board = get_json(&client, addr, "/api/slates/orchard?view=board").await;
+    assert!(
+        board["sections"]["ask"].as_array().unwrap().is_empty(),
+        "{board}"
+    );
+
+    // A closed slate: nothing on it can be answered (409), so the queue is 0
+    // even though the board still shows the ask.
+    assert_eq!(
+        post(&client, addr, "meadow", ask_to_you("anyone?", None))
+            .await
+            .0,
+        201
+    );
+    let r = row(client.clone(), "meadow").await;
+    assert_eq!(r["ask_for_you"], 1, "{r}");
+    let resp = client
+        .post(url(addr, "/api/slates/meadow/close"))
+        .json(&json!({"line": "wrapped up", "prov": prov(Some("sess-a"))}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let r = row(client.clone(), "meadow").await;
+    assert_eq!(r["closed"], true);
+    assert_eq!(r["ask_for_you"], 0, "{r}");
+    assert_eq!(
+        r["counts"]["ask_open"], 1,
+        "ask_open is left as it was: {r}"
+    );
+}
+
 /// The 400 lints the pure engine owns, seen through the wire: every one
 /// names itself with a `code` and says what to do instead.
 #[tokio::test]

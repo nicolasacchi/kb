@@ -675,6 +675,34 @@ pub async fn list(
     no_store_json(StatusCode::OK, rows)
 }
 
+/// The operator's unanswered addressed asks, counted per LOGICAL ask: a
+/// branched edit (two live edits of one root) shows two board rows but is
+/// one question. `answers`/`done` are already chain-wide and a `done` on any
+/// version hides every version (kb_core's `ask_done_by_root`), so this is the
+/// same definition the board and `ask_state` use.
+fn ask_for_you_count(d: &slate::SlateDigest, posts: &[Post]) -> usize {
+    let supersedes: std::collections::HashMap<u64, u64> = posts
+        .iter()
+        .filter_map(|p| p.supersedes.map(|t| (p.seq, t)))
+        .collect();
+    let root = |mut seq: u64| {
+        for _ in 0..64 {
+            match supersedes.get(&seq) {
+                Some(&prev) if prev < seq => seq = prev,
+                _ => break,
+            }
+        }
+        seq
+    };
+    d.sections
+        .ask
+        .iter()
+        .filter(|p| p.to.as_deref() == Some("you") && p.answers.unwrap_or(0) == 0)
+        .map(|p| root(p.seq))
+        .collect::<std::collections::HashSet<u64>>()
+        .len()
+}
+
 fn summarize(
     slug: &SlateSlug,
     loaded: &Loaded,
@@ -708,12 +736,14 @@ fn summarize(
             _ => {}
         }
     }
-    let ask_for_you = d
-        .sections
-        .ask
-        .iter()
-        .filter(|p| p.to.as_deref() == Some("you") && p.answers.unwrap_or(0) == 0)
-        .count();
+    let ask_for_you = if loaded.meta.closed() {
+        // A closed slate refuses every write (409), so nothing on it can be
+        // answered: the operator's queue is empty by definition. `ask_open`
+        // keeps counting what the board shows.
+        0
+    } else {
+        ask_for_you_count(&d, &loaded.posts)
+    };
     SlateSummary {
         slug: slug.to_string(),
         head_seq: loaded.meta.head_seq,
