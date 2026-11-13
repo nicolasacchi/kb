@@ -645,6 +645,8 @@ pub mod codes {
     pub const BAD_TARGET: &str = "bad-target";
     /// 400 — an `ask` that does not end in `?`.
     pub const ASK_NEEDS_QUESTION: &str = "ask-needs-question";
+    /// 400 — an `ask --to` that is not `you`, `any` or a known harness.
+    pub const BAD_TO: &str = "bad-to";
     /// 400 — a `found` with no ref ("post it as idea if it is a guess").
     pub const FOUND_NEEDS_REF: &str = "found-needs-ref";
     /// 400 — a `mark` on the caller's own post.
@@ -934,6 +936,17 @@ fn validate_kind_rules(body: &PostBody, posts: &[Post]) -> std::result::Result<(
                     "an ask must end in `?` — post a statement as now, found or idea",
                 ));
             }
+            if let Some(to) = body.to.as_deref() {
+                if !valid_ask_to(to) {
+                    return Err(SlateError::bad(
+                        codes::BAD_TO,
+                        format!(
+                            "an ask's --to is `you`, `any` or a harness ({}), got `{to}`",
+                            crate::sessions::HARNESSES.join(", ")
+                        ),
+                    ));
+                }
+            }
         }
         Kind::Found => {
             if body.refs.is_empty() {
@@ -1016,6 +1029,13 @@ fn validate_kind_rules(body: &PostBody, posts: &[Post]) -> std::result::Result<(
     Ok(())
 }
 
+/// The addressee an `ask` may carry: the operator (`you`), anyone (`any`)
+/// or one harness from [`crate::sessions::HARNESSES`]. `hand --to` is NOT
+/// held to this (it predates the rule).
+pub fn valid_ask_to(to: &str) -> bool {
+    to == "you" || to == "any" || crate::sessions::HARNESSES.contains(&to)
+}
+
 fn require_target(target: Option<&Post>, kind: Kind) -> std::result::Result<&Post, SlateError> {
     target.ok_or_else(|| {
         SlateError::bad(
@@ -1058,6 +1078,128 @@ pub fn open_asks_with_ref(posts: &[Post], reference: &str) -> Vec<u64> {
         .map(|p| p.seq)
         .filter(|seq| !answered.contains(seq) && !is_closed_by_done(posts, *seq))
         .collect()
+}
+
+/// Where one LOGICAL ask stands (AW1). The logical ask is the whole
+/// `supersedes` chain containing the named seq; every member is an ask (an
+/// edit carries its target's kind). Pure, derived at read time, never
+/// written. `open_asks_with_ref` deliberately does NOT use this (it ignores
+/// chains and the `asks/close` route depends on that exact behaviour).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AskState {
+    /// No such seq on this ledger.
+    NotFound,
+    /// The seq exists but is not an ask.
+    NotAnAsk { kind: Kind },
+    /// Some chain member was dropped (SLATE2 whole-post drop); `drop` is
+    /// the tombstone when the ledger still has it.
+    Dropped { drop: Option<Post> },
+    /// Neither answered nor closed. `head` is the newest version.
+    Open { head: Post },
+    /// At least one live answer and/or a closing `done`. `answers` is in
+    /// seq order; `done` is the newest undropped non-`--abandoned` done.
+    Resolved {
+        head: Post,
+        answers: Vec<Post>,
+        done: Option<Post>,
+    },
+}
+
+/// The shared core of [`ask_state`] and the projection's answer fields.
+struct AskResolution<'a> {
+    head: &'a Post,
+    dropped_member: Option<u64>,
+    answers: Vec<&'a Post>,
+    done: Option<&'a Post>,
+}
+
+/// `seq` must be an `ask` present in `by_seq`.
+fn resolve_ask<'a>(
+    posts: &'a [Post],
+    by_seq: &HashMap<u64, &'a Post>,
+    dropped: &HashSet<u64>,
+    seq: u64,
+) -> Option<AskResolution<'a>> {
+    let mut members: HashSet<u64> = HashSet::new();
+    members.insert(seq);
+    // Back to the chain root (seqs strictly decrease; bounded anyway).
+    let mut cur = seq;
+    for _ in 0..64 {
+        match by_seq.get(&cur).and_then(|p| p.supersedes) {
+            Some(prev) if prev < cur && by_seq.contains_key(&prev) => {
+                members.insert(prev);
+                cur = prev;
+            }
+            _ => break,
+        }
+    }
+    // Forward: ledger order is seq order, so one pass finds every
+    // descendant (including a branch that superseded an older version).
+    for p in posts {
+        if p.kind == Kind::Ask && p.supersedes.is_some_and(|t| members.contains(&t)) {
+            members.insert(p.seq);
+        }
+    }
+    let head = members.iter().max().and_then(|s| by_seq.get(s).copied())?;
+    let dropped_member = members
+        .iter()
+        .filter(|s| dropped.contains(s))
+        .min()
+        .copied();
+    let live_superseded: HashSet<u64> = posts
+        .iter()
+        .filter(|p| !dropped.contains(&p.seq))
+        .filter_map(|p| p.supersedes)
+        .collect();
+    let answers = posts
+        .iter()
+        .filter(|p| p.kind == Kind::Answer && !dropped.contains(&p.seq))
+        .filter(|p| !live_superseded.contains(&p.seq))
+        .filter(|p| p.re.is_some_and(|t| members.contains(&t)))
+        .collect();
+    let done = posts
+        .iter()
+        .rev()
+        .filter(|p| p.kind == Kind::Done && p.abandoned.is_none() && !dropped.contains(&p.seq))
+        .find(|p| p.re.is_some_and(|t| members.contains(&t)));
+    Some(AskResolution {
+        head,
+        dropped_member,
+        answers,
+        done,
+    })
+}
+
+/// See [`AskState`].
+pub fn ask_state(posts: &[Post], seq: u64) -> AskState {
+    let by_seq: HashMap<u64, &Post> = posts.iter().map(|p| (p.seq, p)).collect();
+    let Some(target) = by_seq.get(&seq) else {
+        return AskState::NotFound;
+    };
+    if target.kind != Kind::Ask {
+        return AskState::NotAnAsk { kind: target.kind };
+    }
+    let dropped = dropped_set(posts);
+    let Some(r) = resolve_ask(posts, &by_seq, &dropped, seq) else {
+        return AskState::NotFound;
+    };
+    if let Some(m) = r.dropped_member {
+        let drop = posts
+            .iter()
+            .find(|p| p.kind == Kind::Drop && p.re == Some(m))
+            .cloned();
+        return AskState::Dropped { drop };
+    }
+    if r.answers.is_empty() && r.done.is_none() {
+        return AskState::Open {
+            head: r.head.clone(),
+        };
+    }
+    AskState::Resolved {
+        head: r.head.clone(),
+        answers: r.answers.into_iter().cloned().collect(),
+        done: r.done.cloned(),
+    }
 }
 
 /// The idempotency lookup behind the rules matrix's "Mark idempotency":
@@ -1343,8 +1485,6 @@ struct Derived<'a> {
     pin_state: HashMap<u64, bool>,
     /// target → the `done` that CLOSED it (`--abandoned` never closes).
     done_by: HashMap<u64, u64>,
-    /// ask → undropped answer count.
-    answers: HashMap<u64, usize>,
     /// hand → the take that acknowledged it.
     ack_by: HashMap<u64, u64>,
     /// take → the take that reclaimed it with `--over`.
@@ -1365,7 +1505,6 @@ impl<'a> Derived<'a> {
         let mut marks: HashMap<u64, BTreeSet<String>> = HashMap::new();
         let mut pin_state = HashMap::new();
         let mut done_by = HashMap::new();
-        let mut answers: HashMap<u64, usize> = HashMap::new();
         let mut ack_by = HashMap::new();
         let mut over_by = HashMap::new();
 
@@ -1404,11 +1543,6 @@ impl<'a> Derived<'a> {
                         done_by.insert(t, p.seq);
                     }
                 }
-                Kind::Answer if live_post => {
-                    if let Some(t) = p.re {
-                        *answers.entry(t).or_default() += 1;
-                    }
-                }
                 Kind::Take if live_post => {
                     if let Some(t) = p.re {
                         match by_seq.get(&t).map(|x| x.kind) {
@@ -1438,7 +1572,6 @@ impl<'a> Derived<'a> {
             marks,
             pin_state,
             done_by,
-            answers,
             ack_by,
             over_by,
             activity: SessionActivity::build(posts, presence),
@@ -1891,6 +2024,17 @@ pub struct Who {
     pub tag: String,
 }
 
+/// The newest answer on an ask, for the card and the digest (AW1).
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnswerBrief {
+    pub seq: u64,
+    pub line: String,
+    pub who: Who,
+    /// Seconds since the answer was posted.
+    pub age_secs: i64,
+}
+
 /// One post as the digest shows it: the record plus everything derived at
 /// read time. NONE of the derived fields is ever written (§4).
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
@@ -1933,10 +2077,19 @@ pub struct Projected {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-export", ts(optional))]
     pub acknowledged: Option<bool>,
-    /// Asks only: undropped answer count.
+    /// Asks only: undropped answer count, over the whole edit chain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-export", ts(optional))]
     pub answers: Option<usize>,
+    /// Asks and hands: the addressee (`you`, `any`, a harness) when the post
+    /// carries one. Absent on a pre-AW ask, which reads as `any`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub to: Option<String>,
+    /// Asks only: the newest undropped answer over the edit chain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub last_answer: Option<AnswerBrief>,
     /// The seq this post replaced, rendered `(was #n)`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-export", ts(optional))]
@@ -2448,6 +2601,17 @@ fn seen_by_for(cursors: &BTreeMap<String, CursorRow>, p: &Post, seq: u64) -> Vec
     out
 }
 
+fn who_of(p: &Post) -> Who {
+    Who {
+        origin: p.prov.origin,
+        harness: p.prov.harness.clone(),
+        session_short: session_short(p.prov.session_id.as_deref()),
+        user: p.prov.user.clone(),
+        job_id: p.prov.job_id.clone(),
+        tag: author_tag(p),
+    }
+}
+
 fn build_projected(
     d: &Derived<'_>,
     p: &Post,
@@ -2467,7 +2631,22 @@ fn build_projected(
         (None, None, None)
     };
     let acknowledged = (p.kind == Kind::Hand).then(|| d.ack_by.contains_key(&p.seq));
-    let answers = (p.kind == Kind::Ask).then(|| d.answers.get(&p.seq).copied().unwrap_or_default());
+    let resolution = (p.kind == Kind::Ask)
+        .then(|| resolve_ask(d.posts, &d.by_seq, &d.dropped, p.seq))
+        .flatten();
+    let answers = (p.kind == Kind::Ask).then(|| resolution.as_ref().map_or(0, |r| r.answers.len()));
+    let last_answer = resolution
+        .as_ref()
+        .and_then(|r| r.answers.last().copied())
+        .map(|a| AnswerBrief {
+            seq: a.seq,
+            line: a.line.clone(),
+            who: who_of(a),
+            age_secs: (d.now_unix - a.at).max(0),
+        });
+    let to = matches!(p.kind, Kind::Ask | Kind::Hand)
+        .then(|| p.to.clone())
+        .flatten();
     let author_ended = p.kind == Kind::Ask && !d.author_live(p);
 
     let tier = if matches!(p.kind, Kind::Now | Kind::Warn)
@@ -2512,14 +2691,7 @@ fn build_projected(
             .collect(),
         re: p.re,
         supersedes: p.supersedes,
-        who: Who {
-            origin: p.prov.origin,
-            harness: p.prov.harness.clone(),
-            session_short: session_short(p.prov.session_id.as_deref()),
-            user: p.prov.user.clone(),
-            job_id: p.prov.job_id.clone(),
-            tag: author_tag(p),
-        },
+        who: who_of(p),
         age_secs: (d.now_unix - root_at).max(0),
         tier,
         marks,
@@ -2529,6 +2701,8 @@ fn build_projected(
         confidence,
         acknowledged,
         answers,
+        to,
+        last_answer,
         was: p.supersedes,
         silence_secs: silence,
         taken_over_by: d
@@ -2716,6 +2890,11 @@ fn item_text(p: &Projected) -> String {
     if p.kind == Kind::Now {
         if let Some(ptr) = plan_pointer(&p.refs) {
             s.push_str(&format!("  → {ptr}"));
+        }
+    }
+    if p.kind == Kind::Ask {
+        if let Some(to) = p.to.as_deref().filter(|t| *t != "any") {
+            s.push_str(&format!("  → {to}"));
         }
     }
     if let Some(n) = p.answers.filter(|n| *n > 0) {
@@ -3899,6 +4078,184 @@ mod tests {
         );
         l.push(closer(9, Kind::Drop, 3, None));
         assert!(open_asks_with_ref(&l, "session:t").is_empty());
+    }
+
+    // --- AW1: ask_state, `to`, projection ---------------------------------
+
+    fn aw(seq: u64, kind: Kind, re: Option<u64>, supersedes: Option<u64>) -> Post {
+        Post::mint(
+            PostBody {
+                re,
+                supersedes,
+                prov: prov("claude", Some("aaaa1111"), Origin::Agent),
+                ..body(kind, if kind == Kind::Ask { "why?" } else { "x" })
+            },
+            seq,
+            NOW - 600 + seq as i64,
+        )
+    }
+
+    #[test]
+    fn ask_state_matrix() {
+        let ask = aw(1, Kind::Ask, None, None);
+        let found = aw(2, Kind::Found, None, None);
+        assert_eq!(ask_state(&[ask.clone()], 9), AskState::NotFound);
+        assert_eq!(
+            ask_state(&[ask.clone(), found], 2),
+            AskState::NotAnAsk { kind: Kind::Found }
+        );
+        assert!(matches!(
+            ask_state(&[ask.clone()], 1),
+            AskState::Open { .. }
+        ));
+
+        // answered
+        let mut l = vec![ask.clone(), aw(2, Kind::Answer, Some(1), None)];
+        match ask_state(&l, 1) {
+            AskState::Resolved { answers, done, .. } => {
+                assert_eq!(answers.len(), 1);
+                assert!(done.is_none());
+            }
+            s => panic!("{s:?}"),
+        }
+        // a dropped answer reopens it
+        l.push(aw(3, Kind::Drop, Some(2), None));
+        assert!(matches!(ask_state(&l, 1), AskState::Open { .. }));
+
+        // done closes; abandoned done does not; a dropped done does not
+        let mut l = vec![ask.clone(), aw(2, Kind::Done, Some(1), None)];
+        assert!(matches!(
+            ask_state(&l, 1),
+            AskState::Resolved { done: Some(_), .. }
+        ));
+        l.push(aw(3, Kind::Drop, Some(2), None));
+        assert!(matches!(ask_state(&l, 1), AskState::Open { .. }));
+        let abandoned = Post {
+            abandoned: Some("red".into()),
+            ..aw(2, Kind::Done, Some(1), None)
+        };
+        assert!(matches!(
+            ask_state(&[ask.clone(), abandoned], 1),
+            AskState::Open { .. }
+        ));
+
+        // done + answers
+        let l = vec![
+            ask.clone(),
+            aw(2, Kind::Answer, Some(1), None),
+            aw(3, Kind::Answer, Some(1), None),
+            aw(4, Kind::Done, Some(1), None),
+        ];
+        match ask_state(&l, 1) {
+            AskState::Resolved { answers, done, .. } => {
+                assert_eq!(answers.len(), 2);
+                assert_eq!(done.map(|d| d.seq), Some(4));
+            }
+            s => panic!("{s:?}"),
+        }
+
+        // dropped ask
+        let l = vec![ask.clone(), aw(2, Kind::Drop, Some(1), None)];
+        match ask_state(&l, 1) {
+            AskState::Dropped { drop } => assert_eq!(drop.map(|d| d.seq), Some(2)),
+            s => panic!("{s:?}"),
+        }
+    }
+
+    #[test]
+    fn ask_state_reads_the_whole_edit_chain() {
+        // #1 ask, #2 edit of #1, answer on the OLD version, done on the new.
+        let base = vec![
+            aw(1, Kind::Ask, None, None),
+            aw(2, Kind::Ask, None, Some(1)),
+            aw(3, Kind::Answer, Some(1), None),
+        ];
+        for n in [1, 2] {
+            match ask_state(&base, n) {
+                AskState::Resolved { head, answers, .. } => {
+                    assert_eq!(head.seq, 2, "asked via #{n}");
+                    assert_eq!(answers.len(), 1);
+                }
+                s => panic!("{s:?}"),
+            }
+        }
+        // a done aimed at the older version still resolves the chain
+        let mut l = base.clone();
+        l.push(aw(4, Kind::Done, Some(1), None));
+        assert!(matches!(
+            ask_state(&l, 2),
+            AskState::Resolved { done: Some(_), .. }
+        ));
+        // dropping the EDIT drops the whole logical ask
+        let mut l = base.clone();
+        l.push(aw(4, Kind::Drop, Some(2), None));
+        assert!(matches!(ask_state(&l, 1), AskState::Dropped { .. }));
+        assert!(matches!(ask_state(&l, 2), AskState::Dropped { .. }));
+    }
+
+    #[test]
+    fn ask_to_is_validated_on_ask_only() {
+        for good in ["you", "any", "omp", "claude", "kimi"] {
+            let b = PostBody {
+                to: Some(good.into()),
+                ..body(Kind::Ask, "ok?")
+            };
+            assert!(validate_post(&b, 1, &[]).is_ok(), "{good}");
+        }
+        for bad in ["operator", "You", "", "gpt", "omp "] {
+            let b = PostBody {
+                to: Some(bad.into()),
+                ..body(Kind::Ask, "ok?")
+            };
+            assert_eq!(
+                validate_post(&b, 1, &[]).unwrap_err().code,
+                codes::BAD_TO,
+                "{bad:?}"
+            );
+        }
+        // hand keeps its old latitude
+        let h = PostBody {
+            to: Some("whoever".into()),
+            subject: Some("s".into()),
+            ..body(Kind::Hand, "packet")
+        };
+        assert!(validate_post(&h, 1, &[]).is_ok());
+    }
+
+    #[test]
+    fn projection_carries_to_last_answer_and_chain_count() {
+        let mut ask = aw(1, Kind::Ask, None, None);
+        ask.to = Some("you".into());
+        let mut edit = aw(2, Kind::Ask, None, Some(1));
+        edit.to = Some("you".into());
+        edit.line = "which one?".into();
+        let mut a1 = aw(3, Kind::Answer, Some(1), None);
+        a1.line = "first".into();
+        a1.prov = prov("omp", Some("bbbb2222"), Origin::Agent);
+        let mut a2 = aw(4, Kind::Answer, Some(2), None);
+        a2.line = "the left one".into();
+        a2.prov = prov("claude", None, Origin::Human);
+        let d = project_now(&[ask, edit, a1, a2]);
+        assert_eq!(d.sections.ask.len(), 1);
+        let p = &d.sections.ask[0];
+        assert_eq!(p.seq, 2);
+        assert_eq!(p.to.as_deref(), Some("you"));
+        assert_eq!(p.answers, Some(2), "answers across the edit chain");
+        let la = p.last_answer.as_ref().expect("last_answer");
+        assert_eq!(
+            (la.seq, la.line.as_str(), la.who.tag.as_str()),
+            (4, "the left one", "you")
+        );
+        assert!(la.age_secs > 0);
+        assert!(d.text.contains("which one?  → you"), "{}", d.text);
+        assert!(d.text.contains("(2 answers, unaccepted"), "{}", d.text);
+
+        // any / absent render nothing
+        let mut any = aw(1, Kind::Ask, None, None);
+        any.to = Some("any".into());
+        let d = project_now(&[any, aw(2, Kind::Ask, None, None)]);
+        assert!(!d.text.contains('→'), "{}", d.text);
+        assert!(d.sections.ask.iter().all(|p| p.last_answer.is_none()));
     }
 
     #[test]
