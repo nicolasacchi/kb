@@ -203,11 +203,11 @@ fn runner_response_list_payload_is_session_info_array() {
             let infos: Vec<SessionInfo> = serde_json::from_value(data)
                 .expect("list payload must deserialize as a SessionInfo array");
             assert_eq!(infos.len(), 1);
-            let back = serde_json::to_vec(&infos).expect("serialize SessionInfo list");
+            let back = serde_json::to_vec(&infos[0]).expect("serialize SessionInfo element");
             assert_eq!(
                 back,
                 read_golden("session_info.json"),
-                "list payload must match the session_info golden"
+                "each list element must match the session_info golden"
             );
         }
         Response::Err { .. } => panic!("resp_list.json must be an Ok response"),
