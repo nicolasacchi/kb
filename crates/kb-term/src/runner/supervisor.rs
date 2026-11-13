@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use tokio::process::Command;
 
-use super::{kill_group, pid_alive, RunnerError};
+use super::{kill_group, RunnerError};
 
 /// Context a kill passes to the supervisor's stop path.
 #[derive(Debug, Clone, Default)]
