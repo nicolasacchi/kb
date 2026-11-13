@@ -15,7 +15,7 @@ use kb_core::paths::KbPaths;
 use kb_core::types::KbName;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::Mutex;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
 const FIXTURE_TOKEN: &str = "test-token-fixture-deadbeef";
@@ -53,10 +53,25 @@ fn kb_section(path: std::path::PathBuf) -> KbSection {
 }
 
 /// Scripted replies keyed by op, plus a connection counter to prove
-/// "the gate never touched the runner".
+/// "the gate never touched the runner", plus every request line it
+/// receives (the relay payloads the routes hand over).
 struct FakeRunner {
     conns: Arc<AtomicUsize>,
+    requests: Arc<Mutex<Vec<serde_json::Value>>>,
     socket: std::path::PathBuf,
+}
+
+/// The requests the fake runner has received, in order.
+fn captured_requests(fake: &FakeRunner) -> Vec<serde_json::Value> {
+    fake.requests.lock().unwrap().clone()
+}
+
+/// The most recent request the fake runner has received.
+fn last_request(fake: &FakeRunner) -> serde_json::Value {
+    captured_requests(fake)
+        .into_iter()
+        .last()
+        .expect("the fake runner must have received a request")
 }
 
 fn spawn_fake(
@@ -66,7 +81,9 @@ fn spawn_fake(
     let sock = dir.join("runner.sock");
     let listener = tokio::net::UnixListener::bind(&sock).unwrap();
     let conns = Arc::new(AtomicUsize::new(0));
+    let requests: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
     let counter = conns.clone();
+    let capture = requests.clone();
     tokio::spawn(async move {
         loop {
             let (stream, _) = match listener.accept().await {
@@ -75,16 +92,21 @@ fn spawn_fake(
             };
             counter.fetch_add(1, Ordering::SeqCst);
             let replies = replies.clone();
+            let capture = capture.clone();
             tokio::spawn(async move {
                 let mut line = String::new();
                 let mut reader = tokio::io::BufReader::new(stream);
                 if reader.read_line(&mut line).await.is_err() {
                     return;
                 }
-                let op = serde_json::from_str::<serde_json::Value>(line.trim())
-                    .ok()
-                    .and_then(|v| v.get("op").and_then(|v| v.as_str()).map(String::from))
+                let parsed: serde_json::Value =
+                    serde_json::from_str(line.trim()).unwrap_or(serde_json::Value::Null);
+                let op = parsed
+                    .get("op")
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
                     .unwrap_or_default();
+                capture.lock().unwrap().push(parsed);
                 let reply = replies.get(&op).cloned().unwrap_or_else(|| {
                     "{\"status\":\"err\",\"code\":\"not_found\",\"message\":\"no script\"}"
                         .to_string()
@@ -97,6 +119,7 @@ fn spawn_fake(
     });
     FakeRunner {
         conns,
+        requests,
         socket: sock,
     }
 }
@@ -637,6 +660,7 @@ async fn runner_errors_map_to_statuses() {
     let missing = tmp.path().join("absent.sock");
     let fake = FakeRunner {
         conns: Arc::new(AtomicUsize::new(0)),
+        requests: Arc::new(Mutex::new(Vec::new())),
         socket: missing.clone(),
     };
     let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
@@ -672,4 +696,339 @@ async fn runner_errors_map_to_statuses() {
     assert_eq!(resp.status().as_u16(), 502);
     let (_s, text) = body_text(resp).await;
     assert_problem(&text, "terminal-bad-reply");
+}
+
+#[tokio::test]
+async fn paste_32kib_boundary_is_exact() {
+    async fn post_text(addr: std::net::SocketAddr, text: &str) -> u16 {
+        client()
+            .post(format!("{}/api/terms/{TERM_ID}/paste", base_url(addr)))
+            .header("Origin", origin_header(addr))
+            .header("x-kb-intent", "terminal")
+            .header("Content-Type", "application/json")
+            .body(format!(
+                "{{\"text\":{}}}",
+                serde_json::to_string(text).unwrap()
+            ))
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .as_u16()
+    }
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("paste".to_string(), ok_reply("{\"pasted\":true}"));
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), replies);
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    // Exactly 32 KiB of ASCII is UNDER the cap (the route relays it).
+    assert_eq!(
+        post_text(addr, &"a".repeat(32 * 1024)).await,
+        200,
+        "exactly 32 KiB must not be 413"
+    );
+    // The relay hands the runner exactly the decoded text.
+    assert_eq!(
+        last_request(&fake)["text"].as_str().unwrap(),
+        "a".repeat(32 * 1024)
+    );
+    // 32 KiB + 1 byte is over the cap.
+    assert_eq!(post_text(addr, &"a".repeat(32 * 1024 + 1)).await, 413);
+    // A two-byte char: 16384 of them are exactly 32768 bytes (under
+    // the cap, so relayed); that plus one more byte is 32769 bytes
+    // but only 16385 chars — the cap counts bytes, not chars.
+    assert_eq!(
+        post_text(addr, "é").await,
+        200,
+        "multibyte below the byte cap relays"
+    );
+    assert_eq!(
+        post_text(addr, &"é".repeat(16384)).await,
+        200,
+        "32768 bytes of multibyte text must not be 413"
+    );
+    assert_eq!(
+        post_text(addr, &"é".repeat(16384) + "a").await,
+        413,
+        "32769 bytes (16385 chars) is over the byte cap"
+    );
+    // Only the three accepted pastes reached the runner.
+    assert_eq!(captured_requests(&fake).len(), 3);
+}
+
+#[tokio::test]
+async fn relays_carry_exact_ids_ops_and_payloads() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert(
+        "launch".to_string(),
+        ok_reply("{\"id\":\"abcd1234\",\"harness\":\"omp\"}"),
+    );
+    replies.insert("paste".to_string(), ok_reply("{\"pasted\":true}"));
+    replies.insert("keys".to_string(), ok_reply("{\"sent\":2}"));
+    replies.insert("kill".to_string(), ok_reply("{\"killed\":true}"));
+    replies.insert(
+        "take_size".to_string(),
+        ok_reply("{\"cols\":120,\"rows\":40}"),
+    );
+    replies.insert("enter".to_string(), ok_reply("{\"entered\":true}"));
+    replies.insert("read".to_string(), ok_reply("\"synthetic read output\""));
+    replies.insert("history".to_string(), ok_reply("[]"));
+    replies.insert("list".to_string(), list_reply(&[TERM_ID]));
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), replies);
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+
+    // GET /terms -> {"op":"list"} and nothing else.
+    let resp = c
+        .get(format!("{}/api/terms", base_url(addr)))
+        .header("Origin", origin_header(addr))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    assert_eq!(last_request(&fake), serde_json::json!({"op": "list"}));
+
+    // Launch with no optional fields: the relay supplies the runner's
+    // defaults (cwd /, cols 80, rows 24) and every other field null.
+    let resp = c
+        .post(format!("{}/api/terms", base_url(addr)))
+        .header("Origin", origin_header(addr))
+        .header("x-kb-intent", "terminal")
+        .header("Content-Type", "application/json")
+        .body("{\"harness\":\"omp\"}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 201);
+    assert_eq!(
+        last_request(&fake),
+        serde_json::json!({"op":"launch","harness":"omp","argv":null,"resume_sid":null,"cwd":"/","cols":80,"rows":24,"env":null,"exit_keys":null})
+    );
+
+    // Launch with every field set: each passes through verbatim.
+    let resp = c
+        .post(format!("{}/api/terms", base_url(addr)))
+        .header("Origin", origin_header(addr))
+        .header("x-kb-intent", "terminal")
+        .header("Content-Type", "application/json")
+        .body("{\"harness\":\"claude\",\"resume_sid\":\"sid-x\",\"cwd\":\"/work/proj\",\"cols\":120,\"rows\":40}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 201);
+    assert_eq!(
+        last_request(&fake),
+        serde_json::json!({"op":"launch","harness":"claude","argv":null,"resume_sid":"sid-x","cwd":"/work/proj","cols":120,"rows":40,"env":null,"exit_keys":null})
+    );
+
+    // Paste: id, viewer and text travel verbatim.
+    let resp = c
+        .post(format!("{}/api/terms/{TERM_ID}/paste", base_url(addr)))
+        .header("Origin", origin_header(addr))
+        .header("x-kb-intent", "terminal")
+        .header("Content-Type", "application/json")
+        .body("{\"text\":\"hello synthetic\"}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    assert_eq!(
+        last_request(&fake),
+        serde_json::json!({"op":"paste","id":TERM_ID,"viewer":"spa","text":"hello synthetic"})
+    );
+
+    // Keys: Named key input shape.
+    let resp = c
+        .post(format!("{}/api/terms/{TERM_ID}/keys", base_url(addr)))
+        .header("Origin", origin_header(addr))
+        .header("x-kb-intent", "terminal")
+        .header("Content-Type", "application/json")
+        .body("{\"keys\":[\"Enter\",\"ctrl_c\"]}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    assert_eq!(
+        last_request(&fake),
+        serde_json::json!({"op":"keys","id":TERM_ID,"viewer":"spa","input":{"kind":"named","named":["Enter","ctrl_c"]}})
+    );
+
+    // Kill: id travels; grace is null.
+    let resp = c
+        .post(format!("{}/api/terms/{TERM_ID}/kill", base_url(addr)))
+        .header("Origin", origin_header(addr))
+        .header("x-kb-intent", "terminal")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    assert_eq!(
+        last_request(&fake),
+        serde_json::json!({"op":"kill","id":TERM_ID,"grace_secs":null})
+    );
+
+    // Take-size: id, grid, owner and force travel verbatim.
+    let resp = c
+        .post(format!("{}/api/terms/{TERM_ID}/take-size", base_url(addr)))
+        .header("Origin", origin_header(addr))
+        .header("x-kb-intent", "terminal")
+        .header("Content-Type", "application/json")
+        .body("{\"cols\":120,\"rows\":40}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    assert_eq!(
+        last_request(&fake),
+        serde_json::json!({"op":"take_size","id":TERM_ID,"cols":120,"rows":40,"owner":"kb-term","force":true})
+    );
+
+    // Enter: id, viewer, blocked false, from_composer false.
+    let resp = c
+        .post(format!("{}/api/terms/{TERM_ID}/enter", base_url(addr)))
+        .header("Origin", origin_header(addr))
+        .header("x-kb-intent", "terminal")
+        .header("Content-Type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    assert_eq!(
+        last_request(&fake),
+        serde_json::json!({"op":"enter","id":TERM_ID,"viewer":"spa","blocked":false,"from_composer":false})
+    );
+
+    // Read / history: id travels.
+    let resp = c
+        .get(format!("{}/api/terms/{TERM_ID}/read", base_url(addr)))
+        .header("Origin", origin_header(addr))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    assert_eq!(
+        last_request(&fake),
+        serde_json::json!({"op":"read","id":TERM_ID})
+    );
+    let resp = c
+        .get(format!("{}/api/terms/{TERM_ID}/history", base_url(addr)))
+        .header("Origin", origin_header(addr))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    assert_eq!(
+        last_request(&fake),
+        serde_json::json!({"op":"history","id":TERM_ID})
+    );
+
+    // Ticket: the route's presence probe is a bare list op.
+    let resp = c
+        .post(format!("{}/api/terms/{TERM_ID}/ticket", base_url(addr)))
+        .header("Origin", origin_header(addr))
+        .header("x-kb-intent", "terminal")
+        .header("Content-Type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    assert_eq!(last_request(&fake), serde_json::json!({"op": "list"}));
+}
+
+/// `tracing-subscriber` writer that retains every line the server logs.
+#[derive(Clone)]
+struct CaptureWriter {
+    buf: Arc<Mutex<Vec<u8>>>,
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CaptureWriter {
+    type Writer = CaptureWriter;
+
+    fn make_writer_for(&self, _meta: &tracing::Metadata<'_>) -> Self::Writer {
+        self.clone()
+    }
+}
+
+impl std::io::Write for CaptureWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.buf.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn ticket_and_paste_text_never_reach_the_tracing_output() {
+    let capture = CaptureWriter {
+        buf: Arc::new(Mutex::new(Vec::new())),
+    };
+    tracing_subscriber::fmt()
+        .with_writer(capture.clone())
+        .with_ansi(false)
+        .without_time()
+        .with_target(false)
+        .try_init()
+        .expect("the capture subscriber must install in the test process");
+    tracing::info!("capture-test-marker");
+
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("list".to_string(), list_reply(&[TERM_ID]));
+    replies.insert("paste".to_string(), ok_reply("{\"pasted\":true}"));
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), replies);
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    const SENTINEL: &str = "synthetic-paste-sentinel-9f2c";
+
+    // Mint a ticket and take it back out of the response body (the only
+    // place it is allowed to be).
+    let resp = c
+        .post(format!("{}/api/terms/{TERM_ID}/ticket", base_url(addr)))
+        .header("Origin", origin_header(addr))
+        .header("x-kb-intent", "terminal")
+        .header("Content-Type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let (_s, mint_text) = body_text(resp).await;
+    let ticket = serde_json::from_str::<serde_json::Value>(&mint_text).unwrap()["ticket"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Paste uniquely identifiable text through the relay.
+    let resp = c
+        .post(format!("{}/api/terms/{TERM_ID}/paste", base_url(addr)))
+        .header("Origin", origin_header(addr))
+        .header("x-kb-intent", "terminal")
+        .header("Content-Type", "application/json")
+        .body(format!("{{\"text\":\"{}\"}}", SENTINEL))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+
+    // Everything the server (and this test process) logged while
+    // serving the requests above.
+    let logged = String::from_utf8_lossy(&capture.buf.lock().unwrap()).into_owned();
+    assert!(
+        logged.contains("capture-test-marker"),
+        "the capture must retain log lines; got: {logged}"
+    );
+    assert!(
+        !logged.contains(&ticket),
+        "the ticket must never reach the log stream"
+    );
+    assert!(
+        !logged.contains(SENTINEL),
+        "paste text must never reach the log stream"
+    );
 }

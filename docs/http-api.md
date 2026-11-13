@@ -1448,7 +1448,12 @@ POST   /api/terms                           Launch: body `{harness,
                                             harnesses; `resume_sid`/
                                             `cwd` are non-empty, <= 512
                                             bytes, no control chars;
-                                            `cwd` is absolute. 201 with
+                                            `cwd` is absolute. An
+                                            unsupplied `cwd`, `cols` or
+                                            `rows` defaults to `/`, 80
+                                            and 24 (the runner-shaped
+                                            defaults); an explicit value
+                                            passes through verbatim. 201 with
                                             the runner's reply.
 POST   /api/terms/{id}/ticket               Mint a single-use
                                             WebSocket ticket: the runner's
@@ -1458,15 +1463,19 @@ POST   /api/terms/{id}/ticket               Mint a single-use
                                             "term"}` — the ticket exists
                                             ONLY in this body (T12's WS
                                             client carries it in the
-                                            upgrade query; it is never
-                                            logged). [terminal]
+                                            upgrade query; the handlers
+                                            and the terminal module never
+                                            log it). [terminal]
                                             `ticket_ttl_secs` (30s
                                             default, clamped 1..=120),
                                             bound to the terminal and the
                                             caller; consumed once at
                                             the upgrade.
 POST   /api/terms/{id}/paste                Body `{text}`; decoded
-                                            text over 32 KiB is 413.
+                                            text over 32 KiB is 413 —
+                                            the cap counts bytes, so
+                                            multibyte characters count
+                                            by their byte length.
                                             Relayed verbatim.
 POST   /api/terms/{id}/enter                Body `{}`. Relays the
                                             beat-derived entered flag

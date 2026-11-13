@@ -382,6 +382,7 @@ closed; only the configured parent Origin or a same-host Origin passes
 needs an `X-Kb-Intent: terminal` header. The WebSocket upgrade needs a
 single-use short-lived ticket minted by an authenticated POST, written
 only into the mint response body. The loopback bypass does NOT apply —
+the handlers and the terminal module never log tickets or pasted text.
 agents run on loopback, so admission by the bearer gate is necessary
 but never sufficient. Terminal bytes and pictures are unscrubbed and
 never leave this gate; the CLI and agents never call these routes (there
