@@ -42,6 +42,14 @@ pub fn generate_id(sessions_dir: &Path) -> Result<String, RunnerError> {
     ))
 }
 
+/// Mint a fresh per-stream tap viewer id (`ws-` + 10 random chars, 13
+/// bytes, inside the tap's `[a-z0-9:_-]{1,64}` viewer grammar). Every
+/// `stream` open gets its own: the tap keys viewers by id, and a shared
+/// id would make a second socket displace the first.
+pub fn generate_viewer_id() -> Result<String, RunnerError> {
+    Ok(format!("ws-{}", random_id()?))
+}
+
 fn random_id() -> Result<String, RunnerError> {
     const CHARS: &[u8; 36] = b"abcdefghijklmnopqrstuvwxyz0123456789";
     let mut buf = [0u8; 10];
@@ -83,6 +91,15 @@ mod tests {
         ] {
             assert!(!valid_id(bad), "id {bad:?} must be rejected");
         }
+    }
+
+    #[test]
+    fn viewer_ids_are_valid_and_distinct() {
+        let a = generate_viewer_id().unwrap();
+        let b = generate_viewer_id().unwrap();
+        assert!(crate::viewer::valid_viewer(&a), "viewer id {a:?}");
+        assert!(a.starts_with("ws-"));
+        assert_ne!(a, b, "two mints must differ");
     }
 
     #[test]

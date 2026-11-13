@@ -1145,10 +1145,12 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
             // the logs. This span carries method + path only — the
             // query (and with it the ticket) never lands in a span.
             // `on_request(())` drops tower-http's "started request"
-            // event, which logs the full URI the same way.
+            // event, which logs the full URI the same way. The span
+            // stays at DEBUG (tower-http's own default level) so no
+            // INFO-level event in any handler gains a span context.
             TraceLayer::new_for_http()
                 .make_span_with(|request: &axum::http::Request<axum::body::Body>| {
-                    tracing::info_span!(
+                    tracing::debug_span!(
                         "request",
                         http.method = %request.method(),
                         http.uri = request.uri().path(),

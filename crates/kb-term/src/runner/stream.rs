@@ -53,13 +53,16 @@ pub fn join_envelope(viewer: &str, from: Option<u64>) -> Result<Vec<u8>, wire::W
 }
 
 /// Open the tap connection for a stream request and write the join
-/// envelope. The connection is returned live (unread); the caller owns
-/// the splice from here.
+/// envelope. The connection is returned live (unread) together with
+/// the freshly minted viewer id it joined under; the caller owns the
+/// splice from here. Every call mints its own viewer id: the tap keys
+/// viewers by id, so a shared id would make a second socket silently
+/// displace the first.
 pub async fn connect_tap<S: crate::runner::supervisor::Supervisor>(
     runner: &Runner<S>,
     id: &str,
     from: Option<u64>,
-) -> Result<tokio::net::UnixStream, RunnerError> {
+) -> Result<(tokio::net::UnixStream, String), RunnerError> {
     // Session-down vs tap-down: a session whose directory is gone is
     // "no such session" (NotFound -> 404 at kb-server); a session
     // that exists but whose tap socket will not connect is an
@@ -72,12 +75,13 @@ pub async fn connect_tap<S: crate::runner::supervisor::Supervisor>(
     let mut tap = tokio::net::UnixStream::connect(&path)
         .await
         .map_err(|e| RunnerError::TapTimeout(format!("tap unavailable for {id}: {e}")))?;
-    let join = join_envelope(id, from)
+    let viewer = crate::runner::ids::generate_viewer_id()?;
+    let join = join_envelope(&viewer, from)
         .map_err(|e| RunnerError::Internal(format!("encode join envelope: {e}")))?;
     tap.write_all(&join)
         .await
         .map_err(|e| RunnerError::Internal(format!("write tap join: {e}")))?;
-    Ok(tap)
+    Ok((tap, viewer))
 }
 
 /// Splice tap.sock envelopes between the tap connection and the runner
@@ -225,7 +229,7 @@ mod tests {
         let cfg =
             RunnerConfig::test_config(run_dir, "/bin/true".to_string(), tmp.path().join("conf"));
         let runner = Runner::direct(cfg);
-        let tap = tokio::time::timeout(DEADLINE, connect_tap(&runner, id, None))
+        let (tap, minted) = tokio::time::timeout(DEADLINE, connect_tap(&runner, id, None))
             .await
             .expect("connect deadline")
             .expect("connect to fake tap");
@@ -238,7 +242,8 @@ mod tests {
             .expect("fake tap deadline")
             .expect("fake tap join");
         let (viewer, profile) = viewer_open(&join);
-        assert_eq!(viewer, id, "the join names this session as the viewer");
+        assert_eq!(viewer, minted, "the join names the minted viewer");
+        assert_ne!(viewer, id, "the viewer is never the session id");
         assert_eq!(profile, Profile::Desktop);
         // Client -> tap -> (echo) -> client, byte-for-byte.
         let payload = wire::encode_envelope(wire::ENV_TEXT, b"hello").unwrap();
@@ -257,6 +262,44 @@ mod tests {
             .await
             .expect("splice end deadline");
         let _ = tokio::time::timeout(DEADLINE, tap_task).await;
+    }
+
+    #[tokio::test]
+    async fn two_stream_opens_join_the_tap_under_distinct_viewers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let run_dir = tmp.path().join("run");
+        let id = "abcd1234";
+        let session_dir = run_dir.join("s").join(id);
+        std::fs::create_dir_all(&session_dir).unwrap();
+        std::fs::create_dir_all(run_dir.join("runner")).unwrap();
+        let listener = tokio::net::UnixListener::bind(session_dir.join("tap.sock")).unwrap();
+        let tap_task = tokio::spawn(async move {
+            let mut viewers = Vec::new();
+            let mut conns = Vec::new();
+            for _ in 0..2 {
+                let (mut conn, _) = tokio::time::timeout(DEADLINE, listener.accept())
+                    .await
+                    .expect("accept deadline")
+                    .expect("accept");
+                let join = read_chunk(&mut conn).await;
+                viewers.push(viewer_open(&join).0);
+                conns.push(conn);
+            }
+            viewers
+        });
+        let cfg =
+            RunnerConfig::test_config(run_dir, "/bin/true".to_string(), tmp.path().join("conf"));
+        let runner = Runner::direct(cfg);
+        let (_t1, v1) = connect_tap(&runner, id, None).await.expect("first");
+        let (_t2, v2) = connect_tap(&runner, id, None).await.expect("second");
+        assert_ne!(v1, v2, "each stream open mints its own viewer id");
+        let seen = tokio::time::timeout(DEADLINE, tap_task)
+            .await
+            .expect("tap deadline")
+            .unwrap();
+        assert_eq!(seen.len(), 2);
+        assert_ne!(seen[0], seen[1], "the tap saw two DISTINCT viewer-open ids");
+        assert!(crate::viewer::valid_viewer(&seen[0]));
     }
 
     #[tokio::test]

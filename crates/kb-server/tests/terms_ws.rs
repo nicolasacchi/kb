@@ -176,6 +176,8 @@ fn spawn_stream_fake_mode(
     let (counter, reqs2, received2) = (conns.clone(), stream_reqs.clone(), received.clone());
     let script = Arc::new(script);
     let replies = Arc::new(replies);
+    // One distinct viewer id per stream open, as the real runner mints.
+    let viewer_seq = Arc::new(AtomicUsize::new(0));
     tokio::spawn(async move {
         loop {
             let (stream, _) = match listener.accept().await {
@@ -186,6 +188,7 @@ fn spawn_stream_fake_mode(
             let (reqs3, received3) = (reqs2.clone(), received2.clone());
             let script3 = script.clone();
             let replies3 = replies.clone();
+            let viewer_seq3 = viewer_seq.clone();
             tokio::spawn(async move {
                 let mut reader = tokio::io::BufReader::new(stream);
                 let mut line = String::new();
@@ -209,11 +212,11 @@ fn spawn_stream_fake_mode(
                         let _ = stream.write_all(err.as_bytes()).await;
                         return;
                     }
-                    if stream
-                        .write_all(b"{\"status\":\"ok\",\"data\":{}}\n")
-                        .await
-                        .is_err()
-                    {
+                    let viewer_no = viewer_seq3.fetch_add(1, Ordering::SeqCst);
+                    let ok = format!(
+                        "{{\"status\":\"ok\",\"data\":{{\"viewer\":\"ws-fake{viewer_no:04}\"}}}}\n"
+                    );
+                    if stream.write_all(ok.as_bytes()).await.is_err() {
                         return;
                     }
                     for env in script3.iter() {
@@ -619,6 +622,51 @@ async fn ws_disabled_is_bodiless_404() {
     assert_eq!(fake.conns.load(Ordering::SeqCst), 0, "0 runner connections");
 }
 
+/// A disabled tier is invisible on the WS route too: no missing-ticket
+/// 400, no non-upgrade 400/426 and no id-shape 400 may pre-empt the
+/// bodiless 404, and the runner is never dialled.
+#[tokio::test]
+async fn ws_disabled_hides_extractor_and_id_rejections() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_stream_fake(tmp.path(), HashMap::new(), vec![], true);
+    let (tmp, addr) = boot(
+        kb_core::config::TerminalSection {
+            enabled: Some(false),
+            ..Default::default()
+        },
+        &fake,
+    )
+    .await;
+    let _ = tmp;
+    let origin = origin_header(addr);
+    let upgrade = |req: reqwest::RequestBuilder| {
+        req.header("Upgrade", "websocket")
+            .header("Connection", "Upgrade")
+            .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .header("Sec-WebSocket-Version", "13")
+            .header("Origin", origin.clone())
+    };
+    // (a) upgrade headers but NO ticket param.
+    let url = format!("{}/api/terms/{TERM_ID}/ws", base_url(addr));
+    let (status, text) = body_text(upgrade(client().get(url)).send().await.unwrap()).await;
+    assert_eq!((status, text.as_str()), (404, ""), "no ticket param");
+    // (b) a plain GET with no Upgrade headers at all.
+    let url = format!("{}/api/terms/{TERM_ID}/ws?ticket=abc", base_url(addr));
+    let resp = client()
+        .get(url)
+        .header("Origin", origin.clone())
+        .send()
+        .await
+        .unwrap();
+    let (status, text) = body_text(resp).await;
+    assert_eq!((status, text.as_str()), (404, ""), "plain GET");
+    // (c) an uppercase (invalid-shape) id.
+    let url = format!("{}/api/terms/ABCD1234/ws?ticket=abc", base_url(addr));
+    let (status, text) = body_text(upgrade(client().get(url)).send().await.unwrap()).await;
+    assert_eq!((status, text.as_str()), (404, ""), "bad id shape");
+    assert_eq!(fake.conns.load(Ordering::SeqCst), 0, "0 runner connections");
+}
+
 // --------------------------------------------------------------------------
 // Spec 8, test 2 (adapted to the merged check_origin: same-host Origin
 // is accepted alongside the exact parent origin).
@@ -959,6 +1007,54 @@ async fn ws_input_reaches_upstream_unchanged() {
             (ENV_TEXT, br#"{"t":"resumefrom","offset":42}"#.to_vec()),
         ],
         "browser input must reach the upstream byte-for-byte, in order: {frames:?}"
+    );
+}
+
+/// Two sockets on one terminal reach the runner as two streams with
+/// DISTINCT viewer ids on the C->S prefix (a shared id made the tap
+/// displace the first socket).
+#[tokio::test]
+async fn ws_two_sockets_use_distinct_viewer_ids() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut replies = HashMap::new();
+    replies.insert("list".to_string(), list_reply(&[TERM_ID]));
+    let fake = spawn_stream_fake(
+        tmp.path(),
+        replies,
+        vec![s2c_envelope(ENV_TEXT, br#"{"t":"hello"}"#)],
+        false,
+    );
+    let (tmp, addr) = boot(enabled_terminal(), &fake).await;
+    let _ = tmp;
+    let mut sockets = Vec::new();
+    for _ in 0..2 {
+        let ticket = mint_ticket(addr, TERM_ID, None).await;
+        let mut ws =
+            match ws_connect(addr, TERM_ID, &ticket, None, &origin_header(addr), None).await {
+                WsConnect::Ok(w) => w,
+                other => panic!("connect must succeed, got {other:?}"),
+            };
+        let _ = ws_read_n(&mut ws, 1).await;
+        ws.send(Message::binary(vec![b'x'])).await.unwrap();
+        sockets.push(ws);
+    }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let received = loop {
+        let got = fake.received.lock().unwrap().clone();
+        if got.len() >= 2 {
+            break got;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "both sockets' input must reach the upstream: {got:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    let prefix = |body: &[u8]| body[1..1 + body[0] as usize].to_vec();
+    assert_ne!(
+        prefix(&received[0].1),
+        prefix(&received[1].1),
+        "each socket carries its own viewer id"
     );
 }
 
@@ -1424,6 +1520,39 @@ async fn terminal_emits_created_and_ended_once() {
     assert_eq!(state[0].payload["id"], TERM_ID);
     assert_eq!(state[0].payload["state"], "ended");
 }
+/// An out-of-range runner `exit_code` on the kill path is skipped, not
+/// wrapped: one `term.ended` without the key, one ended `term.state`.
+#[tokio::test]
+async fn kill_out_of_range_exit_code_is_skipped_not_wrapped() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut replies = HashMap::new();
+    replies.insert(
+        "kill".to_string(),
+        "{\"status\":\"ok\",\"data\":{\"id\":\"abcd1234\",\"exit_code\":30000000000}}".to_string(),
+    );
+    let fake = spawn_stream_fake(tmp.path(), replies, vec![], true);
+    let (tmp, addr) = boot(enabled_terminal(), &fake).await;
+    let _ = tmp;
+    let resp = client()
+        .post(format!("{}/api/terms/{TERM_ID}/kill", base_url(addr)))
+        .header("Origin", origin_header(addr))
+        .header("x-kb-intent", "terminal")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200, "kill confirmed by the runner");
+    let events = sse_term_events(addr, Duration::from_millis(1500)).await;
+    let ended: Vec<_> = events.iter().filter(|e| e.event == "term.ended").collect();
+    let state: Vec<_> = events.iter().filter(|e| e.event == "term.state").collect();
+    assert_eq!(ended.len(), 1, "exactly one term.ended: {events:?}");
+    assert!(
+        ended[0].payload.get("exit_code").is_none(),
+        "an out-of-range code must be skipped, not wrapped: {}",
+        ended[0].payload
+    );
+    assert_eq!(state.len(), 1, "one ended term.state: {events:?}");
+}
+
 // --------------------------------------------------------------------------
 // Review round 1: gate negatives, stream-error mapping, shutdown twin.
 // --------------------------------------------------------------------------

@@ -9,9 +9,13 @@
 //! What it pins, end to end:
 //! (a) the first binary frame's offset is 0 — or the seed offset the
 //!     tap announced (a fresh join sees the buffer from its start);
-//! (b) 4 forced WS drops with `?from=<last offset>` reconnects
-//!     resume with no gap and no duplicate once deduped by offset —
-//!     the deduped byte stream is contiguous end to end;
+//! (b) 4 forced WS drops with `?from=<last offset>` reconnects. The
+//!     runner always sends the tap an empty-epoch resume, so the tap
+//!     answers each reconnect with a FULL join (a true resume is a
+//!     follow-up that needs the client's epoch); what is pinned is
+//!     that coverage persists across those re-joins — the offsets
+//!     seen never fall behind the last covered end and the deduped
+//!     byte stream is contiguous end to end;
 //! (c) `POST /api/shutdown` sends the live socket Close 1012 and the
 //!     tmux holder is still alive afterwards (kb-server and the
 //!     holder are separate processes; a kb-server drain kills
@@ -301,8 +305,7 @@ async fn mint_ticket(addr: std::net::SocketAddr, id: &str) -> String {
 }
 
 /// One round's outcome: binary intervals `(offset, len)` in arrival
-/// order, the seed offset (if a seed frame was seen), and whether an
-/// `exit` text frame passed through.
+/// order and the seed offset (if a seed frame was seen).
 #[derive(Default, Debug)]
 struct Round {
     /// Every frame seen, summarised (`text:<t>`, `binary@<offset>`, ...),
@@ -310,7 +313,6 @@ struct Round {
     seen: Vec<String>,
     binary: Vec<(u64, usize)>,
     seed_offset: Option<u64>,
-    exit_seen: bool,
     closed: bool,
 }
 
@@ -363,7 +365,6 @@ async fn read_round(ws: &mut WsStream, max_binary: usize) -> Round {
                                 .and_then(|x| x.as_u64())
                                 .or(round.seed_offset);
                         }
-                        Some("exit") => round.exit_seen = true,
                         _ => {}
                     }
                 }
@@ -531,7 +532,6 @@ async fn ws_real_tap_roundtrip() {
         .max()
         .unwrap_or(0);
     let mut seed_opt = first.seed_offset;
-    let _exit_seen = first.exit_seen;
     drop(ws);
 
     // (b) Four forced drops, each resuming at the last covered end.

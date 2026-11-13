@@ -15,10 +15,14 @@
 //! non-state-changing methods) checks nothing. Every check below runs
 //! BEFORE `ws.on_upgrade(...)` and fails with a plain HTTP response,
 //! in this order:
-//! id shape (400) -> enabled (bodiless 404) -> exact Origin via
+//! enabled (bodiless 404 for ANY request, malformed or not: the query
+//! and upgrade extractors run as `Result`s so their rejections cannot
+//! pre-empt it) -> id shape (400) -> exact Origin via
 //! [`check_origin`](crate::terminal::gate::check_origin) (absent fails
 //! closed; the loopback bypass does NOT apply — agents run on
-//! loopback) -> caller class (403) -> `from` parse (400) -> socket
+//! loopback) -> caller class (403) -> a missing/invalid query or a
+//! non-upgrade request (the extractors' own 4xx) -> `from` parse (400)
+//! -> socket
 //! cap (reserve/release, 503) -> ticket consume (single-use, bound to
 //! `{id}` + the caller's [`Identity`], 403) -> open the upstream
 //! stream (404 no such terminal, 502 runner error) -> upgrade.
@@ -39,7 +43,10 @@ use std::time::{Duration, Instant};
 use axum::extract::ws::{CloseFrame, Message};
 use axum::{
     body::Bytes,
-    extract::{Path, Query, State, WebSocketUpgrade},
+    extract::{
+        rejection::QueryRejection, ws::rejection::WebSocketUpgradeRejection, Path, Query, State,
+        WebSocketUpgrade,
+    },
     http::{HeaderMap, StatusCode},
     response::Response,
     Extension,
@@ -161,12 +168,19 @@ fn socket_cap() -> Response<axum::body::Body> {
 pub(crate) async fn upgrade(
     State(state): State<std::sync::Arc<KbHandles>>,
     Path(id): Path<String>,
-    Query(q): Query<WsQuery>,
+    q: Result<Query<WsQuery>, QueryRejection>,
     Extension(identity): Extension<Identity>,
     headers: HeaderMap,
-    ws: WebSocketUpgrade,
+    ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
 ) -> Response<axum::body::Body> {
-    // 0. Id shape (before any state lookup).
+    // 1. Enabled FIRST — bodiless 404 (same fn the REST gate uses), so a
+    // disabled tier answers every request identically: no extractor
+    // rejection or id-shape 400 may reveal it.
+    let terminal = state.config.read().await.terminal.clone();
+    if !terminal.enabled() {
+        return disabled();
+    }
+    // 0. Id shape (before any state lookup past the enabled check).
     if !is_valid_term_id(&id) {
         return Problem::response(
             "urn:kb:errors:bad-request",
@@ -175,12 +189,7 @@ pub(crate) async fn upgrade(
             "invalid terminal id".to_string(),
         );
     }
-    // 1. Enabled — bodiless 404 (same fn the REST gate uses).
     {
-        let terminal = state.config.read().await.terminal.clone();
-        if !terminal.enabled() {
-            return disabled();
-        }
         // 2. Origin — exact parent origin or same-host (T11's check;
         // absent fails closed). Do NOT reuse `origin_allowed`.
         if check_origin(&headers, &state.origin).is_err() {
@@ -202,6 +211,16 @@ pub(crate) async fn upgrade(
             );
         }
     }
+    // 2c. Query / upgrade extractor rejections, after the gate checks
+    // and before any cap reserve or ticket consume.
+    let Query(q) = match q {
+        Ok(q) => q,
+        Err(rejection) => return axum::response::IntoResponse::into_response(rejection),
+    };
+    let ws = match ws {
+        Ok(ws) => ws,
+        Err(rejection) => return axum::response::IntoResponse::into_response(rejection),
+    };
     // 5. `from` parse (before the ticket + cap steps so a malformed
     // value never burns a single-use ticket nor holds a socket slot).
     let from: Option<u64> = match q.from.as_deref() {
@@ -479,9 +498,13 @@ pub(crate) async fn run_relay<S, U, F>(
                 }
             }
             // (c) mpsc -> sink (upstream items verbatim, in order).
-            // Every sink send is bounded by the same 500 ms write
-            // deadline as the shutdown arm: a stalled browser must
-            // never park the select where the shutdown arm lives.
+            // A data/text frame is handed to the sink or the socket is
+            // closed: a stalled browser (no room for the frame within
+            // `slow_consumer_after`) is closed 1013, never skipped (a
+            // dropped binary frame breaks the byte-for-byte contract
+            // and a dropped text frame cannot be detected at all). The
+            // bound also keeps the shutdown arm reachable. Only the
+            // keep-alive Ping below is best-effort.
             item = upstream_rx.recv() => {
                 let Some(item) = item else {
                     // Upstream EOF/error: 1011, unless an exit frame was
@@ -495,21 +518,28 @@ pub(crate) async fn run_relay<S, U, F>(
                         })))).await;
                     break;
                 };
-                match &item {
+                let msg = match item {
                     StreamItem::Text(text) => {
-                        if let Some(e) = parse_exit(text) {
+                        if let Some(e) = parse_exit(&text) {
                             exit_seen = Some(e);
                             (on_event)(RelayEvent::Exit { code: e });
                         }
-                        if let Some((cols, rows)) = parse_sizechanged(text) {
+                        if let Some((cols, rows)) = parse_sizechanged(&text) {
                             (on_event)(RelayEvent::SizeChanged { cols, rows });
                         }
-                        let _ = tokio::time::timeout(Duration::from_millis(500),
-                            sink.send(Message::Text(text.clone().into()))).await;
+                        Message::Text(text.into())
                     }
-                    StreamItem::Binary(bytes) => {
-                        let _ = tokio::time::timeout(Duration::from_millis(500),
-                            sink.send(Message::Binary(bytes.clone().into()))).await;
+                    StreamItem::Binary(bytes) => Message::Binary(bytes.into()),
+                };
+                match tokio::time::timeout(timers.slow_consumer_after, sink.send(msg)).await {
+                    Ok(Ok(())) => {}
+                    // The peer is gone.
+                    Ok(Err(_)) => break,
+                    // Stalled: the frame was NOT delivered, so nothing
+                    // after it may be either. Close 1013 and stop.
+                    Err(_) => {
+                        send_close(&mut sink, CLOSE_SLOW_CONSUMER, "slow consumer").await;
+                        break;
                     }
                 }
             }
@@ -797,6 +827,125 @@ mod relay_tests {
             pulled.load(std::sync::atomic::Ordering::SeqCst) < 500,
             "the reader must never drain the whole flood"
         );
+    }
+
+    /// A sink that stalls (`poll_ready` Pending, timer-woken) for
+    /// `stall` starting at the first `poll_ready` after its first data
+    /// frame, then turns Ready again. Records every message.
+    struct StallSink {
+        to_test: mpsc::UnboundedSender<Message>,
+        from_test: mpsc::Receiver<Result<Message, axum::Error>>,
+        data_sent: usize,
+        stall: Duration,
+        stall_until: Option<tokio::time::Instant>,
+    }
+
+    impl Stream for StallSink {
+        type Item = Result<Message, axum::Error>;
+        fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            self.get_mut().from_test.poll_recv(cx)
+        }
+    }
+
+    impl Sink<Message> for StallSink {
+        type Error = std::convert::Infallible;
+        fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            let this = self.get_mut();
+            if this.data_sent >= 1 {
+                let until = *this
+                    .stall_until
+                    .get_or_insert_with(|| tokio::time::Instant::now() + this.stall);
+                if tokio::time::Instant::now() < until {
+                    let waker = cx.waker().clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep_until(until).await;
+                        waker.wake();
+                    });
+                    return Poll::Pending;
+                }
+            }
+            Poll::Ready(Ok(()))
+        }
+        fn start_send(self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
+            let this = self.get_mut();
+            if matches!(item, Message::Binary(_) | Message::Text(_)) {
+                this.data_sent += 1;
+            }
+            let _ = this.to_test.send(item);
+            Ok(())
+        }
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_close(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn stalled_browser_never_loses_a_frame_in_the_middle() {
+        // The sink stalls ~800 ms (longer than the old fixed 500 ms
+        // send deadline) at the second data frame. A relay that drops
+        // the timed-out frame and carries on would deliver B2 without
+        // B1. The contract: delivered data frames are a PREFIX of the
+        // upstream order, and a stalled socket is closed 1013.
+        let (to_test, mut out) = mpsc::unbounded_channel::<Message>();
+        let (to_relay, from_relay) = mpsc::channel::<Result<Message, axum::Error>>(8);
+        let _into = to_relay;
+        let sink = StallSink {
+            to_test,
+            from_test: from_relay,
+            data_sent: 0,
+            stall: Duration::from_millis(800),
+            stall_until: None,
+        };
+        let frames: Vec<Vec<u8>> = (0u8..3)
+            .map(|i| vec![0, 0, 0, 0, 0, 0, 0, i, b'A' + i])
+            .collect();
+        let upstream = MemUpstream::new(
+            frames.iter().cloned().map(StreamItem::Binary).collect(),
+            true,
+        );
+        let (_tx, shutdown) = watch::channel(false);
+        let timers = RelayTimers {
+            ping_every: Duration::from_secs(25),
+            idle_close_after: Duration::from_secs(75),
+            slow_consumer_after: Duration::from_millis(100),
+        };
+        let relay = tokio::spawn(async move {
+            run_relay(sink, upstream, shutdown, timers, |_| {}).await;
+        });
+        tokio::time::timeout(Duration::from_secs(5), relay)
+            .await
+            .expect("the relay must end within a few seconds of a stalled browser")
+            .unwrap();
+        let mut delivered: Vec<Vec<u8>> = Vec::new();
+        let mut close_code = None;
+        while let Ok(msg) = out.try_recv() {
+            match msg {
+                Message::Binary(b) => delivered.push(b.to_vec()),
+                Message::Close(Some(f)) => close_code = Some(f.code),
+                _ => {}
+            }
+        }
+        assert_eq!(
+            delivered,
+            frames[..delivered.len()].to_vec(),
+            "delivered frames must be a prefix of the upstream order (no gap): {delivered:?}"
+        );
+        assert!(
+            delivered.len() < frames.len(),
+            "the stall must cut the stream"
+        );
+        if let Some(code) = close_code {
+            assert_eq!(code, CLOSE_SLOW_CONSUMER);
+        }
     }
 
     #[tokio::test]

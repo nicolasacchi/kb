@@ -166,10 +166,11 @@ pub(crate) struct TermStream {
     /// reassembles — a per-call buffer would drop the second
     /// envelope's head and corrupt the byte stream.
     read_buf: std::collections::VecDeque<u8>,
-    /// The viewer id the runner opened this stream for (the `stream`
-    /// request's `id`; the runner splices with the same id). C->S
-    /// bodies carry the tap's S2C id prefix so `parseS2C` unwraps
-    /// exactly what the tap itself would emit.
+    /// The viewer id the runner minted for THIS stream and returned in
+    /// the ok reply's `data.viewer` (unique per socket, so a second tab
+    /// never displaces the first at the tap). C->S bodies carry the
+    /// tap's S2C id prefix so `parseS2C` unwraps exactly what the tap
+    /// itself would emit.
     viewer: String,
 }
 
@@ -346,8 +347,18 @@ impl UnixRunner {
         // Read exactly one reply line (bounded like `round_trip`).
         let (reply, rest) = read_reply_line(&mut stream).await?;
         let text = String::from_utf8(reply).map_err(|_| StreamError::BadReply)?;
+        let viewer: String;
         match serde_json::from_str::<RunnerReply>(text.trim()).map_err(|_| StreamError::BadReply)? {
-            RunnerReply::Ok { .. } => {}
+            RunnerReply::Ok { data } => {
+                // A missing or malformed viewer is a bad reply: never
+                // fall back to a shared id (the multi-viewer bug).
+                viewer = data
+                    .get("viewer")
+                    .and_then(|v| v.as_str())
+                    .filter(|v| valid_viewer_id(v))
+                    .map(str::to_string)
+                    .ok_or(StreamError::BadReply)?;
+            }
             RunnerReply::Err { code, .. }
                 if code == "not-found" || code == "no-session" || code == "invalid-id" =>
             {
@@ -364,9 +375,18 @@ impl UnixRunner {
             write,
             pending,
             read_buf,
-            viewer: id.to_string(),
+            viewer,
         })
     }
+}
+
+/// The tap's viewer-id grammar (`[a-z0-9:_-]{1,64}`), mirrored here
+/// because kb-server takes no kb-term edge.
+fn valid_viewer_id(v: &str) -> bool {
+    (1..=64).contains(&v.len())
+        && v.bytes().all(|c| {
+            c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b':' | b'_' | b'-')
+        })
 }
 
 /// Read one bounded reply line off the stream; returns the line and
@@ -558,7 +578,9 @@ mod tests {
             let (mut stream, _) = listener.accept().await.unwrap();
             let mut buf = vec![0u8; 4096];
             let _ = stream.read(&mut buf).await;
-            let _ = stream.write_all(b"{\"status\":\"ok\",\"data\":{}}\n").await;
+            let _ = stream
+                .write_all(b"{\"status\":\"ok\",\"data\":{\"viewer\":\"ws-test0001\"}}\n")
+                .await;
             let text = fake_envelope(0, "v", br#"{"t":"ping"}"#);
             let _ = stream.write_all(&text).await;
             let binary = fake_envelope(1, "v", &[0, 0, 0, 0, 0, 0, 0, 3, b'a', b'b', b'c']);
@@ -644,6 +666,76 @@ mod tests {
         assert_eq!(&frame[8..], b"hi");
     }
 
+    /// Fake runner answering one `stream` line with `reply`, then
+    /// handing back the first bytes the client writes.
+    async fn open_with_reply(
+        reply: &'static str,
+    ) -> (
+        Result<TermStream, StreamError>,
+        tokio::task::JoinHandle<Vec<u8>>,
+        tempfile::TempDir,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("runner.sock");
+        let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+        let task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 4096];
+            let _ = stream.read(&mut buf).await;
+            let _ = stream.write_all(reply.as_bytes()).await;
+            let mut chunk = [0u8; 4096];
+            match tokio::time::timeout(Duration::from_secs(5), stream.read(&mut chunk)).await {
+                Ok(Ok(n)) => chunk[..n].to_vec(),
+                _ => Vec::new(),
+            }
+        });
+        let runner = UnixRunner::new(sock, Duration::from_secs(5));
+        let opened = runner.open_stream("abcd1234", None).await;
+        (opened, task, dir)
+    }
+
+    #[tokio::test]
+    async fn stream_send_prefixes_the_per_stream_viewer_not_the_session_id() {
+        let (opened, task, _dir) =
+            open_with_reply("{\"status\":\"ok\",\"data\":{\"viewer\":\"ws-aaaa1111\"}}\n").await;
+        let mut stream = opened.expect("open");
+        stream
+            .send(StreamItem::Binary(vec![9]))
+            .await
+            .expect("send");
+        let got = tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("fake deadline")
+            .unwrap();
+        let mut buf: std::collections::VecDeque<u8> = got.iter().copied().collect();
+        let mut out = Vec::new();
+        decode_envelopes(&mut buf, &mut out).unwrap();
+        assert_eq!(out.len(), 1);
+        let body = &out[0].1;
+        assert_eq!(body[0] as usize, "ws-aaaa1111".len());
+        assert_eq!(
+            &body[1..12],
+            b"ws-aaaa1111",
+            "per-stream viewer in the prefix"
+        );
+        assert_ne!(&body[1..9], b"abcd1234", "never the session id");
+    }
+
+    #[tokio::test]
+    async fn stream_open_without_a_valid_viewer_is_a_bad_reply() {
+        for reply in [
+            "{\"status\":\"ok\",\"data\":{}}\n",
+            "{\"status\":\"ok\",\"data\":{\"viewer\":\"\"}}\n",
+            "{\"status\":\"ok\",\"data\":{\"viewer\":\"Bad Id\"}}\n",
+        ] {
+            let (opened, _task, _dir) = open_with_reply(reply).await;
+            assert!(
+                matches!(opened, Err(StreamError::BadReply)),
+                "reply {reply:?} must be BadReply"
+            );
+        }
+    }
+
     #[test]
     fn stream_send_frames_each_item_as_one_envelope() {
         // C->S bodies carry the tap's S2C viewer-id prefix (handed off
@@ -687,7 +779,9 @@ mod tests {
             let (mut stream, _) = listener.accept().await.unwrap();
             let mut buf = vec![0u8; 4096];
             let _ = stream.read(&mut buf).await;
-            let _ = stream.write_all(b"{\"status\":\"ok\",\"data\":{}}\n").await;
+            let _ = stream
+                .write_all(b"{\"status\":\"ok\",\"data\":{\"viewer\":\"ws-test0001\"}}\n")
+                .await;
             let text = fake_envelope(0, "v", br#"{"t":"ping"}"#);
             let binary = fake_envelope(1, "v", &[0, 0, 0, 0, 0, 0, 0, 3, b'a', b'b', b'c']);
             let mut all = text;

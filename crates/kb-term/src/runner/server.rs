@@ -164,7 +164,7 @@ async fn handle_connection<S: Supervisor + 'static>(runner: Arc<Runner<S>>, stre
             // comes from the line reader (any spliced frame starts
             // here), the write half is the one the RPC loop holds.
             let client_read = reader.into_inner();
-            let tap = match crate::runner::stream::connect_tap(&runner, &id, from).await {
+            let (tap, viewer) = match crate::runner::stream::connect_tap(&runner, &id, from).await {
                 Ok(tap) => tap,
                 Err(e) => {
                     let err = crate::wire::Response::Err {
@@ -176,8 +176,12 @@ async fn handle_connection<S: Supervisor + 'static>(runner: Arc<Runner<S>>, stre
                 }
             };
             // The ok envelope goes out first so the client starts
-            // decoding envelopes only after the handshake.
-            let ok = crate::wire::Response::Ok { data: json!({}) };
+            // decoding envelopes only after the handshake. It names the
+            // viewer id this stream joined the tap under: the client
+            // prefixes its C->S envelopes with the same id.
+            let ok = crate::wire::Response::Ok {
+                data: json!({ "viewer": viewer }),
+            };
             if respond(&mut write_half, req_id, ok).await.is_err() {
                 return;
             }

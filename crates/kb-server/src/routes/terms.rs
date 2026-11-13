@@ -686,7 +686,8 @@ pub async fn kill(
                 let exit_code = data
                     .get("exit_code")
                     .and_then(|v| v.as_i64())
-                    .map(|c| c as i32);
+                    // Out of range: skip the code, never wrap it.
+                    .and_then(|c| i32::try_from(c).ok());
                 crate::terminal::events::emit_ended(&state, &id, exit_code);
             }
             relay(reply)
