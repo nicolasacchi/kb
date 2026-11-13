@@ -55,6 +55,8 @@ class TestMirrorStandin(unittest.TestCase):
         result = ms.analyze_dump(lines, 3300)
         self.assertFalse(result["ok"])
         self.assertEqual(len(result["tail_missing"]), 586)
+        self.assertEqual(result["tail_missing"][0], 2715)
+        self.assertEqual(result["tail_missing"][-1], 3300)
         self.assertTrue(
             any("truncated" in problem for problem in result["problems"]),
             result["problems"],
@@ -74,6 +76,7 @@ class TestMirrorStandin(unittest.TestCase):
             self.assertTrue(result_lines, proc.stdout)
             self.assertIn("FAIL", result_lines[-1])
             self.assertIn("truncated", result_lines[-1])
+            self.assertIn("tail                   : truncated", proc.stdout)
 
     def test_complete_dump_passes(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -84,6 +87,8 @@ class TestMirrorStandin(unittest.TestCase):
             proc = _run_cli("--check-dump", path, "--expect-total", "3300")
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("RESULT                 : PASS", proc.stdout)
+            self.assertIn("expected total        : 3300", proc.stdout)
+            self.assertIn("tail                   : OK", proc.stdout)
 
     def test_expect_total_is_required(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -102,13 +107,29 @@ class TestMirrorStandin(unittest.TestCase):
                 "3300",
             )
             self.assertEqual(unreadable.returncode, 2)
+            for bad in ("0", "-1", "1000001"):
+                proc = _run_cli("--check-dump", path, "--expect-total", bad)
+                self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
 
     def test_overrun_fails(self):
         lines = ["L%06d line %d\n" % (n, n) for n in range(1, 3301)]
         result = ms.analyze_dump(lines, 3000)
         self.assertFalse(result["ok"])
+        self.assertEqual(result["overrun"], sorted(range(3001, 3301)))
         self.assertTrue(
             any("overrun" in problem for problem in result["problems"]),
+            result["problems"],
+        )
+
+    def test_stray_l000000_fails(self):
+        lines = ["L000000 stray\n"] + [
+            "L%06d line %d\n" % (n, n) for n in range(1, 5)
+        ]
+        result = ms.analyze_dump(lines, 4)
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(result["below"], [0])
+        self.assertTrue(
+            any("below L000001" in problem for problem in result["problems"]),
             result["problems"],
         )
 
@@ -152,6 +173,26 @@ class TestMirrorStandin(unittest.TestCase):
                 self.assertEqual(
                     proc.returncode, 1, proc.stdout + proc.stderr
                 )
+                self.assertIn(
+                    "tail                   : FAIL (no numbered lines)",
+                    proc.stdout,
+                )
+
+    def test_check_dump_resolves_stdout_at_call_time(self):
+        import io
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(
+                os.path.join(tmp, "dump.txt"), _numbered_text(range(1, 101))
+            )
+            real_stdout = sys.stdout
+            buf = io.StringIO()
+            try:
+                sys.stdout = buf
+                rc = ms.check_dump(path, 100)
+            finally:
+                sys.stdout = real_stdout
+            self.assertEqual(rc, 0)
+            self.assertIn("RESULT                 : PASS", buf.getvalue())
 
     def test_parsing_tolerates_ansi_and_editor_gutter_and_ignores_the_summary_block(self):
         lines = ["L%06d line %d\n" % (n, n) for n in range(1, 7)]
@@ -214,6 +255,8 @@ class TestPtyRun(unittest.TestCase):
                         "--live",
                         "400",
                         "--rebuild-every",
+                        "100",
+                        "--cols",
                         "100",
                     ],
                 )
@@ -313,6 +356,7 @@ class TestPtyRun(unittest.TestCase):
             "--check-dump /tmp/sb.txt --expect-total 3400", self.text
         )
         self.assertIn("last line written     : L003400", self.text)
+        self.assertIn("kb-term T4 stand-in: 100x24", self.text)
 
 
 if __name__ == "__main__":
