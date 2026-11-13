@@ -150,6 +150,14 @@ fn spawn_silent(dir: &std::path::Path) -> FakeRunner {
     }
 }
 
+async fn boot(
+    terminal: TerminalSection,
+    fake: &FakeRunner,
+    with_token: bool,
+) -> (tempfile::TempDir, std::net::SocketAddr) {
+    boot_with(terminal, fake, with_token).await
+}
+
 async fn boot_with(
     terminal: TerminalSection,
     fake: &FakeRunner,
