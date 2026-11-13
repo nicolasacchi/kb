@@ -813,6 +813,19 @@ feat(kb-memory): recall line layout v2, pos marker + parser grammar, order-probe
 </section>
 
 
+<section id="aw-amendment">
+<h2 id="aw-amendment-h">25. AW amendment: asks that come back (2026-11-12)</h2>
+<p>Ruled by the operator: agents post non-blocking questions, the operator answers from the board or in chat, and the answer reaches the asking session, for Claude Code and omp and between agents. Plan: the AW plan file. Two earlier decisions move.</p>
+<dl class="decisions">
+<dt id="d31-aw">D31 reversed for Claude Code, as an opt-in per-ask background wait</dt>
+<dd>D31 refused push for Claude Code because there is no mid-turn injection API. A backgrounded <code>kb slate wait #n</code> needs none: the tool's own background-command completion re-invokes the session. It is per ask, started by the agent, read-only (never POSTs, never moves the cursor), main conversation only. Codex, Kimi and Grok stay pull; the prompt-boundary delta still delivers the answer once more. Claude as an answerer mid-turn also stays pull.</dd>
+<dt id="d26-aw">D26 amended: omp wakes on answers and dones to its own asks</dt>
+<dd>The push adapter resolves an <code>answer</code>/<code>done</code> watch line's <code>re</code> with <code>kb slate show</code> and, when the ask was authored by this session, delivers at once with <code>pi.sendMessage(msg, {triggerTurn: true})</code> (omp 18.16: starts a turn when idle, steers when streaming), bypassing the 30 s floor, once per resolution (D9: nobody else's traffic wakes it). An ask addressed to <code>you</code> or another harness is not pushed.</dd>
+<dt id="d-aw-trust">Trust carve-out</dt>
+<dd>"Posts are data" holds, except that an answer tagged <code>[you]</code> on your own ask is the operator's answer to that question and nothing more.</dd>
+</dl>
+</section>
+
 <footer>
 <p>docs/research/kb-slate-design-2026-09.html · plan: ~/.claude/plans/kb-slate.md · baseline main@fda8e375 · authored 2026-09-03, amended 2026-09-04 (the board), in session c6c8e04f-5f59-491d-bf8a-31d2d8513ac2.</p>
 </footer>

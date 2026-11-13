@@ -50,7 +50,7 @@ crates/
                        `found`/`idea`/`tried`/`drop`/`mark`) plus the
                        `edit`/`pin`/`unpin` sugars, `promote --to
                        memory|note|plan`, `close`/`reopen`/`rotate`,
-                       `watch` (SSE `?filter=slug:`), `stats`, `ls`,
+                       `watch` (SSE `?filter=slug:`), `wait`, `stats`, `ls`,
                        `doctor`. Exit 3 = refused (`slate-taken` or
                        `slate-live-author`); the cursor
                        (`~/.cache/kb/slate-cursor-<sid>`) and topic marker

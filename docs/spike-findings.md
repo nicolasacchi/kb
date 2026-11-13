@@ -1801,3 +1801,25 @@ captures).
 legacy read rollup and the desk's `changed_since_read` to web-only (needs an
 operator decision); bash and read file activity and non-Claude harnesses in the
 presence beat.
+
+## 2026-11 — slate asks that come back (AW)
+
+Shipped: `ask --to you|<harness>|any` (validated 400 `bad-to`), `Projected.to` /
+`last_answer`, digest `→ you`, `SlateSummary.ask_for_you`, read-only
+`kb slate wait #n` (exit 0/4/5/1), the omp `triggerTurn` wake on answers and
+dones to its own asks, the board's addressee and state chips, and the shared
+protocol paragraph with per-harness delivery lines (Claude: background wait;
+omp: pushed; Kimi: next prompt), pinned byte-identical across
+`memory-protocol.txt`, `CLAUDE.memory.md` and `kb-omp.ts`. D31 is reversed for
+Claude Code as an opt-in per-ask wait; D26 is amended for omp.
+
+Recorded limits:
+- Claude as an ANSWERER mid-turn stays pull (an omp ask reaches a working Claude
+  at its next prompt).
+- Liveness is not listening: a live Claude session may have no waiter running.
+- Double delivery: `wait` does not move the cursor, so the answer arrives again
+  at the next prompt.
+- `open_asks_with_ref` ignores edit chains; `ask_state` does not. Noted, not fixed.
+- An ask to `you` is not a push trigger for omp, but can ride along in a later
+  delta (the delta lane filters by kind, not by `to`).
+- Codex has no wake injection point; only the pasted paragraph reaches it.
