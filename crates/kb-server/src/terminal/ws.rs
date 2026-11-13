@@ -430,8 +430,12 @@ pub(crate) async fn run_relay<S, U, F>(
                 send_close(&mut sink, CLOSE_RESTART, "service restart").await;
                 break;
             }
-            // Slow consumer signalled by the reader: close 1013.
-            _ = slow_rx.recv() => {
+            // Slow consumer signalled by the reader: close 1013. Only an
+            // actual signal counts: when the reader ends (upstream EOF) its
+            // sender drops and `recv()` yields `None`, which must disable
+            // this arm, not read as "slow" (it would pre-empt the 1011/1000
+            // close the EOF path owes).
+            Some(()) = slow_rx.recv() => {
                 send_close(&mut sink, CLOSE_SLOW_CONSUMER, "slow consumer").await;
                 break;
             }
