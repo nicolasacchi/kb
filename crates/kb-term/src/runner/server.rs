@@ -20,6 +20,7 @@ use tokio::sync::broadcast;
 
 use serde_json::{json, Value};
 
+use crate::runner::media;
 use crate::runner::rpc;
 use crate::runner::supervisor::Supervisor;
 use crate::runner::Runner;
@@ -147,6 +148,15 @@ async fn handle_connection<S: Supervisor + 'static>(runner: Arc<Runner<S>>, stre
         }
         let id = request_id(&line);
         let resp = match rpc::parse_request(line.as_bytes()) {
+            Ok(crate::wire::Request::Media { sha256 }) => {
+                if respond_media(&mut write_half, id, &runner, sha256)
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                continue;
+            }
             Ok(req) => rpc::dispatch(&runner, &req).await,
             Err(e) => crate::wire::Response::Err {
                 code: e.code().to_string(),
@@ -155,6 +165,45 @@ async fn handle_connection<S: Supervisor + 'static>(runner: Arc<Runner<S>>, stre
         };
         if respond(&mut write_half, id, resp).await.is_err() {
             return;
+        }
+    }
+}
+
+/// Answer a `media` request: the usual envelope header carrying
+/// `{"len":N}`, then exactly N raw picture bytes. A failure is the
+/// ordinary `err` envelope (`not-found`, `bad-request`, `too-large`)
+/// with no bytes after it. The blocking file read runs off the async
+/// workers.
+async fn respond_media<S: Supervisor + 'static>(
+    w: &mut tokio::net::unix::OwnedWriteHalf,
+    id: Option<Value>,
+    runner: &Arc<Runner<S>>,
+    sha256: String,
+) -> std::io::Result<()> {
+    let dir = runner.sessions_dir();
+    let read = tokio::task::spawn_blocking(move || media::read_media(&dir, &sha256)).await;
+    match read {
+        Ok(Ok(bytes)) => {
+            let data = serde_json::to_value(crate::wire::MediaData {
+                len: bytes.len() as u64,
+            })
+            .unwrap_or(Value::Null);
+            respond(w, id, crate::wire::Response::Ok { data }).await?;
+            w.write_all(&bytes).await
+        }
+        Ok(Err(e)) => {
+            let err = crate::wire::Response::Err {
+                code: e.code().to_string(),
+                message: e.message(),
+            };
+            respond(w, id, err).await
+        }
+        Err(_) => {
+            let err = crate::wire::Response::Err {
+                code: "internal".to_string(),
+                message: "media read failed".to_string(),
+            };
+            respond(w, id, err).await
         }
     }
 }
@@ -262,6 +311,85 @@ mod tests {
         assert!(sock.exists(), "dead socket file must exist");
         let listener = bind_runner_socket(&sock).expect("stale socket must be replaced");
         drop(listener);
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    async fn read_header(reader: &mut BufReader<UnixStream>) -> Value {
+        let mut line = String::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            reader.read_line(&mut line),
+        )
+        .await
+        .expect("media header must arrive within 10 s")
+        .unwrap();
+        serde_json::from_str(line.trim()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn media_answers_a_len_header_then_exactly_that_many_raw_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let (handle, runner, _tx) = stub_runner(dir.path()).await;
+        let sock = runner.cfg.run_dir.join("runner").join("runner.sock");
+        let sha = "ab".repeat(32);
+        let payload: Vec<u8> = (0u8..=255).chain([10, 13, 0]).collect();
+        let img = runner.sessions_dir().join("abcd1234").join("img");
+        std::fs::create_dir_all(&img).unwrap();
+        std::fs::write(img.join(&sha), &payload).unwrap();
+
+        let stream = UnixStream::connect(&sock).await.unwrap();
+        let mut reader = BufReader::new(stream);
+        let req = format!("{{\"v\":1,\"id\":3,\"op\":\"media\",\"sha256\":\"{sha}\"}}\n");
+        reader.get_mut().write_all(req.as_bytes()).await.unwrap();
+        let head = read_header(&mut reader).await;
+        assert_eq!(head["status"], "ok");
+        assert_eq!(head["id"], 3);
+        assert_eq!(head["data"]["len"], payload.len());
+        let mut body = vec![0u8; payload.len()];
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            reader.read_exact(&mut body),
+        )
+        .await
+        .expect("media body must arrive within 10 s")
+        .unwrap();
+        assert_eq!(body, payload, "raw bytes survive newline and NUL bytes");
+
+        // The connection stays usable: the next reply line is not
+        // preceded by stray bytes.
+        reader
+            .get_mut()
+            .write_all(b"{\"v\":1,\"id\":4,\"op\":\"ping\"}\n")
+            .await
+            .unwrap();
+        let pong = read_header(&mut reader).await;
+        assert_eq!(pong["id"], 4);
+        assert_eq!(pong["status"], "ok");
+        handle.abort();
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn media_errors_carry_no_bytes_on_the_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let (handle, runner, _tx) = stub_runner(dir.path()).await;
+        let sock = runner.cfg.run_dir.join("runner").join("runner.sock");
+        let stream = UnixStream::connect(&sock).await.unwrap();
+        let mut reader = BufReader::new(stream);
+        let cases = [
+            ("cd".repeat(32), "not-found"),
+            ("AB".repeat(32), "bad-request"),
+            ("../../etc/passwd".to_string(), "bad-request"),
+            ("ab".repeat(31), "bad-request"),
+        ];
+        for (n, (sha, code)) in cases.iter().enumerate() {
+            let req = format!("{{\"v\":1,\"id\":{n},\"op\":\"media\",\"sha256\":\"{sha}\"}}\n");
+            reader.get_mut().write_all(req.as_bytes()).await.unwrap();
+            let head = read_header(&mut reader).await;
+            assert_eq!(head["status"], "err", "{sha}");
+            assert_eq!(head["code"], *code, "{sha}");
+        }
+        handle.abort();
         let _ = std::fs::remove_file(&sock);
     }
 
