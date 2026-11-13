@@ -257,6 +257,24 @@ impl Runner<SystemdSupervisor> {
 }
 
 impl<S: Supervisor> Runner<S> {
+    /// Build a runner around an arbitrary supervisor (unit tests inject a
+    /// recording fake).
+    #[cfg(test)]
+    pub(crate) fn with_supervisor(cfg: RunnerConfig, supervisor: S) -> Self {
+        let tmux = RealTmux::new(cfg.tmux_bin.clone());
+        Runner {
+            cfg,
+            tmux,
+            supervisor,
+            anchors: std::sync::Arc::new(Mutex::new(HashMap::new())),
+            locks: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
+            viewers: std::sync::Arc::new(Mutex::new(HashMap::new())),
+            paste_only: Mutex::new(HashMap::new()),
+            buffer_seqs: Mutex::new(HashMap::new()),
+            server_uid: unsafe { libc::getuid() },
+        }
+    }
+
     /// The `<run-dir>/s` directory that holds per-session sockets and dirs.
     pub fn sessions_dir(&self) -> std::path::PathBuf {
         self.cfg.run_dir.join("s")

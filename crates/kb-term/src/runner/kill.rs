@@ -114,9 +114,10 @@ pub async fn kill_session<S: Supervisor>(
     }
     // A dead pane with an empty/unparsable `pane_dead_status` is NOT a
     // forced kill (`pane_died` is true, `exit_code` stays `None`). The
-    // SIGKILL verdict comes from the supervisor's stop path (did
-    // something survive SIGTERM?), so a surviving stray forces `true`
-    // even when the pane itself died cleanly.
+    // SIGKILL verdict comes from the supervisor's stop path (does any
+    // process GROUP still have a live member after SIGTERM?), so a
+    // surviving stray forces `true` even when the pane's leader died
+    // cleanly.
     let (pane_pid, server_pid) = discovery::pane_and_server_pids(runner, id).await;
     runner.take_anchor(id).await;
     // Hidden viewers go with the session.
@@ -137,24 +138,35 @@ pub async fn kill_session<S: Supervisor>(
         forced: forced_kill(pane_died, sigkill_ran),
     })
 }
+/// Minimum pause after a key/text send that is not followed by an
+/// explicit `WaitMs` (an input-burst or paste heuristic must not see
+/// `/exit` and `Enter` as one pasted chunk). A `WaitMs` governs instead
+/// where present.
+pub const MIN_KEY_GAP_MS: u64 = 150;
+
 /// Send structured exit steps: `Keys`/`Text` via `send-keys`, `WaitMs`
-/// as an explicit sleep. Pure of ordering so the `WaitMs` values are
-/// pinned by `kill_actions`.
+/// as an explicit sleep, and a [`MIN_KEY_GAP_MS`] pause after every send
+/// that is followed by another send. Pure of ordering so the `WaitMs`
+/// values are pinned by `kill_actions`.
 pub async fn run_exit_steps<S: Supervisor>(
     runner: &Runner<S>,
     sock: &std::path::Path,
     steps: &[crate::profiles::OwnedExitStep],
 ) {
-    for action in kill_actions(steps) {
+    let actions = kill_actions(steps);
+    for (i, action) in actions.iter().enumerate() {
         match action {
             KillAction::Keys(s) => {
                 let _ = runner
                     .tmux
-                    .run(sock, &["send-keys", "-t", "kb", &s], None)
+                    .run(sock, &["send-keys", "-t", "kb", s], None)
                     .await;
+                if matches!(actions.get(i + 1), Some(KillAction::Keys(_))) {
+                    tokio::time::sleep(Duration::from_millis(MIN_KEY_GAP_MS)).await;
+                }
             }
             KillAction::Sleep(ms) => {
-                tokio::time::sleep(Duration::from_millis(ms as u64)).await;
+                tokio::time::sleep(Duration::from_millis(*ms as u64)).await;
             }
         }
     }
@@ -266,5 +278,123 @@ mod tests {
         let back: Vec<crate::profiles::OwnedExitStep> = serde_json::from_str(&json).unwrap();
         assert_eq!(back, steps, "exit steps JSON round-trip");
         assert_eq!(kill_actions(&back), kill_actions(&steps));
+    }
+
+    /// A tmux stand-in script: `@kb_exit_steps` answers the JSON file,
+    /// `@kb_conf_version`/`list-sessions` succeed, `#{pane_dead}` reports
+    /// a clean exit, and every `send-keys` appends `<ns-timestamp> <args>`
+    /// to a log. Returns `(runner, log path, dir guard)`.
+    fn fake_runner(
+        steps: &[crate::profiles::OwnedExitStep],
+    ) -> (
+        crate::runner::Runner<crate::runner::supervisor::DirectSupervisor>,
+        std::path::PathBuf,
+        tempfile::TempDir,
+    ) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("sends.log");
+        let steps_json = dir.path().join("steps.json");
+        std::fs::write(&steps_json, serde_json::to_string(steps).unwrap()).unwrap();
+        let script = dir.path().join("fake_tmux.sh");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\n\
+                 case \"$*\" in\n\
+                 *@kb_exit_steps*) cat {steps}; exit 0 ;;\n\
+                 *send-keys*) echo \"$(date +%s%N) $*\" >> {log}; exit 0 ;;\n\
+                 *'#{{pane_dead}}'*) printf '1 0\\n'; exit 0 ;;\n\
+                 esac\n\
+                 exit 0\n",
+                steps = steps_json.display(),
+                log = log.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let cfg = crate::runner::RunnerConfig::test_config(
+            dir.path().join("run"),
+            script.to_string_lossy().into_owned(),
+            std::path::PathBuf::from("/dev/null"),
+        );
+        (crate::runner::Runner::direct(cfg), log, dir)
+    }
+
+    /// Timestamps (ns) of the send-keys log lines, with their key arg.
+    fn send_times(log: &std::path::Path) -> Vec<(u128, String)> {
+        std::fs::read_to_string(log)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| {
+                let mut it = l.split_whitespace();
+                let ts: u128 = it.next()?.parse().ok()?;
+                let key = l.rsplit(' ').next()?.to_string();
+                Some((ts, key))
+            })
+            .collect()
+    }
+
+    /// The kill path SLEEPS: omp's `WaitMs(300)` steps put at least 300 ms
+    /// between its `C-c` sends, and claude's `/exit` then `Enter` (no
+    /// WaitMs) are at least 150 ms apart. Lower bounds only. A `Sleep`
+    /// arm that became a no-op, or a missing key gap, fails this.
+    #[tokio::test]
+    async fn exit_steps_are_paced_by_waitms_and_the_min_key_gap() {
+        use crate::profiles::{ExitStep, OwnedExitStep};
+        // omp-shaped sequence.
+        let omp = OwnedExitStep::from_slice(&[
+            ExitStep::Keys(&["C-c"]),
+            ExitStep::WaitMs(300),
+            ExitStep::Keys(&["C-c"]),
+            ExitStep::WaitMs(300),
+            ExitStep::Keys(&["C-d"]),
+        ]);
+        let (runner, log, _dir) = fake_runner(&omp);
+        let sock = runner.holder_socket("abcd1234");
+        let steps = discovery::exit_steps(&runner, "abcd1234")
+            .await
+            .expect("fake tmux answers the steps JSON");
+        assert_eq!(steps, omp);
+        run_exit_steps(&runner, &sock, &steps).await;
+        let t = send_times(&log);
+        assert_eq!(t.len(), 3, "three sends: {t:?}");
+        let ms = |a: u128, b: u128| (b - a) / 1_000_000;
+        assert!(ms(t[0].0, t[1].0) >= 300, "C-c to C-c gap: {t:?}");
+        assert!(ms(t[1].0, t[2].0) >= 300, "C-c to C-d gap: {t:?}");
+
+        // claude-shaped sequence: Text then Keys, no WaitMs.
+        let claude =
+            OwnedExitStep::from_slice(&[ExitStep::Text("/exit"), ExitStep::Keys(&["Enter"])]);
+        let (runner, log, _dir) = fake_runner(&claude);
+        let sock = runner.holder_socket("abcd1234");
+        let steps = discovery::exit_steps(&runner, "abcd1234").await.unwrap();
+        run_exit_steps(&runner, &sock, &steps).await;
+        let t = send_times(&log);
+        assert_eq!(t.len(), 2, "two sends: {t:?}");
+        assert_eq!(t[0].1, "/exit");
+        assert_eq!(t[1].1, "Enter");
+        assert!(ms(t[0].0, t[1].0) >= 150, "/exit to Enter gap: {t:?}");
+    }
+
+    /// The `forced` wiring: a clean leader exit (`pane_dead` `1 0`) with a
+    /// supervisor that reports it had to SIGKILL a surviving group is
+    /// `forced: true`; reverting the call site to derive `forced` from
+    /// the exit code alone fails this.
+    #[tokio::test]
+    async fn kill_session_forced_follows_the_supervisor_sigkill_verdict() {
+        use crate::runner::supervisor::fake::FakeSupervisor;
+        let (runner, _log, dir) = fake_runner(&[]);
+        let runner =
+            crate::runner::Runner::with_supervisor(runner.cfg.clone(), FakeSupervisor::new());
+        *runner.supervisor.stop_sigkill.lock().unwrap() = true;
+        std::fs::create_dir_all(runner.sessions_dir()).unwrap();
+        let out = kill_session(&runner, "abcd1234", Some(2)).await.unwrap();
+        assert_eq!(out.exit_code, Some(0));
+        assert!(out.forced, "a SIGKILLed survivor forces the verdict");
+        *runner.supervisor.stop_sigkill.lock().unwrap() = false;
+        let out = kill_session(&runner, "abcd1234", Some(2)).await.unwrap();
+        assert!(!out.forced, "a clean exit with no SIGKILL is not forced");
+        drop(dir);
     }
 }

@@ -201,6 +201,12 @@ async fn term_int_exit_empty_off_keeps_the_D_server_alive() {
     })
     .await;
     assert!(alive, "the -D server must answer with no session");
+    // `tmux -D` is the foreground server: the spawned child IS the server
+    // and has not exited (the systemd unit execs it on that premise).
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "tmux -D must keep running in the foreground"
+    );
     // Create then kill the only session; still answers.
     for args in [
         vec![
@@ -239,8 +245,33 @@ async fn term_int_exit_empty_off_keeps_the_D_server_alive() {
     })
     .await;
     assert!(still, "the -D server must outlive zero sessions");
-    let _ = child.kill();
-    let _ = child.wait();
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "the -D server process must outlive zero sessions"
+    );
+    // kill-server ends the foreground server, and so its process.
+    let _ = std::process::Command::new(&tmux_bin)
+        .arg("-S")
+        .arg(&sock)
+        .arg("kill-server")
+        .output();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut exited = false;
+    while std::time::Instant::now() < deadline {
+        if child.try_wait().unwrap().is_some() {
+            exited = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    if !exited {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    assert!(
+        exited,
+        "kill-server must end the foreground -D server process"
+    );
 }
 
 // 3. wait-for -S before wait-for returns immediately.
@@ -764,6 +795,80 @@ async fn term_int_kill_reaps_a_stray_that_ignores_hup() {
     assert!(gone, "the stubborn harness pid must be gone");
     // The holder must be gone too (no socket, no server answering).
     assert!(!tr.sock(&id).exists(), "the holder socket must be gone");
+}
+
+// 10b. A group member that ignores HUP/TERM and outlives its LEADER is
+// still SIGKILLed: the stop path probes process GROUPS, not leader pids.
+#[tokio::test(flavor = "multi_thread")]
+async fn term_int_kill_sigkills_a_group_member_that_outlives_its_leader() {
+    let Some(tmux_bin) = require_tmux() else {
+        return;
+    };
+    let tr = TestRunner::new(tmux_bin);
+    boot_runner(&tr).await;
+    let pid_file = tr.dir.path().join("stray.pid");
+    let script = tr.dir.path().join("stray-holder.sh");
+    std::fs::write(
+        &script,
+        format!(
+            "sh -c 'trap \"\" HUP INT TERM; echo $$ > {}; exec sleep 300' &\nexec /bin/cat\n",
+            pid_file.display()
+        ),
+    )
+    .unwrap();
+    let req = Request::Launch {
+        harness: kb_term::wire::Harness::Omp,
+        argv: Some(vec![
+            "/bin/sh".to_string(),
+            script.to_string_lossy().into_owned(),
+        ]),
+        resume_sid: None,
+        cwd: tr.dir.path().to_string_lossy().into_owned(),
+        cols: Some(120),
+        rows: Some(40),
+        env: None,
+        exit_keys: Some(vec!["C-d".to_string()]),
+    };
+    let id = match tr.launch_raw(&req).await {
+        Response::Ok { data } => data["id"].as_str().unwrap().to_string(),
+        Response::Err { code, message } => panic!("launch failed ({code}): {message}"),
+    };
+    let have_pid = poll_until(Duration::from_secs(5), || {
+        let f = pid_file.clone();
+        async move {
+            std::fs::read_to_string(f)
+                .map(|s| s.trim().parse::<u32>().is_ok())
+                .unwrap_or(false)
+        }
+    })
+    .await;
+    assert!(have_pid, "the stray must publish its pid");
+    let stray: u32 = std::fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(!pid_gone(stray), "the stray must be alive before the kill");
+    let resp = rpc::dispatch(
+        &tr.runner,
+        &Request::Kill {
+            id,
+            grace_secs: Some(5),
+        },
+    )
+    .await;
+    match resp {
+        Response::Ok { data } => {
+            assert_eq!(data["exit_code"], 0, "the leader (cat) exits 0 on C-d");
+            assert_eq!(
+                data["forced"], true,
+                "a surviving group member must force the SIGKILL verdict"
+            );
+        }
+        Response::Err { code, message } => panic!("kill failed ({code}): {message}"),
+    }
+    let gone = poll_until(Duration::from_secs(5), || async move { pid_gone(stray) }).await;
+    assert!(gone, "the TERM-ignoring group member must be SIGKILLed");
 }
 
 // 11. The grid is fixed until resized; the anchor pty tracks resizes.
@@ -2224,21 +2329,44 @@ async fn term_int_anchor_death_closes_viewers_promptly_without_an_rpc() {
         "anchor death must close viewers promptly without any RPC (close reason: {reason:?})"
     );
 }
-/// Server-env inheritance defence proven through the production
-/// dispatch path: a dirty runner env (`KITTY_WINDOW_ID`, `TERM_PROGRAM`,
-/// `GHOSTTY_FOO`) must not reach the pane. The launch goes through
-/// `TestRunner::launch` (dispatch `Launch` → `launch_locked` →
-/// `build_gate_script` + `gate_argv`), so dropping the prelude in
-/// production fails this test. The pane shell is the non-login
-/// `/bin/sh -c`: no login profile is sourced.
+/// Process-env guard: sets vars now and removes them on drop, so a
+/// mid-test panic never leaks dirty env into a later test (this binary
+/// runs under `cargo test`, i.e. as threads of one process).
+struct EnvGuard(Vec<&'static str>);
+
+impl EnvGuard {
+    fn set(vars: &[(&'static str, &'static str)]) -> Self {
+        for (k, v) in vars {
+            std::env::set_var(k, v);
+        }
+        EnvGuard(vars.iter().map(|(k, _)| *k).collect())
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        for k in &self.0 {
+            std::env::remove_var(k);
+        }
+    }
+}
+
+/// A dirty runner env (`KITTY_WINDOW_ID`, `TERM_PROGRAM`, `GHOSTTY_FOO`)
+/// must not reach the pane through the production dispatch path. This
+/// pins the whole path (holder and tmux exec `env_clear`, plus the
+/// wrapper's unset prelude); it is NOT a prelude-only pin. The prelude
+/// itself is pinned by the executed-script unit test in `launch.rs`.
+/// The pane shell is the non-login `/bin/sh -c`.
 #[tokio::test(flavor = "multi_thread")]
 async fn term_int_server_env_defence_via_dispatch() {
     let Some(tmux_bin) = require_tmux() else {
         return;
     };
-    std::env::set_var("KITTY_WINDOW_ID", "1");
-    std::env::set_var("TERM_PROGRAM", "x");
-    std::env::set_var("GHOSTTY_FOO", "1");
+    let _env = EnvGuard::set(&[
+        ("KITTY_WINDOW_ID", "1"),
+        ("TERM_PROGRAM", "x"),
+        ("GHOSTTY_FOO", "1"),
+    ]);
     let tr = TestRunner::new(tmux_bin.clone());
     // `-c` is a forbidden argv element even under the verbatim probe, so
     // the fixture program is a script file run by `/bin/sh`.
@@ -2263,9 +2391,6 @@ async fn term_int_server_env_defence_via_dispatch() {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    std::env::remove_var("KITTY_WINDOW_ID");
-    std::env::remove_var("TERM_PROGRAM");
-    std::env::remove_var("GHOSTTY_FOO");
     for name in ["KITTY_WINDOW_ID=", "TERM_PROGRAM=", "GHOSTTY_FOO="] {
         assert!(
             !captured.contains(name),
@@ -2297,9 +2422,11 @@ async fn term_int_dirty_runner_env_does_not_leak_to_pane() {
     let Some(tmux_bin) = require_tmux() else {
         return;
     };
-    std::env::set_var("KITTY_WINDOW_ID", "dirty");
-    std::env::set_var("WEZTERM_PANE", "dirty");
-    std::env::set_var("KB_SYNTH_SECRET", "synthetic-secret-value");
+    let _env = EnvGuard::set(&[
+        ("KITTY_WINDOW_ID", "dirty"),
+        ("WEZTERM_PANE", "dirty"),
+        ("KB_SYNTH_SECRET", "synthetic-secret-value"),
+    ]);
     let tr = TestRunner::new(tmux_bin.clone());
     // `-c` is a forbidden argv element even under the verbatim probe, so
     // the fixture program is a script file run by `/bin/sh`.
@@ -2324,9 +2451,6 @@ async fn term_int_dirty_runner_env_does_not_leak_to_pane() {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    std::env::remove_var("KITTY_WINDOW_ID");
-    std::env::remove_var("WEZTERM_PANE");
-    std::env::remove_var("KB_SYNTH_SECRET");
     assert!(
         !captured.contains("synthetic-secret-value"),
         "secret leaked to pane; pane env:\n{captured}"

@@ -214,9 +214,9 @@ impl Supervisor for DirectSupervisor {
         }
         // Direct-mode kill of a holder: SIGTERM the server and the pane
         // process group (the pane child is its own session leader, so
-        // pgid == pane_pid), then poll liveness: only what STILL lives
-        // after the SIGTERM gets SIGKILL. Returns `true` when the
-        // SIGKILL path ran.
+        // pgid == pane_pid), then poll the GROUPS (not just the leader
+        // pids): every group that still has a live member after the
+        // grace gets SIGKILL. Returns `true` when a SIGKILL was sent.
         //
         // The pane/server signals come from `ctx` BEFORE the holders-map
         // lookup: after a runner restart the map is empty (the holder is
@@ -234,17 +234,21 @@ impl Supervisor for DirectSupervisor {
         if child_pid != 0 {
             kill_group(child_pid, libc::SIGTERM);
         }
-        let sigkill =
-            wait_groups_dead(ctx.pane_pid, ctx.server_pid, child_pid, holder.as_mut()).await;
-        if sigkill {
-            if let Some(pane) = ctx.pane_pid {
-                kill_group(pane, libc::SIGKILL);
-            }
-            if let Some(server) = ctx.server_pid {
-                kill_group(server, libc::SIGKILL);
-            }
-            if child_pid != 0 {
-                kill_group(child_pid, libc::SIGKILL);
+        let groups: Vec<u32> = [ctx.pane_pid, ctx.server_pid, Some(child_pid)]
+            .into_iter()
+            .flatten()
+            .filter(|p| *p > 1)
+            .collect();
+        wait_groups_dead(&groups, holder.as_mut()).await;
+        // SIGKILL every group that still has a live member, re-probing
+        // right before each signal so an emptied pgid is never signalled.
+        // A member that ignored HUP/TERM while its leader exited cleanly
+        // is caught here: the probe is per GROUP, not per leader pid.
+        let mut sigkill = false;
+        for g in &groups {
+            if group_alive(*g) {
+                kill_group(*g, libc::SIGKILL);
+                sigkill = true;
             }
         }
         if let Some(mut held) = holder {
@@ -258,27 +262,62 @@ impl Supervisor for DirectSupervisor {
     }
 }
 
-/// Poll (up to 2 s, 50 ms apart) until the pane, server and holder-child
-/// process groups are dead. Returns `true` when anything still lives and
-/// therefore needs SIGKILL. A held Child is probed with `try_wait`
-/// first, so an already-exited child is never signalled again.
-async fn wait_groups_dead(
-    pane_pid: Option<u32>,
-    server_pid: Option<u32>,
-    child_pid: u32,
-    mut holder: Option<&mut Held>,
-) -> bool {
+/// Poll (up to 2 s, 50 ms apart) until every given process group is
+/// empty. The held holder Child is reaped with `try_wait` each round (a
+/// zombie leader keeps its group "present" until reaped), but its group
+/// is still probed like the others.
+async fn wait_groups_dead(groups: &[u32], mut holder: Option<&mut Held>) {
     for _ in 0..40 {
-        let child_alive = match holder.as_deref_mut() {
-            Some(h) => matches!(h.child.try_wait(), Ok(None)),
-            None => child_pid != 0 && pid_alive(child_pid),
-        };
-        if !pane_pid.is_some_and(pid_alive) && !server_pid.is_some_and(pid_alive) && !child_alive {
-            return false;
+        if let Some(h) = holder.as_deref_mut() {
+            let _ = h.child.try_wait();
+        }
+        if !groups.iter().any(|g| group_alive(*g)) {
+            return;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    true
+}
+
+/// A process group is alive while `kill(-pgid, 0)` succeeds (or answers
+/// EPERM) AND at least one member is not a zombie. ESRCH means empty.
+/// When `/proc` cannot be scanned the kill probe alone decides.
+fn group_alive(pgid: u32) -> bool {
+    if pgid <= 1 {
+        return false;
+    }
+    let present = unsafe {
+        if libc::kill(-(pgid as i32), 0) == 0 {
+            true
+        } else {
+            std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+        }
+    };
+    if !present {
+        return false;
+    }
+    let Ok(dir) = std::fs::read_dir("/proc") else {
+        return true;
+    };
+    for ent in dir.flatten() {
+        let name = ent.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !name.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{name}/stat")) else {
+            continue;
+        };
+        // `pid (comm) state ppid pgrp ...`: comm may contain anything, so
+        // split after the LAST `)`.
+        let mut f = stat.rsplit(')').next().unwrap_or("").split_whitespace();
+        let state = f.next();
+        let _ppid = f.next();
+        let pgrp = f.next().and_then(|v| v.parse::<u32>().ok());
+        if pgrp == Some(pgid) && state != Some("Z") {
+            return true;
+        }
+    }
+    false
 }
 
 async fn kill_held(held: &mut Held) {
@@ -404,26 +443,26 @@ mod tests {
             // The holder must exec the pinned tmux by path (it is never
             // on PATH), never a bare `tmux` lookup resolved against the
             // user manager's PATH.
-            "ExecStart=/bin/sh -c '\"$KB_TMUX_BIN\" -D -S /run/kb-term/s/%i.sock -f %h/.local/share/kb-term/kb-term.conf || exit 1; exec sleep infinity'",
+            "ExecStart=/bin/sh -c 'exec \"$KB_TMUX_BIN\" -D -S /run/kb-term/s/%i.sock -f %h/.local/share/kb-term/kb-term.conf'",
             "Restart=no",
             "KillMode=control-group",
             "SendSIGKILL=yes",
             "TimeoutStopSec=10",
-            // The holder must stay foreground (Type=exec with the tmux
-            // server behind a `sleep infinity` main process): a bare
-            // `Type=simple` + detached `tmux -D` start makes the unit
-            // inactive immediately and `systemctl stop` a no-op.
+            // `tmux -D` runs the server in the foreground, so the unit's
+            // main process IS the tmux server (exec'd by the shell): stop
+            // terminates it and a server exit ends the unit. The systemd
+            // lifecycle itself is not exercised on CI.
             "Type=exec",
         ] {
             assert!(holder.contains(needle), "kb-term@ must contain `{needle}`");
         }
         assert!(
             !holder.contains("Type=simple"),
-            "kb-term@ must not use Type=simple (tmux -D exits at once)"
+            "kb-term@ must not use Type=simple"
         );
         assert!(
-            holder.contains("sleep infinity"),
-            "kb-term@ must keep a foreground main process"
+            !holder.contains("sleep infinity"),
+            "kb-term@ must not mask a server exit behind a placeholder process"
         );
         assert!(
             !holder.contains("[Install]"),

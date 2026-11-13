@@ -154,9 +154,13 @@ pub fn to_json(checks: &[Check]) -> String {
 /// Run `exe args` with an allowlisted env and a hard deadline:
 /// `None` on timeout/spawn failure (the caller maps it to FAIL/WARN).
 /// Piped output is drained incrementally (64 KiB cap per stream, so a
-/// child writing more than 64 KiB never blocks on a full pipe) and the process group is
-/// killed on timeout (a grandchild holding stdout or inheriting the
-/// group cannot hold `run_with_timeout` past the deadline).
+/// child writing more than 64 KiB never blocks on a full pipe). The
+/// deadline covers the WHOLE call including collecting the output: if
+/// the child exits but a grandchild still holds a pipe open (a
+/// background job started by a login shell), the call waits only until
+/// the deadline, then kills the process group and returns `None` (no
+/// partial capture). The kill is `kill -s KILL -- -<pgid>`, falling back
+/// to killing the direct child when that command fails.
 pub fn run_with_timeout(
     exe: &Path,
     args: &[&str],
@@ -175,17 +179,25 @@ pub fn run_with_timeout(
         .spawn()
         .ok()?;
     let pid = child.id();
-    let stdout_pipe = child.stdout.take()?;
-    let stderr_pipe = child.stderr.take()?;
+    let (Some(stdout_pipe), Some(stderr_pipe)) = (child.stdout.take(), child.stderr.take()) else {
+        kill_probe_group(pid, &mut child);
+        return None;
+    };
     const CAP: usize = 64 * 1024;
-    let stdout_thread = drain(stdout_pipe, CAP);
-    let stderr_thread = drain(stderr_pipe, CAP);
+    let out_rx = drain(stdout_pipe, CAP);
+    let err_rx = drain(stderr_pipe, CAP);
     let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let out = stdout_thread.join().unwrap_or_default();
-                let err = stderr_thread.join().unwrap_or_default();
+                let remaining = |d: Instant| d.saturating_duration_since(Instant::now());
+                let out = out_rx.recv_timeout(remaining(deadline));
+                let err = err_rx.recv_timeout(remaining(deadline));
+                let (Ok(out), Ok(err)) = (out, err) else {
+                    // A grandchild still holds a pipe at the deadline.
+                    kill_probe_group(pid, &mut child);
+                    return None;
+                };
                 return Some((
                     status.success(),
                     String::from_utf8_lossy(&out).into_owned(),
@@ -194,24 +206,43 @@ pub fn run_with_timeout(
             }
             Ok(None) => {
                 if Instant::now() >= deadline {
-                    let _ = std::process::Command::new("/bin/kill")
-                        .args(["-KILL", &format!("-{pid}")])
-                        .output();
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    kill_probe_group(pid, &mut child);
                     return None;
                 }
                 std::thread::sleep(Duration::from_millis(10));
             }
-            Err(_) => return None,
+            Err(_) => {
+                kill_probe_group(pid, &mut child);
+                return None;
+            }
         }
     }
 }
 
+/// Kill the probe's whole process group (std-only: `/bin/kill`), falling
+/// back to the direct child when the command fails, then reap the child.
+fn kill_probe_group(pid: u32, child: &mut std::process::Child) {
+    let killed = std::process::Command::new("/bin/kill")
+        .args(["-s", "KILL", "--", &format!("-{pid}")])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !killed {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+}
+
+/// Drain `r` on a thread (keeping at most `cap` bytes) and deliver the
+/// capture over a channel when the pipe closes.
 fn drain<R: std::io::Read + Send + 'static>(
     mut r: R,
     cap: usize,
-) -> std::thread::JoinHandle<Vec<u8>> {
+) -> std::sync::mpsc::Receiver<Vec<u8>> {
+    let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut buf = vec![0u8; 8192];
         let mut out = Vec::new();
@@ -227,8 +258,9 @@ fn drain<R: std::io::Read + Send + 'static>(
                 Err(_) => break,
             }
         }
-        out
-    })
+        let _ = tx.send(out);
+    });
+    rx
 }
 
 /// First non-empty output line, trimmed.

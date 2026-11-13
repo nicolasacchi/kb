@@ -1053,6 +1053,59 @@ mod tests {
         );
     }
 
+    /// The launch-failure arm hands the supervisor a REAL stop context
+    /// (pane + server pids read before the stop). Reverting the call site
+    /// to `StopCtx::default()` leaves a stubborn pane unsignalled and
+    /// fails this: the recording fake supervisor must see both pids.
+    #[tokio::test]
+    async fn failed_launch_teardown_passes_pane_and_server_pids_to_stop() {
+        use crate::runner::supervisor::fake::FakeSupervisor;
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("fake_tmux.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\n\
+             case \"$*\" in\n\
+             *new-session*) echo boom >&2; exit 1 ;;\n\
+             *'#{pane_pid}'*) printf '4242\\n' ;;\n\
+             *'#{pid}'*) printf '5151\\n' ;;\n\
+             esac\n\
+             exit 0\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let run_dir = dir.path().join("run");
+        std::fs::create_dir_all(run_dir.join("s")).unwrap();
+        let cfg = RunnerConfig::test_config(
+            run_dir,
+            script.to_string_lossy().into_owned(),
+            PathBuf::from("/dev/null"),
+        );
+        let runner = crate::runner::Runner::with_supervisor(cfg, FakeSupervisor::new());
+        let req = Request::Launch {
+            harness: Harness::Omp,
+            argv: None,
+            resume_sid: None,
+            cwd: dir.path().to_string_lossy().into_owned(),
+            cols: None,
+            rows: None,
+            env: None,
+            exit_keys: None,
+        };
+        let spec = validate_launch(&req, &runner.cfg).expect("valid launch");
+        let err = launch_session(&runner, spec).await;
+        assert!(err.is_err(), "new-session fails, so the launch fails");
+        let ctxs = runner.supervisor.stop_ctxs.lock().unwrap().clone();
+        assert_eq!(ctxs.len(), 1, "teardown stops the holder once: {ctxs:?}");
+        assert!(valid_id(&ctxs[0].0), "stop names the session id");
+        assert_eq!(
+            (ctxs[0].1, ctxs[0].2),
+            (Some(4242), Some(5151)),
+            "teardown must pass the pane and server pids"
+        );
+    }
+
     /// Validation precedes ANY tmux/process interaction: with a tmux
     /// binary that does not exist, a bad launch must still answer
     /// `bad-request` (not `tmux-failed`) and create no holder. If
@@ -1253,6 +1306,54 @@ mod tests {
         let sh_pos = got.iter().position(|a| a == "/bin/sh").unwrap();
         assert_eq!(&got[sh_pos + 1], "-c", "gate uses /bin/sh -c");
         assert!(!got.iter().any(|a| a == "-l"), "gate never uses -l");
+    }
+
+    /// Run a gate script (with `/bin/true` standing in for tmux so
+    /// `wait-for` returns at once) under a dirty, cleared environment and
+    /// return what `env` printed.
+    fn run_gate_env(script: &str) -> String {
+        let out = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(script)
+            .arg("kbterm-gate")
+            .arg("/bin/true")
+            .arg("/nonexistent.sock")
+            .arg("/usr/bin/env")
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("KITTY_WINDOW_ID", "1")
+            .env("TERM_PROGRAM", "x")
+            .env("GHOSTTY_FOO", "1")
+            .env("KB_TERM_ID", "abcd1234")
+            .output()
+            .expect("run gate script");
+        assert!(out.status.success(), "gate script failed: {out:?}");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    /// EXECUTES the production wrapper: the unset prelude + prefix
+    /// snippet strip outer-terminal identity inherited from the server
+    /// env and keep everything else, while the bare gate (control arm)
+    /// lets all of it through, proving the defence is what removes it.
+    #[test]
+    fn executed_gate_script_strips_inherited_terminal_identity() {
+        let names = ["KITTY_WINDOW_ID=", "TERM_PROGRAM=", "GHOSTTY_FOO="];
+        let control = run_gate_env(GATE_SCRIPT);
+        for name in names {
+            assert!(
+                control.contains(name),
+                "control run must show {name}: {control}"
+            );
+        }
+        let script = build_gate_script(&profiles::env::unset_after_login(&[])).unwrap();
+        let guarded = run_gate_env(&script);
+        for name in names {
+            assert!(!guarded.contains(name), "defence leaked {name}: {guarded}");
+        }
+        assert!(
+            guarded.contains("KB_TERM_ID=abcd1234"),
+            "unrelated env must survive: {guarded}"
+        );
     }
 
     /// Explicit caller exit keys always win — even when they equal the
