@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { encodeBinaryFrame } from "./wire";
 import {
   TermSession,
+  nextDelay,
   type SessionEffects,
   type SessionSocket,
   type SocketHandlers,
@@ -582,5 +583,57 @@ describe("TermSession", () => {
     await flush();
     // One throw is swallowed; the second write still lands.
     expect(h.calls.filter((c) => c[0] === "write").map((c) => c[1])).toContainEqual([...new TextEncoder().encode("b")]);
+  });
+});
+
+describe("nextDelay (T17)", () => {
+  it("doubles from 250 ms, caps at 10 s, jitters within +/-20 percent", () => {
+    const mid = () => 0.5;
+    expect([0, 1, 2, 3, 4, 5, 6, 7, 20].map((a) => nextDelay(a, mid))).toEqual([
+      250, 500, 1000, 2000, 4000, 8000, 10000, 10000, 10000,
+    ]);
+    for (let a = 0; a < 12; a += 1) {
+      const base = Math.min(10_000, 250 * 2 ** a);
+      expect(nextDelay(a, () => 0)).toBe(Math.round(base * 0.8));
+      expect(nextDelay(a, () => 0.999999)).toBeLessThanOrEqual(Math.round(base * 1.2));
+      expect(nextDelay(a, () => 0.999999)).toBeGreaterThan(base);
+    }
+  });
+
+  it("a network-return trigger skips the pending backoff once", async () => {
+    const h = setup();
+    const s = await goLive(h);
+    s.closeFromServer(1000);
+    expect(h.session.getState().phase).toBe("reconnecting");
+    const pending = h.pendingTimer(250);
+    expect(pending).toBeDefined();
+    const socketsBefore = h.sockets.length;
+    h.session.kick();
+    await flush();
+    expect(pending?.cleared).toBe(true);
+    expect(h.sockets.length).toBe(socketsBefore + 1);
+    // The attempt still advanced: a flapping trigger cannot reset the backoff.
+    expect(h.session.getState().attempt).toBe(1);
+    // Nothing is waiting any more, so a second kick is a no-op.
+    h.session.kick();
+    await flush();
+    expect(h.sockets.length).toBe(socketsBefore + 1);
+  });
+
+  it("kick leaves a live, ended or disposed session alone", async () => {
+    const live = setup();
+    await goLive(live);
+    const n = live.sockets.length;
+    live.session.kick();
+    await flush();
+    expect(live.sockets.length).toBe(n);
+
+    const gone = setup();
+    const gs = await goLive(gone);
+    gs.closeFromServer(1000);
+    gone.session.dispose();
+    gone.session.kick();
+    await flush();
+    expect(gone.sockets.length).toBe(1);
   });
 });

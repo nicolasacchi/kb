@@ -110,6 +110,15 @@ const LIVE_BEFORE_RESET_MS = 5000;
 const BASE_BACKOFF_MS = 250;
 const MAX_BACKOFF_MS = 10_000;
 
+/**
+ * Reconnect delay for the given attempt: `min(10 s, 250 ms * 2^attempt)`
+ * with +/-20% jitter (`random()` in [0,1); 0.5 gives exactly the base).
+ */
+export function nextDelay(attempt: number, random: () => number): number {
+  const base = Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * 2 ** Math.max(0, attempt));
+  return Math.round(base * (1 + (random() - 0.5) * 0.4));
+}
+
 export class TermSession {
   private readonly termId: string;
   private readonly sink: TermSink;
@@ -174,6 +183,21 @@ export class TermSession {
   start(): void {
     if (this.disposed || this.isSettled()) return;
     this.phase = "connecting";
+    void this.connect();
+  }
+
+  /**
+   * The browser says the network is back (`online`, a `pageshow` bfcache
+   * restore, the tab turning visible): when a reconnect is waiting out its
+   * backoff, skip the remaining delay ONCE. A live, connecting, ended or
+   * blocked session is left alone; the attempt counter still advances, so a
+   * flapping trigger cannot reset the backoff.
+   */
+  kick(): void {
+    if (this.disposed || this.isSettled() || this.reconnectTimer === null) return;
+    this.fx.clearTimer(this.reconnectTimer);
+    this.reconnectTimer = null;
+    this.attempt += 1;
     void this.connect();
   }
 
@@ -281,9 +305,7 @@ export class TermSession {
     this.phase = "reconnecting";
     this.clearWatchdog();
     this.clearLiveReset();
-    const base = Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * 2 ** this.attempt);
-    // ±20% jitter: base * [0.8, 1.2); random() = 0.5 gives exactly base.
-    const delay = Math.round(base * (1 + (this.fx.random() - 0.5) * 0.4));
+    const delay = nextDelay(this.attempt, () => this.fx.random());
     this.reconnectTimer = this.fx.setTimer(() => {
       this.reconnectTimer = null;
       this.attempt += 1;
