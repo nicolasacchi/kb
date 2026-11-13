@@ -5,10 +5,10 @@
 use std::path::{Path, PathBuf};
 
 use kb_term::wire::{
-    decode_binary, decode_text_frame, encode_binary, encode_envelope, is_valid_term_id,
-    parse_s2c_body, s2c_body, ClientFrame, ControlMessage, EnvelopeDecoder, Harness, Profile,
-    Request, Response, ResumeInfo, ServerFrame, SessionInfo, TextFrame, WireError,
-    MAX_ENVELOPE_LEN,
+    decode_binary, decode_text_frame, encode_binary, encode_envelope, is_valid_sha256_hex,
+    is_valid_term_id, parse_s2c_body, s2c_body, ClientFrame, ControlMessage, EnvelopeDecoder,
+    Harness, Profile, Request, Response, ResumeInfo, ServerFrame, SessionInfo, TextFrame,
+    WireError, MAX_ENVELOPE_LEN,
 };
 
 fn golden_dir() -> PathBuf {
@@ -188,6 +188,33 @@ fn runner_response_and_session_info_match_golden() {
 }
 
 #[test]
+fn runner_response_list_payload_is_session_info_array() {
+    // `List` is the one response whose `data` is a typed array: pin that the
+    // golden parses as `Response::Ok` whose payload deserializes into
+    // `Vec<SessionInfo>` and re-serializes to the `session_info.json` golden
+    // (spec: SessionInfo is "what List returns inside data, as an array").
+    let bytes = read_golden("resp_list.json");
+    let resp: Response = serde_json::from_slice(&bytes)
+        .unwrap_or_else(|e| panic!("deserialize resp_list.json: {e}"));
+    let out = serde_json::to_vec(&resp).unwrap_or_else(|e| panic!("serialize resp_list.json: {e}"));
+    assert_eq!(out, bytes, "runner response golden resp_list.json");
+    match resp {
+        Response::Ok { data } => {
+            let infos: Vec<SessionInfo> = serde_json::from_value(data)
+                .expect("list payload must deserialize as a SessionInfo array");
+            assert_eq!(infos.len(), 1);
+            let back = serde_json::to_vec(&infos).expect("serialize SessionInfo list");
+            assert_eq!(
+                back,
+                read_golden("session_info.json"),
+                "list payload must match the session_info golden"
+            );
+        }
+        Response::Err { .. } => panic!("resp_list.json must be an Ok response"),
+    }
+}
+
+#[test]
 fn binary_frame_roundtrip() {
     // 0x0002030405060708 < 2^53, so the decode bound does not fire.
     let enc = encode_binary(0x0002030405060708, b"hi");
@@ -346,6 +373,28 @@ fn term_id_charset() {
 }
 
 #[test]
+fn sha256_hex_charset() {
+    // The sha256 of the empty string (the Media golden key) is 64 lowercase
+    // hex characters.
+    assert!(is_valid_sha256_hex(
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    ));
+    assert!(!is_valid_sha256_hex(
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85"
+    ));
+    assert!(!is_valid_sha256_hex(
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b8550"
+    ));
+    assert!(!is_valid_sha256_hex(
+        "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    ));
+    assert!(!is_valid_sha256_hex(
+        "g3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    ));
+    assert!(!is_valid_sha256_hex(""));
+}
+
+#[test]
 fn golden_files_are_complete() {
     let mut expected: Vec<String> = server_goldens()
         .into_iter()
@@ -353,7 +402,12 @@ fn golden_files_are_complete() {
         .chain(control_goldens())
         .chain(envelope_goldens())
         .chain(request_goldens())
-        .chain(["resp_ok.json", "resp_err.json", "session_info.json"])
+        .chain([
+            "resp_ok.json",
+            "resp_err.json",
+            "resp_list.json",
+            "session_info.json",
+        ])
         .map(str::to_string)
         .collect();
     expected.sort();

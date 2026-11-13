@@ -73,6 +73,20 @@ pub fn is_valid_term_id(s: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
 }
 
+/// Whether `s` is a valid sha256 hex digest (a media key).
+///
+/// Media keys ([`ServerFrame::Imagedef`] and [`Request::Media`]) are 64
+/// lowercase hex characters. Callers validate client-supplied keys here, at
+/// the boundary, before building a path from one; the same boundary
+/// discipline applies to [`is_valid_term_id`] for session ids and to argv
+/// entries (built from the allowlisted profiles table, never from an
+/// unvalidated client string).
+pub fn is_valid_sha256_hex(s: &str) -> bool {
+    s.len() == 64
+        && s.chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+}
+
 /// Server-to-client text frames (tag `t`, lowercase variant names, snake_case
 /// fields). Unknown fields are tolerated on read so newer servers stay
 /// readable by older clients.
@@ -126,7 +140,7 @@ pub enum ServerFrame {
         id: u32,
         /// Image generation.
         gen: u32,
-        /// sha256 of the image bytes.
+        /// sha256 of the image bytes, as a hex64 key (see [`is_valid_sha256_hex`]).
         sha256: String,
         /// MIME type, e.g. `"image/png"`.
         mime: String,
@@ -591,7 +605,8 @@ pub enum Request {
     Launch {
         /// Harness to run.
         harness: Harness,
-        /// Extra argv, if any.
+        /// Extra argv entries, if any (callers validate argv entries at the
+        /// boundary before use).
         argv: Option<Vec<String>>,
         /// Resume session id, if any.
         resume_sid: Option<String>,
@@ -710,7 +725,7 @@ pub enum Request {
     },
     /// Fetch media by sha256.
     Media {
-        /// sha256 of the media bytes.
+        /// sha256 of the media bytes, as a hex64 key (see [`is_valid_sha256_hex`]).
         sha256: String,
     },
 }
