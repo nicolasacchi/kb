@@ -1,0 +1,139 @@
+/* T17 — phone terminal. Imported only from PhoneTerminal.tsx so it stays in
+ * the lazy terminal chunk. Existing tokens only. */
+
+/* The Sheet exposes no className for its body: let a terminal root fill it. */
+.kb-sheet__body:has(> [data-kb-term-root]) {
+  overflow: hidden;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+[data-kb-term-root] {
+  flex: 1 1 auto;
+  min-height: 0;
+  /* No pull-to-refresh or rubber banding from a terminal gesture. */
+  overscroll-behavior: none;
+  display: flex;
+  flex-direction: column;
+  max-height: var(--kb-term-vvh, 100%);
+  background: var(--bg-panel);
+  color: var(--ink);
+}
+
+.kb-term-phone [hidden] {
+  display: none !important;
+}
+
+.kb-term-phone__bar,
+.kb-term-read__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-2);
+  padding: var(--pad-1) var(--pad-2);
+  border-bottom: var(--pad-1) solid var(--rule);
+  font-size: var(--fs-sm);
+}
+
+.kb-term-phone__caption,
+.kb-term-read__caption {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-mute);
+}
+
+.kb-term-phone__btn {
+  min-height: var(--spine-h);
+  min-width: var(--spine-h);
+  padding: 0 var(--pad-2);
+  background: var(--bg-card);
+  color: var(--ink);
+  border: var(--pad-1) solid var(--rule-hi);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.kb-term-phone__btn:disabled {
+  opacity: 0.4;
+}
+
+/* The wrapper is as tall as the session grid. When the grid is taller than
+ * the sheet, anchor it to the bottom: the clipped rows are the oldest ones
+ * at the top, never the prompt/cursor area at the bottom. */
+.kb-term-phone__watch {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  overflow: hidden;
+}
+
+.kb-term-phone__jump {
+  position: absolute;
+  right: var(--pad-2);
+  bottom: var(--pad-2);
+}
+
+/* The grid is the session grid, wider than the phone: pan it. */
+.kb-term-phone__wrap {
+  flex: none;
+  overflow-x: scroll;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  background: var(--bg);
+}
+
+.kb-term-phone__wrap::-webkit-scrollbar {
+  display: none;
+}
+
+/* Our scroller owns every gesture. An inherited `none` is not enough:
+ * xterm's inner scroll container re-enables native panning. */
+[data-kb-term-viewport],
+[data-kb-term-viewport] * {
+  touch-action: none !important;
+}
+
+[data-kb-term-viewport] {
+  display: inline-block;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.kb-term-read {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.kb-term-read__scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  user-select: text;
+  -webkit-user-select: text;
+  background: var(--bg);
+}
+
+.kb-term-read__text {
+  margin: 0;
+  padding: var(--pad-2);
+  white-space: pre;
+  font-family: var(--font-mono);
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.kb-term-read__image {
+  color: var(--ink-mute);
+  opacity: 0.6;
+}

@@ -159,6 +159,72 @@ describe("Sheet", () => {
     }
   });
 
+  describe("ignoreEscape (T17)", () => {
+    // A close watcher whose requestClose() mimics the platform: a cancelable
+    // `cancel` first (the hook prevents it for an ignored Esc), then `close`.
+    function installWatcher() {
+      const made: { requestClose: () => void }[] = [];
+      class Watcher {
+        oncancel: ((e: Event) => void) | null = null;
+        onclose: ((e: Event) => void) | null = null;
+        constructor() {
+          made.push(this);
+        }
+        requestClose() {
+          const ev = new Event("cancel", { cancelable: true });
+          this.oncancel?.(ev);
+          if (ev.defaultPrevented) return;
+          this.onclose?.(new Event("close"));
+        }
+        close() {
+          this.onclose?.(new Event("close"));
+        }
+        destroy() {}
+      }
+      (window as unknown as { CloseWatcher?: unknown }).CloseWatcher = Watcher;
+      return made;
+    }
+    const uninstall = () => {
+      delete (window as unknown as { CloseWatcher?: unknown }).CloseWatcher;
+    };
+    const esc = (el: Element) => {
+      const ev = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+      act(() => {
+        el.dispatchEvent(ev);
+      });
+      return ev;
+    };
+
+    it("an ignored Escape neither closes through the React handler nor the platform close request", () => {
+      const made = installWatcher();
+      try {
+        const ignoreEscape = vi.fn((e: KeyboardEvent) => e.target instanceof Element && e.target.id === "inner");
+        const p = mount({ ignoreEscape });
+        const ev = esc(document.getElementById("inner")!);
+        expect(ignoreEscape).toHaveBeenCalled();
+        expect(ev.defaultPrevented).toBe(false);
+        // The platform raises the close request in the keydown's own task.
+        act(() => made[made.length - 1].requestClose());
+        expect(p.onClose).not.toHaveBeenCalled();
+      } finally {
+        uninstall();
+      }
+    });
+
+    it("without the prop Escape still closes", () => {
+      const p = mount();
+      const ev = esc(document.getElementById("inner")!);
+      expect(ev.defaultPrevented).toBe(true);
+      expect(p.onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("with the prop and a non-matching target Escape still closes", () => {
+      const p = mount({ ignoreEscape: () => false });
+      esc(document.getElementById("inner")!);
+      expect(p.onClose).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("renders to string under the importing React major", () => {
     const html = renderToString(
       createElement(Sheet, {
