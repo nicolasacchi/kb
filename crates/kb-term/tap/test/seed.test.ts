@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { makeTwin, type Twin } from '../src/twin.ts';
 import { buildSeed, isQuiescent, QuiescentJoinGate } from '../src/seed.ts';
 import { GroundTracker } from '../src/ground.ts';
+import { stateOf, diffState, compareBuffers } from './matrix/lib.ts';
 import { enc } from './helpers.ts';
 
 const E = '\x1b';
@@ -26,15 +27,15 @@ test('refuses a join inside a ?2026 frame; accepts after ?2026l', async () => {
   const { twin, gate, ground } = await gatePair();
   try {
     await gate.feed(enc(`${E}[?2026h${E}[2J${E}[31mR`));
-    expect(isQuiescent(twin, ground)).toBe(false);
+    expect(isQuiescent(twin, ground, gate.pending)).toBe(false);
     expect(gate.currentJoinPoint()).toEqual({ offset: gate.parsed, quiescent: false, reason: 'sync-frame' });
-    expect(() => buildSeed(twin, { scrollback: 50000, atOffset: gate.parsed, ground })).toThrow(/not quiescent/);
+    expect(() => buildSeed(twin, { scrollback: 50000, atOffset: gate.parsed, ground, pending: gate.pending })).toThrow(/not quiescent/);
     // nextQuiescent times out without a frame end.
     const jp = await gate.nextQuiescent(20); // timeout contract: resolves non-quiescent
     expect(jp.quiescent).toBe(false);
     await gate.feed(enc(`${E}[?2026l`));
-    expect(isQuiescent(twin, ground)).toBe(true);
-    const seed = buildSeed(twin, { scrollback: 50000, atOffset: gate.parsed, ground });
+    expect(isQuiescent(twin, ground, gate.pending)).toBe(true);
+    const seed = buildSeed(twin, { scrollback: 50000, atOffset: gate.parsed, ground, pending: gate.pending });
     expect(seed.bytes.length).toBeGreaterThan(0);
     expect(seed.offset).toBe(gate.parsed);
   } finally {
@@ -46,15 +47,20 @@ test('refuses mid-sequence; converges once the sequence completes', async () => 
   const { twin, gate, ground } = await gatePair();
   try {
     await gate.feed(enc(`${E}[31`)); // split CSI: ESC [ 3 1 (no final)
-    expect(isQuiescent(twin, ground)).toBe(false);
-    expect(() => buildSeed(twin, { scrollback: 50000, atOffset: gate.parsed, ground })).toThrow(/not quiescent/);
+    expect(isQuiescent(twin, ground, gate.pending)).toBe(false);
+    expect(() => buildSeed(twin, { scrollback: 50000, atOffset: gate.parsed, ground, pending: gate.pending })).toThrow(/not quiescent/);
     await gate.feed(enc('m'));
-    expect(isQuiescent(twin, ground)).toBe(true);
-    const seed = buildSeed(twin, { scrollback: 50000, atOffset: gate.parsed, ground });
+    expect(isQuiescent(twin, ground, gate.pending)).toBe(true);
+    const seed = buildSeed(twin, { scrollback: 50000, atOffset: gate.parsed, ground, pending: gate.pending });
     const viewer = makeTwin(40, 12);
     try {
       await viewer.feed(seed.bytes);
       await viewer.feed(enc('Z'));
+      await gate.feed(enc('Z'));
+      // A seed built after completion converges: fresh same-size twin fed the
+      // seed has identical state (no cosmetic class involved in this stream,
+      // so exact equality is asserted).
+      expect(diffState(stateOf(twin.term as never), stateOf(viewer.term as never))).toEqual([]);
     } finally {
       viewer.dispose();
     }
@@ -64,18 +70,63 @@ test('refuses mid-sequence; converges once the sequence completes', async () => 
   }
 });
 
-test('mid-escape: OSC title and UTF-8 cuts are not quiescent', async () => {
+// Mid-escape convergence (spec 9.5, FXT6): for every string/UTF-8 cut kind,
+// the bytes are fed in two pieces; isQuiescent is false at the cut and true
+// after completion; a seed built after completion converges on a fresh
+// same-size twin (state AND buffers).
+const MID_ESCAPE_CUTS: Array<{ name: string; cut: Uint8Array; rest: Uint8Array }> = [];
+function cutAt(bytes: Uint8Array, at: number): { cut: Uint8Array; rest: Uint8Array } {
+  return { cut: bytes.subarray(0, at), rest: bytes.subarray(at) };
+}
+const csiBytes = enc(`${E}[1;32m`);
+const oscBytes = enc(`${E}]0;title\x07`);
+const utf8Bytes = enc('😀');
+MID_ESCAPE_CUTS.push(
+  { name: 'CSI', ...cutAt(csiBytes, 4) },
+  { name: 'OSC', ...cutAt(oscBytes, 6) },
+  { name: 'OSC-ST', ...cutAt(enc(`${E}]0;t${E}\\`), 6) },
+  { name: 'DCS', ...cutAt(enc(`${E}P1;2|dat${E}\\`), 5) },
+  { name: 'APC', ...cutAt(enc(`${E}_Gq=2;data${E}\\`), 5) },
+  { name: 'PM', ...cutAt(enc(`${E}^hello${E}\\`), 4) },
+  { name: 'SOS', ...cutAt(enc(`${E}Xworld${E}\\`), 4) },
+  { name: 'UTF-8', ...cutAt(utf8Bytes, 2) },
+);
+for (const cutCase of MID_ESCAPE_CUTS) {
+  test(`mid-escape convergence: ${cutCase.name} cut`, async () => {
+    const { twin, gate, ground } = await gatePair();
+    try {
+      await gate.feed(cutCase.cut);
+      expect(isQuiescent(twin, ground, gate.pending)).toBe(false);
+      expect(() => buildSeed(twin, { scrollback: 50000, atOffset: gate.parsed, ground, pending: gate.pending })).toThrow(/not quiescent/);
+      await gate.feed(cutCase.rest);
+      expect(isQuiescent(twin, ground, gate.pending)).toBe(true);
+      const seed = buildSeed(twin, { scrollback: 50000, atOffset: gate.parsed, ground, pending: gate.pending });
+      const viewer = makeTwin(40, 12);
+      try {
+        await viewer.feed(seed.bytes);
+        expect(diffState(stateOf(twin.term as never), stateOf(viewer.term as never))).toEqual([]);
+        for (const which of ['normal', 'alt'] as const) {
+          const c = compareBuffers(twin.term as never, viewer.term as never, which);
+          expect(c.cells).toEqual({});
+        }
+      } finally {
+        viewer.dispose();
+      }
+    } finally {
+      twin.dispose();
+    }
+  });
+}
+
+test('buildSeed refuses while feeds are in flight (twin-behind pending)', async () => {
+  // FXT6 defect 1: without the pending count, buildSeed could only check
+  // syncOn+ground and join at an offset the twin has not parsed through.
+  // With pending > 0 it must refuse with reason twin-behind.
   const { twin, gate, ground } = await gatePair();
   try {
-    await gate.feed(enc(`${E}]0;tit`));
-    expect(isQuiescent(twin, ground)).toBe(false);
-    await gate.feed(enc('le\x07'));
-    expect(isQuiescent(twin, ground)).toBe(true);
-    const e = enc('😀');
-    await gate.feed(e.subarray(0, 2)); // partial UTF-8
-    expect(isQuiescent(twin, ground)).toBe(false);
-    await gate.feed(e.subarray(2));
-    expect(isQuiescent(twin, ground)).toBe(true);
+    await gate.feed(enc('hello'));
+    expect(() => buildSeed(twin, { scrollback: 50000, atOffset: gate.parsed, ground, pending: 1 })).toThrow(/twin-behind/);
+    expect(isQuiescent(twin, ground, gate.pending)).toBe(true);
   } finally {
     twin.dispose();
   }
@@ -119,8 +170,11 @@ test('no mouse enables, kitty-keyboard push/set, ?2031 or queries in any seed', 
   for (const seq of seqs) {
     const twin = makeTwin(40, 12);
     try {
-      await twin.feed(enc(seq));
-      const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1 });
+      const bytes = enc(seq);
+      await twin.feed(bytes);
+      const ground = new GroundTracker();
+      ground.push(bytes);
+      const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground, pending: 0 });
       const s = Buffer.from(seed.bytes).toString('latin1');
       for (const pat of ['1000', '1002', '1003', '1005', '1006', '1015', '1016', '2031']) {
         expect(s.includes(`${E}[?${pat}`)).toBe(false);
@@ -137,8 +191,11 @@ test('no mouse enables, kitty-keyboard push/set, ?2031 or queries in any seed', 
 test('mouse-on twin: body enables are filtered and counted', async () => {
   const twin = makeTwin(40, 12);
   try {
-    await twin.feed(enc(`${E}[?1000h${E}[?1002h${E}[31mhi`));
-    const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1 });
+    const seq = enc(`${E}[?1000h${E}[?1002h${E}[31mhi`);
+    await twin.feed(seq);
+    const ground = new GroundTracker();
+    ground.push(seq);
+    const seed = buildSeed(twin, { scrollback: 50000, atOffset: 1, ground, pending: 0 });
     expect(seed.withheld.mouse).toBeGreaterThan(0);
     const s = Buffer.from(seed.bytes).toString('latin1');
     expect(s.includes(`${E}[?1000h`)).toBe(false);
@@ -153,8 +210,10 @@ test('deterministic bytes for a fixed stream+offset (golden sha256)', async () =
   const twin = makeTwin(40, 12);
   try {
     await twin.feed(enc(seq));
-    const a = buildSeed(twin, { scrollback: 50000, atOffset: 99 });
-    const b = buildSeed(twin, { scrollback: 50000, atOffset: 99 });
+    const ground = new GroundTracker();
+    ground.push(enc(seq));
+    const a = buildSeed(twin, { scrollback: 50000, atOffset: 99, ground, pending: 0 });
+    const b = buildSeed(twin, { scrollback: 50000, atOffset: 99, ground, pending: 0 });
     expect(a.bytes).toEqual(b.bytes);
     const sha = createHash('sha256').update(a.bytes).digest('hex');
     console.log(`seed golden sha256: ${sha}`);
@@ -168,10 +227,13 @@ test('size and build-time bounds on a 60k-line twin', async () => {
   const cols = 100, rows = 30;
   const twin = makeTwin(cols, rows);
   try {
-    // Sizing: 50,000 scrollback lines x (100 cols + CRLF) = 5.10 MB raw
-    // characters, so the spec's 4.5 MB desktop bound is structurally
-    // unreachable (raw chars alone exceed it). Desktop bound 5.5 MB;
-    // phone 20,000 lines = 2.04 MB raw, bound 2.2 MB.
+    // Amended size bound (FXT6 defect 9; recorded in test/matrix/README.md):
+    // 50,000 scrollback lines x (100 cols + CRLF) = 5.10 MB raw characters,
+    // so the original spec's 4.5 MB desktop bound is structurally
+    // unreachable (raw chars alone exceed it). Desktop bound 5.5 MB
+    // (= raw chars + tail headroom); phone 20,000 lines = 2.04 MB raw,
+    // bound 2.2 MB; build time <= 3 s. Further relaxations require a
+    // README amendment + a re-pinned number here, never a comment alone.
     const chunks: Uint8Array[] = [];
     for (let i = 0; i < 60000; i++) {
       const line = `line ${String(i).padStart(7, '0')} ` + 'x'.repeat(cols - 13) + '\r\n';
@@ -181,12 +243,14 @@ test('size and build-time bounds on a 60k-line twin', async () => {
     let off = 0;
     for (const c of chunks) { big.set(c, off); off += c.length; }
     await twin.feed(big);
+    const ground = new GroundTracker();
+    ground.push(big);
     const t0 = Date.now();
-    const desktop = buildSeed(twin, { scrollback: 50000, atOffset: big.length });
+    const desktop = buildSeed(twin, { scrollback: 50000, atOffset: big.length, ground, pending: 0 });
     const ms = Date.now() - t0;
     expect(desktop.bytes.length).toBeLessThanOrEqual(5.5 * 1024 * 1024);
     expect(ms).toBeLessThanOrEqual(3000);
-    const phone = buildSeed(twin, { scrollback: 20000, atOffset: big.length });
+    const phone = buildSeed(twin, { scrollback: 20000, atOffset: big.length, ground, pending: 0 });
     expect(phone.bytes.length).toBeLessThanOrEqual(2.2 * 1024 * 1024);
     console.log(`size/time: desktop=${desktop.bytes.length}B phone=${phone.bytes.length}B build=${ms}ms`);
   } finally {
