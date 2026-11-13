@@ -1597,6 +1597,11 @@ jobs:
           cd crates/kb-term/tap
           bun install
 
+      - name: Compile the real tap (for the kb-server WS roundtrip int test)
+        run: |
+          cd crates/kb-term/tap
+          bun build --compile src/main.ts --outfile "$RUNNER_TEMP/kb-tap"
+
       - name: Install cargo-nextest
         uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2
         with:
@@ -1645,6 +1650,10 @@ jobs:
           shared-key: term-int
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: Install protoc (lancedb transitive dep)
+        if: steps.crate.outputs.present == 'true'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev
+
       - name: Integration tests
         if: steps.crate.outputs.present == 'true'
         # Integration tests live in ONE binary
@@ -1653,6 +1662,11 @@ jobs:
         # KB_REQUIRE_TMUX=1, which means fail (same shape as KB_REQUIRE_BUN
         # for hook-omp).
         run: KB_TMUX_BIN="$KB_TMUX_BIN" KB_REQUIRE_TMUX=1 cargo test -p kb-term --test integration
+
+      - name: kb-server terms_ws_int (real tap roundtrip)
+        if: steps.crate.outputs.present == 'true'
+        run: KB_TMUX_BIN="$KB_TMUX_BIN" KB_REQUIRE_TMUX=1 KB_TAP_BIN="$RUNNER_TEMP/kb-tap" KB_REQUIRE_TERM_INT=1 cargo test -p kb-server --test terms_ws_int
+        timeout-minutes: 25
 
       - name: kb-term integration tests not present yet
         if: steps.crate.outputs.present == 'false'

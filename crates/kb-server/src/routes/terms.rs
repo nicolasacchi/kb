@@ -378,6 +378,36 @@ pub async fn launch(
     match call(&state, &req).await {
         Err(e) => e,
         Ok(RunnerReply::Ok { data }) => {
+            // T12: the runner confirmed the launch — the SPA's
+            // `term.created`. The id is the runner's; cols/rows prefer
+            // the runner's confirm values, then the launch body, then
+            // the runner-shaped defaults (the event must not state
+            // dimensions the runner never used). A confirm without
+            // an id cannot be emitted as `created` (there is no id
+            // to key it on): the reply is malformed, so the launch
+            // fails 502 instead of silently skipping the event.
+            let new_id = data
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .unwrap_or_default();
+            if new_id.is_empty() {
+                return runner_err("bad-reply", "runner launch confirm has no id");
+            }
+            let dim = |key: &str, fallback: Option<u16>, default: u16| -> u16 {
+                data.get(key)
+                    .and_then(|v| v.as_u64())
+                    .and_then(|v| u16::try_from(v).ok())
+                    .or(fallback)
+                    .unwrap_or(default)
+            };
+            crate::terminal::events::emit_created(
+                &state,
+                &new_id,
+                &parsed.harness,
+                dim("cols", parsed.cols, 80),
+                dim("rows", parsed.rows, 24),
+            );
             no_store((StatusCode::CREATED, axum::Json(data)).into_response())
         }
         Ok(RunnerReply::Err { code, message }) => runner_err(&code, &message),
@@ -648,7 +678,19 @@ pub async fn kill(
     };
     match call(&state, &req).await {
         Err(e) => e,
-        Ok(reply) => relay(reply),
+        Ok(reply) => {
+            // T12: the runner confirmed the kill — `term.ended` (once
+            // per id; the relay's `exit`-frame path claims the same
+            // slot and loses gracefully).
+            if let RunnerReply::Ok { ref data } = reply {
+                let exit_code = data
+                    .get("exit_code")
+                    .and_then(|v| v.as_i64())
+                    .map(|c| c as i32);
+                crate::terminal::events::emit_ended(&state, &id, exit_code);
+            }
+            relay(reply)
+        }
     }
 }
 

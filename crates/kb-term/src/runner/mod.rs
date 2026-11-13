@@ -28,6 +28,7 @@ pub mod paste;
 pub mod persist;
 pub mod rpc;
 pub mod server;
+pub mod stream;
 pub mod supervisor;
 pub mod tmux;
 
