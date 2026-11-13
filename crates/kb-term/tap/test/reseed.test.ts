@@ -512,6 +512,31 @@ test('reseed_alt_failure_carries_tmux_error_lines', async () => {
   }
 });
 
+test('reseed_catch_preserves_control_error_lines', async () => {
+  const { control, twin, reseeder } = setup();
+  try {
+    // The primary capture (not the -a one) rejects: the catch in reseed()
+    // must keep the %error lines, not just the bare message.
+    const capErr = new ControlError('bad target', ['%error can\'t find pane: %9']);
+    const done = reseeder.reseed('%0', { quiescentMs: 0 });
+    const settled = done.then(() => null, (e: unknown) => e);
+    await tick();
+    for (let i = 0; i < MAX_RESEED_ATTEMPTS; i++) {
+      control.resolveNext(['A 0 5 0']);
+      control.rejectNext(capErr);
+      control.resolveNext([]);
+      control.resolveNext(['B 0 5 0']);
+      control.resolveNext(['M 0 0 23 1 1 0 0 0 0']);
+      await tick();
+    }
+    const err = await settled;
+    expect(err).toBeInstanceOf(ReseedError);
+    expect((err as ReseedError).reason).toContain("can't find pane: %9");
+  } finally {
+    twin.dispose();
+  }
+});
+
 test('reseed_non_alt_marks_alt_unsupported_in_result', async () => {
   const { control, twin, reseeder } = setup();
   try {
@@ -590,6 +615,23 @@ test('reseed_partial_mode_line_retries_and_counts', async () => {
     const done = reseeder.reseed('%0', { quiescentMs: 0 });
     await tick();
     await resolveAttempt(control, ['hello'], ['A 0 5 0'], ['B 0 5 0'], ['M 0 0 23 1 1 0 0 0 x']);
+    await resolveAttempt(control, ['hello'], ['A 0 5 0'], ['B 0 5 0'], ['M 0 0 23 1 1 0 0 0 0']);
+    const r = await done;
+    expect(r.attempts).toBe(2);
+    expect(reseeder.stats().badModeRetries).toBe(1);
+  } finally {
+    twin.dispose();
+  }
+});
+
+test('reseed_garbage_alternate_token_retries_and_counts', async () => {
+  const { control, twin, reseeder } = setup();
+  try {
+    // The alternate-screen token is not a 0/1 flag: the line is malformed
+    // even though every other field parses, so it retries like any bad mode.
+    const done = reseeder.reseed('%0', { quiescentMs: 0 });
+    await tick();
+    await resolveAttempt(control, ['hello'], ['A 0 5 0'], ['B 0 5 0'], ['M x 0 23 1 1 0 0 0 0']);
     await resolveAttempt(control, ['hello'], ['A 0 5 0'], ['B 0 5 0'], ['M 0 0 23 1 1 0 0 0 0']);
     const r = await done;
     expect(r.attempts).toBe(2);

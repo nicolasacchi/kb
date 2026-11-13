@@ -192,6 +192,10 @@ function describeLines(lines: string[] | undefined): string {
  * reply is missing, not malformed. */
 function modeMalformed(lines: string[] | undefined, mode: ModeState | null): boolean {
   if (mode === null) return lines !== undefined && lines.length > 0;
+  // The alternate-screen token is parsed leniently (alternateOn is a plain
+  // boolean); a present-but-garbage token must still retry like the others.
+  const alt = lines?.[0]?.split(/\s+/)[1];
+  if (alt !== '0' && alt !== '1') return true;
   return (
     [mode.scrollTop, mode.scrollBottom, mode.wrap, mode.cursor, mode.insert,
       mode.keypadCursor, mode.keypad, mode.origin].some((v) => v === null)
