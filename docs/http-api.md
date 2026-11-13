@@ -1434,7 +1434,7 @@ GET  /api/terms                             SPA-only terminal relays
                                             `[terminal] refuse_token_callers`
                                             in docs/configuration.md).
                                             Terminal ids are
-                                            `[a-z0-9]{8,12}` (else
+                                            `[a-z0-9]{1,32}` (else
                                             400); every response carries
                                             `Cache-Control: no-store`.
                                             No CLI verb; agents never
@@ -1472,7 +1472,10 @@ POST   /api/terms/{id}/ticket               Mint a single-use
                                             caller; consumed once at
                                             the upgrade.
 POST   /api/terms/{id}/paste                Body `{text}`; decoded
-                                            text over 32 KiB is 413.
+                                            text over 32 KiB is 413
+                                            (the cap counts bytes, so
+                                            multibyte characters count
+                                            by their byte length).
                                             Relayed verbatim.
 POST   /api/terms/{id}/enter                Body `{}`. Relays the
                                             beat-derived entered flag

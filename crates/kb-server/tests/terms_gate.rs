@@ -1033,3 +1033,135 @@ async fn grid_release_resize_and_viewer_close_relay_to_the_runner() {
         "kill must close the spa viewer afterwards, got {ops:?}"
     );
 }
+
+/// R6: an id inside the kb-side grammar (`^[a-z0-9]{1,32}$`, the single
+/// validator in `terminal/binding.rs`) that the runner rejects
+/// (`invalid-id`) or does not know (`not-found`) is relayed as the mapped
+/// 400/404, never a 502, and the gate does reach the runner for it (no
+/// kb-side 8..=12 narrowing).
+#[tokio::test]
+async fn kb_grammar_ids_the_runner_rejects_or_does_not_know_map_to_4xx_never_502() {
+    for id in ["a", "ab12", "a".repeat(32).as_str()] {
+        for (code, want) in [("invalid-id", 400u16), ("not-found", 404)] {
+            let mut replies = std::collections::HashMap::new();
+            replies.insert(
+                "kill".to_string(),
+                format!(
+                    "{{\"status\":\"err\",\"code\":\"{code}\",\"message\":\"synthetic {code}\"}}"
+                ),
+            );
+            let tmp = tempfile::tempdir().unwrap();
+            let fake = spawn_fake(tmp.path(), replies);
+            let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+            let resp = client()
+                .post(format!("{}/api/terms/{id}/kill", base_url(addr)))
+                .header("Origin", origin_header(addr))
+                .header("x-kb-intent", "terminal")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status().as_u16(), want, "id {id} code {code}");
+            assert_eq!(
+                fake.conns.load(Ordering::SeqCst),
+                1,
+                "id {id} must reach the runner, not be refused kb-side"
+            );
+        }
+    }
+}
+
+/// `tracing-subscriber` writer that retains every line the server logs.
+#[derive(Clone)]
+struct CaptureWriter {
+    buf: Arc<Mutex<Vec<u8>>>,
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CaptureWriter {
+    type Writer = CaptureWriter;
+
+    fn make_writer_for(&self, _meta: &tracing::Metadata<'_>) -> Self::Writer {
+        self.clone()
+    }
+}
+
+impl std::io::Write for CaptureWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.buf.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn ticket_and_paste_text_never_reach_the_tracing_output() {
+    let capture = CaptureWriter {
+        buf: Arc::new(Mutex::new(Vec::new())),
+    };
+    tracing_subscriber::fmt()
+        .with_writer(capture.clone())
+        .with_ansi(false)
+        .without_time()
+        .with_target(false)
+        .try_init()
+        .expect("the capture subscriber must install in the test process");
+    tracing::info!("capture-test-marker");
+
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("list".to_string(), list_reply(&[TERM_ID]));
+    replies.insert("viewer_open".to_string(), ok_reply("{\"viewer\":\"spa\"}"));
+    replies.insert("paste".to_string(), ok_reply("{\"pasted\":true}"));
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), replies);
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    const SENTINEL: &str = "synthetic-paste-sentinel-9f2c";
+
+    // Mint a ticket and take it back out of the response body (the only
+    // place it is allowed to be).
+    let resp = c
+        .post(format!("{}/api/terms/{TERM_ID}/ticket", base_url(addr)))
+        .header("Origin", origin_header(addr))
+        .header("x-kb-intent", "terminal")
+        .header("Content-Type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let (_s, mint_text) = body_text(resp).await;
+    let ticket = serde_json::from_str::<serde_json::Value>(&mint_text).unwrap()["ticket"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Paste uniquely identifiable text through the relay.
+    let resp = c
+        .post(format!("{}/api/terms/{TERM_ID}/paste", base_url(addr)))
+        .header("Origin", origin_header(addr))
+        .header("x-kb-intent", "terminal")
+        .header("Content-Type", "application/json")
+        .body(format!("{{\"text\":\"{}\"}}", SENTINEL))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+
+    // Everything the server (and this test process) logged while
+    // serving the requests above.
+    let logged = String::from_utf8_lossy(&capture.buf.lock().unwrap()).into_owned();
+    assert!(
+        logged.contains("capture-test-marker"),
+        "the capture must retain log lines; got: {logged}"
+    );
+    assert!(
+        !logged.contains(&ticket),
+        "the ticket must never reach the log stream"
+    );
+    assert!(
+        !logged.contains(SENTINEL),
+        "paste text must never reach the log stream"
+    );
+}

@@ -11044,10 +11044,10 @@ mod lsc2_tests {
     #[test]
     fn redact_for_non_loopback_keeps_a_valid_term_and_drops_a_malformed_one() {
         let mut ok = row(LiveState::Working, 10, "a");
-        ok.term = Some("abc12345".to_string());
+        ok.term = Some("abc123".to_string());
         redact_for_non_loopback(&mut ok);
-        assert_eq!(ok.term.as_deref(), Some("abc12345"));
-        for bad in ["Bad", "a b", "-x", "abc123", &"a".repeat(33)] {
+        assert_eq!(ok.term.as_deref(), Some("abc123"));
+        for bad in ["Bad", "a b", "-x", &"a".repeat(33)] {
             let mut r = row(LiveState::Working, 10, "b");
             r.term = Some(bad.to_string());
             redact_for_non_loopback(&mut r);

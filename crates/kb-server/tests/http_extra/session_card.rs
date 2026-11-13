@@ -917,7 +917,7 @@ async fn boot_terminal(
 #[tokio::test]
 async fn card_terminal_lane_for_a_child_resolves_to_the_root_terminal() {
     let mut replies = std::collections::HashMap::new();
-    replies.insert("list".to_string(), runner_list_reply(&["abcd1234"]));
+    replies.insert("list".to_string(), runner_list_reply(&["abc123"]));
     let fake_dir = tempfile::tempdir().unwrap();
     let fake = spawn_fake_runner(fake_dir.path(), replies);
     let (_tmp, addr, paths) = boot_terminal(fake.socket.clone()).await;
@@ -954,7 +954,7 @@ async fn card_terminal_lane_for_a_child_resolves_to_the_root_terminal() {
             "harness": "omp",
             "event": "start",
             "at": chrono::Utc::now().to_rfc3339(),
-            "term": "abcd1234",
+            "term": "abc123",
             "pid": 4242,
         }))
         .send()
@@ -969,7 +969,7 @@ async fn card_terminal_lane_for_a_child_resolves_to_the_root_terminal() {
     let (status, card, _) = get_json(&client, addr, "/api/sessions/child-1/card").await;
     assert_eq!(status, 200, "{card}");
     assert_eq!(card["terminal"]["available"], true, "{card}");
-    assert_eq!(card["terminal"]["term_id"], "abcd1234", "{card}");
+    assert_eq!(card["terminal"]["term_id"], "abc123", "{card}");
     assert_eq!(card["terminal"]["harness"], "omp", "{card}");
     assert_eq!(card["terminal"]["state"], "working", "{card}");
     assert_eq!(card["terminal"]["blocked"], false, "{card}");
@@ -979,7 +979,7 @@ async fn card_terminal_lane_for_a_child_resolves_to_the_root_terminal() {
     let (status, card, _) = get_json(&client, addr, "/api/sessions/tree-root/card").await;
     assert_eq!(status, 200, "{card}");
     assert_eq!(card["terminal"]["available"], true, "{card}");
-    assert_eq!(card["terminal"]["term_id"], "abcd1234", "{card}");
+    assert_eq!(card["terminal"]["term_id"], "abc123", "{card}");
     assert!(card["terminal"].get("via").is_none(), "{card}");
     assert!(
         fake.conns.load(std::sync::atomic::Ordering::SeqCst) >= 1,
