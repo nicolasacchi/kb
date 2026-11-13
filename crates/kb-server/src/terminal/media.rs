@@ -121,28 +121,37 @@ fn problem(urn: &'static str, status: StatusCode, detail: impl Into<String>) -> 
     resp
 }
 
-/// Map a runner `err` code (dash or underscore spelling) to a status.
-fn runner_err(code: &str) -> Response<Body> {
+/// Map a runner `err` code (dash or underscore spelling) to a status. The
+/// runner's message is fixed text (never a path or argv); an empty one
+/// falls back to the route's own wording.
+fn runner_err(code: &str, message: &str) -> Response<Body> {
+    let detail = |fallback: &str| -> String {
+        if message.trim().is_empty() {
+            fallback.to_string()
+        } else {
+            message.to_string()
+        }
+    };
     match code {
         "not-found" | "not_found" => problem(
             ERR_TERMINAL_NOT_FOUND,
             StatusCode::NOT_FOUND,
-            "no such picture",
+            detail("no such picture"),
         ),
         "bad-request" | "bad_request" | "invalid-id" => problem(
             ERR_TERMINAL_BAD_REQUEST,
             StatusCode::BAD_REQUEST,
-            "the runner refused the media key",
+            detail("the runner refused the media key"),
         ),
         "too-large" | "too_large" => problem(
             ERR_TERMINAL_PAYLOAD_TOO_LARGE,
             StatusCode::PAYLOAD_TOO_LARGE,
-            "stored picture is too large",
+            detail("stored picture is too large"),
         ),
         _ => problem(
             ERR_TERMINAL_BAD_REPLY,
             StatusCode::BAD_GATEWAY,
-            "terminal runner returned an unexpected error",
+            detail("terminal runner returned an unexpected error"),
         ),
     }
 }
@@ -209,7 +218,7 @@ pub async fn serve(
                 "stored bytes are not a served picture type",
             ),
         },
-        Ok(MediaReply::Err { code, .. }) => runner_err(&code),
+        Ok(MediaReply::Err { code, message }) => runner_err(&code, &message),
         Err(RunnerError::Unavailable | RunnerError::Timeout) => problem(
             ERR_TERMINAL_RUNNER_UNAVAILABLE,
             StatusCode::BAD_GATEWAY,

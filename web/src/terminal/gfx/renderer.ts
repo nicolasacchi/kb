@@ -318,6 +318,7 @@ export class PlaceholderRenderer {
         this.groups.set(key, el);
       }
       el.seen = this.stats.frames;
+      if (def !== undefined) el.clip.dataset.kbgfxVer = String(def.version);
 
       const left = snap(g.minX * m.cw);
       const top = snap(g.minY * m.ch);
@@ -364,6 +365,15 @@ export class PlaceholderRenderer {
       }
     }
     this.syncDecorations(cells);
+    this.publishStats();
+  }
+
+  /** Mirror the decoration counters into the DOM (the e2e suite reads attributes, never a global). */
+  private publishStats(): void {
+    const d = this.overlay.dataset;
+    d.kbgfxDecosCreated = String(this.stats.decosCreated);
+    d.kbgfxDecosDisposed = String(this.stats.decosDisposed);
+    d.kbgfxDecosLive = String(this.liveDecorations);
   }
 
   dispose(): void {

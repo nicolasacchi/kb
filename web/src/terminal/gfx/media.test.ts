@@ -74,7 +74,7 @@ describe("MediaCache", () => {
   it("refuses a key that is not hex64 without a request", async () => {
     const h = harness(() => png());
     expect(await h.cache.load("../etc/passwd")).toBe("missing");
-    expect(await h.cache.load(sha(1).toUpperCase())).toBe("missing");
+    expect(await h.cache.load("A".repeat(64))).toBe("missing");
     expect(h.calls).toHaveLength(0);
   });
 

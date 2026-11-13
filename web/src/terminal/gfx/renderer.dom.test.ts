@@ -63,6 +63,17 @@ describe("PlaceholderRenderer", () => {
     expect(clip.dataset.kbgfxId).toBe(String(ID));
   });
 
+  it("exposes the def version on the clip for the e2e suite", () => {
+    const { fake, renderer, defs } = setup();
+    defs.apply(def());
+    fake.picture(ID, 0, 0, 2, 2);
+    renderer.render();
+    expect(clips(fake)[0].dataset.kbgfxVer).toBe("1");
+    defs.apply(def({ sha256: "f".repeat(64) }));
+    renderer.render();
+    expect(clips(fake)[0].dataset.kbgfxVer).toBe("2");
+  });
+
   it("picture box uses ImageDef cols x rows", async () => {
     const { fake, renderer, defs, media } = setup();
     defs.apply(def({ cols: 8, rows: 6 }));
@@ -193,6 +204,11 @@ describe("PlaceholderRenderer", () => {
       { line: 2, x: 2, width: 4, height: 1, fg: "#000000", bg: "#000000", layer: "top" },
     ]);
     expect(renderer.stats.decosCreated).toBe(3);
+    // The counters are mirrored into the DOM for the e2e suite.
+    const ov = fake.screen.querySelector<HTMLElement>(".kbgfx-overlay")!;
+    expect(ov.dataset.kbgfxDecosCreated).toBe("3");
+    expect(ov.dataset.kbgfxDecosDisposed).toBe("0");
+    expect(ov.dataset.kbgfxDecosLive).toBe("3");
     // A second render with nothing changed creates nothing new.
     renderer.render();
     expect(renderer.stats.decosCreated).toBe(3);
