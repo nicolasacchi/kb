@@ -358,14 +358,11 @@ async fn read_round(ws: &mut WsStream, max_binary: usize) -> Round {
                     t.as_str().chars().take(80).collect::<String>()
                 ));
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(t.as_str()) {
-                    match v.get("t").and_then(|x| x.as_str()) {
-                        Some("seed") => {
-                            round.seed_offset = v
-                                .get("offset")
-                                .and_then(|x| x.as_u64())
-                                .or(round.seed_offset);
-                        }
-                        _ => {}
+                    if v.get("t").and_then(|x| x.as_str()) == Some("seed") {
+                        round.seed_offset = v
+                            .get("offset")
+                            .and_then(|x| x.as_u64())
+                            .or(round.seed_offset);
                     }
                 }
             }
