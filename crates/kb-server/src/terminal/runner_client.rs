@@ -240,6 +240,59 @@ mod tests {
             Err(RunnerError::BadReply)
         ));
     }
+    /// Serve one connection that answers ok only after `delay`.
+    async fn serve_one_slowly(socket: std::path::PathBuf, delay: Duration) {
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 4096];
+            let _ = stream.read(&mut buf).await;
+            tokio::time::sleep(delay).await;
+            let _ = stream.write_all(b"{\"status\":\"ok\",\"data\":{}}\n").await;
+        });
+    }
+
+    /// `call` must apply `op_budget`, not the bare base timeout: with a
+    /// 50 ms base and a 200 ms reply, a launch (60 s floor) succeeds and
+    /// a paste (base budget) times out.
+    #[tokio::test]
+    async fn call_applies_the_per_op_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = Duration::from_millis(50);
+        let delay = Duration::from_millis(200);
+
+        let sock = dir.path().join("launch.sock");
+        serve_one_slowly(sock.clone(), delay).await;
+        let launch = RunnerRequest::Launch {
+            harness: super::super::wire::Harness::Omp,
+            argv: None,
+            resume_sid: None,
+            cwd: "/work/proj".to_string(),
+            cols: None,
+            rows: None,
+            env: None,
+            exit_keys: None,
+        };
+        let reply = UnixRunner::new(sock, base).call(&launch).await;
+        assert!(
+            matches!(reply, Ok(RunnerReply::Ok { .. })),
+            "launch rides its 60 s floor, got {reply:?}"
+        );
+
+        let sock = dir.path().join("paste.sock");
+        serve_one_slowly(sock.clone(), delay).await;
+        let paste = RunnerRequest::Paste {
+            id: "abcd1234".to_string(),
+            viewer: "spa".to_string(),
+            text: "hi".to_string(),
+        };
+        let err = UnixRunner::new(sock, base).call(&paste).await;
+        assert!(
+            matches!(err, Err(RunnerError::Timeout)),
+            "paste rides the base budget, got {err:?}"
+        );
+    }
+
     /// Per-op budgets: with the default 5 s base, long ops must wait
     /// far longer than 5 s (their runner durations), input ops use the
     /// base, and an operator-raised base always wins over a floor.
