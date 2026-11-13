@@ -15,7 +15,7 @@
 #   nextest 3962 run (9 skipped)        web vitest 1451     web-code vitest 3162
 
 [e2e]
-executed = 400
+executed = 435
 
 [code-e2e]
 executed = 245
@@ -27,7 +27,7 @@ executed = 5095
 executed = 2265
 
 [web-code-vitest]
-executed = 3050
+executed = 3570
 
 # kb-code-server + kb-code-cli + kb-lip under nextest (the code-test lane).
 # Seeded from PR #228's first run: 3918 executed (3920 run, 2 then-missing
