@@ -65,8 +65,29 @@ cat >"$TMPROOT/bin/kb" <<'FAKE'
 if [ "${1:-}" != "slate" ]; then echo "unexpected: $*" >&2; exit 1; fi
 case "${2:-}" in
   watch)
+    case "${KB_FAKE_WATCH_MODE:-}" in
+      resolve)
+        printf '%s\n' '{"seq":20,"kind":"ask","line":"for the operator?","to":"you","prov":{"harness":"claude","session_id":"other-session-0001"}}'
+        printf '%s\n' '{"seq":21,"kind":"answer","re":40,"line":"go with B","body":"because C","prov":{"harness":"claude","origin":"human","session_id":"op-web"}}'
+        printf '%s\n' '{"seq":22,"kind":"answer","re":41,"line":"someone elses","prov":{"harness":"claude","session_id":"other-session-0001"}}'
+        printf '%s\n' '{"seq":23,"kind":"done","re":40,"line":"chat: B","prov":{"harness":"claude","origin":"human","session_id":"op-web"}}'
+        sleep 60
+        exit 0
+        ;;
+      elsewhere)
+        printf '%s\n' '{"seq":30,"kind":"ask","line":"for the operator?","to":"you","prov":{"harness":"claude","session_id":"other-session-0001"}}'
+        printf '%s\n' '{"seq":31,"kind":"ask","line":"for claude?","to":"CLAUDE","prov":{"harness":"codex","session_id":"other-session-0002"}}'
+        sleep 60
+        exit 0
+        ;;
+    esac
     printf '%s\n' '{"seq":11,"kind":"ask","line":"where does X live?","prov":{"harness":"claude","session_id":"other-session-0001"}}'
     printf '%s\n' '{"seq":12,"kind":"found","line":"mine","prov":{"harness":"omp","session_id":"'"${KB_FAKE_OWN_SID:-}"'"}}'
+    exit 0
+    ;;
+  show)
+    if [ "${3:-}" = "40" ]; then own="${KB_FAKE_OWN_SID:-}"; else own="other-session-0001"; fi
+    printf '{"post":{"seq":%s,"kind":"ask","line":"which?","prov":{"harness":"omp","session_id":"%s"}},"refs":[],"thread":[]}\n' "${3:-0}" "$own"
     exit 0
     ;;
   delta)
@@ -183,6 +204,59 @@ test("tried carries failed/was, and refs repeat", () => {
     "slate", "tried", "bumped the cap", "--was", "3", "--failed", "still OOMs",
     "--topic", "v7", "--body", "detail", "--ref", "path:a.rs:10", "--ref", "post:#3",
   ]);
+});
+
+test("ask maps `to` to --to; any other kind refuses it", () => {
+  expect(M.slatePostArgs({ kind: "ask", line: "ship it?", to: "you" }).args)
+    .toEqual(["slate", "ask", "ship it?", "--to", "you"]);
+  expect(M.slatePostArgs({ kind: "ask", line: "ship it?" }).args).toEqual(["slate", "ask", "ship it?"]);
+  expect(M.slatePostArgs({ kind: "found", line: "x", to: "you" }).error).toContain("`ask` only");
+});
+
+test("the slate-ask paragraph and omp delivery line ride the post tool description", () => {
+  const { tools } = makePi();
+  const d = tools.get("kb_slate_post").description as string;
+  expect(d).toContain(M.SLATE_ASK_PROTOCOL);
+  expect(d).toContain(M.SLATE_ASK_DELIVERY_OMP);
+  expect(M.SLATE_ASK_DELIVERY_OMP).toContain("never run kb slate wait");
+});
+
+test("watch events carry re/to; asks for someone else are skipped, omp/any/absent are kept", () => {
+  const ev = (o: any) => M.slateWatchEvent(JSON.stringify({ seq: 5, kind: "ask", prov: { session_id: "x" }, ...o }), SID);
+  expect(ev({ to: "You", re: 3 })).toEqual({ seq: 5, kind: "ask", session: "x", re: 3, to: "you" });
+  expect(M.slateAskAddressedElsewhere(ev({ to: "you" }))).toBe(true);
+  expect(M.slateAskAddressedElsewhere(ev({ to: "claude" }))).toBe(true);
+  expect(M.slateAskAddressedElsewhere(ev({ to: "omp" }))).toBe(false);
+  expect(M.slateAskAddressedElsewhere(ev({ to: "any" }))).toBe(false);
+  expect(M.slateAskAddressedElsewhere(ev({}))).toBe(false);
+  // `to` on a non-ask (a hand) is not this rule's business.
+  expect(M.slateAskAddressedElsewhere(ev({ kind: "hand", to: "claude" }))).toBe(false);
+  expect(M.slateIsResolutionCandidate(ev({ kind: "answer", re: 3 }))).toBe(true);
+  expect(M.slateIsResolutionCandidate(ev({ kind: "done", re: 3 }))).toBe(true);
+  expect(M.slateIsResolutionCandidate(ev({ kind: "done" }))).toBe(false);
+  expect(M.slateIsResolutionCandidate(ev({ kind: "found", re: 3 }))).toBe(false);
+});
+
+test("own-ask detection compares the ask's prov.session_id with this session", () => {
+  const show = (kind: string, sid: string) => JSON.stringify({ post: { kind, prov: { session_id: sid } } });
+  expect(M.slateIsOwnAsk(show("ask", SID), SID)).toBe(true);
+  expect(M.slateIsOwnAsk(show("ask", "someone-else"), SID)).toBe(false);
+  expect(M.slateIsOwnAsk(show("take", SID), SID)).toBe(false);
+  expect(M.slateIsOwnAsk("not json", SID)).toBeNull();
+  expect(M.slateIsOwnAsk("{}", SID)).toBeNull();
+});
+
+test("the wake text names the ask, tags [you], and carries the operator carve-out only for [you] answers", () => {
+  const human = M.slateResolutionText(JSON.stringify({ kind: "answer", re: 40, line: "go with B", body: "because C", prov: { origin: "human", harness: "claude", session_id: "op" } }));
+  expect(human).toContain("Your slate ask #40 was answered by [you]: go with B");
+  expect(human).toContain("  because C");
+  expect(human).toContain("operator's answer to that question");
+  expect(human).toContain("kb_slate_post done #40");
+  const agent = M.slateResolutionText(JSON.stringify({ kind: "answer", re: 40, line: "B", prov: { harness: "claude", session_id: "abcd1234" } }));
+  expect(agent).toContain("[claude/abcd]");
+  expect(agent).not.toContain("operator's answer");
+  expect(M.slateResolutionText(JSON.stringify({ kind: "done", re: 40, line: "chat: B", prov: { origin: "human" } })))
+    .toContain("was closed by [you]: chat: B");
 });
 
 test("a flag the CLI does not accept for this kind is REFUSED, never dropped", () => {
@@ -302,6 +376,84 @@ test(
 );
 TS
 
+cat >"$TMPROOT/omp-slate-wake.test.ts" <<'TS'
+import { expect, test } from "bun:test";
+
+const M: any = await import(process.env.KB_OMP_TS!);
+const CWD = process.env.KB_TEST_CWD!;
+
+function boot(sid: string) {
+  process.env.KB_FAKE_OWN_SID = sid;
+  const ctx: any = {
+    cwd: CWD,
+    hasUI: false,
+    sessionManager: { getSessionId: () => sid, getCwd: () => CWD, getSessionFile: () => "" },
+  };
+  const chain: any = {};
+  chain.optional = () => chain;
+  chain.describe = () => chain;
+  const z: any = {
+    object: (o: any) => ({ ...chain, shape: o }),
+    string: () => chain, number: () => chain, boolean: () => chain, array: () => chain,
+  };
+  const handlers = new Map<string, any>();
+  const sent: { m: any; opts: any; at: number }[] = [];
+  M.default({
+    zod: z,
+    on: (e: string, h: any) => handlers.set(e, h),
+    registerTool: () => {},
+    registerCommand: () => {},
+    registerFlag: () => {},
+    getFlag: () => undefined,
+    appendEntry: () => {},
+    sendMessage: (m: any, opts: any) => sent.push({ m, opts, at: Date.now() }),
+    sendUserMessage: () => {},
+  });
+  return { ctx, handlers, sent };
+}
+
+test(
+  "own-ask answers and dones wake with triggerTurn at once; others' answers keep the cadence; an ask to: you is not pushed",
+  async () => {
+    process.env.KB_FAKE_WATCH_MODE = "resolve";
+    const { ctx, handlers, sent } = boot("omp-session-wake");
+    const t0 = Date.now();
+    await handlers.get("session_start")({}, ctx);
+    const deadline = Date.now() + 25_000;
+    while (Date.now() < deadline && sent.length < 3) await Bun.sleep(100);
+    await handlers.get("session_shutdown")({}, ctx);
+
+    const wakes = sent.filter((s) => s.opts?.triggerTurn === true);
+    const plain = sent.filter((s) => !s.opts);
+    expect(wakes.length).toBe(2);
+    expect(wakes[0].m.customType).toBe("kb-slate");
+    expect(wakes[0].m.content).toContain("Your slate ask #40 was answered by [you]: go with B");
+    expect(wakes[1].m.content).toContain("Your slate ask #40 was closed by [you]: chat: B");
+    // Both resolutions delivered inside one rate window: the 30 s floor is bypassed.
+    expect(wakes[1].at - wakes[0].at).toBeLessThan(5_000);
+    // Someone else's answer (#41) still rides the ordinary path: no options, debounced >= 2 s.
+    expect(plain.length).toBe(1);
+    expect(plain[0].at - t0).toBeGreaterThanOrEqual(1_900);
+    // The ask to: you never produced a message of its own.
+    expect(sent.every((s) => !String(s.m.content).includes("for the operator?"))).toBe(true);
+  },
+  60_000,
+);
+
+test(
+  "asks addressed to you or claude never start the push cadence",
+  async () => {
+    process.env.KB_FAKE_WATCH_MODE = "elsewhere";
+    const { ctx, handlers, sent } = boot("omp-session-elsewhere");
+    await handlers.get("session_start")({}, ctx);
+    await Bun.sleep(6_000);
+    await handlers.get("session_shutdown")({}, ctx);
+    expect(sent.length).toBe(0);
+  },
+  30_000,
+);
+TS
+
 # The `--kinds` fallback lives in a SECOND process: `kindsFlagOk` is probed
 # once per process, so a CLI that rejects the flag has to be met with a fresh
 # module load (this is also exactly how it behaves in a real session).
@@ -377,6 +529,26 @@ if grep -q 'CALL slate delta --json --harness omp --budget 1500 .* --kinds now,w
 else
   bad "delta was not fetched with --kinds now,warn,hand,ask,answer"
   grep 'CALL slate delta' "$KB_FAKE_LOG" | head -3
+fi
+
+: >"$KB_FAKE_LOG"
+if run_bun_test "$TMPROOT/omp-slate-wake.test.ts" "$TMPROOT/bun-wake.log"; then
+  ok "bun test: own-ask wake (triggerTurn, no cadence), others keep the cadence, to:you not pushed"
+else
+  bad "bun test (own-ask wake) failed"
+  sed -n '1,80p' "$TMPROOT/bun-wake.log"
+fi
+grep -E '^\s*[0-9]+ (pass|fail)' "$TMPROOT/bun-wake.log" | sed 's/^/        /'
+if grep -q 'CALL slate show 40 --json --harness omp' "$KB_FAKE_LOG"; then
+  ok "own-ask detection resolves the ask with \`kb slate show <re> --json\`"
+else
+  bad "no kb slate show call recorded"
+fi
+if [ "$(grep -c 'CALL slate show 40 ' "$KB_FAKE_LOG")" = "1" ]; then
+  ok "the own-ask lookup is cached per ask (show 40 ran once for two resolutions)"
+else
+  bad "show 40 was not cached"
+  grep 'CALL slate show' "$KB_FAKE_LOG"
 fi
 
 : >"$KB_FAKE_LOG"
