@@ -107,6 +107,12 @@ async fn desk_offer_passes_session_and_ttl() {
         ],
     )
     .env("XDG_CACHE_HOME", &cache)
+    // The current-session file must be the only session source: an ambient
+    // Claude Code session in the developer's env would otherwise win.
+    .env_remove("KB_SESSION_ID")
+    .env_remove("KB_SESSIONS_DIR")
+    .env_remove("CLAUDE_CODE_SESSION_ID")
+    .env_remove("CLAUDECODE")
     .assert()
     .success()
     .get_output()

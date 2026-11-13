@@ -255,6 +255,13 @@ ci-embedder:
     cargo test -p kb-embedder --no-fail-fast
     cargo test -p kb-core --features local-embedder --no-fail-fast
 
+# Build every release binary (kb, kb-code, kb-code-server, kb-term/kb-termd,
+# kb-embedder) from one tree. kb-embedder gets its own cargo invocation so
+# ORT feature unification cannot leak into the other binaries (invariant #26(b)).
+build-all:
+    cargo build --release -p kb-cli -p kb-code-server -p kb-code-cli -p kb-term
+    cargo build --release -p kb-embedder
+
 # Build the kb-embedder release binary (lands in the shared target/release/
 # next to `kb`, satisfying locate_embedder_bin's sibling contract).
 build-embedder:
@@ -445,8 +452,12 @@ ci-e2e: ci-spa
 redeploy CONFIG:
     #!/usr/bin/env bash
     set -euo pipefail
-    echo ">>> building release binary (kb-cli)"
+    echo ">>> building release binaries (kb-cli + kb-embedder)"
+    # kb-embedder is a sibling binary the daemon spawns (locate_embedder_bin);
+    # building only kb-cli left it stuck at an old fastembed/ORT build.
     {{prio}} cargo build --release -p kb-cli
+    # Separate invocation: invariant #26(b) keeps ORT out of the other binaries.
+    {{prio}} cargo build --release -p kb-embedder
     echo ">>> building SPA bundle (web/dist)"
     # Always `npm ci` (see `redeploy-code`'s sibling comment) — the old
     # `[ -d node_modules ] || npm ci` shortcut silently builds against
@@ -485,8 +496,12 @@ redeploy CONFIG:
 redeploy-code:
     #!/usr/bin/env bash
     set -euo pipefail
-    echo ">>> building release binary (kb-code-server)"
-    {{prio}} cargo build --release -p kb-code-server
+    echo ">>> building release binaries (kb-code-server + kb-code-cli)"
+    # Build the CLI too: building only the server left ~/.local/bin/kb-code
+    # stuck at an old build (2026-09-25) while the daemon gained verbs the
+    # CLI could not call (review sync/find/retrack/verify). One cargo
+    # invocation so the two binaries always come from the same tree.
+    {{prio}} cargo build --release -p kb-code-server -p kb-code-cli
     echo ">>> building web-code SPA bundle"
     # Always `npm ci` here (not `redeploy`'s `[ -d node_modules ] || npm ci`
     # shortcut) — a pull that only bumps package-lock.json without touching
