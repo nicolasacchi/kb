@@ -5513,7 +5513,8 @@ pub struct BackfillProjectKeyResponse {
 /// lineage columns (`parent_session_id` / `root_session_id` /
 /// `project_slug`) on omp rows, from the CLI's host-side tree walk.
 /// Cap 500 items/request (400 over cap, never truncation); 400 on unsafe
-/// tokens. Same operator posture as `backfill-project-key`.
+/// tokens. Counts: `would_change`/`changed` are rows, `unmatched` is
+/// items. Same operator posture as `backfill-project-key`.
 #[derive(Debug, Deserialize, Default)]
 pub struct BackfillTreeParams {
     #[serde(default)]
