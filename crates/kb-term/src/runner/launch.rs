@@ -1153,7 +1153,12 @@ mod tests {
         assert!(v.argv.is_empty(), "None argv means use the plan");
         let golden = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/req_launch.json");
         let bytes = std::fs::read(golden).unwrap();
-        let req: Request = serde_json::from_slice(&bytes).unwrap();
+        let mut req: Request = serde_json::from_slice(&bytes).unwrap();
+        // The golden's cwd is a synthetic path that does not exist on the
+        // test host; point it at a real dir so only the shape is judged.
+        if let Request::Launch { cwd, .. } = &mut req {
+            *cwd = "/tmp".to_string();
+        }
         assert!(
             validate_launch(&req, &cfg()).is_ok(),
             "golden bytes validate"
