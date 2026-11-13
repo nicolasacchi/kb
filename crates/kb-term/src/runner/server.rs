@@ -57,6 +57,13 @@ fn probe_live(path: &Path) -> bool {
     std::os::unix::net::UnixStream::connect(path).is_ok()
 }
 
+/// The peer-uid gate as a pure predicate: only a connection from the
+/// runner's own uid runs; anything else (a different uid, or no
+/// credential at all) is rejected.
+fn peer_uid_allowed(peer: Option<u32>, server_uid: u32) -> bool {
+    peer == Some(server_uid)
+}
+
 /// The peer uid of a connected stream (`SO_PEERCRED`).
 fn peer_uid(stream: &UnixStream) -> Option<u32> {
     use std::os::unix::io::AsRawFd;
@@ -102,7 +109,7 @@ pub async fn serve<S: Supervisor + 'static>(
             accepted = listener.accept() => {
                 match accepted {
                     Ok((stream, _)) => {
-                        if peer_uid(&stream) != Some(runner.server_uid) {
+                        if !peer_uid_allowed(peer_uid(&stream), runner.server_uid) {
                             // Wrong-uid connection: reject silently.
                             continue;
                         }
@@ -136,8 +143,11 @@ async fn handle_connection<S: Supervisor + 'static>(runner: Arc<Runner<S>>, stre
         if n == 0 {
             return; // EOF
         }
-        if n > MAX_LINE && !line.ends_with('\n') {
+        if n > MAX_LINE {
             // Over-long request: bad-request and close the connection.
+            // Even a newline-terminated line is rejected: the cap is a
+            // byte count, not a terminator check, so an exactly-65537 B
+            // line cannot fall through to the parser.
             let err = crate::wire::Response::Err {
                 code: "bad-request".to_string(),
                 message: "request line exceeds 64 KiB".to_string(),
@@ -289,6 +299,98 @@ mod tests {
             line.contains("bad-request"),
             "overlong line must be bad-request: {line}"
         );
+        handle.abort();
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    /// `bind_runner_socket` forces 0600 even under a permissive caller
+    /// umask AND restores the caller's umask afterwards (it temporarily
+    /// sets 077 for the atomic-safe create, then puts the caller's back).
+    #[tokio::test]
+    async fn bind_restores_caller_umask_and_forces_0600() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("runner").join("runner.sock");
+        std::fs::create_dir_all(sock.parent().unwrap()).unwrap();
+        let original = unsafe { libc::umask(0o027) };
+        let listener = bind_runner_socket(&sock).unwrap();
+        drop(listener);
+        let current = unsafe { libc::umask(0o027) };
+        unsafe {
+            libc::umask(original);
+        }
+        assert_eq!(current, 0o027, "bind must restore the caller's umask");
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&sock).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "runner.sock must be 0600 even at umask 027");
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    /// The peer-uid gate as a pure predicate: same uid runs, a foreign uid
+    /// is rejected, and a missing credential fails closed.
+    #[test]
+    fn peer_uid_gate_pins_same_foreign_and_missing() {
+        assert!(peer_uid_allowed(Some(1000), 1000));
+        assert!(!peer_uid_allowed(Some(1001), 1000));
+        assert!(!peer_uid_allowed(Some(0), 1000));
+        assert!(!peer_uid_allowed(None, 1000), "no credential fails closed");
+    }
+
+    /// Shutdown lifecycle: signalling the serve loop removes runner.sock
+    /// and exits cleanly, leaving holders alone.
+    #[tokio::test]
+    async fn shutdown_removes_runner_sock_and_exits() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (handle, runner, tx) = stub_runner(&root).await;
+        let sock = runner.cfg.run_dir.join("runner").join("runner.sock");
+        assert!(sock.exists(), "bound socket must exist");
+        tx.send(()).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(10), handle)
+            .await
+            .expect("serve must exit after shutdown")
+            .expect("serve must finish cleanly");
+        assert!(
+            !sock.exists(),
+            "shutdown must remove runner.sock (holders untouched)"
+        );
+    }
+
+    /// The 64 KiB cap is a byte count, not a terminator check: a
+    /// newline-terminated line of MAX_LINE+1 bytes (65537 with the `\n`)
+    /// is bad-request and closes the connection; it never reaches the
+    /// request parser.
+    #[tokio::test]
+    async fn newline_terminated_overlong_line_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (handle, runner, _tx) = stub_runner(&root).await;
+        let sock = runner.cfg.run_dir.join("runner").join("runner.sock");
+        let mut stream = UnixStream::connect(&sock).await.unwrap();
+        let big = vec![b'x'; MAX_LINE];
+        let _ = stream.write_all(&big).await;
+        let _ = stream.write_all(b"\n").await;
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            reader.read_line(&mut line),
+        )
+        .await
+        .expect("boundary line must be answered within 10 s")
+        .unwrap();
+        assert!(
+            line.contains("bad-request") && line.contains("exceeds 64 KiB"),
+            "terminated overlong line must be the explicit cap error: {line}"
+        );
+        let mut tail = String::new();
+        let closed = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            reader.read_line(&mut tail),
+        )
+        .await
+        .expect("closed connection must answer within 10 s")
+        .unwrap();
+        assert_eq!(closed, 0, "connection must be closed after the cap error");
         handle.abort();
         let _ = std::fs::remove_file(&sock);
     }

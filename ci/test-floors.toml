@@ -21,7 +21,7 @@ executed = 385
 executed = 245
 
 [nextest]
-executed = 5095
+executed = 5125
 
 [web-vitest]
 executed = 2130
@@ -47,5 +47,5 @@ executed = 320
 # <skipped/> handling needs witness.py (T2-owned) and is an orchestrator
 # follow-up, not required for lane correctness.
 [term-int]
-executed = 25
+executed = 30
 

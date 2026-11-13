@@ -53,7 +53,13 @@ fn kb_term_resume_matches_kb_core_resume_command() {
         "ses_x.y-z:1",
         "spec-mobsheet-001",
     ];
-    let cwds: [Option<&str>; 3] = [None, Some("/w/x"), Some("/w/it's here")];
+    let cwds: [Option<&str>; 5] = [
+        None,
+        Some("/w/x"),
+        Some("/w/it's here"),
+        Some("relative/cwd"),
+        Some("/w/bad\ncwd"),
+    ];
     for &harness in &HARNESSES {
         for &sid in &sids {
             for &cwd in &cwds {
