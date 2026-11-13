@@ -28,6 +28,9 @@ import { Reseeder } from './reseed.ts';
 import { QueryStripper } from './strip.ts';
 import { ImageStore } from './imagestore.ts';
 
+/** The tmux session name every runner-launched terminal uses. */
+export const TMUX_SESSION_NAME = 'kb';
+
 export const HARNESSES = ['claude', 'codex', 'opencode', 'grok', 'kimi', 'omp'] as const;
 
 /** tap/package.json "version"/"dependencies" pins, mirrored as constants so
@@ -104,7 +107,7 @@ export interface TapStackOpts {
   paneId?: string;
   /** tmux server socket (default `<runDir>/s/<session>.sock`). */
   socket?: string;
-  /** tmux session name to attach (default the session id). */
+  /** tmux session name to attach (default `kb`, the runner's name). */
   sessionName?: string;
   /** ImageStore dir (default `<runDir>/s/<session>/store`). */
   storeDir?: string;
@@ -163,7 +166,11 @@ export function createTapStack(opts: TapStackOpts): TapStack {
   const control = new Control({
     tmuxBin: process.env.KB_TMUX_BIN ?? 'tmux',
     socketPath: opts.socket ?? pathJoin(opts.runDir, 's', `${opts.session}.sock`),
-    sessionName: opts.sessionName ?? opts.session,
+    // The runner's tmux server (one per terminal, socket s/<id>.sock)
+    // always names its single session `kb` (runner launch's
+    // `new-session -s kb`), and the runner starts the tap with only
+    // --session/--run-dir, so `kb` is the attach target by default.
+    sessionName: opts.sessionName ?? TMUX_SESSION_NAME,
     spawn: opts.spawn,
     paneId: opts.paneId,
   });
