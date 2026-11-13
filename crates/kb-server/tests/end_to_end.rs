@@ -6113,6 +6113,127 @@ fn work_seed_row(
     row
 }
 
+/// FXA6 — variant of `work_seed_row` with an explicit folder and a
+/// project slate slug, for the route-glue tests (job/slate/limit/scan).
+fn work_seed_named(
+    paths: &KbPaths,
+    artifact_id: &str,
+    sid: &str,
+    started_at: i64,
+    cwd: &str,
+    project_slug: Option<&str>,
+) -> kb_core::storage::sqlite::SessionRow {
+    let sm = KbName::new("smoke").unwrap();
+    let mut db = kb_core::storage::sqlite::Db::open(&paths.kb_sqlite(&sm)).unwrap();
+    let row = kb_core::storage::sqlite::SessionRow {
+        artifact_id: artifact_id.into(),
+        session_id: sid.into(),
+        started_at,
+        ended_at: started_at + 600,
+        message_count: 42,
+        first_user_prompt: Some("synthetic prompt".into()),
+        source_relative: format!("sessions/session-{started_at}-{sid}.html"),
+        title: Some("synthetic title".into()),
+        cwd: Some(cwd.into()),
+        git_branch: Some("main".into()),
+        files_read_count: 3,
+        files_edited_count: 2,
+        token_total: 12_345,
+        tool_calls: 9,
+        model: Some("synthetic-model".into()),
+        error_count: 1,
+        subagent_count: 1,
+        subagent_tokens: 5_000,
+        subagent_tool_calls: 4,
+        subagent_files_edited: 1,
+        subagent_launched_unstatted: 0,
+        project_key: Some(format!(
+            "-work-{}",
+            cwd.trim_start_matches('/').replace('/', "-")
+        )),
+        repo_root: Some(cwd.into()),
+        harness: "omp".into(),
+        cc_version: None,
+        last_assistant_text: Some("synthetic closing prose".into()),
+        all_cwds: None,
+        commit_count: 0,
+        user_turns: 2,
+        active_secs: 321,
+        substance: None,
+        segment_of: None,
+        segment_idx: None,
+        evidence_json: None,
+        parent_session_id: None,
+        root_session_id: None,
+        project_slug: project_slug.map(str::to_string),
+    };
+    db.sessions_upsert(&row).unwrap();
+    row
+}
+
+fn work_add_research(paths: &KbPaths, artifact_id: &str, sid: &str, kind: &str, query: &str) {
+    let sm = KbName::new("smoke").unwrap();
+    let mut db = kb_core::storage::sqlite::Db::open(&paths.kb_sqlite(&sm)).unwrap();
+    db.session_research_replace(
+        artifact_id,
+        &[kb_core::storage::sqlite::SessionResearchRow {
+            artifact_id_session: artifact_id.into(),
+            session_id: sid.into(),
+            seq: 0,
+            kind: kind.into(),
+            query: query.into(),
+        }],
+    )
+    .unwrap();
+}
+
+fn work_write_slate(paths: &KbPaths, slug: &str, posts: &[kb_core::slate::Post]) {
+    use kb_core::slate::SlateSlug;
+    let parsed = SlateSlug::new(slug).unwrap();
+    let dir = paths.slate_dir(&parsed);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut content = String::new();
+    for p in posts {
+        content.push_str(&kb_core::slate::to_ledger_line(p).unwrap());
+        content.push('\n');
+    }
+    std::fs::write(paths.slate_ledger_file(&parsed), content).unwrap();
+}
+
+fn work_post(
+    seq: u64,
+    kind: kb_core::slate::Kind,
+    re: Option<u64>,
+    sid: &str,
+    line: &str,
+) -> kb_core::slate::Post {
+    kb_core::slate::Post {
+        seq,
+        id: format!("e_{seq:012}"),
+        at: seq as i64,
+        kind,
+        line: line.to_string(),
+        body: None,
+        topic: None,
+        subject: None,
+        refs: Vec::new(),
+        re,
+        supersedes: None,
+        pin: None,
+        anyway: false,
+        over: None,
+        abandoned: None,
+        failed: None,
+        to: None,
+        prov: kb_core::slate::Prov {
+            harness: "omp".into(),
+            session_id: Some(sid.to_string()),
+            model: None,
+            ..Default::default()
+        },
+    }
+}
+
 /// A6 — `GET /api/sessions/work` groups a root with its two stamped
 /// children and leaves an unrelated session alone; the response carries
 /// no scoring vocabulary, repeat reads are byte-identical, a project
@@ -6216,6 +6337,243 @@ async fn sessions_work_groups_a_root_and_its_children_and_leaves_collapsed_listi
         .filter(|id| id.starts_with("work-"))
         .collect();
     assert_eq!(ids, ["work-lone", "work-root"], "{list_body}");
+}
+
+/// FXA6 — the job-ulid route glue: two sessions carrying a `grok_job`
+/// research row with the same ulid group as `job`; a third session
+/// carrying the same query as a non-`grok_job` kind must NOT join
+/// (pins the `kind == "grok_job"` filter).
+#[tokio::test]
+async fn sessions_work_joins_sessions_sharing_a_grok_job_ulid() {
+    let (_tmp, cfg, paths) = fixture_corpus();
+    let now = chrono::Utc::now().timestamp();
+    work_seed_named(&paths, "art-job-a", "job-a", now - 3600, "/work/joba", None);
+    work_seed_named(&paths, "art-job-b", "job-b", now - 3500, "/work/jobb", None);
+    work_seed_named(&paths, "art-job-c", "job-c", now - 3400, "/work/jobc", None);
+    work_add_research(&paths, "art-job-a", "job-a", "grok_job", "ulid-job-1");
+    work_add_research(&paths, "art-job-b", "job-b", "grok_job", "ulid-job-1");
+    work_add_research(&paths, "art-job-c", "job-c", "kb_search", "ulid-job-1");
+    std::fs::create_dir_all(&paths.config).unwrap();
+    std::fs::write(paths.token_file(), FIXTURE_TOKEN).unwrap();
+    let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths.clone())
+        .await
+        .expect("serve");
+    common::wait_docs_listed(addr, "smoke", 4).await;
+    let client = reqwest::Client::new();
+    let body: serde_json::Value = client
+        .get(url(addr, "/api/sessions/work"))
+        .header("Authorization", format!("Bearer {FIXTURE_TOKEN}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let groups = body["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), 2, "{body}");
+    assert_eq!(body["scan_capped"], false, "{body}");
+    let job = groups
+        .iter()
+        .find(|g| g["term"] == "job")
+        .expect("job group");
+    assert_eq!(job["members_total"], 2, "{body}");
+    let job_ids: Vec<&str> = job["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["session_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(job_ids, ["job-a", "job-b"], "{body}");
+    let alone = groups
+        .iter()
+        .find(|g| g["term"] == "alone")
+        .expect("alone group");
+    assert_eq!(alone["members_total"], 1, "{body}");
+    assert_eq!(alone["members"][0]["session_id"], "job-c", "{body}");
+}
+
+/// FXA6 — the slate route glue: a Take -> Take chain on the slate
+/// named by the rows' `project_slug` joins the two sessions as
+/// `slate_take`, and slate text never leaks into the response. This
+/// pins the slug source (reading it from the title would yield no
+/// edges and two alone groups).
+#[tokio::test]
+async fn sessions_work_follows_slate_take_chain() {
+    let (_tmp, cfg, paths) = fixture_corpus();
+    let now = chrono::Utc::now().timestamp();
+    work_seed_named(
+        &paths,
+        "art-take-a",
+        "take-a",
+        now - 3600,
+        "/work/takea",
+        Some("work-slatetest"),
+    );
+    work_seed_named(
+        &paths,
+        "art-take-b",
+        "take-b",
+        now - 3500,
+        "/work/takeb",
+        Some("work-slatetest"),
+    );
+    use kb_core::slate::Kind;
+    work_write_slate(
+        &paths,
+        "work-slatetest",
+        &[
+            work_post(1, Kind::Take, None, "take-a", "LEAK-MARKER take by a"),
+            work_post(
+                2,
+                Kind::Take,
+                Some(1),
+                "take-b",
+                "LEAK-MARKER takeover by b",
+            ),
+        ],
+    );
+    std::fs::create_dir_all(&paths.config).unwrap();
+    std::fs::write(paths.token_file(), FIXTURE_TOKEN).unwrap();
+    let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths.clone())
+        .await
+        .expect("serve");
+    common::wait_docs_listed(addr, "smoke", 4).await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(url(addr, "/api/sessions/work"))
+        .header("Authorization", format!("Bearer {FIXTURE_TOKEN}"))
+        .send()
+        .await
+        .unwrap();
+    let bytes = resp.bytes().await.unwrap();
+    let text = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(!text.contains("LEAK-MARKER"), "slate text leaked: {text}");
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let groups = body["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), 1, "{body}");
+    assert_eq!(groups[0]["term"], "slate_take", "{body}");
+    assert_eq!(groups[0]["members_total"], 2, "{body}");
+    let take_ids: Vec<&str> = groups[0]["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["session_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(take_ids, ["take-a", "take-b"], "{body}");
+}
+
+/// FXA6 — `limit`/`truncated`: two alone groups with `limit=1` yield
+/// exactly one group and `truncated: true` (ignoring the limit would
+/// return both and `truncated: false`).
+#[tokio::test]
+async fn sessions_work_honors_limit_and_reports_truncated() {
+    let (_tmp, cfg, paths) = fixture_corpus();
+    let now = chrono::Utc::now().timestamp();
+    work_seed_named(&paths, "art-lim-a", "lim-a", now - 3600, "/work/lima", None);
+    work_seed_named(&paths, "art-lim-b", "lim-b", now - 3500, "/work/limb", None);
+    std::fs::create_dir_all(&paths.config).unwrap();
+    std::fs::write(paths.token_file(), FIXTURE_TOKEN).unwrap();
+    let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths.clone())
+        .await
+        .expect("serve");
+    common::wait_docs_listed(addr, "smoke", 4).await;
+    let client = reqwest::Client::new();
+    let capped: serde_json::Value = client
+        .get(url(addr, "/api/sessions/work?limit=1"))
+        .header("Authorization", format!("Bearer {FIXTURE_TOKEN}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(capped["groups"].as_array().unwrap().len(), 1, "{capped}");
+    assert_eq!(capped["truncated"], true, "{capped}");
+    let full: serde_json::Value = client
+        .get(url(addr, "/api/sessions/work"))
+        .header("Authorization", format!("Bearer {FIXTURE_TOKEN}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(full["groups"].as_array().unwrap().len(), 2, "{full}");
+    assert_eq!(full["truncated"], false, "{full}");
+    assert_eq!(full["scan_capped"], false, "{full}");
+}
+
+/// FXA6 — `scan_capped`: exactly `WORK_SCAN_CAP` (2000) scanned rows
+/// report `scan_capped: true` (a hardcoded `false` would pass the
+/// other tests but fail here).
+#[tokio::test]
+async fn sessions_work_reports_scan_capped_at_cap() {
+    let (_tmp, cfg, paths) = fixture_corpus();
+    let now = chrono::Utc::now().timestamp();
+    let sm = KbName::new("smoke").unwrap();
+    let mut db = kb_core::storage::sqlite::Db::open(&paths.kb_sqlite(&sm)).unwrap();
+    for i in 0..2000i64 {
+        let sid = format!("scan-{i:04}");
+        let started_at = now - 1000 + i;
+        let row = kb_core::storage::sqlite::SessionRow {
+            artifact_id: format!("art-{sid}"),
+            session_id: sid.clone(),
+            started_at,
+            ended_at: started_at + 5,
+            message_count: 1,
+            first_user_prompt: None,
+            source_relative: format!("sessions/session-{started_at}-{sid}.html"),
+            title: Some("scan".into()),
+            cwd: Some("/work/scan".into()),
+            git_branch: None,
+            files_read_count: 0,
+            files_edited_count: 0,
+            token_total: 0,
+            tool_calls: 0,
+            model: None,
+            error_count: 0,
+            subagent_count: 0,
+            subagent_tokens: 0,
+            subagent_tool_calls: 0,
+            subagent_files_edited: 0,
+            subagent_launched_unstatted: 0,
+            project_key: Some("-work-scan".into()),
+            repo_root: Some("/work/scan".into()),
+            harness: "omp".into(),
+            cc_version: None,
+            last_assistant_text: None,
+            all_cwds: None,
+            commit_count: 0,
+            user_turns: 1,
+            active_secs: 5,
+            substance: None,
+            segment_of: None,
+            segment_idx: None,
+            evidence_json: None,
+            parent_session_id: None,
+            root_session_id: None,
+            project_slug: None,
+        };
+        db.sessions_upsert(&row).unwrap();
+    }
+    drop(db);
+    std::fs::create_dir_all(&paths.config).unwrap();
+    std::fs::write(paths.token_file(), FIXTURE_TOKEN).unwrap();
+    let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths.clone())
+        .await
+        .expect("serve");
+    common::wait_docs_listed(addr, "smoke", 4).await;
+    let client = reqwest::Client::new();
+    let body: serde_json::Value = client
+        .get(url(addr, "/api/sessions/work"))
+        .header("Authorization", format!("Bearer {FIXTURE_TOKEN}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(body["scan_capped"], true, "{body}");
 }
 
 #[tokio::test]

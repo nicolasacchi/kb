@@ -2971,6 +2971,22 @@ mod tests {
     }
 
     #[test]
+    fn trailer_sid_source_claude_beats_grok_and_kb() {
+        // The top rung: with Claude, Grok, KB_SESSION_ID and the
+        // harness ALL set, Claude wins (bash ladder order).
+        let c = decide_trailer_sid_source(&trailer_env(
+            Some("claude-sid"),
+            Some("grok-sid"),
+            Some("kb-sid"),
+            Some("omp"),
+        ));
+        assert_eq!(c.status, CheckStatus::Pass, "{}", c.detail);
+        assert!(c.detail.contains("CLAUDE_CODE_SESSION_ID"), "{}", c.detail);
+        assert!(!c.detail.contains("GROK_SESSION_ID"), "{}", c.detail);
+        assert!(!c.detail.contains("claude-sid"), "{}", c.detail);
+    }
+
+    #[test]
     fn trailer_sid_source_grok_passes() {
         let c = decide_trailer_sid_source(&trailer_env(
             None,
