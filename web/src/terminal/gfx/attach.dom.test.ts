@@ -82,6 +82,10 @@ describe("attachGfx tap to open", () => {
     pointer(s.fake.screen, "pointerdown", 30, 30);
     s.advance(100);
     pointer(s.fake.screen, "pointerup", 32, 31);
+    // Deferred past the click that follows the pointerup (the panel's host
+    // click handler refocuses the terminal; the dialog must focus after it).
+    expect(s.opened).toEqual([]);
+    await tick();
     expect(s.opened).toEqual([{ id: ID, sha: sha(ID), mime: "image/png", w: 400, h: 200 }]);
   });
 
@@ -91,6 +95,7 @@ describe("attachGfx tap to open", () => {
     await loadedPicture(s);
     pointer(s.fake.screen, "pointerdown", 150, 150);
     pointer(s.fake.screen, "pointerup", 150, 150);
+    await tick();
     expect(s.opened).toEqual([]);
   });
 
@@ -101,6 +106,7 @@ describe("attachGfx tap to open", () => {
     pointer(s.fake.screen, "pointerdown", 30, 30);
     s.advance(100);
     pointer(s.fake.screen, "pointerup", 45, 30);
+    await tick();
     expect(s.opened).toEqual([]);
   });
 
@@ -111,6 +117,7 @@ describe("attachGfx tap to open", () => {
     pointer(s.fake.screen, "pointerdown", 30, 30);
     s.advance(TAP_MAX_MS + 1);
     pointer(s.fake.screen, "pointerup", 30, 30);
+    await tick();
     expect(s.opened).toEqual([]);
   });
 
@@ -122,16 +129,22 @@ describe("attachGfx tap to open", () => {
     pointer(s.fake.screen, "pointerdown", 30, 30);
     s.advance(100);
     pointer(s.fake.screen, "pointerup", 30, 30);
+    await tick();
     expect(s.opened).toEqual([]);
   });
 
-  it("dispose stops tap handling", async () => {
+  it("dispose stops tap handling and cancels a pending open", async () => {
     stubRects({ left: 20, top: 20, right: 60, bottom: 80 });
     const s = setup();
     await loadedPicture(s);
-    s.handle.dispose();
     pointer(s.fake.screen, "pointerdown", 30, 30);
     pointer(s.fake.screen, "pointerup", 30, 30);
+    s.handle.dispose();
+    await tick();
+    expect(s.opened).toEqual([]);
+    pointer(s.fake.screen, "pointerdown", 30, 30);
+    pointer(s.fake.screen, "pointerup", 30, 30);
+    await tick();
     expect(s.opened).toEqual([]);
     expect(s.fake.listenerCount).toBe(0);
   });

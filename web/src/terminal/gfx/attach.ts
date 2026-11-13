@@ -89,6 +89,7 @@ export function attachGfx(term: Terminal, opts: AttachGfxOptions): GfxHandle {
   /** Seed-batch ids not yet requested. */
   const pendingSeed = new Set<number>();
   let prefetchRaf = 0;
+  let openTimer: ReturnType<typeof setTimeout> | undefined;
 
   const prefetchNow = (): void => {
     if (disposed || pendingSeed.size === 0) return;
@@ -135,7 +136,14 @@ export function attachGfx(term: Terminal, opts: AttachGfxOptions): GfxHandle {
     if (id === null) return;
     const def = defs.get(id);
     if (def === undefined) return;
-    opts.onOpenPicture({ id, sha: def.sha, mime: def.mime, w: def.w, h: def.h });
+    const picture: OpenPicture = { id, sha: def.sha, mime: def.mime, w: def.w, h: def.h };
+    // Open AFTER the `click` that follows this pointerup: the panel's host
+    // click handler focuses the terminal, and a dialog opened (and focused)
+    // synchronously would lose focus to it, leaving Esc going nowhere.
+    openTimer = setTimeout(() => {
+      openTimer = undefined;
+      if (!disposed) opts.onOpenPicture?.(picture);
+    }, 0);
   };
   screen?.addEventListener("pointerdown", onDown as EventListener, { capture: true, passive: true });
   screen?.addEventListener("pointerup", onUp as EventListener, { capture: true, passive: true });
@@ -179,6 +187,8 @@ export function attachGfx(term: Terminal, opts: AttachGfxOptions): GfxHandle {
       disposed = true;
       if (prefetchRaf !== 0) cancelFrame(prefetchRaf);
       prefetchRaf = 0;
+      if (openTimer !== undefined) clearTimeout(openTimer);
+      openTimer = undefined;
       for (const s of subs) {
         if (typeof s === "function") s();
         else s.dispose();
