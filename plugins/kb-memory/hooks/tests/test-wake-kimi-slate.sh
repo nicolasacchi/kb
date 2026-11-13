@@ -74,6 +74,11 @@ case "$base_out" in
   *) ok "baseline stays bare stdout (no envelope)" ;;
 esac
 
+case "$base_out" in
+  *'Addressed asks: ask'*'Kimi: answers to your asks arrive at your next prompt'*)
+    ok "Kimi slate-ask paragraph + delivery line are injected" ;;
+  *) bad "Kimi slate-ask paragraph + delivery line are injected (got: $base_out)" ;;
+esac
 # --- 1. non-empty slate text: appended AFTER the memory index -------------
 export SLATE_JSON='{"text":"NOW v7  #1 [claude/aaa 2m]  doing the thing","head_seq":42}'
 out1="$(run_wake "wk-sid-1" "$TMPROOT/cache1")"

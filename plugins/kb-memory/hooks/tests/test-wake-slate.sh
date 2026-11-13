@@ -85,6 +85,21 @@ case "$base_out" in
   *) bad "baseline still carries the protocol + memory index (got: $base_out)" ;;
 esac
 
+case "$base_out" in
+  *'Addressed asks: ask'*'kb slate wait #n as a BACKGROUND Bash command'*)
+    ok "Claude slate-ask paragraph + delivery line are injected" ;;
+  *) bad "Claude slate-ask paragraph + delivery line are injected (got: $base_out)" ;;
+esac
+omp_out="$(KB_HARNESS=omp run_wake "$TMPROOT/cache-omp")"
+case "$omp_out" in
+  *'Addressed asks: ask'*) ok "a non-claude harness still gets the shared paragraph" ;;
+  *) bad "a non-claude harness still gets the shared paragraph" ;;
+esac
+case "$omp_out" in
+  *'kb slate wait #n as a BACKGROUND'*) bad "a non-claude harness must NOT get the Claude wait line" ;;
+  *) ok "a non-claude harness does not get the Claude wait line" ;;
+esac
+
 # --- 1. non-empty slate text: appended AFTER the memory index -------------
 export SLATE_JSON='{"text":"NOW v7  #1 [claude/aaa 2m]  doing the thing","head_seq":42}'
 out1="$(run_wake "$TMPROOT/cache1")"

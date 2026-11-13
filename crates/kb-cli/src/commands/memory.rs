@@ -2814,6 +2814,53 @@ mod tests {
 
     // ---- memory-protocol.txt golden ------------------------------------
 
+    /// AW6 — the slate-ask paragraph is ONE text in three places: the wake
+    /// injection (`memory-protocol.txt`), the pasteable `CLAUDE.memory.md`,
+    /// and omp's `kb-omp.ts` (`SLATE_ASK_PROTOCOL`, shown in the post tool).
+    /// Byte-identical, and it must keep the trust carve-out narrow.
+    #[test]
+    fn slate_ask_paragraph_is_byte_identical_across_protocol_copies() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/kb-memory/hooks");
+        let ts = std::fs::read_to_string(dir.join("kb-omp.ts")).expect("read kb-omp.ts");
+        let start = ts
+            .find("SLATE_ASK_PROTOCOL = `")
+            .expect("SLATE_ASK_PROTOCOL in kb-omp.ts")
+            + "SLATE_ASK_PROTOCOL = `".len();
+        let end = start + ts[start..].find('`').expect("closing backtick");
+        let para = &ts[start..end];
+        assert!(para.starts_with("Addressed asks: ask "), "{para}");
+        assert!(!para.contains('\n'), "the paragraph is one line");
+        for needle in [
+            "--to you",
+            "--to <harness>",
+            "[you] on YOUR OWN ask",
+            "and nothing more",
+            "done #n \"chat: <answer>\" (never drop)",
+            "done #n \"went with <default>\"",
+        ] {
+            assert!(para.contains(needle), "paragraph lost: {needle}");
+        }
+        for name in ["memory-protocol.txt", "CLAUDE.memory.md"] {
+            let text = std::fs::read_to_string(dir.join(name)).expect("read protocol copy");
+            assert_eq!(
+                text.lines().filter(|l| *l == para).count(),
+                1,
+                "{name} must carry the shared slate-ask paragraph as one exact line"
+            );
+        }
+        // Per-harness delivery lines stay harness-scoped.
+        let proto = std::fs::read_to_string(dir.join("memory-protocol.txt")).unwrap();
+        assert!(
+            !proto.contains("kb slate wait"),
+            "wait advice is Claude-only, injected by kb-wake.sh"
+        );
+        let wake = std::fs::read_to_string(dir.join("kb-wake.sh")).unwrap();
+        assert!(wake.contains("run kb slate wait #n as a BACKGROUND Bash command"));
+        let omp_line = ts.contains("never run kb slate wait.");
+        assert!(omp_line, "omp copy must forbid running wait");
+    }
+
     /// v044-X3 (F8 carry) — the wake hooks inject `memory-protocol.txt` as the
     /// agent's instructions. Its claim about where a bare `kb remember`
     /// lands used to be a flat "GLOBAL by default", which the ladder in

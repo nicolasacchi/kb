@@ -73,6 +73,14 @@ else
   protocol=""
 fi
 
+# Per-harness slate-ask delivery line (the shared paragraph is already in
+# memory-protocol.txt). This hook is Claude Code's SessionStart; omp's
+# extension also runs it with KB_HARNESS=omp and carries its own line in
+# kb-omp.ts, so only an unset/claude harness gets the Claude line.
+if [ -n "$protocol" ] && [ "${KB_HARNESS:-claude}" = "claude" ]; then
+  protocol="$protocol"$'\n''Claude Code: after an addressed ask, run kb slate wait #n as a BACKGROUND Bash command (run_in_background, never &), main conversation only, not in a subagent, not under claude -p; its exit re-invokes you (0 answered, 4 timed out, 5 gone). If the operator answers in chat, stop the waiter first, then done #n "chat: <answer>".'
+fi
+
 # kb-cli defaults to http://127.0.0.1:4000 — KB_DAEMON_URL lets a project
 # (via .claude/settings.json `env`) point this hook at a non-default port.
 extra=()
