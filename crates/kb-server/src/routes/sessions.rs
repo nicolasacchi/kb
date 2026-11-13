@@ -3339,7 +3339,7 @@ mod work_tests {
         assert_eq!(display_name_of(None, Some("P"), "sid-12345678"), "P");
         assert_eq!(
             display_name_of(None, None, "sid-12345678"),
-            "session sid-123"
+            "session sid-1234"
         );
     }
 }
