@@ -26,8 +26,11 @@ use crate::runner::Runner;
 
 /// The default umask for the runner socket (then `chmod 0600` as well).
 const RUNNER_UMASK: u32 = 0o077;
-/// 128 KiB request line cap: the largest legal request (a 32 KiB
-/// paste whose bytes mostly need JSON escaping) fits with room.
+/// 128 KiB request line cap. The worst legal escape is 2x: paste text
+/// may not carry C0 controls other than tab and newline, nor DEL, so the
+/// only bytes that grow when JSON-escaped are the quote and the
+/// backslash (one byte to two). A 32 KiB paste of quotes is therefore
+/// about 64 KiB plus the envelope, which the old 64 KiB cap refused.
 const MAX_LINE: usize = 128 * 1024;
 
 /// Bind `runner.sock`, replacing a stale socket file.
@@ -289,6 +292,62 @@ mod tests {
         assert!(
             line.contains("bad-request"),
             "overlong line must be bad-request: {line}"
+        );
+        handle.abort();
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn legal_paste_line_between_64_and_128_kib_is_dispatched() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (handle, runner, _tx) = stub_runner(&root).await;
+        let sock = runner.cfg.run_dir.join("runner").join("runner.sock");
+        // The worst legal 32 KiB paste: every byte is a quote, which JSON
+        // escapes to two bytes.
+        let req = serde_json::json!({
+            "op": "paste", "id": "abcd1234", "viewer": "spa",
+            "text": "\"".repeat(32 * 1024),
+        });
+        let mut line = serde_json::to_string(&req).unwrap();
+        assert!(
+            line.len() > 64 * 1024 && line.len() < MAX_LINE,
+            "fixture must sit between the old and new cap: {}",
+            line.len()
+        );
+        line.push('\n');
+        let mut stream = UnixStream::connect(&sock).await.unwrap();
+        stream.write_all(line.as_bytes()).await.unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut reply = String::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            reader.read_line(&mut reply),
+        )
+        .await
+        .expect("a legal line must be answered within 10 s")
+        .unwrap();
+        assert!(
+            !reply.contains("request line exceeds"),
+            "a legal 32 KiB paste must reach dispatch: {reply}"
+        );
+        // The connection stays usable: a ping on the SAME stream answers ok.
+        reader
+            .get_mut()
+            .write_all(b"{\"v\":1,\"id\":2,\"op\":\"ping\"}\n")
+            .await
+            .unwrap();
+        let mut pong = String::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            reader.read_line(&mut pong),
+        )
+        .await
+        .expect("ping on the same connection must answer within 10 s")
+        .unwrap();
+        assert!(
+            pong.contains(r#""status":"ok""#),
+            "ping after paste: {pong}"
         );
         handle.abort();
         let _ = std::fs::remove_file(&sock);
