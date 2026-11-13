@@ -253,4 +253,27 @@ mod tests {
             .await
             .expect("splice end deadline");
     }
+
+    #[tokio::test]
+    async fn connect_tap_distinguishes_unknown_session_from_tap_down() {
+        let tmp = tempfile::tempdir().unwrap();
+        let run_dir = tmp.path().join("run");
+        std::fs::create_dir_all(run_dir.join("s")).unwrap();
+        let cfg = RunnerConfig::test_config(
+            run_dir.clone(),
+            "/bin/true".to_string(),
+            tmp.path().join("conf"),
+        );
+        let runner = Runner::direct(cfg);
+        // No session directory at all: "no such session" (code
+        // `not-found`, a 404 at kb-server).
+        let err = connect_tap(&runner, "abcd1234", None).await.unwrap_err();
+        assert!(matches!(err, RunnerError::NotFound(_)), "got {err:?}");
+        // The session directory exists but nothing listens on its
+        // tap.sock: an upstream failure (`tap-timeout`, a 502), never
+        // the same 404.
+        std::fs::create_dir_all(run_dir.join("s").join("abcd1234")).unwrap();
+        let err = connect_tap(&runner, "abcd1234", None).await.unwrap_err();
+        assert!(matches!(err, RunnerError::TapTimeout(_)), "got {err:?}");
+    }
 }

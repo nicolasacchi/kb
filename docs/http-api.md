@@ -1485,7 +1485,11 @@ GET    /api/terms/{id}/ws                    SPA-only terminal byte
                                             `?ticket=<t>&from=<offset>`
                                             (both optional except
                                             ticket). Handler-side gate
-                                            order: id shape (400) ->
+                                            order: id shape
+                                            (`^[a-z0-9]{1,32}$`, 400;
+                                            an id in that grammar the
+                                            runner does not know is a
+                                            404 at the stream open) ->
                                             enabled (bodiless 404) ->
                                             exact Origin (absent fails
                                             closed) -> caller class

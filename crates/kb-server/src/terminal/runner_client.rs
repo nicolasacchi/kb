@@ -357,7 +357,7 @@ impl UnixRunner {
         }
         // Any bytes the reply read buffered past the newline are the
         // first spliced envelopes; seed the stream with them.
-        let (pending, read_buf) = decode_seed(rest);
+        let (pending, read_buf) = decode_seed(rest)?;
         let (read, write) = stream.into_split();
         Ok(TermStream {
             read,
@@ -412,31 +412,35 @@ async fn read_reply_line(
 /// the next envelope, never dropped).
 fn decode_seed(
     rest: Vec<u8>,
-) -> (
-    std::collections::VecDeque<StreamItem>,
-    std::collections::VecDeque<u8>,
-) {
+) -> Result<
+    (
+        std::collections::VecDeque<StreamItem>,
+        std::collections::VecDeque<u8>,
+    ),
+    StreamError,
+> {
     let mut out = std::collections::VecDeque::new();
     let mut buf: std::collections::VecDeque<u8> = rest.iter().copied().collect();
     if buf.is_empty() {
-        return (out, buf);
+        return Ok((out, buf));
     }
     let mut decoded = Vec::new();
-    if decode_envelopes(&mut buf, &mut decoded).is_ok() {
-        for (kind, body) in decoded {
-            let frame = strip_s2c_id(&body).map(<[u8]>::to_vec).unwrap_or(body);
-            let item = match kind {
-                ENV_BINARY => StreamItem::Binary(frame),
-                ENV_TEXT => match String::from_utf8(frame) {
-                    Ok(text) => StreamItem::Text(text),
-                    Err(_) => continue,
-                },
-                _ => continue,
-            };
-            out.push_back(item);
-        }
+    // Same rule as `recv`: a malformed envelope or a non-UTF-8 text
+    // body is a stream error (BadReply), never a silent drop.
+    decode_envelopes(&mut buf, &mut decoded).map_err(|_| StreamError::BadReply)?;
+    for (kind, body) in decoded {
+        let frame = strip_s2c_id(&body).map(<[u8]>::to_vec).unwrap_or(body);
+        let item = match kind {
+            ENV_BINARY => StreamItem::Binary(frame),
+            ENV_TEXT => match String::from_utf8(frame) {
+                Ok(text) => StreamItem::Text(text),
+                Err(_) => return Err(StreamError::BadReply),
+            },
+            _ => continue,
+        };
+        out.push_back(item);
     }
-    (out, buf)
+    Ok((out, buf))
 }
 
 #[cfg(test)]
@@ -718,6 +722,14 @@ mod tests {
     }
 
     #[test]
+    fn decode_seed_rejects_non_utf8_text_instead_of_dropping_it() {
+        // Mirrors `recv`: a text envelope past the reply newline that
+        // is not UTF-8 is a stream error, not a silently lost frame.
+        let bad = fake_envelope(0, "v", &[0xff, 0xfe, 0xfd]);
+        assert!(matches!(decode_seed(bad), Err(StreamError::BadReply)));
+    }
+
+    #[test]
     fn decode_seed_keeps_trailing_partial() {
         // Bytes past the reply newline that form only a partial
         // envelope must survive as the read-buffer seed — not be
@@ -727,7 +739,7 @@ mod tests {
         let split = binary.len() / 2;
         let mut rest = full.clone();
         rest.extend_from_slice(&binary[..split]);
-        let (pending, leftover) = decode_seed(rest);
+        let (pending, leftover) = decode_seed(rest).expect("valid seed");
         assert_eq!(
             pending.into_iter().collect::<Vec<_>>(),
             vec![StreamItem::Text(r#"{"t":"ping"}"#.to_string())]
