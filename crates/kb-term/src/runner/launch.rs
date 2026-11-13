@@ -414,7 +414,7 @@ async fn launch_locked<S: Supervisor>(
         id,
         spec,
         &exit_keys,
-        plan.exit_steps,
+        recorded_exit_steps(spec, &plan),
         started,
     )
     .await?;
@@ -508,7 +508,7 @@ async fn set_user_options<S: Supervisor>(
     id: &str,
     spec: &ValidatedLaunch,
     exit_keys: &[String],
-    exit_steps: &'static [profiles::ExitStep],
+    exit_steps: Option<&'static [profiles::ExitStep]>,
     started: u64,
 ) -> Result<(), RunnerError> {
     let mut opts: Vec<(&str, String)> = vec![
@@ -519,12 +519,17 @@ async fn set_user_options<S: Supervisor>(
             "@kb_exit_keys",
             serde_json::to_string(exit_keys).map_err(|e| RunnerError::Internal(e.to_string()))?,
         ),
-        (
-            "@kb_exit_steps",
-            serde_json::to_string(&profiles::OwnedExitStep::from_slice(exit_steps))
-                .map_err(|e| RunnerError::Internal(e.to_string()))?,
-        ),
     ];
+    // Profile steps (with their waits) are recorded only when the caller
+    // gave no exit keys; the kill path prefers `@kb_exit_steps`, so
+    // recording them next to explicit keys would override the caller.
+    if let Some(steps) = exit_steps {
+        opts.push((
+            "@kb_exit_steps",
+            serde_json::to_string(&profiles::OwnedExitStep::from_slice(steps))
+                .map_err(|e| RunnerError::Internal(e.to_string()))?,
+        ));
+    }
     if let Some(sid) = &spec.resume_sid {
         opts.push(("@kb_resume_sid", sid.clone()));
     }
@@ -621,6 +626,16 @@ fn effective_exit_keys(spec: &ValidatedLaunch, plan: &profiles::LaunchPlan) -> V
         None => flattened_exit_keys(plan.exit_steps),
         Some(keys) => keys.clone(),
     }
+}
+
+/// The structured exit steps to record in `@kb_exit_steps`: the profile
+/// steps when the caller gave no exit keys, `None` (option left unset, so
+/// the kill path sends the caller's keys) when it did.
+fn recorded_exit_steps(
+    spec: &ValidatedLaunch,
+    plan: &profiles::LaunchPlan,
+) -> Option<&'static [profiles::ExitStep]> {
+    spec.exit_keys.is_none().then_some(plan.exit_steps)
 }
 
 /// Flatten exit steps to the key strings recorded for `@kb_exit_keys`
@@ -1274,6 +1289,23 @@ mod tests {
             effective_exit_keys(&explicit, &plan),
             vec!["C-c".to_string(), "C-c".to_string(), "C-d".to_string()],
             "explicit default-equal keys still win over the profile"
+        );
+        // The kill path prefers `@kb_exit_steps`, so explicit keys must
+        // leave it unrecorded or the profile steps would override them.
+        assert!(
+            recorded_exit_steps(&explicit, &plan).is_none(),
+            "explicit keys: no profile steps recorded"
+        );
+        assert!(
+            recorded_exit_steps(
+                &ValidatedLaunch {
+                    exit_keys: None,
+                    ..explicit
+                },
+                &plan
+            )
+            .is_some(),
+            "no caller keys: the profile steps are recorded"
         );
     }
 

@@ -494,6 +494,7 @@ async fn term_int_list_is_state_free() {
     );
     seed_cfg.tap_bin = Some(fixture("fake_tap.sh"));
     seed_cfg.require_tap = true;
+    seed_cfg.allow_verbatim_probe = true;
     let seed = kb_term::runner::Runner::direct(seed_cfg);
     ensure_layout(&seed.cfg).await.unwrap();
     check_tmux_version(&seed.tmux, "3.7c").await.unwrap();
@@ -591,6 +592,7 @@ async fn term_int_runner_restart_keeps_the_session_and_recreates_the_anchor() {
     );
     cfg.tap_bin = Some(fixture("fake_tap.sh"));
     cfg.require_tap = true;
+    cfg.allow_verbatim_probe = true;
     let a = kb_term::runner::Runner::direct(cfg);
     ensure_layout(&a.cfg).await.unwrap();
     check_tmux_version(&a.tmux, "3.7c").await.unwrap();
@@ -1015,6 +1017,7 @@ async fn term_int_kill_after_restart_reaps_holder() {
     );
     cfg.tap_bin = Some(fixture("fake_tap.sh"));
     cfg.require_tap = true;
+    cfg.allow_verbatim_probe = true;
     let a = kb_term::runner::Runner::direct(cfg);
     ensure_layout(&a.cfg).await.unwrap();
     check_tmux_version(&a.tmux, "3.7c").await.unwrap();
@@ -1865,6 +1868,7 @@ async fn term_int_runner_restart_readopts_a_responder_anchor() {
         );
         cfg.tap_bin = Some(fixture("fake_tap.sh"));
         cfg.require_tap = true;
+        cfg.allow_verbatim_probe = true;
         cfg
     };
     let a = kb_term::runner::Runner::direct(cfg1);
@@ -1892,6 +1896,7 @@ async fn term_int_runner_restart_readopts_a_responder_anchor() {
         );
         cfg.tap_bin = Some(fixture("fake_tap.sh"));
         cfg.require_tap = true;
+        cfg.allow_verbatim_probe = true;
         cfg
     };
     let b = kb_term::runner::Runner::direct(cfg2);
@@ -1955,6 +1960,7 @@ async fn term_int_restart_restores_viewers_and_paste_only() {
         );
         cfg.tap_bin = Some(fixture("fake_tap.sh"));
         cfg.require_tap = true;
+        cfg.allow_verbatim_probe = true;
         cfg
     };
     let a = kb_term::runner::Runner::direct(mk_cfg());
@@ -2234,11 +2240,14 @@ async fn term_int_server_env_defence_via_dispatch() {
     std::env::set_var("TERM_PROGRAM", "x");
     std::env::set_var("GHOSTTY_FOO", "1");
     let tr = TestRunner::new(tmux_bin.clone());
+    // `-c` is a forbidden argv element even under the verbatim probe, so
+    // the fixture program is a script file run by `/bin/sh`.
+    let script = tr.dir.path().join("env_then_sleep.sh");
+    std::fs::write(&script, "/usr/bin/env; exec sleep 300\n").unwrap();
     let (id, _pid) = tr
         .launch(vec![
             "/bin/sh".to_string(),
-            "-c".to_string(),
-            "/usr/bin/env; exec sleep 300".to_string(),
+            script.to_string_lossy().into_owned(),
         ])
         .await;
     let sock = tr.sock(&id);
@@ -2292,11 +2301,14 @@ async fn term_int_dirty_runner_env_does_not_leak_to_pane() {
     std::env::set_var("WEZTERM_PANE", "dirty");
     std::env::set_var("KB_SYNTH_SECRET", "synthetic-secret-value");
     let tr = TestRunner::new(tmux_bin.clone());
+    // `-c` is a forbidden argv element even under the verbatim probe, so
+    // the fixture program is a script file run by `/bin/sh`.
+    let script = tr.dir.path().join("env_then_sleep.sh");
+    std::fs::write(&script, "/usr/bin/env; exec sleep 300\n").unwrap();
     let (id, _pid) = tr
         .launch(vec![
             "/bin/sh".to_string(),
-            "-c".to_string(),
-            "/usr/bin/env; exec sleep 300".to_string(),
+            script.to_string_lossy().into_owned(),
         ])
         .await;
     let sock = tr.sock(&id);
