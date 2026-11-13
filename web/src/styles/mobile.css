@@ -1074,7 +1074,7 @@ body.kb-immersive .kb-tabbar {
  * against the drawer and the FAB is already solved).
  *
  * The mobile-only affordance REMOVALS (no body editor, no refs, no subject;
- * mark/drop/done only on a card) are done in TSX, not here — hiding a
+ * mark/drop/done plus answer on an ask (D35) on a card) are done in TSX, not here — hiding a
  * control with CSS leaves it focusable and in the aria tree, and a phone
  * that can still tab to "pin" is not the reader this rules-matrix row
  * describes. */

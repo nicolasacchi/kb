@@ -54,6 +54,10 @@ protocol=""
 if [ -f "$protocol_file" ]; then
   protocol="$(cat "$protocol_file" 2>/dev/null)"
 fi
+# Per-harness slate-ask delivery line (the shared paragraph is in the file).
+if [ -n "$protocol" ]; then
+  protocol="$protocol"$'\n''Kimi: answers to your own asks arrive in full in the slate delta of your next prompt; never run kb slate wait.'
+fi
 
 # (b) — same rendering as kb-wake.sh. kb-cli defaults to
 # http://127.0.0.1:4000 — KB_DAEMON_URL overrides.

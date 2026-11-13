@@ -1200,6 +1200,179 @@ async fn the_slate_list_reports_open_counts_and_topics() {
     assert_eq!(meadow["counts"]["found"], 1);
 }
 
+/// AW2: `ask_for_you` counts the operator's UNANSWERED addressed asks, and
+/// `ask --to` is validated on the wire (`bad-to`).
+#[tokio::test]
+async fn the_slate_list_counts_unanswered_asks_addressed_to_you() {
+    let (_tmp, addr, _paths) = boot().await;
+    let client = reqwest::Client::new();
+    let ask_to = |line: &str, to: Option<&str>| {
+        let mut b = body("ask", line, Some("sess-a"));
+        if let Some(t) = to {
+            b["to"] = json!(t);
+        }
+        b
+    };
+    assert_eq!(
+        post(&client, addr, "orchard", ask_to("one?", Some("you")))
+            .await
+            .0,
+        201
+    );
+    assert_eq!(
+        post(&client, addr, "orchard", ask_to("two?", Some("you")))
+            .await
+            .0,
+        201
+    );
+    assert_eq!(
+        post(&client, addr, "orchard", ask_to("three?", Some("omp")))
+            .await
+            .0,
+        201
+    );
+    assert_eq!(
+        post(&client, addr, "orchard", ask_to("four?", None))
+            .await
+            .0,
+        201
+    );
+
+    let (status, v) = post(&client, addr, "orchard", ask_to("five?", Some("operator"))).await;
+    assert_eq!(status, 400, "{v}");
+    assert_eq!(v["code"], "bad-to", "{v}");
+
+    let list = |c: reqwest::Client| async move {
+        let rows: Vec<Value> =
+            serde_json::from_value(get_json(&c, addr, "/api/slates").await).unwrap();
+        rows.into_iter().find(|r| r["slug"] == "orchard").unwrap()
+    };
+    let row = list(client.clone()).await;
+    assert_eq!(row["ask_for_you"], 2, "{row}");
+    assert_eq!(row["counts"]["ask_open"], 4);
+
+    // Answering #1 moves it out of the operator's queue (it now waits on
+    // its asker) but not off the board.
+    let mut ans = body("answer", "yes", Some("sess-b"));
+    ans["re"] = json!(1);
+    assert_eq!(post(&client, addr, "orchard", ans).await.0, 201);
+    let row = list(client.clone()).await;
+    assert_eq!(row["ask_for_you"], 1, "{row}");
+    assert_eq!(row["counts"]["ask_open"], 4);
+
+    // The board carries `to` and `last_answer`.
+    let board = get_json(&client, addr, "/api/slates/orchard?view=board").await;
+    let asks = board["sections"]["ask"].as_array().unwrap().clone();
+    let first = asks.iter().find(|c| c["seq"] == 1).unwrap();
+    assert_eq!(first["to"], "you");
+    assert_eq!(first["last_answer"]["line"], "yes");
+}
+
+/// AW2 review: `ask_for_you` counts LOGICAL asks. An edited ask is one
+/// question, a `done` on an OLDER version closes the whole chain (board and
+/// count agree), a branched edit counts once, and a closed slate has nothing
+/// the operator can answer.
+#[tokio::test]
+async fn ask_for_you_counts_logical_asks_and_is_zero_on_a_closed_slate() {
+    let (_tmp, addr, _paths) = boot().await;
+    let client = reqwest::Client::new();
+    let row = |c: reqwest::Client, slug: &'static str| async move {
+        let rows: Vec<Value> =
+            serde_json::from_value(get_json(&c, addr, "/api/slates").await).unwrap();
+        rows.into_iter().find(|r| r["slug"] == slug).unwrap()
+    };
+    let ask_to_you = |line: &str, supersedes: Option<u64>| {
+        let mut b = body("ask", line, Some("sess-a"));
+        b["to"] = json!("you");
+        if let Some(s) = supersedes {
+            b["supersedes"] = json!(s);
+        }
+        b
+    };
+
+    // #1 ask, #2 edits #1: one question, one board row.
+    assert_eq!(
+        post(&client, addr, "orchard", ask_to_you("one?", None))
+            .await
+            .0,
+        201
+    );
+    assert_eq!(
+        post(
+            &client,
+            addr,
+            "orchard",
+            ask_to_you("one, reworded?", Some(1))
+        )
+        .await
+        .0,
+        201
+    );
+    let r = row(client.clone(), "orchard").await;
+    assert_eq!(
+        (r["ask_for_you"].as_u64(), r["counts"]["ask_open"].as_u64()),
+        (Some(1), Some(1)),
+        "{r}"
+    );
+
+    // Branched edit: #3 also edits #1 -> two rows, still ONE question.
+    assert_eq!(
+        post(
+            &client,
+            addr,
+            "orchard",
+            ask_to_you("one, other wording?", Some(1))
+        )
+        .await
+        .0,
+        201
+    );
+    let r = row(client.clone(), "orchard").await;
+    assert_eq!(r["ask_for_you"], 1, "{r}");
+
+    // A done aimed at the OLDEST version closes every version.
+    let mut done = body("done", "handled in chat", Some("sess-a"));
+    done["re"] = json!(1);
+    let (status, v) = post(&client, addr, "orchard", done).await;
+    assert_eq!(status, 201, "{v}");
+    let r = row(client.clone(), "orchard").await;
+    assert_eq!(
+        (r["ask_for_you"].as_u64(), r["counts"]["ask_open"].as_u64()),
+        (Some(0), Some(0)),
+        "{r}"
+    );
+    let board = get_json(&client, addr, "/api/slates/orchard?view=board").await;
+    assert!(
+        board["sections"]["ask"].as_array().unwrap().is_empty(),
+        "{board}"
+    );
+
+    // A closed slate: nothing on it can be answered (409), so the queue is 0
+    // even though the board still shows the ask.
+    assert_eq!(
+        post(&client, addr, "meadow", ask_to_you("anyone?", None))
+            .await
+            .0,
+        201
+    );
+    let r = row(client.clone(), "meadow").await;
+    assert_eq!(r["ask_for_you"], 1, "{r}");
+    let resp = client
+        .post(url(addr, "/api/slates/meadow/close"))
+        .json(&json!({"line": "wrapped up", "prov": prov(Some("sess-a"))}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let r = row(client.clone(), "meadow").await;
+    assert_eq!(r["closed"], true);
+    assert_eq!(r["ask_for_you"], 0, "{r}");
+    assert_eq!(
+        r["counts"]["ask_open"], 1,
+        "ask_open is left as it was: {r}"
+    );
+}
+
 /// The 400 lints the pure engine owns, seen through the wire: every one
 /// names itself with a `code` and says what to do instead.
 #[tokio::test]
@@ -1999,4 +2172,62 @@ async fn an_answered_ask_is_not_closed_again_and_missing_slates_are_noops() {
     let dones = done_posts(&raw);
     assert_eq!(dones.len(), 1, "only the xyz ask got a done: {raw:?}");
     assert_eq!(dones[0]["re"], 2);
+}
+
+/// The per-prompt delta carries an answer to the READING session's own
+/// ask in full, even though the ask is already behind its cursor; another
+/// session's delta stays empty, and reading writes nothing.
+#[tokio::test]
+async fn the_delta_carries_answers_to_the_sessions_own_asks() {
+    let (_tmp, addr, _paths) = boot().await;
+    let client = reqwest::Client::new();
+    assert_eq!(
+        post(
+            &client,
+            addr,
+            "orchard",
+            body("ask", "which gate?", Some("sess-a"))
+        )
+        .await
+        .0,
+        201
+    );
+    let mut ans = body("answer", "the review gate", Some("sess-b"));
+    ans["re"] = json!(1);
+    assert_eq!(post(&client, addr, "orchard", ans).await.0, 201);
+
+    let mine = get_json(
+        &client,
+        addr,
+        "/api/slates/orchard/delta?since=1&session=sess-a",
+    )
+    .await;
+    let text = mine["text"].as_str().unwrap();
+    assert!(
+        text.contains("ANSWER #2 → your ask #1") && text.contains("the review gate"),
+        "{text}"
+    );
+    let other = get_json(
+        &client,
+        addr,
+        "/api/slates/orchard/delta?since=1&session=sess-c",
+    )
+    .await;
+    assert_eq!(other["text"], "", "{other}");
+    // idempotent read: asking again says the same thing
+    let again = get_json(
+        &client,
+        addr,
+        "/api/slates/orchard/delta?since=1&session=sess-a",
+    )
+    .await;
+    assert_eq!(again["text"], mine["text"]);
+    // past the cursor there is nothing new
+    let past = get_json(
+        &client,
+        addr,
+        "/api/slates/orchard/delta?since=2&session=sess-a",
+    )
+    .await;
+    assert_eq!(past["text"], "", "{past}");
 }

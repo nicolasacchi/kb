@@ -102,6 +102,15 @@ export default function SlatesRoute() {
                     {relativeAge(s.updated_unix)}
                   </span>
                 </Link>
+                {!s.closed && (s.ask_for_you ?? 0) > 0 && (
+                  <Link
+                    className="slates-row__foryou"
+                    to={`/slates/${encodeURIComponent(s.slug)}`}
+                    data-testid={`slate-foryou-${s.slug}`}
+                  >
+                    {s.ask_for_you} question{s.ask_for_you === 1 ? "" : "s"} for you
+                  </Link>
+                )}
                 <div className="slates-row__counts">
                   {SECTION_CHIPS.filter((c) => (s.counts?.[c.key] ?? 0) > 0).map(
                     (c) => {

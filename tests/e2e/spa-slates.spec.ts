@@ -383,11 +383,16 @@ test.describe("slate board — pin, composer, refusals, drawings", () => {
     await page.keyboard.press("Escape");
     await expect(composer).toBeHidden();
 
-    // Card actions on mobile are mark / drop / done only.
+    // Card actions on mobile are mark / drop / done, plus answer on an ask (D35).
     const card = page.locator(`#slate-post-${s.found}`);
     await expect(card.locator('[data-act="mark"]')).toBeVisible();
     await expect(card.locator('[data-act="edit"]')).toHaveCount(0);
     await expect(card.locator('[data-act="pin"]')).toHaveCount(0);
+    await expect(card.locator('[data-act="answer"]')).toHaveCount(0);
+    const askCard = page.locator(`#slate-post-${s.ask}`);
+    await expect(askCard.locator('[data-act="answer"]')).toBeVisible();
+    await askCard.locator('[data-act="answer"]').click();
+    await expect(composer.getByRole("heading", { name: `Answer #${s.ask}` })).toBeVisible();
   });
 });
 
