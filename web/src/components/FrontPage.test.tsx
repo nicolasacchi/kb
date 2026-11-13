@@ -191,4 +191,21 @@ describe("FrontPage", () => {
     expect(clean).toBeGreaterThan(0);
     expect(duplicated).toBe(clean);
   });
+
+  it("coverage rail shows questions for you, linked, only when > 0", async () => {
+    const base = {
+      head_seq: 1, generation: 1, updated_unix: NOW_S, closed: false, topics: [],
+      counts: { now: 0, warn: 0, hand_unack: 0, ask_open: 1, take_live: 0, take_stale: 0, take_contested: 0, found: 0, idea: 0, tried: 0 },
+    };
+    vi.mocked(fetchSlates).mockResolvedValue([{ ...base, slug: "docs", ask_for_you: 2 }] as never);
+    mount();
+    const el = await screen.findByTestId("frontpage-foryou");
+    expect(el.textContent).toContain("2 questions for you");
+    expect(el.querySelector("a")?.getAttribute("href")).toBe("/slates/docs");
+    cleanup();
+    vi.mocked(fetchSlates).mockResolvedValue([{ ...base, slug: "docs", ask_for_you: 0 }] as never);
+    mount();
+    await screen.findByTestId("frontpage-lead");
+    expect(screen.queryByTestId("frontpage-foryou")).toBeNull();
+  });
 });

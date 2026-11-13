@@ -387,9 +387,13 @@ function CoverageRail({ kb, comments, desk, slates, sessions, reviewCount, onRev
   const slateRows = slates
     .filter((s) => !s.closed && s.counts.now > 0 && (kb == null || s.slug === kb))
     .slice(0, 2);
+  const forYouRows = slates.filter(
+    (s) => !s.closed && (s.ask_for_you ?? 0) > 0 && (kb == null || s.slug === kb),
+  );
   const totalOpen = comments?.total_open ?? 0;
   const empty =
     totalOpen === 0 &&
+    forYouRows.length === 0 &&
     deskRows.length === 0 &&
     slateRows.length === 0 &&
     !sessions &&
@@ -436,6 +440,18 @@ function CoverageRail({ kb, comments, desk, slates, sessions, reviewCount, onRev
             ))}
           </ul>
         </div>
+      )}
+
+      {forYouRows.length > 0 && (
+        <ul className="kb-fp__cov-list kb-fp__cov-list--links" data-testid="frontpage-foryou">
+          {forYouRows.map((s) => (
+            <li key={s.slug}>
+              <Link to={`/slates/${encodeURIComponent(s.slug)}`}>
+                {s.ask_for_you} question{s.ask_for_you === 1 ? "" : "s"} for you · {s.slug}
+              </Link>
+            </li>
+          ))}
+        </ul>
       )}
 
       {slateRows.map((s) => (

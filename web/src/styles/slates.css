@@ -401,6 +401,41 @@
 .slate-card__who.is-you {
   color: var(--accent);
 }
+.slate-card__to,
+.slate-card__askstate {
+  padding: 0 6px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+}
+.slate-card__to.is-you {
+  border-color: var(--accent);
+  background: var(--accent-fill);
+  color: var(--accent-fill-fg);
+  font-weight: 600;
+}
+.slate-card__askstate.is-answered {
+  border-style: dashed;
+  color: var(--ink-dim);
+}
+.slate-card__lastanswer {
+  margin: 4px 0 0;
+  padding-left: 8px;
+  border-left: 2px solid var(--rule-hi);
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+}
+.slates-row__foryou {
+  align-self: flex-start;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-fill);
+  color: var(--accent-fill-fg);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-decoration: none;
+}
 .slate-card__age {
   color: var(--ink-dim);
   font-variant-numeric: tabular-nums;

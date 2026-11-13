@@ -36,6 +36,19 @@ export const COMPOSER_KINDS: readonly SlateKind[] = [
   "answer",
 ];
 
+/// Addressees for an `ask` (AW1): `any` is the default and sends NO `to`
+/// (absent ≡ any); `you` is the operator; the rest are harnesses.
+export const ASK_TO_OPTIONS: readonly string[] = [
+  "any",
+  "you",
+  "claude",
+  "codex",
+  "opencode",
+  "grok",
+  "kimi",
+  "omp",
+];
+
 export const LINE_MAX = 200;
 export const BODY_MAX = 2000;
 export const REFS_MAX = 8;
@@ -54,6 +67,8 @@ export type ComposerSeed = {
   supersedes?: number;
   /// Set by "answer" — the ask this answers.
   re?: number;
+  /// Prefill for an ask's addressee (an edit of an addressed ask).
+  to?: string;
 };
 
 type Props = {
@@ -85,6 +100,7 @@ export default function SlateComposer({
   const [subject, setSubject] = useState(seed?.subject ?? "");
   const [failed, setFailed] = useState(seed?.failed ?? "");
   const [refsText, setRefsText] = useState((seed?.refs ?? []).join(" "));
+  const [to, setTo] = useState(seed?.to ?? "any");
   const [busy, setBusy] = useState(false);
   const lineRef = useRef<HTMLInputElement>(null);
 
@@ -99,6 +115,7 @@ export default function SlateComposer({
     setTopic(seed?.topic ?? "");
     setSubject(seed?.subject ?? "");
     setFailed(seed?.failed ?? "");
+    setTo(seed?.to ?? "any");
     setRefsText((seed?.refs ?? []).join(" "));
     const t = setTimeout(() => lineRef.current?.focus(), 0);
     return () => clearTimeout(t);
@@ -159,6 +176,7 @@ export default function SlateComposer({
       if (!mobile && needsSubject && subject.trim()) post.subject = subject.trim();
       if (!mobile && kind === "tried" && failed.trim()) post.failed = failed.trim();
       if (!mobile && refs.length) post.refs = refs;
+      if (kind === "ask" && to !== "any") post.to = to;
       if (seed?.supersedes !== undefined) post.supersedes = seed.supersedes;
       if (seed?.re !== undefined) post.re = seed.re;
       await onSubmit(post);
@@ -281,6 +299,26 @@ export default function SlateComposer({
             ))}
           </datalist>
         </div>
+
+        {kind === "ask" && (
+          <div className="slate-composer__row">
+            <label className="slate-composer__lbl" htmlFor={`${uid}-to`}>
+              To
+            </label>
+            <select
+              id={`${uid}-to`}
+              className="slate-composer__to"
+              value={to}
+              onChange={(e) => setTo(e.target.value)}
+            >
+              {ASK_TO_OPTIONS.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {/* Everything below is DESKTOP-ONLY (rules matrix "Mobile"). */}
         {!mobile && needsSubject && (

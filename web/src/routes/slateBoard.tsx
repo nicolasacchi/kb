@@ -214,6 +214,7 @@ export default function SlateBoardRoute() {
           subject: c.subject,
           refs: (c.refs ?? []).map((r) => r.raw),
           supersedes: c.seq,
+          to: c.to,
         }),
       onPin: (c, pin) =>
         void post(

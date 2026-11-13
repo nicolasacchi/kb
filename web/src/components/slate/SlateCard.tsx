@@ -195,6 +195,8 @@ export default function SlateCard({
   const live = card.liveness ? glyphForLiveness(card.liveness) : null;
   const opacity = opacityForAge(card.age_secs);
   const refs = card.refs ?? [];
+  const isAsk = card.kind === "ask";
+  const answered = (card.answers ?? 0) > 0;
   const seen = seenChipFor(card);
   const rawRefs = useMemo(
     () => (card.refs ?? []).map((r) => r.raw),
@@ -320,6 +322,28 @@ export default function SlateCard({
             taken over by {card.taken_over_by}
           </span>
         )}
+        {isAsk && card.to && card.to !== "any" && (
+          <span
+            className={`slate-card__to${card.to === "you" ? " is-you" : ""}`}
+            data-to={card.to}
+            title={card.to === "you" ? "A question for the operator" : `Addressed to ${card.to}`}
+          >
+            → {card.to}
+          </span>
+        )}
+        {isAsk && (
+          <span
+            className={`slate-card__askstate${answered ? " is-answered" : ""}`}
+            data-state={answered ? "answered" : "open"}
+            title={
+              answered
+                ? "Answered, but still on the board until the asker posts done"
+                : "No answer yet"
+            }
+          >
+            {answered ? "answered — waiting for asker" : "open"}
+          </span>
+        )}
         {card.answers !== undefined && card.answers > 0 && (
           <span className="slate-card__answers">
             {card.answers} answer{card.answers === 1 ? "" : "s"}
@@ -339,6 +363,23 @@ export default function SlateCard({
           </span>
         )}
       </div>
+
+      {isAsk && card.last_answer && (
+        <p className="slate-card__lastanswer" data-testid="slate-last-answer">
+          <span
+            className={`slate-card__who${card.last_answer.who.origin === "human" ? " is-you" : ""}`}
+            title={card.last_answer.who.tag}
+          >
+            {card.last_answer.who.origin === "human"
+              ? `[${authorChip(card.last_answer.who)}]`
+              : authorChip(card.last_answer.who)}
+          </span>{" "}
+          <span className="slate-card__lastanswer-line">{card.last_answer.line}</span>{" "}
+          <span className="slate-card__age" title={`${card.last_answer.age_secs}s`}>
+            {ageLabel(card.last_answer.age_secs)}
+          </span>
+        </p>
+      )}
 
       {card.body && (
         <>
