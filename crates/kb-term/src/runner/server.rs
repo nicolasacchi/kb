@@ -1,6 +1,6 @@
 //! `runner.sock`: newline-delimited JSON over a unix stream.
 //!
-//! Many requests per connection; the request line is capped at 64 KiB
+//! Many requests per connection; the request line is capped at 128 KiB
 //! (longer -> `bad-request`, connection closed). Responses answer in the
 //! envelope `{v: 1, id, status: "ok"|"err", ...}`.
 //!
@@ -26,8 +26,9 @@ use crate::runner::Runner;
 
 /// The default umask for the runner socket (then `chmod 0600` as well).
 const RUNNER_UMASK: u32 = 0o077;
-/// 64 KiB request line cap.
-const MAX_LINE: usize = 64 * 1024;
+/// 128 KiB request line cap: the largest legal request (a 32 KiB
+/// paste whose bytes mostly need JSON escaping) fits with room.
+const MAX_LINE: usize = 128 * 1024;
 
 /// Bind `runner.sock`, replacing a stale socket file.
 pub fn bind_runner_socket(path: &Path) -> std::io::Result<UnixListener> {
@@ -140,7 +141,7 @@ async fn handle_connection<S: Supervisor + 'static>(runner: Arc<Runner<S>>, stre
             // Over-long request: bad-request and close the connection.
             let err = crate::wire::Response::Err {
                 code: "bad-request".to_string(),
-                message: "request line exceeds 64 KiB".to_string(),
+                message: "request line exceeds 128 KiB".to_string(),
             };
             let _ = respond(&mut write_half, None, err).await;
             return;
@@ -271,10 +272,10 @@ mod tests {
         let root = dir.path().to_path_buf();
         let (handle, runner, _tx) = stub_runner(&root).await;
         let sock = runner.cfg.run_dir.join("runner").join("runner.sock");
-        // 128 KiB without a newline: the server must answer bad-request
+        // 256 KiB without a newline: the server must answer bad-request
         // from a bounded read (never buffer the whole line).
         let mut stream = UnixStream::connect(&sock).await.unwrap();
-        let big = vec![b'x'; 128 * 1024];
+        let big = vec![b'x'; 256 * 1024];
         let _ = stream.write_all(&big).await; // server closes early; EPIPE ok
         let mut reader = BufReader::new(stream);
         let mut line = String::new();
