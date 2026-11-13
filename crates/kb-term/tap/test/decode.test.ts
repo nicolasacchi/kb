@@ -150,6 +150,28 @@ test('pause_continue_exit_events', () => {
   expect(x2.kind === 'exit' && x2.reason === '').toBe(true);
 });
 
+test('exit_prefix_is_strict_and_pause_pane_tolerates_spacing', () => {
+  const d = new ControlDecoder();
+  // %exitFoo is not an exit: bare %exit or %exit + space + reason only.
+  const evs = d.push(enc(`%exitFoo${NL}%pause  %0${NL}%continue  %7${NL}`));
+  expect(evs.map(e => e.kind)).toEqual(['other', 'pause', 'continue']);
+  expect(evs[1].kind === 'pause' && evs[1].pane === '%0').toBe(true);
+  expect(evs[2].kind === 'continue' && evs[2].pane === '%7').toBe(true);
+});
+
+test('over_range_octal_escape_is_malformed_not_wrapped', () => {
+  // \777 is three octal digits but not a byte: the backslash is literal and
+  // counted, never a wrapped 255.
+  expect(eq(decodeValue(enc('\\777')), enc('\\777'))).toBe(true);
+  expect(eq(decodeValue(enc('a\\400b')), enc('a\\400b'))).toBe(true);
+  const d = new ControlDecoder();
+  const evs = d.push(enc('%output %0 \\777' + NL));
+  expect(evs.length).toBe(1);
+  expect(evs[0].kind === 'output' && eq(evs[0].data, enc('\\777'))).toBe(true);
+  expect(d.stats.badEscapes).toBe(1);
+});
+
+
 test('oversize_line_is_discarded_and_resyncs', () => {
   const d = new ControlDecoder();
   const big = new Uint8Array(5 * 1024 * 1024).fill(0x61);

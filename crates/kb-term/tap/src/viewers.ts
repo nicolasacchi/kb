@@ -243,6 +243,9 @@ export class TapServer {
         scrollback: scrollback === 20000 ? 20000 : 50000,
         atOffset,
         ground: this.ground,
+        // joinNow's `twinOffset === X && !twinBroken` guard is the
+        // twin-behind check for this caller, so nothing is in flight here.
+        pending: 0,
       });
       return seed.bytes;
     });

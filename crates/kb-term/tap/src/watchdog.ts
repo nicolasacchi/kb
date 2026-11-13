@@ -48,6 +48,8 @@ export class Watchdog {
   private timer: ReturnType<typeof setInterval> | null = null;
   private tickCount = 0;
   private lastTickAt = 0;
+  private rssChecks = 0;
+  private rssUnreadable = 0;
 
   constructor(hooks: WatchdogHooks) {
     this.hooks = hooks;
@@ -105,15 +107,27 @@ export class Watchdog {
   }
 
   /** Check tmux RSS once. Over the limit fires onRetap exactly ONCE until
-   * the RSS recovers below the limit. Returns the last RSS seen. */
+   * the RSS recovers below the limit. Returns the last RSS seen, or
+   * undefined when it could not be read -- counted in stats() so that
+   * 'under limit' is distinguishable from 'not measuring'. */
   checkRss(): number | undefined {
+    this.rssChecks++;
     const getPid = this.hooks.getPid;
-    if (!getPid) return undefined;
+    if (!getPid) {
+      this.rssUnreadable++;
+      return undefined;
+    }
     const pid = getPid();
-    if (pid === undefined) return undefined;
+    if (pid === undefined) {
+      this.rssUnreadable++;
+      return undefined;
+    }
     const read = this.hooks.readRssBytes ?? readProcRssBytes;
     const rss = read(pid);
-    if (rss === undefined) return undefined;
+    if (rss === undefined) {
+      this.rssUnreadable++;
+      return undefined;
+    }
     if (rss > TMUX_RSS_LIMIT_BYTES) {
       if (!this.retapFired) {
         this.retapFired = true;
@@ -123,6 +137,11 @@ export class Watchdog {
       this.retapFired = false;
     }
     return rss;
+  }
+
+  /** RSS observability: total checks and how many could not measure. */
+  stats(): { rssChecks: number; rssUnreadable: number } {
+    return { rssChecks: this.rssChecks, rssUnreadable: this.rssUnreadable };
   }
 
   /** Whether a retap has fired and not yet recovered. */

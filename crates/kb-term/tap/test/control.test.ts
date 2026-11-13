@@ -37,12 +37,13 @@ class FakeSpawn {
   writes: string[] = [];
   stdout = new FakeStdout();
   killed = false;
-
+  failWrites = false;
   fn = (argv: string[]): SpawnedProcess => {
     this.argv = argv;
     return {
       stdin: {
         write: (d: string) => {
+          if (this.failWrites) throw new Error('EPIPE');
           this.writes.push(d);
           return d.length;
         },
@@ -305,4 +306,63 @@ test('control_start_acks_pause_after_with_no_initial_begin', async () => {
   fake.stdout.push(enc('%begin 7000 0 0\n%end 7000 0 0\n'));
   await starting;
   c.stop();
+});
+
+test('control_cmd_before_start_rejects_without_orphaning', async () => {
+  const fake = new FakeSpawn();
+  const c = new Control({ tmuxBin: '/fake/tmux-3.7c', socketPath: '/tmp/s.sock', sessionName: 's1', spawn: fake.fn });
+  // Not started: cmd/write must return a rejected PROMISE (so .catch()
+  // callers see it -- a synchronous throw would escape .catch()), and no
+  // Pending may be left orphaned.
+  const err = await c.cmd('display-message -p -t %0 x').then(() => null, (e: unknown) => e);
+  expect(err).toBeInstanceOf(Error);
+  expect((err as Error).message).toBe('control client not started');
+  const errs = await Promise.all(
+    c.write(['one', 'two']).map((q) => q.then(() => null, (e: unknown) => e)),
+  );
+  expect(errs.every((e) => e instanceof Error && (e as Error).message === 'control client not started')).toBe(true);
+  // The rejected calls never reached the fake's stdin.
+  expect(fake.writes.length).toBe(0);
+  // A subsequent real start is unaffected: an orphaned Pending would
+  // consume the pause-after %begin block and start() would hang.
+  const starting = c.start();
+  fake.stdout.push(enc('%begin 1000 0 0\n%end 1000 0 0\n'));
+  fake.stdout.push(enc('%begin 1000 1 0\n%end 1000 1 0\n'));
+  await starting;
+  expect(fake.writes.length).toBe(1);
+  c.stop();
+});
+
+test('control_pause_continue_failure_still_runs_handlers', async () => {
+  const fake = new FakeSpawn();
+  const c = await start(fake);
+  // Make stdin writes throw (e.g. a broken pipe): the %pause continue
+  // must not silence onPause.
+  fake.failWrites = true;
+  let paused = 0;
+  c.onPause(() => {
+    paused++;
+  });
+  fake.stdout.push(enc('%pause %0\n'));
+  await waitFor(() => paused === 1);
+  expect(c.lastError).not.toBeNull();
+  fake.failWrites = false;
+  c.stop();
+});
+
+test('command_builders_reject_invalid_pane_ids', () => {
+  expect(() => continueCommand('%0')).not.toThrow();
+  expect(() => pauseCommand('%0')).not.toThrow();
+  expect(() => continueCommand('bogus')).toThrow('invalid pane id');
+  expect(() => pauseCommand('%')).toThrow('invalid pane id');
+  expect(() => continueCommand('%0;send-keys')).toThrow('invalid pane id');
+  expect(() => pauseCommand('')).toThrow('invalid pane id');
+});
+
+test('attach_argv_rejects_empty_and_nul_arguments', () => {
+  expect(() => attachArgv('/t', '/s', 's1')).not.toThrow();
+  expect(() => attachArgv('', '/s', 's1')).toThrow('invalid tmuxBin');
+  expect(() => attachArgv('/t', '', 's1')).toThrow('invalid socketPath');
+  expect(() => attachArgv('/t', '/s', '')).toThrow('invalid sessionName');
+  expect(() => attachArgv('/t', '/s\0x', 's1')).toThrow('invalid socketPath');
 });
