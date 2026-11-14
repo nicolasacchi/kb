@@ -414,7 +414,6 @@ async fn ws_real_tap_roundtrip() {
         None => return,
         Some(v) => v,
     };
-    std::env::set_var("KB_TERM_TEST_PROBE", "1");
 
     // --- the real runner, served on a unix socket --------------------
     let rundir = tempfile::Builder::new()
@@ -427,6 +426,9 @@ async fn ws_real_tap_roundtrip() {
     let mut cfg = RunnerConfig::test_config(run_dir.clone(), tmux_bin.clone(), conf_path());
     cfg.require_tap = true;
     cfg.tap_ready_secs = 30;
+    // The fixture launch passes an explicit argv (python3 + fake harness);
+    // the runner accepts that only under the test-only config flag.
+    cfg.allow_verbatim_probe = true;
     // The supervisor starts the tap with stderr discarded; run it through
     // a one-line wrapper that appends stderr to a file so a failure can
     // print what the tap said.
