@@ -155,7 +155,51 @@ async fn handle_connection<S: Supervisor + 'static>(runner: Arc<Runner<S>>, stre
             let _ = respond(&mut write_half, None, err).await;
             return;
         }
-        let id = request_id(&line);
+        let req_id = request_id(&line);
+        // The `stream` op splices onto this connection: it is the LAST
+        // request this connection ever answers. A successful open is
+        // answered with the standard ok envelope, then the connection
+        // becomes a tap relay (see `crate::runner::stream`). An open
+        // failure is an ordinary error reply and the connection closes.
+        if let Ok(crate::wire::Request::Stream { id, from }) = rpc::parse_request(line.as_bytes()) {
+            if !crate::runner::ids::valid_id(&id) {
+                let err = crate::wire::Response::Err {
+                    code: "invalid-id".to_string(),
+                    message: format!("invalid terminal id `{id}`"),
+                };
+                let _ = respond(&mut write_half, req_id, err).await;
+                return;
+            }
+            // The client-side halves for the splice: the read half
+            // comes from the line reader (any spliced frame starts
+            // here), the write half is the one the RPC loop holds.
+            let client_read = reader.into_inner();
+            let (tap, viewer) = match crate::runner::stream::connect_tap(&runner, &id, from).await {
+                Ok(tap) => tap,
+                Err(e) => {
+                    let err = crate::wire::Response::Err {
+                        code: e.code().to_string(),
+                        message: e.message(),
+                    };
+                    let _ = respond(&mut write_half, req_id, err).await;
+                    return;
+                }
+            };
+            // The ok envelope goes out first so the client starts
+            // decoding envelopes only after the handshake. It names the
+            // viewer id this stream joined the tap under: the client
+            // prefixes its C->S envelopes with the same id.
+            let ok = crate::wire::Response::Ok {
+                data: json!({ "viewer": viewer }),
+            };
+            if respond(&mut write_half, req_id, ok).await.is_err() {
+                return;
+            }
+            let (tap_read, tap_write) = tap.into_split();
+            let _ =
+                crate::runner::stream::splice(tap_read, tap_write, client_read, write_half).await;
+            return;
+        }
         let resp = match rpc::parse_request(line.as_bytes()) {
             Ok(req) => rpc::dispatch(&runner, &req).await,
             Err(e) => crate::wire::Response::Err {
@@ -163,7 +207,7 @@ async fn handle_connection<S: Supervisor + 'static>(runner: Arc<Runner<S>>, stre
                 message: e.message(),
             },
         };
-        if respond(&mut write_half, id, resp).await.is_err() {
+        if respond(&mut write_half, req_id, resp).await.is_err() {
             return;
         }
     }
