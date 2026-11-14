@@ -134,7 +134,7 @@ impl RunnerClient {
     pub async fn call(&mut self, req: &Request) -> Result<serde_json::Value, RunnerClientError> {
         let id = self.next_id;
         self.next_id += 1;
-        let mut line = request_line(id, req).map_err(RunnerClientError::Unreachable)?;
+        let (mut line, expected) = request_line(id, req).map_err(RunnerClientError::Unreachable)?;
         line.push('\n');
         self.stream.write_all(line.as_bytes()).await.map_err(|_| {
             RunnerClientError::Unreachable(format!(
@@ -156,21 +156,23 @@ impl RunnerClient {
                     self.path.display()
                 ))
             })?;
-        // The envelope id must echo our request id (a late or duplicate
-        // line is a protocol failure, never a silent mis-pairing).
+        // The reply must echo the envelope id we sent: the numeric request
+        // id, or for an id-carrying op the op's own session id (the server
+        // echoes whatever `id` the line carried). A late or duplicate line
+        // is a protocol failure, never a silent mis-pairing.
         match serde_json::from_str::<serde_json::Value>(&body)
             .ok()
-            .and_then(|v| v.get("id").and_then(serde_json::Value::as_u64))
+            .and_then(|v| v.get("id").cloned())
         {
-            Some(r) if r == id => {}
+            Some(r) if r == expected => {}
+            Some(serde_json::Value::Null) | None => {
+                return Err(RunnerClientError::Unreachable(
+                    "runner reply has no id".to_string(),
+                ));
+            }
             Some(_) => {
                 return Err(RunnerClientError::Unreachable(
                     "runner socket answered an unexpected id".to_string(),
-                ));
-            }
-            None => {
-                return Err(RunnerClientError::Unreachable(
-                    "runner reply has no id".to_string(),
                 ));
             }
         }
@@ -212,15 +214,34 @@ async fn read_response_line(stream: &mut tokio::net::UnixStream) -> std::io::Res
     }
 }
 
-/// Build the request line `{"v":1,"id":n,"op":...}` for a wire request.
-fn request_line(id: u64, req: &Request) -> Result<String, String> {
+/// Build the request line for a wire request and the `id` its reply must
+/// echo.
+///
+/// The envelope is `{"v":1,"id":n,"op":...}` with a NUMERIC request id,
+/// but most ops carry their own STRING session id in a field also named
+/// `id` (kill, resize, stream, viewer_open, keys, ...). The two share one
+/// JSON key, so the rule is: an op that already has a string `id` keeps it
+/// (the runner's `parse_request` treats a string `id` as the session id)
+/// and the numeric envelope id is NOT written; the server echoes the
+/// line's `id`, so the reply is then correlated on the session id. An op
+/// without an `id` (ping, list, launch) gets the numeric envelope id as
+/// before, so an old runner and a new client still agree on those.
+fn request_line(id: u64, req: &Request) -> Result<(String, serde_json::Value), String> {
     let mut v = serde_json::to_value(req).map_err(|e| format!("encode request: {e}"))?;
     let obj = v
         .as_object_mut()
         .ok_or_else(|| "request is not an object".to_string())?;
     obj.insert("v".to_string(), serde_json::json!(1));
-    obj.insert("id".to_string(), serde_json::json!(id));
-    serde_json::to_string(&v).map_err(|e| format!("encode request: {e}"))
+    let expected = match obj.get("id") {
+        Some(sid) if sid.is_string() => sid.clone(),
+        _ => {
+            let n = serde_json::json!(id);
+            obj.insert("id".to_string(), n.clone());
+            n
+        }
+    };
+    let line = serde_json::to_string(&v).map_err(|e| format!("encode request: {e}"))?;
+    Ok((line, expected))
 }
 
 #[cfg(test)]
@@ -298,12 +319,13 @@ mod tests {
 
     #[test]
     fn request_line_envelope() {
-        let line = request_line(7, &Request::Ping {}).unwrap();
+        let (line, expected) = request_line(7, &Request::Ping {}).unwrap();
+        assert_eq!(expected, 7);
         let v: serde_json::Value = serde_json::from_str(&line).unwrap();
         assert_eq!(v["v"], 1);
         assert_eq!(v["id"], 7);
         assert_eq!(v["op"], "ping");
-        let line = request_line(
+        let (line, _) = request_line(
             3,
             &Request::Launch {
                 harness: Harness::Omp,
@@ -320,5 +342,90 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&line).unwrap();
         assert_eq!(v["harness"], "omp");
         assert_eq!(v["argv"][0], "/usr/local/bin/omp");
+    }
+
+    #[test]
+    fn id_carrying_op_keeps_its_session_id_and_is_correlated_on_it() {
+        let (line, expected) = request_line(
+            9,
+            &Request::ViewerOpen {
+                id: "abcd1234".to_string(),
+                viewer: "v1".to_string(),
+            },
+        )
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(
+            v["id"], "abcd1234",
+            "the numeric envelope id must not overwrite it"
+        );
+        assert_eq!(v["viewer"], "v1");
+        assert_eq!(expected, "abcd1234");
+    }
+
+    /// End to end over a real `runner.sock` server (real dispatch, no tmux:
+    /// the session does not exist, so each op answers `no-session` NAMING the
+    /// session id it received). Before the fix the client overwrote the
+    /// session id with the numeric envelope id, the runner stripped it, and
+    /// every one of these answered `bad-request` "missing field `id`".
+    #[tokio::test]
+    async fn id_carrying_ops_reach_dispatch_with_their_session_id_over_the_socket() {
+        use crate::runner::config::RunnerConfig;
+        use crate::runner::server::{bind_runner_socket, serve};
+        use crate::runner::Runner;
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = RunnerConfig::test_config(
+            dir.path().to_path_buf(),
+            "/bin/true".to_string(),
+            PathBuf::from("/dev/null"),
+        );
+        let runner = Arc::new(Runner::direct(cfg));
+        let sock = runner.cfg.run_dir.join("runner").join("runner.sock");
+        std::fs::create_dir_all(sock.parent().unwrap()).unwrap();
+        let listener = bind_runner_socket(&sock).unwrap();
+        let (tx, rx) = tokio::sync::broadcast::channel::<()>(1);
+        let server = tokio::spawn({
+            let runner = runner.clone();
+            let sock = sock.clone();
+            async move {
+                let _ = serve(runner, listener, sock, rx).await;
+            }
+        });
+
+        let mut client = RunnerClient::connect(&sock).await.unwrap();
+        // A numeric-envelope op still correlates on the same connection.
+        assert!(client.call(&Request::Ping {}).await.is_ok());
+        let reqs = [
+            Request::ViewerOpen {
+                id: "abcd1234".to_string(),
+                viewer: "v1".to_string(),
+            },
+            Request::ViewerClose {
+                id: "abcd1234".to_string(),
+                viewer: "v1".to_string(),
+            },
+            Request::TakeSize {
+                id: "abcd1234".to_string(),
+                cols: 80,
+                rows: 24,
+                owner: "attach-test".to_string(),
+                force: false,
+            },
+        ];
+        for req in &reqs {
+            match client.call(req).await {
+                Err(RunnerClientError::Code { code, message }) => {
+                    assert_eq!(code, "no-session", "{req:?}: {message}");
+                    assert!(message.contains("abcd1234"), "{req:?}: {message}");
+                }
+                other => panic!("{req:?}: expected no-session, got {other:?}"),
+            }
+        }
+        // The connection is still correlated after id-carrying ops.
+        assert!(client.call(&Request::Ping {}).await.is_ok());
+        let _ = tx.send(());
+        let _ = tokio::time::timeout(Duration::from_secs(10), server).await;
     }
 }
