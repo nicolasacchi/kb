@@ -62,8 +62,11 @@ permissions: {}
 #     term-int       term-int         —
 #
 # `term-int` as a rust-cache family holds only the small kb-term crate
-# graph; the pinned tmux binary itself is cached via `actions/cache`,
-# never via rust-cache.
+# graph; the pinned tmux binary itself is cached via `actions/cache` —
+# twice: the static default at tmux-3.7c, and the forced-dynamic variant
+# (KB_TMUX_STATIC=0) at tmux-3.7c-dynamic, so the dynamic build, its
+# BUILD-INFO `ldd` and the cache-hit runtime-library install stay
+# exercised — never via rust-cache.
 
 # ONE WRITER PER FAMILY is not cosmetic. rust-cache skips its save whenever
 # the restore was an exact hit, so the FIRST job to save after a key change
@@ -1558,8 +1561,11 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: build-tmux selftest (refusal, pin, hostile env)
+      - name: build-tmux selftest (refusal, pin, hostile env, cache, retry)
         run: scripts/ci/build-tmux-selftest.sh
+
+      - name: tmux-smoke selftest (fake tmux, failure XML, deadlines)
+        run: scripts/ci/tmux-smoke-selftest.sh
 
       - name: Runner image id (tmux cache key)
         id: img
@@ -1575,6 +1581,15 @@ jobs:
           # libevent and ncurses. No restore-keys: a stale image entry is
           # a wrong-lib entry.
           key: tmux-3.7c-${{ hashFiles('scripts/ci/build-tmux.sh') }}-${{ runner.os }}-${{ steps.img.outputs.key }}
+      - name: Cache the dynamic tmux binary
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/tmux-3.7c-dynamic
+          # Same key shape as the static entry: the pin lives in
+          # build-tmux.sh and the image id covers the runtime libs. A
+          # separate entry so static and dynamic never overwrite each
+          # other in the cache.
+          key: tmux-3.7c-dynamic-${{ hashFiles('scripts/ci/build-tmux.sh') }}-${{ runner.os }}-${{ steps.img.outputs.key }}
 
       - name: Build the pinned tmux (or reuse the cache)
         run: scripts/ci/build-tmux.sh
@@ -1672,12 +1687,28 @@ jobs:
         if: steps.crate.outputs.present == 'false'
         run: echo "::notice::kb-term integration tests not present yet (T1/T8)"
 
+      - name: Build the dynamic tmux (KB_TMUX_STATIC=0)
+        env:
+          KB_TMUX_STATIC: "0"
+          KB_TMUX_OUT: ${{ runner.temp }}/tmux-3.7c-dynamic
+        run: |
+          # GITHUB_ENV is unset for this one invocation on purpose: the
+          # build script's export_result would otherwise repoint KB_TMUX_BIN
+          # at the dynamic tmux for every later step, and the T19 packaging
+          # check below must package the static pinned tmux release.yml ships.
+          env -u GITHUB_ENV scripts/ci/build-tmux.sh
+          test "$(cat "$KB_TMUX_OUT/LINKAGE")" = "dynamic"
+          grep -F -- "linkage=dynamic" "$KB_TMUX_OUT/BUILD-INFO" >/dev/null
+          grep -F -- "--- ldd ---" "$KB_TMUX_OUT/BUILD-INFO" >/dev/null
+
       - name: Collect tmux build info
         if: always()
         run: |
           mkdir -p "$RUNNER_TEMP/witness"
           cp "$RUNNER_TEMP/tmux-3.7c/BUILD-INFO" "$RUNNER_TEMP/witness/" || true
           cp "$RUNNER_TEMP/tmux-3.7c/LINKAGE" "$RUNNER_TEMP/witness/" || true
+          cp "$RUNNER_TEMP/tmux-3.7c-dynamic/BUILD-INFO" "$RUNNER_TEMP/witness/dynamic-BUILD-INFO" || true
+          cp "$RUNNER_TEMP/tmux-3.7c-dynamic/LINKAGE" "$RUNNER_TEMP/witness/dynamic-LINKAGE" || true
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
@@ -1715,6 +1746,10 @@ jobs:
           OUT_DIR: ${{ runner.temp }}/kb-term-out
         run: |
           set -euo pipefail
+          test "$KB_TMUX_BIN" = "$RUNNER_TEMP/tmux-3.7c/bin/tmux" || {
+            echo "packaging must use the static pinned tmux, got $KB_TMUX_BIN" >&2
+            exit 1
+          }
           export KB_TERM_VERSION="main-${GITHUB_SHA::12}"
           export KB_TERM_TARGET="x86_64-unknown-linux-gnu"
           export KB_BUN_VERSION="$(cat crates/kb-term/tap/.bun-version)"

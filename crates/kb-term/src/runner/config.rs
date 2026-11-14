@@ -27,8 +27,10 @@ impl Default for SupervisorKind {
     }
 }
 
-/// kb-termd configuration. `pane_shell` exists for the launch profiles
-/// (T10); there is no flag for it.
+/// kb-termd configuration. `pane_shell`/`pane_shell_args` are the
+/// non-login pane shell (`/bin/sh -c`): the gate wrapper is POSIX-only
+/// and deliberately NOT a login shell, so no user profile is ever
+/// sourced for a pane. There is no flag for either field.
 #[derive(Debug, Clone)]
 pub struct RunnerConfig {
     /// Base dir: `<run-dir>/s/*.sock` holders, `<run-dir>/runner/runner.sock`.
@@ -73,6 +75,10 @@ pub struct RunnerConfig {
     pub pane_shell: PathBuf,
     /// Args for `pane_shell` (the T10 launch profiles consume both).
     pub pane_shell_args: Vec<String>,
+    /// Test-only: honour verbatim caller argv (fixture programs) instead
+    /// of the profile argv. Set ONLY by the test harness; production
+    /// `kb-termd` never sets it and the ambient env never gates it.
+    pub allow_verbatim_probe: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -179,6 +185,7 @@ impl RunnerConfig {
             enter_max_wait_ms: cli.enter_max_wait_ms,
             pane_shell: PathBuf::from("/bin/sh"),
             pane_shell_args: vec!["-c".to_string()],
+            allow_verbatim_probe: false,
         }
     }
 
@@ -206,6 +213,7 @@ impl RunnerConfig {
             enter_max_wait_ms: 5000,
             pane_shell: PathBuf::from("/bin/sh"),
             pane_shell_args: vec!["-c".to_string()],
+            allow_verbatim_probe: false,
         }
     }
     /// The responder profile for the anchor and every hidden client.
@@ -236,11 +244,13 @@ mod tests {
     #[test]
     fn conf_is_versioned_and_has_every_documented_option() {
         let conf = include_str!("../../share/kb-term.conf");
-        assert!(
-            conf.contains("@kb_conf_version 2"),
-            "conf must carry the version marker"
-        );
+        // Full scoped lines (exact line match, never a substring): a
+        // `-s` where the spec says `-g`, or a value on the wrong scope,
+        // must fail. (Line numbers in briefs drift; the spelling below
+        // is the spec's own.)
+        let lines: Vec<&str> = conf.lines().collect();
         for line in [
+            "set -g @kb_conf_version 2",
             "set -g default-terminal \"tmux-256color\"",
             "set -g prefix None",
             "set -g prefix2 None",
@@ -251,29 +261,50 @@ mod tests {
             "set -g mouse off",
             "set -g window-size manual",
             "set -g default-size 120x40",
-            "extended-keys always",
-            "extended-keys-format csi-u",
-            "history-limit 50000",
-            "status off",
-            "remain-on-exit on",
-            "remain-on-exit-format \"\"",
-            "exit-empty off",
-            "allow-passthrough off",
+            "set -s extended-keys always",
+            "set -g extended-keys-format csi-u",
+            "set -g history-limit 50000",
+            "set -g status off",
+            "set -g remain-on-exit on",
+            "set -g remain-on-exit-format \"\"",
+            "set -s exit-empty off",
+            "set -g allow-passthrough off",
         ] {
-            assert!(conf.contains(line), "conf must contain `{line}`");
+            assert!(
+                lines.contains(&line),
+                "conf must contain the full line `{line}`"
+            );
         }
+        // Every removed round-1 item from the spec must stay out.
         for removed in [
             "window-size latest",
             "focus-events on",
             "set-clipboard on",
             "client-active",
+            "M-PPage",
+            "mouse on",
         ] {
             assert!(
                 !conf.contains(removed),
                 "conf must not contain the removed option `{removed}`"
             );
         }
-        assert!(!conf.contains("mouse on"), "conf must not enable the mouse");
+    }
+
+    #[test]
+    fn conf_terminal_scopes_are_not_global() {
+        // `extended-keys` and `exit-empty` are SERVER options (`set -s`),
+        // not global/session settings (`set -g`): a `-g` spelling must
+        // fail the golden above, so pin the negative here as well.
+        let conf = include_str!("../../share/kb-term.conf");
+        assert!(
+            !conf.lines().any(|l| l == "set -g extended-keys always"),
+            "extended-keys must be `set -s`, not `set -g`"
+        );
+        assert!(
+            !conf.lines().any(|l| l == "set -g exit-empty off"),
+            "exit-empty must be `set -s`, not `set -g`"
+        );
     }
 
     #[test]

@@ -4,8 +4,12 @@ PartOf=kb-term@%i.service
 After=kb-term@%i.service
 
 [Service]
-ExecStart=%h/.local/bin/kb-tap --session %i --run-dir /run/kb-term
-# TODO(T7/T19): reconcile args
+Environment=KB_TMUX_BIN=%h/.local/libexec/kb-term/tmux
+# The tap needs the pinned tmux (`KB_TMUX_BIN`) and the session's
+# harness (a closed set, read from the holder's `@kb_harness` option
+# when the tap starts — the instance name is a session id, not a
+# harness, so the flag cannot name it at unit level).
+ExecStart=/bin/sh -c 'h=$(%h/.local/libexec/kb-term/tmux -S /run/kb-term/s/%i.sock show-options -gqv @kb_harness); exec %h/.local/bin/kb-tap --session %i --run-dir /run/kb-term --harness "$h"'
 Restart=on-failure
 RestartSec=1
 KillMode=process

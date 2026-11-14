@@ -16,9 +16,10 @@ import { SPA_PROV } from "../../hooks/useSlates";
 // than silently truncating — a truncated coordination line is worse than a
 // refused one.
 //
-// MOBILE (rules matrix "Mobile"): kind, line and topic ONLY. No body
-// editor, no refs, no subject — the phone is a reader with a capture slot,
-// and the non-goal that says so is load-bearing, not an omission.
+// MOBILE (rules matrix "Mobile"): kind, line, topic and an ask's `to`
+// (D35) ONLY. No body editor, no refs, no subject — the phone is a reader
+// with a capture slot, and the non-goal that says so is load-bearing, not
+// an omission.
 
 /// The kinds a human authors from the board. `drop`, `mark`, `done` and
 /// `answer` are ACTIONS on an existing card, not things you compose;
@@ -34,6 +35,19 @@ export const COMPOSER_KINDS: readonly SlateKind[] = [
   "take",
   "tried",
   "answer",
+];
+
+/// Addressees for an `ask` (AW1): `any` is the default and sends NO `to`
+/// (absent ≡ any); `you` is the operator; the rest are harnesses.
+export const ASK_TO_OPTIONS: readonly string[] = [
+  "any",
+  "you",
+  "claude",
+  "codex",
+  "opencode",
+  "grok",
+  "kimi",
+  "omp",
 ];
 
 export const LINE_MAX = 200;
@@ -54,6 +68,11 @@ export type ComposerSeed = {
   supersedes?: number;
   /// Set by "answer" — the ask this answers.
   re?: number;
+  /// The answered ask's line, echoed in the sheet: on the phone the sheet
+  /// covers the board, so the question would otherwise be out of sight.
+  reLine?: string;
+  /// Prefill for an ask's addressee (an edit of an addressed ask).
+  to?: string;
 };
 
 type Props = {
@@ -85,6 +104,7 @@ export default function SlateComposer({
   const [subject, setSubject] = useState(seed?.subject ?? "");
   const [failed, setFailed] = useState(seed?.failed ?? "");
   const [refsText, setRefsText] = useState((seed?.refs ?? []).join(" "));
+  const [to, setTo] = useState(seed?.to ?? "any");
   const [busy, setBusy] = useState(false);
   const lineRef = useRef<HTMLInputElement>(null);
 
@@ -93,16 +113,19 @@ export default function SlateComposer({
   // never gets clobbered mid-compose.
   useEffect(() => {
     if (!open) return;
-    setKind(seed?.kind ?? "found");
+    // The phone's kind select has no `found` (it needs a ref), so its
+    // default is `idea` here as in the initial state.
+    setKind(seed?.kind ?? (mobile ? "idea" : "found"));
     setLine(seed?.line ?? "");
     setBody(seed?.body ?? "");
     setTopic(seed?.topic ?? "");
     setSubject(seed?.subject ?? "");
     setFailed(seed?.failed ?? "");
+    setTo(seed?.to ?? "any");
     setRefsText((seed?.refs ?? []).join(" "));
     const t = setTimeout(() => lineRef.current?.focus(), 0);
     return () => clearTimeout(t);
-  }, [open, seed]);
+  }, [open, seed, mobile]);
 
   useEffect(() => {
     if (!open) return;
@@ -159,8 +182,16 @@ export default function SlateComposer({
       if (!mobile && needsSubject && subject.trim()) post.subject = subject.trim();
       if (!mobile && kind === "tried" && failed.trim()) post.failed = failed.trim();
       if (!mobile && refs.length) post.refs = refs;
+      // Mobile addresses asks too (operator ruling 2026-11-13, design D35);
+      // a hand edit never reaches the phone (edit is desktop-only).
+      const keepsTo =
+        to !== "any" &&
+        (kind === "ask" || (kind === "hand" && seed?.supersedes !== undefined));
+      if (keepsTo) post.to = to;
       if (seed?.supersedes !== undefined) post.supersedes = seed.supersedes;
-      if (seed?.re !== undefined) post.re = seed.re;
+      // `re` belongs to the kind it was seeded for (answer on an ask, take
+      // on a hand): switching the kind away must not carry it onto an ask.
+      if (seed?.re !== undefined && (kind === "answer" || kind === "take")) post.re = seed.re;
       await onSubmit(post);
       onClose();
     } finally {
@@ -169,6 +200,7 @@ export default function SlateComposer({
   }
 
   const editing = seed?.supersedes !== undefined;
+  const answering = !editing && seed?.re !== undefined && kind === "answer";
 
   return (
     <>
@@ -185,11 +217,16 @@ export default function SlateComposer({
         hidden={!open}
         onSubmit={submit}
         {...(mobile ? { role: "dialog" as const, "aria-modal": true } : {})}
-        aria-label={editing ? "Rewrite a post" : "Post to the slate"}
+        aria-labelledby={`${uid}-title`}
+        aria-describedby={answering ? `${uid}-re` : undefined}
       >
         <header className="slate-composer__head">
-          <h2 className="slate-composer__title">
-            {editing ? `Rewrite #${seed!.supersedes}` : "Post"}
+          <h2 className="slate-composer__title" id={`${uid}-title`}>
+            {editing
+              ? `Rewrite #${seed!.supersedes}`
+              : answering
+                ? `Answer #${seed!.re}`
+                : "Post"}
           </h2>
           <button
             type="button"
@@ -200,6 +237,12 @@ export default function SlateComposer({
             <Icon.X />
           </button>
         </header>
+
+        {answering && seed?.reLine && (
+          <p className="slate-composer__re" id={`${uid}-re`} data-testid="slate-composer-re">
+            <span className="slate-composer__re-n">#{seed.re}</span> {seed.reLine}
+          </p>
+        )}
 
         {closed && (
           <p className="slate-composer__note" role="alert">
@@ -281,6 +324,26 @@ export default function SlateComposer({
             ))}
           </datalist>
         </div>
+
+        {kind === "ask" && (
+          <div className="slate-composer__row">
+            <label className="slate-composer__lbl" htmlFor={`${uid}-to`}>
+              To
+            </label>
+            <select
+              id={`${uid}-to`}
+              className="slate-composer__to"
+              value={to}
+              onChange={(e) => setTo(e.target.value)}
+            >
+              {(ASK_TO_OPTIONS.includes(to) ? ASK_TO_OPTIONS : [...ASK_TO_OPTIONS, to]).map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {/* Everything below is DESKTOP-ONLY (rules matrix "Mobile"). */}
         {!mobile && needsSubject && (

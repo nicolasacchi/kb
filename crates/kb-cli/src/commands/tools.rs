@@ -291,8 +291,10 @@ mod tests {
                 .replace('\\', "/")
         }
 
-        /// `plugins/*/skills/*/SKILL.md` + `plugins/*/commands/*.md`, sorted.
-        /// Never docs/research, READMEs, plugin.json or hooks.
+        /// `plugins/*/skills/*/SKILL.md` + `plugins/*/commands/*.md` + the
+        /// injected protocol text `plugins/*/hooks/*.{txt,md}` (AW6: the wake
+        /// hooks hand those verbatim to agents), sorted. Never docs/research,
+        /// READMEs, plugin.json or hook scripts.
         pub(super) fn plugin_md_files() -> Vec<PathBuf> {
             let plugins = repo_root().join("plugins");
             let mut out = Vec::new();
@@ -305,6 +307,17 @@ mod tests {
                     for s in rd {
                         let f = s.expect("dir entry").path().join("SKILL.md");
                         if f.is_file() {
+                            out.push(f);
+                        }
+                    }
+                }
+                if let Ok(rd) = std::fs::read_dir(p.join("hooks")) {
+                    for h in rd {
+                        let f = h.expect("dir entry").path();
+                        if f.is_file()
+                            && f.extension().is_some_and(|e| e == "md" || e == "txt")
+                            && f.file_name().is_some_and(|n| n != "README.md")
+                        {
                             out.push(f);
                         }
                     }

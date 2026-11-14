@@ -478,6 +478,23 @@ done <"$LIN_CASES_FILE"
 else
   bad "shared lineage fixture missing at $LIN_FIXTURE"
 fi
+
+echo
+echo "== A2: cap_lineage splits ancestor dirs literally (no glob expansion) =="
+# A stem-shaped dir whose prefix carries a glob char is not a <ts> stem
+# (its prefix is not timestamp-shaped). With pathname expansion on, the
+# `202?-...` word would expand to the sibling `2022-...` stem and
+# misattribute the root. With `set -f` the split is literal: {}.
+GLOB_ROOT="$TMPROOT/globlineage"
+mkdir -p "$GLOB_ROOT/202?-09-01T10-00-00-000Z_roootG"
+mkdir -p "$GLOB_ROOT/2022-09-01T10-00-00-000Z_roootG"
+printf '%s\n%s\n' '{"type":"session","id":"childG001","timestamp":"2026-09-01T10:00:00.000Z","cwd":"/tmp/kb-omp-fixture"}' '{"type":"message","id":"m1","timestamp":"2026-09-01T10:00:01.000Z","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}' > "$GLOB_ROOT/202?-09-01T10-00-00-000Z_roootG/childG001.jsonl"
+GLOB_OUT="$(cd "$GLOB_ROOT" && bash -c '. "$1"; cap_lineage "$2"' _ "$LIN_LIB" "$GLOB_ROOT/202?-09-01T10-00-00-000Z_roootG/childG001.jsonl" 2>/dev/null || true)"
+if printf '%s' "$GLOB_OUT" | jq -e 'keys == []' >/dev/null 2>&1; then
+  ok "cap_lineage splits glob-char dirs literally (no root from '?')"
+else
+  bad "cap_lineage glob-expanded an ancestor dir: $GLOB_OUT (want {})"
+fi
 # Static wiring pin: --argjson lineage reaches exactly the main transcript
 # and both segment (P1/PN) translations; the sidecar call takes none.
 LIN_NARG="$(grep -c -- '--argjson lineage' "$CAPTURE")"
@@ -616,6 +633,60 @@ if printf '%s\n' "$img_body" | jq -e '[.. | objects | select(.type == "image")] 
   ok "no image block in the capture keeps a data key"
 else
   bad "an image block kept its data key"
+fi
+img_user_text="$(printf '%s\n' "$img_body" | jq -r 'select(.type == "user") | .message.content[0].text // empty' | head -1)"
+if [ "$img_user_text" = "look at this screenshot" ]; then
+  ok "user text entry body preserved alongside the image block"
+else
+  bad "user text body wrong: $img_user_text"
+fi
+img_tool_text="$(printf '%s\n' "$img_body" | jq -r 'select(.message.content | map(select(.type == "tool_result")) | length == 1) | .message.content[0].content[0].text // empty' | head -1)"
+if [ "$img_tool_text" = "opened the picture" ]; then
+  ok "tool_result text entry body preserved alongside the image block"
+else
+  bad "tool_result text body wrong: $img_tool_text"
+fi
+img_tool_sha="$(printf '%s\n' "$img_body" | jq -r 'select(.message.content | map(select(.type == "tool_result")) | length == 1) | .message.content[0].content[1].source.sha256 // empty' | head -1)"
+if [ "$img_tool_sha" = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd" ]; then
+  ok "tool_result image carries the invented blob sha"
+else
+  bad "tool_result image sha wrong: $img_tool_sha"
+fi
+
+echo
+echo "== T20: omp images longer than 2000 chars keep intent + cap beside the image =="
+LONG_SESSION="$TMPROOT/long-images.jsonl"
+{
+  title='{"type":"title","v":1,"title":"long images test"}'
+  pad_len=$((256 - ${#title} - 1))
+  printf '%s%*s\n' "$title" "$pad_len" ''
+  cat "$SCRIPT_DIR/fixtures/omp-session-images-long.jsonl"
+} >"$LONG_SESSION"
+LONG_OUTDIR="$TMPROOT/sessions-long-images"
+mkdir -p "$LONG_OUTDIR"
+KB_SESSIONS_DIR="$LONG_OUTDIR" "$CAPTURE" "$LONG_SESSION" >/dev/null 2>&1
+long_out="$(find "$LONG_OUTDIR" -name 'session-*-imgsess2.html' | head -1)"
+long_body="$(sed -n '/<pre>/,/<\/pre>/p' "$long_out" 2>/dev/null | sed '1d;$s|</pre>$||')"
+if [ -n "$long_out" ]; then
+  ok "long images fixture captured"
+else
+  bad "long images fixture produced no capture file"
+fi
+if printf '%s\n' "$long_body" | jq -e 'select(.message.content | map(select(.type == "tool_result")) | length == 1) | .message.content[0].content[0].text | startswith("[intent] Checking the picture ladder\n")' >/dev/null 2>&1; then
+  ok "tool_result text keeps the intent prefix beside the image"
+else
+  bad "intent prefix missing beside image"
+fi
+n_y="$(printf '%s\n' "$long_body" | grep -o 'y\{2000\}' | wc -l | tr -d ' ')"
+if [ "${n_y:-0}" -ge 1 ]; then
+  ok "tool_result text still capped at 2000 chars beside the image"
+else
+  bad "tool_result cap broken beside image"
+fi
+if printf '%s\n' "$long_body" | jq -e 'select(.message.content | map(select(.type == "tool_result")) | length == 1) | .message.content[0].content | map(select(.type == "image")) | length == 1' >/dev/null 2>&1; then
+  ok "capped tool_result still keeps its image block"
+else
+  bad "image missing on capped tool_result"
 fi
 
 echo

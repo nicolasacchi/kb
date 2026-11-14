@@ -21,7 +21,8 @@ use kb_core::config::{
 };
 use kb_core::paths::KbPaths;
 use kb_core::storage::sqlite::{
-    Db, SessionDecisionRow, SessionFileRow, SessionResearchRow, SessionRow,
+    Db, MemoryRecallRow, SessionCommitRow, SessionDecisionRow, SessionFileRow, SessionResearchRow,
+    SessionRow,
 };
 use kb_core::types::KbName;
 use serde_json::{json, Value};
@@ -984,5 +985,612 @@ async fn card_terminal_lane_for_a_child_resolves_to_the_root_terminal() {
     assert!(
         fake.conns.load(std::sync::atomic::Ordering::SeqCst) >= 1,
         "the directory refresh must have dialed the runner"
+    );
+}
+
+// ===== FXA3 post-merge fix-ups ===============================================
+
+/// A two-kb boot (the `boot` shape, one extra empty corpus) — the
+/// cross-kb fan-out proofs need a second kb whose storage can be broken
+/// independently of `smoke`.
+async fn boot_two_kbs() -> (tempfile::TempDir, std::net::SocketAddr, KbPaths) {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = tmp.path().join("corpus");
+    std::fs::create_dir_all(&source).unwrap();
+    let source2 = tmp.path().join("corpus2");
+    std::fs::create_dir_all(&source2).unwrap();
+    let daemon_name = format!(
+        "test-session-card-2kb-{}",
+        tmp.path().file_name().unwrap().to_string_lossy()
+    );
+    let section = |path: std::path::PathBuf| KbSection {
+        path,
+        reconcile_secs: None,
+        skip_patterns: Vec::new(),
+        ui: UiSection::default(),
+        embedding_model: None,
+        reranker_model: None,
+        chunked_embeddings: false,
+        graph_boost: None,
+        outbound: None,
+        atlas: None,
+        templates: BTreeMap::new(),
+        memory_scope: None,
+        project_slugs: Vec::new(),
+        default_search_category: None,
+        code_url: None,
+        decay_policy: None,
+        versions: None,
+        git_dir: None,
+        git_prefix: None,
+        reading_progress: None,
+        search: Default::default(),
+        indexable_extensions: None,
+        capture_dir: None,
+        resurface: None,
+        slo: None,
+        id_patterns: Vec::new(),
+    };
+    let mut kb_map: BTreeMap<KbName, KbSection> = BTreeMap::new();
+    kb_map.insert(KbName::new("smoke").unwrap(), section(source));
+    kb_map.insert(KbName::new("other").unwrap(), section(source2));
+    let cfg = KbConfig {
+        daemon: DaemonSection {
+            name: Some(daemon_name.clone()),
+        },
+        server: ServerSection::default(),
+        ui: UiSection::default(),
+        indexer: Default::default(),
+        storage: Default::default(),
+        share: Default::default(),
+        webhooks: None,
+        defaults: DefaultsSection {
+            embedding_model: None,
+            disable_embedder_fallback: true,
+        },
+        retention: Default::default(),
+        backup: Default::default(),
+        identity: Default::default(),
+        memory: Default::default(),
+        kb: kb_map,
+        projects: Default::default(),
+        sessions: Default::default(),
+        terminal: Default::default(),
+    };
+    let paths = KbPaths::rooted_at(tmp.path(), &daemon_name);
+    std::fs::create_dir_all(&paths.config).unwrap();
+    std::fs::write(paths.token_file(), FIXTURE_TOKEN).unwrap();
+    let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths.clone())
+        .await
+        .expect("serve");
+    common::wait_http_up(addr).await;
+    (tmp, addr, paths)
+}
+
+fn open_kb_db(paths: &KbPaths, kb: &str) -> Db {
+    Db::open(&paths.kb_sqlite(&KbName::new(kb).unwrap())).unwrap()
+}
+
+/// Drop one of a kb's sqlite tables under the running daemon: a genuine
+/// storage failure, so the lanes must degrade (available:false +
+/// reason + warn, never 500 and never invented data).
+fn drop_table(paths: &KbPaths, kb: &str, table: &str) {
+    let path = paths.kb_sqlite(&KbName::new(kb).unwrap());
+    let conn = rusqlite::Connection::open(&path).expect("raw open");
+    conn.execute_batch(&format!("DROP TABLE {table}"))
+        .expect("drop table");
+}
+
+/// The `files` lane's action buckets: one read, one edit, one write.
+/// Swapping the buckets would keep `total` green without this pin.
+#[tokio::test]
+async fn files_lane_counts_read_edit_write_buckets() {
+    let (_tmp, addr, paths) = boot().await;
+    let client = reqwest::Client::new();
+    {
+        let mut db = open_db(&paths);
+        db.sessions_upsert(&row("art-buckets", "buckets-1", 1_000))
+            .unwrap();
+        db.session_files_replace(
+            "art-buckets",
+            &[
+                file_row("art-buckets", "buckets-1", "/work/alpha/a-read.rs", "read"),
+                file_row("art-buckets", "buckets-1", "/work/alpha/b-edit.rs", "edit"),
+                file_row(
+                    "art-buckets",
+                    "buckets-1",
+                    "/work/alpha/c-write.rs",
+                    "write",
+                ),
+            ],
+        )
+        .unwrap();
+    }
+    let (status, card, _) = get_json(&client, addr, "/api/sessions/buckets-1/card").await;
+    assert_eq!(status, 200, "{card}");
+    assert_eq!(card["files"]["total"], 3);
+    assert_eq!(card["files"]["read"], 1);
+    assert_eq!(card["files"]["edited"], 1);
+    assert_eq!(card["files"]["wrote"], 1);
+}
+
+/// `not_committed` end-to-end: 25 resolved commits against a real git
+/// repo, the session touched the OLDEST commit's file (outside the
+/// newest-20 window, so excluded from the touched set) and the NEWEST
+/// commit's file (inside the window, so covered). Dropping the
+/// `reverse()` or the 20-cap would change this pin.
+#[tokio::test]
+async fn not_committed_window_caps_at_newest_twenty_with_caption() {
+    let (_tmp, addr, paths) = boot().await;
+    let client = reqwest::Client::new();
+    // A real git repo with 25 commits, one distinct file each.
+    let repo_dir = _tmp.path().join("gitrepo");
+    std::fs::create_dir_all(&repo_dir).unwrap();
+    let git = |args: &[&str]| {
+        let ok = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo_dir)
+            .args([
+                "-c",
+                "user.email=t@kb",
+                "-c",
+                "user.name=kb-test",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .status()
+            .expect("git runs")
+            .success();
+        assert!(ok, "git {args:?} failed");
+    };
+    git(&["init", "-q"]);
+    let mut shas: Vec<String> = Vec::new();
+    for i in 0..25 {
+        std::fs::write(
+            repo_dir.join(format!("f{i:02}.rs")),
+            format!("// synthetic {i}\n"),
+        )
+        .unwrap();
+        git(&["add", &format!("f{i:02}.rs")]);
+        git(&["commit", "-q", "-m", &format!("c{i}")]);
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo_dir)
+            .arg("rev-parse")
+            .arg("HEAD")
+            .output()
+            .expect("git rev-parse")
+            .stdout;
+        shas.push(String::from_utf8(out).unwrap().trim().to_string());
+    }
+    let repo_root = repo_dir.to_string_lossy().to_string();
+    {
+        let mut db = open_db(&paths);
+        db.sessions_upsert(&row("art-nc", "nc-1", 1_000)).unwrap();
+        let commits: Vec<SessionCommitRow> = (0..25)
+            .map(|i| SessionCommitRow {
+                artifact_id_session: "art-nc".into(),
+                session_id: "nc-1".into(),
+                seq: i as i64 + 1,
+                kind: "commit".into(),
+                sha: Some(shas[i as usize].clone()),
+                subject: Some(format!("c{i}")),
+                sha_full: Some(shas[i as usize].clone()),
+                repo_root: Some(repo_root.clone()),
+                resolved: true,
+                author: None,
+                parents: None,
+                trailers: None,
+            })
+            .collect();
+        db.session_commits_replace("art-nc", &commits).unwrap();
+        // Oldest file (excluded by the cap) + newest file (covered).
+        db.session_files_replace(
+            "art-nc",
+            &[
+                file_row(
+                    "art-nc",
+                    "nc-1",
+                    &repo_dir.join("f00.rs").to_string_lossy(),
+                    "edit",
+                ),
+                file_row(
+                    "art-nc",
+                    "nc-1",
+                    &repo_dir.join("f24.rs").to_string_lossy(),
+                    "edit",
+                ),
+            ],
+        )
+        .unwrap();
+    }
+    let (status, card, _) = get_json(&client, addr, "/api/sessions/nc-1/card").await;
+    assert_eq!(status, 200, "{card}");
+    let nc = &card["outcome"]["not_committed"];
+    assert_eq!(nc["commits_total"], 25);
+    assert_eq!(nc["commits_considered"], 20, "newest twenty only");
+    assert_eq!(nc["capped"], true);
+    assert!(nc["caption"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("newest 20"));
+    let files: Vec<&str> = nc["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f.as_str().unwrap())
+        .collect();
+    assert!(
+        files.contains(&repo_dir.join("f00.rs").to_string_lossy().as_ref()),
+        "the oldest commit's file is NOT covered by the newest-20 window: {files:?}"
+    );
+    assert!(
+        !files.iter().any(|f| f.ends_with("f24.rs")),
+        "the newest commit's file IS covered: {files:?}"
+    );
+}
+
+/// Public + private comments on a touched in-corpus artifact, plus a
+/// raised history row pointing at the private one: the private body
+/// must never appear (both the `visible(Public)` open filter and the
+/// raised leak guard).
+#[tokio::test]
+async fn private_comments_never_appear_in_card() {
+    let (_tmp, addr, paths) = boot().await;
+    let client = reqwest::Client::new();
+    const PRIVATE_MARKER: &str = "PRIVATE-NOTE-MARKER-9z2y";
+    const PUBLIC_MARKER: &str = "public-note-marker-3k8m";
+    let private_id;
+    {
+        let mut db = open_db(&paths);
+        db.sessions_upsert(&row("art-com", "com-1", 1_000)).unwrap();
+        let mut f = file_row("art-com", "com-1", "/work/alpha/touched.rs", "edit");
+        f.in_corpus = true;
+        f.target_kb = Some("smoke".into());
+        f.target_artifact_id = Some("art-x".into());
+        db.session_files_replace("art-com", &[f]).unwrap();
+        let kb = KbName::new("smoke").unwrap();
+        let mut review = kb_core::review::ReviewFile::empty_skeleton(&kb, "art-x", "Synthetic");
+        review.add_comment(kb_core::review::NewComment {
+            file: "a.html".into(),
+            file_label: "a".into(),
+            anchor: kb_core::review::Anchor::File,
+            author: kb_core::review::Author::You,
+            body: PUBLIC_MARKER.into(),
+            choices: Vec::new(),
+            attachments: Vec::new(),
+            user: None,
+            tags: Vec::new(),
+            private: false,
+        });
+        let added = review.add_comment(kb_core::review::NewComment {
+            file: "a.html".into(),
+            file_label: "a".into(),
+            anchor: kb_core::review::Anchor::File,
+            author: kb_core::review::Author::You,
+            body: PRIVATE_MARKER.into(),
+            choices: Vec::new(),
+            attachments: Vec::new(),
+            user: None,
+            tags: Vec::new(),
+            private: true,
+        });
+        private_id = added.id.clone();
+        let review_path = paths.kb_review_dir(&kb).join("art-x.json");
+        kb_core::review::save_atomic(&review_path, &review, None).expect("save review file");
+        // A raised history row for the private comment, in the window.
+        db.history_record_comment("art-x", &private_id, 1_200, "operator")
+            .unwrap();
+    }
+    let (status, card, body) = get_json(&client, addr, "/api/sessions/com-1/card").await;
+    assert_eq!(status, 200, "{card}");
+    assert_eq!(card["comments"]["available"], true);
+    assert_eq!(card["comments"]["open_count"], 1, "only the public comment");
+    assert!(
+        body.contains(PUBLIC_MARKER),
+        "the public body rides the card"
+    );
+    assert!(
+        !body.contains(PRIVATE_MARKER),
+        "no private body (or title-row leak) on the card: {body}"
+    );
+    let raised_ids: Vec<&str> = card["comments"]["raised"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["comment_id"].as_str().unwrap())
+        .collect();
+    assert!(
+        !raised_ids.contains(&private_id.as_str()),
+        "the raised leak guard drops the private comment: {raised_ids:?}"
+    );
+}
+
+/// The readings window (first 20 of 23, newest first, per-artifact
+/// dedup) and memory produced/pos accounting (produced docs carry the
+/// session stamp; recall `pos` is preserved with NULL staying NULL).
+#[tokio::test]
+async fn readings_and_memory_lanes_window_and_pos() {
+    let (_tmp, addr, paths) = boot().await;
+    let client = reqwest::Client::new();
+    {
+        let mut db = open_db(&paths);
+        db.sessions_upsert(&row("art-mem", "mem-1", 1_000)).unwrap();
+        // 23 distinct artifacts opened in the window + one duplicate
+        // open of one of them + one out-of-window open.
+        for i in 0..23 {
+            db.history_record_open(&format!("read-art-{i:02}"), 1_100 + i, None, "operator")
+                .unwrap();
+        }
+        db.history_record_open("read-art-00", 1_200, None, "operator")
+            .unwrap();
+        db.history_record_open("read-art-late", 9_999, None, "operator")
+            .unwrap();
+        db.memory_recalls_replace(
+            "art-mem",
+            &[
+                MemoryRecallRow {
+                    memory_kb: "smoke".into(),
+                    memory_id: "aaaaaaaaaaaa".into(),
+                    session_id: "mem-1".into(),
+                    turn_id: Some("t-1".into()),
+                    recalled_at: Some(1_500),
+                    artifact_id: "art-mem".into(),
+                    used: true,
+                    pos: Some(1),
+                },
+                MemoryRecallRow {
+                    memory_kb: "smoke".into(),
+                    memory_id: "bbbbbbbbbbbb".into(),
+                    session_id: "mem-1".into(),
+                    turn_id: Some("t-2".into()),
+                    recalled_at: Some(1_600),
+                    artifact_id: "art-mem".into(),
+                    used: false,
+                    pos: Some(2),
+                },
+                MemoryRecallRow {
+                    memory_kb: "smoke".into(),
+                    memory_id: "cccccccccccc".into(),
+                    session_id: "mem-1".into(),
+                    turn_id: None,
+                    recalled_at: None,
+                    artifact_id: "art-mem".into(),
+                    used: false,
+                    pos: None,
+                },
+            ],
+        )
+        .unwrap();
+    }
+    // Two produced memories stamped with this session.
+    let corpus = _tmp.path().join("corpus");
+    for (name, title) in [("mem-a.html", "Synthetic A"), ("mem-b.html", "Synthetic B")] {
+        std::fs::write(
+            corpus.join(name),
+            format!(
+                r#"<!DOCTYPE html><html><head><meta charset="utf-8"><title>{title}</title><meta name="kb-category" content="memory-user"><meta name="kb-session" content="mem-1"></head><body><h1>{title}</h1><p>body</p></body></html>"#
+            ),
+        )
+        .unwrap();
+    }
+    // Poll until the indexer has ingested both.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let card = loop {
+        let (_status, card, _) = get_json(&client, addr, "/api/sessions/mem-1/card").await;
+        if card["memory"]["produced_total"].as_u64().unwrap_or(0) >= 2 {
+            break card;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "produced docs never landed: {card}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    };
+    let readings = &card["readings"];
+    assert_eq!(readings["available"], true);
+    assert_eq!(
+        readings["total"], 23,
+        "23 distinct, dup + out-of-window excluded"
+    );
+    assert_eq!(
+        readings["items"].as_array().unwrap().len(),
+        20,
+        "first-20 window"
+    );
+    assert_eq!(
+        readings["items"][0]["artifact_id"], "read-art-22",
+        "newest first"
+    );
+    let memory = &card["memory"];
+    assert_eq!(memory["available"], true);
+    assert_eq!(memory["produced_total"], 2);
+    assert_eq!(memory["produced"].as_array().unwrap().len(), 2);
+    let recalled = memory["recalled"].as_array().unwrap();
+    assert_eq!(recalled.len(), 3);
+    // NULL-recalled_at sorts last; pos is preserved, NULL stays NULL.
+    assert_eq!(recalled[0]["id"], "aaaaaaaaaaaa");
+    assert_eq!(recalled[0]["pos"], 1);
+    assert_eq!(recalled[1]["id"], "bbbbbbbbbbbb");
+    assert_eq!(recalled[1]["pos"], 2);
+    assert_eq!(recalled[2]["id"], "cccccccccccc");
+    assert!(recalled[2].get("pos").is_none(), "NULL pos stays NULL");
+}
+
+/// FXA3 defect 2 — when every kb's reader for a lane fails, the lane
+/// degrades (available:false + reason + 200, siblings intact). Without
+/// the fix these report available:true with empty/zero data.
+#[tokio::test]
+async fn research_lane_degrades_when_its_reader_fails() {
+    let (_tmp, addr, paths) = boot().await;
+    let client = reqwest::Client::new();
+    {
+        let mut db = open_db(&paths);
+        db.sessions_upsert(&row("art-r", "research-fail-1", 1_000))
+            .unwrap();
+        db.session_research_replace(
+            "art-r",
+            &[SessionResearchRow {
+                artifact_id_session: "art-r".into(),
+                session_id: "research-fail-1".into(),
+                seq: 1,
+                kind: "web".into(),
+                query: "synthetic query".into(),
+            }],
+        )
+        .unwrap();
+    }
+    drop_table(&paths, "smoke", "session_research");
+    let (status, card, _) = get_json(&client, addr, "/api/sessions/research-fail-1/card").await;
+    assert_eq!(status, 200, "{card}");
+    assert_eq!(card["research"]["available"], false);
+    assert_eq!(card["research"]["reason"], "research unreadable");
+    assert_eq!(card["summary"]["available"], true);
+    assert_eq!(card["files"]["available"], true);
+}
+
+#[tokio::test]
+async fn readings_and_comments_degrade_when_their_reader_fails() {
+    let (_tmp, addr, paths) = boot().await;
+    let client = reqwest::Client::new();
+    {
+        let mut db = open_db(&paths);
+        db.sessions_upsert(&row("art-d", "degrade-1", 1_000))
+            .unwrap();
+        db.history_record_open("read-art-1", 1_100, None, "operator")
+            .unwrap();
+    }
+    drop_table(&paths, "smoke", "history");
+    let (status, card, _) = get_json(&client, addr, "/api/sessions/degrade-1/card").await;
+    assert_eq!(status, 200, "{card}");
+    assert_eq!(card["readings"]["available"], false);
+    assert_eq!(card["readings"]["reason"], "readings unreadable");
+    // The comments lane's raised reader is the same `history` table.
+    assert_eq!(card["comments"]["available"], false);
+    assert_eq!(card["comments"]["reason"], "comments unreadable");
+    assert_eq!(card["summary"]["available"], true);
+    assert_eq!(card["memory"]["available"], true);
+}
+
+#[tokio::test]
+async fn memory_lane_degrades_on_recall_reader_failure() {
+    let (_tmp, addr, paths) = boot().await;
+    let client = reqwest::Client::new();
+    {
+        let mut db = open_db(&paths);
+        db.sessions_upsert(&row("art-mf", "mem-fail-1", 1_000))
+            .unwrap();
+    }
+    drop_table(&paths, "smoke", "memory_recalls");
+    let (status, card, _) = get_json(&client, addr, "/api/sessions/mem-fail-1/card").await;
+    assert_eq!(status, 200, "{card}");
+    assert_eq!(card["memory"]["available"], false);
+    assert_eq!(card["memory"]["reason"], "memory unreadable");
+    assert_eq!(card["summary"]["available"], true);
+}
+
+/// The "at minimum" boundary: a lane stays available when at least one
+/// kb's reader answers — partial failure is not darkness.
+#[tokio::test]
+async fn research_lane_stays_available_with_one_healthy_kb() {
+    let (_tmp, addr, paths) = boot_two_kbs().await;
+    let client = reqwest::Client::new();
+    {
+        let mut db = open_kb_db(&paths, "smoke");
+        db.sessions_upsert(&row("art-p", "partial-1", 1_000))
+            .unwrap();
+        db.session_research_replace(
+            "art-p",
+            &[SessionResearchRow {
+                artifact_id_session: "art-p".into(),
+                session_id: "partial-1".into(),
+                seq: 1,
+                kind: "web".into(),
+                query: "synthetic query".into(),
+            }],
+        )
+        .unwrap();
+    }
+    drop_table(&paths, "other", "session_research");
+    let (status, card, _) = get_json(&client, addr, "/api/sessions/partial-1/card").await;
+    assert_eq!(status, 200, "{card}");
+    assert_eq!(card["research"]["available"], true);
+    assert_eq!(card["research"]["total"], 1, "the healthy kb's data rides");
+}
+
+/// FXA3 defect 5: the same child session id captured in two kbs counts
+/// once (first-wins on the list count map, id union on the card total
+/// and page). Summing would report 2 everywhere.
+#[tokio::test]
+async fn cross_kb_child_count_dedupes_by_session_id() {
+    let (_tmp, addr, paths) = boot_two_kbs().await;
+    let client = reqwest::Client::new();
+    {
+        let mut smoke = open_kb_db(&paths, "smoke");
+        smoke
+            .sessions_upsert(&row("art-xroot", "xroot-1", 1_000))
+            .unwrap();
+        let mut dup_smoke = row("art-dup-smoke", "dup-child", 1_100);
+        dup_smoke.root_session_id = Some("xroot-1".into());
+        dup_smoke.parent_session_id = Some("xroot-1".into());
+        smoke.sessions_upsert(&dup_smoke).unwrap();
+        // The SAME child session id captured in the second kb.
+        let mut other = open_kb_db(&paths, "other");
+        let mut dup_other = row("art-dup-other", "dup-child", 1_100);
+        dup_other.root_session_id = Some("xroot-1".into());
+        dup_other.parent_session_id = Some("xroot-1".into());
+        other.sessions_upsert(&dup_other).unwrap();
+    }
+    let (status, card, _) = get_json(&client, addr, "/api/sessions/xroot-1/card").await;
+    assert_eq!(status, 200, "{card}");
+    assert_eq!(card["children"]["total"], 1, "one child, not two");
+    assert_eq!(card["children"]["items"].as_array().unwrap().len(), 1);
+    assert_eq!(card["summary"]["child_total"], 1);
+    let (status, v, _) = get_json(&client, addr, "/api/sessions?limit=100&tree=flat").await;
+    assert_eq!(status, 200, "{v}");
+    let root = v["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["session_id"] == "xroot-1")
+        .expect("root row on the list");
+    assert_eq!(root["child_count"], 1, "list agrees with the card");
+}
+
+/// FXA3 defect 3: threads rows carry the derived child_count like the
+/// list and detail routes. Without the annotate call every row reports 0.
+#[tokio::test]
+async fn threads_rows_carry_child_count() {
+    let (_tmp, addr, paths) = boot().await;
+    let client = reqwest::Client::new();
+    {
+        let mut db = open_db(&paths);
+        let mut r = row("art-tr", "thread-root", 1_000);
+        r.cwd = Some("/work/thread".into());
+        db.sessions_upsert(&r).unwrap();
+        let mut c = row("art-tc", "thread-child", 1_100);
+        c.cwd = Some("/work/thread".into());
+        c.root_session_id = Some("thread-root".into());
+        c.parent_session_id = Some("thread-root".into());
+        db.sessions_upsert(&c).unwrap();
+    }
+    let (status, v, _) = get_json(&client, addr, "/api/sessions/threads").await;
+    assert_eq!(status, 200, "{v}");
+    let thread = v["threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["folder"] == "/work/thread")
+        .expect("the /work/thread thread");
+    let root = thread["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["session_id"] == "thread-root")
+        .expect("root row in the thread");
+    assert_eq!(
+        root["child_count"], 1,
+        "threads rows are annotated like list rows: {thread}"
     );
 }

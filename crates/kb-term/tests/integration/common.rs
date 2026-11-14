@@ -97,10 +97,9 @@ impl TestRunner {
 
     pub fn with_tap(tmux_bin: String, require_tap: bool, with_fake_tap: bool) -> Self {
         // Integration fixtures run through the production dispatch
-        // path, so enable the term-int probe flag that lets a probe
-        // argv run verbatim (production kb-termd never sets it and
-        // always launches the profile argv).
-        std::env::set_var("KB_TERM_TEST_PROBE", "1");
+        // path, so enable verbatim argv via the explicit config flag
+        // (test harness only; production kb-termd never sets it and
+        // ambient env never gates it).
         let dir = tempfile::Builder::new()
             .prefix("kb-term-test-")
             .tempdir_in("/tmp")
@@ -111,6 +110,7 @@ impl TestRunner {
         let mut cfg = RunnerConfig::test_config(run_dir, tmux_bin.clone(), conf_path());
         cfg.require_tap = require_tap;
         cfg.tap_ready_secs = 5;
+        cfg.allow_verbatim_probe = true;
         if with_fake_tap {
             cfg.tap_bin = Some(fixture("fake_tap.sh"));
         }
@@ -180,7 +180,10 @@ pub fn launch_req(argv: Vec<String>, cwd: String) -> Request {
 impl Drop for TestRunner {
     fn drop(&mut self) {
         // Cleanup guard: kill every holder still in the tempdir so a
-        // failing test never leaks a tmux server.
+        // failing test never leaks a tmux server. Also clear the legacy
+        // ambient probe var (production no longer reads it) so no
+        // leaked flag can order-depend a later test in this binary.
+        std::env::remove_var("KB_TERM_TEST_PROBE");
         if let Ok(rd) = std::fs::read_dir(self.runner.sessions_dir()) {
             for entry in rd.flatten() {
                 let path = entry.path();

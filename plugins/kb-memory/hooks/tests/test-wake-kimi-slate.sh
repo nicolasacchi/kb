@@ -22,6 +22,7 @@ FAIL=0
 ok() { PASS=$((PASS + 1)); printf 'ok      - %s\n' "$1"; }
 bad() { FAIL=$((FAIL + 1)); printf 'not ok  - %s\n' "$1"; }
 
+unset KB_HARNESS CLAUDE_PLUGIN_ROOT KB_SESSION_ID
 mkdir -p "$TMPROOT/bin"
 export PATH="$TMPROOT/bin:$PATH"
 
@@ -74,6 +75,11 @@ case "$base_out" in
   *) ok "baseline stays bare stdout (no envelope)" ;;
 esac
 
+case "$base_out" in
+  *'Addressed asks: ask'*'Kimi: answers to your own asks arrive in full in the slate delta of your next prompt'*)
+    ok "Kimi slate-ask paragraph + delivery line are injected" ;;
+  *) bad "Kimi slate-ask paragraph + delivery line are injected (got: $base_out)" ;;
+esac
 # --- 1. non-empty slate text: appended AFTER the memory index -------------
 export SLATE_JSON='{"text":"NOW v7  #1 [claude/aaa 2m]  doing the thing","head_seq":42}'
 out1="$(run_wake "wk-sid-1" "$TMPROOT/cache1")"

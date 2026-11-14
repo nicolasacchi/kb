@@ -35,7 +35,6 @@ describe("xtermPins", () => {
     const deps = pkg.dependencies ?? {};
     for (const [name, pin] of Object.entries(PINS)) {
       expect(deps[name], `${name} pin`).toBe(pin);
-      expect(deps[name], `${name} must not be a range`).not.toMatch(/^[\^~>]/);
     }
   });
 

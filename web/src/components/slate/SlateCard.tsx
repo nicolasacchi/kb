@@ -58,8 +58,8 @@ type Props = {
   /// design). Absent ⇒ the caption query omits `?repo=` and a multi-repo
   /// kb-code 400s `repo_required`, which the hook already renders `unknown`.
   repo?: string | null;
-  /// Desktop shows every action; mobile shows mark/drop/done only (rules
-  /// matrix "Mobile" — a reader with a capture slot).
+  /// Desktop shows every action; mobile shows mark/drop/done and answer
+  /// (rules matrix "Mobile" — a reader with a capture slot; D35).
   mobile?: boolean;
   /// Pin is a UI convenience shown when the identity is the operator; the
   /// daemon checks only `origin: human` (§10 "Actions").
@@ -195,6 +195,13 @@ export default function SlateCard({
   const live = card.liveness ? glyphForLiveness(card.liveness) : null;
   const opacity = opacityForAge(card.age_secs);
   const refs = card.refs ?? [];
+  const isAsk = card.kind === "ask";
+  const answered = (card.answers ?? 0) > 0;
+  const answeredText = card.author_ended
+    ? "answered — asker ended"
+    : card.who.origin === "human"
+      ? "answered — waiting for you"
+      : "answered — waiting for asker";
   const seen = seenChipFor(card);
   const rawRefs = useMemo(
     () => (card.refs ?? []).map((r) => r.raw),
@@ -320,6 +327,39 @@ export default function SlateCard({
             taken over by {card.taken_over_by}
           </span>
         )}
+        {isAsk && card.to && card.to !== "any" && (
+          <span
+            className={`slate-card__to${card.to === "you" ? " is-you" : ""}`}
+            data-to={card.to}
+            aria-label={`addressed to ${card.to}`}
+            title={card.to === "you" ? "A question for the operator" : `Addressed to ${card.to}`}
+          >
+            → {card.to}
+          </span>
+        )}
+        {isAsk && (
+          <span
+            className={`slate-card__askstate${answered ? " is-answered" : ""}`}
+            data-state={answered ? "answered" : "open"}
+            title={
+              answered
+                ? card.author_ended
+                  ? "Answered, but the asking session ended — close it yourself"
+                  : "Answered, but still on the board until the asker posts done"
+                : "No answer yet"
+            }
+          >
+            {answered ? answeredText : "open"}
+          </span>
+        )}
+        {isAsk && answered && card.author_ended && (
+          <span
+            className="slate-card__askended"
+            title="The asking session has ended; close this ask yourself"
+          >
+            asker ended
+          </span>
+        )}
         {card.answers !== undefined && card.answers > 0 && (
           <span className="slate-card__answers">
             {card.answers} answer{card.answers === 1 ? "" : "s"}
@@ -339,6 +379,23 @@ export default function SlateCard({
           </span>
         )}
       </div>
+
+      {isAsk && card.last_answer && (
+        <p className="slate-card__lastanswer" data-testid="slate-last-answer">
+          <span
+            className={`slate-card__who${card.last_answer.who.origin === "human" ? " is-you" : ""}`}
+            title={card.last_answer.who.tag}
+          >
+            {card.last_answer.who.origin === "human"
+              ? `[${authorChip(card.last_answer.who)}]`
+              : authorChip(card.last_answer.who)}
+          </span>{" "}
+          <span className="slate-card__lastanswer-line">{card.last_answer.line}</span>{" "}
+          <span className="slate-card__age" title={`${card.last_answer.age_secs}s`}>
+            {ageLabel(card.last_answer.age_secs)}
+          </span>
+        </p>
+      )}
 
       {card.body && (
         <>
@@ -363,9 +420,11 @@ export default function SlateCard({
         </>
       )}
 
-      {/* Actions (§10). MOBILE is mark / drop / done only — edit and pin are
-          desktop-only, so the phone stays "a reader with a capture slot"
-          (rules matrix "Mobile"). `done` is offered on the three kinds that
+      {/* Actions (§10). MOBILE is mark / drop / done plus answer on an ask
+          (operator ruling 2026-11-13, design D35: the operator answers agents'
+          questions from the phone); edit, pin and take stay desktop-only, so
+          the phone stays "a reader with a capture slot" (rules matrix
+          "Mobile"). `done` is offered on the three kinds that
           can be CLOSED (take, ask, hand); the daemon's re-target matrix is
           wider, but offering `done` on a found would be a button whose
           meaning nobody can state. */}
@@ -424,7 +483,7 @@ export default function SlateCard({
             <Icon.Pin /> {card.pinned ? "unpin" : "pin"}
           </button>
         )}
-        {!mobile && actions.onAnswer && card.kind === "ask" && (
+        {actions.onAnswer && card.kind === "ask" && (
           <button
             type="button"
             className="slate-card__act"

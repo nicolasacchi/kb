@@ -38,8 +38,14 @@ executed = 3850
 # kb-term (T2): bun placeholder tests and the tmux 3.7c smoke cases. Later
 # units raise these in the PR that adds tests; never lower without a reason.
 [term-tap]
-executed = 280
+executed = 320
 
+# The term-int floor is witnessed only from the term-int lane, where
+# KB_REQUIRE_TMUX=1 makes the tmux-absent early-return impossible (it panics
+# instead). In lanes without tmux the early-return is observable: the test
+# prints "SKIP: tmux absent (workspace-test)". Recorded witness-level
+# <skipped/> handling needs witness.py (T2-owned) and is an orchestrator
+# follow-up, not required for lane correctness.
 [term-int]
 executed = 30
 
