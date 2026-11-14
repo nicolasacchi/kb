@@ -128,6 +128,37 @@ function concat(parts: Uint8Array[]): Uint8Array {
 }
 
 // ------------------------------------------------------------------- tests
+// The runner starts the tap with only --session/--run-dir; its tmux
+// server names the one session `kb`. Attaching to the terminal id (the
+// old default) never finds a session, so no control client ever appears
+// and every real launch times out (term-int: "tap did not attach").
+test('default_attach_target_is_the_runner_tmux_session_kb', async () => {
+  const runDir = mkdtempSync(join(tmpdir(), 'kbt12-main-'));
+  const fake = new FakeSpawn();
+  const stack = createTapStack({
+    session: 'attach001',
+    runDir,
+    harness: 'omp',
+    cols: 80,
+    rows: 24,
+    epoch: 'a'.repeat(32),
+    spawn: fake.fn,
+  });
+  const starting = stack.start();
+  fake.stdout.push('%begin 1000 0 0\n%end 1000 0 0\n');
+  fake.stdout.push('%begin 1000 1 0\n%end 1000 1 0\n');
+  await starting;
+  try {
+    const t = fake.argv.indexOf('-t');
+    expect(t).toBeGreaterThan(0);
+    expect(fake.argv[t + 1]).toBe('kb');
+    expect(fake.argv).toContain(join(runDir, 's', 'attach001.sock'));
+  } finally {
+    stack.stop();
+    rmSync(runDir, { recursive: true, force: true });
+  }
+});
+
 test('seam_control_to_viewer_end_to_end', async () => {
   const runDir = mkdtempSync(join(tmpdir(), 'kbt7-main-'));
   const fake = new FakeSpawn();

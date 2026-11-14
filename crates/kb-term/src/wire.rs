@@ -733,6 +733,21 @@ pub enum Request {
         /// sha256 of the media bytes, as a hex64 key (see [`is_valid_sha256_hex`]).
         sha256: String,
     },
+    /// Open a byte-stream relay to a session's tap (kb-server's
+    /// WebSocket upstream). This op never returns as an ordinary RPC:
+    /// the server answers the request line with the standard
+    /// `{"status":"ok","data":{...}}` envelope, then splices tap.sock
+    /// envelopes verbatim on the SAME connection until either side
+    /// closes. `from` is the absolute byte offset the caller wants to
+    /// resume from (`None` = a full join); the tap decides resume vs
+    /// full join.
+    Stream {
+        /// Session id.
+        id: String,
+        /// Resume offset, if any.
+        #[serde(default)]
+        from: Option<u64>,
+    },
 }
 
 /// Key input for the `keys` RPC (kind-tagged; unknown fields rejected).

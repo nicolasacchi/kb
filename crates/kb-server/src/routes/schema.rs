@@ -237,6 +237,14 @@ const V0_0_1_TYPES: &[&str] = &[
     // The purge (`DELETE /api/slates/{slug}?purge=true`, loopback-only) —
     // the ONE deletion path a slate has.
     "slate.deleted",
+    // kb-term (T12) — the SPA-only terminal tier's low-rate SSE kinds,
+    // same posture as `session.state` (#24): `created` on launch,
+    // `ended` exactly once per id (kill or an `exit` frame through the
+    // relay), `state` only on `sizechanged`/ended — never per data
+    // frame. Emitters: `terminal::events` (+ the relay's `on_relay_event`).
+    "term.created",
+    "term.ended",
+    "term.state",
 ];
 
 #[derive(Debug, Serialize)]
@@ -444,6 +452,9 @@ pub async fn per_type(Path((kind, version)): Path<(String, String)>) -> Response
         }
         "slate.deleted" => json!({"type": kind, "payload": ["slug"]}),
         "session.state" => json!({"type": kind, "payload": SESSION_STATE_KEYS}),
+        "term.created" => json!({"type": kind, "payload": TERM_CREATED_KEYS}),
+        "term.ended" => json!({"type": kind, "payload": TERM_ENDED_KEYS}),
+        "term.state" => json!({"type": kind, "payload": TERM_STATE_KEYS}),
         _ => unreachable!("contains-check above"),
     };
     Json(schema).into_response()
@@ -463,6 +474,22 @@ pub const SESSION_STATE_KEYS: [&str; 8] = [
     "blocked",
     "blocked_tool?",
 ];
+
+/// The declared payload keys of `term.created` (emitted by
+/// `terminal::events::emit_created` on a confirmed launch). A `?`
+/// suffix marks a key that is present only sometimes (see
+/// [`SESSION_STATE_KEYS`]); `term.created` carries no optional keys.
+pub const TERM_CREATED_KEYS: [&str; 4] = ["id", "harness", "cols", "rows"];
+
+/// The declared payload keys of `term.ended` (emitted exactly once per
+/// id by `terminal::events::emit_ended`). `exit_code` is present only
+/// when the runner/tap supplied one.
+pub const TERM_ENDED_KEYS: [&str; 2] = ["id", "exit_code?"];
+
+/// The declared payload keys of `term.state` (emitted only on a
+/// `sizechanged` frame or on `ended`, never per data frame).
+/// `state` is `"live"` or `"ended"`.
+pub const TERM_STATE_KEYS: [&str; 5] = ["id", "state", "cols?", "rows?", "grid_owner?"];
 
 /// The declared payload keys of `maintenance.backup.written`.
 pub const BACKUP_WRITTEN_KEYS: [&str; 3] = ["kb", "path", "remote"];

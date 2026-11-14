@@ -14,6 +14,7 @@ use crate::middleware::{
 };
 use crate::routes;
 use crate::state::KbHandles;
+use crate::terminal;
 use axum::{
     extract::DefaultBodyLimit,
     http::Method,
@@ -495,6 +496,7 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
             "/terms/{id}/viewer-close",
             post(routes::terms::viewer_close),
         )
+        .route("/terms/{id}/ws", get(terminal::ws::upgrade))
         .route("/sessions/beat", post(routes::sessions::beat))
         .route("/sessions/live-status", get(routes::sessions::live_status))
         // OL PRES1 — which files live agent sessions are touching. Same
@@ -1145,6 +1147,26 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
         // the parent-origin SPA shell.
         .fallback(routes::dispatch::fallback)
         .layer(from_fn_with_state(origin_state, origin_allowlist))
-        .layer(TraceLayer::new_for_http())
+        .layer(
+            // The terminal WS ticket rides the query string (browsers
+            // cannot set headers on a WS handshake). Span fields print
+            // as context on nested events at TRACE, so the default
+            // span (full URI incl. query) would leak the ticket into
+            // the logs. This span carries method + path only — the
+            // query (and with it the ticket) never lands in a span.
+            // `on_request(())` drops tower-http's "started request"
+            // event, which logs the full URI the same way. The span
+            // stays at DEBUG (tower-http's own default level) so no
+            // INFO-level event in any handler gains a span context.
+            TraceLayer::new_for_http()
+                .make_span_with(|request: &axum::http::Request<axum::body::Body>| {
+                    tracing::debug_span!(
+                        "request",
+                        http.method = %request.method(),
+                        http.uri = request.uri().path(),
+                    )
+                })
+                .on_request(()),
+        )
         .with_state(state)
 }

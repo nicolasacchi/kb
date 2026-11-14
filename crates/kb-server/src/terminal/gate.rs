@@ -152,7 +152,7 @@ impl GateRefusal {
 /// leaks nothing about the terminal tier. It still carries
 /// `Cache-Control: no-store` like every other terminal response
 /// (spec §5) — that header names no feature.
-fn disabled() -> Response<Body> {
+pub(crate) fn disabled() -> Response<Body> {
     Response::builder()
         .status(StatusCode::NOT_FOUND)
         .header(header::CACHE_CONTROL, "no-store")

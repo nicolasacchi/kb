@@ -259,8 +259,9 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | POST | `/api/terms/{id}/take-size` | `routes::terms::take_size` |
 | POST | `/api/terms/{id}/ticket` | `routes::terms::ticket` |
 | POST | `/api/terms/{id}/viewer-close` | `routes::terms::viewer_close` |
+| GET | `/api/terms/{id}/ws` | `terminal::ws::upgrade` |
 | GET | `/api/turn` | `routes::turn::get` |
 | GET | `/api/users` | `routes::users::list` |
 | GET | `/api/why` | `routes::sessions::why` |
 
-_253 routes._
+_254 routes._
