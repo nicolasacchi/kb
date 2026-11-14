@@ -15,9 +15,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use super::wire::{RunnerReply, RunnerRequest};
 
 /// Hard ceiling on one runner reply (a `history`/`read` payload is
-/// terminal bytes; 4 MiB is far beyond any live session's scrollback
-/// the relay returns).
-pub(crate) const MAX_REPLY_BYTES: usize = 4 * 1024 * 1024;
+/// terminal bytes; the runner truncates at 16 MiB, so a legal reply
+/// fits with room for the envelope).
+pub(crate) const MAX_REPLY_BYTES: usize = 17 * 1024 * 1024;
 
 /// Why a runner call failed. `Unavailable` never carries the socket
 /// path (the route handler maps it to a fixed 503 body).
@@ -41,6 +41,31 @@ pub(crate) struct UnixRunner {
     timeout: Duration,
 }
 
+/// The per-op relay budget: a floor over the configured base timeout.
+///
+/// Runner durations from the merged `kb-term` code: `enter` waits up
+/// to `enter_max_wait_ms` (5 s) + quiet, `kill` polls the exit-keys
+/// grace (5 s default) plus two 2 s supervisory sleeps and a possible
+/// 10 s systemctl stop, `launch` stacks the holder poll, anchor polls
+/// and up to the 10 s tap wait, and `list` spawns ~8 tmux subprocesses
+/// per session. A flat 5 s base would race successful ops and then
+/// report 503 while the runner kept mutating. Input ops (paste,
+/// keys) and the other single-step ops use the base; `list` gets 30 s
+/// (a large session count is the slow case); `launch`/`kill`/
+/// `read`/`history` get 60 s.
+fn op_budget(req: &RunnerRequest, base: Duration) -> Duration {
+    let floor = match req {
+        RunnerRequest::Launch { .. }
+        | RunnerRequest::Kill { .. }
+        | RunnerRequest::Read { .. }
+        | RunnerRequest::History { .. } => Duration::from_secs(60),
+        RunnerRequest::Enter { .. } => Duration::from_secs(15),
+        RunnerRequest::List {} => Duration::from_secs(30),
+        _ => base,
+    };
+    floor.max(base)
+}
+
 impl UnixRunner {
     pub(crate) fn new(path: PathBuf, timeout: Duration) -> Self {
         Self { path, timeout }
@@ -48,10 +73,15 @@ impl UnixRunner {
 
     /// One request per connection: connect, write one JSON line
     /// (`{"op":"<name>",...}` + `\n`), read one JSON line, close. The
-    /// whole round trip is wrapped in the configured deadline.
+    /// deadline is per-op (see [`op_budget`]): the configured
+    /// `self.timeout` is the floor for input ops, and long ops get
+    /// budgets that cover their runner durations, so a successful
+    /// launch/kill is never raced by a 5 s client timeout while the
+    /// runner keeps mutating after a 503.
     pub(crate) async fn call(&self, req: &RunnerRequest) -> Result<RunnerReply, RunnerError> {
         let line = serde_json::to_string(req).map_err(|_| RunnerError::BadReply)?;
-        let outcome = tokio::time::timeout(self.timeout, self.round_trip(line)).await;
+        let budget = op_budget(req, self.timeout);
+        let outcome = tokio::time::timeout(budget, self.round_trip(line)).await;
         match outcome {
             Err(_) => Err(RunnerError::Timeout),
             Ok(Ok(bytes)) => {
@@ -468,7 +498,7 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    async fn serve_one(socket: std::path::PathBuf, reply: &'static str) {
+    async fn serve_one(socket: std::path::PathBuf, reply: String) {
         let listener = tokio::net::UnixListener::bind(&socket).unwrap();
         tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
@@ -483,7 +513,7 @@ mod tests {
     async fn unix_runner_roundtrips_over_a_real_socket() {
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("runner.sock");
-        serve_one(sock.clone(), "{\"status\":\"ok\",\"data\":{}}").await;
+        serve_one(sock.clone(), "{\"status\":\"ok\",\"data\":{}}".to_string()).await;
         let runner = UnixRunner::new(sock, Duration::from_secs(5));
         let reply = runner.call(&RunnerRequest::List {}).await.unwrap();
         match reply {
@@ -495,7 +525,8 @@ mod tests {
     #[tokio::test]
     async fn silent_server_times_out_within_one_second() {
         // The only runner-client test allowed to wait: the deadline
-        // must fire.
+        // must fire. Paste rides the base budget (heavy ops have
+        // per-op floors above 1s in op_budget).
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("runner.sock");
         let listener = tokio::net::UnixListener::bind(&sock).unwrap();
@@ -506,7 +537,13 @@ mod tests {
         });
         let runner = UnixRunner::new(sock, Duration::from_secs(1));
         let started = std::time::Instant::now();
-        let err = runner.call(&RunnerRequest::List {}).await;
+        let err = runner
+            .call(&RunnerRequest::Paste {
+                id: "abcd1234".to_string(),
+                viewer: "spa".to_string(),
+                text: "hi".to_string(),
+            })
+            .await;
         assert!(matches!(err, Err(RunnerError::Timeout)), "got {err:?}");
         assert!(started.elapsed() < Duration::from_secs(5));
     }
@@ -517,8 +554,7 @@ mod tests {
         let sock = dir.path().join("runner.sock");
         let big = "x".repeat(MAX_REPLY_BYTES + 1);
         let reply = format!("{{\"status\":\"ok\",\"data\":\"{big}\"}}");
-        // Leaked so the spawned server task gets a 'static reply.
-        serve_one(sock.clone(), Box::leak(reply.into_boxed_str())).await;
+        serve_one(sock.clone(), reply).await;
         let runner = UnixRunner::new(sock, Duration::from_secs(5));
         assert!(matches!(
             runner.call(&RunnerRequest::List {}).await,
@@ -542,12 +578,156 @@ mod tests {
     async fn malformed_reply_is_bad_reply() {
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("runner.sock");
-        serve_one(sock.clone(), "not json").await;
+        serve_one(sock.clone(), "not json".to_string()).await;
         let runner = UnixRunner::new(sock, Duration::from_secs(5));
         assert!(matches!(
             runner.call(&RunnerRequest::List {}).await,
             Err(RunnerError::BadReply)
         ));
+    }
+
+    /// Serve one connection that answers ok only after `delay`.
+    async fn serve_one_slowly(socket: std::path::PathBuf, delay: Duration) {
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 4096];
+            let _ = stream.read(&mut buf).await;
+            tokio::time::sleep(delay).await;
+            let _ = stream.write_all(b"{\"status\":\"ok\",\"data\":{}}\n").await;
+        });
+    }
+
+    /// `call` must apply `op_budget`, not the bare base timeout: with a
+    /// 50 ms base and a 200 ms reply, a launch (60 s floor) succeeds and
+    /// a paste (base budget) times out.
+    #[tokio::test]
+    async fn call_applies_the_per_op_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = Duration::from_millis(50);
+        let delay = Duration::from_millis(200);
+
+        let sock = dir.path().join("launch.sock");
+        serve_one_slowly(sock.clone(), delay).await;
+        let launch = RunnerRequest::Launch {
+            harness: super::super::wire::Harness::Omp,
+            argv: None,
+            resume_sid: None,
+            cwd: "/work/proj".to_string(),
+            cols: None,
+            rows: None,
+            env: None,
+            exit_keys: None,
+        };
+        let reply = UnixRunner::new(sock, base).call(&launch).await;
+        assert!(
+            matches!(reply, Ok(RunnerReply::Ok { .. })),
+            "launch rides its 60 s floor, got {reply:?}"
+        );
+
+        let sock = dir.path().join("paste.sock");
+        serve_one_slowly(sock.clone(), delay).await;
+        let paste = RunnerRequest::Paste {
+            id: "abcd1234".to_string(),
+            viewer: "spa".to_string(),
+            text: "hi".to_string(),
+        };
+        let err = UnixRunner::new(sock, base).call(&paste).await;
+        assert!(
+            matches!(err, Err(RunnerError::Timeout)),
+            "paste rides the base budget, got {err:?}"
+        );
+    }
+
+    /// Per-op budgets: with the default 5 s base, long ops must wait
+    /// far longer than 5 s (their runner durations), input ops use the
+    /// base, and an operator-raised base always wins over a floor.
+    #[test]
+    fn op_budget_covers_runner_durations() {
+        let base = Duration::from_secs(5);
+        let launch = RunnerRequest::Launch {
+            harness: super::super::wire::Harness::Omp,
+            argv: None,
+            resume_sid: None,
+            cwd: "/work/proj".to_string(),
+            cols: None,
+            rows: None,
+            env: None,
+            exit_keys: None,
+        };
+        assert!(op_budget(&launch, base) >= Duration::from_secs(60));
+        assert!(
+            op_budget(
+                &RunnerRequest::Kill {
+                    id: "abcd1234".to_string(),
+                    grace_secs: None
+                },
+                base
+            ) >= Duration::from_secs(60)
+        );
+        assert!(
+            op_budget(
+                &RunnerRequest::Read {
+                    id: "abcd1234".to_string()
+                },
+                base
+            ) >= Duration::from_secs(60)
+        );
+        assert!(
+            op_budget(
+                &RunnerRequest::History {
+                    id: "abcd1234".to_string()
+                },
+                base
+            ) >= Duration::from_secs(60)
+        );
+        assert!(
+            op_budget(
+                &RunnerRequest::Enter {
+                    id: "abcd1234".to_string(),
+                    viewer: "spa".to_string(),
+                    blocked: false,
+                    from_composer: true
+                },
+                base
+            ) >= Duration::from_secs(15)
+        );
+        assert!(op_budget(&RunnerRequest::List {}, base) >= Duration::from_secs(30));
+        assert_eq!(
+            op_budget(
+                &RunnerRequest::Paste {
+                    id: "abcd1234".to_string(),
+                    viewer: "spa".to_string(),
+                    text: "x".to_string()
+                },
+                base
+            ),
+            base,
+            "input ops use the base"
+        );
+        assert_eq!(
+            op_budget(&RunnerRequest::List {}, Duration::from_secs(45)),
+            Duration::from_secs(45),
+            "an operator-raised base wins over the floor"
+        );
+    }
+
+    /// A reply between the old 4 MiB cap and the current budget
+    /// (a full 50k-line scrollback) must round-trip, not TooLarge.
+    #[tokio::test]
+    async fn five_mib_reply_roundtrips_within_the_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("runner.sock");
+        let big = "x".repeat(5 * 1024 * 1024);
+        let reply = format!("{{\"status\":\"ok\",\"data\":\"{big}\"}}");
+        serve_one(sock.clone(), reply).await;
+        let runner = UnixRunner::new(sock, Duration::from_secs(5));
+        match runner.call(&RunnerRequest::List {}).await {
+            Ok(RunnerReply::Ok { data }) => {
+                assert_eq!(data.as_str().map(|s| s.len()), Some(5 * 1024 * 1024));
+            }
+            other => panic!("5 MiB reply must round-trip, got {other:?}"),
+        }
     }
 
     /// Encode one envelope exactly as the tap would (for the fake

@@ -219,8 +219,11 @@ pub struct TerminalSection {
     #[serde(default)]
     pub refuse_token_callers: Option<bool>,
 
-    /// One runner RPC deadline (connect+write+read) in seconds. Default
-    /// 5s; values outside `1..=60` are clamped into that range.
+    /// Runner RPC deadline floor (connect+write+read) in seconds. Default
+    /// 5s; values outside `1..=60` are clamped into that range. Per-op
+    /// budgets (floors over this base, pinned by `op_budget` in the
+    /// runner client) give long ops more: launch/kill/read/history
+    /// 60s, enter 15s, list 30s.
     #[serde(default)]
     pub runner_timeout_secs: Option<u64>,
 }
@@ -275,8 +278,9 @@ impl TerminalSection {
         self.refuse_token_callers.unwrap_or(true)
     }
 
-    /// Runner RPC deadline in seconds: the configured value filtered for
-    /// `> 0`, defaulted to 5s, then clamped into `1..=60`.
+    /// Base runner RPC deadline in seconds: the configured value filtered
+    /// for `> 0`, defaulted to 5s, then clamped into `1..=60`. Per-op
+    /// budgets floor over this base in the runner client.
     pub fn runner_timeout_secs(&self) -> u64 {
         self.runner_timeout_secs
             .filter(|&s| s > 0)

@@ -1,6 +1,6 @@
 //! `runner.sock`: newline-delimited JSON over a unix stream.
 //!
-//! Many requests per connection; the request line is capped at 64 KiB
+//! Many requests per connection; the request line is capped at 128 KiB
 //! (longer -> `bad-request`, connection closed). Responses answer in the
 //! envelope `{v: 1, id, status: "ok"|"err", ...}`.
 //!
@@ -26,8 +26,12 @@ use crate::runner::Runner;
 
 /// The default umask for the runner socket (then `chmod 0600` as well).
 const RUNNER_UMASK: u32 = 0o077;
-/// 64 KiB request line cap.
-const MAX_LINE: usize = 64 * 1024;
+/// 128 KiB request line cap. The worst legal escape is 2x: paste text
+/// may not carry C0 controls other than tab and newline, nor DEL, so the
+/// only bytes that grow when JSON-escaped are the quote and the
+/// backslash (one byte to two). A 32 KiB paste of quotes is therefore
+/// about 64 KiB plus the envelope, which the old 64 KiB cap refused.
+const MAX_LINE: usize = 128 * 1024;
 
 /// Bind `runner.sock`, replacing a stale socket file.
 pub fn bind_runner_socket(path: &Path) -> std::io::Result<UnixListener> {
@@ -146,11 +150,12 @@ async fn handle_connection<S: Supervisor + 'static>(runner: Arc<Runner<S>>, stre
         if n > MAX_LINE {
             // Over-long request: bad-request and close the connection.
             // Even a newline-terminated line is rejected: the cap is a
-            // byte count, not a terminator check, so an exactly-65537 B
-            // line cannot fall through to the parser.
+            // byte count, not a terminator check, so a line of
+            // MAX_LINE + 1 bytes (131073 with the `\n`) cannot fall through
+            // to the parser.
             let err = crate::wire::Response::Err {
                 code: "bad-request".to_string(),
-                message: "request line exceeds 64 KiB".to_string(),
+                message: "request line exceeds 128 KiB".to_string(),
             };
             let _ = respond(&mut write_half, None, err).await;
             return;
@@ -325,10 +330,10 @@ mod tests {
         let root = dir.path().to_path_buf();
         let (handle, runner, _tx) = stub_runner(&root).await;
         let sock = runner.cfg.run_dir.join("runner").join("runner.sock");
-        // 128 KiB without a newline: the server must answer bad-request
+        // 256 KiB without a newline: the server must answer bad-request
         // from a bounded read (never buffer the whole line).
         let mut stream = UnixStream::connect(&sock).await.unwrap();
-        let big = vec![b'x'; 128 * 1024];
+        let big = vec![b'x'; 256 * 1024];
         let _ = stream.write_all(&big).await; // server closes early; EPIPE ok
         let mut reader = BufReader::new(stream);
         let mut line = String::new();
@@ -399,8 +404,8 @@ mod tests {
         );
     }
 
-    /// The 64 KiB cap is a byte count, not a terminator check: a
-    /// newline-terminated line of MAX_LINE+1 bytes (65537 with the `\n`)
+    /// The request-line cap is a byte count, not a terminator check: a
+    /// newline-terminated line of MAX_LINE+1 bytes (including the `\n`)
     /// is bad-request and closes the connection; it never reaches the
     /// request parser.
     #[tokio::test]
@@ -423,7 +428,7 @@ mod tests {
         .expect("boundary line must be answered within 10 s")
         .unwrap();
         assert!(
-            line.contains("bad-request") && line.contains("exceeds 64 KiB"),
+            line.contains("bad-request") && line.contains("exceeds 128 KiB"),
             "terminated overlong line must be the explicit cap error: {line}"
         );
         let mut tail = String::new();
@@ -435,6 +440,66 @@ mod tests {
         .expect("closed connection must answer within 10 s")
         .unwrap();
         assert_eq!(closed, 0, "connection must be closed after the cap error");
+        handle.abort();
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn legal_paste_line_between_64_and_128_kib_passes_the_line_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (handle, runner, _tx) = stub_runner(&root).await;
+        let sock = runner.cfg.run_dir.join("runner").join("runner.sock");
+        // The worst legal 32 KiB paste: every byte is a quote, which JSON
+        // escapes to two bytes.
+        let req = serde_json::json!({
+            "op": "paste", "id": "abcd1234", "viewer": "spa",
+            "text": "\"".repeat(32 * 1024),
+        });
+        let mut line = serde_json::to_string(&req).unwrap();
+        assert!(
+            line.len() > 64 * 1024 && line.len() < MAX_LINE,
+            "fixture must sit between the old and new cap: {}",
+            line.len()
+        );
+        line.push('\n');
+        let mut stream = UnixStream::connect(&sock).await.unwrap();
+        stream.write_all(line.as_bytes()).await.unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut reply = String::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            reader.read_line(&mut reply),
+        )
+        .await
+        .expect("a legal line must be answered within 10 s")
+        .unwrap();
+        assert!(
+            !reply.contains("request line exceeds"),
+            "a legal 32 KiB paste must pass the line cap: {reply}"
+        );
+        // Inside the cap the reply echoes the request id; the over-cap path
+        // answers `id: null`. Fails with MAX_LINE = 64 KiB.
+        let parsed: serde_json::Value = serde_json::from_str(reply.trim()).unwrap();
+        assert_eq!(parsed["id"], "abcd1234", "reply: {reply}");
+        // The connection stays usable: a ping on the SAME stream answers ok.
+        reader
+            .get_mut()
+            .write_all(b"{\"v\":1,\"id\":2,\"op\":\"ping\"}\n")
+            .await
+            .unwrap();
+        let mut pong = String::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            reader.read_line(&mut pong),
+        )
+        .await
+        .expect("ping on the same connection must answer within 10 s")
+        .unwrap();
+        assert!(
+            pong.contains(r#""status":"ok""#),
+            "ping after paste: {pong}"
+        );
         handle.abort();
         let _ = std::fs::remove_file(&sock);
     }
