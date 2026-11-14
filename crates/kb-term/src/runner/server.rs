@@ -150,8 +150,9 @@ async fn handle_connection<S: Supervisor + 'static>(runner: Arc<Runner<S>>, stre
         if n > MAX_LINE {
             // Over-long request: bad-request and close the connection.
             // Even a newline-terminated line is rejected: the cap is a
-            // byte count, not a terminator check, so an exactly-65537 B
-            // line cannot fall through to the parser.
+            // byte count, not a terminator check, so a line of
+            // MAX_LINE + 1 bytes (131073 with the `\n`) cannot fall through
+            // to the parser.
             let err = crate::wire::Response::Err {
                 code: "bad-request".to_string(),
                 message: "request line exceeds 128 KiB".to_string(),
@@ -400,7 +401,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn legal_paste_line_between_64_and_128_kib_is_dispatched() {
+    async fn legal_paste_line_between_64_and_128_kib_passes_the_line_cap() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         let (handle, runner, _tx) = stub_runner(&root).await;
@@ -431,8 +432,12 @@ mod tests {
         .unwrap();
         assert!(
             !reply.contains("request line exceeds"),
-            "a legal 32 KiB paste must reach dispatch: {reply}"
+            "a legal 32 KiB paste must pass the line cap: {reply}"
         );
+        // Inside the cap the reply echoes the request id; the over-cap path
+        // answers `id: null`. Fails with MAX_LINE = 64 KiB.
+        let parsed: serde_json::Value = serde_json::from_str(reply.trim()).unwrap();
+        assert_eq!(parsed["id"], "abcd1234", "reply: {reply}");
         // The connection stays usable: a ping on the SAME stream answers ok.
         reader
             .get_mut()

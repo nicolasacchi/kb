@@ -184,7 +184,7 @@ impl RunnerClient {
     }
 }
 
-/// Read one response line, bounded by the server's 64 KiB line cap.
+/// Read one response line, bounded by this client's own 64 KiB response-line cap.
 /// Never reads past the newline, so the next response stays intact.
 async fn read_response_line(stream: &mut tokio::net::UnixStream) -> std::io::Result<String> {
     const MAX_LINE: usize = 64 * 1024;
