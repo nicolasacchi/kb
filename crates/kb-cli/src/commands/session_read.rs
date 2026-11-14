@@ -1061,14 +1061,40 @@ fn render_item(it: &serde_json::Value) -> Option<String> {
             it["reason"].as_str().unwrap_or("?")
         )),
         "Image" => {
-            let mime = it["mime"].as_str().unwrap_or("image/*");
-            let sha = it["sha256"].as_str();
+            // Defence in depth: the wire mime is transcript-controlled, so
+            // never echo it raw into a terminal (newline/ESC injection).
+            // Only plain token chars survive; anything else becomes '?',
+            // and a non-`image/` shape collapses to the wildcard.
+            let mime_raw = it["mime"].as_str().unwrap_or("image/*");
+            let mime_clean: String = mime_raw
+                .chars()
+                .take(64)
+                .map(|c| {
+                    if matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9' | '/' | '-' | '_' | '.' | '+' | '*')
+                    {
+                        c
+                    } else {
+                        '?'
+                    }
+                })
+                .collect();
+            let mime = if mime_clean.starts_with("image/") && mime_clean.len() > 6 {
+                mime_clean
+            } else {
+                "image/*".to_string()
+            };
+            // Same for the sha: only a validated hex-64 reaches the label.
+            let sha_owned = it["sha256"].as_str().filter(|h| {
+                h.len() == 64
+                    && h.bytes()
+                        .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+            });
             let inline = it["inline_bytes"]
                 .as_u64()
                 .map(|n| u32::try_from(n).unwrap_or(u32::MAX));
             Some(format!(
                 "▣ {}",
-                kb_core::sessions::view::image_label(mime, sha, inline)
+                kb_core::sessions::view::image_label(&mime, sha_owned, inline)
             ))
         }
         _ => None,
@@ -1443,6 +1469,46 @@ mod tests {
         );
         // bare form (mime only)
         assert!(out.contains("[image image/webp]"), "{out}");
+    }
+
+    #[test]
+    fn hostile_mime_is_sanitised_for_the_terminal() {
+        // A transcript-controlled mime carrying newline + ESC must never
+        // reach the terminal raw: no control char survives the line.
+        let esc = char::from_u32(27).unwrap();
+        let mut hostile = serde_json::json!({
+            "item": "Image",
+            "mime": "image/png",
+            "sha256": serde_json::Value::Null,
+            "inline_bytes": serde_json::Value::Null,
+        });
+        hostile["mime"] = serde_json::Value::String(format!("image/x\n{esc}[2J"));
+        let line = render_item(&hostile).expect("Image renders a line");
+        assert!(!line.contains('\n'), "newline leaked: {line:?}");
+        assert!(!line.contains('\r'), "carriage return leaked: {line:?}");
+        assert!(!line.contains('\u{1b}'), "ESC leaked: {line:?}");
+        assert!(line.contains("▣ [image image/x?"), "{line}");
+        // A hostile sha is likewise dropped to the bare form.
+        let mut hostile_sha = serde_json::json!({
+            "item": "Image",
+            "mime": "image/png",
+            "sha256": serde_json::Value::Null,
+            "inline_bytes": serde_json::Value::Null,
+        });
+        hostile_sha["sha256"] = serde_json::Value::String(format!("abababababab\n{esc}[2J"));
+        let line = render_item(&hostile_sha).expect("Image renders a line");
+        assert!(!line.contains('\n') && !line.contains('\u{1b}'), "{line:?}");
+        assert!(line.contains("[image image/png]"), "{line}");
+        // A valid mime still renders verbatim (sanitisation is inert for
+        // honest mimes).
+        let valid = serde_json::json!({
+            "item": "Image",
+            "mime": "image/png",
+            "sha256": serde_json::Value::Null,
+            "inline_bytes": serde_json::Value::Null,
+        });
+        let line = render_item(&valid).expect("Image renders a line");
+        assert_eq!(line, "▣ [image image/png]");
     }
 
     #[test]

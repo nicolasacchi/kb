@@ -27,6 +27,14 @@ const streamFile = arg('stream')!;
 const scenario = arg('scenario')!;
 const expectBytes = Number(arg('expect-bytes') ?? '0');
 const quiescentOpts = arg('quiescent') === 'off' ? { quiescentMs: 0 } : {};
+/** Bounded cells gate for the pause scenario against the byte-0 file
+ *  reference. A correct reseed differs only in the bottom padding padTo
+ *  adds for an in-flight gap (CI measured 29 cells at the 29-line gap); a
+ *  truncated/wrong-cell feed pads a much larger blank tail versus the
+ *  flood reference (half-capture ~550k cells). 5000 (~217 flood rows)
+ *  separates the two by orders of magnitude. Do not widen it to get
+ *  green: investigate. */
+const FILE_REF_CELLS_BOUND = 5000;
 
 const note = (...a: unknown[]): void => {
   console.error(...a);
@@ -55,6 +63,15 @@ interface CompareOut {
   rowsGot: string[];
   examples: unknown;
   altExamples: unknown;
+  /** True when the mode-restore surface (alt buffer, active-buffer scroll
+   * region, restored modes, cursor visibility) agrees. Gates `ok` with
+   * cellsDiff, so a reconstruction that matches in cells but not in mode
+   * state fails. Cursor position and pending-wrap stay informational:
+   * pending wrap is a documented residual (term_int_reseed_pending_wrap)
+   * and its cursor spelling differs by representation. */
+  modeStateOk: boolean;
+  modeStateDiff: unknown;
+  cursorMatches: boolean;
 }
 
 function cursorOf(twin: Twin): { x: number; y: number } {
@@ -87,16 +104,38 @@ function compareTwins(reseeded: Twin, ref: Twin, result: ReseededResult, stats: 
   const sumCells = (c: { rowsDiff: number; cells: Record<string, number> }): number =>
     c.rowsDiff + Object.values(c.cells).reduce((x, y) => x + y, 0);
   const cellsDiff = sumCells(normal) + (alt ? sumCells(alt) : 0);
-  const sd = diffState(stateOf(a), stateOf(b));
-  const ok = cellsDiff === 0;
+  const stateA = stateOf(a);
+  const stateB = stateOf(b);
+  const sd = diffState(stateA, stateB);
+  // Mode-restore surface: everything modeRestoreBytes must prove (alt
+  // buffer, the ACTIVE buffer's scroll region, the six restored mode
+  // keys, cursor visibility). Saved cursor/charset/title/tabs/pen are
+  // T6-tail state no capture carries and stay out of the gate.
+  const activeBuf = stateA.activeBuffer === 'alternate' ? 'alt' : 'normal';
+  const MODE_KEYS: ReadonlySet<string> = new Set([
+    'activeBuffer',
+    'cursorHidden',
+    'modes.originMode',
+    'modes.wraparoundMode',
+    'modes.insertMode',
+    'modes.applicationCursorKeysMode',
+    'modes.applicationKeypadMode',
+  ]);
+  const isModeKey = (k: string): boolean => MODE_KEYS.has(k) || k === `${activeBuf}.scrollTop` || k === `${activeBuf}.scrollBottom`;
+  const modeDiffs = sd.filter((d) => isModeKey(d.key));
+  const modeStateOk = modeDiffs.length === 0;
+  const cursor = cursorOf(reseeded);
+  const cursorRef = cursorOf(ref);
+  const cursorMatches = cursor.x === cursorRef.x && cursor.y === cursorRef.y;
+  const ok = cellsDiff === 0 && modeStateOk;
   return {
     ok,
     cellsDiff,
     stateDiff: sd.length,
     stateDiffClasses: [...new Set(sd.map((d) => d.cls))].sort(),
     stateDiffDetail: sd,
-    cursor: cursorOf(reseeded),
-    cursorRef: cursorOf(ref),
+    cursor,
+    cursorRef,
     altCellsDiff: alt ? sumCells(alt) : 0,
     attempts: result.attempts,
     stats,
@@ -106,6 +145,9 @@ function compareTwins(reseeded: Twin, ref: Twin, result: ReseededResult, stats: 
     b: result.b,
     examples: normal.examples,
     altExamples: alt?.examples ?? null,
+    modeStateOk,
+    modeStateDiff: modeDiffs,
+    cursorMatches,
     // Diagnostics only; dumped ONLY on mismatch (and capped at 4 rows) --
     // the full dumps made the driver's JSON larger than the OS pipe
     // buffer (64 KiB): with stdout piped and Rust reading only on
@@ -138,6 +180,25 @@ async function main(): Promise<void> {
   });
   const reseedTwin = makeTwin(cols, rows);
   const reseeder = new Reseeder(control, reseedTwin);
+  // The %pause -> continue -> reseed hook wiring (pause scenario):
+  // Control's dispatch writes the quoted continue when %pause arrives;
+  // once the pane settles, reseed. On CI tmux 3.7c the hook never fires
+  // for the explicit pause (HOOK_PAUSE_MISSED_FALLBACK), so the manual
+  // fallback below is what runs; the hook path itself is unit-pinned in
+  // control.test.ts and only recorded here as the pauseHookContinued
+  // metric.
+  let hookReseed: Promise<ReseededResult> | null = null;
+  let fallbackTaken = false;
+  control.onPause((p) => {
+    if (scenario !== 'pause' || p !== pane) return;
+    // If the manual fallback already took charge, do not race it with a
+    // second reseed on the same twin.
+    if (fallbackTaken) return;
+    hookReseed = (async () => {
+      await waitSettled();
+      return reseeder.reseed(pane);
+    })();
+  });
 
   const touchReady = (): void => {
     if (readyFile) writeFileSync(readyFile, 'ready');
@@ -246,8 +307,9 @@ async function main(): Promise<void> {
         // >40s of verified stopped-client lag (CI 42439069928: the entire
         // 30MB flood drained post-resume undropped) -- see the PR body. The
         // documented per-pane pause (`refresh-client -A '<pane>:pause'`,
-        // pauseCommand) pauses the pane deterministically here so the same
-        // %pause -> continue -> reseed recovery path is exercised.
+        // pauseCommand) pauses the pane deterministically here, so the
+        // explicit pause, the halt, the manual continue and the reseed are
+        // exercised (the %pause hook path is unit-pinned, not asserted here).
         note('STALLED');
         touchReady();
         const bytesAtStop = emittedTotal;
@@ -262,7 +324,7 @@ async function main(): Promise<void> {
         // halts: this is the stall policy's observable surface, since
         // `pause-after` auto-engagement never fired on 3.7c (see the PR
         // body evidence for the >40s stopped-client runs).
-        await control.cmd(pauseCommand(pane));
+        const pauseReplyLines = await control.cmd(pauseCommand(pane));
         note('PAUSE_CMD_SENT');
         // Observe the halt. With the flood still flowing, a healthy drain
         // exceeds 200 KiB in 1.5s by orders of magnitude; a paused pane
@@ -274,34 +336,74 @@ async function main(): Promise<void> {
         if (growthWhilePaused > 200_000) {
           throw new Error(`pane did not pause: ${growthWhilePaused} bytes still flowed`);
         }
-        // Continue the pane with the same form the %pause hook uses, then
-        // let the flood complete and drain before the reseed.
-        await control.cmd(continueCommand(pane));
-        note('CONTINUED');
-        // Wait until the pane settles (flood done) before the reseed, so
-        // the capture holds the complete state and a partial tail cannot
-        // hide in the post-capture queue.
-        await waitSettled();
-        const r = await reseeder.reseed(pane);
+        // Recover: if tmux delivered %pause to the hook, it already wrote
+        // the quoted continue and reseeds once the pane settles; wait
+        // briefly for it, else take the manual continue + reseed fallback
+        // (the usual outcome on CI; recorded, not asserted).
+        const hookDeadline = Date.now() + 10_000;
+        while (!hookReseed && Date.now() < hookDeadline) await sleep(50);
+        let r: ReseededResult;
+        let pauseHookContinued = false;
+        if (hookReseed) {
+          pauseHookContinued = true;
+          note('HOOK_PAUSE_SEEN');
+          r = await hookReseed;
+        } else {
+          // Fallback: the onPause hook did not fire within 10s (a %pause
+          // inside the refresh-client reply block would land in
+          // pauseReplyLines instead). The manual continue and reseed keep
+          // the recovery exercised; pauseHookContinued=false records the miss.
+          fallbackTaken = true;
+          note('HOOK_PAUSE_MISSED_FALLBACK');
+          await control.cmd(continueCommand(pane));
+          note('CONTINUED');
+          // Wait until the pane settles (flood done) before the reseed,
+          // so the capture holds the complete state and a partial tail
+          // cannot hide in the post-capture queue.
+          await waitSettled();
+          r = await reseeder.reseed(pane);
+        }
         note('RESEEDED');
+        // Gated on bounded equality, not emitted-ref equality: the pause
+        // drops output by design, so no byte-stream reference can match
+        // the capture (CI 42450773946: reseeded history 49971 vs
+        // emitted-ref length 1483, cellsDiff 48518 -- the client received
+        // only ~35 KB of the flood while the capture holds the pane's
+        // full screen). The gate is (a) history proximity vs the byte-0
+        // file reference within 2%, (b) exact determinism: a second
+        // reseed of the idle pane reproduces the identical twin, and (c)
+        // a bounded cellsDiff + mode-state agreement of the reseeded twin
+        // against the byte-0 file reference (so a deterministically wrong
+        // reseed that feeds truncated cells fails even though padTo pads
+        // the line count and the two reseeds agree). The emitted-ref
+        // comparison and pauseHookContinued are recorded as metrics only.
         out.compare = await compareAt(r);
         note('COMPARED');
-        // NOT gated on the seed comparison: 'seed == reference' is
-        // UNVERIFIED for this scenario. Even with the drain race closed,
-        // neither byte-stream reference can match the capture: the pane
-        // pause DROPS output by design, so the emitted log structurally
-        // misses the dropped chunk (CI 42450773946: reseeded history
-        // 49971 vs emitted-ref length 1483, cellsDiff 48518 -- the client
-        // received only ~35 KB of the 30 MB flood while the capture holds
-        // the pane's full screen), and the byte-0 file reference
-        // overshoots by the chunk the pause dropped from the pane itself
-        // (CI 42443779255: 49971 vs 50000). The comparison still runs and
-        // is recorded as a driver metric; the asserted surface stays:
-        // pause-after accepted, pane pause halts output (asserted inline
-        // above), continue + a successful reseed (attempts >= 1), and
-        // tmux RSS < 100 MB in Rust.
-        out.ok = r.attempts >= 1;
-        out.metric = { seedEqualsEmittedRef: (out.compare as CompareOut).ok };
+        const hash1 = stateHash(reseedTwin);
+        const refFull = await fileRef();
+        const refHistory = refFull.lineCount('normal') - rows;
+        // Content gate (c): line-count proximity alone cannot catch a
+        // truncated feed because padTo pads with blank rows.
+        const fileCompare = compareTwins(reseedTwin, refFull, r, reseeder.stats());
+        const fileRefCellsOk = fileCompare.cellsDiff <= FILE_REF_CELLS_BOUND && fileCompare.modeStateOk;
+        refFull.dispose();
+        const historyGap = Math.abs(r.historySize - refHistory);
+        const historyClose = historyGap <= Math.max(100, Math.floor(refHistory / 50));
+        const r2 = await reseeder.reseed(pane);
+        const hash2 = stateHash(reseedTwin);
+        const deterministic = hash1 === hash2;
+        out.ok = r.attempts >= 1 && r2.attempts >= 1 && deterministic && historyClose && fileRefCellsOk;
+        out.metric = {
+          seedEqualsEmittedRef: (out.compare as CompareOut).ok,
+          deterministic,
+          historyGap,
+          historyClose,
+          pauseHookContinued,
+          pauseReplyLines,
+          fileRefCellsOk,
+          fileRefCellsDiff: fileCompare.cellsDiff,
+          fileRefModeStateOk: fileCompare.modeStateOk,
+        };
         break;
       }
       case 'midseq': {

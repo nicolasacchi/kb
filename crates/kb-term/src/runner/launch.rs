@@ -21,19 +21,27 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::profiles::{self, PlanRequest};
 use crate::runner::anchor::Anchor;
 use crate::runner::ids::{generate_id, valid_harness, valid_id};
-use crate::runner::supervisor::{StopCtx, Supervisor};
+use crate::runner::supervisor::Supervisor;
 use crate::runner::tmux::Tmux;
 use crate::runner::{Runner, RunnerConfig, RunnerError};
 use crate::wire::{Harness, Request};
 
 /// The documented gate: `wait-for` holds the harness until the runner
 /// sends `wait-for -S kbterm-go` after the tap and the anchor are in.
-/// The ONLY shell string the runner ever builds.
+/// The ONLY shell string the runner ever builds. It runs under the
+/// non-login `/bin/sh -c` (no `-l`): no user profile is sourced for a
+/// pane. The unset prelude + prefix snippet prepended to this script
+/// defend server-env inheritance (a tmux server inherits its first
+/// client's env); they do not defend a login-profile threat the
+/// launcher cannot have.
 pub const GATE_SCRIPT: &str =
     "T=$1; S=$2; shift 2; \"$T\" -S \"$S\" wait-for kbterm-go; exec \"$@\"";
 
 /// The default exit keys (the omp sequence; per-harness tables are T10).
 pub const DEFAULT_EXIT_KEYS: [&str; 3] = ["C-c", "C-c", "C-d"];
+
+/// Maximum `resume_sid` byte length (validation `bad-request` above this).
+pub const MAX_RESUME_SID_LEN: usize = 256;
 
 /// Build the exact `new-session` argv for a launch. Pure (no IO) so the
 /// gate shape is pinned by a unit test.
@@ -79,15 +87,29 @@ pub fn gate_argv(
     out.extend(argv.iter().cloned());
     out
 }
+/// Build the pane wrapper script: server-env defence prelude + prefix
+/// snippet + the gate. Pure (no IO) so the defence is pinned by a unit
+/// test that does not need tmux; the production launch calls this exact
+/// helper, so a test that fails without the defence proves the
+/// production path emits it.
+pub fn build_gate_script(unset_after_login: &[String]) -> Result<String, String> {
+    let prelude = profiles::env::shell_unset_prelude(unset_after_login)?;
+    Ok(format!(
+        "{prelude}{} {GATE_SCRIPT}",
+        profiles::env::shell_unset_prefixes_snippet()
+    ))
+}
 
 /// A validated launch request (everything after the pre-tmux checks).
 #[derive(Debug, Clone)]
 pub struct ValidatedLaunch {
     /// Harness name (wire enum; for the `@kb_harness` option).
     pub harness: String,
-    /// The argv to run (first item an absolute path). The plan argv
-    /// governs the launch; verbatim caller argv is honoured only under
-    /// the term-int probe flag (see `validate_launch`).
+    /// The caller's argv, if any: `None` from kb-server by design (the
+    /// runner builds argv from the harness profile). Empty means "use
+    /// the plan argv" — the plan governs unless verbatim mode is set.
+    /// `Some` entries are validated (absolute `argv[0]`, harness-named,
+    /// forbidden scan).
     pub argv: Vec<String>,
     /// Resume session id, if any.
     pub resume_sid: Option<String>,
@@ -135,53 +157,58 @@ pub fn validate_launch(req: &Request, cfg: &RunnerConfig) -> Result<ValidatedLau
     else {
         return Err(RunnerError::BadRequest("not a launch request".to_string()));
     };
-    let Some(argv) = argv else {
-        return Err(RunnerError::BadRequest("argv is required".to_string()));
-    };
-    if argv.is_empty() {
-        return Err(RunnerError::BadRequest(
-            "argv must not be empty".to_string(),
-        ));
-    }
-    if !argv[0].starts_with('/') {
-        return Err(RunnerError::BadRequest(
-            "argv[0] must be an absolute path".to_string(),
-        ));
-    }
-    // The profile argv governs the launch: the caller's argv[0] must
-    // name the harness binary (its basename must equal the harness
-    // name). The only exception is the term-int probe flag, which lets
-    // integration fixtures run verbatim; production (kb-termd without
-    // the flag) always uses the plan argv, so a wire caller cannot run
-    // an alternate program. Forbidden argv elements never pass, under
-    // either mode: a probe argv cannot smuggle `--kb-off` or a bare
-    // continue past the profile.
-    if let Some(bad) = argv
-        .iter()
-        .find(|a| profiles::table::FORBIDDEN_ARGV.contains(&a.as_str()))
-    {
-        return Err(RunnerError::BadRequest(format!(
-            "argv element `{bad}` is forbidden"
-        )));
-    }
-    let names_harness = std::path::Path::new(&argv[0])
-        .file_name()
-        .is_some_and(|f| f.to_str() == Some(harness.as_str()));
-    let probe = std::env::var("KB_TERM_TEST_PROBE").is_ok_and(|v| v == "1");
-    if !names_harness && !probe {
-        return Err(RunnerError::BadRequest(format!(
-            "argv[0] must name the harness binary ({})",
-            harness.as_str()
-        )));
-    }
-    let total: usize = argv.iter().map(String::len).sum();
-    if total > 32 * 1024 {
-        return Err(RunnerError::BadRequest("argv exceeds 32 KiB".to_string()));
-    }
-    for arg in argv {
-        if arg.contains('\0') {
+    // kb-server sends `argv: None` by design (the runner builds argv
+    // from the harness profile). `None` (and an empty `Some`) therefore
+    // validates as "use the plan argv"; only a non-empty `Some` is
+    // validated as verbatim caller argv. Production always uses the
+    // plan argv, so a wire caller cannot run an alternate program.
+    let argv: Vec<String> = argv.clone().unwrap_or_default();
+    if !argv.is_empty() {
+        if !argv[0].starts_with('/') {
             return Err(RunnerError::BadRequest(
-                "argv contains a NUL byte".to_string(),
+                "argv[0] must be an absolute path".to_string(),
+            ));
+        }
+        if let Some(bad) = argv
+            .iter()
+            .find(|a| profiles::table::FORBIDDEN_ARGV.contains(&a.as_str()))
+        {
+            return Err(RunnerError::BadRequest(format!(
+                "argv element `{bad}` is forbidden"
+            )));
+        }
+        let names_harness = std::path::Path::new(&argv[0])
+            .file_name()
+            .is_some_and(|f| f.to_str() == Some(harness.as_str()));
+        if !names_harness && !cfg.allow_verbatim_probe {
+            return Err(RunnerError::BadRequest(format!(
+                "argv[0] must name the harness binary ({})",
+                harness.as_str()
+            )));
+        }
+        let total: usize = argv.iter().map(String::len).sum();
+        if total > 32 * 1024 {
+            return Err(RunnerError::BadRequest("argv exceeds 32 KiB".to_string()));
+        }
+        for arg in &argv {
+            if arg.contains('\0') {
+                return Err(RunnerError::BadRequest(
+                    "argv contains a NUL byte".to_string(),
+                ));
+            }
+        }
+    }
+    // `resume_sid` is written verbatim into `@kb_resume_sid` and echoed in
+    // list; bound it (~256 B) so it can never grow past the line cap.
+    if let Some(sid) = resume_sid {
+        if sid.len() > MAX_RESUME_SID_LEN {
+            return Err(RunnerError::BadRequest(format!(
+                "resume_sid exceeds {MAX_RESUME_SID_LEN} bytes"
+            )));
+        }
+        if sid.contains('\0') {
+            return Err(RunnerError::BadRequest(
+                "resume_sid contains a NUL byte".to_string(),
             ));
         }
     }
@@ -281,13 +308,31 @@ pub async fn launch_session<S: Supervisor>(
         }
         Err(e) => {
             drop(lock);
-            // Best-effort teardown: stop the units, wait the holder, drop
-            // the anchor, remove `s/<id>*`.
+            // Best-effort teardown: read the pane/server pids BEFORE
+            // stopping (the server must still answer), then stop the
+            // units, drop the anchor, remove `s/<id>*`. An empty StopCtx
+            // would leave a stubborn pane alive (its SIGTERMs would go
+            // to nobody); the pids let direct mode SIGKILL it.
             runner.take_anchor(&id).await;
-            let _ = runner.supervisor.stop(&id, StopCtx::default()).await;
+            let ctx = teardown_stop_ctx(runner, &id).await;
+            let _ = runner.supervisor.stop(&id, ctx).await;
             remove_session_files(runner, &id).await;
             Err(e)
         }
+    }
+}
+
+/// The supervisor stop context for a teardown: the pane and server pids
+/// read best-effort from the holder (each `None` when the server no
+/// longer answers).
+pub async fn teardown_stop_ctx<S: Supervisor>(
+    runner: &Runner<S>,
+    id: &str,
+) -> crate::runner::supervisor::StopCtx {
+    let (pane_pid, server_pid) = crate::runner::discovery::pane_and_server_pids(runner, id).await;
+    crate::runner::supervisor::StopCtx {
+        pane_pid,
+        server_pid,
     }
 }
 
@@ -321,20 +366,20 @@ async fn launch_locked<S: Supervisor>(
     // the session (the pane command is the gate).
     let plan = build_launch_plan(runner, id, spec)?;
     let plan_env: BTreeMap<String, String> = plan.env.iter().cloned().collect();
-    let prelude = profiles::env::shell_unset_prelude(&plan.unset_after_login)
+    let script = build_gate_script(&plan.unset_after_login)
         .map_err(|bad| RunnerError::Internal(format!("bad env name in unset prelude: {bad}")))?;
-    let script = format!(
-        "{prelude}{} {GATE_SCRIPT}",
-        profiles::env::shell_unset_prefixes_snippet()
-    );
     // The plan argv governs the launch: `validate_launch` rejects any
-    // caller argv[0] that does not name the harness binary unless the
-    // term-int probe flag is set, in which case an integration fixture
-    // runs verbatim (still under the profile env and exit keys). Caller
-    // extras are otherwise discarded, so no wire-supplied argv can
-    // smuggle `--kb-off` or a bare continue past the profile.
-    let probe = std::env::var("KB_TERM_TEST_PROBE").is_ok_and(|v| v == "1");
-    let launch_argv = if is_profile_binary(&spec.argv, &plan.argv) || !probe {
+    // caller argv[0] that does not name the harness binary unless
+    // `allow_verbatim_probe` is set (test harness only), in which case
+    // an integration fixture runs verbatim (still under the profile env
+    // and exit keys). `spec.argv` empty (kb-server sends `argv: None`,
+    // "use the plan") always yields the plan argv, even in verbatim
+    // mode. Caller extras are otherwise discarded, so no wire-supplied
+    // argv can smuggle `--kb-off` or a bare continue past the profile.
+    let launch_argv = if spec.argv.is_empty()
+        || is_profile_binary(&spec.argv, &plan.argv)
+        || !runner.cfg.allow_verbatim_probe
+    {
         plan.argv.clone()
     } else {
         spec.argv.clone()
@@ -363,7 +408,16 @@ async fn launch_locked<S: Supervisor>(
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
     let exit_keys = effective_exit_keys(spec, &plan);
-    set_user_options(runner, &sock, id, spec, &exit_keys, started).await?;
+    set_user_options(
+        runner,
+        &sock,
+        id,
+        spec,
+        &exit_keys,
+        recorded_exit_steps(spec, &plan),
+        started,
+    )
+    .await?;
     // The pane already exists (the gate holds the harness); name its pid
     // in the tap-timeout error so diagnostics can confirm the teardown.
     let pane_pid_early: u32 = read_pane_pid(runner, &sock).await.unwrap_or_default();
@@ -454,6 +508,7 @@ async fn set_user_options<S: Supervisor>(
     id: &str,
     spec: &ValidatedLaunch,
     exit_keys: &[String],
+    exit_steps: Option<&'static [profiles::ExitStep]>,
     started: u64,
 ) -> Result<(), RunnerError> {
     let mut opts: Vec<(&str, String)> = vec![
@@ -465,6 +520,16 @@ async fn set_user_options<S: Supervisor>(
             serde_json::to_string(exit_keys).map_err(|e| RunnerError::Internal(e.to_string()))?,
         ),
     ];
+    // Profile steps (with their waits) are recorded only when the caller
+    // gave no exit keys; the kill path prefers `@kb_exit_steps`, so
+    // recording them next to explicit keys would override the caller.
+    if let Some(steps) = exit_steps {
+        opts.push((
+            "@kb_exit_steps",
+            serde_json::to_string(&profiles::OwnedExitStep::from_slice(steps))
+                .map_err(|e| RunnerError::Internal(e.to_string()))?,
+        ));
+    }
     if let Some(sid) = &spec.resume_sid {
         opts.push(("@kb_resume_sid", sid.clone()));
     }
@@ -521,9 +586,10 @@ fn build_launch_plan<S: Supervisor>(
 /// Merge validated caller env (`Request::Launch.env`) into an
 /// already-built plan. The plan env (allowlist + profile env + kb-term
 /// identity) is authoritative for the pane: caller entries are added
-/// (re-sorted) but never override the identity pair, never name a
-/// tmux-owned or never-forward name, and never reintroduce a forbidden
-/// outer-terminal name — those are `bad-request`, not silently dropped.
+/// (re-sorted) but never override the identity pair or a profile-owned
+/// name (`PI_*`, `CLAUDE_*`), never name a tmux-owned or never-forward
+/// name, and never reintroduce a forbidden outer-terminal name — those
+/// are `bad-request`, not silently dropped.
 fn merge_caller_env(
     mut plan: profiles::LaunchPlan,
     extra: &BTreeMap<String, String>,
@@ -533,6 +599,7 @@ fn merge_caller_env(
             || profiles::env::is_forbidden_name(k)
             || profiles::env::TMUX_OWNED.contains(&k.as_str())
             || profiles::env::NEVER_FORWARD.contains(&k.as_str())
+            || profiles::env::is_profile_owned(k)
         {
             return Err(RunnerError::BadRequest(format!(
                 "env key `{k}` may not be forwarded"
@@ -561,8 +628,18 @@ fn effective_exit_keys(spec: &ValidatedLaunch, plan: &profiles::LaunchPlan) -> V
     }
 }
 
-/// Flatten exit steps to the strings the kill RPC sends one by one
-/// (waits are implicit: the kill path sleeps between keys).
+/// The structured exit steps to record in `@kb_exit_steps`: the profile
+/// steps when the caller gave no exit keys, `None` (option left unset, so
+/// the kill path sends the caller's keys) when it did.
+fn recorded_exit_steps(
+    spec: &ValidatedLaunch,
+    plan: &profiles::LaunchPlan,
+) -> Option<&'static [profiles::ExitStep]> {
+    spec.exit_keys.is_none().then_some(plan.exit_steps)
+}
+
+/// Flatten exit steps to the key strings recorded for `@kb_exit_keys`
+/// (waits live in `@kb_exit_steps`; the kill path honours them).
 fn flattened_exit_keys(steps: &[profiles::ExitStep]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for step in steps {
@@ -878,11 +955,6 @@ mod tests {
         bad.push(r);
         let mut r = base();
         if let Request::Launch { argv, .. } = &mut r {
-            *argv = Some(vec![]);
-        }
-        bad.push(r);
-        let mut r = base();
-        if let Request::Launch { argv, .. } = &mut r {
             *argv = Some(vec!["cat".to_string()]);
         }
         bad.push(r);
@@ -918,6 +990,120 @@ mod tests {
             let err = validate_launch(&req, &cfg).unwrap_err();
             assert_eq!(err.code(), "bad-request", "request {req:?}");
         }
+    }
+
+    /// `resume_sid` is bounded at 256 B: a 257-B sid is `bad-request`
+    /// (not silently truncated and not written to `@kb_resume_sid`),
+    /// while exactly 256 B validates.
+    #[test]
+    fn validate_rejects_overlong_resume_sid() {
+        let cfg = cfg();
+        let mut req = launch_with(&["/usr/bin/omp"]);
+        if let Request::Launch { resume_sid, .. } = &mut req {
+            *resume_sid = Some("s".repeat(257));
+        }
+        let err = validate_launch(&req, &cfg).unwrap_err();
+        assert_eq!(err.code(), "bad-request");
+        let mut req = launch_with(&["/usr/bin/omp"]);
+        if let Request::Launch { resume_sid, .. } = &mut req {
+            *resume_sid = Some("s".repeat(256));
+        }
+        assert!(
+            validate_launch(&req, &cfg).is_ok(),
+            "exactly 256 B must validate"
+        );
+    }
+
+    /// The launch teardown context carries the pane and server pids read
+    /// best-effort (a stubborn pane is then SIGKILLable); an empty
+    /// StopCtx would send SIGTERMs to nobody and leak it.
+    #[tokio::test]
+    async fn teardown_stop_ctx_reads_pane_and_server_pids() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("fake_tmux.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\n\
+             case \"$*\" in\n\
+             *'#{pane_pid}'*) printf '4242\\n' ;;\n\
+             *'#{pid}'*) printf '5151\\n' ;;\n\
+             esac\n\
+             exit 0\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let run_dir = dir.path().join("run");
+        let cfg = RunnerConfig::test_config(
+            run_dir,
+            script.to_string_lossy().into_owned(),
+            PathBuf::from("/dev/null"),
+        );
+        let runner = crate::runner::Runner::direct(cfg);
+        let ctx = teardown_stop_ctx(&runner, "abcd1234").await;
+        assert_eq!(
+            ctx.pane_pid,
+            Some(4242),
+            "teardown ctx must carry the pane pid"
+        );
+        assert_eq!(
+            ctx.server_pid,
+            Some(5151),
+            "teardown ctx must carry the server pid"
+        );
+    }
+
+    /// The launch-failure arm hands the supervisor a REAL stop context
+    /// (pane + server pids read before the stop). Reverting the call site
+    /// to `StopCtx::default()` leaves a stubborn pane unsignalled and
+    /// fails this: the recording fake supervisor must see both pids.
+    #[tokio::test]
+    async fn failed_launch_teardown_passes_pane_and_server_pids_to_stop() {
+        use crate::runner::supervisor::fake::FakeSupervisor;
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("fake_tmux.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\n\
+             case \"$*\" in\n\
+             *new-session*) echo boom >&2; exit 1 ;;\n\
+             *'#{pane_pid}'*) printf '4242\\n' ;;\n\
+             *'#{pid}'*) printf '5151\\n' ;;\n\
+             esac\n\
+             exit 0\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let run_dir = dir.path().join("run");
+        std::fs::create_dir_all(run_dir.join("s")).unwrap();
+        let cfg = RunnerConfig::test_config(
+            run_dir,
+            script.to_string_lossy().into_owned(),
+            PathBuf::from("/dev/null"),
+        );
+        let runner = crate::runner::Runner::with_supervisor(cfg, FakeSupervisor::new());
+        let req = Request::Launch {
+            harness: Harness::Omp,
+            argv: None,
+            resume_sid: None,
+            cwd: dir.path().to_string_lossy().into_owned(),
+            cols: None,
+            rows: None,
+            env: None,
+            exit_keys: None,
+        };
+        let spec = validate_launch(&req, &runner.cfg).expect("valid launch");
+        let err = launch_session(&runner, spec).await;
+        assert!(err.is_err(), "new-session fails, so the launch fails");
+        let ctxs = runner.supervisor.stop_ctxs.lock().unwrap().clone();
+        assert_eq!(ctxs.len(), 1, "teardown stops the holder once: {ctxs:?}");
+        assert!(valid_id(&ctxs[0].0), "stop names the session id");
+        assert_eq!(
+            (ctxs[0].1, ctxs[0].2),
+            (Some(4242), Some(5151)),
+            "teardown must pass the pane and server pids"
+        );
     }
 
     /// Validation precedes ANY tmux/process interaction: with a tmux
@@ -958,18 +1144,18 @@ mod tests {
         assert!(entries.is_empty(), "no holder may be spawned");
     }
 
-    /// Serialises the tests that observe `KB_TERM_TEST_PROBE`. Every
-    /// other launch test's verdict is unchanged whether the flag is set
-    /// (all its bad cases fail on other grounds), so this only needs to
-    /// keep the two flag-observing tests apart.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     fn cfg() -> RunnerConfig {
         RunnerConfig::test_config(
             PathBuf::from("/tmp/kb-term-test"),
             "/pinned/tmux".to_string(),
             PathBuf::from("/dev/null"),
         )
+    }
+
+    fn cfg_probe() -> RunnerConfig {
+        let mut c = cfg();
+        c.allow_verbatim_probe = true;
+        c
     }
 
     fn launch_with(argv: &[&str]) -> Request {
@@ -987,12 +1173,10 @@ mod tests {
 
     /// The profile governs the launch: a caller argv that does not
     /// name the harness binary is `bad-request`, and forbidden argv
-    /// elements never pass — even under the probe flag, so a probe
+    /// elements never pass — even under verbatim mode, so a verbatim
     /// argv cannot smuggle `--kb-off` or `-c` through validation.
     #[test]
     fn validate_rejects_argv_not_naming_the_harness() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("KB_TERM_TEST_PROBE");
         let err = validate_launch(&launch_with(&["/tmp/copy-of-omp"]), &cfg()).unwrap_err();
         assert_eq!(err.code(), "bad-request");
         let err = validate_launch(&launch_with(&["/usr/bin/omp", "--kb-off"]), &cfg()).unwrap_err();
@@ -1002,25 +1186,174 @@ mod tests {
             "an argv[0] naming the harness binary validates"
         );
     }
+    /// kb-server sends `argv: None` by design (the runner builds argv
+    /// from the harness profile). `validate_launch` must accept it
+    /// (empty ValidatedLaunch argv → plan argv in `launch_locked`), and
+    /// the committed `req_launch.json` golden bytes must validate too.
+    #[test]
+    fn validate_accepts_missing_argv_from_kb_server() {
+        let req = Request::Launch {
+            harness: Harness::Omp,
+            argv: None,
+            resume_sid: None,
+            cwd: "/tmp".to_string(),
+            cols: Some(120),
+            rows: Some(40),
+            env: None,
+            exit_keys: None,
+        };
+        let v = validate_launch(&req, &cfg()).unwrap();
+        assert!(v.argv.is_empty(), "None argv means use the plan");
+        let golden = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/req_launch.json");
+        let bytes = std::fs::read(golden).unwrap();
+        let mut req: Request = serde_json::from_slice(&bytes).unwrap();
+        // The golden's cwd is a synthetic path that does not exist on the
+        // test host; point it at a real dir so only the shape is judged.
+        if let Request::Launch { cwd, .. } = &mut req {
+            *cwd = "/tmp".to_string();
+        }
+        assert!(
+            validate_launch(&req, &cfg()).is_ok(),
+            "golden bytes validate"
+        );
+        // An empty `Some` behaves like `None`.
+        let req = Request::Launch {
+            harness: Harness::Omp,
+            argv: Some(vec![]),
+            resume_sid: None,
+            cwd: "/tmp".to_string(),
+            cols: Some(120),
+            rows: Some(40),
+            env: None,
+            exit_keys: None,
+        };
+        let v = validate_launch(&req, &cfg()).unwrap();
+        assert!(v.argv.is_empty());
+    }
 
-    /// Only the term-int probe flag lets a fixture program run
-    /// verbatim, and the forbidden scan applies there too.
+    /// Only `allow_verbatim_probe` (test harness only) lets a fixture
+    /// program run verbatim, and the forbidden scan applies there too.
+    /// The ambient env never gates it: with the flag off the same
+    /// argv is `bad-request` even when the legacy env var is set.
     #[test]
     fn validate_probe_flag_allows_fixtures_but_not_forbidden_argv() {
-        let _lock = ENV_LOCK.lock().unwrap();
         std::env::set_var("KB_TERM_TEST_PROBE", "1");
-        let ok = validate_launch(
+        let err = validate_launch(
             &launch_with(&["/usr/bin/python3", "-I", "/fixtures/probe.py"]),
             &cfg(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.code(),
+            "bad-request",
+            "ambient env must not honour verbatim argv"
         );
-        assert!(ok.is_ok(), "probe argv validates under the flag");
-        let err =
-            validate_launch(&launch_with(&["/usr/bin/python3", "--kb-off"]), &cfg()).unwrap_err();
-        assert_eq!(err.code(), "bad-request");
-        let err =
-            validate_launch(&launch_with(&["/usr/bin/python3", "-c", "x"]), &cfg()).unwrap_err();
-        assert_eq!(err.code(), "bad-request");
         std::env::remove_var("KB_TERM_TEST_PROBE");
+        let ok = validate_launch(
+            &launch_with(&["/usr/bin/python3", "-I", "/fixtures/probe.py"]),
+            &cfg_probe(),
+        );
+        assert!(
+            ok.is_ok(),
+            "verbatim argv validates under the explicit flag"
+        );
+        let err = validate_launch(
+            &launch_with(&["/usr/bin/python3", "--kb-off"]),
+            &cfg_probe(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), "bad-request");
+        let err = validate_launch(&launch_with(&["/usr/bin/python3", "-c", "x"]), &cfg_probe())
+            .unwrap_err();
+        assert_eq!(err.code(), "bad-request");
+    }
+
+    /// The pane wrapper script emitted by the production helper carries
+    /// the server-env defence: `unset` prelude + prefix snippet + gate.
+    /// Without the defence the forbidden names would survive server-env
+    /// inheritance; with it they are unset before exec.
+    #[test]
+    fn gate_script_contains_unset_defence() {
+        let names = vec![
+            "KITTY_WINDOW_ID".to_string(),
+            "TERM_PROGRAM".to_string(),
+            "GHOSTTY_FOO".to_string(),
+        ];
+        let script = build_gate_script(&names).unwrap();
+        assert!(
+            script.contains("unset KITTY_WINDOW_ID"),
+            "prelude: {script}"
+        );
+        assert!(script.contains("GHOSTTY_"), "snippet: {script}");
+        assert!(script.contains(GATE_SCRIPT), "gate: {script}");
+        assert!(
+            !script.contains("-l"),
+            "non-login wrapper must not invoke a login shell: {script}"
+        );
+        // The gate argv itself is the non-login shell, never `-l`.
+        let env: BTreeMap<String, String> = BTreeMap::new();
+        let got = gate_argv(
+            "/pinned/tmux",
+            Path::new("/run/s/abc12345.sock"),
+            "abc12345",
+            Path::new("/tmp"),
+            120,
+            40,
+            &env,
+            &["/usr/bin/omp".to_string()],
+            &script,
+        );
+        let sh_pos = got.iter().position(|a| a == "/bin/sh").unwrap();
+        assert_eq!(&got[sh_pos + 1], "-c", "gate uses /bin/sh -c");
+        assert!(!got.iter().any(|a| a == "-l"), "gate never uses -l");
+    }
+
+    /// Run a gate script (with `/bin/true` standing in for tmux so
+    /// `wait-for` returns at once) under a dirty, cleared environment and
+    /// return what `env` printed.
+    fn run_gate_env(script: &str) -> String {
+        let out = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(script)
+            .arg("kbterm-gate")
+            .arg("/bin/true")
+            .arg("/nonexistent.sock")
+            .arg("/usr/bin/env")
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("KITTY_WINDOW_ID", "1")
+            .env("TERM_PROGRAM", "x")
+            .env("GHOSTTY_FOO", "1")
+            .env("KB_TERM_ID", "abcd1234")
+            .output()
+            .expect("run gate script");
+        assert!(out.status.success(), "gate script failed: {out:?}");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    /// EXECUTES the production wrapper: the unset prelude + prefix
+    /// snippet strip outer-terminal identity inherited from the server
+    /// env and keep everything else, while the bare gate (control arm)
+    /// lets all of it through, proving the defence is what removes it.
+    #[test]
+    fn executed_gate_script_strips_inherited_terminal_identity() {
+        let names = ["KITTY_WINDOW_ID=", "TERM_PROGRAM=", "GHOSTTY_FOO="];
+        let control = run_gate_env(GATE_SCRIPT);
+        for name in names {
+            assert!(
+                control.contains(name),
+                "control run must show {name}: {control}"
+            );
+        }
+        let script = build_gate_script(&profiles::env::unset_after_login(&[])).unwrap();
+        let guarded = run_gate_env(&script);
+        for name in names {
+            assert!(!guarded.contains(name), "defence leaked {name}: {guarded}");
+        }
+        assert!(
+            guarded.contains("KB_TERM_ID=abcd1234"),
+            "unrelated env must survive: {guarded}"
+        );
     }
 
     /// Explicit caller exit keys always win — even when they equal the
@@ -1063,11 +1396,28 @@ mod tests {
             vec!["C-c".to_string(), "C-c".to_string(), "C-d".to_string()],
             "explicit default-equal keys still win over the profile"
         );
+        // The kill path prefers `@kb_exit_steps`, so explicit keys must
+        // leave it unrecorded or the profile steps would override them.
+        assert!(
+            recorded_exit_steps(&explicit, &plan).is_none(),
+            "explicit keys: no profile steps recorded"
+        );
+        assert!(
+            recorded_exit_steps(
+                &ValidatedLaunch {
+                    exit_keys: None,
+                    ..explicit
+                },
+                &plan
+            )
+            .is_some(),
+            "no caller keys: the profile steps are recorded"
+        );
     }
 
     /// The plan env is authoritative: caller env merges on top but can
-    /// never override the identity pair or forward a forbidden,
-    /// tmux-owned, or identity name.
+    /// never override the identity pair, a profile-owned name, or
+    /// forward a forbidden, tmux-owned, or identity name.
     #[test]
     fn merge_caller_env_keeps_plan_authoritative() {
         let plan = || {
@@ -1093,7 +1443,16 @@ mod tests {
         let mut sorted = merged.env.clone();
         sorted.sort_by(|a, b| a.0.cmp(&b.0));
         assert_eq!(merged.env, sorted, "merged env stays sorted by name");
-        for bad_key in ["KB_TERM_ID", "KITTY_WINDOW_ID", "TERM", "KB_SESSION_ID"] {
+        for bad_key in [
+            "KB_TERM_ID",
+            "KITTY_WINDOW_ID",
+            "TERM",
+            "KB_SESSION_ID",
+            "PI_FORCE_IMAGE_PROTOCOL",
+            "PI_CONFIG_FILES",
+            "PI_IMAGE_PROTOCOL",
+            "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN",
+        ] {
             let mut extra = BTreeMap::new();
             extra.insert(bad_key.to_string(), "x".to_string());
             assert_eq!(

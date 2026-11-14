@@ -240,7 +240,9 @@ why. These are rulings, not backlog.
   (2026-11, off by default): when the operator enables `[terminal]`, the
   phone may drive a live agent terminal through the SPA as an operator
   control surface; corpora stay read-only from mobile, and agents and the
-  `kb` CLI never get a terminal surface.
+  `kb` CLI never get a terminal surface. The slate board's mobile sheet also
+  answers and addresses agents' asks (2026-11, design D35): a slate post is a
+  ledger line, not a corpus edit.
 - **No MCP server *yet*.** The CLI is the protocol — every harness in real use
   drives `kb` via shell plus an instructions file, and ambient memory (recall
   injection, capture) is hook work MCP cannot carry. Recorded build triggers: a

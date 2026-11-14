@@ -2153,7 +2153,10 @@ are listed by repo name and sha with join-ladder confidence and `via` plus an
 `attributed_here` flag (20 rows at most, with `total` and `truncated`
 reporting the full count), reviews (20 at most) by id, repo name, title,
 state and verdict, findings as a per-severity count of what the session
-authored, and presence as a file count plus the newest edit age. It is the
+authored, and presence as a file count plus the newest edit age. The
+optional `?repo=` filter scopes the commits and reviews lanes (including
+the doc-authored half of reviews); findings and presence are session-scoped
+only and ignore the filter. It is the
 one addition to the credentialed doc-lens CORS set (the five doc-lens routes
 plus this one); the `/api/kb/*` relays above stay off that set.
 `kb-code session-card <SID>` renders the same card on the CLI (`--json` for

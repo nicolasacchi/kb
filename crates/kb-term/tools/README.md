@@ -1,7 +1,7 @@
 # T4 mirror stand-in: operator re-check kit
 
 Operator check for the kb-term local mirror claim. CI only proves the script
-runs and its byte stream is self-consistent (the `term-tools` job). Whether
+runs and its byte stream is self-consistent (the `mirror stand-in unit tests` step of the `term-tap` job). Whether
 the terminal multiplexer behaves is what the operator finds out here.
 
 `crates/kb-term/tools/mirror_standin.py` (python3 stdlib, no install) is a

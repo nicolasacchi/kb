@@ -201,6 +201,12 @@ async fn term_int_exit_empty_off_keeps_the_D_server_alive() {
     })
     .await;
     assert!(alive, "the -D server must answer with no session");
+    // `tmux -D` is the foreground server: the spawned child IS the server
+    // and has not exited (the systemd unit execs it on that premise).
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "tmux -D must keep running in the foreground"
+    );
     // Create then kill the only session; still answers.
     for args in [
         vec![
@@ -239,8 +245,33 @@ async fn term_int_exit_empty_off_keeps_the_D_server_alive() {
     })
     .await;
     assert!(still, "the -D server must outlive zero sessions");
-    let _ = child.kill();
-    let _ = child.wait();
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "the -D server process must outlive zero sessions"
+    );
+    // kill-server ends the foreground server, and so its process.
+    let _ = std::process::Command::new(&tmux_bin)
+        .arg("-S")
+        .arg(&sock)
+        .arg("kill-server")
+        .output();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut exited = false;
+    while std::time::Instant::now() < deadline {
+        if child.try_wait().unwrap().is_some() {
+            exited = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    if !exited {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    assert!(
+        exited,
+        "kill-server must end the foreground -D server process"
+    );
 }
 
 // 3. wait-for -S before wait-for returns immediately.
@@ -494,6 +525,7 @@ async fn term_int_list_is_state_free() {
     );
     seed_cfg.tap_bin = Some(fixture("fake_tap.sh"));
     seed_cfg.require_tap = true;
+    seed_cfg.allow_verbatim_probe = true;
     let seed = kb_term::runner::Runner::direct(seed_cfg);
     ensure_layout(&seed.cfg).await.unwrap();
     check_tmux_version(&seed.tmux, "3.7c").await.unwrap();
@@ -542,6 +574,37 @@ async fn term_int_list_is_state_free() {
         .output();
 }
 
+// The list RPC reply `data` is an array of `SessionInfo`s that
+// round-trips through the wire type (live entries carry their facts).
+#[tokio::test(flavor = "multi_thread")]
+async fn term_int_list_data_parses_as_session_infos() {
+    let Some(tmux_bin) = require_tmux() else {
+        return;
+    };
+    let tr = TestRunner::new(tmux_bin);
+    boot_runner(&tr).await;
+    let cwd = tr.dir.path().to_string_lossy().into_owned();
+    let req = common::launch_req(vec!["/bin/cat".to_string()], cwd);
+    let id = match rpc::dispatch(&tr.runner, &req).await {
+        Response::Ok { data } => data["id"].as_str().unwrap().to_string(),
+        Response::Err { code, message } => panic!("launch failed ({code}): {message}"),
+    };
+    match rpc::dispatch(&tr.runner, &Request::List {}).await {
+        Response::Ok { data } => {
+            let infos: Vec<kb_term::wire::SessionInfo> =
+                serde_json::from_value(data).expect("list data must parse as SessionInfo array");
+            let info = infos
+                .iter()
+                .find(|s| s.id == id)
+                .expect("launched session must appear in list");
+            assert_eq!(info.harness, Some(kb_term::wire::Harness::Omp));
+            assert!(info.pane_pid.is_some() && info.cols.is_some() && info.rows.is_some());
+            assert!(!info.stale, "a live session must not read stale");
+        }
+        Response::Err { code, message } => panic!("list failed ({code}): {message}"),
+    }
+}
+
 // 8. Runner restart keeps the session and re-anchors it.
 #[tokio::test(flavor = "multi_thread")]
 async fn term_int_runner_restart_keeps_the_session_and_recreates_the_anchor() {
@@ -560,6 +623,7 @@ async fn term_int_runner_restart_keeps_the_session_and_recreates_the_anchor() {
     );
     cfg.tap_bin = Some(fixture("fake_tap.sh"));
     cfg.require_tap = true;
+    cfg.allow_verbatim_probe = true;
     let a = kb_term::runner::Runner::direct(cfg);
     ensure_layout(&a.cfg).await.unwrap();
     check_tmux_version(&a.tmux, "3.7c").await.unwrap();
@@ -731,6 +795,80 @@ async fn term_int_kill_reaps_a_stray_that_ignores_hup() {
     assert!(gone, "the stubborn harness pid must be gone");
     // The holder must be gone too (no socket, no server answering).
     assert!(!tr.sock(&id).exists(), "the holder socket must be gone");
+}
+
+// 10b. A group member that ignores HUP/TERM and outlives its LEADER is
+// still SIGKILLed: the stop path probes process GROUPS, not leader pids.
+#[tokio::test(flavor = "multi_thread")]
+async fn term_int_kill_sigkills_a_group_member_that_outlives_its_leader() {
+    let Some(tmux_bin) = require_tmux() else {
+        return;
+    };
+    let tr = TestRunner::new(tmux_bin);
+    boot_runner(&tr).await;
+    let pid_file = tr.dir.path().join("stray.pid");
+    let script = tr.dir.path().join("stray-holder.sh");
+    std::fs::write(
+        &script,
+        format!(
+            "sh -c 'trap \"\" HUP INT TERM; echo $$ > {}; exec sleep 300' &\nexec /bin/cat\n",
+            pid_file.display()
+        ),
+    )
+    .unwrap();
+    let req = Request::Launch {
+        harness: kb_term::wire::Harness::Omp,
+        argv: Some(vec![
+            "/bin/sh".to_string(),
+            script.to_string_lossy().into_owned(),
+        ]),
+        resume_sid: None,
+        cwd: tr.dir.path().to_string_lossy().into_owned(),
+        cols: Some(120),
+        rows: Some(40),
+        env: None,
+        exit_keys: Some(vec!["C-d".to_string()]),
+    };
+    let id = match tr.launch_raw(&req).await {
+        Response::Ok { data } => data["id"].as_str().unwrap().to_string(),
+        Response::Err { code, message } => panic!("launch failed ({code}): {message}"),
+    };
+    let have_pid = poll_until(Duration::from_secs(5), || {
+        let f = pid_file.clone();
+        async move {
+            std::fs::read_to_string(f)
+                .map(|s| s.trim().parse::<u32>().is_ok())
+                .unwrap_or(false)
+        }
+    })
+    .await;
+    assert!(have_pid, "the stray must publish its pid");
+    let stray: u32 = std::fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(!pid_gone(stray), "the stray must be alive before the kill");
+    let resp = rpc::dispatch(
+        &tr.runner,
+        &Request::Kill {
+            id,
+            grace_secs: Some(5),
+        },
+    )
+    .await;
+    match resp {
+        Response::Ok { data } => {
+            assert_eq!(data["exit_code"], 0, "the leader (cat) exits 0 on C-d");
+            assert_eq!(
+                data["forced"], true,
+                "a surviving group member must force the SIGKILL verdict"
+            );
+        }
+        Response::Err { code, message } => panic!("kill failed ({code}): {message}"),
+    }
+    let gone = poll_until(Duration::from_secs(5), || async move { pid_gone(stray) }).await;
+    assert!(gone, "the TERM-ignoring group member must be SIGKILLed");
 }
 
 // 11. The grid is fixed until resized; the anchor pty tracks resizes.
@@ -984,6 +1122,7 @@ async fn term_int_kill_after_restart_reaps_holder() {
     );
     cfg.tap_bin = Some(fixture("fake_tap.sh"));
     cfg.require_tap = true;
+    cfg.allow_verbatim_probe = true;
     let a = kb_term::runner::Runner::direct(cfg);
     ensure_layout(&a.cfg).await.unwrap();
     check_tmux_version(&a.tmux, "3.7c").await.unwrap();
@@ -1834,6 +1973,7 @@ async fn term_int_runner_restart_readopts_a_responder_anchor() {
         );
         cfg.tap_bin = Some(fixture("fake_tap.sh"));
         cfg.require_tap = true;
+        cfg.allow_verbatim_probe = true;
         cfg
     };
     let a = kb_term::runner::Runner::direct(cfg1);
@@ -1861,6 +2001,7 @@ async fn term_int_runner_restart_readopts_a_responder_anchor() {
         );
         cfg.tap_bin = Some(fixture("fake_tap.sh"));
         cfg.require_tap = true;
+        cfg.allow_verbatim_probe = true;
         cfg
     };
     let b = kb_term::runner::Runner::direct(cfg2);
@@ -1924,6 +2065,7 @@ async fn term_int_restart_restores_viewers_and_paste_only() {
         );
         cfg.tap_bin = Some(fixture("fake_tap.sh"));
         cfg.require_tap = true;
+        cfg.allow_verbatim_probe = true;
         cfg
     };
     let a = kb_term::runner::Runner::direct(mk_cfg());
@@ -2187,146 +2329,150 @@ async fn term_int_anchor_death_closes_viewers_promptly_without_an_rpc() {
         "anchor death must close viewers promptly without any RPC (close reason: {reason:?})"
     );
 }
+/// Process-env guard: sets vars now and removes them on drop, so a
+/// mid-test panic never leaks dirty env into a later test (this binary
+/// runs under `cargo test`, i.e. as threads of one process).
+struct EnvGuard(Vec<&'static str>);
 
-#[tokio::test(flavor = "multi_thread")]
-async fn term_int_login_profile_cannot_reintroduce_forbidden_env() {
-    let Some(tmux) = require_tmux() else { return };
-    use kb_term::profiles::{self, PlanRequest};
-    use kb_term::runner::launch::{gate_argv, GATE_SCRIPT};
-    let tag = format!("{}-{}", std::process::id(), {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        static N: AtomicUsize = AtomicUsize::new(0);
-        N.fetch_add(1, Ordering::SeqCst)
-    });
-    let sock = format!("/tmp/kbt-t10-{tag}.sock");
-    let dir = tempfile::tempdir().unwrap();
-    // A temp HOME whose login profile reintroduces forbidden vars.
-    let home = dir.path().join("home");
-    std::fs::create_dir_all(&home).unwrap();
-    std::fs::write(
-        home.join(".bash_profile"),
-        "export KITTY_WINDOW_ID=1 TERM_PROGRAM=x GHOSTTY_FOO=1\n",
-    )
-    .unwrap();
-    // The plan env (from profiles::plan itself): KB_TERM_ID + allowlist
-    // only.
-    let base: Vec<(String, String)> = vec![
-        ("HOME".into(), home.to_string_lossy().into_owned()),
-        ("SHELL".into(), "/bin/bash".into()),
-        ("PATH".into(), "/usr/bin:/bin".into()),
-    ];
-    let plan = profiles::plan(&PlanRequest {
-        harness: "omp",
-        term_id: "tid01x",
-        resume_sid: None,
-        cwd: "/tmp",
-        job_ulid: None,
-        run_dir: dir.path(),
-        base_env: &base,
-        extra_passthrough: &[],
-    })
-    .unwrap();
-    let env: std::collections::BTreeMap<String, String> = plan.env.iter().cloned().collect();
-    let argv = vec![
-        "/bin/sh".to_string(),
-        "-c".to_string(),
-        "/usr/bin/env; exec sleep 300".to_string(),
-    ];
-    let run_tmux = |args: &[&str]| -> (bool, String, String) {
-        let out = std::process::Command::new(&tmux)
-            .args(["-S", &sock])
-            .args(args)
-            .env_clear()
-            .env("LANG", "C.UTF-8")
-            .output()
-            .expect("spawn tmux");
-        (
-            out.status.success(),
-            String::from_utf8_lossy(&out.stdout).into_owned(),
-            String::from_utf8_lossy(&out.stderr).into_owned(),
-        )
-    };
-    for with_defence in [true, false] {
-        let script = if with_defence {
-            let prelude = profiles::env::shell_unset_prelude(&plan.unset_after_login).unwrap();
-            format!(
-                "{prelude}{} {GATE_SCRIPT}",
-                profiles::env::shell_unset_prefixes_snippet()
-            )
-        } else {
-            GATE_SCRIPT.to_string()
-        };
-        let args = gate_argv(
-            &tmux,
-            std::path::Path::new(&sock),
-            "tid01x",
-            std::path::Path::new("/tmp"),
-            120,
-            40,
-            &env,
-            &argv,
-            &script,
-        );
-        // Dirty server env: simulates a login profile having reintroduced
-        // the forbidden vars into the pane environment.
-        let mut cmd = std::process::Command::new(&tmux);
-        cmd.args(["-S", &sock]).args(&args);
-        cmd.env_clear();
-        cmd.env("LANG", "C.UTF-8");
-        cmd.env("KITTY_WINDOW_ID", "1");
-        cmd.env("TERM_PROGRAM", "x");
-        cmd.env("GHOSTTY_FOO", "1");
-        cmd.env("HOME", &home);
-        let out = cmd.output().expect("spawn tmux new-session");
-        assert!(
-            out.status.success(),
-            "new-session failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        // Release the gate, then capture the pane.
-        let (ok, _, _) = run_tmux(&["wait-for", "-S", "kbterm-go"]);
-        assert!(ok, "wait-for -S failed");
-        let mut captured = String::new();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while std::time::Instant::now() < deadline {
-            let (ok, stdout, _) = run_tmux(&["capture-pane", "-p", "-t", "kb"]);
-            if ok {
-                captured = stdout;
-                if captured.contains("KB_TERM_ID") || captured.contains("GHOSTTY_FOO") {
-                    break;
-                }
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
+impl EnvGuard {
+    fn set(vars: &[(&'static str, &'static str)]) -> Self {
+        for (k, v) in vars {
+            std::env::set_var(k, v);
         }
-        let _ = run_tmux(&["kill-server"]);
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        if with_defence {
-            for name in ["KITTY_WINDOW_ID=", "TERM_PROGRAM=", "GHOSTTY_FOO="] {
-                assert!(
-                    !captured.contains(name),
-                    "defence leaked {name}; pane env:\n{captured}"
-                );
-            }
-            assert!(
-                captured.contains("KB_TERM_ID=tid01x"),
-                "KB_TERM_ID present; pane env:\n{captured}"
-            );
-            // tmux-supplied vars ARE present.
-            assert!(
-                captured.contains("TMUX="),
-                "TMUX present; pane env:\n{captured}"
-            );
-            assert!(
-                captured.contains("TERM="),
-                "TERM present; pane env:\n{captured}"
-            );
-        } else {
-            for name in ["KITTY_WINDOW_ID=", "TERM_PROGRAM=", "GHOSTTY_FOO="] {
-                assert!(
-                    captured.contains(name),
-                    "control run must show {name}; pane env:\n{captured}"
-                );
-            }
+        EnvGuard(vars.iter().map(|(k, _)| *k).collect())
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        for k in &self.0 {
+            std::env::remove_var(k);
         }
     }
+}
+
+/// A dirty runner env (`KITTY_WINDOW_ID`, `TERM_PROGRAM`, `GHOSTTY_FOO`)
+/// must not reach the pane through the production dispatch path. This
+/// pins the whole path (holder and tmux exec `env_clear`, plus the
+/// wrapper's unset prelude); it is NOT a prelude-only pin. The prelude
+/// itself is pinned by the executed-script unit test in `launch.rs`.
+/// The pane shell is the non-login `/bin/sh -c`.
+#[tokio::test(flavor = "multi_thread")]
+async fn term_int_server_env_defence_via_dispatch() {
+    let Some(tmux_bin) = require_tmux() else {
+        return;
+    };
+    let _env = EnvGuard::set(&[
+        ("KITTY_WINDOW_ID", "1"),
+        ("TERM_PROGRAM", "x"),
+        ("GHOSTTY_FOO", "1"),
+    ]);
+    let tr = TestRunner::new(tmux_bin.clone());
+    // `-c` is a forbidden argv element even under the verbatim probe, so
+    // the fixture program is a script file run by `/bin/sh`.
+    let script = tr.dir.path().join("env_then_sleep.sh");
+    std::fs::write(&script, "/usr/bin/env; exec sleep 300\n").unwrap();
+    let (id, _pid) = tr
+        .launch(vec![
+            "/bin/sh".to_string(),
+            script.to_string_lossy().into_owned(),
+        ])
+        .await;
+    let sock = tr.sock(&id);
+    let mut captured = String::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        let (ok, out) = tr.tmux(&sock, &["capture-pane", "-p", "-t", "kb"]);
+        if ok {
+            captured = out;
+            if captured.contains("KB_TERM_ID=") {
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    for name in ["KITTY_WINDOW_ID=", "TERM_PROGRAM=", "GHOSTTY_FOO="] {
+        assert!(
+            !captured.contains(name),
+            "defence leaked {name} via dispatch; pane env:\n{captured}"
+        );
+    }
+    assert!(
+        captured.contains(&format!("KB_TERM_ID={id}")),
+        "KB_TERM_ID present; pane env:\n{captured}"
+    );
+    assert!(
+        captured.contains("TMUX="),
+        "TMUX present; pane env:\n{captured}"
+    );
+    assert!(
+        captured.contains("TERM="),
+        "TERM present; pane env:\n{captured}"
+    );
+}
+
+/// Dirty-runner holder cleanliness (Spec 2b): seed the runner process
+/// env with `KITTY_WINDOW_ID`, `WEZTERM_PANE` and a `SECRET` value,
+/// launch via dispatch, and assert the pane env equals the plan env
+/// plus tmux-supplied `TMUX`/`TERM` — no secret, no outer-terminal
+/// identity leaks through the holder or the tmux exec path (both
+/// `env_clear` + `LANG`/`HOME`).
+#[tokio::test(flavor = "multi_thread")]
+async fn term_int_dirty_runner_env_does_not_leak_to_pane() {
+    let Some(tmux_bin) = require_tmux() else {
+        return;
+    };
+    let _env = EnvGuard::set(&[
+        ("KITTY_WINDOW_ID", "dirty"),
+        ("WEZTERM_PANE", "dirty"),
+        ("KB_SYNTH_SECRET", "synthetic-secret-value"),
+    ]);
+    let tr = TestRunner::new(tmux_bin.clone());
+    // `-c` is a forbidden argv element even under the verbatim probe, so
+    // the fixture program is a script file run by `/bin/sh`.
+    let script = tr.dir.path().join("env_then_sleep.sh");
+    std::fs::write(&script, "/usr/bin/env; exec sleep 300\n").unwrap();
+    let (id, _pid) = tr
+        .launch(vec![
+            "/bin/sh".to_string(),
+            script.to_string_lossy().into_owned(),
+        ])
+        .await;
+    let sock = tr.sock(&id);
+    let mut captured = String::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        let (ok, out) = tr.tmux(&sock, &["capture-pane", "-p", "-t", "kb"]);
+        if ok {
+            captured = out;
+            if captured.contains("KB_TERM_ID=") {
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        !captured.contains("synthetic-secret-value"),
+        "secret leaked to pane; pane env:\n{captured}"
+    );
+    assert!(
+        !captured.contains("KB_SYNTH_SECRET"),
+        "secret name leaked; pane env:\n{captured}"
+    );
+    assert!(
+        !captured.contains("WEZTERM_PANE="),
+        "WEZTERM_PANE leaked; pane env:\n{captured}"
+    );
+    // The pane carries the plan identity and the allowlisted HOME.
+    assert!(
+        captured.contains(&format!("KB_TERM_ID={id}")),
+        "KB_TERM_ID present; pane env:\n{captured}"
+    );
+    assert!(
+        captured.contains("HOME="),
+        "HOME (allowlisted) present; pane env:\n{captured}"
+    );
+    // tmux supplies these itself — never stripped.
+    assert!(captured.contains("TMUX="), "TMUX present;\n{captured}");
+    assert!(captured.contains("TERM="), "TERM present;\n{captured}");
 }

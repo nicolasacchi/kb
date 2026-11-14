@@ -1,8 +1,16 @@
 [Unit]
 Description=kb-term runner
 After=network.target
+# The tmpfiles.d dirs are a one-time setup step (T19 installs the
+# snippet, the operator runs it): without them the unit must not start
+# (and endlessly restart under on-failure).
+ConditionPathExists=/run/kb-term
+ConditionPathExists=/run/kb-term/s
+ConditionPathExists=/run/kb-term/runner
 
 [Service]
+Environment=KB_TMUX_BIN=%h/.local/libexec/kb-term/tmux
+Environment=KB_TERM_RUN_DIR=/run/kb-term
 ExecStart=%h/.local/bin/kb-termd --supervisor systemd
 Restart=on-failure
 KillMode=process

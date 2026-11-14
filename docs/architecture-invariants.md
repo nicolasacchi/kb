@@ -175,7 +175,7 @@ Middleware tests pass an explicit `ConnectInfo` (the `req_with` helper).
 
 **Canary (v0.44 F1):** `ci/canaries/02-connectinfo-loopback.sh` makes a missing `ConnectInfo` read as loopback and `request_is_loopback_no_connect_info_fails_closed` must then FAIL.
 
-### 4. `auth_bearer` is the ONE admission + attribution gate
+### 4. `auth_bearer` is the ONE admission + attribution gate (except terminal tier, KT)
 
 `auth_bearer`, `rate_limit`, `outbound_scrub` skip only when the *genuine* client
 is loopback.
@@ -292,18 +292,29 @@ loopback. The gate lives IN THE HANDLER, not in middleware:
 POST/PUT/PATCH/DELETE and passes an absent Origin, and a WebSocket
 upgrade is a GET, so it gets no Origin check from middleware. The
 terminal routes therefore (a) 404 bodiless when `[terminal] enabled` is
-false, (b) require an `Origin` exactly equal to the configured parent
-origin, and an absent Origin FAILS CLOSED, (c) require an SPA-only
-intent header on every POST (precedent: the `X-Kb-Visibility` marker in
+false, (b) require an `Origin` equal to the configured parent origin,
+or an http(s) origin whose scheme and Host are exactly equal to the
+request Host (a same-host Origin), and an absent Origin FAILS CLOSED;
+the artifact-suffix arm of the shared Origin check and the
+KB_DEV_ORIGIN_ANY bypass are deliberately NOT accepted on this tier:
+an Origin on an artifact subdomain fails unless the request Host is
+that same subdomain (the Host-equality is the only admission, exactly
+as the parent-Origin equality is); (c) require an SPA-only intent header on
+every POST (precedent: the `X-Kb-Visibility` marker in
 routes/comments.rs, an intent marker, not an authorization; header name
-fixed in T11), (d) mint a single-use ticket of about 30 s for the WS
-upgrade (binding details fixed in T11) and re-check Origin there. This
-is a convention gate for a single-machine, light-security setup: the
-headers are forgeable by a non-browser local client; the ruling is that
-agents and the CLI never call these routes, and no kb-cli verb exists.
-An optional refusal of bearer/registry-token callers is an open
-decision recorded in T11, not decided here. Everything else about #4
-(identity ladder, fail-closed public bind) is unchanged.
+`X-Kb-Intent: terminal`, fixed in T11), (d) mint a single-use ticket of
+about 30 s for the WS upgrade (binding details fixed in T11) and
+re-check Origin there. This is a convention gate for a single-machine,
+light-security setup: the headers are forgeable by a non-browser local
+client; the ruling is that agents and the CLI never call these routes,
+and no kb-cli verb exists. Bearer/registry-token callers are refused
+by default, as decided in T11: `refuse_token_callers` (default `true`)
+refuses Token/Legacy identities with a token-refused problem body, so
+a script or agent holding a registry secret never reaches the
+terminal tier; setting it to `false` is the operator escape hatch for
+a deployed reverse proxy that injects the shared token into every
+request. Everything else about #4 (identity ladder, fail-closed
+public bind) is unchanged.
 
 ### 5. `<template id="kb-prompt">` convention
 
@@ -1026,11 +1037,14 @@ module reads it and the V0047 lineage columns it carries
 (`parent_session_id`/`root_session_id`/`project_slug`) are display-only,
 never a rank, sort or filter term of any ranking module (pinned by
 `checks::no_ranking_module_reads_session_evidence`'s `card::` /
-`SessionCard` needles). No transcript BODY or raw turns ride the card
+`SessionCard` needles, `lineage::no_ranking_module_reads_session_lineage`'s
+`child_count` needle, and the FXA3 checks.rs `child_count` needle). No
+transcript BODY or raw turns ride the card
 (stored, capped, derived fields only; reading stays in `session-view/1`
 anchors). Lineage turns `collapse` into shape: `GET /api/sessions`
-gains a closed `tree=collapsed|flat` param (collapsed is the default —
-the omp subagent flood hides behind its roots) and a per-row
+gains a closed `tree=collapsed|flat` param (collapsed is the default;
+an empty value aliases it) — the omp subagent flood hides behind its
+roots) and a per-row
 `child_count` that uses the ONE card predicate (a root counts its whole
 flood, any depth; a non-root counts its direct children), so list and
 card agree on the number for every row including mid-tree nodes; omp
@@ -1282,7 +1296,7 @@ W7's live-tail panel (memo R15/LF-4), unconsumed by any shipped presenter
 yet. Extending interpretation (a new card shape, a new wrapper kind) is a
 `view.rs`-only change; a presenter that starts re-deriving interpretation
 locally reintroduces the exact drift this wave closed.
-`Item::Image` carries a mime and an optional content-address (`sha256`) or inline size, never pixels — surfaced, never scored, never in the digest, the `code` lane, or the closure heuristic.
+`Item::Image` carries a mime and an optional content-address (`sha256`) or inline size, never pixels — surfaced, never scored, never in the digest or the closure heuristic.
 
 **W1/M2 amendment — stable `t-<uuid12>` turn identity (moonshots M2, memo
 R2).** A turn's id is `"t-"` + the first 12 hex chars (dashes stripped) of

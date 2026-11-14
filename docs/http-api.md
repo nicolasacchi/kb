@@ -541,7 +541,12 @@ GET  /api/session-card?sid=                kbc-session-card/1: one read
                                             unknown `repo` is a 400 (never
                                             echoes the rejected `sid`); any
                                             well-formed `sid` is a 200, even
-                                            with empty lanes. No paths, no
+                                            with empty lanes. `?repo=NAME`
+                                            scopes commits and reviews
+                                            (including the doc-authored half);
+                                            findings and presence are
+                                            session-scoped only and ignore
+                                            the filter. No paths, no
                                             file contents, no text.
 GET  /api/kb/ui                            OL S1: kb's `theme_family` +
                                             `theme` from `GET /api/settings`
@@ -880,14 +885,16 @@ GET  /api/sessions[?cursor=<unix>&limit=N   Cross-kb list of captured Claude
                                             own. When none is known it is an
                                             honest not-resumable sentence.
                                             `tree=` (A3) is closed:
-                                            absent/`collapsed` (the default)
-                                            hides subagent children
+                                            absent/empty/`collapsed` (the
+                                            default) hides subagent children
                                             (`root_session_id IS NULL` in SQL
                                             before LIMIT, so the keyset
                                             cursor stays coherent; NULL-root
                                             rows stay visible), `flat` shows
                                             every row; any other value is a
-                                            400. Every row carries
+                                            400. (An empty `tree=` value is an
+                                            explicit alias for `collapsed`,
+                                            not a 400.) Every row carries
                                             `child_count`: how many children
                                             it has by the card predicate
                                             (a root counts its whole flood,
@@ -1480,6 +1487,66 @@ POST   /api/terms/{id}/take-size            Body `{cols,rows}`. Takes
                                             (or reports) the grid.
 GET    /api/terms/{id}/read                 Relay the runner read.
 GET    /api/terms/{id}/history              Relay the runner history.
+GET    /api/terms/{id}/ws                    SPA-only terminal byte
+                                            stream upgrade (T12).
+                                            `?ticket=<t>&from=<offset>`
+                                            (both optional except
+                                            ticket). Handler-side gate
+                                            order: enabled (bodiless
+                                            404 for ANY request) -> id
+                                            shape
+                                            (`^[a-z0-9]{1,32}$`, 400;
+                                            an id in that grammar the
+                                            runner does not know is a
+                                            404 at the stream open) ->
+                                            exact Origin (absent fails
+                                            closed) -> caller class
+                                            (403) -> missing ticket /
+                                            non-upgrade request (the
+                                            extractor's 4xx) -> `from`
+                                            parse (400)
+                                            -> socket cap 16 (503) ->
+                                            single-use ticket (bound
+                                            to `{id}` and the caller;
+                                            every failure is the same
+                                            403) -> upstream stream
+                                            (404 no such terminal, 502
+                                            runner unreachable/bad
+                                            reply) -> upgrade. Neither
+                                            a cap rejection nor a bad
+                                            `from` consumes the ticket
+                                            (both run before the
+                                            consume); a stream-open
+                                            failure does (auth runs
+                                            before any upstream dial).
+                                            The ticket is never logged,
+                                            and the loopback bypass does
+                                            NOT apply. The socket
+                                            relays the tap's frames
+                                            byte-for-byte (binary frames
+                                            keep their 8-byte BE offset
+                                            header; text frames pass
+                                            through verbatim, in order);
+                                            it closes 1012 on daemon
+                                            restart, 1013 for a slow
+                                            consumer, 1011 when the
+                                            upstream ends (1000 after
+                                            an `exit` frame), and 1001
+                                            after 75 s of browser
+                                            silence.
+                                            SSE (low rate, never per
+                                            data frame): `term.created`
+                                            `{id, harness, cols, rows}`
+                                            on a confirmed launch;
+                                            `term.ended` `{id, exit_code?}`
+                                            exactly once per id (kill
+                                            or an `exit` frame through
+                                            the relay); `term.state`
+                                            `{id, state, cols?, rows?,
+                                            grid_owner?}` with `state`
+                                            `"live" | "ended"` only on
+                                            a `sizechanged` frame or on
+                                            ended.
                                             Error table: unreachable or
                                             timed-out runner → 503
                                             `terminal-runner-unavailable`
@@ -1542,7 +1609,9 @@ POST /api/sessions/backfill-tree             V0047 — fill NULL
                                             would_change, changed,
                                             unmatched, kbs[{kb,
                                             would_change, changed,
-                                            unmatched}], degraded[]}.
+                                            unmatched}], degraded[]}:
+                                            the counts are rows (would_change/
+                                            changed) and items (unmatched).
 GET  /api/why?path=<file>                   R2 — the WHY assembler: the past
                                             sessions that touched a file + their
                                             prompt/decisions/commits. Basename-
@@ -1655,14 +1724,15 @@ POST /api/sessions/threads/save                                         P8 — s
 # and pin reserved to `origin: human`) are the human-vs-agent role split kb
 # already has, NOT an ACL. Reads never lock and never write — the cursor is
 # client-side and `?since=` only drives the `seen` header.
-GET  /api/slates                            every slate: {slug, head_seq, generation, updated_unix, closed, topics[], counts{now,warn,hand_unack,ask_open,take_live,take_stale,take_contested,found,idea,tried}, sessions_served, generation_posts}. `generation_posts` = posts in the CURRENT generation's ledger (drops to 0 on `rotate`; `head_seq` never resets). The board's attention chip = hand_unack + ask_open + take_contested + take_stale, summed CLIENT-side — the daemon never sums an attention number for you.
+GET  /api/slates                            every slate: {slug, head_seq, generation, updated_unix, closed, topics[], counts{now,warn,hand_unack,ask_open,take_live,take_stale,take_contested,found,idea,tried}, ask_for_you, sessions_served, generation_posts}. `ask_for_you` = open asks with `to == "you"` and zero answers (the operator's unanswered addressed asks; shown beside, never summed into, the attention chip). `generation_posts` = posts in the CURRENT generation's ledger (drops to 0 on `rotate`; `head_seq` never resets). The board's attention chip = hand_unack + ask_open + take_contested + take_stale, summed CLIENT-side — the daemon never sums an attention number for you.
 GET  /api/slates/{slug}                     the digest (THE projection, `kb_core::slate::project`). `text` is byte-identical to what `kb slate open` prints. `?mode=full|hybrid` (hybrid = the session-start injection block), `?budget=` CHARACTERS not tokens (default 6,000 full / 2,000 hybrid — the daemon links no tokenizer, so a token budget would be a character budget in costume), `?topic=`, `?all=1` (no truncation), `?session=` (marks "your own asks with new answers"; NEVER written), `?since=` (the client-side cursor; drives the `seen #a → #b` header only). Response = SlateDigest + {generation, closed}.
 GET  /api/slates/{slug}?view=board[&topic=][&all=1] the SPA board projection: every shown post as a BoardCard = Projected + {body, marks_by[], has_sketch}. NEVER budget-truncated — the board scrolls. SLATE2: found/idea posts older than 14 days (unpinned, unmarked) are folded out of `sections.found_idea` and counted in `folded_found_idea`; `all=1` lists them. The digest read carries the same fold as `found_idea_folded` (off under `?all=1`). `has_sketch` is a ```mermaid fence in the body (D21: there is no `sketch` kind).
+ASK ADDRESSING (AW): an `ask` may carry `to` (`you` · a harness from the closed six · `any`); `Projected.to` (ask/hand) and `Projected.last_answer {seq, line, who, age_secs}` (newest undropped answer over the edit chain; `answers` is counted over the chain too) ride the digest and board reads. Read-only `kb slate wait` is a CLI loop over the slate SSE stream (`/api/events?filter=slug:<slug>`) plus the ledger read (`…/posts`). `ask_for_you` is 0 on a closed slate and counts a logical ask once (edit chain); a `done` on any version of an ask closes every version. The per-prompt delta carries new answers and dones on the reading session's OWN asks in full.
 GET  /api/slates/{slug}/posts[?since=&limit=]   RAW Post[] after a sequence number — the watch loop's refetch, the one read that hands back the ledger as written (minus the scrub floor).
 GET  /api/slates/{slug}/posts/{id-or-seq}   one post unfolded: the body, its refs as display strings, and the thread beneath it (answers, done, drops, the edit that replaced it). `post:#n` resolves to that post's line, `kb:<kb>/<id>` and `mem:<id>` to a title, `session:<sid>` to the newest capture's title; `path:`/`job:`/`commit:`/`plan:` render verbatim with `resolved:false` — the daemon has no tree and never guesses.
-GET  /api/slates/{slug}/delta[?since=&session=&budget=&limit=&kinds=]   the per-prompt lane: `{posts, hides:[{hide,by,reason,who,why}], text, truncated, filtered}`. `?kinds=` (D26) is a csv over the twelve kind words that narrows the posts AND the hides (a hide passes when its TARGET carries one of the kinds) and renders `text` from the narrowed set — the push adapters ask for `now,warn,hand,ask,answer` and leave found/idea/tried pull-only; an unknown word is a 400 `bad-kind`, never a silently empty delta, and an absent/empty `?kinds=` is `filtered:false`. `hides` is what makes a delta consumer's fold agree with a full projection (a later post can hide an earlier one). NO echo line and no digest header (the full digest's job); a non-empty `text` opens with the two-line untrusted-data frame — the digest's own sentence without its legend, counted inside `budget` — and an empty delta is still `""`. Hooks and `kb slate delta` read this, never `…/posts`.
+GET  /api/slates/{slug}/delta[?since=&session=&budget=&limit=&kinds=]   the per-prompt lane: `{posts, hides:[{hide,by,reason,who,why}], text, truncated, filtered}`. `?kinds=` (D26) is a csv over the twelve kind words that narrows the posts AND the hides (a hide passes when its TARGET carries one of the kinds) and renders `text` from the narrowed set — the push adapters ask for `now,warn,hand,ask,answer` and leave found/idea/tried pull-only; an unknown word is a 400 `bad-kind`, never a silently empty delta, and an absent/empty `?kinds=` is `filtered:false`. `hides` is what makes a delta consumer's fold agree with a full projection (a later post can hide an earlier one). NO echo line and no digest header (the full digest's job); a non-empty `text` opens with the two-line untrusted-data frame — the digest's own sentence without its legend, counted inside `budget` — and an empty delta is still `""`. With `?session=`, new answers and other sessions' non-abandoned dones on that session's OWN asks (resolved over the edit chain) render in full right after the frame as `ANSWER #n → your ask #m · [who age · operator's answer|input to weigh]: <line>` (body capped at 600 chars) and `DONE #n closed your ask #m · [who age]: <line>`; the session's own posts are excluded and `?kinds=` narrows them too. Hooks and `kb slate delta` read this, never `…/posts`.
 GET  /api/slates/{slug}/history[?since=&limit=] dropped and SUPERSEDED posts only, newest first, each naming the hiding post, its author and its reason. A `done` closes an item, it does not tombstone it, so it is never here. Current generation only; the archives are for distill.
-POST /api/slates/{slug}/posts               append any of the twelve kinds (now·warn·take·done·hand·ask·answer·found·idea·tried·drop·mark). Creates the slate on first post — there is no create verb. UNDER THE PER-SLUG LOCK: read meta → mint seq → validate → conflict + live-author checks against the #11 live registry → O_APPEND + fsync → atomic meta → project before/after at the DEFAULT budget → 201 `{post, displaced[≤5], displaced_total, nudge, head_seq}`. `displaced` is the poster's only feedback loop with the finite surface and never blocks the write (D18: room is never a reason to refuse a post); NOW, WARN, unacknowledged HAND and pinned posts are never displaced. Refusals are problem+json carrying `code` as an RFC 7807 extension member AND as `detail`'s `<code>: <text>` prefix: 409 slate-taken (with `holder{seq,line,harness,session_short,age_secs,liveness}`) · 409 slate-live-author · 409 slate-closed · 413 slate-full + the size/count caps · 429 slate-rate · 400 pin-is-human / no-ascii-art / already-done / kind-mismatch / bad-ref / ask-needs-question / found-needs-ref / self-mark / unknown-harness. A duplicate plain `mark` by the same session returns 200 with the EXISTING post and writes nothing. A post with no session id is stamped `origin: unattributed`, never refused; `prov.user` comes from the resolved Identity (attribution, not authorization).
+POST /api/slates/{slug}/posts               append any of the twelve kinds (now·warn·take·done·hand·ask·answer·found·idea·tried·drop·mark). Creates the slate on first post — there is no create verb. UNDER THE PER-SLUG LOCK: read meta → mint seq → validate → conflict + live-author checks against the #11 live registry → O_APPEND + fsync → atomic meta → project before/after at the DEFAULT budget → 201 `{post, displaced[≤5], displaced_total, nudge, head_seq}`. `displaced` is the poster's only feedback loop with the finite surface and never blocks the write (D18: room is never a reason to refuse a post); NOW, WARN, unacknowledged HAND and pinned posts are never displaced. Refusals are problem+json carrying `code` as an RFC 7807 extension member AND as `detail`'s `<code>: <text>` prefix: 409 slate-taken (with `holder{seq,line,harness,session_short,age_secs,liveness}`) · 409 slate-live-author · 409 slate-closed · 413 slate-full + the size/count caps · 429 slate-rate · 400 bad-to (an `ask` whose `to` is not `you`, a harness or `any`; `hand --to` is not validated) / pin-is-human / no-ascii-art / already-done / kind-mismatch / bad-ref / ask-needs-question / found-needs-ref / self-mark / unknown-harness. A duplicate plain `mark` by the same session returns 200 with the EXISTING post and writes nothing. A post with no session id is stamped `origin: unattributed`, never refused; `prov.user` comes from the resolved Identity (attribution, not authorization).
 POST /api/slates/{slug}/asks/close         v0.44 F10: body `{ref, line, prov}` — append a `done` for EVERY open ask carrying the typed `ref` (a distill ask is `session:<sid>`), the open set decided INSIDE the per-slug lock (an ask is closed by a `done` that is not `--abandoned`, by an `answer`, or by a drop; a dropped closer closes nothing). Answers `{closed:[{ask_seq,done_seq}], head_seq}`; nothing open, or no such slate, is `closed:[]` with 200 — never an error, so concurrent callers all succeed and exactly one `done` lands. One `slate.updated` per appended done. CLI: `kb sessions distilled`. 409 slate-closed only when something WOULD be closed; 400 bad-ref. If a later `done` fails after earlier ones committed, the earlier ones are still announced and answered: the error status carries `{closed:[…committed…], head_seq, error}` and re-running the call closes the rest.
 POST /api/slates/{slug}/close               append a terminal `now` (topic null) with `{line, prov}` and set `closed_unix` — appends refuse 409 slate-closed until reopen.
 POST /api/slates/{slug}/reopen              clear `closed_unix`; appends NOTHING.

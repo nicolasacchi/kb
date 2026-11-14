@@ -3,11 +3,14 @@
 //! and the COMMITTED live-touches fixture (`tests/fixtures/live-touches-v1.json`).
 //!
 //! Pins: the four lanes answer in one read; an unknown sid is 200 with empty
-//! lanes (never 404); a malformed sid / unknown repo filter is 400 without
-//! echoing the sid; kb failures degrade only the kb lanes (and kb failure
-//! with cache rows still serves the cache); repeat reads are byte-identical
-//! modulo the clock; the route is bearer-gated off-loopback and GET-only;
-//! reviews authored through `review_docs` carry basis `doc_author`.
+//! lanes (never 404); a malformed or padded sid / unknown or padded repo
+//! filter is 400 without echoing the sid; kb failures degrade only the kb
+//! lanes (and kb failure with cache rows still serves the cache); repeat
+//! reads are byte-identical modulo the clock; the route is bearer-gated
+//! off-loopback (rejection and acceptance both pinned) and GET-only; reviews
+//! authored through `review_docs` carry basis `doc_author`; the reviews
+//! total counts past MAX_REVIEWS with (a) wins even for evicted rows; an
+//! unmirrored kb commit dedupes the same-sha cache row by sha alone.
 
 use axum::{extract::Path as AxPath, routing::get, Json, Router};
 use kb_code_server::config::{KbCodeConfig, KbDaemonSection, RepoEntry};
@@ -505,6 +508,24 @@ async fn route_requires_bearer_off_loopback() {
         .unwrap();
     assert_eq!(resp.status(), 401, "no bearer on a non-loopback caller");
 
+    // The same simulated non-loopback caller WITH the valid bearer is
+    // admitted: a mutant that accepts no token at all (every request 401)
+    // passes the rejection above while blocking legitimate callers.
+    let resp = client
+        .get(format!("http://{addr}/api/session-card?sid=sess-0001"))
+        .header("X-Forwarded-For", "8.8.8.8")
+        .header("Authorization", format!("Bearer {FIXTURE_TOKEN}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "a valid bearer on a non-loopback caller must be admitted"
+    );
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["schema"], "kbc-session-card/1", "{body}");
+
     let resp = client
         .post(format!("http://{addr}/api/session-card?sid=sess-0001"))
         .send()
@@ -610,4 +631,194 @@ async fn cache_extras_beyond_max_commits_count_toward_total() {
         20,
         "{body}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reviews_beyond_max_reviews_count_toward_total() {
+    // 25 session_id reviews: the store scan must not pre-cap at MAX_REVIEWS,
+    // or `total` undercounts (20 not 25). `reviews_lane` alone caps shown.
+    let commits_body = Arc::new(Mutex::new(
+        serde_json::to_string(&json!({ "commits": [] })).unwrap(),
+    ));
+    let kb = spawn_mock(hello_ok(), commits_body).await;
+    let b = boot(enabled(kb)).await;
+    {
+        let store = open_store(&b.store_path);
+        for i in 0..25 {
+            store
+                .create_review(
+                    "fixture",
+                    Some(&format!("Review {i}")),
+                    "main",
+                    "feature",
+                    Some(SID),
+                    1_700_000_000 + i as i64,
+                )
+                .unwrap();
+        }
+    }
+    let (status, body) = get_json(&b.base, &format!("/api/session-card?sid={SID}")).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["reviews"]["available"], true, "{body}");
+    assert_eq!(body["reviews"]["total"], 25, "{body}");
+    assert_eq!(body["reviews"]["shown"], 20, "{body}");
+    assert_eq!(
+        body["reviews"]["items"].as_array().unwrap().len(),
+        20,
+        "{body}"
+    );
+    assert!(
+        body["reviews"]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["basis"] == "session_id"),
+        "every shown row is basis session_id: {body}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn session_id_wins_over_doc_author_past_max_reviews() {
+    // Basis (a) wins past the reader cap: one review is BOTH session-started
+    // and doc-authored and is the OLDEST of 25 session reviews (evicted by a
+    // MAX_REVIEWS-capped scan). Dedup must run against the full session id
+    // set, so the review counts exactly once toward `total` (25, not the
+    // capped 21) and no shown row ever carries `doc_author` for it.
+    // (The evicted row itself sorts last and is truncated from `items` in
+    // both the buggy and fixed versions, so `total` + uniqueness + basis are
+    // the observables; the buggy total is 21, the fixed total is 25.)
+    let commits_body = Arc::new(Mutex::new(
+        serde_json::to_string(&json!({ "commits": [] })).unwrap(),
+    ));
+    let kb = spawn_mock(hello_ok(), commits_body).await;
+    let b = boot(enabled(kb)).await;
+    let overlap_id = {
+        let store = open_store(&b.store_path);
+        let mut first_id = None;
+        for i in 0..25 {
+            let id = store
+                .create_review(
+                    "fixture",
+                    Some(&format!("Review {i}")),
+                    "main",
+                    "feature",
+                    Some(SID),
+                    1_700_000_000 + i as i64,
+                )
+                .unwrap();
+            if i == 0 {
+                first_id = Some(id);
+            }
+        }
+        first_id.unwrap()
+    };
+    {
+        let conn = rusqlite::Connection::open(&b.store_path).unwrap();
+        let author_json = serde_json::to_string(&json!({
+            "kind": "agent",
+            "session_id": SID,
+            "considered": [],
+            "not_considered": []
+        }))
+        .unwrap();
+        conn.execute(
+            "INSERT INTO review_docs
+                (review_id, ps_number, revision, schema, tier, doc_md,
+                 summary_md, risk_level, risk_why, omitted_json, author_json,
+                 byte_len, created_at)
+             VALUES (?1, 1, 1, 'kbc-review/1', 'v1', '# doc', 'summary',
+                     NULL, NULL, '[]', ?2, 5, 1_700_000_000)",
+            rusqlite::params![overlap_id, author_json],
+        )
+        .unwrap();
+    }
+    let (status, body) = get_json(&b.base, &format!("/api/session-card?sid={SID}")).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["reviews"]["total"], 25, "{body}");
+    assert_eq!(body["reviews"]["shown"], 20, "{body}");
+    let items = body["reviews"]["items"].as_array().unwrap();
+    let mut ids: Vec<i64> = items.iter().map(|r| r["id"].as_i64().unwrap()).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(
+        ids.len(),
+        items.len(),
+        "every shown review id appears once: {body}"
+    );
+    assert!(
+        items.iter().all(|r| r["basis"] == "session_id"),
+        "the overlapping review must never surface as doc_author: {body}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unmirrored_commit_dedupes_cache_row_by_sha() {
+    // An unmirrored kb entry (repo "") and a cache row for the same sha under
+    // its real repo are the same commit, counted once. Dedupe keys unmirrored
+    // entries by sha alone.
+    let sha = "dddddddddddddddddddddddddddddddddddddddd";
+    let unmirrored_body = serde_json::to_string(&json!({
+        "commits": [{
+            "kind": "commit",
+            "sha": sha,
+            "subject": "unmirrored subject",
+            "resolved": true,
+            "sha_full": sha,
+            "repo_root": "/repos/unknown-elsewhere",
+            "author": "fixture",
+            "parents": 0,
+            "trailers": [],
+        }]
+    }))
+    .unwrap();
+    let commits_body = Arc::new(Mutex::new(unmirrored_body));
+    let kb = spawn_mock(hello_ok(), commits_body).await;
+    let b = boot(enabled(kb)).await;
+    {
+        let store = open_store(&b.store_path);
+        let repo_id = store.repo_id("fixture").unwrap().unwrap();
+        let row = kb_code_server::store::CommitSessionRow {
+            confidence: "exact".to_string(),
+            via: "by-commit".to_string(),
+            session_id: Some(SID.to_string()),
+            kb: Some("platform".to_string()),
+            display_name: Some("fixture".to_string()),
+            started_at: Some(1_700_000_000),
+            resolved_at: 1_700_000_100,
+        };
+        store.upsert_commit_session(repo_id, sha, &row).unwrap();
+    }
+    let (status, body) = get_json(&b.base, &format!("/api/session-card?sid={SID}")).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["commits"]["available"], true, "{body}");
+    assert_eq!(body["commits"]["total"], 1, "{body}");
+    assert_eq!(
+        body["commits"]["items"].as_array().unwrap().len(),
+        1,
+        "{body}"
+    );
+    assert_eq!(body["commits"]["items"][0]["visible"], false, "{body}");
+    assert_eq!(body["commits"]["items"][0]["repo"], "", "{body}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn padded_sid_and_repo_are_rejected_without_trim() {
+    // No lenient trim: a padded sid is a malformed token, a padded repo is
+    // unknown. (The rejected sid is never echoed, as in the basic 400 case.)
+    let commits_body = Arc::new(Mutex::new(
+        serde_json::to_string(&json!({ "commits": [] })).unwrap(),
+    ));
+    let kb = spawn_mock(hello_ok(), commits_body).await;
+    let b = boot(enabled(kb)).await;
+
+    let (status, body) = get_json(&b.base, "/api/session-card?sid=%20sess-0001").await;
+    assert_eq!(status, 400, "{body}");
+    let (status, body) = get_json(&b.base, "/api/session-card?sid=sess-0001%20").await;
+    assert_eq!(status, 400, "{body}");
+    let (status, body) = get_json(
+        &b.base,
+        "/api/session-card?sid=sess-0001&repo=%20fixture%20",
+    )
+    .await;
+    assert_eq!(status, 400, "{body}");
 }

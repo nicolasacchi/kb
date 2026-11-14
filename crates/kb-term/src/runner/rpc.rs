@@ -44,7 +44,13 @@ pub fn parse_request(line: &[u8]) -> Result<Request, RunnerError> {
         }
     }
     obj.remove("v");
-    obj.remove("id");
+    // The envelope's request id is numeric (`{"v":1,"id":7,"op":...}`);
+    // a STRING `id` is the op's own session id (kill, resize, stream, ...)
+    // and must reach the wire `Request`. Stripping it unconditionally made
+    // every id-carrying op fail with "missing field `id`" over the socket.
+    if !obj.get("id").is_some_and(Value::is_string) {
+        obj.remove("id");
+    }
     serde_json::from_value(v).map_err(|e| RunnerError::BadRequest(format!("bad request: {e}")))
 }
 
@@ -66,8 +72,13 @@ async fn dispatch_inner<S: Supervisor>(
     match req {
         Request::Ping {} => Ok(json!({"pong": true})),
         Request::List {} => {
+            // The contract promises `SessionInfo`s (`Response::Ok` `data`
+            // is an array of them); stale sockets are included with
+            // null facts and `stale: true`.
             let entries = discovery::list_sessions(runner).await;
-            Ok(serde_json::to_value(entries).map_err(|e| RunnerError::Internal(e.to_string()))?)
+            let infos: Vec<crate::wire::SessionInfo> =
+                entries.iter().map(discovery::session_entry_info).collect();
+            Ok(serde_json::to_value(infos).map_err(|e| RunnerError::Internal(e.to_string()))?)
         }
         Request::Launch { .. } => {
             // Harness closed-set first (mirrors ids::HARNESSES; the wire
@@ -300,6 +311,13 @@ async fn dispatch_inner<S: Supervisor>(
         Request::Media { .. } => Err(RunnerError::BadRequest(
             "op not implemented by this unit".to_string(),
         )),
+        // The stream op never returns as an ordinary RPC: dispatch()
+        // must not answer it (the server connection turns into a relay
+        // — see server.rs). An ok-shape here would desync the splice,
+        // so refuse loudly when reached through dispatch().
+        Request::Stream { .. } => Err(RunnerError::BadRequest(
+            "stream is a connection splice, not an RPC".to_string(),
+        )),
     }
 }
 
@@ -371,4 +389,39 @@ async fn read_cap<S: Supervisor>(
         (text, false)
     };
     Ok(json!({"text": text, "truncated": truncated}))
+}
+
+#[cfg(test)]
+mod parse_tests {
+    use super::*;
+
+    #[test]
+    fn numeric_envelope_id_is_stripped() {
+        let req = parse_request(br#"{"v":1,"id":7,"op":"ping"}"#).expect("ping");
+        assert_eq!(req, Request::Ping {});
+    }
+
+    #[test]
+    fn string_id_is_the_ops_own_session_id() {
+        // Without the string-id carve-out these failed with
+        // "missing field `id`": the envelope strip ate the session id.
+        let stream = parse_request(br#"{"op":"stream","id":"abcd1234","from":null}"#)
+            .expect("stream keeps its id");
+        assert_eq!(
+            stream,
+            Request::Stream {
+                id: "abcd1234".to_string(),
+                from: None
+            }
+        );
+        let kill = parse_request(br#"{"v":1,"op":"kill","id":"abcd1234","grace_secs":null}"#)
+            .expect("kill keeps its id");
+        assert_eq!(
+            kill,
+            Request::Kill {
+                id: "abcd1234".to_string(),
+                grace_secs: None
+            }
+        );
+    }
 }

@@ -19,12 +19,40 @@ pub const HARNESSES: [&str; 6] = ["claude", "codex", "opencode", "grok", "kimi",
 pub const OMP_OVERLAY: &str = include_str!("../../share/omp/overlay.yml");
 
 /// One step of a harness exit sequence (sent before the cgroup kill,
-/// which is the backstop that never depends on these).
+/// which is the backstop that never depends on these). `WaitMs` is
+/// honoured by the kill path; it is not dead data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExitStep {
     Keys(&'static [&'static str]),
     Text(&'static str),
     WaitMs(u32),
+}
+
+/// Owned, JSON-serialisable mirror of [`ExitStep`] for the
+/// `@kb_exit_steps` tmux option. [`ExitStep`] borrows `&'static str`
+/// literals and cannot be deserialised from JSON; this type carries the
+/// same steps as owned `String`s.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum OwnedExitStep {
+    Keys(Vec<String>),
+    Text(String),
+    WaitMs(u32),
+}
+
+impl OwnedExitStep {
+    /// Copy a static step into its owned transport form.
+    pub fn from_static(step: &ExitStep) -> Self {
+        match step {
+            ExitStep::Keys(keys) => Self::Keys(keys.iter().map(|k| k.to_string()).collect()),
+            ExitStep::Text(t) => Self::Text(t.to_string()),
+            ExitStep::WaitMs(ms) => Self::WaitMs(*ms),
+        }
+    }
+
+    /// Copy a static slice into owned form.
+    pub fn from_slice(steps: &[ExitStep]) -> Vec<Self> {
+        steps.iter().map(Self::from_static).collect()
+    }
 }
 
 /// Everything `plan()` needs. `base_env` is the runner's own env
@@ -55,8 +83,8 @@ pub struct LaunchPlan {
     /// identity), sorted by name.
     pub env: Vec<(String, String)>,
     /// Forbidden exact names + concrete forbidden-prefixed names
-    /// present in `base_env` (the wrapper unsets these after any login
-    /// shell runs).
+    /// present in `base_env` (the wrapper unsets these before exec to
+    /// defend server-env inheritance; the pane shell is non-login).
     pub unset_after_login: Vec<String>,
     /// omp only: absolute overlay path (mode 0600).
     pub overlay_path: Option<PathBuf>,

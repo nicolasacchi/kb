@@ -3002,9 +3002,10 @@ enum SessionsAction {
     /// Walk the host's omp sessions tree and fill NULL lineage
     /// columns (`parent_session_id` / `root_session_id` /
     /// `project_slug`) on omp rows through the daemon. Dry-run by
-    /// default (prints `would_change=<n> changed=<n> unmatched=<n>`);
-    /// `--apply` writes. Never overwrites a non-NULL value. Requires a
-    /// running daemon (the storage actor stays the single writer).
+    /// default (prints `would_change=<n> changed=<n> unmatched=<n>` —
+    /// rows; rows; items); `--apply` writes. Never overwrites a
+    /// non-NULL value. Requires a running daemon (the storage actor
+    /// stays the single writer).
     BackfillTree {
         /// Write the lineage. Absent = dry-run; nothing is written.
         #[arg(long)]
@@ -3012,7 +3013,7 @@ enum SessionsAction {
         /// The omp sessions directory to walk (default `~/.omp/agent/sessions`).
         #[arg(long)]
         sessions_dir: Option<std::path::PathBuf>,
-        /// Items per POST batch (default 200; the route caps at 500).
+        /// Items per POST batch (default 200; clamped to the route cap of 500).
         #[arg(long, default_value_t = 200)]
         batch: usize,
         /// Daemon to run it through (default: the local one).
@@ -4526,6 +4527,22 @@ enum SlateAction {
     Ask {
         #[arg(required = true, num_args = 1..)]
         line: Vec<String>,
+        /// Who the question is for: `you` (the operator; `operator` and
+        /// `human` are aliases), a harness, or `any` (the default).
+        #[arg(long)]
+        to: Option<String>,
+    },
+    /// Block until an ask is answered or closed (read-only). Exit 0
+    /// resolved, 4 timed out still open, 5 gone (not found, dropped,
+    /// rotated, closed), 1 error or stopped.
+    Wait {
+        post: String,
+        /// Give up after this many seconds (exit 4); 0 waits forever.
+        #[arg(long, default_value_t = 3600)]
+        timeout: u64,
+        /// Exit when this pid is no longer alive. Not required.
+        #[arg(long = "parent-pid")]
+        parent_pid: Option<u32>,
     },
     /// Answer an ask.
     Answer {
@@ -7797,7 +7814,12 @@ async fn main() -> Result<()> {
                 SlateAction::Now { line } => sl::plain(&ctx, "now", &join(line)).await,
                 SlateAction::Warn { line } => sl::plain(&ctx, "warn", &join(line)).await,
                 SlateAction::Idea { line } => sl::plain(&ctx, "idea", &join(line)).await,
-                SlateAction::Ask { line } => sl::ask(&ctx, &join(line)).await,
+                SlateAction::Ask { line, to } => sl::ask(&ctx, &join(line), to.as_deref()).await,
+                SlateAction::Wait {
+                    post,
+                    timeout,
+                    parent_pid,
+                } => sl::wait(&ctx, sl::parse_seq(&post)?, timeout, parent_pid).await,
                 SlateAction::Found { line } => sl::found(&ctx, &join(line)).await,
                 SlateAction::Answer { post, line } => {
                     sl::answer(&ctx, sl::parse_seq(&post)?, &join(line)).await

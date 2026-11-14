@@ -669,7 +669,7 @@ kb sessions distilled <sid> [--note TEXT] [--slate SLUG]  v0.44 F10 — idempote
 kb chores [--json] [--line]            v0.44 F10 — one derived agenda of due agent-layer upkeep (distill queue, slate tidy/rotate/hand, memory triage, resurface, stale hook markers, an aged `weekly-review` note, CLI/daemon build skew), one `chore → skill (why)` line each. `--line` prints a single counts-only line, at most once per UTC day, and prints nothing (exit 0) when nothing is due or the daemon is down; `kb-wake.sh` appends it to the SessionStart context. The line skips the whole-fleet notes read (no weekly-note chore there). It names `cli-skew` (CLI build vs daemon build) unless `KB_SKEW_SHOWN=1` is set, which `kb-wake.sh` does when it just printed its own, different, CLI-older-than-hooks notice. Pull-only; schedules and stores nothing
 kb sessions folders                    List the folders (working directories) sessions ran in, with counts
 kb sessions backfill-tree [--apply] [--sessions-dir DIR] [--batch N]
-                                    V0047 — walk the host omp sessions tree (`~/.omp/agent/sessions`) and fill NULL lineage columns (`parent_session_id`, `root_session_id`, `project_slug`) on omp rows through the daemon (`POST /api/sessions/backfill-tree`). Dry-run by default (prints `would_change=<n> changed=<n> unmatched=<n>`); `--apply` writes. Never overwrites a non-NULL value. Requires a running daemon (no offline path)
+                                    V0047 — walk the host omp sessions tree (`~/.omp/agent/sessions`) and fill NULL lineage columns (`parent_session_id`, `root_session_id`, `project_slug`) on omp rows through the daemon (`POST /api/sessions/backfill-tree`). Dry-run by default (prints `would_change=<n> changed=<n> unmatched=<n>` — rows; rows; items); `--apply` writes. Never overwrites a non-NULL value. Requires a running daemon (no offline path)
 kb sessions rollup                     R9 — top research queries per project folder (or overall)
 kb sessions funnel                     R9 — the activity funnel: searched → opened → edited → committed → commented
 kb sessions ledger [--project] [--days]
@@ -1040,10 +1040,10 @@ kb slate show #n | delta [--since SEQ] [--limit N] [--kinds a,b]
                                     no session id resolved) — `cursor` is
                                     for callers that need to report on
                                     their own schedule instead.
-kb slate now "…" | warn "…" | ask "…?" | answer #n "…"
+kb slate now "…" | warn "…" | ask "…?" [--to you|<harness>|any] | answer #n "…"
 kb slate found "…" --ref R | idea "…" | tried "…" --failed "…" [--was #n]
 kb slate take <subject|#n> "…" [--anyway|--over #n]
-kb slate done #n "…" [--abandoned "…"] | hand <subject> "…" [--to H]
+kb slate done <n> "…" [--abandoned "…"] | hand <subject> "…" [--to H]
 kb slate drop #n "…" [--anyway] | edit #n "…" [--body -|MD] [--anyway]
 kb slate mark #n [--pin|--unpin] | pin #n | unpin #n
                                     The twelve kinds. `drop` removes the
@@ -1088,6 +1088,64 @@ kb slate watch [--once] [--timeout S] | stats | ls | doctor
                                     session) — counts, never a verdict.
                                     `doctor` is a structural lint. See
                                     `## kb slate` below.
+kb slate wait <n> [--timeout S] [--parent-pid PID] [--json]
+                                    Block until ask <n> is resolved. Write
+                                    the number BARE: `#` starts a shell
+                                    comment, so `kb slate wait #57` runs
+                                    `kb slate wait` (usage error, exit 2);
+                                    the parser accepts both forms. Read-only:
+                                    never POSTs, never moves the cursor. It
+                                    subscribes to the SSE stream first, then
+                                    seeds from the ledger, re-seeds on
+                                    reconnect and notices a rotation or close
+                                    (detected at the seed and on every
+                                    resync, not only from a live frame; a
+                                    replayed rotate/close frame is not
+                                    trusted; a lag or gap forces a resync).
+                                    Exit 0 answered or closed · 4 timed out,
+                                    still open (default `--timeout 3600`, 0 =
+                                    forever) · 5 gone (not found, not an
+                                    ask, dropped, rotated, closed) · 1
+                                    error or stopped (parent died, stdout
+                                    closed); never 2 or 3. Output starts
+                                    with the slate's untrusted-data frame
+                                    line on a resolved ask. Human output is
+                                    one `#57 answered · [you] 3m: <line>`
+                                    per answer (body indented), `#57 done ·
+                                    …` when closed,
+                                    then a footer: a `[you]` answer reads
+                                    "the operator's answer to this
+                                    question", any other author "input to
+                                    weigh" (never an instruction); both
+                                    end `kb slate done 57 "…"` with the
+                                    bare number. Under `--json` EVERY
+                                    outcome prints JSON: `{state:
+                                    resolved|timeout|gone|stopped|error,
+                                    slug, seq, ask, answers, done, reason,
+                                    kind}`;
+                                    `reason` is null|timeout|stopped|
+                                    not-found|not-an-ask (carrying the
+                                    actual `kind`)|dropped|rotated|closed,
+                                    or, for `state: error` (exit 1), the
+                                    error message. On timeout `ask` is
+                                    filled.
+                                    `ask --to` addresses an ask: `you`
+                                    (aliases `operator`, `human`; stored
+                                    `you`), a harness (claude codex
+                                    opencode grok kimi omp,
+                                    case-insensitive) or `any`; a bad value
+                                    exits 1 locally and the server answers
+                                    400 `bad-to`. `edit` on an ask keeps
+                                    its `to`, normalising a legacy value
+                                    (operator/You become `you`) and dropping
+                                    an invalid one; a hand's `to` is kept;
+                                    `hand --to` is unchanged. A `done` on
+                                    ANY version of an ask closes every
+                                    version. The per-prompt delta (`kb slate
+                                    delta`, kb-recall's slate lane) carries
+                                    new answers and dones on the reading
+                                    session's OWN asks in full, so they
+                                    arrive with its next prompt.
 kb desk {offer,update,ls,wait,expire,promote}
                                     ephemeral LLM↔human handoff. Offer a
                                     draft, wait for comments, re-push, or

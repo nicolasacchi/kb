@@ -72,3 +72,6 @@ rusqlite = { workspace = true }
 pretty_assertions = { workspace = true }
 # tests/api_docs.rs — route-table extraction from router.rs source.
 regex = { workspace = true }
+# tests/terms_ws*.rs — the WS client for the relay tests. Same version
+# axum 0.8's `ws` feature resolves in the lock (deny duplicate versions).
+tokio-tungstenite = "=0.29.0"

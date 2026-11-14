@@ -164,8 +164,14 @@ export type SlateProjected = {
   confidence?: SlateTakeConfidence;
   /// Hands only: a `take #n` on the hand acknowledges it.
   acknowledged?: boolean;
-  /// Asks only.
+  /// Asks only. Counted over the ask's whole edit chain.
   answers?: number;
+  /// Asks and hands only (AW1) — who it is addressed to: `you` (the
+  /// operator), `any`, or a harness. Absent ≡ `any`.
+  to?: string;
+  /// Asks only (AW1) — the newest undropped answer over the whole edit
+  /// chain. `who.tag` is `you` for a human answer.
+  last_answer?: SlateAnswerBrief;
   /// The superseded ancestor — rendered `(was #n)`.
   was?: number;
   /// Takes only: silence since the holder's last beat/post.
@@ -184,6 +190,15 @@ export type SlateProjected = {
   /// It is ATTRIBUTION, not acknowledgement: the digest says "served", and
   /// so does the board's hover.
   seen_by?: string[];
+};
+
+/// `slate::AnswerBrief` — the newest answer on an ask (AW1).
+export type SlateAnswerBrief = {
+  seq: number;
+  line: string;
+  who: SlateWho;
+  /// Seconds since the answer was posted.
+  age_secs: number;
 };
 
 /// `slate::TopicNow` — one NOW-band row. Both fields are bare `Option`s
@@ -275,6 +290,10 @@ export type SlateSummary = {
   sessions_served?: number;
   /// Posts in the CURRENT generation's ledger (drops to 0 on rotate).
   generation_posts?: number;
+  /// AW3 — asks on the board addressed `to: "you"` with zero answers (an
+  /// answered ask waits on its asker, not the operator). Optional: a
+  /// pre-AW3 daemon omits it and the UI shows nothing.
+  ask_for_you?: number;
 };
 
 export type SlateCounts = {

@@ -29,6 +29,38 @@ pub struct TreeItem {
 }
 /// One parsed session header: `(id, parentSession, cwd)`.
 type Header = (Option<String>, Option<String>, Option<String>);
+/// The per-request cap the route enforces (at most 500 items per
+/// request). `--batch` is clamped to it client-side so a large value
+/// never exceeds the server cap mid-run (the route 400s the chunk).
+pub(crate) const BACKFILL_TREE_BATCH_CAP: usize = 500;
+
+/// Clamp a `--batch` value into `1..=BACKFILL_TREE_BATCH_CAP`.
+pub(crate) fn clamp_batch(batch: usize) -> usize {
+    batch.clamp(1, BACKFILL_TREE_BATCH_CAP)
+}
+
+/// `(would_change, changed, unmatched)` summed out of one chunk's route
+/// reply (pure: pinned by a unit test). `would_change`/`changed` count
+/// ROWS; `unmatched` counts ITEMS (see `Db::sessions_backfill_tree`'s
+/// docstring).
+pub(crate) fn backfill_tree_chunk_totals(v: &Value) -> (u64, u64, u64) {
+    let num = |k: &str| v.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+    (num("would_change"), num("changed"), num("unmatched"))
+}
+
+/// The capture slug charset the server enforces
+/// (`[a-z0-9._-]{1,64}` — the same rule as
+/// `kb_core::sessions::meta_project_slug`). A repo basename long enough
+/// to slugify past 64 chars must yield `None` here, never an over-cap
+/// slug that makes `check_slug` 400 the whole batch (the capture path
+/// drops such a slug to NULL the same way).
+fn valid_project_slug(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 64
+        && s.bytes().all(|b| {
+            b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'-')
+        })
+}
 
 /// The route + query for one run (PURE: pinned by a unit test).
 pub(crate) fn backfill_tree_path(apply: bool) -> String {
@@ -111,7 +143,7 @@ pub fn collect_tree_items(sessions_dir: &Path) -> Vec<TreeItem> {
             .as_deref()
             .filter(|c| Path::new(c).is_absolute() && Path::new(c).is_dir())
             .map(|c| super::memory::current_repo_slug_in(Path::new(c)))
-            .filter(|s| !s.is_empty());
+            .filter(|s| valid_project_slug(s));
         items.push(TreeItem {
             session_id: header_id.to_string(),
             parent_session_id: folded.parent,
@@ -172,7 +204,8 @@ fn items_to_json(items: &[TreeItem]) -> Value {
 
 /// `kb sessions backfill-tree [--apply] [--sessions-dir DIR] [--batch N]`
 /// — dry-run by default; prints `would_change=<n> changed=<n>
-///unmatched=<n>`. Refuses with a clear error when no daemon answers.
+/// unmatched=<n>` (rows; rows; items). Refuses with a clear error when no
+/// daemon answers.
 pub async fn backfill_tree(
     apply: bool,
     sessions_dir: Option<&PathBuf>,
@@ -190,7 +223,7 @@ pub async fn backfill_tree(
         );
     };
     let client = http::client_with_timeout_and_bearer(120, bearer)?;
-    let batch = batch.max(1);
+    let batch = clamp_batch(batch);
     let mut would_change = 0u64;
     let mut changed = 0u64;
     let mut unmatched = 0u64;
@@ -204,10 +237,10 @@ pub async fn backfill_tree(
             .with_context(|| format!("POST {url}/api/sessions/backfill-tree"))?
             .error_for_status()?;
         let v: Value = resp.json().await?;
-        let num = |k: &str| v.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
-        would_change += num("would_change");
-        changed += num("changed");
-        unmatched += num("unmatched");
+        let (w, c, u) = backfill_tree_chunk_totals(&v);
+        would_change += w;
+        changed += c;
+        unmatched += u;
         if let Some(d) = v.get("degraded").and_then(|d| d.as_array()) {
             for lane in d {
                 eprintln!(
@@ -241,6 +274,60 @@ mod tests {
             backfill_tree_path(true),
             "/api/sessions/backfill-tree?apply=true"
         );
+    }
+
+    #[test]
+    fn clamp_batch_stays_within_the_route_cap() {
+        assert_eq!(clamp_batch(0), 1);
+        assert_eq!(clamp_batch(1), 1);
+        assert_eq!(clamp_batch(200), 200);
+        assert_eq!(clamp_batch(500), 500);
+        assert_eq!(clamp_batch(BACKFILL_TREE_BATCH_CAP + 1), 500);
+        assert_eq!(clamp_batch(1000), 500);
+    }
+
+    #[test]
+    fn backfill_tree_chunk_totals_sums_a_canned_reply() {
+        let v = json!({"apply": true, "would_change": 3, "changed": 2, "unmatched": 1});
+        assert_eq!(backfill_tree_chunk_totals(&v), (3, 2, 1));
+        assert_eq!(backfill_tree_chunk_totals(&Value::Null), (0, 0, 0));
+        assert_eq!(backfill_tree_chunk_totals(&json!({})), (0, 0, 0));
+    }
+
+    #[test]
+    fn valid_project_slug_matches_the_server_cap() {
+        assert!(valid_project_slug("my-proj_1.2"));
+        assert!(valid_project_slug(&"a".repeat(64)));
+        assert!(!valid_project_slug(""));
+        assert!(!valid_project_slug("UPPER"));
+        assert!(!valid_project_slug(&"a".repeat(65)));
+    }
+
+    #[test]
+    fn collect_tree_items_drops_an_over_cap_repo_slug() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let short_dir = root.join("my-proj");
+        let long_name = "a".repeat(70);
+        let long_dir = root.join(&long_name);
+        std::fs::create_dir_all(&short_dir).unwrap();
+        std::fs::create_dir_all(&long_dir).unwrap();
+        std::fs::create_dir_all(root.join("bucket")).unwrap();
+        let write = |p: &Path, id: &str, cwd: &Path| {
+            let v = json!({"type":"session","id":id,"cwd": cwd.to_string_lossy()});
+            std::fs::write(p, format!("{}\n", serde_json::to_string(&v).unwrap())).unwrap();
+        };
+        write(&root.join("bucket/a.jsonl"), "short1", &short_dir);
+        write(&root.join("bucket/b.jsonl"), "long1", &long_dir);
+        let items = collect_tree_items(root);
+        let find = |sid: &str| items.iter().find(|i| i.session_id == sid).unwrap().clone();
+        assert_eq!(find("short1").project_slug.as_deref(), Some("my-proj"));
+        assert_eq!(
+            find("long1").project_slug,
+            None,
+            "an over-64-char slug must post None, never 400 the batch"
+        );
+        // `tmp` (TempDir) removes the tree on drop, including on failure.
     }
 
     #[test]
