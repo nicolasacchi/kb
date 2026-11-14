@@ -156,6 +156,18 @@ export const queryClient = new QueryClient({
 //                                   invalidation (a session ending IS a
 //                                   state transition), so this bridge entry
 //                                   only has to add session.state.
+//   ["terms"]                        T14 — kb-term sessions list
+//                                   (`GET /api/terms`,
+//                                   `terminal/useTerms.ts`). The next
+//                                   documented #23 exception: finite
+//                                   staleTime (15 s) plus direct
+//                                   invalidation on
+//                                   `term.created|term.ended|term.state`,
+//                                   which fire only on a lifecycle/state
+//                                   CHANGE (low rate, #24). Terminal BYTES
+//                                   never enter TanStack: the per-panel
+//                                   WebSocket is outside the SharedWorker
+//                                   (#24 carve-out).
 //   ["sessions", "card", sid]      A4 — one session's `kb-session-card/1`
 //                                   (`GET /api/sessions/{sid}/card`,
 //                                   `hooks/useSessionCard.ts`). Finite
@@ -596,6 +608,12 @@ export function startSseInvalidationBridge(): () => void {
     // diverged from the card. Same kinds, same low rate.
     invalidate(["session"]);
   });
+  // T14 — term lifecycle/state changes re-list the terminals. The kinds
+  // are registered server-side in routes/schema.rs (TERM_*_KEYS); they
+  // fire only on a lifecycle/state CHANGE, so no burst gate is needed.
+  on("term.created", () => invalidate(["terms"]));
+  on("term.ended", () => invalidate(["terms"]));
+  on("term.state", () => invalidate(["terms"]));
   // memory.* in full, plus session.captured for the session lens (its
   // queries key under the same ["memories", …] prefix) and
   // artifact.removed (a forgotten memory is a removed artifact).

@@ -1,15 +1,28 @@
-// A4 — the terminal seam: the thin props contract where the kb-term
-// `TerminalPanel` mounts later (React.lazy, after an explicit click).
-// This unit renders NOTHING — the panel does not exist yet, so the slot
-// stays empty even when T13's registry-derived lane is available and
-// admitted. No xterm, no WebSocket, no ticket, no `/api/terms` call
-// lives here; T14 owns those.
+// T14 — the terminal seam, filled: the panel mounts lazily after an
+// explicit click, in `<Suspense>` with A4's `StateCard` fallback.
+//
+// Contract (A4's file, seam body only):
+//   * lane `available: false` (or unadmitted) → nothing.
+//   * `available: true` with a term → "Terminal" header with the state
+//     chip + "Open terminal"; clicking mounts `<TerminalPanel>`
+//     (lazily, via `React.lazy`) and "Close terminal" unmounts it
+//     (disconnect only, never kill).
+//   * a child (subagent) session whose lane resolves to the ROOT's
+//     term (`via: "root"`) shows a link to the session and no panel.
+// The slot imports nothing from the terminal engine packages; the only
+// engine edge is the dynamic `lazy(...)` import below, so the panel
+// chunk is fetched only after the click.
 
-import type { ReactElement } from "react";
+import { Suspense, lazy, useState, type ReactElement } from "react";
+import { Link } from "react-router-dom";
+import { StateCard } from "@kb/ui/StateCard";
 import type { TerminalLane } from "../api/sessions";
 
 export type TerminalSlotProps = {
   sid: string;
+  // The root session that owns the terminal (card summary's
+  // root_session_id); used by the `via: "root"` link on a child page.
+  rootSid?: string;
   termId?: string;
   harness: string;
   state?: string;
@@ -18,21 +31,61 @@ export type TerminalSlotProps = {
   lane: TerminalLane,
 };
 
-export function TerminalSlot(_props: TerminalSlotProps): ReactElement | null {
-  // the kb-term TerminalPanel mounts here (React.lazy, explicit click)
-  return null;
+const TerminalPanel = lazy(() => import("../terminal/TerminalPanel.lazy"));
+
+export function TerminalSlot(props: TerminalSlotProps): ReactElement | null {
+  const [open, setOpen] = useState(false);
+  const { lane } = props;
+  const termId = props.termId ?? lane.term_id;
+  if (!lane.available || !lane.admitted) return null;
+  if (lane.via === "root") {
+    if (!props.rootSid) {
+      return <span data-testid="session-term-root-link">Terminal in parent session</span>;
+    }
+    return (
+      <Link
+        to={`/sessions/${encodeURIComponent(props.rootSid)}`}
+        data-testid="session-term-root-link"
+      >
+        Terminal in parent session
+      </Link>
+    );
+  }
+  if (!termId) return null;
+  const harness = lane.harness ?? props.harness;
+  return (
+    <div data-testid="kb-terminal-slot">
+      <span data-testid="kb-term-slot-state">{lane.state ?? ""}</span>
+      <button
+        type="button"
+        data-testid="kb-term-open"
+        onClick={() => setOpen((v) => !v)}
+      >
+        {open ? "Close terminal" : "Open terminal"}
+      </button>
+      {open ? (
+        <Suspense
+          fallback={
+            <StateCard kind="loading" title="Loading terminal" reason={harness} />
+          }
+        >
+          <TerminalPanel
+            termId={termId}
+            sid={props.sid}
+            harness={harness}
+            mode="watch"
+            onClose={() => setOpen(false)}
+          />
+        </Suspense>
+      ) : null}
+    </div>
+  );
 }
 
-// FXA4 — `shouldRenderTerminal` is the page's gate for the terminal
-// `<details>` wrapper. The slot renders NOTHING today (no panel exists
-// — T14 mounts it), so the gate MUST stay false: rendering the wrapper
-// whenever the lane is available+admitted would show an empty 'Terminal'
-// section. T14 flips this to `lane.available && lane.admitted` when the
-// panel actually renders. (Brief A4 §3.1: the wrapper renders only if
-// the slot renders something, which today is never.)
+// The page renders the terminal wrapper <details> only when the slot
+// can render something: the lane must be available AND admitted.
 export function shouldRenderTerminal(
   lane: TerminalSlotProps["lane"],
 ): boolean {
-  void lane;
-  return false;
+  return lane.available && lane.admitted;
 }
