@@ -203,7 +203,7 @@ async fn handle_connection<S: Supervisor + 'static>(runner: Arc<Runner<S>>, stre
         }
         let resp = match rpc::parse_request(line.as_bytes()) {
             Ok(crate::wire::Request::Media { sha256 }) => {
-                if respond_media(&mut write_half, id, &runner, sha256)
+                if respond_media(&mut write_half, req_id, &runner, sha256)
                     .await
                     .is_err()
                 {

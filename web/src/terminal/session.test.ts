@@ -666,8 +666,8 @@ describe("TermSession", () => {
       t: "imagedef", seq: 1, id: 7, gen: 1, sha256: "a".repeat(64), mime: "image/png",
       w: 4, h: 4, cols: 2, rows: 1, offset: 0,
     });
-    s.pushText({ t: "seed", offset: 100, len: 5 });
-    s.pushBinary(100, "hello");
+    s.pushText({ t: "seed", offset: 105, len: 5 });
+    s.pushBinary(105, "hello");
     s.pushText({ t: "gfxreset", seq: 2, gen: 3, offset: 105 });
     await flush();
     expect(order).toEqual(["fulljoin", "imagedef:7", "gfxreset:3"]);
