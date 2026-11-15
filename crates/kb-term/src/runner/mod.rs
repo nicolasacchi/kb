@@ -24,6 +24,7 @@ pub mod ids;
 pub mod keys;
 pub mod kill;
 pub mod launch;
+pub mod media;
 pub mod paste;
 pub mod persist;
 pub mod rpc;

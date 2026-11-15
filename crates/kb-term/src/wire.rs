@@ -816,6 +816,15 @@ pub struct GridData {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EmptyData {}
 
+/// Header payload of a successful `media` reply (`{"len": N}`). The
+/// envelope line carrying it is followed on the same connection by
+/// exactly `len` raw picture bytes (never base64).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MediaData {
+    /// Number of raw bytes that follow the header line.
+    pub len: u64,
+}
+
 /// Session facts returned by `Request::List` inside `Response::Ok` `data`.
 ///
 /// Every fact is `Option` and serializes `None` as an explicit `null`:
