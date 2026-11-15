@@ -261,4 +261,4 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | GET | `/api/users` | `routes::users::list` |
 | GET | `/api/why` | `routes::sessions::why` |
 
-_250 routes._
+_251 routes._
