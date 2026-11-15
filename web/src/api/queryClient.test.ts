@@ -245,6 +245,16 @@ describe("SSE → TanStack invalidation bridge (invariant #23)", () => {
     expect(keys()).toEqual([["sessions", "live"], ["sessions", "card"], ["session"]]);
   });
 
+  // T14 — each term.* lifecycle kind invalidates ["terms"] and nothing
+  // under ["sessions"] (the kinds fire only on a CHANGE; no burst gate).
+  it.each(["term.created", "term.ended", "term.state"])(
+    "%s invalidates exactly [\"terms\"]",
+    (kind) => {
+      emit(kind, { term: "t1" });
+      expect(keys()).toEqual([["terms"]]);
+    },
+  );
+
   // SL4 — the slate bridge. These four cases pin the EXACT key set: a fifth
   // key appearing here (or one of these going missing) is the bug the
   // design's "with the ledger comment and the vitest case that pins the

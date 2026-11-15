@@ -286,6 +286,7 @@ export default function SessionPage() {
           <div className="kb-sp__body">
             <TerminalSlot
               sid={sid}
+              rootSid={sum.root_session_id}
               termId={card.terminal.term_id}
               harness={sum.harness}
               state={card.terminal.state}

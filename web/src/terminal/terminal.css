@@ -1,0 +1,88 @@
+/* T14 — terminal panel styles. Existing tokens only (the css-vars
+ * lint and the ratchet baseline forbid new font-size/hex/z-index
+ * literals in this file). */
+
+.kb-term {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+  background: var(--bg-panel-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  padding: var(--pad-2);
+}
+
+.kb-term__bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--pad-2);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-tight);
+  color: var(--ink);
+}
+
+.kb-term__harness {
+  font-weight: 600;
+}
+
+.kb-term__chip {
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-pill);
+  padding: var(--pad-1);
+  color: var(--ink-mute);
+}
+
+.kb-term__grid {
+  font-family: var(--font-mono);
+  color: var(--ink-mute);
+}
+
+.kb-term__caption {
+  color: var(--ink-mute);
+  flex: 1;
+  min-width: var(--pad-4);
+}
+
+.kb-term__btn {
+  background: var(--bg-card);
+  color: var(--ink);
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  padding: var(--pad-1) var(--pad-2);
+  cursor: pointer;
+}
+
+.kb-term__btn:hover {
+  border-color: var(--accent);
+}
+
+.kb-term__findbar {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-2);
+}
+
+.kb-term__findinput {
+  background: var(--bg-card);
+  color: var(--ink);
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  padding: var(--pad-1) var(--pad-2);
+}
+
+.kb-term__findnote {
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+}
+
+.kb-term__view {
+  /* No fixed height: xterm sizes .xterm-screen to rows x cell height
+   * and the host must follow it, or the screen paints over whatever
+   * follows the panel. */
+  min-height: var(--pad-4);
+  max-width: 100%;
+  background: var(--bg);
+}
