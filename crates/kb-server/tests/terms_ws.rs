@@ -1431,6 +1431,47 @@ async fn term_events_low_rate_and_ended_once() {
 // --------------------------------------------------------------------------
 
 #[tokio::test]
+async fn created_without_any_dims_states_the_runner_default_120x40() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut replies = HashMap::new();
+    replies.insert(
+        "launch".to_string(),
+        "{\"status\":\"ok\",\"data\":{\"id\":\"abcd1234\"}}".to_string(),
+    );
+    let fake = spawn_stream_fake(tmp.path(), replies, vec![], true);
+    let (tmp, addr) = boot(enabled_terminal(), &fake).await;
+    let _ = tmp;
+
+    let resp = client()
+        .post(format!("{}/api/terms", base_url(addr)))
+        .header("Origin", origin_header(addr))
+        .header("x-kb-intent", "terminal")
+        .header("Content-Type", "application/json")
+        .body(r#"{"harness":"omp"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 201);
+
+    let events = sse_term_events(addr, Duration::from_millis(1500)).await;
+    let created: Vec<_> = events
+        .iter()
+        .filter(|e| e.event == "term.created")
+        .collect();
+    assert_eq!(created.len(), 1, "exactly one term.created: {events:?}");
+    assert_eq!(
+        created[0].payload["cols"], 120,
+        "the runner's default, not a fabricated 80: {}",
+        created[0].payload
+    );
+    assert_eq!(
+        created[0].payload["rows"], 40,
+        "the runner's default, not a fabricated 24: {}",
+        created[0].payload
+    );
+}
+
+#[tokio::test]
 async fn terminal_emits_created_and_ended_once() {
     let tmp = tempfile::tempdir().unwrap();
     let mut replies = HashMap::new();

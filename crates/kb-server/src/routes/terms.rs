@@ -8,10 +8,15 @@
 //!
 //! Validation order in each handler: gate → `id` shape → body shape.
 //! The runner failure mapping is: unreachable/timeout → 503
-//! (`terminal-runner-unavailable`, the socket path NEVER leaks),
-//! `not_found` → 404, `blocked` → 409, `multi_line_refused` → 422,
-//! `grid_owned` → 409 (with the reply's message), `bad_request` → 400,
-//! anything else → 502.
+//! (`terminal-runner-unavailable`, the socket path NEVER leaks);
+//! the runner's dash codes map as follows (pinned by
+//! `runner_err_maps_every_dash_code`): `not-found`/`no-session`/
+//! `no-viewer` → 404, `blocked`/`grid-owned`/`paste-only`/`busy`/
+//! `busy-pty`/`too-many-viewers` → 409 (with the reply's message),
+//! `multi-line-refused` → 422, `invalid-id`/`invalid-harness`/
+//! `bad-request`/`bad-viewer`/`bad-input`/`bad-key`/`bad-text`/
+//! `bad-size` → 400, `too-large` → 413, `tap-timeout`/`tmux-version`
+//! → 503, `tmux-failed`/`internal`/anything else → 502.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -35,17 +40,11 @@ use axum::Extension;
 
 use kb_core::sessions::live::LiveState;
 
-/// `ids` are 1..=32 chars drawn from `[a-z0-9]` only — the one grammar
-/// shared with the beat hook, the beat intake, the redaction floor and the
-/// binding directory. (The runner's own `is_valid_term_id` mints only
-/// 8..=12; this relay accepts the wider shape so the ticket handler can
-/// 404 on an id the runner never minted rather than 400 it.)
-fn is_valid_term_id(s: &str) -> bool {
-    !s.is_empty()
-        && s.len() <= crate::terminal::binding::TERM_ID_MAX
-        && s.chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-}
+// R6: ONE kb-side term-id grammar (`^[a-z0-9]{1,32}$`), the validator in
+// `binding.rs`. Only the runner mints/validates 8..=12; an id inside this
+// grammar that the runner does not know comes back as a mapped 4xx
+// (`invalid-id` 400 / `not-found` 404), never a 502.
+use crate::terminal::binding::is_valid_term_id;
 
 /// The maximum request body the relay parses before a 413.
 const MAX_BODY_BYTES: usize = 256 * 1024;
@@ -157,15 +156,29 @@ fn relay(reply: RunnerReply) -> Response<Body> {
     }
 }
 
-/// The runner error-code → HTTP status mapping (typed strings, no wire
-/// assertion stronger than the code).
+/// The runner error-code → HTTP status mapping. The runner emits DASH
+/// codes (`RunnerError::code()`); matching underscore forms here would
+/// make every failure a 502. Every code the runner can emit is pinned
+/// by `runner_err_maps_every_dash_code`.
 fn runner_err(code: &str, message: &str) -> Response<Body> {
     let (status, urn) = match code {
-        "not_found" => (StatusCode::NOT_FOUND, ERR_TERMINAL_NOT_FOUND),
-        "blocked" => (StatusCode::CONFLICT, ERR_TERMINAL_CONFLICT),
-        "grid_owned" => (StatusCode::CONFLICT, ERR_TERMINAL_CONFLICT),
-        "multi_line_refused" => (StatusCode::UNPROCESSABLE_ENTITY, ERR_TERMINAL_REFUSED),
-        "bad_request" => (StatusCode::BAD_REQUEST, ERR_TERMINAL_BAD_REQUEST),
+        "invalid-id" | "invalid-harness" | "bad-request" | "bad-viewer" | "bad-input"
+        | "bad-key" | "bad-text" | "bad-size" => {
+            (StatusCode::BAD_REQUEST, ERR_TERMINAL_BAD_REQUEST)
+        }
+        "not-found" | "no-session" | "no-viewer" => (StatusCode::NOT_FOUND, ERR_TERMINAL_NOT_FOUND),
+        "too-large" => (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            ERR_TERMINAL_PAYLOAD_TOO_LARGE,
+        ),
+        "blocked" | "grid-owned" | "paste-only" | "busy" | "busy-pty" | "too-many-viewers" => {
+            (StatusCode::CONFLICT, ERR_TERMINAL_CONFLICT)
+        }
+        "multi-line-refused" => (StatusCode::UNPROCESSABLE_ENTITY, ERR_TERMINAL_REFUSED),
+        "tap-timeout" | "tmux-version" => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            ERR_TERMINAL_RUNNER_UNAVAILABLE,
+        ),
         _ => (StatusCode::BAD_GATEWAY, ERR_TERMINAL_BAD_REPLY),
     };
     let detail = if message.trim().is_empty() {
@@ -221,6 +234,30 @@ async fn call(state: &Arc<KbHandles>, req: &RunnerRequest) -> Result<RunnerReply
         Err(RunnerError::Unavailable | RunnerError::Timeout) => Err(runner_down()),
         Err(RunnerError::TooLarge | RunnerError::BadReply) => Err(runner_bad_reply()),
     }
+}
+
+/// The relay's single hidden-client viewer identity. The runner
+/// requires a registered viewer for paste/enter/keys, and nothing else
+/// opens one over HTTP, so every input handler opens `spa` first.
+/// The runner's `viewer_open` is idempotent, so re-opening on every
+/// call is safe; the `viewer-close` route closes it explicitly and a
+/// successful `kill` closes it best-effort (the kill path closes
+/// viewers server-side anyway).
+const SPA_VIEWER: &str = "spa";
+
+/// Open (idempotently) the relay's hidden client for `id`. Best-effort
+/// by design: it must never fail an input call with a viewer-open
+/// error of its own — if the open fails (e.g. no session), the input
+/// call's own error is the honest one to surface.
+async fn ensure_spa_viewer(state: &Arc<KbHandles>, id: &str) {
+    let _ = call(
+        state,
+        &RunnerRequest::ViewerOpen {
+            id: id.to_string(),
+            viewer: SPA_VIEWER.to_string(),
+        },
+    )
+    .await;
 }
 
 /// Does `data` (a `RunnerReply::Ok.data` for `list`) contain `id`?
@@ -363,15 +400,18 @@ pub async fn launch(
             return bad_request("cwd must be an absolute path");
         }
     }
-    // kb-server supplies the runner-shaped defaults; T10 owns the
-    // launch profiles (argv/env) and may ignore them.
+    // `cols`/`rows` pass through as `None` when the client omits them,
+    // so the runner's own defaults (120x40) apply — the relay must not
+    // fabricate its own size. `cwd` defaults to `/` (the runner
+    // requires a value); T10 owns the launch profiles (argv/env) and
+    // may ignore them.
     let req = RunnerRequest::Launch {
         harness,
         argv: None,
         resume_sid: parsed.resume_sid.clone(),
         cwd: parsed.cwd.clone().unwrap_or_else(|| "/".to_string()),
-        cols: parsed.cols.unwrap_or(80),
-        rows: parsed.rows.unwrap_or(24),
+        cols: parsed.cols,
+        rows: parsed.rows,
         env: None,
         exit_keys: None,
     };
@@ -394,6 +434,9 @@ pub async fn launch(
             if new_id.is_empty() {
                 return runner_err("bad-reply", "runner launch confirm has no id");
             }
+            // Last resort: the runner's own built-in default (120x40),
+            // reached only when a confirm omits its dims and the body
+            // sent none (the relay never fabricates its own size).
             let dim = |key: &str, fallback: Option<u16>, default: u16| -> u16 {
                 data.get(key)
                     .and_then(|v| v.as_u64())
@@ -405,8 +448,8 @@ pub async fn launch(
                 &state,
                 &new_id,
                 &parsed.harness,
-                dim("cols", parsed.cols, 80),
-                dim("rows", parsed.rows, 24),
+                dim("cols", parsed.cols, 120),
+                dim("rows", parsed.rows, 40),
             );
             no_store((StatusCode::CREATED, axum::Json(data)).into_response())
         }
@@ -527,9 +570,10 @@ pub async fn paste(
     if parsed.text.len() > MAX_PASTE_TEXT_BYTES {
         return payload_too_large("paste text over 32 KiB");
     }
+    ensure_spa_viewer(&state, &id).await;
     let req = RunnerRequest::Paste {
         id: id.clone(),
-        viewer: "spa".to_string(),
+        viewer: SPA_VIEWER.to_string(),
         text: parsed.text,
     };
     match call(&state, &req).await {
@@ -578,11 +622,15 @@ pub async fn enter(
         ));
     }
     let unbound = term_gate.bound.is_none();
+    ensure_spa_viewer(&state, &id).await;
+    // The SPA's Enter is always the composer Enter: after a
+    // paste-only paste (`/` or `@`) the runner refuses with
+    // `paste-only` (409) and nothing is written.
     let req = RunnerRequest::Enter {
         id: id.clone(),
-        viewer: "spa".to_string(),
+        viewer: SPA_VIEWER.to_string(),
         blocked: false,
-        from_composer: false,
+        from_composer: true,
     };
     match call(&state, &req).await {
         Err(e) => e,
@@ -640,9 +688,10 @@ pub async fn keys(
     {
         return bad_request("keys must be 1..=32 entries of [A-Za-z0-9_-] up to 16 bytes");
     }
+    ensure_spa_viewer(&state, &id).await;
     let req = RunnerRequest::Keys {
         id: id.clone(),
-        viewer: "spa".to_string(),
+        viewer: SPA_VIEWER.to_string(),
         input: crate::terminal::wire::KeyInput::Named { named: parsed.keys },
     };
     match call(&state, &req).await {
@@ -676,23 +725,34 @@ pub async fn kill(
         id: id.clone(),
         grace_secs: None,
     };
-    match call(&state, &req).await {
-        Err(e) => e,
-        Ok(reply) => {
-            // T12: the runner confirmed the kill — `term.ended` (once
-            // per id; the relay's `exit`-frame path claims the same
-            // slot and loses gracefully).
-            if let RunnerReply::Ok { ref data } = reply {
-                let exit_code = data
-                    .get("exit_code")
-                    .and_then(|v| v.as_i64())
-                    // Out of range: skip the code, never wrap it.
-                    .and_then(|c| i32::try_from(c).ok());
-                crate::terminal::events::emit_ended(&state, &id, exit_code);
-            }
-            relay(reply)
-        }
+    let reply = match call(&state, &req).await {
+        Err(e) => return e,
+        Ok(reply) => reply,
+    };
+    if let RunnerReply::Ok { ref data } = reply {
+        // T12: the runner confirmed the kill: `term.ended` (once per
+        // id; the relay's `exit`-frame path claims the same slot and
+        // loses gracefully). Emitted before the viewer close round
+        // trip so a slow runner never delays the event.
+        let exit_code = data
+            .get("exit_code")
+            .and_then(|v| v.as_i64())
+            // Out of range: skip the code, never wrap it.
+            .and_then(|c| i32::try_from(c).ok());
+        crate::terminal::events::emit_ended(&state, &id, exit_code);
+        // Best-effort: the kill path closes viewers server-side,
+        // but an explicit close keeps a stale hidden client from
+        // outliving the session if the kill was partial.
+        let _ = call(
+            &state,
+            &RunnerRequest::ViewerClose {
+                id: id.clone(),
+                viewer: SPA_VIEWER.to_string(),
+            },
+        )
+        .await;
     }
+    relay(reply)
 }
 
 // ---------------------------------------------------------------- take-size
@@ -729,7 +789,8 @@ pub async fn take_size(
         cols: parsed.cols,
         rows: parsed.rows,
         owner: "kb-term".to_string(),
-        force: true,
+        // Never stomp a foreign owner: surface grid-owned (409).
+        force: false,
     };
     match call(&state, &req).await {
         Err(e) => e,
@@ -770,6 +831,128 @@ pub async fn history(
         return bad_request("invalid terminal id");
     }
     match call(&state, &RunnerRequest::History { id: id.clone() }).await {
+        Err(e) => e,
+        Ok(reply) => relay(reply),
+    }
+}
+
+// ------------------------------------------------- grid/release/resize/viewer
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EmptyBody {}
+
+pub async fn grid(
+    State(state): State<Arc<KbHandles>>,
+    Extension(identity): Extension<Identity>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+) -> Response<Body> {
+    if let Err(e) = gate(&state, &headers, &identity, false).await {
+        return e;
+    }
+    if !check_id(&id) {
+        return bad_request("invalid terminal id");
+    }
+    match call(&state, &RunnerRequest::Grid { id: id.clone() }).await {
+        Err(e) => e,
+        Ok(reply) => relay(reply),
+    }
+}
+
+pub async fn release_size(
+    State(state): State<Arc<KbHandles>>,
+    Extension(identity): Extension<Identity>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+    body: axum::body::Bytes,
+) -> Response<Body> {
+    if let Err(e) = gate(&state, &headers, &identity, true).await {
+        return e;
+    }
+    if !check_id(&id) {
+        return bad_request("invalid terminal id");
+    }
+    if body.len() > MAX_BODY_BYTES {
+        return payload_too_large("request body over 256 KiB");
+    }
+    if serde_json::from_slice::<EmptyBody>(&body).is_err() {
+        return bad_request("malformed release-size body");
+    }
+    // The relay's single grid owner: the SPA can always release the
+    // grid it took through `take-size` (same `"kb-term"` owner).
+    let req = RunnerRequest::ReleaseSize {
+        id: id.clone(),
+        owner: "kb-term".to_string(),
+    };
+    match call(&state, &req).await {
+        Err(e) => e,
+        Ok(reply) => relay(reply),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResizeBody {
+    cols: u16,
+    rows: u16,
+}
+
+pub async fn resize(
+    State(state): State<Arc<KbHandles>>,
+    Extension(identity): Extension<Identity>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+    body: axum::body::Bytes,
+) -> Response<Body> {
+    if let Err(e) = gate(&state, &headers, &identity, true).await {
+        return e;
+    }
+    if !check_id(&id) {
+        return bad_request("invalid terminal id");
+    }
+    if body.len() > MAX_BODY_BYTES {
+        return payload_too_large("request body over 256 KiB");
+    }
+    let parsed: ResizeBody = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return bad_request("malformed resize body"),
+    };
+    let req = RunnerRequest::Resize {
+        id: id.clone(),
+        cols: parsed.cols,
+        rows: parsed.rows,
+    };
+    match call(&state, &req).await {
+        Err(e) => e,
+        Ok(reply) => relay(reply),
+    }
+}
+
+pub async fn viewer_close(
+    State(state): State<Arc<KbHandles>>,
+    Extension(identity): Extension<Identity>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+    body: axum::body::Bytes,
+) -> Response<Body> {
+    if let Err(e) = gate(&state, &headers, &identity, true).await {
+        return e;
+    }
+    if !check_id(&id) {
+        return bad_request("invalid terminal id");
+    }
+    if body.len() > MAX_BODY_BYTES {
+        return payload_too_large("request body over 256 KiB");
+    }
+    if serde_json::from_slice::<EmptyBody>(&body).is_err() {
+        return bad_request("malformed viewer-close body");
+    }
+    let req = RunnerRequest::ViewerClose {
+        id: id.clone(),
+        viewer: SPA_VIEWER.to_string(),
+    };
+    match call(&state, &req).await {
         Err(e) => e,
         Ok(reply) => relay(reply),
     }
@@ -846,5 +1029,70 @@ mod tests {
         assert!(is_valid_term_id(&"a".repeat(32)));
         assert!(!is_valid_term_id(&"a".repeat(33)));
         assert!(!is_valid_term_id("Bad"));
+    }
+
+    fn status(code: &str) -> u16 {
+        runner_err(code, "synthetic message").status().as_u16()
+    }
+
+    /// Every dash code `RunnerError::code()` can emit keeps its
+    /// natural HTTP status; the underscore forms the old mapping
+    /// matched (and the fake runner used to send) now fall to 502,
+    /// which is the observable proof the dead path is gone.
+    #[test]
+    fn runner_err_maps_every_dash_code() {
+        for code in [
+            "invalid-id",
+            "invalid-harness",
+            "bad-request",
+            "bad-viewer",
+            "bad-input",
+            "bad-key",
+            "bad-text",
+            "bad-size",
+        ] {
+            assert_eq!(status(code), 400, "{code}");
+        }
+        for code in ["not-found", "no-session", "no-viewer"] {
+            assert_eq!(status(code), 404, "{code}");
+        }
+        assert_eq!(status("too-large"), 413);
+        for code in [
+            "blocked",
+            "grid-owned",
+            "paste-only",
+            "busy",
+            "busy-pty",
+            "too-many-viewers",
+        ] {
+            assert_eq!(status(code), 409, "{code}");
+        }
+        assert_eq!(status("multi-line-refused"), 422);
+        assert_eq!(status("tap-timeout"), 503);
+        assert_eq!(status("tmux-version"), 503);
+        assert_eq!(status("tmux-failed"), 502);
+        assert_eq!(status("internal"), 502);
+        // The underscore forms the dead mapping matched are NO LONGER
+        // special: they must not accidentally keep their old status.
+        assert_eq!(status("not_found"), 502);
+        assert_eq!(status("grid_owned"), 502);
+        assert_eq!(status("multi_line_refused"), 502);
+        assert_eq!(status("bad_request"), 502);
+        assert_eq!(status("weird_code"), 502);
+    }
+
+    /// R6: the relay shares the single kb-side validator, so an id inside
+    /// 1..=32 that the runner will reject (`invalid-id`) or not know
+    /// (`not-found`) is a mapped 4xx, never a 502.
+    #[test]
+    fn ids_in_the_kb_grammar_unknown_to_the_runner_map_to_4xx() {
+        for ok in ["a", "abc", "abcd1234", &"a".repeat(32)] {
+            assert!(is_valid_term_id(ok), "{ok:?} is inside the kb grammar");
+        }
+        for bad in ["", &"a".repeat(33), "ABCD1234", "abcd-123", "a b"] {
+            assert!(!is_valid_term_id(bad), "{bad:?} must be rejected");
+        }
+        assert_eq!(status("invalid-id"), 400);
+        assert_eq!(status("not-found"), 404);
     }
 }
