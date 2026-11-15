@@ -168,6 +168,25 @@ fn spawn_stream_fake_mode(
     close_after: bool,
     stream_err: Option<&'static str>,
 ) -> StreamFake {
+    spawn_stream_fake_busy(dir, replies, script, close_after, stream_err, 0)
+}
+
+/// The tap's join-deferred frame, as the runner splices it.
+const BUSY_FRAME: &[u8] =
+    br#"{"t":"error","code":"busy","msg":"join deferred: frame in progress"}"#;
+
+/// Like [`spawn_stream_fake_mode`], but the first `busy_opens` stream
+/// opens answer ok, then send the tap's `error{busy}` text frame and
+/// close (the tap's deferred-join contract); later opens play `script`
+/// as usual. `usize::MAX` makes every open busy.
+fn spawn_stream_fake_busy(
+    dir: &std::path::Path,
+    replies: HashMap<String, String>,
+    script: Vec<Vec<u8>>,
+    close_after: bool,
+    stream_err: Option<&'static str>,
+    busy_opens: usize,
+) -> StreamFake {
     let sock = dir.join("runner.sock");
     let listener = tokio::net::UnixListener::bind(&sock).unwrap();
     let conns = Arc::new(AtomicUsize::new(0));
@@ -217,6 +236,10 @@ fn spawn_stream_fake_mode(
                         "{{\"status\":\"ok\",\"data\":{{\"viewer\":\"ws-fake{viewer_no:04}\"}}}}\n"
                     );
                     if stream.write_all(ok.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    if viewer_no < busy_opens {
+                        let _ = stream.write_all(&s2c_envelope(ENV_TEXT, BUSY_FRAME)).await;
                         return;
                     }
                     for env in script3.iter() {
@@ -1943,5 +1966,127 @@ async fn term_state_live_on_sizechanged() {
     assert!(
         events.iter().all(|e| e.event != "term.created"),
         "no launch means no created: {events:?}"
+    );
+}
+
+// --------------------------------------------------------------------------
+// FXBUSY: a join the tap deferred with error{busy} is retried upstream.
+// --------------------------------------------------------------------------
+
+#[tokio::test]
+async fn ws_busy_join_is_retried_and_the_browser_never_sees_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut replies = HashMap::new();
+    replies.insert("list".to_string(), list_reply(&[TERM_ID]));
+    let script = vec![
+        s2c_envelope(ENV_TEXT, br#"{"t":"hello","proto":"kb-term/1"}"#),
+        s2c_envelope(ENV_BINARY, &binary_frame(0, b"seed")),
+        s2c_envelope(ENV_TEXT, br#"{"t":"exit","seq":1,"code":0,"offset":4}"#),
+    ];
+    // The first TWO opens are deferred busy; the third joins.
+    let fake = spawn_stream_fake_busy(tmp.path(), replies, script, true, None, 2);
+    let (tmp, addr) = boot(enabled_terminal(), &fake).await;
+    let _ = tmp;
+    let ticket = mint_ticket(addr, TERM_ID, None).await;
+    let mut ws = match ws_connect(
+        addr,
+        TERM_ID,
+        &ticket,
+        Some("0"),
+        &origin_header(addr),
+        None,
+    )
+    .await
+    {
+        WsConnect::Ok(w) => w,
+        other => panic!("connect must succeed, got {other:?}"),
+    };
+    let (frames, close) = ws_read_n(&mut ws, 3).await;
+    assert_eq!(
+        frames.len(),
+        3,
+        "hello, seed, exit and nothing else: {frames:?}"
+    );
+    match &frames[0] {
+        Message::Text(t) => assert_eq!(t.as_str(), r#"{"t":"hello","proto":"kb-term/1"}"#),
+        other => panic!("the first browser frame must be hello, not busy: {other:?}"),
+    }
+    match &frames[1] {
+        Message::Binary(b) => assert_eq!(b.as_ref(), &binary_frame(0, b"seed")[..]),
+        other => panic!("frame 1 must be the offset-0 seed: {other:?}"),
+    }
+    for m in &frames {
+        if let Message::Text(t) = m {
+            assert!(
+                !t.contains("busy"),
+                "no busy frame may reach the browser: {t}"
+            );
+        }
+    }
+    assert_eq!(
+        close,
+        Some((1000, "normal".to_string())),
+        "exit flushed, then a normal close"
+    );
+    let reqs = fake.stream_reqs.lock().unwrap().clone();
+    assert_eq!(reqs.len(), 3, "two busy opens + the joined one: {reqs:?}");
+    for r in &reqs {
+        assert_eq!(r.get("id"), Some(&serde_json::json!(TERM_ID)));
+        assert_eq!(
+            r.get("from"),
+            Some(&serde_json::json!(0)),
+            "every retry re-sends the same ?from: {r}"
+        );
+    }
+    drop(ws);
+    let events = sse_term_events(addr, Duration::from_millis(1500)).await;
+    assert_eq!(
+        events.iter().filter(|e| e.event == "term.ended").count(),
+        1,
+        "the retries add no duplicate term.ended: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|e| e.event == "term.ended" || e.event == "term.state"),
+        "no other term event comes from a retried join: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn ws_always_busy_exhausts_the_retries_then_closes_1011() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut replies = HashMap::new();
+    replies.insert("list".to_string(), list_reply(&[TERM_ID]));
+    let fake = spawn_stream_fake_busy(tmp.path(), replies, vec![], true, None, usize::MAX);
+    let (tmp, addr) = boot(enabled_terminal(), &fake).await;
+    let _ = tmp;
+    let ticket = mint_ticket(addr, TERM_ID, None).await;
+    let mut ws = match ws_connect(addr, TERM_ID, &ticket, None, &origin_header(addr), None).await {
+        WsConnect::Ok(w) => w,
+        other => panic!("connect must succeed, got {other:?}"),
+    };
+    let (frames, close) = ws_read_n(&mut ws, 1).await;
+    assert_eq!(
+        frames.len(),
+        1,
+        "exactly one busy frame, after the budget: {frames:?}"
+    );
+    match &frames[0] {
+        Message::Text(t) => assert!(
+            t.contains(r#""code":"busy""#),
+            "the exhausted case surfaces the tap's busy frame: {t}"
+        ),
+        other => panic!("expected the busy text frame, got {other:?}"),
+    }
+    assert_eq!(
+        close,
+        Some((1011, "upstream closed".to_string())),
+        "exhausted retries close like any upstream end"
+    );
+    assert_eq!(
+        fake.stream_reqs.lock().unwrap().len(),
+        4,
+        "the budget is BUSY_JOIN_ATTEMPTS opens in total"
     );
 }

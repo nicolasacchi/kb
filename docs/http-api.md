@@ -1567,7 +1567,20 @@ GET    /api/terms/{id}/ws                    SPA-only terminal byte
                                             keep their 8-byte BE offset
                                             header; text frames pass
                                             through verbatim, in order);
-                                            it closes 1012 on daemon
+                                            a join the tap defers with
+                                            `error{busy}` before its
+                                            first binary frame is
+                                            retried by the relay (up to
+                                            4 upstream opens, 150 ms
+                                            doubling backoff, same
+                                            `from`) and the busy frame
+                                            is not forwarded; when the
+                                            retries are spent that
+                                            frame is forwarded once and
+                                            the socket closes 1011. A
+                                            busy after the first binary
+                                            frame passes through.
+                                            It closes 1012 on daemon
                                             restart, 1013 for a slow
                                             consumer, 1011 when the
                                             upstream ends (1000 after
