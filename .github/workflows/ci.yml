@@ -60,6 +60,7 @@ permissions: {}
 #     code-e2e-fast  code-e2e         —
 #     embedder       embedder-test    embedder-lint
 #     term-int       term-int         —
+#     term-e2e-fast  term-e2e         —   (T25; fast kb-server + kb-term)
 #
 # `term-int` as a rust-cache family holds only the small kb-term crate
 # graph; the pinned tmux binary itself is cached via `actions/cache` —
@@ -1809,6 +1810,153 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+  term-e2e:
+    permissions:
+      contents: read
+    name: term-e2e (real tmux + tap + kb-termd + kb-server + SPA)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # No `needs:` (T25). The terminal stack end to end: the pinned tmux 3.7c,
+    # the compiled bun tap, kb-termd (direct supervisor), three kb-server
+    # processes and the real SPA in Chromium, driven by synthetic fake
+    # harnesses (tests/e2e/spa-terminal-stack.spec.ts, KB_E2E_TERMINAL=1).
+    # CI-only and synthetic-only: no real harness, session or image is
+    # involved, and nothing here touches the host's tmux, home or runtime dir.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history + tags: the kb-server binary carries a version stamp
+          # (see the `e2e` job's note on crates/kb-buildstamp).
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Free disk space (drop preinstalled SDKs)
+        run: |
+          for d in /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                   /opt/hostedtoolcache/CodeQL /usr/local/.ghcup \
+                   /usr/local/share/boost; do
+            ( sudo rm -rf "$d" || true ) &
+          done
+          wait
+          df -h /
+
+      - name: Install Rust toolchain
+        uses: ./.github/actions/setup-rust
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        with:
+          shared-key: term-e2e-fast
+          # Only main writes the cache — see the CACHING note at the top.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install protoc (lancedb transitive dep)
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev
+
+      - name: Build kb-server + kb-termd (fast profile)
+        # `-p kb-term` is the package that owns the kb-termd bin. Neither
+        # package links ONNX Runtime (invariant #26).
+        run: cargo build --locked --profile fast -p kb-server -p kb-term
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.4"
+
+      - name: Bun matches the pin
+        run: test "$(bun --version)" = "$(cat crates/kb-term/tap/.bun-version)"
+
+      - name: Compile the real tap
+        run: |
+          cd crates/kb-term/tap
+          bun install
+          bun build --compile src/main.ts --outfile "$RUNNER_TEMP/kb-tap"
+          echo "KB_TAP_BIN=$RUNNER_TEMP/kb-tap" >> "$GITHUB_ENV"
+
+      - name: Runner image id (tmux cache key)
+        id: img
+        run: |
+          echo "key=${ImageOS}-${ImageVersion}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the pinned tmux binary
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/tmux-3.7c
+          # Same key shape as the term-int job: the sha256 pin lives inside
+          # scripts/ci/build-tmux.sh and the image id covers the runner's libs.
+          key: tmux-3.7c-${{ hashFiles('scripts/ci/build-tmux.sh') }}-${{ runner.os }}-${{ steps.img.outputs.key }}
+
+      - name: Build the pinned tmux (or reuse the cache)
+        # Exports KB_TMUX_BIN through GITHUB_ENV.
+        run: scripts/ci/build-tmux.sh
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+
+      - name: Build SPA bundle
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Playwright deps
+        working-directory: tests/e2e
+        run: npm ci
+
+      - name: Resolve Playwright version (browser-cache key)
+        id: playwright-version
+        working-directory: tests/e2e
+        run: |
+          echo "version=$(node -p "require('./package-lock.json').packages['node_modules/@playwright/test'].version")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+
+      - name: Install Chromium
+        # --with-deps is load-bearing on a hosted runner (see the e2e job).
+        working-directory: tests/e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the terminal stack specs
+        env:
+          KB_E2E_TERMINAL: "1"
+          KB_WITNESS_DIR: ${{ runner.temp }}/witness
+        working-directory: tests/e2e
+        run: |
+          mkdir -p "$KB_WITNESS_DIR"
+          set -o pipefail; npx playwright test --project=terminal-stack --project=terminal-stack-dpr2 2>&1 | tee playwright-output.log
+
+      - name: Witness (Playwright JSON report -> floor + zero failures)
+        if: ${{ !cancelled() }}
+        env:
+          KB_WITNESS_DIR: ${{ runner.temp }}/witness
+        run: python3 scripts/ci/witness.py playwright "$KB_WITNESS_DIR/pw-term-e2e.json" --lane term-e2e
+
+      - name: Upload witness report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: witness-term-e2e
+          path: ${{ runner.temp }}/witness
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Upload run output
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: term-e2e-artifacts
+          path: |
+            tests/e2e/playwright-output.log
+            tests/e2e/test-results
+          retention-days: 14
+          if-no-files-found: warn
+
   supply-chain:
     permissions:
       contents: read
@@ -2041,6 +2189,7 @@ jobs:
       - hook-omp
       - term-tap
       - term-int
+      - term-e2e
       - supply-chain
       - spa-image
     runs-on: ubuntu-latest
