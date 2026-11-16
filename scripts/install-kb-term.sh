@@ -218,6 +218,32 @@ check_no_tokens() {
 }
 
 # ---- main -------------------------------------------------------------------
+# Print (never write) the kb-termd.service drop-in step, pre-filled from the
+# current shell: KB_SESSIONS_DIR and the dirs of any harness on PATH.
+print_env_dropin() {
+  dirs=""
+  for bin in claude codex opencode grok kimi omp; do
+    p="$(command -v "$bin" 2>/dev/null || true)"
+    case "$p" in /*) ;; *) continue ;; esac
+    d="$(dirname "$p")"
+    case "$d" in /usr/bin|/usr/local/bin) continue ;; esac
+    case ":${dirs}:" in *":${d}:"*) continue ;; esac
+    dirs="${dirs:+${dirs}:}${d}"
+  done
+  env_path="${dirs:+${dirs}:}/usr/local/bin:/usr/bin"
+  sessions_dir="${KB_SESSIONS_DIR:-/path/to/the/sessions/corpus}"
+  say "       mkdir -p ~/.config/systemd/user/kb-termd.service.d"
+  say "       cat > ~/.config/systemd/user/kb-termd.service.d/env.conf <<'EOF'"
+  say "       [Service]"
+  say "       Environment=PATH=${env_path}"
+  say "       Environment=KB_SESSIONS_DIR=${sessions_dir}"
+  say "EOF"
+  say "       systemctl --user daemon-reload && systemctl --user restart kb-termd.service"
+  if [ -z "${KB_SESSIONS_DIR:-}" ]; then
+    say "     (KB_SESSIONS_DIR is not set in this shell: replace the placeholder with the [kb.sessions] source path)"
+  fi
+}
+
 main() {
   say "kb-term installer"
 
@@ -378,9 +404,12 @@ main() {
   say "Done. The operator (you) runs these host steps, in order:"
   say "  1. sudo install -m 0644 ${prefix}/share/kb-term/tmpfiles.d/kb-term.conf /etc/tmpfiles.d/kb-term.conf && sudo systemd-tmpfiles --create /etc/tmpfiles.d/kb-term.conf"
   say "  2. systemctl --user enable --now kb-termd.service"
-  say "  3. loginctl enable-linger \"\$(id -un)\"   # without linger the user manager and its sessions end at logout"
-  say "  4. kb-term doctor"
-  say "  5. add a runner dir bind mount to the kb container:"
+  say "  3. give the runner its environment (panes inherit kb-termd's, which under systemd has a minimal PATH and no KB_SESSIONS_DIR;"
+  say "     without it harnesses in per-user dirs exit 127 and the capture/beat hooks do nothing). Review, then run:"
+  print_env_dropin
+  say "  4. loginctl enable-linger \"\$(id -un)\"   # without linger the user manager and its sessions end at logout"
+  say "  5. kb-term doctor"
+  say "  6. add a runner dir bind mount to the kb container:"
   say "       - /run/kb-term/runner:/run/kb-term/runner"
   say "     then set [terminal] enabled = true in the host copy of kb.toml"
   say ""
