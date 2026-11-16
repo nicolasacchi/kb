@@ -10,6 +10,7 @@
 //! (viewer-open + the `kb-term/1` frames).
 
 pub mod fallback;
+pub mod graphics;
 pub mod label;
 mod tables;
 pub mod tty;
