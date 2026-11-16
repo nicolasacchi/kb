@@ -1242,6 +1242,14 @@ GET  /api/sessions/{session_id}/live        W7 (R15/LF-3b) — a loopback-only,
                                             disk, zero daemon required — the
                                             SAME `resolve_live_transcript`
                                             resolver this route uses).
+                                            Inline base64 images are
+                                            replaced by `{"type":"image",
+                                            "source":{"type":"ref",...}}`
+                                            (sha256 of the decoded bytes
+                                            plus its length) before a delta
+                                            is built, in raw and
+                                            interpreted mode alike; offsets
+                                            stay source-file byte offsets.
 POST /api/sessions/beat                     LSC-2/3 (live-sessions cockpit
                                             §5/§6) — adapter push intake: one
                                             lifecycle EVENT (`start|prompt|
@@ -1669,6 +1677,13 @@ GET    /api/terms/media/{sha256}            A stored terminal picture
                                             Policy: default-src 'none';
                                             sandbox`. Unknown hash 404;
                                             runner down or unreadable 502.
+                                            Also serves omp blobs the
+                                            runner finds by content hash;
+                                            the response carries `ETag:
+                                            "<sha256>"` and a matching
+                                            `If-None-Match` is a 304 once
+                                            the gate and the hash check
+                                            have passed.
 GET  /api/sessions/by-artifact/{kb}/{aid}   W2/R11 — the canonical
                                             artifact→session join
                                             (`SessionsGetByArtifactIds`, #11):

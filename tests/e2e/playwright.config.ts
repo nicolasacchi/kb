@@ -19,6 +19,9 @@ const isCI = !!process.env.CI;
 const TERMINAL_STACK = process.env.KB_E2E_TERMINAL === "1";
 const STACK_SPEC = /spa-terminal-stack\.spec\.ts/;
 
+// T17 - the phone terminal spec runs on the phone projects only.
+const PHONE_SPEC = /spa-terminal-phone\.spec\.ts/;
+
 // v0.44 F1 -- when KB_WITNESS_DIR is set (CI), ALSO write Playwright's JSON
 // report there. scripts/ci/witness.py decides the lane from that file
 // (unexpected == 0 and executed >= the ci/test-floors.toml floor), not from
@@ -99,7 +102,7 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      testIgnore: STACK_SPEC,
+      testIgnore: [STACK_SPEC, PHONE_SPEC],
       // The T15 picture specs run only in the chromium-gfx-dpr* projects below.
       grepInvert: /@gfx/,
       use: { ...devices["Desktop Chrome"] },
@@ -113,7 +116,7 @@ export default defineConfig({
     // hence viewport:null + an explicit window size and no deviceScaleFactor.
     {
       name: "chromium-gfx-dpr1",
-      testIgnore: STACK_SPEC,
+      testIgnore: [STACK_SPEC, PHONE_SPEC],
       grep: /@gfx-dpr1/,
       use: {
         ...devices["Desktop Chrome"],
@@ -122,7 +125,7 @@ export default defineConfig({
     },
     {
       name: "chromium-gfx-dpr2",
-      testIgnore: STACK_SPEC,
+      testIgnore: [STACK_SPEC, PHONE_SPEC],
       grep: /@gfx-dpr2/,
       use: {
         ...devices["Desktop Chrome"],
@@ -133,7 +136,7 @@ export default defineConfig({
     },
     {
       name: "chromium-gfx-dpr3",
-      testIgnore: STACK_SPEC,
+      testIgnore: [STACK_SPEC, PHONE_SPEC],
       grep: /@gfx-dpr3/,
       use: {
         ...devices["Desktop Chrome"],
@@ -156,7 +159,7 @@ export default defineConfig({
     // below, and those must not run here.
     {
       name: "firefox",
-      testIgnore: STACK_SPEC,
+      testIgnore: [STACK_SPEC, PHONE_SPEC],
       grep: /@selection/,
       use: {
         ...devices["Desktop Firefox"],
@@ -203,5 +206,30 @@ export default defineConfig({
           },
         ]
       : []),
+    // T17 - the phone terminal view. Only spa-terminal-phone.spec.ts runs on
+    // these three projects (and the two projects above ignore that file, so
+    // their counts do not move). Touch is on; the Chromium ones keep the
+    // shared launch args, WebKit must override them like firefox does (the
+    // host-resolver switch is Chromium-only).
+    {
+      name: "chromium-pixel7",
+      testMatch: PHONE_SPEC,
+      use: { ...devices["Pixel 7"], hasTouch: true },
+    },
+    {
+      name: "chromium-iphone15",
+      testMatch: PHONE_SPEC,
+      use: (() => {
+        // An iPhone-shaped viewport and UA on Chromium: drop the WebKit default.
+        const { defaultBrowserType: _ignored, ...iphone } = devices["iPhone 15"];
+        void _ignored;
+        return { ...iphone, browserName: "chromium" as const, hasTouch: true };
+      })(),
+    },
+    {
+      name: "webkit-iphone15",
+      testMatch: PHONE_SPEC,
+      use: { ...devices["iPhone 15"], hasTouch: true, launchOptions: {} },
+    },
   ],
 });

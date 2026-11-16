@@ -440,7 +440,66 @@ async fn png_served_with_nosniff_immutable_csp() {
         "default-src 'none'; sandbox"
     );
     assert_eq!(get("content-disposition"), "inline");
+    assert_eq!(get("etag"), format!("\"{}\"", sha('a')));
     assert_eq!(resp.bytes().await.unwrap().as_ref(), PNG);
+}
+
+#[tokio::test]
+async fn if_none_match_is_304_only_after_the_gate_and_validation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), one_png());
+    let (_t, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    let etag = format!("\"{}\"", sha('a'));
+    // Gate passed + valid hash + matching validator: 304, no body, and
+    // the runner is not asked again.
+    let resp = get_ok(&c, addr, &sha('a'))
+        .header("if-none-match", etag.as_str())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 304);
+    assert_eq!(resp.headers().get("etag").unwrap().to_str().unwrap(), etag);
+    assert!(resp.bytes().await.unwrap().is_empty());
+    assert_eq!(fake.conns.load(Ordering::SeqCst), 0);
+    // A non-matching validator is a normal 200.
+    let other = format!("\"{}\"", sha('b'));
+    let resp = get_ok(&c, addr, &sha('a'))
+        .header("if-none-match", other.as_str())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    // Without the intent header the validator buys nothing: 403, not 304.
+    let resp = c
+        .get(url(addr, &sha('a')))
+        .header("if-none-match", etag.as_str())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 403);
+    // A malformed key is a 400 even with a validator that "matches" it.
+    let resp = get_ok(&c, addr, "NOT-A-HASH")
+        .header("if-none-match", "*")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 400);
+}
+
+#[tokio::test]
+async fn if_none_match_on_a_disabled_tier_is_the_bodiless_404() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), one_png());
+    let (_t, addr) = boot(TerminalSection::default(), &fake, false).await;
+    let c = client();
+    let resp = get_ok(&c, addr, &sha('a'))
+        .header("if-none-match", "*")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 404);
+    assert!(resp.bytes().await.unwrap().is_empty());
 }
 
 #[tokio::test]
