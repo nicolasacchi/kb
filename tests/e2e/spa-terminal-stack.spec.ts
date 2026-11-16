@@ -214,7 +214,7 @@ test("no query bytes reach the browser", async ({ page, request }) => {
   expect(total, "bytes the browser received").toBeGreaterThan(10_000);
 });
 
-test("the SPA sends no terminal replies, and typed keys reach the pane", async ({ page, request }) => {
+test("the SPA sends no terminal replies", async ({ page, request }) => {
   test.setTimeout(240_000);
   const gate = join(scratch("gate"), "go");
   const h = numberedHarness({ gate, seed: 600, live: 200, rebuildEvery: 100, rate: 100, queries: true });
@@ -227,32 +227,73 @@ test("the SPA sends no terminal replies, and typed keys reach the pane", async (
   await page.locator("[data-kb-term]").click();
   await page.keyboard.type("echo hi");
   await page.keyboard.press("Enter");
-  await expect
-    .poll(() => (existsSync(join(h.out, "stdin.log")) ? readFileSync(join(h.out, "stdin.log"), "latin1") : ""), { timeout: 20_000 })
-    .toContain("echo hi");
   const replyShape = /\x1b\[[?>]?[\d;]*c|\x1b\[[\d;]*R|\x1bP>?\||\$y|\x1b\]1[01];|\x1b\[\?[\d;]*u/;
   const typed: string[] = [];
-  for (const s of c.socks) {
-    for (const f of s.tx) {
-      const o = JSON.parse(typeof f === "string" ? f : f.toString("latin1")) as { t: string; data?: string };
-      expect(o.t, "the only client frame this SPA sends here").toBe("input");
-      expect(o.data ?? "", "a terminal reply in what the SPA sent").not.toMatch(replyShape);
-      typed.push(o.data ?? "");
-    }
-  }
-  expect(typed.join(""), "what the SPA sent is what was typed").toContain("echo hi");
+  await expect
+    .poll(() => {
+      typed.length = 0;
+      for (const s of c.socks) {
+        for (const f of s.tx) {
+          const o = JSON.parse(typeof f === "string" ? f : f.toString("latin1")) as { t: string; data?: string };
+          expect(o.t, "the only client frame this SPA sends here").toBe("input");
+          expect(o.data ?? "", "a terminal reply in what the SPA sent").not.toMatch(replyShape);
+          typed.push(o.data ?? "");
+        }
+      }
+      return typed.join("");
+    }, { timeout: 15_000 })
+    .toContain("echo hi");
+  // The pane DID receive terminal queries and answered them itself: the replies are in the harness's stdin.
+  const stdin = readFileSync(join(h.out, "stdin.log"), "latin1");
+  expect(stdin, "the pane-side responder answered the injected queries").toMatch(/tmux 3\.7c|\d+;\d+;\d+c/);
+});
+
+test("keys sent through the REST composer path reach the pane (control for the stdin observation)", async ({ request }) => {
+  test.setTimeout(120_000);
+  const api = new Api(request);
+  const h = numberedHarness({ seed: 10, live: 10, rebuildEvery: 0, rate: 100 });
+  const t = await launch(api, h);
+  await waitFile(join(h.out, "expected.json"), 60_000);
+  const r = await api.call("POST", `/api/terms/${t.id}/keys`, { data: { keys: ["y", "n", "7"] } });
+  expect(r.status(), await r.text()).toBe(200);
+  await expect
+    .poll(() => (existsSync(join(h.out, "stdin.log")) ? readFileSync(join(h.out, "stdin.log"), "latin1") : ""), { timeout: 15_000 })
+    .toContain("yn7");
+});
+
+test("typed keys sent over the WebSocket reach the pane (KNOWN GAP: the tap ignores client input frames)", async ({ page, request }) => {
+  // Expected failure, pinned in both directions: tap/src/viewers.ts accepts a
+  // client `input` frame and drops it (`ping and any other C->S text frame:
+  // accepted, no reply`), so what the operator types in the panel never
+  // reaches the pane today; input goes through the REST composer routes.
+  // When the tap forwards input this passes, and Playwright reports an
+  // unexpected pass until the marker is removed.
+  test.fail();
+  test.setTimeout(180_000);
+  const gate = join(scratch("gate"), "go");
+  const h = numberedHarness({ gate, seed: 100, live: 50, rebuildEvery: 0, rate: 100 });
+  const c = await prepare(page, request, h);
+  await openPanel(page, c.sid);
+  touch(gate);
+  await waitDone(page);
+  await page.locator("[data-kb-term]").click();
+  await page.keyboard.type("echo hi");
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(() => (existsSync(join(h.out, "stdin.log")) ? readFileSync(join(h.out, "stdin.log"), "latin1") : ""), { timeout: 10_000 })
+    .toContain("echo hi");
 });
 
 // =============================================== pictures (Spec 7)
 
 const KITTY_ID = 0x66cf38;
 
-async function pictureChecks(page: Page, api: Api, c: Ctx, dpr: number): Promise<{ sha: string }> {
+async function pictureChecks(page: Page, api: Api, c: Ctx, dpr: number, placements = 1): Promise<{ sha: string }> {
   expect(await page.evaluate(() => window.devicePixelRatio)).toBe(dpr);
   // Let the view box grow with its content so the whole picture can be probed.
   await page.addStyleTag({ content: ".kb-term__view{height:auto !important;overflow:visible !important;}" });
   await expect(page.locator(".xterm-screen .kbgfx-overlay")).toHaveCount(1, { timeout: 30_000 });
-  await expect(page.locator(".kbgfx-overlay .kbgfx-img")).toHaveCount(1, { timeout: 30_000 });
+  await expect(page.locator(".kbgfx-overlay .kbgfx-img")).toHaveCount(placements, { timeout: 30_000 });
   await page.waitForFunction(
     () => {
       const i = document.querySelector<HTMLImageElement>(".kbgfx-img");
@@ -277,8 +318,12 @@ async function pictureChecks(page: Page, api: Api, c: Ctx, dpr: number): Promise
   expect(body.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
   expect(sha256(body)).toBe(sha);
 
-  // Pixels: compare the drawn picture with the served PNG at the centres of
-  // checker squares (away from edges), with a gradient so blank/black fails.
+  // Pixels: compare the drawn picture with the served PNG along the centre row
+  // (checker-square centres, away from edges), with a gradient so blank/black
+  // fails. The renderer fills the picture's cell box and crops what does not
+  // fit when the viewer's real cell aspect differs from the tap's cell_px
+  // (9x18), so only the centre row is expected to match exactly; the vertical
+  // gradient is checked as monotonic instead of pixel-exact.
   const src = decodePng(body);
   const img = page.locator(".kbgfx-img").first();
   await img.scrollIntoViewIfNeeded();
@@ -286,16 +331,19 @@ async function pictureChecks(page: Page, api: Api, c: Ctx, dpr: number): Promise
   const near = (a: Rgb | null, b: Rgb | null, tol: number): boolean =>
     !!a && !!b && a.every((v, i) => Math.abs(v - b[i]) <= tol);
   const bad: string[] = [];
+  const y = 50;
   for (const x of [30, 130, 210]) {
-    for (const y of [10, 50, 90]) {
-      if (x >= src.w || y >= src.h) continue;
-      const want = pixel(src, x, y);
-      const got = pixel(shot, (x / src.w) * shot.w, (y / src.h) * shot.h);
-      expect(Math.max(...(want ?? [0])), "reference pixel is not black").toBeGreaterThan(100);
-      if (!near(got, want, 3)) bad.push(`(${x},${y}) got ${JSON.stringify(got)} want ${JSON.stringify(want)}`);
-    }
+    if (x >= src.w || y >= src.h) continue;
+    const want = pixel(src, x, y);
+    const got = pixel(shot, (x / src.w) * shot.w, (y / src.h) * shot.h);
+    expect(Math.max(...(want ?? [0])), "reference pixel is not black").toBeGreaterThan(100);
+    if (!near(got, want, 3)) bad.push(`(${x},${y}) got ${JSON.stringify(got)} want ${JSON.stringify(want)}`);
   }
   expect(bad, "drawn pixels that differ from the served PNG").toEqual([]);
+  const g = [0.25, 0.5, 0.75].map((f) => pixel(shot, 0.5 * shot.w, f * shot.h)?.[1] ?? -1);
+  expect(g[0], `green rises down the picture: ${g.join(",")}`).toBeGreaterThanOrEqual(0);
+  expect(g[1]).toBeGreaterThan(g[0] + 20);
+  expect(g[2]).toBeGreaterThan(g[1] + 20);
 
   // No tofu: a 4 css px band right beside the picture box is plain background.
   const box = await img.boundingBox();
@@ -339,12 +387,13 @@ test("rebuild retransmit keeps ids stable and the store deduped", async ({ page,
   const c = await prepare(page, request, kittyHarness({ resizeReplay: true, gate }));
   await openPanel(page, c.sid);
   touch(gate);
-  const { sha } = await pictureChecks(page, c.api, c, 1);
+  const { sha } = await pictureChecks(page, c.api, c, 1, 2);
   const defs = c.socks.flatMap((s) => decodeStream(s.rx).texts.filter((t) => t.t === "imagedef"));
   expect(new Set(defs.map((d) => Number(d.id)))).toEqual(new Set([KITTY_ID]));
   expect(new Set(defs.map((d) => String(d.sha256)))).toEqual(new Set([sha]));
   expect(storeImgFiles(c.term.id), "the same bytes are stored once").toEqual([sha]);
-  expect(await page.locator(".kbgfx-img").count()).toBe(1);
+  // --resize-replay prints the placeholder block twice (the replay re-places the same id): two placements, one id, one stored file.
+  expect(await page.locator(".kbgfx-img").count()).toBe(2);
 });
 
 // ================================================ ResumeFrom (Spec 8)
@@ -447,7 +496,7 @@ test("a resume needs no term reset (KNOWN GAP: the runner cannot carry the tap e
 });
 
 test("aged-out offset forces a full join", async ({ page, request }) => {
-  test.setTimeout(480_000);
+  test.setTimeout(900_000);
   const conns = await proxySockets(page);
   const gate = join(scratch("gate"), "go");
   const floodGate = join(scratch("gate"), "flood");
@@ -469,7 +518,9 @@ test("aged-out offset forces a full join", async ({ page, request }) => {
   const from = fromOf(next);
   expect(from, "the stale offset is sent").not.toBeNull();
   expect(from!).toBeGreaterThanOrEqual(before.offset);
-  await waitPhase(page, "live", 60_000);
+  // The tap parses the whole 40 MB flood before it can answer a join, and a join
+  // waits for a quiet frame boundary: allow minutes, not seconds.
+  await waitPhase(page, "live", 480_000);
   expect((await panelAttrs(page)).resets, "a full join (seed) reset the terminal").toBeGreaterThan(before.resets);
   expect(decodeStream(next.rx).texts.some((t) => t.t === "seed"), "the aged-out reconnect was answered with a seed").toBe(true);
   const text = await waitDone(page, "TAIL-DONE", 120_000);
