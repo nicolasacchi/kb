@@ -941,7 +941,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn close_after_a_deliver_cancelled_mid_open_leaves_no_hidden_client() {
+    async fn close_after_an_open_cancelled_mid_persist_leaves_no_hidden_client() {
         let (runner, _out, _ready, dir) = fake_tmux_runner();
         let id = "abcd1234";
         let viewer = "ws-cccc3333dd";
@@ -962,10 +962,12 @@ mod tests {
         let mut sink = HiddenInput::new(&runner, id, viewer);
         let cancelled = tokio::time::timeout(
             std::time::Duration::from_millis(400),
-            sink.deliver(b"x".to_vec()),
+            // The future `HiddenInput::deliver` awaits for a first input;
+            // dropped mid-await exactly as the splice's `select!` does.
+            runner.viewer_open(id, viewer, 80, 24),
         )
         .await;
-        assert!(cancelled.is_err(), "deliver was cancelled mid-open");
+        assert!(cancelled.is_err(), "the open was cancelled mid-persist");
         assert!(
             runner.has_viewer(id, viewer).await,
             "precondition: the cancelled open left its viewer registered"
