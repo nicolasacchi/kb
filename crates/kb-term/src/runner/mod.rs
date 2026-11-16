@@ -211,6 +211,24 @@ impl Drop for IdLock {
 
 /// The runner. Generic over the supervisor so systemd and direct modes
 /// compile without trait-object indirection on the async path.
+type StreamSlots = std::sync::Arc<std::sync::Mutex<std::collections::HashSet<(String, String)>>>;
+
+/// A stream's reserved viewer slot (FXSTREAM). Released on drop, so every
+/// exit path of the stream (error, cancel, normal end) frees it.
+#[derive(Debug)]
+pub struct StreamSlot {
+    slots: StreamSlots,
+    key: (String, String),
+}
+
+impl Drop for StreamSlot {
+    fn drop(&mut self) {
+        if let Ok(mut set) = self.slots.lock() {
+            set.remove(&self.key);
+        }
+    }
+}
+
 pub struct Runner<S: Supervisor> {
     pub cfg: RunnerConfig,
     pub tmux: RealTmux,
@@ -220,6 +238,11 @@ pub struct Runner<S: Supervisor> {
     /// holds an entry only while an [`IdLock`] for it exists.
     locks: LockMap,
     viewers: std::sync::Arc<Mutex<HashMap<(String, String), Viewer>>>,
+    /// Stream slots reserved at stream OPEN (FXSTREAM): `(session,
+    /// viewer id)` pairs counted against `max_viewers_per_session` from
+    /// the moment a `stream` is admitted until it ends, whether or not
+    /// its lazily-opened hidden client exists yet.
+    stream_slots: StreamSlots,
     paste_only: Mutex<HashMap<String, bool>>,
     buffer_seqs: Mutex<HashMap<String, u64>>,
     /// Peer-uid accepted by the runner socket (this process's uid).
@@ -243,6 +266,7 @@ impl Runner<DirectSupervisor> {
             anchors: std::sync::Arc::new(Mutex::new(HashMap::new())),
             locks: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
             viewers: std::sync::Arc::new(Mutex::new(HashMap::new())),
+            stream_slots: StreamSlots::default(),
             paste_only: Mutex::new(HashMap::new()),
             buffer_seqs: Mutex::new(HashMap::new()),
             server_uid: unsafe { libc::getuid() },
@@ -261,6 +285,7 @@ impl Runner<SystemdSupervisor> {
             anchors: std::sync::Arc::new(Mutex::new(HashMap::new())),
             locks: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
             viewers: std::sync::Arc::new(Mutex::new(HashMap::new())),
+            stream_slots: StreamSlots::default(),
             paste_only: Mutex::new(HashMap::new()),
             buffer_seqs: Mutex::new(HashMap::new()),
             server_uid: unsafe { libc::getuid() },
@@ -281,6 +306,7 @@ impl<S: Supervisor> Runner<S> {
             anchors: std::sync::Arc::new(Mutex::new(HashMap::new())),
             locks: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
             viewers: std::sync::Arc::new(Mutex::new(HashMap::new())),
+            stream_slots: StreamSlots::default(),
             paste_only: Mutex::new(HashMap::new()),
             buffer_seqs: Mutex::new(HashMap::new()),
             server_uid: unsafe { libc::getuid() },
@@ -467,8 +493,60 @@ impl<S: Supervisor> Runner<S> {
 
     /// Whether session `id` is at the per-session viewer cap
     /// (`max_viewers_per_session`, shared by every kind of viewer).
+    /// Streams count from their reserved slot, not from their hidden
+    /// client (see [`Runner::reserve_stream_slot`]).
     pub async fn viewers_full(&self, id: &str) -> bool {
-        self.viewer_count(id).await >= self.cfg.max_viewers_per_session
+        self.slots_in_use(id, None).await >= self.cfg.max_viewers_per_session
+    }
+
+    /// Viewer slots in use for `id`: registered non-stream viewers plus
+    /// reserved stream slots, except `skip` (a stream's own slot).
+    async fn slots_in_use(&self, id: &str, skip: Option<&str>) -> usize {
+        let registered = {
+            let viewers = self.viewers.lock().await;
+            viewers
+                .iter()
+                .filter(|((sid, _), v)| sid == id && !v.stream)
+                .count()
+        };
+        let reserved = self
+            .stream_slots
+            .lock()
+            .map(|set| {
+                set.iter()
+                    .filter(|(sid, w)| sid == id && Some(w.as_str()) != skip)
+                    .count()
+            })
+            .unwrap_or(0);
+        registered + reserved
+    }
+
+    /// Reserve a slot for stream viewer `viewer` of session `id`, or
+    /// refuse with `too-many-viewers` when the session is full. Serialized
+    /// with `open_viewer` by the per-id lock, so two concurrent opens can
+    /// never both take the last slot.
+    pub async fn reserve_stream_slot(
+        &self,
+        id: &str,
+        viewer: &str,
+    ) -> Result<StreamSlot, RunnerError> {
+        let _lock = self.id_lock(id).await;
+        let _guard = _lock.lock().await;
+        if self.slots_in_use(id, None).await >= self.cfg.max_viewers_per_session {
+            return Err(RunnerError::TooManyViewers(format!(
+                "session {id} already has {} viewers",
+                self.cfg.max_viewers_per_session
+            )));
+        }
+        let key = (id.to_string(), viewer.to_string());
+        self.stream_slots
+            .lock()
+            .map_err(|_| RunnerError::Internal("stream slots poisoned".to_string()))?
+            .insert(key.clone());
+        Ok(StreamSlot {
+            slots: self.stream_slots.clone(),
+            key,
+        })
     }
 
     /// The std Mutex guard is never held across an `.await`. The per-id
@@ -498,7 +576,11 @@ impl<S: Supervisor> Runner<S> {
                 drop(lock);
                 return Ok(());
             }
-            if viewers.keys().filter(|(sid, _)| sid == id).count()
+            drop(viewers);
+            // A stream's own hidden client rides the slot it reserved at
+            // open (skipped here); everything else counts registered
+            // non-stream viewers plus every reserved stream slot.
+            if self.slots_in_use(id, stream.then_some(viewer)).await
                 >= self.cfg.max_viewers_per_session
             {
                 return Err(RunnerError::TooManyViewers(format!(
