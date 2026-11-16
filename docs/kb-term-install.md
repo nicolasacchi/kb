@@ -90,6 +90,34 @@ exact path, so a distro tmux upgrade cannot kill or mismatch any session.
    systemctl --user enable --now kb-termd.service
    ```
 
+   The unit carries an `[Install]` section, so `enable` makes it start on
+   boot; `kb-term doctor` WARNs (`termd_enabled`) when it is not enabled.
+
+   **Give the runner its environment.** Every pane gets an allowlisted copy
+   of the environment of `kb-termd`, and under systemd that is the user
+   manager's: a minimal `PATH` (usually `/usr/local/bin:/usr/bin`) and no
+   `KB_SESSIONS_DIR`. Without this step a harness installed in a per-user
+   directory (for example under `~/.bun/bin`) exits 127 in the pane, and
+   the capture and beat hooks exit immediately because `KB_SESSIONS_DIR`
+   is unset, so SPA-launched sessions get no beats, no terminal-to-session
+   binding and no capture. The installer prints this block pre-filled from
+   your current shell; it never writes it for you:
+
+   ```bash
+   mkdir -p ~/.config/systemd/user/kb-termd.service.d
+   cat > ~/.config/systemd/user/kb-termd.service.d/env.conf <<'EOF'
+   [Service]
+   Environment=PATH=/path/to/harness/bin:/usr/local/bin:/usr/bin
+   Environment=KB_SESSIONS_DIR=/path/to/the/sessions/corpus
+   EOF
+   systemctl --user daemon-reload
+   systemctl --user restart kb-termd.service
+   ```
+
+   `kb-term doctor` reads the running runner's environment and FAILs
+   (`runner_env_sessions_dir`, `runner_env_harness_*`) when either is
+   missing there.
+
    Anything that did not change the machine (a tmpfiles re-run, a schema
    note) needs no restart. Do **not** restart `kb-term@*` holder units to
    pick up an upgrade — that ends every live session. Restart `kb-termd`
