@@ -493,12 +493,18 @@ mod tests {
             "KillMode=process",
             // No tmpfiles dirs, no start (and no silent Restart loop).
             "ConditionPathExists=/run/kb-term",
+            // `enable --now` must enable something: a unit without an
+            // [Install] section is `static` and never starts after a reboot.
+            "[Install]\nWantedBy=default.target",
         ] {
             assert!(
                 runner_unit.contains(needle),
                 "kb-termd.service must contain `{needle}`"
             );
         }
+
+        // The two template units are started by the runner, never enabled.
+        assert!(!holder.contains("[Install]") && !tap.contains("[Install]"));
 
         let tmpfiles = include_str!("../../share/tmpfiles.d/kb-term.conf");
         for line in [

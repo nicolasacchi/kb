@@ -60,18 +60,84 @@ fn doctor_tap_binary() {
     assert!(check.detail.contains("--version"));
 }
 
+/// The tap's own pin table: the `PINS` block of `tap/src/main.ts`, the
+/// exact source of what `kb-tap --pins` prints, as a JSON object map.
+fn tap_reported_pins() -> serde_json::Map<String, serde_json::Value> {
+    let main_ts = include_str!("../tap/src/main.ts");
+    let start = main_ts
+        .find("export const PINS: Record<string, string> = {")
+        .expect("tap PINS block");
+    let block = &main_ts[start..];
+    let block = &block[..block.find("};").expect("end of the PINS block")];
+    let mut map = serde_json::Map::new();
+    for line in block.lines().skip(1) {
+        let quoted: Vec<&str> = line.split('\'').collect();
+        // `  '@xterm/headless': '6.0.0',` splits into ["  ", name, ": ", version, ","].
+        if quoted.len() >= 4 {
+            map.insert(quoted[1].to_string(), serde_json::json!(quoted[3]));
+        }
+    }
+    map
+}
+
 #[test]
-fn doctor_xterm_pins() {
-    let ok_json = r#"{"@xterm/xterm":"6.0.0","@xterm/headless":"6.0.0","@xterm/addon-serialize":"0.14.0","@xterm/addon-unicode-graphemes":"0.4.0","@xterm/addon-image":"0.9.0","@xterm/addon-webgl":"0.19.0"}"#;
-    let check = doctor::decide_xterm_pins(Some(ok_json));
-    assert_eq!(check.status, CheckStatus::Pass);
-    let drift_json = r#"{"@xterm/xterm":"7.0.0"}"#;
-    let check = doctor::decide_xterm_pins(Some(drift_json));
+fn doctor_xterm_pins_pass_on_the_taps_real_report() {
+    let reported = tap_reported_pins();
+    assert_eq!(
+        reported.len(),
+        4,
+        "the tap pins four packages: {reported:?}"
+    );
+    // The report is what tap/package.json depends on.
+    let manifest: serde_json::Value =
+        serde_json::from_str(include_str!("../tap/package.json")).unwrap();
+    assert_eq!(
+        manifest["dependencies"],
+        serde_json::Value::Object(reported.clone()),
+        "tap/src/main.ts PINS drifted from tap/package.json dependencies"
+    );
+    let json = serde_json::Value::Object(reported).to_string();
+    let check = doctor::decide_xterm_pins(Some(&json));
+    assert_eq!(check.status, CheckStatus::Pass, "{}", check.detail);
+}
+
+#[test]
+fn doctor_xterm_pins_fail_on_a_drifted_or_missing_tap_pin() {
+    let mut drifted = tap_reported_pins();
+    drifted.insert("@xterm/headless".to_string(), serde_json::json!("7.0.0"));
+    let check = doctor::decide_xterm_pins(Some(&serde_json::Value::Object(drifted).to_string()));
     assert_eq!(check.status, CheckStatus::Fail);
-    let check = doctor::decide_xterm_pins(None);
-    assert_eq!(check.status, CheckStatus::Skip);
-    let check = doctor::decide_xterm_pins(Some("not json"));
-    assert_eq!(check.status, CheckStatus::Skip);
+    assert!(
+        check.detail.contains("@xterm/headless 7.0.0 != 6.0.0"),
+        "{}",
+        check.detail
+    );
+    let mut missing = tap_reported_pins();
+    missing.remove("@xterm/addon-serialize");
+    let check = doctor::decide_xterm_pins(Some(&serde_json::Value::Object(missing).to_string()));
+    assert_eq!(check.status, CheckStatus::Fail);
+    assert!(
+        check.detail.contains("@xterm/addon-serialize missing"),
+        "{}",
+        check.detail
+    );
+    // The SPA's viewer-side pins are not the tap's to report: a report that
+    // is ONLY those is drift, not a pass.
+    let spa_only =
+        r#"{"@xterm/xterm":"6.0.0","@xterm/addon-image":"0.9.0","@xterm/addon-webgl":"0.19.0"}"#;
+    assert_eq!(
+        doctor::decide_xterm_pins(Some(spa_only)).status,
+        CheckStatus::Fail
+    );
+}
+
+#[test]
+fn doctor_xterm_pins_skip_when_the_tap_reports_nothing_usable() {
+    assert_eq!(doctor::decide_xterm_pins(None).status, CheckStatus::Skip);
+    assert_eq!(
+        doctor::decide_xterm_pins(Some("not json")).status,
+        CheckStatus::Skip
+    );
 }
 
 #[test]
@@ -436,4 +502,104 @@ fn doctor_exit_codes() {
         ),
         0
     );
+}
+
+#[test]
+fn doctor_termd_enabled() {
+    for ok in ["enabled", "enabled-runtime", "alias", "linked"] {
+        assert_eq!(
+            doctor::decide_termd_enabled(Some(ok)).status,
+            CheckStatus::Pass,
+            "{ok}"
+        );
+    }
+    for bad in ["static", "disabled", "masked"] {
+        let c = doctor::decide_termd_enabled(Some(bad));
+        assert_eq!(c.status, CheckStatus::Warn, "{bad}");
+        assert_eq!(c.id, "termd_enabled");
+        assert!(c.detail.contains(bad));
+    }
+    assert_eq!(doctor::decide_termd_enabled(None).status, CheckStatus::Skip);
+}
+
+#[test]
+fn doctor_parse_environ_splits_nul_pairs() {
+    let env = doctor::parse_environ(b"PATH=/usr/bin:/bin\0KB_SESSIONS_DIR=\0X=a=b\0junk\0");
+    assert_eq!(env.len(), 3);
+    assert_eq!(env[0], ("PATH".to_string(), "/usr/bin:/bin".to_string()));
+    assert_eq!(env[1].1, "");
+    assert_eq!(env[2], ("X".to_string(), "a=b".to_string()));
+}
+
+fn env_of(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+    pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
+fn status_of(checks: &[doctor::Check], id: &str) -> CheckStatus {
+    checks.iter().find(|c| c.id == id).unwrap().status
+}
+
+#[test]
+fn doctor_runner_env_resolves_against_the_runner_not_the_shell() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner_bin = dir.path().join("runner-bin");
+    let shell_bin = dir.path().join("shell-bin");
+    std::fs::create_dir_all(&runner_bin).unwrap();
+    std::fs::create_dir_all(&shell_bin).unwrap();
+    fake_exe(&runner_bin, "kb", "#!/bin/sh\n");
+    fake_exe(&runner_bin, "claude", "#!/bin/sh\n");
+    let omp = fake_exe(&shell_bin, "omp", "#!/bin/sh\n");
+    let env = env_of(&[
+        ("PATH", runner_bin.to_str().unwrap()),
+        ("KB_SESSIONS_DIR", "/srv/sessions"),
+    ]);
+    let harnesses = vec![
+        ("claude".to_string(), Some(runner_bin.join("claude"))),
+        ("omp".to_string(), Some(omp)),
+        ("grok".to_string(), None),
+    ];
+    let checks = doctor::decide_runner_env(Some(&env), &harnesses);
+    assert_eq!(
+        status_of(&checks, "runner_env_sessions_dir"),
+        CheckStatus::Pass
+    );
+    assert_eq!(status_of(&checks, "runner_env_kb"), CheckStatus::Pass);
+    assert_eq!(
+        status_of(&checks, "runner_env_harness_claude"),
+        CheckStatus::Pass
+    );
+    // omp is on the shell PATH only: the pane would exit 127.
+    assert_eq!(
+        status_of(&checks, "runner_env_harness_omp"),
+        CheckStatus::Fail
+    );
+    // Not installed anywhere: no check at all.
+    assert!(checks.iter().all(|c| c.id != "runner_env_harness_grok"));
+}
+
+#[test]
+fn doctor_runner_env_fails_when_sessions_dir_is_unset_or_empty() {
+    for env in [
+        env_of(&[("PATH", "/usr/bin")]),
+        env_of(&[("PATH", "/usr/bin"), ("KB_SESSIONS_DIR", "")]),
+    ] {
+        let checks = doctor::decide_runner_env(Some(&env), &[]);
+        let c = checks
+            .iter()
+            .find(|c| c.id == "runner_env_sessions_dir")
+            .unwrap();
+        assert_eq!(c.status, CheckStatus::Fail);
+        assert!(c.fix.as_deref().unwrap_or("").contains("env.conf"));
+        assert_eq!(status_of(&checks, "runner_env_kb"), CheckStatus::Warn);
+    }
+}
+
+#[test]
+fn doctor_runner_env_skips_when_the_runner_is_unreadable() {
+    let checks = doctor::decide_runner_env(None, &[("omp".to_string(), None)]);
+    assert_eq!(checks.len(), 1);
+    assert_eq!(checks[0].status, CheckStatus::Skip);
 }

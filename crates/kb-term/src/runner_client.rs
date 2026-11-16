@@ -103,10 +103,23 @@ impl std::error::Error for RunnerClientError {}
 
 /// An RPC over runner.sock. One connection per `RunnerClient`, kept
 /// open for many requests (the server answers in request order).
+///
+/// Replies are paired to calls by the id echoed in the reply line, and an
+/// id-carrying op's echoed id is its SESSION id, so two calls on one
+/// session carry the same id. A reply that arrives late (after the
+/// per-call deadline) would therefore be indistinguishable from the answer
+/// to the NEXT call on that session. So any call that fails after its
+/// request may have reached the runner (a timeout, a read or write
+/// error, a reply that does not pair or parse) drops the connection; the
+/// next call dials a fresh one, whose reply stream cannot hold a stale
+/// line. A runner error reply (`Code`) is a complete, paired answer and
+/// leaves the connection in place.
 pub struct RunnerClient {
-    stream: tokio::net::UnixStream,
+    /// The live connection; `None` after a failed call (re-dialled by the
+    /// next call).
+    stream: Option<tokio::net::UnixStream>,
     next_id: u64,
-    /// The socket path (for error messages).
+    /// The socket path (for error messages and reconnects).
     path: PathBuf,
     /// Per-call deadline.
     timeout: Duration,
@@ -115,14 +128,9 @@ pub struct RunnerClient {
 impl RunnerClient {
     /// Connect to `path`.
     pub async fn connect(path: &Path) -> Result<Self, RunnerClientError> {
-        let stream = tokio::net::UnixStream::connect(path).await.map_err(|e| {
-            RunnerClientError::Unreachable(format!(
-                "cannot connect to runner socket {}: {e}",
-                path.display()
-            ))
-        })?;
+        let stream = dial(path).await?;
         Ok(Self {
-            stream,
+            stream: Some(stream),
             next_id: 1,
             path: path.to_path_buf(),
             timeout: Duration::from_secs(10),
@@ -136,35 +144,51 @@ impl RunnerClient {
         self.next_id += 1;
         let (mut line, expected) = request_line(id, req).map_err(RunnerClientError::Unreachable)?;
         line.push('\n');
-        self.stream.write_all(line.as_bytes()).await.map_err(|_| {
-            RunnerClientError::Unreachable(format!(
-                "write to runner socket {} failed",
-                self.path.display()
-            ))
+        if self.stream.is_none() {
+            self.stream = Some(dial(&self.path).await?);
+        }
+        let outcome = self.exchange(line.as_bytes(), &expected).await;
+        if matches!(outcome, Err(RunnerClientError::Unreachable(_))) {
+            // Anything but a clean, paired answer may leave a reply in
+            // flight: never reuse this connection.
+            self.stream = None;
+        }
+        outcome
+    }
+
+    async fn exchange(
+        &mut self,
+        line: &[u8],
+        expected: &serde_json::Value,
+    ) -> Result<serde_json::Value, RunnerClientError> {
+        let path = self.path.display().to_string();
+        let timeout = self.timeout;
+        let stream = self.stream.as_mut().ok_or_else(|| {
+            RunnerClientError::Unreachable("runner connection closed".to_string())
         })?;
-        let body = tokio::time::timeout(self.timeout, read_response_line(&mut self.stream))
+        stream.write_all(line).await.map_err(|_| {
+            RunnerClientError::Unreachable(format!("write to runner socket {path} failed"))
+        })?;
+        let body = tokio::time::timeout(timeout, read_response_line(stream))
             .await
             .map_err(|_| {
                 RunnerClientError::Unreachable(format!(
-                    "runner socket {} did not answer in time",
-                    self.path.display()
+                    "runner socket {path} did not answer in time"
                 ))
             })?
             .map_err(|_| {
-                RunnerClientError::Unreachable(format!(
-                    "cannot read runner socket {}",
-                    self.path.display()
-                ))
+                RunnerClientError::Unreachable(format!("cannot read runner socket {path}"))
             })?;
         // The reply must echo the envelope id we sent: the numeric request
         // id, or for an id-carrying op the op's own session id (the server
-        // echoes whatever `id` the line carried). A late or duplicate line
-        // is a protocol failure, never a silent mis-pairing.
+        // echoes whatever `id` the line carried). A reply that does not
+        // pair is a protocol failure, and the caller drops the connection
+        // so a late line can never be taken for a later call's answer.
         match serde_json::from_str::<serde_json::Value>(&body)
             .ok()
             .and_then(|v| v.get("id").cloned())
         {
-            Some(r) if r == expected => {}
+            Some(r) if r == *expected => {}
             Some(serde_json::Value::Null) | None => {
                 return Err(RunnerClientError::Unreachable(
                     "runner reply has no id".to_string(),
@@ -184,6 +208,15 @@ impl RunnerClient {
             ))),
         }
     }
+}
+
+async fn dial(path: &Path) -> Result<tokio::net::UnixStream, RunnerClientError> {
+    tokio::net::UnixStream::connect(path).await.map_err(|e| {
+        RunnerClientError::Unreachable(format!(
+            "cannot connect to runner socket {}: {e}",
+            path.display()
+        ))
+    })
 }
 
 /// Read one response line, bounded by this client's own 64 KiB response-line cap.
@@ -425,6 +458,335 @@ mod tests {
             }
         }
         // The connection is still correlated after id-carrying ops.
+        assert!(client.call(&Request::Ping {}).await.is_ok());
+        let _ = tx.send(());
+        let _ = tokio::time::timeout(Duration::from_secs(10), server).await;
+    }
+
+    // ---- FXIDS: a reply that does not pair never poisons a later call ----
+
+    use serde_json::{json, Value};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use tokio::io::AsyncBufReadExt;
+
+    /// What the scripted runner does with one request line.
+    enum Act {
+        Reply(String),
+        Delayed(Duration, String),
+    }
+
+    /// The `id` a request line carries (a session-id string or the numeric
+    /// envelope id), echoed the way the real server echoes it.
+    fn line_id(line: &str) -> Value {
+        serde_json::from_str::<Value>(line)
+            .ok()
+            .and_then(|v| v.get("id").cloned())
+            .unwrap_or(Value::Null)
+    }
+
+    fn ok_line(id: &Value, n: u64) -> String {
+        format!(
+            "{}\n",
+            json!({"v": 1, "id": id, "status": "ok", "data": {"n": n}})
+        )
+    }
+
+    /// A scripted runner.sock: `script(connection number from 1, request
+    /// line)` decides each answer. Returns the accept count.
+    fn scripted_runner(
+        dir: &Path,
+        script: impl Fn(usize, &str) -> Act + Send + Sync + 'static,
+    ) -> (PathBuf, Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {
+        let sock = dir.join("scripted.sock");
+        let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+        let conns = Arc::new(AtomicUsize::new(0));
+        let script = Arc::new(script);
+        let accepted = conns.clone();
+        let task = tokio::spawn(async move {
+            loop {
+                let Ok((conn, _)) = listener.accept().await else {
+                    return;
+                };
+                let n = accepted.fetch_add(1, Ordering::SeqCst) + 1;
+                let script = script.clone();
+                tokio::spawn(async move {
+                    let (read, mut write) = conn.into_split();
+                    let mut read = tokio::io::BufReader::new(read);
+                    loop {
+                        let mut line = String::new();
+                        match read.read_line(&mut line).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(_) => {}
+                        }
+                        let reply = match script(n, &line) {
+                            Act::Reply(r) => r,
+                            Act::Delayed(d, r) => {
+                                tokio::time::sleep(d).await;
+                                r
+                            }
+                        };
+                        if write.write_all(reply.as_bytes()).await.is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        (sock, conns, task)
+    }
+
+    fn grid(id: &str) -> Request {
+        Request::Grid { id: id.to_string() }
+    }
+
+    /// Reply 1 arrives AFTER the client gave up on call 1. Both calls name
+    /// the same session, so both replies echo the same `id`: before the fix
+    /// the next call read the stale reply off the same connection and
+    /// returned reply 1 as the answer to call 2.
+    #[tokio::test]
+    async fn a_late_reply_is_never_taken_for_the_next_calls_answer() {
+        let dir = tempfile::tempdir().unwrap();
+        let (sock, conns, task) = scripted_runner(dir.path(), |conn, line| {
+            let id = line_id(line);
+            if conn == 1 {
+                Act::Delayed(Duration::from_millis(300), ok_line(&id, 1))
+            } else {
+                Act::Reply(ok_line(&id, 2))
+            }
+        });
+        let mut client = RunnerClient::connect(&sock).await.unwrap();
+        client.timeout = Duration::from_millis(150);
+        let first = client.call(&grid("abcd1234")).await;
+        assert!(
+            matches!(&first, Err(RunnerClientError::Unreachable(m)) if m.contains("in time")),
+            "call 1 must time out: {first:?}"
+        );
+        // Let the stale reply reach the dead connection's socket buffer.
+        tokio::time::sleep(Duration::from_millis(450)).await;
+        let second = client.call(&grid("abcd1234")).await.unwrap();
+        assert_eq!(
+            second["n"], 2,
+            "call 2 must get its own reply, not reply 1: {second}"
+        );
+        assert_eq!(
+            conns.load(Ordering::SeqCst),
+            2,
+            "the timeout dropped the connection; call 2 dialled a fresh one"
+        );
+        task.abort();
+    }
+
+    /// A reply naming some other id, and a reply with a null id, are each a
+    /// protocol failure that drops the connection (the next call re-dials
+    /// and is answered normally).
+    #[tokio::test]
+    async fn a_mismatched_or_null_id_fails_the_call_and_drops_the_connection() {
+        for (label, bad_id, want) in [
+            ("mismatched", json!("zzzz9999"), "unexpected id"),
+            ("null", Value::Null, "no id"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let bad = ok_line(&bad_id, 1);
+            let (sock, conns, task) = scripted_runner(dir.path(), move |conn, line| {
+                if conn == 1 {
+                    Act::Reply(bad.clone())
+                } else {
+                    Act::Reply(ok_line(&line_id(line), 2))
+                }
+            });
+            let mut client = RunnerClient::connect(&sock).await.unwrap();
+            let first = client.call(&grid("abcd1234")).await;
+            assert!(
+                matches!(&first, Err(RunnerClientError::Unreachable(m)) if m.contains(want)),
+                "{label}: {first:?}"
+            );
+            let second = client.call(&grid("abcd1234")).await.unwrap();
+            assert_eq!(second["n"], 2, "{label}: the next call is paired afresh");
+            assert_eq!(conns.load(Ordering::SeqCst), 2, "{label}: re-dialled");
+            task.abort();
+        }
+    }
+
+    /// A runner error reply is a complete, paired answer: the connection
+    /// stays (no needless re-dial).
+    #[tokio::test]
+    async fn a_runner_error_reply_keeps_the_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let (sock, conns, task) = scripted_runner(dir.path(), |_, line| {
+            let err = json!({"v": 1, "id": line_id(line), "status": "err",
+                "code": "no-session", "message": "no session abcd1234"});
+            Act::Reply(format!("{err}\n"))
+        });
+        let mut client = RunnerClient::connect(&sock).await.unwrap();
+        for _ in 0..2 {
+            let e = client.call(&grid("abcd1234")).await.unwrap_err();
+            assert_eq!(e.code(), Some("no-session"));
+        }
+        assert_eq!(conns.load(Ordering::SeqCst), 1, "one connection throughout");
+        task.abort();
+    }
+
+    // ---- FXIDS: the success paths over the real runner server ----
+
+    /// A fake tmux: `attach-session` is a raw-mode byte recorder (the
+    /// hidden client's pty slave), the pane reports dead with status 0, and
+    /// every other call succeeds with an empty answer.
+    fn fake_tmux(dir: &Path) -> (String, PathBuf, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let out = dir.join("typed.bin");
+        let ready = dir.join("ready");
+        let script = dir.join("fake_tmux.sh");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\n\
+                 case \"$*\" in\n\
+                 *attach-session*) stty raw -echo; : > {ready}; exec cat >> {out} ;;\n\
+                 *'#{{pane_dead_status}}'*) printf '1 0\\n'; exit 0 ;;\n\
+                 *display-message*) printf '1234 0 0 80 24 0\\n'; exit 0 ;;\n\
+                 esac\n\
+                 exit 0\n",
+                ready = ready.display(),
+                out = out.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (script.to_string_lossy().into_owned(), out, ready)
+    }
+
+    async fn wait_until(what: &str, mut ok: impl FnMut() -> bool) {
+        let start = std::time::Instant::now();
+        while !ok() {
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "timed out waiting for {what}"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    /// `viewer_open`, `take_size`, `keys`, `viewer_close` and `kill` through
+    /// the real client against the real runner server (a fake tmux and a
+    /// recording supervisor stand in for the host): each returns its real
+    /// payload and has its real effect. Before this, only the no-session
+    /// error path of three of them was exercised.
+    #[tokio::test]
+    async fn id_carrying_ops_succeed_through_the_real_client_and_server() {
+        use crate::runner::config::RunnerConfig;
+        use crate::runner::server::{bind_runner_socket, serve};
+        use crate::runner::supervisor::fake::FakeSupervisor;
+        use crate::runner::Runner;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, out, ready) = fake_tmux(dir.path());
+        let cfg =
+            RunnerConfig::test_config(dir.path().join("run"), tmux, PathBuf::from("/dev/null"));
+        let runner = Arc::new(Runner::with_supervisor(cfg, FakeSupervisor::new()));
+        let sessions = runner.sessions_dir();
+        std::fs::create_dir_all(&sessions).unwrap();
+        // Discovery globs `s/<id>.sock`: a placeholder is a live holder to
+        // the fake tmux.
+        let holder = sessions.join("abcd1234.sock");
+        std::fs::write(&holder, b"").unwrap();
+        let sock = runner.cfg.run_dir.join("runner").join("runner.sock");
+        std::fs::create_dir_all(sock.parent().unwrap()).unwrap();
+        let listener = bind_runner_socket(&sock).unwrap();
+        let (tx, rx) = tokio::sync::broadcast::channel::<()>(1);
+        let server = tokio::spawn({
+            let runner = runner.clone();
+            let sock = sock.clone();
+            async move {
+                let _ = serve(runner, listener, sock, rx).await;
+            }
+        });
+
+        let mut client = RunnerClient::connect(&sock).await.unwrap();
+        let id = "abcd1234".to_string();
+
+        let opened = client
+            .call(&Request::ViewerOpen {
+                id: id.clone(),
+                viewer: "v1".to_string(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(opened, json!({"viewer": "v1"}));
+        assert!(runner.has_viewer(&id, "v1").await, "the viewer registered");
+
+        // Typed bytes reach the hidden client once its pty is raw.
+        wait_until("the hidden client", || ready.exists()).await;
+        let keys = client
+            .call(&Request::Keys {
+                id: id.clone(),
+                viewer: "v1".to_string(),
+                input: crate::wire::KeyInput::Named {
+                    named: vec!["Up".to_string(), "y".to_string()],
+                },
+            })
+            .await
+            .unwrap();
+        assert_eq!(keys, json!({}));
+        wait_until("the typed bytes", || {
+            std::fs::read(&out).is_ok_and(|b| b.len() >= 4)
+        })
+        .await;
+        assert_eq!(std::fs::read(&out).unwrap(), b"\x1b[Ay");
+
+        let taken = client
+            .call(&Request::TakeSize {
+                id: id.clone(),
+                cols: 90,
+                rows: 30,
+                owner: "attach-test".to_string(),
+                force: false,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            taken,
+            json!({"cols": 90, "rows": 30, "owner": "attach-test"})
+        );
+
+        let closed = client
+            .call(&Request::ViewerClose {
+                id: id.clone(),
+                viewer: "v1".to_string(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(closed, json!({"viewer": "v1"}));
+        assert!(!runner.has_viewer(&id, "v1").await, "the viewer is gone");
+        // The same viewer cannot be closed twice.
+        let again = client
+            .call(&Request::ViewerClose {
+                id: id.clone(),
+                viewer: "v1".to_string(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(again.code(), Some("no-viewer"));
+
+        let killed = client
+            .call(&Request::Kill {
+                id: id.clone(),
+                grace_secs: Some(2),
+            })
+            .await
+            .unwrap();
+        assert_eq!(killed, json!({"exit_code": 0, "forced": false}));
+        assert!(!holder.exists(), "kill removed the holder socket");
+        assert!(
+            runner
+                .supervisor
+                .calls
+                .lock()
+                .unwrap()
+                .contains(&("stop".to_string(), id.clone())),
+            "kill stopped the session through the supervisor"
+        );
+        // One connection carried the whole conversation, still paired.
         assert!(client.call(&Request::Ping {}).await.is_ok());
         let _ = tx.send(());
         let _ = tokio::time::timeout(Duration::from_secs(10), server).await;

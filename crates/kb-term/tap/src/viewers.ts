@@ -162,8 +162,18 @@ function validOffset(value: unknown, name: string): number {
   return value as number;
 }
 
+/** The one epoch grammar (kb-server `parse_resume`, kb-term `is_valid_epoch`
+ * and this check share the golden table tests/fixtures/epoch-grammar.json):
+ * 1..=64 of [A-Za-z0-9_-]. The tap mints 32 hex characters. The tap also
+ * accepts the empty string: the runner writes `epoch: ""` for a bare resume
+ * (`?from=` without an epoch), which never equals the tap's own epoch and so
+ * downgrades to a full join. Clients cannot send it (kb-server and kb-term
+ * refuse an empty epoch). */
+const EPOCH_RE = /^[A-Za-z0-9_-]{0,64}$/;
+
 function validEpoch(value: unknown): string {
   if (typeof value !== 'string') throw new FrameError('bad-frame: resumefrom.epoch must be a string');
+  if (!EPOCH_RE.test(value)) throw new FrameError('bad-frame: resumefrom.epoch is not a valid epoch');
   return value;
 }
 

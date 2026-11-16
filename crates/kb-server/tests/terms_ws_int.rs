@@ -316,14 +316,25 @@ struct Round {
     closed: bool,
 }
 
+/// Worst-case silence before the first frame: the relay's join-retry
+/// budget (4 opens x the tap's 3 s join wait + 150 + 300 + 600 ms of
+/// backoff = 13.05 s) plus margin for the runner round trips.
+const FIRST_FRAME_WAIT: Duration = Duration::from_secs(16);
+
 async fn read_round(ws: &mut WsStream, max_binary: usize) -> Round {
     let mut round = Round::default();
     for i in 0..(max_binary * 3 + 10) {
         // The tap holds a join until its twin is quiescent (up to its
-        // 3 s join wait), so the FIRST frame of a round gets a generous
-        // deadline; later frames are already flowing.
+        // 3 s join wait) and answers `error{busy}` when the twin still
+        // lags; the relay swallows that and re-opens (FXBUSY: 4 opens,
+        // 150/300/600 ms backoff), so a slow twin on a loaded runner is
+        // silent toward the browser for up to 4 x 3 s + 1.05 s = 13.05 s
+        // BEFORE the first frame of any kind. The first-frame deadline
+        // must outlast that designed budget, else the test gives up on a
+        // join the relay is still legitimately retrying (it did: a round
+        // that saw only `timeout after 10s`). Later frames are flowing.
         let wait = if i == 0 {
-            Duration::from_secs(10)
+            FIRST_FRAME_WAIT
         } else {
             WS_DEADLINE
         };

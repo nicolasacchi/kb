@@ -151,6 +151,12 @@ pub fn spawn_tmux_client(
 pub struct Viewer {
     /// Hidden client handle.
     pub client: ClientHandle,
+    /// Whether a `stream` splice opened this viewer (FXRUNNER2). Set by the
+    /// runner's own open path, never inferred from the viewer's name: a
+    /// stream viewer's hidden client dies with its splice, so it is kept
+    /// out of the durable `@kb_viewers` set, while a CLI or REST viewer
+    /// (whatever it is called) is a registration that survives a restart.
+    pub stream: bool,
 }
 
 /// Whether `viewer` is a valid viewer id: `[a-z0-9:_-]{1,64}`.

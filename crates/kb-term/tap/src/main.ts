@@ -38,9 +38,9 @@ export const HARNESSES = ['claude', 'codex', 'opencode', 'grok', 'kimi', 'omp'] 
 export const TAP_VERSION = '0.0.0';
 
 /** The pinned xterm set the tap is built against (tap/package.json
- * `dependencies`). kb-term doctor's PINS additionally names viewer-side
- * packages (@xterm/xterm, addon-image, addon-webgl) this binary does not
- * link; reconciling that superset is the doctor owner's call (PR body). */
+ * `dependencies`). kb-term doctor's PINS expects exactly this set; the
+ * viewer-side packages (@xterm/xterm, addon-image, addon-webgl) are the
+ * SPA's and are not reported here. */
 export const PINS: Record<string, string> = {
   '@xterm/headless': '6.0.0',
   '@xterm/addon-serialize': '0.14.0',

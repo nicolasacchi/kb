@@ -1410,6 +1410,8 @@ export default function kbMemoryOmp(pi: {
     maxSeq: number;
     /** Wakes delivered with triggerTurn (counter for /kb-slate). */
     wakes: number;
+    /** Tail of the resolution-lookup chain: lookups run one at a time so wakes keep watch order. */
+    wakeChain: Promise<unknown>;
   };
   const pushers = new Map<string, Pusher>();
   /** The newest ctx omp handed a session handler: its sessionManager answers "which session is live". */
@@ -1640,7 +1642,12 @@ export default function kbMemoryOmp(pi: {
     // Asks addressed to the operator or another harness never wake omp.
     if (slateAskAddressedElsewhere(ev)) return;
     if (slateIsResolutionCandidate(ev)) {
-      void wakeOnOwnResolution(p, ev, line)
+      // One lookup at a time, in watch order: concurrent `show` spawns finish
+      // in any order, which delivered a later resolution's wake (a done) ahead
+      // of an earlier one's (the answer to the same ask).
+      const turn = p.wakeChain.then(() => wakeOnOwnResolution(p, ev, line));
+      p.wakeChain = turn.catch(() => undefined);
+      void turn
         .then((handled) => {
           // Not ours (or the lookup failed): today's behaviour, unchanged.
           if (!handled && !p.stopped) queuePush(p);
@@ -1748,6 +1755,7 @@ export default function kbMemoryOmp(pi: {
           woken: new Set(),
           maxSeq: 0,
           wakes: 0,
+          wakeChain: Promise.resolve(),
         };
         pushers.set(info.sid, p);
       }

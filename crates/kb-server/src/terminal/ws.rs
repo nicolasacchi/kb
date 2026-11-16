@@ -85,14 +85,21 @@ pub(crate) const CLOSE_NORMAL: u16 = 1000;
 
 /// Join-retry policy for an upstream `error{busy}` (FXBUSY). The tap
 /// defers a join that cannot reach a quiescent frame boundary within
-/// its own wait (3 s by default), answers `error{busy}` and closes;
-/// its contract is that the CLIENT retries. The relay is that client:
-/// it re-opens the upstream stream (same terminal, same `from`) up to
-/// `BUSY_JOIN_ATTEMPTS` opens in total, sleeping `BUSY_RETRY_BACKOFF`
-/// doubled per retry (150 ms, 300 ms, 600 ms) between them, and never
-/// shows the browser a busy frame it is still retrying. When the
-/// budget is spent the last busy frame is forwarded and the socket
-/// closes 1011 like any other upstream end.
+/// its own wait (3 s by default, `KB_TAP_JOIN_WAIT_MS`), answers
+/// `error{busy}` and closes; its contract is that the CLIENT retries.
+/// The relay is that client: it re-opens the upstream stream (same
+/// terminal, same `from`) up to `BUSY_JOIN_ATTEMPTS` opens in total,
+/// waiting `BUSY_RETRY_BACKOFF` doubled per retry (150 ms, 300 ms,
+/// 600 ms) between them, and never shows the browser a busy frame it
+/// is still retrying. The wait is a DEADLINE fixed when the busy frame
+/// is seen, so browser input that cancels `recv()` cannot postpone it.
+/// When the budget is spent the last busy frame is forwarded and the
+/// socket closes 1011 like any other upstream end.
+///
+/// Worst-case silence before a surfaced busy (the browser sees no
+/// frame at all): `BUSY_JOIN_ATTEMPTS` tap waits (4 x 3 s = 12 s with
+/// the tap default) plus the 1.05 s of backoff, about 13 s, plus the
+/// runner round trip of each re-open.
 pub(crate) const BUSY_JOIN_ATTEMPTS: u32 = 4;
 pub(crate) const BUSY_RETRY_BACKOFF: Duration = Duration::from_millis(150);
 /// Browser frames held while a join retry is re-opening (input and
@@ -475,15 +482,32 @@ fn is_busy_frame(text: &str) -> bool {
     }
 }
 
+/// True for the frames the tap writes once a join has been accepted:
+/// `hello` (first frame of every join) and `seed`. After one of them
+/// the tap cannot answer that join with `busy`.
+fn completes_join(text: &str) -> bool {
+    if !text.contains("hello") && !text.contains("seed") {
+        return false;
+    }
+    match serde_json::from_str::<ErrFrame>(text) {
+        Ok(f) => matches!(f.t.as_deref(), Some("hello") | Some("seed")),
+        Err(_) => false,
+    }
+}
+
 /// An [`Upstream`] that retries a join the tap deferred with
 /// `error{busy}`.
 ///
-/// The tap sends that frame (then closes) only from its join path, so
-/// it is retryable exactly until the first binary frame of the join
-/// (the seed or replay) has been handed to the relay. Before that
-/// point a busy frame is swallowed and the stream is re-opened (fresh
-/// viewer, same `from`); the browser sees only the retried stream's
-/// frames. After the first binary frame the stream is live and every
+/// The tap sends that frame (then closes) only from its join path,
+/// before it has written anything of the join itself: `hello` is the
+/// first frame the join writes (full join and resume alike), and the
+/// join writes it synchronously with the rest (profile, imagedefs,
+/// `seed`, seed bytes). So a busy is retryable exactly until the first
+/// `hello`, `seed` or binary frame of the join has been handed to the
+/// relay (the stream is then live, even when the seed is empty and no
+/// binary frame ever follows). Before that point a busy frame is
+/// swallowed and the stream is re-opened (fresh viewer, same `from`);
+/// the browser sees only the retried stream's frames. After it every
 /// item, a busy frame included, passes through untouched (a busy there
 /// can only answer a browser-sent resume request, and the relay never
 /// rewrites those).
@@ -493,11 +517,22 @@ fn is_busy_frame(text: &str) -> bool {
 /// `offset-ahead` notice for a resume (`?from=`) request, which a
 /// retry can therefore repeat.
 ///
+/// Browser items. While the busy frame is held (the old stream is
+/// dead) items are queued, at most `BUSY_QUEUE_CAP` (64): the first 64
+/// are kept in order and replayed onto the new stream, an item past
+/// the cap is dropped (and `send` still answers `Ok`, so a flood never
+/// ends the relay). Items that the old stream ACCEPTED before its busy
+/// frame arrived (mid-join, not yet live) are NOT replayed: they are
+/// lost with the busy close. That is harmless by construction, the tap
+/// drops a joining viewer's input anyway, and a client resizes and
+/// types again once the join lands. Only an item whose write to the
+/// old stream FAILED mid-join is queued for the replay.
+///
 /// `recv` is cancel-safe in the way the relay needs (it sits in a
-/// `select!` beside the browser queue): the busy frame and the pending
-/// re-open are kept in fields, so a dropped `recv` future resumes the
-/// retry on the next call. Browser items sent while the old stream is
-/// dead are queued (bounded) and replayed onto the new stream.
+/// `select!` beside the browser queue): the busy frame, the pending
+/// re-open and its `retry_at` deadline are kept in fields, so a
+/// dropped `recv` future resumes the retry on the next call without
+/// restarting the backoff.
 pub(crate) struct JoinRetry<U: Upstream> {
     current: U,
     reopen: Reopen<U>,
@@ -509,6 +544,9 @@ pub(crate) struct JoinRetry<U: Upstream> {
     /// A busy frame was seen and the re-open has not completed yet.
     /// While set, `send` queues instead of writing to the dead stream.
     held_busy: Option<String>,
+    /// When the pending re-open may run; set once, when the busy frame
+    /// is held, so a cancelled `recv` never restarts the wait.
+    retry_at: Option<tokio::time::Instant>,
     queued: Vec<StreamItem>,
     /// The last item has been handed out: `recv` now ends the stream.
     finished: bool,
@@ -523,9 +561,19 @@ impl<U: Upstream> JoinRetry<U> {
             opens: 1,
             live: false,
             held_busy: None,
+            retry_at: None,
             queued: Vec::new(),
             finished: false,
         }
+    }
+
+    /// Hold a busy frame and fix the instant its re-open may run:
+    /// `backoff` doubled per retry already made.
+    fn hold_busy(&mut self, text: String) {
+        let shift = self.opens.saturating_sub(1).min(16);
+        self.retry_at =
+            Some(tokio::time::Instant::now() + self.policy.backoff.saturating_mul(1u32 << shift));
+        self.held_busy = Some(text);
     }
 
     fn queue(&mut self, item: StreamItem) {
@@ -542,13 +590,15 @@ impl<U: Upstream> JoinRetry<U> {
         if self.opens >= self.policy.attempts {
             return Err(());
         }
-        let shift = (self.opens - 1).min(16);
-        tokio::time::sleep(self.policy.backoff.saturating_mul(1u32 << shift)).await;
+        if let Some(at) = self.retry_at {
+            tokio::time::sleep_until(at).await;
+        }
         match (self.reopen)().await {
             Ok(fresh) => {
                 self.current = fresh;
                 self.opens += 1;
                 self.held_busy = None;
+                self.retry_at = None;
                 for item in std::mem::take(&mut self.queued) {
                     if self.current.send(item).await.is_err() {
                         break;
@@ -583,7 +633,13 @@ impl<U: Upstream> Upstream for JoinRetry<U> {
                         return Some(StreamItem::Binary(bytes));
                     }
                     Some(StreamItem::Text(text)) if !self.live && is_busy_frame(&text) => {
-                        self.held_busy = Some(text);
+                        self.hold_busy(text);
+                    }
+                    Some(StreamItem::Text(text)) => {
+                        if !self.live && completes_join(&text) {
+                            self.live = true;
+                        }
+                        return Some(StreamItem::Text(text));
                     }
                     other => return other,
                 }
@@ -1788,6 +1844,251 @@ mod relay_tests {
         );
         assert_eq!(fresh_sent.lock().unwrap().clone(), vec![resize]);
     }
+
+    /// A reopen that records the (paused-clock) instant of every call
+    /// and hands out `fresh` upstreams in order.
+    fn timed_reopen(
+        queue: Vec<MemUpstream>,
+        times: std::sync::Arc<std::sync::Mutex<Vec<tokio::time::Instant>>>,
+    ) -> Reopen<MemUpstream> {
+        let queue = std::sync::Arc::new(std::sync::Mutex::new(
+            queue.into_iter().collect::<std::collections::VecDeque<_>>(),
+        ));
+        Box::new(move || {
+            times.lock().unwrap().push(tokio::time::Instant::now());
+            let next = queue.lock().unwrap().pop_front();
+            Box::pin(async move { next.ok_or(StreamError::Unavailable) })
+        })
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn steady_browser_input_does_not_postpone_the_reopen() {
+        // The relay's `select!` cancels `recv()` on every browser frame.
+        // A frame every 20 ms during the 150 ms backoff used to restart
+        // a local sleep each time, so the re-open never ran.
+        let times = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let second = mem(vec![
+            StreamItem::Text(HELLO.to_string()),
+            StreamItem::Binary(vec![0; 8]),
+        ]);
+        let mut up = JoinRetry::new(
+            mem(vec![StreamItem::Text(BUSY.to_string())]),
+            timed_reopen(vec![second], times.clone()),
+            BusyRetry::default(),
+        );
+        let start = tokio::time::Instant::now();
+        let mut ticks = tokio::time::interval(Duration::from_millis(20));
+        let got = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                tokio::select! {
+                    item = up.recv() => break item,
+                    _ = ticks.tick() => {}
+                }
+            }
+        })
+        .await
+        .expect("the retry must complete despite the cancelling input");
+        assert_eq!(got, Some(StreamItem::Text(HELLO.to_string())));
+        let times = times.lock().unwrap().clone();
+        assert_eq!(times.len(), 1, "exactly one re-open");
+        // The paused clock rounds each timer up to a whole millisecond.
+        let at = times[0].duration_since(start).as_millis();
+        assert!(
+            (150..=151).contains(&at),
+            "re-opened at the scheduled 150 ms, not later: {at} ms"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_backoff_schedule_is_150_300_600_then_the_busy_surfaces() {
+        let times = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let busy = || mem(vec![StreamItem::Text(BUSY.to_string())]);
+        let mut up = JoinRetry::new(
+            busy(),
+            timed_reopen(vec![busy(), busy(), busy()], times.clone()),
+            BusyRetry::default(),
+        );
+        let start = tokio::time::Instant::now();
+        assert_eq!(up.recv().await, Some(StreamItem::Text(BUSY.to_string())));
+        let ms = |t: &tokio::time::Instant| t.duration_since(start).as_millis();
+        let times = times.lock().unwrap().clone();
+        // The paused clock rounds each timer up to a whole millisecond
+        // (under 1 ms per step), hence the 3 ms window.
+        let near = |got: u128, want: u128| (want..=want + 3).contains(&got);
+        let got: Vec<u128> = times.iter().map(ms).collect();
+        assert_eq!(got.len(), 3, "three re-opens: {got:?}");
+        assert!(
+            near(got[0], 150) && near(got[1], 450) && near(got[2], 1050),
+            "re-opens at 150, 150+300 and 150+300+600 ms: {got:?}"
+        );
+        let end = tokio::time::Instant::now()
+            .duration_since(start)
+            .as_millis();
+        assert!(
+            near(end, got[2]),
+            "the busy frame surfaces right after the last open, no extra wait: {end} ms"
+        );
+        assert_eq!(up.recv().await, None);
+    }
+
+    #[tokio::test]
+    async fn an_empty_seed_join_is_live_so_a_later_busy_is_not_retried() {
+        // seed.len == 0: hello, profile, `seed{len:0}` and no binary frame.
+        for frames in [
+            vec![HELLO],
+            vec![HELLO, r#"{"t":"seed","offset":0,"len":0}"#],
+            vec![r#"{"t":"seed","offset":0,"len":0}"#],
+        ] {
+            let calls = std::sync::Arc::new(AtomicUsize::new(0));
+            let mut items: Vec<StreamItem> = frames
+                .iter()
+                .map(|f| StreamItem::Text((*f).to_string()))
+                .collect();
+            items.push(StreamItem::Text(BUSY.to_string()));
+            let mut up = JoinRetry::new(
+                mem(items),
+                scripted_reopen(vec![mem(vec![])], calls.clone()),
+                fast(4),
+            );
+            for f in &frames {
+                assert_eq!(up.recv().await, Some(StreamItem::Text((*f).to_string())));
+            }
+            assert_eq!(
+                up.recv().await,
+                Some(StreamItem::Text(BUSY.to_string())),
+                "busy after {frames:?} passes through"
+            );
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                0,
+                "no re-open after {frames:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_text_frame_that_only_mentions_hello_does_not_make_the_stream_live() {
+        // An offset-ahead notice precedes a join; it must not defeat the
+        // retry (only a real `hello`/`seed` frame does).
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let notice = r#"{"t":"error","code":"offset-ahead","msg":"hello seed"}"#;
+        let mut up = JoinRetry::new(
+            mem(vec![
+                StreamItem::Text(notice.to_string()),
+                StreamItem::Text(BUSY.to_string()),
+            ]),
+            scripted_reopen(
+                vec![mem(vec![StreamItem::Text(HELLO.to_string())])],
+                calls.clone(),
+            ),
+            fast(4),
+        );
+        assert_eq!(up.recv().await, Some(StreamItem::Text(notice.to_string())));
+        assert_eq!(up.recv().await, Some(StreamItem::Text(HELLO.to_string())));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// Park a retry on a gated re-open so `send` takes the held-busy
+    /// queue path; returns the fresh stream's sent log.
+    async fn parked_retry(
+        gate: std::sync::Arc<tokio::sync::Notify>,
+    ) -> (
+        JoinRetry<MemUpstream>,
+        std::sync::Arc<std::sync::Mutex<Vec<StreamItem>>>,
+    ) {
+        let fresh = mem(vec![StreamItem::Text(HELLO.to_string())]);
+        let fresh_sent = fresh.sent.clone();
+        let slot = std::sync::Arc::new(std::sync::Mutex::new(Some(fresh)));
+        let reopen: Reopen<MemUpstream> = Box::new(move || {
+            let (gate, slot) = (gate.clone(), slot.clone());
+            Box::pin(async move {
+                gate.notified().await;
+                slot.lock().unwrap().take().ok_or(StreamError::Unavailable)
+            })
+        });
+        let mut up = JoinRetry::new(
+            mem(vec![StreamItem::Text(BUSY.to_string())]),
+            reopen,
+            fast(4),
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), up.recv())
+                .await
+                .is_err(),
+            "the retry is parked on the re-open"
+        );
+        (up, fresh_sent)
+    }
+
+    #[tokio::test]
+    async fn the_held_queue_keeps_the_first_64_in_order_and_drops_the_rest() {
+        let gate = std::sync::Arc::new(tokio::sync::Notify::new());
+        let (mut up, fresh_sent) = parked_retry(gate.clone()).await;
+        let item = |i: usize| StreamItem::Text(format!(r#"{{"t":"resize","cols":{i},"rows":30}}"#));
+        for i in 0..(BUSY_QUEUE_CAP + 1) {
+            up.send(item(i))
+                .await
+                .expect("an item past the cap is dropped, never an error");
+        }
+        gate.notify_one();
+        assert_eq!(up.recv().await, Some(StreamItem::Text(HELLO.to_string())));
+        let sent = fresh_sent.lock().unwrap().clone();
+        assert_eq!(sent.len(), BUSY_QUEUE_CAP, "item 65 was dropped");
+        assert_eq!(sent, (0..BUSY_QUEUE_CAP).map(item).collect::<Vec<_>>());
+    }
+
+    /// An upstream whose `send` can be made to fail.
+    struct Flaky {
+        inner: MemUpstream,
+        fail_send: bool,
+    }
+
+    impl Upstream for Flaky {
+        fn recv<'a>(&'a mut self) -> Pin<Box<dyn Future<Output = Option<StreamItem>> + Send + 'a>> {
+            self.inner.recv()
+        }
+        fn send<'a>(
+            &'a mut self,
+            item: StreamItem,
+        ) -> Pin<Box<dyn Future<Output = Result<(), StreamError>> + Send + 'a>> {
+            if self.fail_send {
+                Box::pin(async { Err(StreamError::Unavailable) })
+            } else {
+                self.inner.send(item)
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_mid_join_send_failure_is_queued_and_replayed_not_fatal() {
+        let fresh = Flaky {
+            inner: mem(vec![StreamItem::Text(HELLO.to_string())]),
+            fail_send: false,
+        };
+        let fresh_sent = fresh.inner.sent.clone();
+        let slot = std::sync::Arc::new(std::sync::Mutex::new(Some(fresh)));
+        let reopen: Reopen<Flaky> = Box::new(move || {
+            let slot = slot.clone();
+            Box::pin(async move { slot.lock().unwrap().take().ok_or(StreamError::Unavailable) })
+        });
+        let mut up = JoinRetry::new(
+            Flaky {
+                inner: mem(vec![StreamItem::Text(BUSY.to_string())]),
+                fail_send: true,
+            },
+            reopen,
+            fast(4),
+        );
+        let input = StreamItem::Text(r#"{"t":"resize","cols":90,"rows":20}"#.to_string());
+        // The write races the tap's busy close and fails: not an error
+        // for the relay (recv has yet to see the busy frame)...
+        up.send(input.clone())
+            .await
+            .expect("must not end the relay");
+        // ...and the item reaches the re-opened stream.
+        assert_eq!(up.recv().await, Some(StreamItem::Text(HELLO.to_string())));
+        assert_eq!(fresh_sent.lock().unwrap().clone(), vec![input]);
+    }
 }
 
 #[cfg(test)]
@@ -1847,5 +2148,47 @@ mod resume_query_tests {
         );
         // Malformed values are refused even without a `from`.
         assert!(parse_resume(&q(None, Some("a b"), None)).is_err());
+    }
+
+    /// ONE epoch grammar, three implementations (kb-server here, kb-term's
+    /// `wire::is_valid_epoch`, the tap's `validEpoch`): the same golden
+    /// table drives all three.
+    #[test]
+    fn epoch_grammar_matches_the_golden_table_and_kb_terms_validator() {
+        let table: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../kb-term/tests/fixtures/epoch-grammar.json"
+        ))
+        .unwrap();
+        let list = |k: &str| -> Vec<String> {
+            table[k]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap().to_string())
+                .collect()
+        };
+        // The runner's bare-resume marker (`""`) is the tap's alone: a
+        // client-supplied epoch is never empty.
+        let (accept, mut reject) = (list("accept"), list("reject"));
+        reject.extend(list("runner_sentinel"));
+        assert!(
+            accept.len() >= 8 && reject.len() >= 8,
+            "table not truncated"
+        );
+        for e in &accept {
+            assert!(
+                parse_resume(&q(Some("1"), Some(e), None)).is_ok(),
+                "kb-server accepts {e:?}"
+            );
+            assert!(kb_term::wire::is_valid_epoch(e), "kb-term accepts {e:?}");
+        }
+        for e in &reject {
+            assert_eq!(
+                parse_resume(&q(Some("1"), Some(e), None)),
+                Err("invalid `epoch`"),
+                "kb-server rejects {e:?}"
+            );
+            assert!(!kb_term::wire::is_valid_epoch(e), "kb-term rejects {e:?}");
+        }
     }
 }

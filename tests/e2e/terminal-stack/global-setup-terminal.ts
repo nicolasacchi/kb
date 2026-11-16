@@ -104,7 +104,19 @@ function strayPids(root: string): string[] {
   return (r.stdout ?? "").split("\n").map((s) => s.trim()).filter(Boolean);
 }
 
-export async function setupTerminalStack(): Promise<() => Promise<void>> {
+export interface SetupOptions {
+  /**
+   * Self-test hook: throw once kb-termd is up, i.e. a bring-up that fails
+   * AFTER it has started a process. The setup must then tear everything down
+   * itself (it never returns a teardown closure on failure). The thrown error
+   * carries the unique root so the caller can look for survivors.
+   */
+  injectFailure?: "after-termd";
+  /** Where teardown copies the child logs (default: the CI artifact dir). */
+  keepLogsIn?: string;
+}
+
+export async function setupTerminalStack(opts: SetupOptions = {}): Promise<() => Promise<void>> {
   const tmuxBin = need("KB_TMUX_BIN");
   const tapBin = need("KB_TAP_BIN");
   const tmuxVersion = execFileSync(tmuxBin, ["-V"], { encoding: "utf-8" }).trim();
@@ -130,11 +142,11 @@ export async function setupTerminalStack(): Promise<() => Promise<void>> {
   const runnerSock = join(runDir, "runner", "runner.sock");
   const holderDir = join(runDir, "s");
 
-  // The fake `omp` the runner's launch table resolves on the pane PATH. The
-  // scenario (what the pane runs) is `$HOME/scenario.sh`, rewritten by each
-  // test before it launches; the default idles.
-  writeFileSync(join(home, "scenario.sh"), "exec sleep 3600\n");
-  writeFileSync(join(binDir, "omp"), '#!/bin/sh\nexec /bin/sh "$HOME/scenario.sh"\n');
+  // The fake `omp` the runner's launch table resolves on the pane PATH. It runs
+  // `./scenario.sh` in the pane's working directory: every launch gets its own
+  // directory with its own script (see `launch` in stack.ts), so no two panes
+  // ever share a script file.
+  writeFileSync(join(binDir, "omp"), '#!/bin/sh\nexec /bin/sh ./scenario.sh\n');
   chmodSync(join(binDir, "omp"), 0o755);
   // Tap wrapper: same binary, stderr kept for the failure artifacts.
   writeFileSync(
@@ -158,94 +170,9 @@ export async function setupTerminalStack(): Promise<() => Promise<void>> {
   }
 
   const launched: Launched[] = [];
-  const start = (name: string, bin: string, args: string[], env: NodeJS.ProcessEnv): ChildProcess => {
-    const logFd = openSync(join(logDir, `${name}.log`), "a");
-    const proc = spawn(bin, args, { env, stdio: ["ignore", logFd, logFd] });
-    proc.on("error", (err) => console.error(`terminal e2e: ${name} spawn error:`, err));
-    launched.push({ name, proc, logFd });
-    return proc;
-  };
-
-  const termd = start(
-    "kb-termd",
-    KB_TERMD_BIN,
-    [
-      "--run-dir", runDir,
-      "--tmux-bin", tmuxBin,
-      "--conf", KB_TERM_CONF,
-      "--supervisor", "direct",
-      "--tap-bin", join(binDir, "kb-tap-wrapper.sh"),
-      "--tap-ready-secs", "30",
-    ],
-    childEnv({ PATH: `${binDir}:${process.env.PATH ?? "/usr/bin:/bin"}`, RUST_LOG: "info" }),
-  );
-  await waitFor("kb-termd runner.sock", () => {
-    if (termd.exitCode !== null) throw new Error(`kb-termd exited with ${termd.exitCode}`);
-    return existsSync(runnerSock);
-  }, 30_000);
-
-  const servers: Array<{ name: string; port: number; ttl?: number; enabled: boolean }> = [
-    { name: "main", port: PORT_MAIN, enabled: true },
-    { name: "ttl", port: PORT_TTL, ttl: SHORT_TTL_SECS, enabled: true },
-    { name: "off", port: PORT_OFF, enabled: false },
-  ];
-  const procs: Record<string, ChildProcess> = {};
-  for (const s of servers) {
-    const kbDir = join(root, `kb-${s.name}`);
-    mkdirSync(kbDir, { recursive: true });
-    const cfg = join(root, `kb-${s.name}.toml`);
-    writeFileSync(
-      cfg,
-      serverToml({
-        name: `e2eterm-${s.name}`,
-        port: s.port,
-        kbDir,
-        runnerSock: s.enabled ? runnerSock : undefined,
-        ttlSecs: s.ttl,
-      }),
-    );
-    // Per-server state/cache dirs: the daemon name pins the state dir.
-    const stateDir = join(root, `state-${s.name}`);
-    const cacheDir = join(root, `cache-${s.name}`);
-    const cfgDir = join(root, `cfgdir-${s.name}`);
-    for (const d of [stateDir, cacheDir, cfgDir]) mkdirSync(d, { recursive: true });
-    procs[s.name] = start(
-      `kb-server-${s.port}`,
-      KB_SERVER_BIN,
-      ["--config", cfg],
-      childEnv({
-        XDG_STATE_HOME: stateDir,
-        XDG_CACHE_HOME: cacheDir,
-        XDG_CONFIG_HOME: cfgDir,
-        KB_SPA_DIST: SPA_DIST,
-        RUST_LOG: "warn,kb=info",
-      }),
-    );
-  }
-  for (const s of servers) {
-    await waitFor(`kb-server :${s.port}`, () => {
-      const p = procs[s.name];
-      if (p.exitCode !== null) throw new Error(`kb-server :${s.port} exited with ${p.exitCode}`);
-      return identityOk(s.port);
-    }, 60_000);
-  }
-
-  // Workers are separate processes: hand them everything through env.
-  process.env.KB_E2E_PORT = String(PORT_MAIN);
-  process.env.KB_E2E_TS_ROOT = root;
-  process.env.KB_E2E_RUNNER_SOCK = runnerSock;
-  process.env.KB_E2E_TMUX_BIN = tmuxBin;
-  process.env.KB_E2E_TMUX_SOCK_DIR = holderDir;
-  process.env.KB_E2E_REPO_ROOT = REPO_ROOT;
-  // The default teardown SIGTERMs this; ours clears it so it never double-kills.
-  (globalThis as { __KB_DAEMON__?: unknown }).__KB_DAEMON__ = {
-    process: procs.main,
-    port: PORT_MAIN,
-    tmpDir: root,
-  };
 
   let tornDown = false;
-  return async function teardown(): Promise<void> {
+  async function teardown(): Promise<void> {
     if (tornDown) return;
     tornDown = true;
     (globalThis as { __KB_DAEMON__?: unknown }).__KB_DAEMON__ = undefined;
@@ -280,7 +207,7 @@ export async function setupTerminalStack(): Promise<() => Promise<void>> {
       strays = strayPids(root);
     }
     // 4. Keep the logs for the CI artifact before deleting the root.
-    const keep = process.env.KB_TERM_E2E_LOG_DIR ?? resolve(REPO_ROOT, "tests", "e2e", "test-results", "term-e2e-logs");
+    const keep = opts.keepLogsIn ?? process.env.KB_TERM_E2E_LOG_DIR ?? resolve(REPO_ROOT, "tests", "e2e", "test-results", "term-e2e-logs");
     try {
       mkdirSync(keep, { recursive: true });
       for (const f of readdirSync(logDir)) copyFileSync(join(logDir, f), join(keep, f));
@@ -291,7 +218,108 @@ export async function setupTerminalStack(): Promise<() => Promise<void>> {
     if (strays.length > 0) {
       throw new Error(`terminal e2e: processes naming ${root} survived teardown: ${strays.join(",")}`);
     }
+  }
+
+  const start = (name: string, bin: string, args: string[], env: NodeJS.ProcessEnv): ChildProcess => {
+    const logFd = openSync(join(logDir, `${name}.log`), "a");
+    const proc = spawn(bin, args, { env, stdio: ["ignore", logFd, logFd] });
+    proc.on("error", (err) => console.error(`terminal e2e: ${name} spawn error:`, err));
+    launched.push({ name, proc, logFd });
+    return proc;
   };
+
+  // A bring-up that fails part-way has already started children (kb-termd, a
+  // tmux holder, some kb-servers) and the caller never receives the teardown
+  // closure: run it here, then rethrow, so nothing leaks.
+  try {
+    const termd = start(
+      "kb-termd",
+      KB_TERMD_BIN,
+      [
+        "--run-dir", runDir,
+        "--tmux-bin", tmuxBin,
+        "--conf", KB_TERM_CONF,
+        "--supervisor", "direct",
+        "--tap-bin", join(binDir, "kb-tap-wrapper.sh"),
+        "--tap-ready-secs", "30",
+      ],
+      childEnv({ PATH: `${binDir}:${process.env.PATH ?? "/usr/bin:/bin"}`, RUST_LOG: "info" }),
+    );
+    await waitFor("kb-termd runner.sock", () => {
+      if (termd.exitCode !== null) throw new Error(`kb-termd exited with ${termd.exitCode}`);
+      return existsSync(runnerSock);
+    }, 30_000);
+    if (opts.injectFailure === "after-termd") throw new Error("terminal e2e: injected bring-up failure after kb-termd started");
+
+    const servers: Array<{ name: string; port: number; ttl?: number; enabled: boolean }> = [
+      { name: "main", port: PORT_MAIN, enabled: true },
+      { name: "ttl", port: PORT_TTL, ttl: SHORT_TTL_SECS, enabled: true },
+      { name: "off", port: PORT_OFF, enabled: false },
+    ];
+    const procs: Record<string, ChildProcess> = {};
+    for (const s of servers) {
+      const kbDir = join(root, `kb-${s.name}`);
+      mkdirSync(kbDir, { recursive: true });
+      const cfg = join(root, `kb-${s.name}.toml`);
+      writeFileSync(
+        cfg,
+        serverToml({
+          name: `e2eterm-${s.name}`,
+          port: s.port,
+          kbDir,
+          runnerSock: s.enabled ? runnerSock : undefined,
+          ttlSecs: s.ttl,
+        }),
+      );
+      // Per-server state/cache dirs: the daemon name pins the state dir.
+      const stateDir = join(root, `state-${s.name}`);
+      const cacheDir = join(root, `cache-${s.name}`);
+      const cfgDir = join(root, `cfgdir-${s.name}`);
+      for (const d of [stateDir, cacheDir, cfgDir]) mkdirSync(d, { recursive: true });
+      procs[s.name] = start(
+        `kb-server-${s.port}`,
+        KB_SERVER_BIN,
+        ["--config", cfg],
+        childEnv({
+          XDG_STATE_HOME: stateDir,
+          XDG_CACHE_HOME: cacheDir,
+          XDG_CONFIG_HOME: cfgDir,
+          KB_SPA_DIST: SPA_DIST,
+          RUST_LOG: "warn,kb=info",
+        }),
+      );
+    }
+    for (const s of servers) {
+      await waitFor(`kb-server :${s.port}`, () => {
+        const p = procs[s.name];
+        if (p.exitCode !== null) throw new Error(`kb-server :${s.port} exited with ${p.exitCode}`);
+        return identityOk(s.port);
+      }, 60_000);
+    }
+
+    // Workers are separate processes: hand them everything through env.
+    process.env.KB_E2E_PORT = String(PORT_MAIN);
+    process.env.KB_E2E_TS_ROOT = root;
+    process.env.KB_E2E_RUNNER_SOCK = runnerSock;
+    process.env.KB_E2E_TMUX_BIN = tmuxBin;
+    process.env.KB_E2E_TMUX_SOCK_DIR = holderDir;
+    process.env.KB_E2E_REPO_ROOT = REPO_ROOT;
+    // The default teardown SIGTERMs this; ours clears it so it never double-kills.
+    (globalThis as { __KB_DAEMON__?: unknown }).__KB_DAEMON__ = {
+      process: procs.main,
+      port: PORT_MAIN,
+      tmpDir: root,
+    };
+  } catch (err) {
+    try {
+      await teardown();
+    } catch (te) {
+      console.error("terminal e2e: teardown after a failed bring-up also failed:", te);
+    }
+    throw Object.assign(err instanceof Error ? err : new Error(String(err)), { root });
+  }
+
+  return teardown;
 }
 
-export default setupTerminalStack;
+

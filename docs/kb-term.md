@@ -85,7 +85,11 @@ compiled single binary; `PartOf=kb-term@<id>`) attaches to the holder in tmux
 control mode, sanitises and numbers the byte stream, keeps a twin terminal and
 a ring, and serves viewers over a per-session unix socket. Viewer keystrokes do
 not travel through the tap: they go through a per-viewer hidden tmux client
-whose output is drained and discarded.
+whose output is drained and discarded. One session accepts at most
+`max_viewers_per_session` (default 8) viewers, counted across the host CLI,
+the REST routes and browser streams alike; a stream opened at the cap is
+refused up front with `too-many-viewers`, instead of being admitted and ended
+at its first keystroke.
 
 `kb-termd` (Rust) is the runner: it fronts launch, kill, paste, keys, read and
 history over `runner.sock` (mode 0600, connections from another uid are
@@ -614,6 +618,14 @@ any check FAILs, and with `--strict` also on any WARN; a SKIP never fails. Check
 | `omp_overlay` | the on-disk omp overlay carries the approved pins |
 | `run_layout` | `/run/kb-term` is 0755, `s/` is 0700, `runner/` is 0750 or 0700, `runner.sock` is 0600, all owned by the current uid |
 | `login_env` | the login shell does not set outer-terminal identity names that a pane would inherit |
+| `termd_enabled` | `kb-termd.service` is enabled so it starts after a reboot (WARN when `static`, `disabled` or masked; SKIP when `systemctl --user` cannot be reached) |
+| `runner_env_sessions_dir` | `KB_SESSIONS_DIR` is set in the RUNNER's environment (read from the running `kb-termd` process); FAIL when unset or empty, because the capture and beat hooks silently do nothing in SPA-launched sessions |
+| `runner_env_kb`, `runner_env_harness_<bin>` | `kb` and each harness binary resolve on the RUNNER's `PATH`, not your shell's; a harness your shell finds but the runner's `PATH` lacks FAILs (the pane would exit 127), `kb` missing WARNs; SKIP for all when `kb-termd` is not running |
+
+**Panes inherit the runner's environment.** Panes get an allowlisted copy of
+the environment of `kb-termd`, which under systemd is the user manager's: a
+minimal `PATH` and no `KB_SESSIONS_DIR`. Put both in a user-unit drop-in (see
+`docs/kb-term-install.md`); the `runner_env_*` checks verify it took effect.
 
 ## Known limits and unverified
 
