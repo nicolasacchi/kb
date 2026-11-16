@@ -167,7 +167,13 @@ async fn handle_connection<S: Supervisor + 'static>(runner: Arc<Runner<S>>, stre
         // answered with the standard ok envelope, then the connection
         // becomes a tap relay (see `crate::runner::stream`). An open
         // failure is an ordinary error reply and the connection closes.
-        if let Ok(crate::wire::Request::Stream { id, from }) = rpc::parse_request(line.as_bytes()) {
+        if let Ok(crate::wire::Request::Stream {
+            id,
+            from,
+            epoch,
+            mseq,
+        }) = rpc::parse_request(line.as_bytes())
+        {
             if !crate::runner::ids::valid_id(&id) {
                 let err = crate::wire::Response::Err {
                     code: "invalid-id".to_string(),
@@ -180,7 +186,15 @@ async fn handle_connection<S: Supervisor + 'static>(runner: Arc<Runner<S>>, stre
             // comes from the line reader (any spliced frame starts
             // here), the write half is the one the RPC loop holds.
             let client_read = reader.into_inner();
-            let (tap, viewer) = match crate::runner::stream::connect_tap(&runner, &id, from).await {
+            let (tap, viewer) = match crate::runner::stream::connect_tap(
+                &runner,
+                &id,
+                from,
+                epoch.as_deref(),
+                mseq,
+            )
+            .await
+            {
                 Ok(tap) => tap,
                 Err(e) => {
                     let err = crate::wire::Response::Err {
