@@ -439,19 +439,50 @@ impl<S: Supervisor> Runner<S> {
         }
     }
 
-    /// Open (or re-open, idempotently) a hidden client for a viewer.
-    ///
-    /// The std Mutex guard is never held across an `.await`. The per-id
-    /// lock (see [`Runner::id_lock`]) serializes cap-check / spawn /
-    /// insert per session so two concurrent opens cannot both pass the
-    /// cap check and insert 2 (cap 8 -> 9); `spawn_tmux_client` is
-    /// synchronous, so no await spans the guard here.
+    /// Open (or re-open, idempotently) a hidden client for a CLI or REST
+    /// viewer: a registration that is written into the durable
+    /// `@kb_viewers` set and re-opened after a runner restart.
     pub async fn viewer_open(
         &self,
         id: &str,
         viewer: &str,
         cols: u16,
         rows: u16,
+    ) -> Result<(), RunnerError> {
+        self.open_viewer(id, viewer, cols, rows, false).await
+    }
+
+    /// Open (or re-open, idempotently) the hidden client of a `stream`
+    /// splice's own viewer. Marked as a stream viewer on its record, so it
+    /// is never persisted, whatever its id looks like.
+    pub async fn stream_viewer_open(
+        &self,
+        id: &str,
+        viewer: &str,
+        cols: u16,
+        rows: u16,
+    ) -> Result<(), RunnerError> {
+        self.open_viewer(id, viewer, cols, rows, true).await
+    }
+
+    /// Whether session `id` is at the per-session viewer cap
+    /// (`max_viewers_per_session`, shared by every kind of viewer).
+    pub async fn viewers_full(&self, id: &str) -> bool {
+        self.viewer_count(id).await >= self.cfg.max_viewers_per_session
+    }
+
+    /// The std Mutex guard is never held across an `.await`. The per-id
+    /// lock (see [`Runner::id_lock`]) serializes cap-check / spawn /
+    /// insert per session so two concurrent opens cannot both pass the
+    /// cap check and insert 2 (cap 8 -> 9); `spawn_tmux_client` is
+    /// synchronous, so no await spans the guard here.
+    async fn open_viewer(
+        &self,
+        id: &str,
+        viewer: &str,
+        cols: u16,
+        rows: u16,
+        stream: bool,
     ) -> Result<(), RunnerError> {
         // When the anchor reports closed, its session is gone: the
         // viewers of that session close with it.
@@ -494,7 +525,7 @@ impl<S: Supervisor> Runner<S> {
         // entry API still discards a same-key race as defence in depth.
         viewers
             .entry((id.to_string(), viewer.to_string()))
-            .or_insert(Viewer { client });
+            .or_insert(Viewer { client, stream });
         drop(viewers);
         // The per-id lock is still held here on purpose: the durable
         // write is serialized with other opens/closes for this session.
@@ -509,7 +540,9 @@ impl<S: Supervisor> Runner<S> {
         let set: Vec<String> = {
             let viewers = self.viewers.lock().await;
             persistable_viewers(
-                viewers.keys().map(|(sid, w)| (sid.as_str(), w.as_str())),
+                viewers
+                    .iter()
+                    .map(|((sid, w), v)| (sid.as_str(), w.as_str(), v.stream)),
                 id,
             )
         };
@@ -683,13 +716,15 @@ impl<S: Supervisor> Runner<S> {
 
 /// The viewer ids of session `id` that belong in the durable
 /// `@kb_viewers` set: every registered viewer except the transient
-/// stream viewers (`ws-…`), whose hidden client dies with its splice.
+/// stream viewers (the third tuple field), whose hidden client dies with
+/// its splice. The flag comes from the viewer record, not from its name.
 pub(crate) fn persistable_viewers<'a>(
-    keys: impl Iterator<Item = (&'a str, &'a str)>,
+    viewers: impl Iterator<Item = (&'a str, &'a str, bool)>,
     id: &str,
 ) -> Vec<String> {
-    keys.filter(|(sid, w)| *sid == id && !crate::runner::ids::is_stream_viewer(w))
-        .map(|(_, w)| w.to_string())
+    viewers
+        .filter(|(sid, _, stream)| *sid == id && !stream)
+        .map(|(_, w, _)| w.to_string())
         .collect()
 }
 
@@ -859,17 +894,24 @@ mod tests {
     #[test]
     fn stream_viewers_never_enter_the_durable_viewer_set() {
         let keys = [
-            ("abcd1234", "ws-aaaa1111bb"),
-            ("abcd1234", "phone:1"),
-            ("abcd1234", "web"),
-            ("zzzz9999", "other"),
+            ("abcd1234", "ws-aaaa1111bb", true),
+            ("abcd1234", "phone:1", false),
+            ("abcd1234", "web", false),
+            // A CLI/REST viewer that merely LOOKS like a stream viewer is
+            // still a durable registration.
+            ("abcd1234", "ws-x", false),
+            ("zzzz9999", "other", false),
         ];
         let mut got = persistable_viewers(keys.iter().copied(), "abcd1234");
         got.sort();
         assert_eq!(
             got,
-            vec!["phone:1".to_string(), "web".to_string()],
-            "a transient ws- viewer must not be re-opened after a runner restart"
+            vec![
+                "phone:1".to_string(),
+                "web".to_string(),
+                "ws-x".to_string()
+            ],
+            "a stream viewer must not be re-opened after a runner restart, but a REST viewer named ws-x must"
         );
     }
 

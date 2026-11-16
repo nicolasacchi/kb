@@ -180,32 +180,64 @@ async fn describe<S: Supervisor>(runner: &Runner<S>, id: &str, _dir: &Path) -> S
         .tmux
         .run(
             &sock,
-            &[
-                "display-message",
-                "-p",
-                "-t",
-                "kb",
-                "#{pane_pid} #{pane_dead} #{pane_dead_status} #{window_width} #{window_height} #{bracket_paste_flag}",
-            ],
+            &["display-message", "-p", "-t", "kb", PANE_FACTS_FORMAT],
             None,
         )
         .await;
     if let Ok(out) = out {
         if out.ok {
-            let parts: Vec<&str> = out.stdout.split_whitespace().collect();
-            if parts.len() >= 5 {
-                entry.pane_pid = parts[0].parse().ok();
-                entry.pane_dead = parts[1] == "1";
-                if entry.pane_dead {
-                    entry.exit_code = parts[2].parse().ok();
-                }
-                entry.cols = parts[3].parse().ok();
-                entry.rows = parts[4].parse().ok();
-                entry.bracket_paste_flag = parts.get(5) == Some(&"1");
+            if let Some(f) = parse_pane_facts(&out.stdout) {
+                entry.pane_pid = f.pane_pid;
+                entry.pane_dead = f.pane_dead;
+                entry.exit_code = f.exit_code;
+                entry.cols = f.cols;
+                entry.rows = f.rows;
+                entry.bracket_paste_flag = f.bracket_paste_flag;
             }
         }
     }
     entry
+}
+
+/// The `display-message -p` format for the pane facts. TAB-separated:
+/// `#{pane_dead_status}` is EMPTY for a live pane, and a whitespace split
+/// collapses that empty field, shifting every later column (a live
+/// 120x40 pane read as 40x1).
+const PANE_FACTS_FORMAT: &str = "#{pane_pid}\t#{pane_dead}\t#{pane_dead_status}\t#{window_width}\t#{window_height}\t#{bracket_paste_flag}";
+
+/// Parsed [`PANE_FACTS_FORMAT`] output.
+#[derive(Debug, PartialEq, Eq)]
+struct PaneFacts {
+    pane_pid: Option<u32>,
+    pane_dead: bool,
+    exit_code: Option<i32>,
+    cols: Option<u16>,
+    rows: Option<u16>,
+    bracket_paste_flag: bool,
+}
+
+/// Parse one line of [`PANE_FACTS_FORMAT`] output. Fields are split on
+/// TAB and empty fields are kept, so a live pane's empty exit status
+/// cannot shift the grid columns.
+fn parse_pane_facts(stdout: &str) -> Option<PaneFacts> {
+    let line = stdout.lines().next()?;
+    let parts: Vec<&str> = line.split('\t').collect();
+    if parts.len() < 5 {
+        return None;
+    }
+    let pane_dead = parts[1] == "1";
+    Some(PaneFacts {
+        pane_pid: parts[0].parse().ok(),
+        pane_dead,
+        exit_code: if pane_dead {
+            parts[2].parse().ok()
+        } else {
+            None
+        },
+        cols: parts[3].parse().ok(),
+        rows: parts[4].parse().ok(),
+        bracket_paste_flag: parts.get(5) == Some(&"1"),
+    })
 }
 
 async fn show_option<S: Supervisor>(runner: &Runner<S>, sock: &Path, key: &str) -> Option<String> {
@@ -335,6 +367,36 @@ pub async fn capture_pane<S: Supervisor>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The exact live-pane line tmux prints: the empty
+    /// `#{pane_dead_status}` field must not shift the grid columns.
+    #[test]
+    fn live_pane_facts_keep_the_grid_despite_the_empty_exit_status() {
+        let f = parse_pane_facts("23517\t0\t\t120\t40\t1\n").unwrap();
+        assert_eq!(f.pane_pid, Some(23517));
+        assert!(!f.pane_dead);
+        assert_eq!(f.exit_code, None);
+        assert_eq!((f.cols, f.rows), (Some(120), Some(40)));
+        assert!(f.bracket_paste_flag);
+        let f = parse_pane_facts("23517\t0\t\t120\t40\t0\n").unwrap();
+        assert!(!f.bracket_paste_flag);
+    }
+
+    #[test]
+    fn dead_pane_facts_parse_the_exit_status() {
+        let f = parse_pane_facts("23517\t1\t127\t120\t40\t0\n").unwrap();
+        assert!(f.pane_dead);
+        assert_eq!(f.exit_code, Some(127));
+        assert_eq!((f.cols, f.rows), (Some(120), Some(40)));
+    }
+
+    #[test]
+    fn pane_facts_format_is_tab_separated_and_garbage_is_none() {
+        assert!(!PANE_FACTS_FORMAT.contains(' '));
+        assert_eq!(PANE_FACTS_FORMAT.matches('\t').count(), 5);
+        assert_eq!(parse_pane_facts(""), None);
+        assert_eq!(parse_pane_facts("1 2 3 4 5"), None);
+    }
 
     #[test]
     fn list_item_never_serialises_argv_or_env() {

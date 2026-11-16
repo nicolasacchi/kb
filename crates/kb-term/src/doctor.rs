@@ -84,14 +84,16 @@ impl Check {
     }
 }
 
-/// The pinned xterm.js pins the tap must be built against.
+/// The xterm.js packages the TAP is built against: exactly what
+/// `kb-tap --pins` reports (tap/package.json `dependencies`; docs/kb-term.md
+/// "Pins"). The viewer-side packages (`@xterm/xterm`, the image and WebGL
+/// add-ons) are the SPA's pins: the tap does not link them and never
+/// reports them, so expecting them here made a healthy tap FAIL.
 pub const PINS: &[(&str, &str)] = &[
-    ("@xterm/xterm", "6.0.0"),
     ("@xterm/headless", "6.0.0"),
     ("@xterm/addon-serialize", "0.14.0"),
     ("@xterm/addon-unicode-graphemes", "0.4.0"),
-    ("@xterm/addon-image", "0.9.0"),
-    ("@xterm/addon-webgl", "0.19.0"),
+    ("@xterm/addon-unicode11", "0.9.0"),
 ];
 
 /// Known-good harness versions (kimi/grok unreconciled: never warned).
@@ -810,6 +812,180 @@ pub fn login_env_check(shell: &str, names: Option<&[String]>) -> Check {
     decide_login_env(Some(shell), &forbidden, shell_ok)
 }
 
+// ------------------------------------------------- boot enablement + runner env
+
+/// `systemctl --user` (absolute path: the probe env is cleared) with just
+/// enough environment to reach the user manager.
+fn systemctl_user(args: &[&str]) -> Option<(bool, String, String)> {
+    let exe = ["/usr/bin/systemctl", "/bin/systemctl"]
+        .iter()
+        .map(Path::new)
+        .find(|p| is_executable(p))?;
+    let env: Vec<(String, String)> = current_env()
+        .into_iter()
+        .filter(|(k, _)| {
+            matches!(
+                k.as_str(),
+                "PATH" | "HOME" | "XDG_RUNTIME_DIR" | "DBUS_SESSION_BUS_ADDRESS"
+            )
+        })
+        .collect();
+    let mut full = vec!["--user"];
+    full.extend_from_slice(args);
+    run_with_timeout(exe, &full, &env, Duration::from_secs(5))
+}
+
+/// `systemctl --user is-enabled kb-termd.service` state word
+/// (`enabled`, `static`, `disabled`, ...); `None` when systemd cannot be
+/// asked. The state is read from stdout even on a non-zero exit.
+pub fn probe_termd_enabled() -> Option<String> {
+    let (_, stdout, _) = systemctl_user(&["is-enabled", "kb-termd.service"])?;
+    first_line(&stdout)
+}
+
+/// kb-termd must be enabled so it starts after a reboot. A `static`
+/// unit (no `[Install]` section) or a `disabled` one does not.
+pub fn decide_termd_enabled(state: Option<&str>) -> Check {
+    let id = "termd_enabled";
+    let fix = "systemctl --user enable --now kb-termd.service";
+    match state.map(str::trim) {
+        None => Check::skip(id, "cannot ask the systemd user manager (systemctl --user)"),
+        Some("enabled")
+        | Some("enabled-runtime")
+        | Some("alias")
+        | Some("linked")
+        | Some("linked-runtime") => Check::pass(id, "kb-termd.service is enabled (starts on boot)"),
+        Some(other) => Check::warn(
+            id,
+            format!("kb-termd.service is `{other}`: it will not start after a reboot"),
+        )
+        .with_fix(fix),
+    }
+}
+
+/// The runner's pid: the unit's `MainPID`, else a `/proc` scan for a
+/// process of ours named `kb-termd`.
+pub fn probe_runner_pid() -> Option<u32> {
+    if let Some((true, out, _)) =
+        systemctl_user(&["show", "-p", "MainPID", "--value", "kb-termd.service"])
+    {
+        if let Some(pid) = first_line(&out).and_then(|l| l.parse::<u32>().ok()) {
+            if pid > 0 {
+                return Some(pid);
+            }
+        }
+    }
+    let me = std::fs::metadata("/proc/self").map(|m| m.uid()).ok()?;
+    for entry in std::fs::read_dir("/proc").ok()?.flatten() {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|n| n.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let comm = std::fs::read_to_string(entry.path().join("comm")).unwrap_or_default();
+        if comm.trim() == "kb-termd"
+            && std::fs::metadata(entry.path()).map(|m| m.uid()).ok() == Some(me)
+        {
+            return Some(pid);
+        }
+    }
+    None
+}
+
+/// Parse a `/proc/<pid>/environ` blob (NUL-separated `K=V`).
+pub fn parse_environ(raw: &[u8]) -> Vec<(String, String)> {
+    raw.split(|b| *b == 0)
+        .filter_map(|kv| {
+            let kv = String::from_utf8_lossy(kv);
+            let (k, v) = kv.split_once('=')?;
+            (!k.is_empty()).then(|| (k.to_string(), v.to_string()))
+        })
+        .collect()
+}
+
+/// The runner's own environment (what its panes inherit), or `None`
+/// when it is not running or `/proc/<pid>/environ` is unreadable.
+pub fn probe_runner_env() -> Option<Vec<(String, String)>> {
+    let pid = probe_runner_pid()?;
+    let raw = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
+    Some(parse_environ(&raw))
+}
+
+/// Resolve `name` on a `PATH` string only (no `~/.local/bin` fallback:
+/// a pane's shell gets exactly the runner's PATH).
+pub fn resolve_on_path(name: &str, path: &str) -> Option<PathBuf> {
+    path.split(':')
+        .filter(|p| !p.is_empty())
+        .map(|p| PathBuf::from(p).join(name))
+        .find(|c| c.is_file() && is_executable(c))
+}
+
+const ENV_DROPIN_FIX: &str = "write ~/.config/systemd/user/kb-termd.service.d/env.conf with Environment=PATH=... and Environment=KB_SESSIONS_DIR=..., then systemctl --user daemon-reload && systemctl --user restart kb-termd.service (see docs/kb-term-install.md)";
+
+/// Checks against the RUNNER's environment (what every pane inherits),
+/// not the shell doctor runs in. `harnesses` pairs each harness binary
+/// name with where doctor's own shell finds it (`None` = not installed).
+/// `env == None` is a single SKIP (runner not running / unreadable).
+pub fn decide_runner_env(
+    env: Option<&[(String, String)]>,
+    harnesses: &[(String, Option<PathBuf>)],
+) -> Vec<Check> {
+    let Some(env) = env else {
+        return vec![Check::skip(
+            "runner_env",
+            "kb-termd is not running or its environment is unreadable",
+        )];
+    };
+    let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+    let mut out = Vec::new();
+    match get("KB_SESSIONS_DIR") {
+        Some(v) if !v.is_empty() => out.push(Check::pass(
+            "runner_env_sessions_dir",
+            "KB_SESSIONS_DIR is set in the runner environment",
+        )),
+        _ => out.push(
+            Check::fail(
+                "runner_env_sessions_dir",
+                "KB_SESSIONS_DIR is unset in the runner environment: capture and beat hooks silently no-op in SPA-launched sessions",
+            )
+            .with_fix(ENV_DROPIN_FIX),
+        ),
+    }
+    let path = get("PATH").unwrap_or("");
+    match resolve_on_path("kb", path) {
+        Some(p) => out.push(Check::pass(
+            "runner_env_kb",
+            format!("kb resolves on the runner PATH ({})", p.display()),
+        )),
+        None => out.push(
+            Check::warn("runner_env_kb", "kb is not on the runner PATH").with_fix(ENV_DROPIN_FIX),
+        ),
+    }
+    for (name, local) in harnesses {
+        let id = format!("runner_env_harness_{name}");
+        match (resolve_on_path(name, path), local) {
+            (Some(p), _) => out.push(Check::pass(
+                id,
+                format!("{name} resolves on the runner PATH ({})", p.display()),
+            )),
+            (None, Some(l)) => out.push(
+                Check::fail(
+                    id,
+                    format!(
+                        "{name} is at {} for your shell but not on the runner PATH: a pane would exit 127",
+                        l.display()
+                    ),
+                )
+                .with_fix(ENV_DROPIN_FIX),
+            ),
+            (None, None) => {}
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------- driver
 
 /// Run every check against the real host state.
@@ -868,6 +1044,16 @@ pub fn run_checks() -> Vec<Check> {
             checks.push(login_env_check(&shell, names.as_deref()));
         }
     }
+    // boot enablement + the runner's own environment
+    checks.push(decide_termd_enabled(probe_termd_enabled().as_deref()));
+    let local: Vec<(String, Option<PathBuf>)> = crate::profiles::HARNESSES
+        .iter()
+        .map(|n| {
+            let bin = crate::profiles::table::row(n).map(|r| r.bin).unwrap_or(*n);
+            (bin.to_string(), harness_bin_path(bin))
+        })
+        .collect();
+    checks.extend(decide_runner_env(probe_runner_env().as_deref(), &local));
     checks
 }
 
