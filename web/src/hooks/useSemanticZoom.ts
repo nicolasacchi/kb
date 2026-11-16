@@ -15,6 +15,11 @@ type Options = {
   onStep: (v: ZoomView) => void;
 };
 
+/// The Library's current `?view=` (absent means the default, the shelf).
+function viewOfUrl(search: string): string {
+  return new URLSearchParams(search).get("view") || "grid";
+}
+
 /// Semantic zoom for the Library: ctrl-wheel (trackpad pinch) over the content
 /// steps atlas <-> index <-> shelf; bare `-` / `=` do the same from the keyboard.
 /// Ctrl+/Ctrl- and the browser menu are never touched: the wheel handler only
@@ -37,10 +42,24 @@ export function useSemanticZoom({ node, view, gesture, onStep }: Options) {
   }
   const onStepRef = useRef(onStep);
   onStepRef.current = onStep;
+  // The location right after the last step. While it is unchanged the step is
+  // still in flight and the optimistic rung stands; once it differs (the step
+  // landed, or another navigation superseded it) the URL is the truth, read at
+  // event time, so an external navigation that leaves the `view` prop equal to
+  // what it was cannot strand the optimistic rung.
+  const stepHrefRef = useRef<string | null>(null);
   const stepRef = useRef((to: ZoomView) => {
     viewRef.current = to;
     onStepRef.current(to);
+    stepHrefRef.current = window.location.href;
   });
+  const currentView = (): string => {
+    if (stepHrefRef.current !== null && window.location.href !== stepHrefRef.current) {
+      stepHrefRef.current = null;
+      viewRef.current = viewOfUrl(window.location.search);
+    }
+    return viewRef.current;
+  };
 
   useEffect(() => {
     if (!node || !gesture) return;
@@ -50,14 +69,14 @@ export function useSemanticZoom({ node, view, gesture, onStep }: Options) {
       if (!loadPinchZoom()) return;
       const t = e.target as Element | null;
       if (t && t.closest && t.closest(".kb-gallery-viewbar")) return;
-      const r = feedWheel(state, e.deltaY, performance.now(), (d: ZoomDir) => nextView(viewRef.current, d) !== null);
+      const r = feedWheel(state, e.deltaY, performance.now(), (d: ZoomDir) => nextView(currentView(), d) !== null);
       state = r.state;
       if (r.action === "pass") return;
       e.preventDefault();
       // The Atlas canvas zooms its own map on a wheel: a rung change must not also do that.
       e.stopPropagation();
       if (r.action === "step" && r.dir) {
-        const to = nextView(viewRef.current, r.dir);
+        const to = nextView(currentView(), r.dir);
         if (to) stepRef.current(to);
       }
     };
@@ -71,7 +90,7 @@ export function useSemanticZoom({ node, view, gesture, onStep }: Options) {
       if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
       if (e.key !== "-" && e.key !== "=") return;
       if (isEditableTarget(e.target) || isOverlayOpen()) return;
-      const to = nextView(viewRef.current, e.key === "=" ? "in" : "out");
+      const to = nextView(currentView(), e.key === "=" ? "in" : "out");
       if (!to) return;
       e.preventDefault();
       stepRef.current(to);
