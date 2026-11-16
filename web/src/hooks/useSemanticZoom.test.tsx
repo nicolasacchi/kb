@@ -118,6 +118,19 @@ describe("useSemanticZoom", () => {
     expect(steps).toEqual(["grid", "list", "atlas"]);
   });
 
+  it("a re-render with the old prop does not undo the optimistic rung, a changed prop resyncs", async () => {
+    const steps: ZoomView[] = [];
+    await mount("list", steps);
+    const key = (k: string) => window.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true }));
+    key("="); // grid
+    await mount("list", steps); // re-render still carrying the stale prop
+    key("-");
+    expect(steps).toEqual(["grid", "list"]);
+    await mount("atlas", steps); // external navigation: the prop changed, resync
+    key("=");
+    expect(steps).toEqual(["grid", "list", "list"]);
+  });
+
   it("wheel notches also step from the rung just stepped to", async () => {
     const steps: ZoomView[] = [];
     await mount("atlas", steps);

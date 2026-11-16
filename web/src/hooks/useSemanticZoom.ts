@@ -21,14 +21,20 @@ type Options = {
 /// calls preventDefault when a step is available or the tail of a step's own
 /// gesture is being swallowed.
 export function useSemanticZoom({ node, view, gesture, onStep }: Options) {
-  // The rung the NEXT step is computed from. Resynced from the prop on every
-  // render (so external navigation wins), and advanced optimistically by `stepRef`
-  // below: the caller navigates exactly to the rung it is handed, but the
-  // navigation lands before the re-render that delivers the new `view` prop, so
-  // a second keypress or wheel notch in that window would otherwise step from
-  // the stale rung (skipping or repeating one).
+  // The rung the NEXT step is computed from. The caller navigates exactly to
+  // the rung it is handed, but the navigation lands before the re-render that
+  // delivers the new `view` prop, so reading the prop alone makes a second key
+  // press or wheel notch in that window step from a stale rung (skipping or
+  // repeating one). So `stepRef` advances this ref optimistically, and the prop
+  // resyncs it ONLY when the prop value itself changes: a re-render that still
+  // carries an older prop (the one before the step) must not undo the
+  // optimistic rung either.
   const viewRef = useRef(view);
-  viewRef.current = view;
+  const seenViewRef = useRef(view);
+  if (seenViewRef.current !== view) {
+    seenViewRef.current = view;
+    viewRef.current = view;
+  }
   const onStepRef = useRef(onStep);
   onStepRef.current = onStep;
   const stepRef = useRef((to: ZoomView) => {
