@@ -105,6 +105,12 @@ export interface SessionCallbacks {
   onFullJoin?(): void;
   onSizeChanged?(cols: number, rows: number, by: string): void;
   onClipboard?(dataB64: string): void;
+  /**
+   * T18 — fired on every `hello` with the viewer id this socket joined the tap
+   * under (null from an older tap that does not name it). The phone Drive layer
+   * sends it on its REST input calls so the tap can tell which device typed.
+   */
+  onViewer?(viewer: string | null): void;
   /** Transient caption-only notice (e.g. dropped input while not live). */
   onTransient?(message: string): void;
 }
@@ -536,6 +542,7 @@ export class TermSession {
           this.applied = 0;
         }
         this.epoch = frame.epoch;
+        this.cb.onViewer?.(typeof frame.viewer === "string" ? frame.viewer : null);
         // The tap marks the viewer live before writing hello, and a
         // resume of an idle terminal is answered with hello alone.
         this.markLive();

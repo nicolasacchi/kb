@@ -142,6 +142,21 @@ async function goLive(h: ReturnType<typeof setup>): Promise<FakeSocket> {
 }
 
 describe("TermSession", () => {
+  it("reports the viewer id each hello names (null from an older tap)", async () => {
+    const seen: Array<string | null> = [];
+    const h = setup({ callbacks: { onViewer: (v) => seen.push(v) } });
+    h.session.start();
+    await flush();
+    const s = h.sockets[h.sockets.length - 1];
+    s.pushText({ t: "hello", proto: "kb-term/1", session: "s1", epoch: "E1", harness: "omp", bound_sid: null, viewer: "ws-abc1234567" });
+    expect(seen).toEqual(["ws-abc1234567"]);
+    // A tap that predates the field says nothing: the Drive layer must see null,
+    // never a stale id from the previous socket.
+    s.pushText({ t: "hello", proto: "kb-term/1", session: "s1", epoch: "E1", harness: "omp", bound_sid: null });
+    s.pushText({ t: "hello", proto: "kb-term/1", session: "s1", epoch: "E1", harness: "omp", bound_sid: null, viewer: 5 });
+    expect(seen).toEqual(["ws-abc1234567", null, null]);
+  });
+
   it("in-order data advances applied", async () => {
     const h = setup();
     const s = await goLive(h);
