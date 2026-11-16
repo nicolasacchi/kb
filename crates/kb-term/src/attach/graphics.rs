@@ -774,7 +774,6 @@ pub fn cell_px_from_winsize(cols: u16, rows: u16, xpixel: u16, ypixel: u16) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::Engine as _;
 
     const GLYPH: [u8; 4] = [0xF4, 0x8E, 0xBB, 0xAE];
 
