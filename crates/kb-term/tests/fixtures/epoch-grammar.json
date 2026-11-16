@@ -1,0 +1,31 @@
+{
+ "accept": [
+  "a",
+  "Z",
+  "0",
+  "-",
+  "_",
+  "0123abcd-_Z",
+  "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "0123456789abcdef0123456789abcdef",
+  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+ ],
+ "reject": [
+  "a b",
+  "a/b",
+  "a\"b",
+  "\u00e9",
+  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "a\n",
+  " ",
+  "a.b",
+  "a:b",
+  "a+b",
+  "\u0000",
+  "a\u00e9",
+  "\u3042"
+ ],
+ "runner_sentinel": [
+  ""
+ ]
+}
