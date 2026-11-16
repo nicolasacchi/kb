@@ -898,3 +898,33 @@ test('viewers_resume_epoch_follows_the_shared_golden_grammar', async () => {
   expect(server.viewerCount).toBe(accepted);
   await server.close();
 });
+
+// The same golden table drives the C->S `resumefrom` text frame (the browser's
+// own resume request), not only viewer-open's resume: the connection that
+// carries a frame with an epoch outside the grammar is closed (bad-frame); one
+// inside it (and the runner's empty sentinel) is accepted.
+test('viewers_resumefrom_text_frame_epoch_follows_the_shared_golden_grammar', async () => {
+  const table = JSON.parse(readFileSync(join(import.meta.dir, '../../tests/fixtures/epoch-grammar.json'), 'utf-8')) as { accept: string[]; reject: string[]; runner_sentinel: string[] };
+  expect(table.reject.length).toBeGreaterThanOrEqual(8);
+  const clock = fakeClock();
+  const stubTwin = { feed: async () => {}, serialize: { serialize: () => '' } } as unknown as Twin;
+  const server = new TapServer({ session: 'epoch0002', harness: 'omp', epoch: 'e'.repeat(32), twin: stubTwin, now: clock.now, quiesceMs: 0, joinWaitMs: 5000, makeSeed: () => new Uint8Array(0) });
+  const good = new MockTransport();
+  openViewer(server, good, 'good');
+  await waitUntil(() => kinds(good).includes('hello'), 'good join');
+  const send = (epoch: string): MockTransport => {
+    const t = new MockTransport();
+    const conn = server.attachTransport(t);
+    const frame = JSON.stringify({ t: 'resumefrom', offset: 0, mseq: 0, epoch });
+    server.feedTransport(conn, encodeEnvelope(ENV_TEXT, wrapS2C('good', enc(frame))));
+    return t;
+  };
+  for (const epoch of table.reject) {
+    expect(send(epoch).closed, `rejects ${JSON.stringify(epoch)}`).toBe(true);
+  }
+  for (const epoch of [...table.accept, ...table.runner_sentinel]) {
+    expect(send(epoch).closed, `accepts ${JSON.stringify(epoch)}`).toBe(false);
+  }
+  expect(good.closed).toBe(false);
+  await server.close();
+});

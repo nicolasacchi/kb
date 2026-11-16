@@ -88,8 +88,11 @@ not travel through the tap: they go through a per-viewer hidden tmux client
 whose output is drained and discarded. One session accepts at most
 `max_viewers_per_session` (default 8) viewers, counted across the host CLI,
 the REST routes and browser streams alike; a stream opened at the cap is
-refused up front with `too-many-viewers`, instead of being admitted and ended
-at its first keystroke.
+refused up front with `too-many-viewers` (a 409 `terminal-conflict` at the
+WebSocket upgrade), instead of being admitted and ended at its first
+keystroke. A stream reserves its slot when it opens, whether or not it ever
+types, and holds it until the stream ends, so two simultaneous opens cannot
+both take the last slot.
 
 `kb-termd` (Rust) is the runner: it fronts launch, kill, paste, keys, read and
 history over `runner.sock` (mode 0600, connections from another uid are

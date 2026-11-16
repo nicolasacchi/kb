@@ -34,7 +34,8 @@
 //! it stays out of the durable viewer set.
 //!
 //! The per-session viewer cap (`max_viewers_per_session`) is shared by CLI,
-//! REST and stream viewers. A `stream` open at the cap is refused with
+//! REST and stream viewers. A `stream` reserves its slot at open and
+//! holds it until it ends; an open at the cap is refused with
 //! `too-many-viewers` instead of being admitted and then ended at its
 //! first keystroke.
 
@@ -85,7 +86,8 @@ pub fn join_envelope(
 
 /// Open the tap connection for a stream request and write the join
 /// envelope. The connection is returned live (unread) together with
-/// the freshly minted viewer id it joined under; the caller owns the
+/// the freshly minted viewer id it joined under and the reserved viewer
+/// slot (hold it until the stream ends); the caller owns the
 /// splice from here. Every call mints its own viewer id: the tap keys
 /// viewers by id, so a shared id would make a second socket silently
 /// displace the first.
@@ -95,7 +97,7 @@ pub async fn connect_tap<S: crate::runner::supervisor::Supervisor>(
     from: Option<u64>,
     epoch: Option<&str>,
     mseq: Option<u64>,
-) -> Result<(tokio::net::UnixStream, String), RunnerError> {
+) -> Result<(tokio::net::UnixStream, String, crate::runner::StreamSlot), RunnerError> {
     if let Some(e) = epoch {
         if !wire::is_valid_epoch(e) {
             return Err(RunnerError::BadRequest("invalid stream epoch".to_string()));
@@ -110,28 +112,23 @@ pub async fn connect_tap<S: crate::runner::supervisor::Supervisor>(
         return Err(RunnerError::NotFound(format!("no session {id}")));
     }
     // The per-session viewer cap is shared by every kind of viewer (CLI,
-    // REST and stream). A stream that is admitted at the cap would only
-    // fail later, at its first keystroke, when its hidden client is opened
-    // lazily and refused: so the stream is refused HERE, at open, with a
-    // clear `too-many-viewers`. (Checked before the dial, so a refused
-    // stream never joins the tap.)
-    if runner.viewers_full(id).await {
-        return Err(RunnerError::TooManyViewers(format!(
-            "session {id} already has {} viewers",
-            runner.cfg.max_viewers_per_session
-        )));
-    }
+    // REST and stream). The stream's slot is RESERVED here, at open, and
+    // held (by the returned `StreamSlot`) until the stream ends, so the
+    // lazily-opened hidden client can never be refused later and two
+    // concurrent opens can never both take the last slot. A refused
+    // stream never dials the tap.
+    let viewer = crate::runner::ids::generate_viewer_id()?;
+    let slot = runner.reserve_stream_slot(id, &viewer).await?;
     let path = tap_socket_path(runner, id);
     let mut tap = tokio::net::UnixStream::connect(&path)
         .await
         .map_err(|e| RunnerError::TapTimeout(format!("tap unavailable for {id}: {e}")))?;
-    let viewer = crate::runner::ids::generate_viewer_id()?;
     let join = join_envelope(&viewer, from, epoch, mseq)
         .map_err(|e| RunnerError::Internal(format!("encode join envelope: {e}")))?;
     tap.write_all(&join)
         .await
         .map_err(|e| RunnerError::Internal(format!("write tap join: {e}")))?;
-    Ok((tap, viewer))
+    Ok((tap, viewer, slot))
 }
 
 /// Where a client `input` frame's bytes go (the stream's hidden tmux
@@ -499,7 +496,7 @@ mod tests {
         let cfg =
             RunnerConfig::test_config(run_dir, "/bin/true".to_string(), tmp.path().join("conf"));
         let runner = Runner::direct(cfg);
-        let (tap, minted) =
+        let (tap, minted, _slot) =
             tokio::time::timeout(DEADLINE, connect_tap(&runner, id, None, None, None))
                 .await
                 .expect("connect deadline")
@@ -573,10 +570,10 @@ mod tests {
         let cfg =
             RunnerConfig::test_config(run_dir, "/bin/true".to_string(), tmp.path().join("conf"));
         let runner = Runner::direct(cfg);
-        let (_t1, v1) = connect_tap(&runner, id, None, None, None)
+        let (_t1, v1, _s1) = connect_tap(&runner, id, None, None, None)
             .await
             .expect("first");
-        let (_t2, v2) = connect_tap(&runner, id, None, None, None)
+        let (_t2, v2, _s2) = connect_tap(&runner, id, None, None, None)
             .await
             .expect("second");
         assert_ne!(v1, v2, "each stream open mints its own viewer id");
@@ -1360,8 +1357,11 @@ mod tests {
     /// A hidden client that never reads its pty (a stuck harness) makes the
     /// 2 s write bound fire: the delivery fails `busy-pty`, and that error
     /// ENDS the splice. The runner connection closing is what the browser
-    /// socket sees as an upstream end (kb-server closes 1011 on it).
-    #[tokio::test]
+    /// socket sees as an upstream end (kb-server closes 1011 on it), so the
+    /// client side must read EOF (not a frame) once the splice returns.
+    /// Runs on a paused clock: the bound is measured on virtual time, so
+    /// the test neither sleeps 2 s nor depends on host speed.
+    #[tokio::test(start_paused = true)]
     async fn a_stuck_hidden_client_ends_the_splice_with_busy_pty_after_the_write_bound() {
         let (runner, _out, ready, _dir) = fake_tmux_runner_with("sleep 60");
         let id = "abcd1234";
@@ -1370,21 +1370,22 @@ mod tests {
         wait_for(&ready, 0).await;
         let mut sink = HiddenInput::new(&runner, id, viewer);
         let (tap_end, _tap_peer) = tokio::net::UnixStream::pair().unwrap();
-        let (client_end, mut client_peer) = tokio::net::UnixStream::pair().unwrap();
+        let (client_end, client_peer) = tokio::net::UnixStream::pair().unwrap();
         let (tap_read, tap_write) = tap_end.into_split();
         let (client_read, client_write) = client_end.into_split();
+        let (mut peer_read, mut peer_write) = client_peer.into_split();
         // Far more input than the pty plus the pump queue can hold, fed
         // from a task (the splice stops reading once delivery blocks).
         let feeder = tokio::spawn(async move {
             let frame = c2s_text(viewer, &input_json(&"a".repeat(4000)));
             for _ in 0..600 {
-                if client_peer.write_all(&frame).await.is_err() {
+                if peer_write.write_all(&frame).await.is_err() {
                     return;
                 }
             }
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
         });
-        let started = std::time::Instant::now();
+        let started = tokio::time::Instant::now();
         let res = tokio::time::timeout(
             std::time::Duration::from_secs(30),
             splice(
@@ -1401,9 +1402,22 @@ mod tests {
         let err = res.expect_err("a stuck hidden client is a splice error");
         assert!(err.to_string().contains("busy-pty"), "got {err}");
         assert!(
-            started.elapsed() >= std::time::Duration::from_millis(1500),
+            started.elapsed() >= std::time::Duration::from_secs(2),
             "the failure comes from the 2 s write bound, not an early error: {:?}",
             started.elapsed()
+        );
+        let mut rest = Vec::new();
+        // The splice dropped its halves with unread client bytes pending,
+        // so the peer sees either a clean EOF or a reset: both are the
+        // connection ending (what kb-server turns into a 1011 close),
+        // never a data frame.
+        match peer_read.read_to_end(&mut rest).await {
+            Ok(n) => assert_eq!(n, 0, "no data after the failure"),
+            Err(e) => assert_eq!(e.kind(), std::io::ErrorKind::ConnectionReset, "{e}"),
+        }
+        assert!(
+            rest.is_empty(),
+            "the client side sees the connection end (1011)"
         );
         feeder.abort();
         sink.close().await;
@@ -1456,5 +1470,76 @@ mod tests {
         assert_eq!(reply["code"], "too-many-viewers", "{reply}");
         let _ = tx.send(());
         let _ = tokio::time::timeout(DEADLINE, server).await;
+    }
+
+    /// FXSTREAM: the slot is reserved at OPEN, so two concurrent opens with
+    /// one slot left admit exactly one, and the admitted stream's first
+    /// keystroke (which lazily opens its hidden client) is delivered
+    /// instead of ending the stream.
+    #[tokio::test]
+    async fn two_concurrent_stream_opens_with_one_slot_left_admit_exactly_one() {
+        let (mut runner, out, ready, _dir) = fake_tmux_runner();
+        runner.cfg.max_viewers_per_session = 2;
+        let id = "abcd1234";
+        let tap_dir = runner.sessions_dir().join(id);
+        std::fs::create_dir_all(&tap_dir).unwrap();
+        let _listener = tokio::net::UnixListener::bind(tap_dir.join("tap.sock")).unwrap();
+        runner.viewer_open(id, "cli-a", 80, 24).await.unwrap();
+        let (a, b) = tokio::join!(
+            connect_tap(&runner, id, None, None, None),
+            connect_tap(&runner, id, None, None, None)
+        );
+        let (admitted, refused) = match (a, b) {
+            (Ok(ok), Err(e)) | (Err(e), Ok(ok)) => (ok, e),
+            (Ok(_), Ok(_)) => panic!("both opens were admitted past the cap"),
+            (Err(e), Err(f)) => panic!("neither open was admitted: {e} / {f}"),
+        };
+        assert_eq!(refused.code(), "too-many-viewers", "{refused}");
+        let (_tap, viewer, _slot) = admitted;
+        let mut sink = HiddenInput::new(&runner, id, &viewer);
+        sink.deliver(b"k".to_vec())
+            .await
+            .expect("the admitted stream's first keystroke is delivered");
+        wait_for(&ready, 0).await;
+        assert_eq!(wait_for(&out, 1).await, b"k");
+        sink.close().await;
+    }
+
+    /// A reserved slot counts against every other kind of open until the
+    /// stream ends, and is released on drop.
+    #[tokio::test]
+    async fn a_reserved_stream_slot_blocks_a_cli_open_until_it_is_dropped() {
+        let (mut runner, _out, _ready, _dir) = fake_tmux_runner();
+        runner.cfg.max_viewers_per_session = 1;
+        let id = "abcd1234";
+        let tap_dir = runner.sessions_dir().join(id);
+        std::fs::create_dir_all(&tap_dir).unwrap();
+        let _listener = tokio::net::UnixListener::bind(tap_dir.join("tap.sock")).unwrap();
+        let (tap, _viewer, slot) = connect_tap(&runner, id, None, None, None).await.unwrap();
+        let err = runner.viewer_open(id, "cli-a", 80, 24).await.unwrap_err();
+        assert_eq!(err.code(), "too-many-viewers", "{err}");
+        drop(tap);
+        drop(slot);
+        runner
+            .viewer_open(id, "cli-a", 80, 24)
+            .await
+            .expect("the slot is free once the stream ended");
+    }
+
+    /// A failed dial after the reservation releases it (no leaked slot).
+    #[tokio::test]
+    async fn a_stream_whose_tap_dial_fails_releases_its_slot() {
+        let (mut runner, _out, _ready, _dir) = fake_tmux_runner();
+        runner.cfg.max_viewers_per_session = 1;
+        let id = "abcd1234";
+        std::fs::create_dir_all(runner.sessions_dir().join(id)).unwrap();
+        let err = connect_tap(&runner, id, None, None, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, RunnerError::TapTimeout(_)), "{err:?}");
+        assert!(
+            !runner.viewers_full(id).await,
+            "no slot leaked by the failed dial"
+        );
     }
 }

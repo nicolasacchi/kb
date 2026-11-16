@@ -187,7 +187,7 @@ async fn handle_connection<S: Supervisor + 'static>(runner: Arc<Runner<S>>, stre
             // comes from the line reader (any spliced frame starts
             // here), the write half is the one the RPC loop holds.
             let client_read = reader.into_inner();
-            let (tap, viewer) = match crate::runner::stream::connect_tap(
+            let (tap, viewer, _slot) = match crate::runner::stream::connect_tap(
                 &runner,
                 &id,
                 from,

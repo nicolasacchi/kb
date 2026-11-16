@@ -1928,6 +1928,40 @@ async fn ws_stream_errors_map_and_upstream_failure_consumes_ticket() {
         }
     }
 
+    // (a3) FXSTREAM: the runner's per-session viewer cap is its OWN
+    // refusal, a 409 `terminal-conflict` naming `too-many-viewers`, never
+    // the generic 502 `terminal-bad-reply`.
+    {
+        let tmp4 = tempfile::tempdir().unwrap();
+        let mut replies4 = HashMap::new();
+        replies4.insert("list".to_string(), list_reply(&[TERM_ID]));
+        let fake4 = spawn_stream_fake_mode(
+            tmp4.path(),
+            replies4,
+            vec![],
+            true,
+            Some("too-many-viewers"),
+        );
+        let (tmp4, addr4) = boot(enabled_terminal(), &fake4).await;
+        let _ = tmp4;
+        let ticket4 = mint_ticket(addr4, TERM_ID, None).await;
+        let (status, text) = ws_http_get(
+            addr4,
+            TERM_ID,
+            &ticket4,
+            None,
+            Some(&origin_header(addr4)),
+            None,
+        )
+        .await;
+        assert_eq!(status, 409, "viewer cap must 409: {text}");
+        assert_problem(&text, "terminal-conflict");
+        assert!(
+            text.contains("too-many-viewers"),
+            "names the refusal: {text}"
+        );
+    }
+
     // (b) Runner unreachable (socket file gone) -> 502 (spec 1.6:
     // runner unreachable is 502, not the REST ops' 503).
     // The ticket mint needs the runner's `list`, so the socket file is
