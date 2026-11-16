@@ -369,7 +369,12 @@ const KITTY_ID = 0x66cf38;
 // The probed pixels are checker-square centres (flat colour). Every run
 // annotates the worst delta it measured, so a tolerance that is too tight (or
 // loose) shows up as data, not as a guess.
-const PIXEL_TOL = 2;
+// Per-channel tolerance for the centre-row pixel check. The `pixel-delta`
+// annotations of a green CI run (PR #301) measured worst deltas of 2 at DPR 1
+// (two tests) and 1 at DPR 2: a tolerance of 2 sits exactly on the measured
+// value, with no headroom for a runner's GPU/software-raster variation, so it
+// stays at 3 (the value the lane was specified with).
+const PIXEL_TOL = 3;
 
 async function pictureChecks(page: Page, api: Api, c: Ctx, dpr: number, placements = 1): Promise<{ sha: string }> {
   expect(await page.evaluate(() => window.devicePixelRatio)).toBe(dpr);
