@@ -84,14 +84,16 @@ impl Check {
     }
 }
 
-/// The pinned xterm.js pins the tap must be built against.
+/// The xterm.js packages the TAP is built against: exactly what
+/// `kb-tap --pins` reports (tap/package.json `dependencies`; docs/kb-term.md
+/// "Pins"). The viewer-side packages (`@xterm/xterm`, the image and WebGL
+/// add-ons) are the SPA's pins: the tap does not link them and never
+/// reports them, so expecting them here made a healthy tap FAIL.
 pub const PINS: &[(&str, &str)] = &[
-    ("@xterm/xterm", "6.0.0"),
     ("@xterm/headless", "6.0.0"),
     ("@xterm/addon-serialize", "0.14.0"),
     ("@xterm/addon-unicode-graphemes", "0.4.0"),
-    ("@xterm/addon-image", "0.9.0"),
-    ("@xterm/addon-webgl", "0.19.0"),
+    ("@xterm/addon-unicode11", "0.9.0"),
 ];
 
 /// Known-good harness versions (kimi/grok unreconciled: never warned).

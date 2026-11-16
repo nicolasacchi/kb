@@ -60,18 +60,84 @@ fn doctor_tap_binary() {
     assert!(check.detail.contains("--version"));
 }
 
+/// The tap's own pin table: the `PINS` block of `tap/src/main.ts`, the
+/// exact source of what `kb-tap --pins` prints, as a JSON object map.
+fn tap_reported_pins() -> serde_json::Map<String, serde_json::Value> {
+    let main_ts = include_str!("../tap/src/main.ts");
+    let start = main_ts
+        .find("export const PINS: Record<string, string> = {")
+        .expect("tap PINS block");
+    let block = &main_ts[start..];
+    let block = &block[..block.find("};").expect("end of the PINS block")];
+    let mut map = serde_json::Map::new();
+    for line in block.lines().skip(1) {
+        let quoted: Vec<&str> = line.split('\'').collect();
+        // `  '@xterm/headless': '6.0.0',` splits into ["  ", name, ": ", version, ","].
+        if quoted.len() >= 4 {
+            map.insert(quoted[1].to_string(), serde_json::json!(quoted[3]));
+        }
+    }
+    map
+}
+
 #[test]
-fn doctor_xterm_pins() {
-    let ok_json = r#"{"@xterm/xterm":"6.0.0","@xterm/headless":"6.0.0","@xterm/addon-serialize":"0.14.0","@xterm/addon-unicode-graphemes":"0.4.0","@xterm/addon-image":"0.9.0","@xterm/addon-webgl":"0.19.0"}"#;
-    let check = doctor::decide_xterm_pins(Some(ok_json));
-    assert_eq!(check.status, CheckStatus::Pass);
-    let drift_json = r#"{"@xterm/xterm":"7.0.0"}"#;
-    let check = doctor::decide_xterm_pins(Some(drift_json));
+fn doctor_xterm_pins_pass_on_the_taps_real_report() {
+    let reported = tap_reported_pins();
+    assert_eq!(
+        reported.len(),
+        4,
+        "the tap pins four packages: {reported:?}"
+    );
+    // The report is what tap/package.json depends on.
+    let manifest: serde_json::Value =
+        serde_json::from_str(include_str!("../tap/package.json")).unwrap();
+    assert_eq!(
+        manifest["dependencies"],
+        serde_json::Value::Object(reported.clone()),
+        "tap/src/main.ts PINS drifted from tap/package.json dependencies"
+    );
+    let json = serde_json::Value::Object(reported).to_string();
+    let check = doctor::decide_xterm_pins(Some(&json));
+    assert_eq!(check.status, CheckStatus::Pass, "{}", check.detail);
+}
+
+#[test]
+fn doctor_xterm_pins_fail_on_a_drifted_or_missing_tap_pin() {
+    let mut drifted = tap_reported_pins();
+    drifted.insert("@xterm/headless".to_string(), serde_json::json!("7.0.0"));
+    let check = doctor::decide_xterm_pins(Some(&serde_json::Value::Object(drifted).to_string()));
     assert_eq!(check.status, CheckStatus::Fail);
-    let check = doctor::decide_xterm_pins(None);
-    assert_eq!(check.status, CheckStatus::Skip);
-    let check = doctor::decide_xterm_pins(Some("not json"));
-    assert_eq!(check.status, CheckStatus::Skip);
+    assert!(
+        check.detail.contains("@xterm/headless 7.0.0 != 6.0.0"),
+        "{}",
+        check.detail
+    );
+    let mut missing = tap_reported_pins();
+    missing.remove("@xterm/addon-serialize");
+    let check = doctor::decide_xterm_pins(Some(&serde_json::Value::Object(missing).to_string()));
+    assert_eq!(check.status, CheckStatus::Fail);
+    assert!(
+        check.detail.contains("@xterm/addon-serialize missing"),
+        "{}",
+        check.detail
+    );
+    // The SPA's viewer-side pins are not the tap's to report: a report that
+    // is ONLY those is drift, not a pass.
+    let spa_only =
+        r#"{"@xterm/xterm":"6.0.0","@xterm/addon-image":"0.9.0","@xterm/addon-webgl":"0.19.0"}"#;
+    assert_eq!(
+        doctor::decide_xterm_pins(Some(spa_only)).status,
+        CheckStatus::Fail
+    );
+}
+
+#[test]
+fn doctor_xterm_pins_skip_when_the_tap_reports_nothing_usable() {
+    assert_eq!(doctor::decide_xterm_pins(None).status, CheckStatus::Skip);
+    assert_eq!(
+        doctor::decide_xterm_pins(Some("not json")).status,
+        CheckStatus::Skip
+    );
 }
 
 #[test]

@@ -29,7 +29,14 @@
 //! does for the CLI. Every other client frame is re-encoded
 //! byte-identically and forwarded to the tap. The hidden client is
 //! opened lazily on the first input byte (a watch-only stream never
-//! spawns one) and closed when the splice ends.
+//! spawns one) and closed when the splice ends. It is registered as a
+//! STREAM viewer on its viewer record (never recognised by its name), so
+//! it stays out of the durable viewer set.
+//!
+//! The per-session viewer cap (`max_viewers_per_session`) is shared by CLI,
+//! REST and stream viewers. A `stream` open at the cap is refused with
+//! `too-many-viewers` instead of being admitted and then ended at its
+//! first keystroke.
 
 use std::path::PathBuf;
 
@@ -102,6 +109,18 @@ pub async fn connect_tap<S: crate::runner::supervisor::Supervisor>(
     if !runner.sessions_dir().join(id).exists() {
         return Err(RunnerError::NotFound(format!("no session {id}")));
     }
+    // The per-session viewer cap is shared by every kind of viewer (CLI,
+    // REST and stream). A stream that is admitted at the cap would only
+    // fail later, at its first keystroke, when its hidden client is opened
+    // lazily and refused: so the stream is refused HERE, at open, with a
+    // clear `too-many-viewers`. (Checked before the dial, so a refused
+    // stream never joins the tap.)
+    if runner.viewers_full(id).await {
+        return Err(RunnerError::TooManyViewers(format!(
+            "session {id} already has {} viewers",
+            runner.cfg.max_viewers_per_session
+        )));
+    }
     let path = tap_socket_path(runner, id);
     let mut tap = tokio::net::UnixStream::connect(&path)
         .await
@@ -161,7 +180,7 @@ impl<S: crate::runner::supervisor::Supervisor> InputSink for HiddenInput<'_, S> 
                 .await
                 .unwrap_or((self.runner.cfg.default_cols, self.runner.cfg.default_rows));
             self.runner
-                .viewer_open(self.id, self.viewer, cols, rows)
+                .stream_viewer_open(self.id, self.viewer, cols, rows)
                 .await?;
         }
         let pump = self
@@ -249,12 +268,7 @@ async fn client_to_tap<I: InputSink>(
                     sink.deliver(bytes)
                         .await
                         .map_err(|e| std::io::Error::other(e.to_string()))?;
-                    let typed = serde_json::to_vec(&ControlMessage::Typed {
-                        viewer: viewer.to_string(),
-                    })
-                    .map_err(|e| invalid(e.to_string()))?;
-                    let bytes = wire::encode_envelope(wire::ENV_CONTROL, &typed)
-                        .map_err(|e| invalid(e.to_string()))?;
+                    let bytes = typed_envelope(viewer).map_err(|e| invalid(e.to_string()))?;
                     tap_write.write_all(&bytes).await?;
                 }
             }
@@ -882,8 +896,22 @@ mod tests {
     /// A fake tmux whose `attach-session` is a raw-mode byte recorder:
     /// the hidden client's pty slave is `cat >> OUT` after `stty raw
     /// -echo` (READY is touched once raw), every other tmux call
-    /// succeeds, and `display-message` reports a live 80x24 pane.
+    /// succeeds, and `display-message` reports a live 80x24 pane. Every
+    /// `set-option` is appended to `<dir>/set.log` (the durable writes).
     fn fake_tmux_runner() -> (
+        Runner<crate::runner::supervisor::DirectSupervisor>,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        tempfile::TempDir,
+    ) {
+        fake_tmux_runner_with("cat >> {out}")
+    }
+
+    /// [`fake_tmux_runner`] with a chosen tail for the hidden client's
+    /// process once its pty is raw (`{out}` is the recorded-bytes path).
+    fn fake_tmux_runner_with(
+        attach_tail: &str,
+    ) -> (
         Runner<crate::runner::supervisor::DirectSupervisor>,
         std::path::PathBuf,
         std::path::PathBuf,
@@ -893,18 +921,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("typed.bin");
         let ready = dir.path().join("ready");
+        let setlog = dir.path().join("set.log");
         let script = dir.path().join("fake_tmux.sh");
+        let tail = attach_tail.replace("{out}", &out.display().to_string());
         std::fs::write(
             &script,
             format!(
                 "#!/bin/sh\n\
                  case \"$*\" in\n\
-                 *attach-session*) stty raw -echo; : > {ready}; exec cat >> {out} ;;\n\
+                 *attach-session*) stty raw -echo; : > {ready}; exec {tail} ;;\n\
                  *display-message*) printf '1234 0 0 80 24 0\\n'; exit 0 ;;\n\
+                 *set-option*) echo \"$*\" >> {setlog}; exit 0 ;;\n\
                  esac\n\
                  exit 0\n",
                 ready = ready.display(),
-                out = out.display()
+                setlog = setlog.display(),
             ),
         )
         .unwrap();
@@ -921,6 +952,16 @@ mod tests {
             dir.path().join("conf"),
         );
         (Runner::direct(cfg), out, ready, dir)
+    }
+
+    /// The `@kb_viewers` values written so far, in order.
+    fn persisted_viewer_sets(dir: &tempfile::TempDir) -> Vec<String> {
+        std::fs::read_to_string(dir.path().join("set.log"))
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| l.contains("@kb_viewers"))
+            .map(|l| l.rsplit(' ').next().unwrap_or("").to_string())
+            .collect()
     }
 
     async fn wait_for(path: &std::path::Path, want_len: usize) -> Vec<u8> {
@@ -1083,5 +1124,337 @@ mod tests {
             !runner.has_viewer(id, viewer).await,
             "close() must reap a viewer whose open was cancelled"
         );
+    }
+
+    // ---- FXRUNNER2: structural stream viewers, the untested input branches,
+    // the cap at open ----
+
+    /// A viewer opened through the REST/CLI path is a durable registration
+    /// whatever it is called; only the runner's own stream viewer is kept
+    /// out of the durable `@kb_viewers` set. Before the fix the name prefix
+    /// decided, so a REST viewer called `ws-x` was silently dropped from the
+    /// set a runner restart re-opens.
+    #[tokio::test]
+    async fn a_rest_viewer_named_like_a_stream_viewer_is_persisted_and_a_stream_viewer_is_not() {
+        let (runner, _out, _ready, dir) = fake_tmux_runner();
+        let id = "abcd1234";
+        runner.viewer_open(id, "ws-x", 80, 24).await.unwrap();
+        runner
+            .stream_viewer_open(id, "ws-aaaa1111bb", 80, 24)
+            .await
+            .unwrap();
+        assert!(runner.has_viewer(id, "ws-x").await);
+        assert!(runner.has_viewer(id, "ws-aaaa1111bb").await);
+        let sets = persisted_viewer_sets(&dir);
+        assert_eq!(
+            sets.last().map(String::as_str),
+            Some("ws-x"),
+            "the REST viewer is in the durable set: {sets:?}"
+        );
+        assert!(
+            sets.iter().all(|set| !set.contains("ws-aaaa1111bb")),
+            "the stream viewer never is: {sets:?}"
+        );
+    }
+
+    async fn wait_for_suffix(path: &std::path::Path, suffix: &[u8]) {
+        let start = std::time::Instant::now();
+        loop {
+            if std::fs::read(path).is_ok_and(|b| b.ends_with(suffix)) {
+                return;
+            }
+            assert!(
+                start.elapsed() < DEADLINE,
+                "timed out waiting for {suffix:?} at {}",
+                path.display()
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
+    /// The lazy cold-open branch of `HiddenInput`: nothing pre-opened the
+    /// viewer, so the first input frame itself spawns the stream viewer's
+    /// hidden client, and the typed bytes reach it. The client is a STREAM
+    /// viewer: it never enters the durable viewer set.
+    #[tokio::test]
+    async fn the_first_input_frame_lazily_opens_the_hidden_client_as_a_stream_viewer() {
+        let (runner, out, ready, dir) = fake_tmux_runner();
+        let id = "abcd1234";
+        let viewer = "ws-dddd4444ee";
+        assert!(!runner.has_viewer(id, viewer).await, "precondition");
+        let mut sink = HiddenInput::new(&runner, id, viewer);
+        let (tap_end, _tap_peer) = tokio::net::UnixStream::pair().unwrap();
+        let (client_end, mut client_peer) = tokio::net::UnixStream::pair().unwrap();
+        let (tap_read, tap_write) = tap_end.into_split();
+        let (client_read, client_write) = client_end.into_split();
+        let task = splice(
+            tap_read,
+            tap_write,
+            client_read,
+            client_write,
+            viewer,
+            &mut sink,
+        );
+        let feed = async {
+            client_peer
+                .write_all(&c2s_text(viewer, &input_json("xyz")))
+                .await
+                .unwrap();
+            // The first frame spawned the client; once its pty is raw the
+            // second frame is delivered exactly.
+            wait_for(&ready, 0).await;
+            client_peer
+                .write_all(&c2s_text(viewer, &input_json("123")))
+                .await
+                .unwrap();
+            wait_for_suffix(&out, b"123").await;
+            drop(client_peer);
+        };
+        let (res, ()) = tokio::time::timeout(DEADLINE, async { tokio::join!(task, feed) })
+            .await
+            .expect("splice deadline");
+        assert!(res.is_ok(), "{res:?}");
+        assert!(
+            runner.has_viewer(id, viewer).await,
+            "the first input opened the viewer"
+        );
+        assert!(
+            persisted_viewer_sets(&dir)
+                .iter()
+                .all(|set| !set.contains(viewer)),
+            "a lazily opened stream viewer is not persisted"
+        );
+        sink.close().await;
+        assert!(!runner.has_viewer(id, viewer).await);
+    }
+
+    fn paste_only_writes(dir: &tempfile::TempDir) -> usize {
+        std::fs::read_to_string(dir.path().join("set.log"))
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| l.contains("@kb_paste_only"))
+            .count()
+    }
+
+    /// Typing clears a `paste_only` latch (like the `keys` RPC), and the
+    /// durable write happens only when the latch was actually set.
+    #[tokio::test]
+    async fn typing_through_the_stream_clears_the_paste_only_latch() {
+        let (runner, _out, _ready, dir) = fake_tmux_runner();
+        let id = "abcd1234";
+        runner.set_paste_only(id, true).await;
+        assert!(runner.paste_only(id).await, "precondition: latched");
+        let writes_after_latching = paste_only_writes(&dir);
+        let mut sink = HiddenInput::new(&runner, id, "ws-ffff6666aa");
+        sink.deliver(b"k".to_vec()).await.unwrap();
+        assert!(
+            !runner.paste_only(id).await,
+            "typing must clear the latch, or the composer Enter stays refused"
+        );
+        assert_eq!(
+            paste_only_writes(&dir),
+            writes_after_latching + 1,
+            "one durable clear"
+        );
+        sink.deliver(b"k".to_vec()).await.unwrap();
+        assert_eq!(
+            paste_only_writes(&dir),
+            writes_after_latching + 1,
+            "no durable write when the latch is already clear"
+        );
+        sink.close().await;
+    }
+
+    /// A running runner.sock server over `runner`.
+    fn serve_runner(
+        runner: Runner<crate::runner::supervisor::DirectSupervisor>,
+    ) -> (
+        std::sync::Arc<Runner<crate::runner::supervisor::DirectSupervisor>>,
+        std::path::PathBuf,
+        tokio::sync::broadcast::Sender<()>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let runner = std::sync::Arc::new(runner);
+        let sock = runner.cfg.run_dir.join("runner").join("runner.sock");
+        let listener = crate::runner::server::bind_runner_socket(&sock).unwrap();
+        let (tx, rx) = tokio::sync::broadcast::channel::<()>(1);
+        let task = tokio::spawn({
+            let runner = runner.clone();
+            let sock = sock.clone();
+            async move {
+                let _ = crate::runner::server::serve(runner, listener, sock, rx).await;
+            }
+        });
+        (runner, sock, tx, task)
+    }
+
+    /// Send a `stream` request over a real connection; the parsed first
+    /// reply line plus the reader (the spliced bytes follow on it).
+    async fn open_stream(
+        sock: &std::path::Path,
+        id: &str,
+    ) -> (
+        serde_json::Value,
+        tokio::io::BufReader<tokio::net::UnixStream>,
+    ) {
+        use tokio::io::AsyncBufReadExt;
+        let mut conn = tokio::net::UnixStream::connect(sock).await.unwrap();
+        conn.write_all(format!("{{\"v\":1,\"op\":\"stream\",\"id\":\"{id}\"}}\n").as_bytes())
+            .await
+            .unwrap();
+        let mut reader = tokio::io::BufReader::new(conn);
+        let mut line = String::new();
+        tokio::time::timeout(DEADLINE, reader.read_line(&mut line))
+            .await
+            .expect("reply deadline")
+            .expect("reply");
+        (serde_json::from_str(&line).expect("reply json"), reader)
+    }
+
+    /// When a stream's splice ends, the connection handler closes the
+    /// stream's hidden client: without that call the viewer would stay
+    /// registered (and count against the cap) for the life of the runner.
+    #[tokio::test]
+    async fn the_connection_handler_closes_the_hidden_client_when_the_splice_ends() {
+        let (runner, _out, _ready, _dir) = fake_tmux_runner();
+        let id = "abcd1234";
+        let tap_dir = runner.sessions_dir().join(id);
+        std::fs::create_dir_all(&tap_dir).unwrap();
+        let tap_listener = tokio::net::UnixListener::bind(tap_dir.join("tap.sock")).unwrap();
+        // A tap that accepts and then just holds the connection open.
+        let tap = tokio::spawn(async move {
+            let (mut conn, _) = tap_listener.accept().await.unwrap();
+            let mut sink = Vec::new();
+            let _ = conn.read_to_end(&mut sink).await;
+        });
+        let (runner, sock, tx, server) = serve_runner(runner);
+        let (reply, mut reader) = open_stream(&sock, id).await;
+        assert_eq!(reply["status"], "ok", "{reply}");
+        let viewer = reply["data"]["viewer"].as_str().unwrap().to_string();
+        // Typing opens the hidden client.
+        reader
+            .get_mut()
+            .write_all(&c2s_text(&viewer, &input_json("a")))
+            .await
+            .unwrap();
+        let start = std::time::Instant::now();
+        while !runner.has_viewer(id, &viewer).await {
+            assert!(start.elapsed() < DEADLINE, "the input never opened it");
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        // The client goes away: the splice ends, the viewer must be reaped.
+        drop(reader);
+        let start = std::time::Instant::now();
+        while runner.has_viewer(id, &viewer).await {
+            assert!(
+                start.elapsed() < DEADLINE,
+                "the hidden client outlived its stream"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        tap.abort();
+        let _ = tx.send(());
+        let _ = tokio::time::timeout(DEADLINE, server).await;
+    }
+
+    /// A hidden client that never reads its pty (a stuck harness) makes the
+    /// 2 s write bound fire: the delivery fails `busy-pty`, and that error
+    /// ENDS the splice. The runner connection closing is what the browser
+    /// socket sees as an upstream end (kb-server closes 1011 on it).
+    #[tokio::test]
+    async fn a_stuck_hidden_client_ends_the_splice_with_busy_pty_after_the_write_bound() {
+        let (runner, _out, ready, _dir) = fake_tmux_runner_with("sleep 60");
+        let id = "abcd1234";
+        let viewer = "ws-eeee5555ff";
+        runner.stream_viewer_open(id, viewer, 80, 24).await.unwrap();
+        wait_for(&ready, 0).await;
+        let mut sink = HiddenInput::new(&runner, id, viewer);
+        let (tap_end, _tap_peer) = tokio::net::UnixStream::pair().unwrap();
+        let (client_end, mut client_peer) = tokio::net::UnixStream::pair().unwrap();
+        let (tap_read, tap_write) = tap_end.into_split();
+        let (client_read, client_write) = client_end.into_split();
+        // Far more input than the pty plus the pump queue can hold, fed
+        // from a task (the splice stops reading once delivery blocks).
+        let feeder = tokio::spawn(async move {
+            let frame = c2s_text(viewer, &input_json(&"a".repeat(4000)));
+            for _ in 0..600 {
+                if client_peer.write_all(&frame).await.is_err() {
+                    return;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        });
+        let started = std::time::Instant::now();
+        let res = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            splice(
+                tap_read,
+                tap_write,
+                client_read,
+                client_write,
+                viewer,
+                &mut sink,
+            ),
+        )
+        .await
+        .expect("a stuck pty must end the splice, not hang it");
+        let err = res.expect_err("a stuck hidden client is a splice error");
+        assert!(err.to_string().contains("busy-pty"), "got {err}");
+        assert!(
+            started.elapsed() >= std::time::Duration::from_millis(1500),
+            "the failure comes from the 2 s write bound, not an early error: {:?}",
+            started.elapsed()
+        );
+        feeder.abort();
+        sink.close().await;
+    }
+
+    /// The viewer cap (shared by CLI, REST and stream viewers) refuses a
+    /// stream at OPEN, before the tap is dialled, instead of admitting it
+    /// and ending it at its first keystroke.
+    #[tokio::test]
+    async fn a_stream_open_at_the_viewer_cap_is_refused_before_the_tap_is_dialled() {
+        let (mut runner, _out, _ready, _dir) = fake_tmux_runner();
+        runner.cfg.max_viewers_per_session = 2;
+        let id = "abcd1234";
+        let tap_dir = runner.sessions_dir().join(id);
+        std::fs::create_dir_all(&tap_dir).unwrap();
+        let listener = tokio::net::UnixListener::bind(tap_dir.join("tap.sock")).unwrap();
+        runner.viewer_open(id, "cli-a", 80, 24).await.unwrap();
+        runner.viewer_open(id, "cli-b", 80, 24).await.unwrap();
+        let err = connect_tap(&runner, id, None, None, None)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "too-many-viewers", "{err}");
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(200), listener.accept())
+                .await
+                .is_err(),
+            "a refused stream never joined the tap"
+        );
+        // One slot frees up: the same stream now opens.
+        runner.viewer_close(id, "cli-b").await.unwrap();
+        connect_tap(&runner, id, None, None, None)
+            .await
+            .expect("under the cap the stream opens");
+    }
+
+    /// The same refusal over the real socket: an error reply naming
+    /// `too-many-viewers`, never an ok envelope followed by a dead stream.
+    #[tokio::test]
+    async fn the_stream_op_at_the_viewer_cap_answers_too_many_viewers_over_the_socket() {
+        let (mut runner, _out, _ready, _dir) = fake_tmux_runner();
+        runner.cfg.max_viewers_per_session = 1;
+        let id = "abcd1234";
+        let tap_dir = runner.sessions_dir().join(id);
+        std::fs::create_dir_all(&tap_dir).unwrap();
+        let _tap = tokio::net::UnixListener::bind(tap_dir.join("tap.sock")).unwrap();
+        runner.viewer_open(id, "cli-a", 80, 24).await.unwrap();
+        let (_runner, sock, tx, server) = serve_runner(runner);
+        let (reply, _reader) = open_stream(&sock, id).await;
+        assert_eq!(reply["status"], "err", "{reply}");
+        assert_eq!(reply["code"], "too-many-viewers", "{reply}");
+        let _ = tx.send(());
+        let _ = tokio::time::timeout(DEADLINE, server).await;
     }
 }
