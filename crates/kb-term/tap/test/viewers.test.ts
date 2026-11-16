@@ -133,6 +133,26 @@ test('viewers_join_order_hello_profile_imagedef_seed_stream', async () => {
   twin.dispose();
 });
 
+test('viewers_hello_names_the_viewer_it_was_written_for', async () => {
+  // The phone panel names this id on its REST input calls so the tap can tell which device
+  // typed (an OSC 52 write is released only to a recent typer). Two viewers on one tap each
+  // get THEIR OWN id, never the other's.
+  const twin = makeTwin(120, 40);
+  const clock = fakeClock();
+  const server = new TapServer({ session: 'hvid00001', harness: 'omp', epoch: 'e'.repeat(32), twin, now: clock.now, quiesceMs: 0, joinWaitMs: 5000, makeSeed: () => new Uint8Array(0) });
+  const t1 = new MockTransport();
+  const t2 = new MockTransport();
+  openViewer(server, t1, 'v1');
+  openViewer(server, t2, 'v2');
+  await waitUntil(() => kinds(t1).includes('seed') && kinds(t2).includes('seed'), 'both joins land');
+  for (const [t, id] of [[t1, 'v1'], [t2, 'v2']] as const) {
+    const hello = collect(t).find((f) => f.text?.t === 'hello')?.text as Extract<ServerFrame, { t: 'hello' }>;
+    expect(hello.viewer).toBe(id);
+  }
+  await server.close();
+  twin.dispose();
+});
+
 test('viewers_atomic_join_no_loss_no_duplicate', async () => {
   const twin = makeTwin(120, 40);
   const clock = fakeClock();

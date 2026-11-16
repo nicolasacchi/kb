@@ -55,14 +55,16 @@ export function profileFrame(patch) {
   });
 }
 
-export function helloFrame(epoch) {
+export function helloFrame(epoch, viewer, harness) {
   return JSON.stringify({
     t: "hello",
     proto: "kb-term/1",
     session: "s1",
     epoch: epoch ?? "E1",
-    harness: "omp",
+    harness: harness ?? "omp",
     bound_sid: SID,
+    // T18: the viewer id the tap names for this socket (older taps omit it).
+    ...(viewer ? { viewer } : {}),
   });
 }
 
@@ -140,6 +142,16 @@ export function fixtureCard() {
  *     still counted in `tickets`.
  *   - `holdAt` option + `release()`: the stream pauses at that absolute
  *     byte offset until released, so a test can act while it is "live".
+ *
+ * T18 (all additive, inert unless `opts.drive` is true): the phone Drive
+ * controls. `drive: true` also fakes `POST /api/terms/*\/{paste,enter,keys,
+ * take-size,upload}` and `GET /api/sessions/live-status`, recording every
+ * Drive request in `stats.drive` (`{op, headers, json, bytes, contentType}`).
+ * Options: `harness` (term row, card, hello), `bracketPaste` (the row's
+ * `bracket_paste_flag`), `gridOwner` (the row's `grid_owner`), `viewer` (the
+ * id the hello names). Controls: `replyDrive(op, status, body)` queues the
+ * answer for the next request of that op; `setBlocked(on, tool?)` flips the
+ * live-status row's `blocked` (the SPA picks it up on its next poll).
  */
 export async function installFakeTerminal(page, opts = {}) {
   const total = opts.total ?? 2000;
@@ -175,7 +187,18 @@ export async function installFakeTerminal(page, opts = {}) {
   let holdAt = opts.holdAt ?? null;
   let refuseStatus = null;
   const liveSockets = new Set();
+  const harness = opts.harness ?? "omp";
+  const driveReplies = {};
+  const live = { blocked: false, tool: null };
   const stats = {
+    drive: [],
+    replyDrive: (op, status, body) => {
+      (driveReplies[op] ??= []).push({ status, body: body ?? {} });
+    },
+    setBlocked: (on, tool) => {
+      live.blocked = on;
+      live.tool = tool ?? null;
+    },
     tickets: 0,
     ticketRequests: [],
     sockets: 0,
@@ -201,6 +224,8 @@ export async function installFakeTerminal(page, opts = {}) {
   const dropEvery = opts.dropEvery ?? null;
 
   const card = fixtureCard();
+  card.summary.harness = harness;
+  card.terminal.harness = harness;
   await page.route("**/api/sessions/*/card", (route) =>
     route.fulfill({
       status: 200,
@@ -217,17 +242,17 @@ export async function installFakeTerminal(page, opts = {}) {
           terms: [
             {
               id: TERM_ID,
-              harness: "omp",
+              harness,
               cwd: "/synthetic",
               started_unix: 1760000000,
               resume_sid: null,
               pane_pid: 1,
               cols: 120,
               rows: 40,
-              bracket_paste_flag: false,
+              bracket_paste_flag: opts.bracketPaste ?? false,
               pane_dead: false,
               exit_code: null,
-              grid_owner: null,
+              grid_owner: opts.gridOwner ?? null,
               conf_version: 1,
               anchor_pid: null,
               stale: false,
@@ -260,6 +285,63 @@ export async function installFakeTerminal(page, opts = {}) {
     });
   });
 
+  if (opts.drive) {
+    await page.route(/\/api\/terms\/[^/]+\/(paste|enter|keys|take-size|upload)$/, async (route) => {
+      const req = route.request();
+      const op = new URL(req.url()).pathname.split("/").pop();
+      const raw = req.postDataBuffer();
+      const contentType = req.headers()["content-type"] ?? "";
+      let json = null;
+      if (op !== "upload" && raw !== null) {
+        try {
+          json = JSON.parse(raw.toString("utf8"));
+        } catch {
+          json = null;
+        }
+      }
+      stats.drive.push({ op, headers: req.headers(), json, bytes: op === "upload" ? (raw?.length ?? 0) : null, contentType });
+      const queued = driveReplies[op]?.shift();
+      if (queued) {
+        return route.fulfill({
+          status: queued.status,
+          contentType: queued.status >= 400 ? "application/problem+json" : "application/json",
+          body: JSON.stringify(queued.body),
+        });
+      }
+      const ok =
+        op === "upload"
+          ? { path: "/run/kb-term/s/synthetic/up/" + "ab".repeat(32) + ".png", bytes: raw?.length ?? 0, mime: "image/png", sha256: "ab".repeat(32) }
+          : op === "take-size"
+            ? { cols: json?.cols ?? 0, rows: json?.rows ?? 0, owner: "kb-term" }
+            : {};
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(ok) });
+    });
+    await page.route("**/api/sessions/live-status", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          sessions: [
+            {
+              session_id: SID,
+              harness,
+              holder: "agent",
+              state: "working",
+              source: "hook",
+              confidence: "observed",
+              since_unix: 1760000000,
+              since_secs: 10,
+              resume: "",
+              blocked: live.blocked,
+              ...(live.blocked && live.tool ? { blocked_tool: live.tool } : {}),
+              term: TERM_ID,
+            },
+          ],
+        }),
+      }),
+    );
+  }
+
   await page.routeWebSocket("**/api/terms/*/ws*", (ws) => {
     stats.sockets += 1;
     const url = new URL(ws.url());
@@ -290,7 +372,7 @@ export async function installFakeTerminal(page, opts = {}) {
     const sendBinary = (off, payload) => {
       if (!closed) ws.send(binary(off, payload));
     };
-    sendText(helloFrame(opts.epoch));
+    sendText(helloFrame(opts.epoch, opts.viewer, harness));
     // After the grid change every later socket announces the CURRENT
     // grid (a real tap would), else each rejoin would flip it back.
     sendText(profileFrame(secondProfileSent ? { ...(profilePatch ?? {}), ...secondProfile } : profilePatch));

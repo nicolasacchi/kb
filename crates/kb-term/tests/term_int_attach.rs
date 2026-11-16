@@ -167,6 +167,7 @@ fn hello_frame(session: &str) -> ServerFrame {
         epoch: "00000001".into(),
         harness: kb_term::wire::Harness::Omp,
         bound_sid: None,
+        viewer: None,
     }
 }
 

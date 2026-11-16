@@ -35,7 +35,7 @@ const ENVELOPE = ['env_ssc_text', 'env_ssc_binary', 'env_control'];
 // Control + request/response/session goldens land with merged units; the
 // shared dir is asserted in full so both language mirrors pin the same set.
 const CONTROL = ['ctrl_viewer_open', 'ctrl_viewer_close', 'ctrl_typed', 'ctrl_stats'];
-const REQUEST = ['req_list', 'req_launch', 'req_kill', 'req_resize', 'req_ping', 'req_paste', 'req_enter', 'req_keys', 'req_history', 'req_read', 'req_take_size', 'req_media', 'req_grid', 'req_release_size', 'req_viewer_close', 'req_viewer_open', 'req_stream', 'req_stream_resume'];
+const REQUEST = ['req_list', 'req_launch', 'req_kill', 'req_resize', 'req_ping', 'req_paste', 'req_enter', 'req_keys', 'req_history', 'req_read', 'req_take_size', 'req_media', 'req_grid', 'req_release_size', 'req_viewer_close', 'req_viewer_open', 'req_stream', 'req_stream_resume', 'req_upload', 'req_typed'];
 
 test('wire_server_goldens_roundtrip_byte_identical', () => {
   for (const name of SERVER) {
@@ -82,7 +82,7 @@ test('wire_envelope_split_frame_needs_all_bytes', () => {
 
 test('wire_golden_directory_is_complete', () => {
   const actual = readdirSync(GOLDEN).sort();
-  const expected = [...SERVER.map((n) => `${n}.json`), ...CLIENT.map((n) => `${n}.json`), ...CONTROL.map((n) => `${n}.json`), ...REQUEST.map((n) => `${n}.json`), 'resp_ok.json', 'resp_list.json', 'resp_err.json', 'session_info.json', ...ENVELOPE.map((n) => `${n}.hex`)].sort();
+  const expected = [...SERVER.map((n) => `${n}.json`), ...CLIENT.map((n) => `${n}.json`), ...CONTROL.map((n) => `${n}.json`), ...REQUEST.map((n) => `${n}.json`), 'resp_ok.json', 'resp_list.json', 'resp_err.json', 'session_info.json', 'upload_data.json', ...ENVELOPE.map((n) => `${n}.hex`)].sort();
   expect(actual).toEqual(expected);
 });
 
@@ -191,6 +191,9 @@ test('wire_missing_optional_fields_accepted_like_rust', () => {
   expect(() => decodeTextFrame('{"t":"hello","proto":"kb-term/1","session":"s","epoch":"e","harness":"omp","bound_sid":5}')).toThrow(FrameError);
   expect(() => decodeTextFrame('{"t":"exit","seq":10,"code":"1","offset":1234}')).toThrow(FrameError);
   expect(() => decodeTextFrame('{"t":"viewer-open","viewer":"v1","profile":"desktop","resume":"x"}')).toThrow(FrameError);
+  // The hello's viewer id is optional (older taps omit it), but a present one must be a string.
+  expect(decodeTextFrame('{"t":"hello","proto":"kb-term/1","session":"s","epoch":"e","harness":"omp","bound_sid":null,"viewer":"ws-abc"}').kind).toBe('known');
+  expect(() => decodeTextFrame('{"t":"hello","proto":"kb-term/1","session":"s","epoch":"e","harness":"omp","bound_sid":null,"viewer":5}')).toThrow(FrameError);
 });
 
 // Every ServerFrame seq/offset field plus profile.image used to carry a

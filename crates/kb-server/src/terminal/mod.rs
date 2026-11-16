@@ -14,9 +14,11 @@
 pub mod binding;
 pub mod events;
 pub mod gate;
+pub mod keys_allow;
 pub mod media;
 pub mod runner_client;
 pub mod ticket;
+pub mod upload;
 pub mod wire;
 pub mod ws;
 

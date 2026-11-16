@@ -14,12 +14,13 @@
 // The renderer is the DOM one on a phone (the panel skips the WebGL addon
 // when it creates the terminal on a phone-sized viewport).
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { Terminal } from "@xterm/xterm";
 import { ReadView } from "./ReadView";
 import { FONT_STEPS, stepFont } from "./scrollerCore";
 import { readFont } from "./fontSteps";
-import { applyFont, usePhoneScroller, type ScrollTerm } from "./usePhoneScroller";
+import { applyFont, measureCellHeight, usePhoneScroller, type ScrollTerm } from "./usePhoneScroller";
+import type { PhoneMeasure } from "./fitPhone";
 import "./phone.css";
 
 export type PhoneMode = "watch" | "read";
@@ -59,6 +60,12 @@ export interface PhoneTerminalProps {
   stream: PhoneStream;
   caption: string;
   onClose?: () => void;
+  /**
+   * T18 — the Drive dock, rendered below the Watch grid (kept mounted, only
+   * hidden, in Read mode so a half-typed message survives a mode switch).
+   * `measure` reports the visible Watch area and one cell for "Fit to phone".
+   */
+  renderDrive?: (api: { measure: () => PhoneMeasure | null }) => ReactNode;
 }
 
 /**
@@ -85,7 +92,7 @@ function setAttr(el: HTMLElement, name: string, value: string | number | undefin
 }
 
 export function PhoneTerminal(props: PhoneTerminalProps) {
-  const { term, profile, hostRef, mode, onMode, stream, caption, onClose } = props;
+  const { term, profile, hostRef, mode, onMode, stream, caption, onClose, renderDrive } = props;
   const [wrap, setWrap] = useState<HTMLDivElement | null>(null);
   const [viewport, setViewport] = useState<HTMLDivElement | null>(null);
   const [font, setFont] = useState<number>(() => readFont());
@@ -188,6 +195,22 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
     };
   }, [viewport]);
 
+  // T18 — what "Fit to phone" fills: the wrapper's visible width and the Watch
+  // area's allocated height, over one rendered cell. Measured on demand (a click),
+  // never observed: nothing here may drive a resize by itself.
+  const measure = useCallback((): PhoneMeasure | null => {
+    const t = termRef.current;
+    if (!t || !wrap) return null;
+    const screen = t.element?.querySelector(".xterm-screen");
+    if (!screen || t.cols <= 0) return null;
+    return {
+      visibleWidth: wrap.clientWidth,
+      visibleHeight: wrap.parentElement?.clientHeight ?? 0,
+      cellWidth: screen.getBoundingClientRect().width / t.cols,
+      cellHeight: measureCellHeight(t),
+    };
+  }, [wrap]);
+
   const fontIdx = FONT_STEPS.indexOf(font as (typeof FONT_STEPS)[number]);
   return (
     <div className="kb-term-phone" data-kb-term-root="" data-testid="kb-terminal">
@@ -266,6 +289,7 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
           onWatch={() => onMode("watch")}
         />
       ) : null}
+      {renderDrive ? <div hidden={mode === "read"}>{renderDrive({ measure })}</div> : null}
     </div>
   );
 }

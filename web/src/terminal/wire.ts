@@ -68,7 +68,11 @@ export function encodeBinaryFrame(offset: number, payload: Uint8Array): Uint8Arr
 
 // ------------------------------------------------------------ text frames
 
-export interface HelloFrame { t: "hello"; proto: string; session: string; epoch: string; harness: string; bound_sid: string | null }
+export interface HelloFrame {
+  t: "hello"; proto: string; session: string; epoch: string; harness: string; bound_sid: string | null;
+  /** The viewer id this socket joined the tap under (T18). Absent from an older tap. */
+  viewer?: string;
+}
 export interface ProfileFrame {
   t: "profile"; xterm: string; serialize: string; width: string; image: string;
   cols: number; rows: number; scrollback: number; scroll_on_erase_in_display: boolean;
@@ -134,7 +138,7 @@ export function parseTextFrame(raw: string): ServerTextFrame {
 // table is extended alongside the TS type.
 
 export const KNOWN_SERVER_KEYS: Record<string, readonly string[]> = {
-  hello: ["t", "proto", "session", "epoch", "harness", "bound_sid"],
+  hello: ["t", "proto", "session", "epoch", "harness", "bound_sid", "viewer"],
   profile: ["t", "xterm", "serialize", "width", "image", "cols", "rows", "scrollback", "scroll_on_erase_in_display", "cell_px_w", "cell_px_h", "theme"],
   imagedef: ["t", "seq", "id", "gen", "sha256", "mime", "w", "h", "cols", "rows", "offset"],
   seed: ["t", "offset", "len"],

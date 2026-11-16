@@ -8,7 +8,7 @@ use kb_term::wire::{
     decode_binary, decode_text_frame, encode_binary, encode_envelope, is_valid_sha256_hex,
     is_valid_term_id, parse_s2c_body, s2c_body, ClientFrame, ControlMessage, EnvelopeDecoder,
     Harness, Profile, Request, Response, ResumeInfo, ServerFrame, SessionInfo, TextFrame,
-    WireError, MAX_ENVELOPE_LEN,
+    UploadData, WireError, MAX_ENVELOPE_LEN,
 };
 
 fn golden_dir() -> PathBuf {
@@ -78,6 +78,8 @@ fn request_goldens() -> Vec<&'static str> {
         "req_media.json",
         "req_stream.json",
         "req_stream_resume.json",
+        "req_upload.json",
+        "req_typed.json",
     ]
 }
 
@@ -409,6 +411,7 @@ fn golden_files_are_complete() {
             "resp_err.json",
             "resp_list.json",
             "session_info.json",
+            "upload_data.json",
         ])
         .map(str::to_string)
         .collect();
@@ -514,4 +517,36 @@ fn decode_text_frame_rejects_offsets_at_2pow53() {
         decode_text_frame(r#"{"t":"clipboard","offset":9007199254740992,"data_b64":""}"#),
         Err(WireError::OffsetOutOfRange)
     );
+}
+
+#[test]
+fn upload_data_matches_golden() {
+    let bytes = read_golden("upload_data.json");
+    let data: UploadData = serde_json::from_slice(&bytes).expect("deserialize upload_data.json");
+    let out = serde_json::to_vec(&data).expect("serialize upload_data.json");
+    assert_eq!(out, bytes, "upload_data golden");
+}
+
+#[test]
+fn upload_and_typed_requests_reject_unknown_fields() {
+    for bad in [
+        r#"{"op":"upload","id":"abcd1234","mime":"image/png","len":1,"name":"x.png"}"#,
+        r#"{"op":"typed","id":"abcd1234","viewer":"ws-abcd1234","extra":1}"#,
+    ] {
+        let r: Result<Request, _> = serde_json::from_str(bad);
+        assert!(r.is_err(), "unknown field must be rejected: {bad}");
+    }
+}
+
+#[test]
+fn hello_viewer_is_optional_and_omitted_when_absent() {
+    // The older golden (no viewer) still parses, and re-serializes without
+    // inventing a `viewer` key.
+    let old = r#"{"t":"hello","proto":"kb-term/1","session":"abcd1234","epoch":"00000001","harness":"omp","bound_sid":null}"#;
+    let frame: ServerFrame = serde_json::from_str(old).expect("hello without viewer");
+    assert_eq!(serde_json::to_string(&frame).unwrap(), old);
+    // With a viewer the key rides last and round-trips.
+    let new = r#"{"t":"hello","proto":"kb-term/1","session":"abcd1234","epoch":"00000001","harness":"omp","bound_sid":null,"viewer":"ws-abcd1234"}"#;
+    let frame: ServerFrame = serde_json::from_str(new).expect("hello with viewer");
+    assert_eq!(serde_json::to_string(&frame).unwrap(), new);
 }

@@ -32,6 +32,7 @@ pub mod server;
 pub mod stream;
 pub mod supervisor;
 pub mod tmux;
+pub mod upload;
 
 pub use config::RunnerConfig;
 
@@ -94,6 +95,11 @@ pub enum RunnerError {
     BusyPty(String),
     /// The grid is owned by someone else.
     GridOwned(String),
+    /// An upload whose bytes are not a picture of an allowed type, or whose
+    /// declared mime disagrees with the sniffed one (T18).
+    BadImage(String),
+    /// An upload could not be written (short body, timeout, disk).
+    Io(String),
     /// Anything else the runner could not complete.
     Internal(String),
 }
@@ -124,6 +130,8 @@ impl RunnerError {
             RunnerError::Busy(_) => "busy",
             RunnerError::BusyPty(_) => "busy-pty",
             RunnerError::GridOwned(_) => "grid-owned",
+            RunnerError::BadImage(_) => "bad-image",
+            RunnerError::Io(_) => "io",
             RunnerError::Internal(_) => "internal",
         }
     }
@@ -153,6 +161,8 @@ impl RunnerError {
             | RunnerError::Busy(m)
             | RunnerError::BusyPty(m)
             | RunnerError::GridOwned(m)
+            | RunnerError::BadImage(m)
+            | RunnerError::Io(m)
             | RunnerError::Internal(m) => m.clone(),
         }
     }

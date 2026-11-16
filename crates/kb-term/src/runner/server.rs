@@ -23,6 +23,7 @@ use serde_json::{json, Value};
 use crate::runner::media;
 use crate::runner::rpc;
 use crate::runner::supervisor::Supervisor;
+use crate::runner::upload;
 use crate::runner::Runner;
 
 /// The default umask for the runner socket (then `chmod 0600` as well).
@@ -230,6 +231,17 @@ async fn handle_connection<S: Supervisor + 'static>(runner: Arc<Runner<S>>, stre
                 }
                 continue;
             }
+            Ok(crate::wire::Request::Upload { id, mime, len }) => {
+                // The body follows the request line on this connection. A
+                // refusal before the body is read (or a short body) leaves
+                // the stream out of step, so the connection ends there.
+                if !respond_upload(&mut reader, &mut write_half, req_id, &runner, id, mime, len)
+                    .await
+                {
+                    return;
+                }
+                continue;
+            }
             Ok(req) => rpc::dispatch(&runner, &req).await,
             Err(e) => crate::wire::Response::Err {
                 code: e.code().to_string(),
@@ -240,6 +252,74 @@ async fn handle_connection<S: Supervisor + 'static>(runner: Arc<Runner<S>>, stre
             return;
         }
     }
+}
+
+/// Answer an `upload` request (T18). Returns whether the connection may
+/// carry another request: every refusal that leaves body bytes unread (or
+/// a body cut short) returns `false`, and so does a failed write.
+///
+/// The order is the contract: the id grammar and the session's presence
+/// are checked, and `len` against the cap, BEFORE a body byte is read, so
+/// a refused request costs no memory; the body is then read in full under
+/// [`upload::UPLOAD_BODY_TIMEOUT`] and only a complete body reaches the
+/// disk, so a short body leaves nothing behind.
+async fn respond_upload<S: Supervisor + 'static>(
+    reader: &mut BufReader<tokio::net::unix::OwnedReadHalf>,
+    w: &mut tokio::net::unix::OwnedWriteHalf,
+    id: Option<Value>,
+    runner: &Arc<Runner<S>>,
+    session: String,
+    mime: String,
+    len: u64,
+) -> bool {
+    let refuse = |e: crate::runner::RunnerError| crate::wire::Response::Err {
+        code: e.code().to_string(),
+        message: e.message(),
+    };
+    let dir = runner.sessions_dir();
+    if let Err(e) = upload::check_target(&dir, &session) {
+        let _ = respond(w, id, refuse(e)).await;
+        return false;
+    }
+    if len > upload::UPLOAD_MAX_BYTES {
+        let e = crate::runner::RunnerError::TooLarge(format!(
+            "upload exceeds {} MiB",
+            upload::UPLOAD_MAX_BYTES / (1024 * 1024)
+        ));
+        let _ = respond(w, id, refuse(e)).await;
+        return false;
+    }
+    // `len` is at most 8 MiB here, so the allocation is bounded.
+    let mut body = vec![0u8; len as usize];
+    let read =
+        tokio::time::timeout(upload::UPLOAD_BODY_TIMEOUT, reader.read_exact(&mut body)).await;
+    if !matches!(read, Ok(Ok(_))) {
+        let e = crate::runner::RunnerError::Io("upload body was short or timed out".to_string());
+        let _ = respond(w, id, refuse(e)).await;
+        return false;
+    }
+    let stored = tokio::task::spawn_blocking(move || {
+        upload::sweep_orphans(&dir);
+        upload::store_upload(&dir, &session, &mime, &body)
+    })
+    .await;
+    let resp = match stored {
+        Ok(Ok(s)) => {
+            let data = serde_json::to_value(crate::wire::UploadData {
+                path: s.path.to_string_lossy().into_owned(),
+                bytes: s.bytes,
+                mime: s.mime.to_string(),
+                sha256: s.sha256,
+            })
+            .unwrap_or(Value::Null);
+            crate::wire::Response::Ok { data }
+        }
+        Ok(Err(e)) => refuse(e),
+        Err(_) => refuse(crate::runner::RunnerError::Io(
+            "upload task failed".to_string(),
+        )),
+    };
+    respond(w, id, resp).await.is_ok()
 }
 
 /// Answer a `media` request: the usual envelope header carrying
