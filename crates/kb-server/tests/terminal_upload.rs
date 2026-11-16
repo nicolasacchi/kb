@@ -298,7 +298,12 @@ async fn the_shared_gate_runs_before_anything_else_on_the_upload_route() {
     assert_eq!(s, 403);
     assert_problem(&text, "terminal-origin-refused");
 
-    // A wrong Origin, an artifact-subdomain Origin.
+    // A wrong Origin, an artifact-subdomain Origin. A foreign POST Origin may
+    // be refused by the daemon-wide origin allowlist before the handler runs
+    // (`urn:kb:errors:origin-refused`) and the artifact-suffix one by the
+    // terminal gate (`...:terminal-origin-refused`); both are a 403 and both
+    // end in `origin-refused`, which is all this loop asserts. The absent
+    // Origin above is the case only the handler gate catches.
     for bad in ["https://evil.example", "http://x.artifacts.localhost"] {
         let resp = c
             .post(&url)
@@ -311,7 +316,7 @@ async fn the_shared_gate_runs_before_anything_else_on_the_upload_route() {
             .unwrap();
         let (s, text) = status_and_text(resp).await;
         assert_eq!(s, 403, "origin {bad}");
-        assert_problem(&text, "terminal-origin-refused");
+        assert_problem(&text, "origin-refused");
     }
 
     // No intent header, and a wrong one.
