@@ -745,7 +745,7 @@ mod tests {
     #[test]
     fn multi_megabyte_image_line_stays_under_the_live_delta_cap() {
         let tmp = tempfile::tempdir().unwrap();
-        let content = format!("{}\n", image_line(&fake_png(2300 * 1024)));
+        let content = format!("{}\n", image_line(&fake_png(2400 * 1024)));
         assert!(content.len() > 3 * 1024 * 1024);
         let p = write_file(tmp.path(), "s.jsonl", content.as_bytes());
         let d = TailReader::new(p, 0)
