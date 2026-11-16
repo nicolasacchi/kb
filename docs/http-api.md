@@ -1704,6 +1704,29 @@ GET    /api/terms/{id}/ws                    SPA-only terminal byte
                                             JSON under crates/kb-term/
                                             tests/golden is the
                                             contract.
+                                            Browser frames go upstream on the
+                                            same socket: a client `input`
+                                            frame `{"t":"input","data":...}`
+                                            is NOT sent to the tap (the tap
+                                            is read-only and has no input
+                                            path). The runner's stream
+                                            splice writes its `data`, whole,
+                                            byte-exact and in send order, to
+                                            THIS stream's own hidden tmux
+                                            client (the per-viewer client the
+                                            host CLI types through; opened on
+                                            the first input and closed when
+                                            the stream ends, never shared
+                                            with another stream or viewer),
+                                            then tells the tap the viewer
+                                            typed. Every other client frame
+                                            is forwarded to the tap
+                                            unchanged. If the runner cannot
+                                            deliver input (session gone,
+                                            client pty closed or stuck for
+                                            2 s) the socket closes 1011
+                                            rather than silently dropping
+                                            keys.
                                             It closes 1012 on daemon
                                             restart, 1013 for a slow
                                             consumer, 1011 when the
