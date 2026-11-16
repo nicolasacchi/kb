@@ -359,6 +359,7 @@ time of writing (the profiles module is the authority):
 | `kimi` | none | `PI_IMAGE_PROTOCOL=iterm2` | `-S <sid>` | Ctrl-D, 300 ms, Ctrl-D | not verified; the cgroup kill is the backstop |
 | `grok` | `--minimal --no-alt-screen` | none | `-r <sid>` plus `--cwd <cwd>` for an absolute clean cwd | Ctrl-C, 300 ms, Ctrl-C | **experimental** |
 | `opencode` | `--mini` | none | `--session <sid>` | Ctrl-C, 300 ms, Ctrl-C | **experimental** |
+| handoff (`omp` or `claude` target) | none | the target harness's profile env, plus `KB_TERM_ID` | `kb sessions handoff <sid> --to <harness> --transplant --launch --cwd <cwd>` replaces the harness binary | the target harness's | not verified; the cgroup kill is the backstop |
 
 Fixed rules:
 
@@ -380,6 +381,20 @@ Fixed rules:
   `WT_*`, `STY`), because harnesses derive terminal identity from the
   environment first. The wrapper also unsets any such name a server inherited.
   The runner adds `KB_TERM_ID`.
+- **Handoff launch.** A launch carrying `handoff_from` (the source session id of a
+  cross-harness handoff, see `kb sessions handoff` in [cli.md](cli.md)) runs
+  `kb sessions handoff <sid> --to <harness> --transplant --launch --cwd <cwd>`
+  in the pane instead of the harness binary, with the bare `kb` resolved from the
+  pane `PATH`. The transplant file must be written on the host, which the daemon
+  (possibly containerised) never sees, so the pane itself runs the kb CLI; that
+  writes a new native session file and `exec`s `claude -r <new>` / `omp -r <new>`
+  in the cwd. The pane env is the target harness's normal profile env (above) plus
+  `KB_TERM_ID`, and the exit sequence is the target's, so the resumed harness runs
+  as in any kb-term launch and its beats bind the terminal to the new session.
+  Rules, enforced by the server, the runner and the plan alike: `handoff_from` is
+  a plain token (non-empty, at most 128 bytes, first character ASCII
+  alphanumeric, the rest alphanumeric or `.` `_` `:` `-`); `harness` is `claude`
+  or `omp`; it is exclusive with `resume_sid`; `cwd` is required and absolute.
 - **Beats stay on.** kb-term never launches a harness with `--kb-off`, because
   the beats are what tell kb the session's state.
 
@@ -442,6 +457,11 @@ beat (for example a prompt that does not raise one) shows no choice bar.
 - **No unvalidated client string reaches an argv:** key names are a closed
   vocabulary, media keys are 64 lowercase hex characters, ids are plain tokens,
   and the harness argv comes only from the profile table.
+  A handoff launch keeps this property: the only caller-supplied values in its
+  argv are the validated plain-token session id, the closed harness name and the
+  validated absolute cwd; the argv is otherwise fixed tokens, `FORBIDDEN_ARGV`
+  still applies, and the launch is still SPA-only behind the operator-intent
+  gate (no kb verb launches terminals).
 - **Not exposed publicly:** there is no `/api/terms` rule in the public-mirror
   allowlist (`docs/public-mirror/allowlist.txt`) and none may be added.
 

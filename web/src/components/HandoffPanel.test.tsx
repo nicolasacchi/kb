@@ -9,6 +9,21 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { HandoffPanel, handoffTargets } from "./HandoffPanel";
 import type { HandoffOut } from "../api/generated/HandoffOut";
 
+let mockPanelEvals = 0;
+vi.mock("../terminal/TerminalPanel.lazy", () => {
+  mockPanelEvals += 1;
+  return {
+    __esModule: true,
+    default: (props: { termId: string; harness: string; sid: string; onClose?: () => void }) => (
+      <div data-testid="mock-panel" data-term={props.termId} data-harness={props.harness}>
+        <button type="button" data-testid="mock-panel-close" onClick={() => props.onClose?.()}>
+          Close
+        </button>
+      </div>
+    ),
+  };
+});
+
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
@@ -134,5 +149,74 @@ describe("HandoffPanel", () => {
     const { container } = render(<HandoffPanel sessionId="abc" harness="codex" />);
     expect(container.firstChild).toBeNull();
     expect(fetchFn).not.toHaveBeenCalled();
+  });
+});
+
+describe("HandoffPanel — Open in terminal", () => {
+  const sid = "sid-1";
+  const cwd = "/work/p";
+
+  it("shows no button unless the lane is admitted and the cwd is known", () => {
+    stubFetch(200, {});
+    const { rerender } = render(<HandoffPanel sessionId={sid} harness="omp" cwd={cwd} />);
+    expect(screen.queryByTestId("session-handoff-term-claude")).toBeNull();
+    rerender(<HandoffPanel sessionId={sid} harness="omp" terminalAdmitted={false} cwd={cwd} />);
+    expect(screen.queryByTestId("session-handoff-term-claude")).toBeNull();
+    rerender(<HandoffPanel sessionId={sid} harness="omp" terminalAdmitted />);
+    expect(screen.queryByTestId("session-handoff-term-claude")).toBeNull();
+    rerender(<HandoffPanel sessionId={sid} harness="omp" terminalAdmitted cwd={null} />);
+    expect(screen.queryByTestId("session-handoff-term-claude")).toBeNull();
+    rerender(<HandoffPanel sessionId={sid} harness="omp" terminalAdmitted cwd={cwd} />);
+    expect(screen.getByTestId("session-handoff-term-claude")).toBeTruthy();
+  });
+
+  it("launches nothing before the click, then POSTs /api/terms and mounts the lazy panel", async () => {
+    const fetchFn = stubFetch(201, { id: "t7", cols: 120, rows: 40 });
+    render(<HandoffPanel sessionId={sid} harness="omp" terminalAdmitted cwd={cwd} />);
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("mock-panel")).toBeNull();
+    expect(mockPanelEvals).toBe(0);
+    expect(screen.getByTestId("session-handoff-term-claude").getAttribute("title")).toContain(
+      "--transplant --launch",
+    );
+
+    fireEvent.click(screen.getByTestId("session-handoff-term-claude"));
+    const panel = await screen.findByTestId("mock-panel");
+    expect(mockPanelEvals).toBe(1);
+    expect(panel.getAttribute("data-term")).toBe("t7");
+    expect(panel.getAttribute("data-harness")).toBe("claude");
+
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchFn.mock.calls[0];
+    expect(String(url)).toBe("/api/terms");
+    expect(init?.method).toBe("POST");
+    const headers = init?.headers as Record<string, string>;
+    expect(headers["X-Kb-Intent"]).toBe("terminal");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      harness: "claude",
+      cwd,
+      handoff_from: sid,
+    });
+
+    // Close only unmounts the panel.
+    fireEvent.click(screen.getByTestId("mock-panel-close"));
+    expect(screen.queryByTestId("mock-panel")).toBeNull();
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders the launch error reason and mounts no panel", async () => {
+    stubFetch(400, {
+      type: "urn:kb:errors:bad-request",
+      title: "Bad Request",
+      detail: "cwd must be an absolute path",
+    });
+    render(<HandoffPanel sessionId={sid} harness="claude" terminalAdmitted cwd={cwd} />);
+    fireEvent.click(screen.getByTestId("session-handoff-term-omp"));
+    await waitFor(() => expect(screen.getByTestId("session-handoff-term-error")).toBeTruthy());
+    expect(screen.getByTestId("session-handoff-term-error").textContent).toContain(
+      "Bad Request: cwd must be an absolute path",
+    );
+    expect(screen.queryByTestId("mock-panel")).toBeNull();
+    expect(screen.queryByTestId("session-handoff-error")).toBeNull();
   });
 });

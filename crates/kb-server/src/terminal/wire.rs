@@ -97,6 +97,11 @@ pub enum RunnerRequest {
         /// Exit keys used by the kill RPC.
         #[serde(default)]
         exit_keys: Option<Vec<String>>,
+        /// Source session id of a cross-harness handoff: the pane runs
+        /// `kb sessions handoff <id> --to <harness> --transplant --launch --cwd <cwd>`
+        /// instead of the harness binary. Mutually exclusive with `resume_sid`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        handoff_from: Option<String>,
     },
     /// Kill a session.
     Kill {
@@ -538,6 +543,7 @@ mod tests {
             harness: Harness::Omp,
             argv: None,
             resume_sid: None,
+            handoff_from: None,
             cwd: "/work/proj".to_string(),
             cols: None,
             rows: None,
@@ -551,6 +557,7 @@ mod tests {
             harness: Harness::Omp,
             argv: None,
             resume_sid: None,
+            handoff_from: None,
             cwd: "/work/proj".to_string(),
             cols: None,
             rows: None,
@@ -559,6 +566,41 @@ mod tests {
         };
         let back: RunnerRequest = serde_json::from_str(&out).unwrap();
         assert_eq!(back, expected);
+    }
+
+    /// `handoff_from` is optional on the wire: absent parses as `None`,
+    /// `None` serializes with no key at all (old runners never see it),
+    /// and a set value round-trips under the name `handoff_from`.
+    #[test]
+    fn launch_handoff_from_is_optional_and_skipped_when_none() {
+        let req: RunnerRequest = serde_json::from_str(
+            "{\"op\":\"launch\",\"harness\":\"claude\",\"argv\":null,\"resume_sid\":null,\"cwd\":\"/work/proj\"}",
+        )
+        .unwrap();
+        match req {
+            RunnerRequest::Launch { handoff_from, .. } => assert_eq!(handoff_from, None),
+            other => panic!("must be launch, got {other:?}"),
+        }
+        let mut launch = RunnerRequest::Launch {
+            harness: Harness::Claude,
+            argv: None,
+            resume_sid: None,
+            handoff_from: None,
+            cwd: "/work/proj".to_string(),
+            cols: None,
+            rows: None,
+            env: None,
+            exit_keys: None,
+        };
+        let out = serde_json::to_string(&launch).unwrap();
+        assert!(!out.contains("handoff_from"), "{out}");
+        if let RunnerRequest::Launch { handoff_from, .. } = &mut launch {
+            *handoff_from = Some("sid-1".to_string());
+        }
+        let out = serde_json::to_string(&launch).unwrap();
+        assert!(out.contains(r#""handoff_from":"sid-1""#), "{out}");
+        let back: RunnerRequest = serde_json::from_str(&out).unwrap();
+        assert_eq!(back, launch);
     }
 
     /// The runner's `list` reply `data` is an array of `SessionInfo`s

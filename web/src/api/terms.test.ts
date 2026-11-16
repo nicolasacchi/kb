@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  launchTerm,
   listTerms,
   mintTicket,
   TERMINAL_INTENT_HEADER,
@@ -65,6 +66,44 @@ describe("terms API", () => {
     expect(header(init, "X-Kb-Token")).toBeUndefined();
     expect(header(init, "Origin")).toBeUndefined();
     expect(init.body).toBe("{}");
+  });
+
+  it("launchTerm POSTs the JSON body with the intent header and returns the runner confirm", async () => {
+    const calls = mockFetch(() => jsonResponse(201, { id: "t9", cols: 120, rows: 40 }));
+    const out = await launchTerm({ harness: "claude", cwd: "/work/p", handoff_from: "sid-1" });
+    expect(out).toEqual({ id: "t9", cols: 120, rows: 40 });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("/api/terms");
+    const init = calls[0].init!;
+    expect(init.method).toBe("POST");
+    expect(header(init, "X-Kb-Intent")).toBe("terminal");
+    expect(header(init, "Accept")).toBe("application/json");
+    expect(header(init, "Content-Type")).toBe("application/json");
+    expect(header(init, "Authorization")).toBeUndefined();
+    expect(header(init, "X-Kb-Token")).toBeUndefined();
+    expect(JSON.parse(String(init.body))).toEqual({
+      harness: "claude",
+      cwd: "/work/p",
+      handoff_from: "sid-1",
+    });
+  });
+
+  it("launchTerm throws TermsApiError with the problem reason on non-2xx", async () => {
+    mockFetch(() =>
+      jsonResponse(400, {
+        type: "urn:kb:errors:bad-request",
+        title: "Bad Request",
+        detail: "invalid handoff_from",
+      }),
+    );
+    await expect(
+      launchTerm({ harness: "claude", cwd: "/work/p", handoff_from: "bad id" }),
+    ).rejects.toMatchObject({
+      name: "TermsApiError",
+      status: 400,
+      type: "urn:kb:errors:bad-request",
+      message: "Bad Request: invalid handoff_from",
+    });
   });
 
   it("listTerms GETs /api/terms and unwraps the {terms} envelope", async () => {

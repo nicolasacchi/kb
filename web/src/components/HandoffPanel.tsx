@@ -8,10 +8,24 @@
 // `ResumeCommand`); it runs `kb sessions handoff` on the machine that has
 // the session, because the daemon cannot launch a harness on the operator's
 // terminal.
+//
+// "Open in terminal" (only when the card's terminal lane is admitted and the
+// session cwd is known) launches the TRANSPLANT in a kb terminal: the pane
+// runs `kb sessions handoff <sid> --to <target> --transplant --launch` on
+// the daemon's host, which writes a native copy of this session for the
+// target and resumes it there. The SPA sends only the closed harness name,
+// the cwd and the source sid (`launchTerm`); the argv is built by the kb-term
+// runner. Nothing is launched until the click.
 
-import { useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useRef, useState } from "react";
+import { StateCard } from "@kb/ui/StateCard";
 import { fetchSessionHandoff } from "../api/sessions";
+import { launchTerm } from "../api/terms";
 import type { HandoffOut } from "../api/generated/HandoffOut";
+
+// Same lazy seam as `TerminalSlot`: the panel chunk (xterm) loads only after
+// a successful launch.
+const TerminalPanel = lazy(() => import("../terminal/TerminalPanel.lazy"));
 
 export type HandoffTarget = { to: "claude" | "omp"; label: string };
 
@@ -35,6 +49,17 @@ const HELP =
   "prompt. The command runs `kb sessions handoff` on the machine that has " +
   "the session; add --transplant to resume a native copy instead.";
 
+const TERM_HELP = (target: string) =>
+  "Runs `kb sessions handoff --transplant --launch` in a kb terminal on the " +
+  `daemon's host: it writes a native copy of this session for ${target} and ` +
+  "resumes it there.";
+
+type TermState =
+  | { kind: "idle" }
+  | { kind: "launching"; to: "claude" | "omp" }
+  | { kind: "error"; to: "claude" | "omp"; reason: string }
+  | { kind: "open"; to: "claude" | "omp"; termId: string };
+
 function CopyButton({ text, label, testId }: { text: string; label: string; testId: string }) {
   const [copied, setCopied] = useState(false);
   const copy = () => {
@@ -53,13 +78,51 @@ function CopyButton({ text, label, testId }: { text: string; label: string; test
   );
 }
 
-export function HandoffPanel({ sessionId, harness }: { sessionId: string; harness: string }) {
+export function HandoffPanel({
+  sessionId,
+  harness,
+  terminalAdmitted,
+  cwd,
+}: {
+  sessionId: string;
+  harness: string;
+  /// The card's terminal lane is admitted (and the terminal tier is on).
+  terminalAdmitted?: boolean;
+  /// The session's working directory; the transplant resumes there.
+  cwd?: string | null;
+}) {
   const targets = handoffTargets(harness);
   const [state, setState] = useState<State>({ kind: "idle" });
+  const [term, setTerm] = useState<TermState>({ kind: "idle" });
   const ctl = useRef<AbortController | null>(null);
-  useEffect(() => () => ctl.current?.abort(), []);
+  const termCtl = useRef<AbortController | null>(null);
+  useEffect(
+    () => () => {
+      ctl.current?.abort();
+      termCtl.current?.abort();
+    },
+    [],
+  );
 
   if (targets.length === 0) return null;
+  const canLaunch = Boolean(terminalAdmitted && cwd);
+
+  const openTerm = (to: "claude" | "omp") => {
+    if (!cwd) return;
+    termCtl.current?.abort();
+    const c = new AbortController();
+    termCtl.current = c;
+    setTerm({ kind: "launching", to });
+    launchTerm({ harness: to, cwd, handoff_from: sessionId }, c.signal).then(
+      (r) => {
+        if (!c.signal.aborted) setTerm({ kind: "open", to, termId: r.id });
+      },
+      (e: unknown) => {
+        if (c.signal.aborted) return;
+        setTerm({ kind: "error", to, reason: e instanceof Error ? e.message : String(e) });
+      },
+    );
+  };
 
   const run = (to: "claude" | "omp") => {
     ctl.current?.abort();
@@ -93,9 +156,28 @@ export function HandoffPanel({ sessionId, harness }: { sessionId: string; harnes
             {t.label}
           </button>
         ))}
+        {canLaunch &&
+          targets.map((t) => (
+            <button
+              key={t.to}
+              type="button"
+              className="kb-ses__resume-copy"
+              onClick={() => openTerm(t.to)}
+              disabled={term.kind === "launching" || term.kind === "open"}
+              data-testid={`session-handoff-term-${t.to}`}
+              title={TERM_HELP(t.to)}
+            >
+              Open in terminal
+            </button>
+          ))}
         {state.kind === "loading" && (
           <span className="kb-ses__handoff-meta" data-testid="session-handoff-loading">
             building brief…
+          </span>
+        )}
+        {term.kind === "launching" && (
+          <span className="kb-ses__handoff-meta" data-testid="session-handoff-term-launching">
+            launching terminal…
           </span>
         )}
       </div>
@@ -103,6 +185,24 @@ export function HandoffPanel({ sessionId, harness }: { sessionId: string; harnes
         <p className="kb-ses__ins-errors" role="alert" data-testid="session-handoff-error">
           handoff failed: {state.reason}
         </p>
+      )}
+      {term.kind === "error" && (
+        <p className="kb-ses__ins-errors" role="alert" data-testid="session-handoff-term-error">
+          terminal launch failed: {term.reason}
+        </p>
+      )}
+      {term.kind === "open" && (
+        <Suspense
+          fallback={<StateCard kind="loading" title="Loading terminal" reason={term.to} />}
+        >
+          <TerminalPanel
+            termId={term.termId}
+            sid={sessionId}
+            harness={term.to}
+            mode="watch"
+            onClose={() => setTerm({ kind: "idle" })}
+          />
+        </Suspense>
       )}
       {state.kind === "ready" && <HandoffResult out={state.out} />}
     </div>

@@ -609,7 +609,13 @@ export default function SessionPage() {
 
       <Section name="resume" title="Resume" open={open}>
         <ResumeCommand sessionId={sid} resume={sum.resume} />
-        <HandoffPanel key={sid} sessionId={sid} harness={sum.harness} />
+        <HandoffPanel
+          key={sid}
+          sessionId={sid}
+          harness={sum.harness}
+          terminalAdmitted={card.terminal.admitted && card.terminal.reason !== "terminal disabled"}
+          cwd={detail?.cwd}
+        />
       </Section>
     </main>
   );

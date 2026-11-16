@@ -1517,8 +1517,9 @@ GET  /api/terms                             SPA-only terminal relays
 GET    /api/terms                           Relay the runner's session
                                             list as `{"terms":[...]}`.
 POST   /api/terms                           Launch: body `{harness,
-                                            resume_sid?, cwd?, cols?,
-                                            rows?}`. `harness` must be
+                                            resume_sid?, handoff_from?,
+                                            cwd?, cols?, rows?}`.
+                                            `harness` must be
                                             one of the six known
                                             harnesses; `resume_sid`/
                                             `cwd` are non-empty, <= 512
@@ -1529,8 +1530,26 @@ POST   /api/terms                           Launch: body `{harness,
                                             runner's own 120x40 when
                                             omitted (the relay sends
                                             `null` so the runner's
-                                            default applies). 201 with
-                                            the runner's reply.
+                                            default applies).
+                                            `handoff_from` is the source
+                                            session id of a cross-harness
+                                            handoff (the pane runs `kb
+                                            sessions handoff <id> --to
+                                            <harness> --transplant
+                                            --launch --cwd <cwd>`, see
+                                            docs/kb-term.md): a plain
+                                            token (<= 128 bytes, first
+                                            char alphanumeric, rest
+                                            alphanumeric or `.` `_` `:`
+                                            `-`), `harness` must be
+                                            `claude` or `omp` (400 "handoff
+                                            targets claude or omp"), it
+                                            excludes `resume_sid` (400),
+                                            and `cwd` is then required and
+                                            absolute (400). An invalid
+                                            token is 400 too; nothing
+                                            reaches the runner on a 400.
+                                            201 with the runner's reply.
 POST   /api/terms/{id}/ticket               Mint a single-use
                                             WebSocket ticket: the runner's
                                             list must contain `id` (else

@@ -1113,6 +1113,7 @@ pub async fn run_new(args: NewArgs) -> u8 {
             harness,
             argv: Some(vec![format!("/usr/local/bin/{}", harness.as_str())]),
             resume_sid: args.resume_sid.clone(),
+            handoff_from: None,
             cwd: cwd.to_string_lossy().into_owned(),
             cols: args.cols,
             rows: args.rows,

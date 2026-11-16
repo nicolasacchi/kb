@@ -659,6 +659,11 @@ pub enum Request {
         /// Exit keys used by the kill RPC (`None` means the default sequence).
         #[serde(default)]
         exit_keys: Option<Vec<String>>,
+        /// Source session id of a cross-harness handoff: the pane runs
+        /// `kb sessions handoff <id> --to <harness> --transplant --launch --cwd <cwd>`
+        /// instead of the harness binary. Mutually exclusive with `resume_sid`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        handoff_from: Option<String>,
     },
     /// Kill a session.
     Kill {
@@ -949,4 +954,50 @@ pub struct SessionInfo {
     /// Whether the holder socket did not answer (stale).
     #[serde(default)]
     pub stale: bool,
+}
+
+#[cfg(test)]
+mod handoff_wire_tests {
+    use super::*;
+
+    const BASE: &str =
+        r#"{"op":"launch","harness":"claude","argv":null,"resume_sid":null,"cwd":"/w"}"#;
+
+    /// A launch without `handoff_from` still parses (old callers), a launch
+    /// with it parses into `Some`, and `None` is omitted on serialise.
+    #[test]
+    fn launch_handoff_from_is_optional_and_omitted_when_none() {
+        let old: Request = serde_json::from_str(BASE).unwrap();
+        match &old {
+            Request::Launch { handoff_from, .. } => assert_eq!(*handoff_from, None),
+            other => panic!("expected launch, got {other:?}"),
+        }
+        let json = serde_json::to_string(&old).unwrap();
+        assert!(
+            !json.contains("handoff_from"),
+            "None must be omitted: {json}"
+        );
+
+        let with: Request = serde_json::from_str(
+            r#"{"op":"launch","harness":"omp","argv":null,"resume_sid":null,"cwd":"/w","handoff_from":"abc-123"}"#,
+        )
+        .unwrap();
+        match &with {
+            Request::Launch { handoff_from, .. } => {
+                assert_eq!(handoff_from.as_deref(), Some("abc-123"));
+            }
+            other => panic!("expected launch, got {other:?}"),
+        }
+        let json = serde_json::to_string(&with).unwrap();
+        assert!(json.contains(r#""handoff_from":"abc-123""#), "{json}");
+        let back: Request = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, with);
+    }
+
+    /// `deny_unknown_fields` still rejects a misspelled sibling.
+    #[test]
+    fn launch_still_rejects_unknown_fields() {
+        let bad = r#"{"op":"launch","harness":"claude","argv":null,"resume_sid":null,"cwd":"/w","handoff":"x"}"#;
+        assert!(serde_json::from_str::<Request>(bad).is_err());
+    }
 }

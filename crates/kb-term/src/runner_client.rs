@@ -331,6 +331,7 @@ mod tests {
                 harness: Harness::Omp,
                 argv: Some(vec!["/usr/local/bin/omp".to_string()]),
                 resume_sid: None,
+                handoff_from: None,
                 cwd: "/tmp".to_string(),
                 cols: None,
                 rows: None,

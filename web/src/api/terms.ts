@@ -117,6 +117,53 @@ export async function mintTicket(termId: string, signal?: AbortSignal): Promise<
   return (await res.json()) as TicketResult;
 }
 
+/**
+ * The `POST /api/terms` reply: the runner's launch confirm (`terms.rs`
+ * `launch` relays the runner `data`; `id` is guaranteed, dims are the
+ * runner's).
+ */
+export interface LaunchResult {
+  id: string;
+  cols?: number;
+  rows?: number;
+}
+
+/** The `POST /api/terms` body (`terms.rs` `LaunchBody`). */
+export interface LaunchBody {
+  harness: string;
+  cwd: string;
+  /**
+   * Source session id of a cross-harness handoff: the pane runs
+   * `kb sessions handoff <id> --to <harness> --transplant --launch`.
+   * Mutually exclusive with `resume_sid`.
+   */
+  handoff_from?: string;
+  resume_sid?: string;
+  cols?: number;
+  rows?: number;
+}
+
+/**
+ * Launch a terminal. Operator-intent only (call from a click handler):
+ * same gate as `mintTicket` — same-origin, intent header, no token.
+ * Non-2xx throws `TermsApiError` (400 = rejected body, 404 = terminal
+ * disabled, 5xx = runner failure).
+ */
+export async function launchTerm(body: LaunchBody, signal?: AbortSignal): Promise<LaunchResult> {
+  const res = await fetch(`${currentDaemonBase()}/api/terms`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      [TERMINAL_INTENT_HEADER]: TERMINAL_INTENT_VALUE,
+    },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!res.ok) throw await termsError(res);
+  return (await res.json()) as LaunchResult;
+}
+
 /** List all terminals (`{terms: [...]}` envelope unwrapped). */
 export async function listTerms(signal?: AbortSignal): Promise<TermRow[]> {
   const res = await fetch(`${currentDaemonBase()}/api/terms`, {
