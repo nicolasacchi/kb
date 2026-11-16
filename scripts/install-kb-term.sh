@@ -218,15 +218,31 @@ check_no_tokens() {
 }
 
 # ---- main -------------------------------------------------------------------
+# One systemd `Environment=` line for NAME=VALUE. The whole assignment is
+# double-quoted (so a space survives), and inside the quotes a backslash and a
+# double quote are backslash-escaped and `%` is doubled (`%%`), because
+# systemd expands `%x` specifiers in unit files. The heredoc that carries the
+# result is quoted ('EOF'), so the shell never touches these characters.
+systemd_env_line() {
+  esc="$(printf '%s' "$2" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/%/%%/g')"
+  printf 'Environment="%s=%s"' "$1" "$esc"
+}
+
 # Print (never write) the kb-termd.service drop-in step, pre-filled from the
-# current shell: KB_SESSIONS_DIR and the dirs of any harness on PATH.
+# current shell: KB_SESSIONS_DIR, and a PATH that always holds the dir `kb`
+# resolves from plus the dir of every harness found (panes inherit the
+# runner's PATH, so a missing dir means exit 127 or a silent hook no-op).
 print_env_dropin() {
   dirs=""
-  for bin in claude codex opencode grok kimi omp; do
+  for bin in kb claude codex opencode grok kimi omp; do
     p="$(command -v "$bin" 2>/dev/null || true)"
     case "$p" in /*) ;; *) continue ;; esac
     d="$(dirname "$p")"
     case "$d" in /usr/bin|/usr/local/bin) continue ;; esac
+    # A PATH entry cannot carry a colon or a newline; skip rather than
+    # print a drop-in that silently splits the directory.
+    case "$d" in *:*|*"
+"*) continue ;; esac
     case ":${dirs}:" in *":${d}:"*) continue ;; esac
     dirs="${dirs:+${dirs}:}${d}"
   done
@@ -235,8 +251,8 @@ print_env_dropin() {
   say "       mkdir -p ~/.config/systemd/user/kb-termd.service.d"
   say "       cat > ~/.config/systemd/user/kb-termd.service.d/env.conf <<'EOF'"
   say "       [Service]"
-  say "       Environment=PATH=${env_path}"
-  say "       Environment=KB_SESSIONS_DIR=${sessions_dir}"
+  say "       $(systemd_env_line PATH "$env_path")"
+  say "       $(systemd_env_line KB_SESSIONS_DIR "$sessions_dir")"
   say "EOF"
   say "       systemctl --user daemon-reload && systemctl --user restart kb-termd.service"
   if [ -z "${KB_SESSIONS_DIR:-}" ]; then

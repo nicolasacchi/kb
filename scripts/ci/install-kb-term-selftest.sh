@@ -278,13 +278,63 @@ printf '#!/bin/sh\n' > "$work/hbin/omp"
 chmod 755 "$work/hbin/omp"
 run "$work/p4b" PATH="$work/hbin:$PATH" KB_SESSIONS_DIR=/tmp/sessions-fixture \
   || fail "install with a harness on PATH should succeed"
-grep -qF "Environment=KB_SESSIONS_DIR=/tmp/sessions-fixture" "$work/out" \
+grep -qF 'Environment="KB_SESSIONS_DIR=/tmp/sessions-fixture"' "$work/out" \
   || fail "drop-in is not pre-filled with KB_SESSIONS_DIR"
-grep "Environment=PATH=" "$work/out" | grep -qF "$work/hbin:/usr/local/bin:/usr/bin" \
+grep 'Environment="PATH=' "$work/out" | grep -qF "$work/hbin:" \
   || fail "drop-in PATH does not carry the harness dir"
 [ ! -e "$work/home/.config/systemd/user/kb-termd.service.d" ] \
   || fail "the installer must not write the drop-in"
 say_ok "4b env drop-in step is printed pre-filled and not written"
+
+# 4c. the printed drop-in PATH holds the dir `kb` resolves from AND every
+# harness dir, and the values survive systemd's own unquoting even with a
+# space, a `%`, a backslash and a double quote in the paths. The block is
+# parsed back the way systemd reads Environment=: the whole assignment is a
+# double-quoted word, `\x` yields x, and `%%` yields `%`.
+kbdir="$work/kb dir%1"
+hdir="$work/harness \\dir%2"
+mkdir -p "$kbdir" "$hdir"
+printf '#!/bin/sh\n' > "$kbdir/kb"; chmod 755 "$kbdir/kb"
+printf '#!/bin/sh\n' > "$hdir/omp"; chmod 755 "$hdir/omp"
+sess='/tmp/sess "q" 100%\x'
+run "$work/p4c" PATH="$kbdir:$hdir:$PATH" KB_SESSIONS_DIR="$sess" \
+  || fail "install with kb and a harness in odd dirs should succeed"
+python3 -I - "$work/out" "$kbdir" "$hdir" "$sess" <<'PYEOF' || fail "drop-in does not parse back to the intended values"
+import re, sys
+out, kbdir, hdir, want_sess = sys.argv[1:5]
+found = {}
+for line in open(out, encoding="utf-8"):
+    line = line.strip()
+    if not line.startswith('Environment="'):
+        continue
+    body = line[len('Environment='):]
+    assert body.startswith('"') and body.endswith('"') and len(body) >= 2, line
+    body = body[1:-1]
+    value, i = "", 0
+    while i < len(body):
+        c = body[i]
+        if c == "\\":
+            value += body[i + 1]
+            i += 2
+        elif c == "%":
+            assert body[i + 1] == "%", "unescaped % specifier in " + line
+            value += "%"
+            i += 2
+        else:
+            assert c != '"', "unescaped quote in " + line
+            value += c
+            i += 1
+    name, _, val = value.partition("=")
+    found[name] = val
+# Harness dirs already on the host PATH may precede the fixture's omp dir, so
+# assert membership and the fixed ends rather than the whole string.
+parts = found.get("PATH", "").split(":")
+assert parts[0] == kbdir, parts
+assert hdir in parts, parts
+assert parts[-2:] == ["/usr/local/bin", "/usr/bin"], parts
+assert found.get("KB_SESSIONS_DIR") == want_sess, found.get("KB_SESSIONS_DIR")
+PYEOF
+say_ok "4c drop-in carries kb's dir and quotes values for systemd"
 
 # 5. gh attestation fails -> abort with nothing installed; override proceeds
 if run "$work/p5" PATH="$work/gh-bin:$PATH" FAKE_GH_VERIFY=1; then fail "failed attestation must abort"; fi
