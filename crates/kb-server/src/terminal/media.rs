@@ -44,7 +44,7 @@ use crate::terminal::runner_client::{MediaReply, RunnerError, UnixRunner};
 
 /// `urn:kb:errors:unsupported-media` — stored bytes whose magic is not
 /// a served picture type.
-const ERR_UNSUPPORTED_MEDIA: &str = "urn:kb:errors:unsupported-media";
+pub(crate) const ERR_UNSUPPORTED_MEDIA: &str = "urn:kb:errors:unsupported-media";
 
 /// `Sec-Fetch-Site` header name (a forbidden header: scripts cannot set it).
 const SEC_FETCH_SITE: &str = "sec-fetch-site";

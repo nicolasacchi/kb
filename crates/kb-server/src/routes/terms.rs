@@ -15,7 +15,7 @@
 //! `busy-pty`/`too-many-viewers` → 409 (with the reply's message),
 //! `multi-line-refused` → 422, `invalid-id`/`invalid-harness`/
 //! `bad-request`/`bad-viewer`/`bad-input`/`bad-key`/`bad-text`/
-//! `bad-size` → 400, `too-large` → 413, `tap-timeout`/`tmux-version`
+//! `bad-size` → 400, `too-large` → 413, `bad-image` → 415, `tap-timeout`/`tmux-version`
 //! → 503, `tmux-failed`/`internal`/anything else → 502.
 
 use std::sync::Arc;
@@ -33,6 +33,9 @@ use crate::terminal::gate::{
     gate, Problem, ERR_TERMINAL_BAD_REPLY, ERR_TERMINAL_BAD_REQUEST, ERR_TERMINAL_CONFLICT,
     ERR_TERMINAL_NOT_FOUND, ERR_TERMINAL_PAYLOAD_TOO_LARGE, ERR_TERMINAL_REFUSED,
     ERR_TERMINAL_RUNNER_UNAVAILABLE, ERR_TERMINAL_TICKET_FULL, ERR_TERMINAL_TICKET_UNAVAILABLE,
+};
+use crate::terminal::keys_allow::{
+    is_named_key, is_valid_viewer_id, ERR_TERMINAL_BAD_KEY, MAX_KEYS_PER_REQUEST,
 };
 use crate::terminal::runner_client::{RunnerError, UnixRunner};
 use crate::terminal::wire::{Harness, RunnerReply, RunnerRequest};
@@ -53,7 +56,7 @@ const MAX_BODY_BYTES: usize = 256 * 1024;
 /// refused, never truncated).
 const MAX_PASTE_TEXT_BYTES: usize = 32 * 1024;
 
-fn no_store(mut resp: Response<Body>) -> Response<Body> {
+pub(crate) fn no_store(mut resp: Response<Body>) -> Response<Body> {
     resp.headers_mut().insert(
         header::CACHE_CONTROL,
         header::HeaderValue::from_static("no-store"),
@@ -61,7 +64,7 @@ fn no_store(mut resp: Response<Body>) -> Response<Body> {
     resp
 }
 
-fn bad_request(detail: impl Into<String>) -> Response<Body> {
+pub(crate) fn bad_request(detail: impl Into<String>) -> Response<Body> {
     no_store(Problem::response(
         ERR_TERMINAL_BAD_REQUEST,
         StatusCode::BAD_REQUEST,
@@ -70,7 +73,7 @@ fn bad_request(detail: impl Into<String>) -> Response<Body> {
     ))
 }
 
-fn payload_too_large(detail: impl Into<String>) -> Response<Body> {
+pub(crate) fn payload_too_large(detail: impl Into<String>) -> Response<Body> {
     no_store(Problem::response(
         ERR_TERMINAL_PAYLOAD_TOO_LARGE,
         StatusCode::PAYLOAD_TOO_LARGE,
@@ -160,7 +163,7 @@ fn relay(reply: RunnerReply) -> Response<Body> {
 /// codes (`RunnerError::code()`); matching underscore forms here would
 /// make every failure a 502. Every code the runner can emit is pinned
 /// by `runner_err_maps_every_dash_code`.
-fn runner_err(code: &str, message: &str) -> Response<Body> {
+pub(crate) fn runner_err(code: &str, message: &str) -> Response<Body> {
     let (status, urn) = match code {
         "invalid-id" | "invalid-harness" | "bad-request" | "bad-viewer" | "bad-input"
         | "bad-key" | "bad-text" | "bad-size" => {
@@ -170,6 +173,11 @@ fn runner_err(code: &str, message: &str) -> Response<Body> {
         "too-large" => (
             StatusCode::PAYLOAD_TOO_LARGE,
             ERR_TERMINAL_PAYLOAD_TOO_LARGE,
+        ),
+        // T18: an upload whose bytes are not an allowed picture type.
+        "bad-image" => (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            crate::terminal::media::ERR_UNSUPPORTED_MEDIA,
         ),
         "blocked" | "grid-owned" | "paste-only" | "busy" | "busy-pty" | "too-many-viewers" => {
             (StatusCode::CONFLICT, ERR_TERMINAL_CONFLICT)
@@ -194,7 +202,7 @@ fn runner_err(code: &str, message: &str) -> Response<Body> {
     ))
 }
 
-fn runner_down() -> Response<Body> {
+pub(crate) fn runner_down() -> Response<Body> {
     no_store(Problem::response(
         ERR_TERMINAL_RUNNER_UNAVAILABLE,
         StatusCode::SERVICE_UNAVAILABLE,
@@ -206,7 +214,7 @@ fn runner_down() -> Response<Body> {
 /// The runner answered with something unreadable (oversize or
 /// unparseable): a bad-gateway shape (502), not "unavailable" — the
 /// runner was reachable and spoke nonsense.
-fn runner_bad_reply() -> Response<Body> {
+pub(crate) fn runner_bad_reply() -> Response<Body> {
     no_store(Problem::response(
         ERR_TERMINAL_BAD_REPLY,
         StatusCode::BAD_GATEWAY,
@@ -218,7 +226,7 @@ fn runner_bad_reply() -> Response<Body> {
 /// Build the per-request runner client from the CURRENT config
 /// (invariant #13: a config edit restarts in-process; building it here
 /// means the very next request uses the new socket/timeout).
-async fn runner_for(state: &Arc<KbHandles>) -> UnixRunner {
+pub(crate) async fn runner_for(state: &Arc<KbHandles>) -> UnixRunner {
     let cfg = state.config.read().await;
     let terminal = &cfg.terminal;
     UnixRunner::new(
@@ -258,6 +266,43 @@ async fn ensure_spa_viewer(state: &Arc<KbHandles>, id: &str) {
         },
     )
     .await;
+}
+
+/// T18 — the optional drive `viewer` of a request body, validated against
+/// the tap's viewer-id grammar. `Ok(None)` = absent. A bad id is a 400
+/// before any runner call: a client string never reaches the runner
+/// unchecked, and it is never persisted (LF-7).
+fn drive_viewer(viewer: Option<&str>) -> Result<Option<String>, Response<Body>> {
+    match viewer {
+        None => Ok(None),
+        Some(v) if is_valid_viewer_id(v) => Ok(Some(v.to_string())),
+        Some(_) => Err(bad_request("invalid viewer id")),
+    }
+}
+
+/// T18 — after a drive call SUCCEEDED, tell the tap which device typed.
+/// The phone's composer, key bar and choice bar travel over REST, not the
+/// WebSocket, so this is the only way the tap learns that the viewer typed
+/// (an OSC 52 clipboard write is released only to a viewer that typed in
+/// the last 10 s). Best-effort by design: the input already happened, so a
+/// failed notification must never turn it into an error. A refused call
+/// never reaches here, so a failed paste is not "typing".
+async fn notify_typed(state: &Arc<KbHandles>, id: &str, viewer: Option<&str>, reply: &RunnerReply) {
+    let Some(viewer) = viewer else { return };
+    if !matches!(reply, RunnerReply::Ok { .. }) {
+        return;
+    }
+    if let Err(resp) = call(
+        state,
+        &RunnerRequest::Typed {
+            id: id.to_string(),
+            viewer: viewer.to_string(),
+        },
+    )
+    .await
+    {
+        tracing::debug!(status = %resp.status(), "typed notification not delivered");
+    }
 }
 
 /// Does `data` (a `RunnerReply::Ok.data` for `list`) contain `id`?
@@ -545,6 +590,9 @@ pub async fn ticket(
 #[serde(deny_unknown_fields)]
 struct PasteBody {
     text: String,
+    /// T18: the panel's viewer id (the OSC 52 typing clock).
+    #[serde(default)]
+    viewer: Option<String>,
 }
 
 pub async fn paste(
@@ -570,6 +618,10 @@ pub async fn paste(
     if parsed.text.len() > MAX_PASTE_TEXT_BYTES {
         return payload_too_large("paste text over 32 KiB");
     }
+    let typed_by = match drive_viewer(parsed.viewer.as_deref()) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
     ensure_spa_viewer(&state, &id).await;
     let req = RunnerRequest::Paste {
         id: id.clone(),
@@ -578,7 +630,10 @@ pub async fn paste(
     };
     match call(&state, &req).await {
         Err(e) => e,
-        Ok(reply) => relay(reply),
+        Ok(reply) => {
+            notify_typed(&state, &id, typed_by.as_deref(), &reply).await;
+            relay(reply)
+        }
     }
 }
 
@@ -586,7 +641,11 @@ pub async fn paste(
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct EnterBody {}
+struct EnterBody {
+    /// T18: the panel's viewer id (the OSC 52 typing clock).
+    #[serde(default)]
+    viewer: Option<String>,
+}
 
 pub async fn enter(
     State(state): State<Arc<KbHandles>>,
@@ -604,9 +663,14 @@ pub async fn enter(
     if body.len() > MAX_BODY_BYTES {
         return payload_too_large("request body over 256 KiB");
     }
-    if serde_json::from_slice::<EnterBody>(&body).is_err() {
-        return bad_request("malformed enter body");
-    }
+    let parsed: EnterBody = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return bad_request("malformed enter body"),
+    };
+    let typed_by = match drive_viewer(parsed.viewer.as_deref()) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
     // T13 — a bound-but-blocked terminal refuses with 409 BEFORE the
     // runner relay; an unbound terminal is NOT blocked (state unknown)
     // and gets an `x-kb-term-state: unbound` header on the relayed reply.
@@ -635,6 +699,7 @@ pub async fn enter(
     match call(&state, &req).await {
         Err(e) => e,
         Ok(reply) => {
+            notify_typed(&state, &id, typed_by.as_deref(), &reply).await;
             let mut resp = relay(reply);
             if unbound {
                 resp.headers_mut().insert(
@@ -653,13 +718,9 @@ pub async fn enter(
 #[serde(deny_unknown_fields)]
 struct KeysBody {
     keys: Vec<String>,
-}
-
-fn is_key_name(s: &str) -> bool {
-    !s.is_empty()
-        && s.len() <= 16
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    /// T18: the panel's viewer id (the OSC 52 typing clock).
+    #[serde(default)]
+    viewer: Option<String>,
 }
 
 pub async fn keys(
@@ -682,12 +743,26 @@ pub async fn keys(
         Ok(v) => v,
         Err(_) => return bad_request("malformed keys body"),
     };
-    if parsed.keys.is_empty()
-        || parsed.keys.len() > 32
-        || !parsed.keys.iter().all(|k| is_key_name(k))
-    {
-        return bad_request("keys must be 1..=32 entries of [A-Za-z0-9_-] up to 16 bytes");
+    if parsed.keys.is_empty() || parsed.keys.len() > MAX_KEYS_PER_REQUEST {
+        return bad_request("keys must be 1..=32 entries");
     }
+    // T18: a closed vocabulary. An unknown name is its own error type, and
+    // no client string is forwarded that the runner's table does not map.
+    if let Some(unknown) = parsed.keys.iter().find(|k| !is_named_key(k)) {
+        return no_store(Problem::response(
+            ERR_TERMINAL_BAD_KEY,
+            StatusCode::BAD_REQUEST,
+            "Bad Request",
+            format!(
+                "unknown key name `{}`",
+                unknown.chars().take(16).collect::<String>()
+            ),
+        ));
+    }
+    let typed_by = match drive_viewer(parsed.viewer.as_deref()) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
     ensure_spa_viewer(&state, &id).await;
     let req = RunnerRequest::Keys {
         id: id.clone(),
@@ -696,7 +771,10 @@ pub async fn keys(
     };
     match call(&state, &req).await {
         Err(e) => e,
-        Ok(reply) => relay(reply),
+        Ok(reply) => {
+            notify_typed(&state, &id, typed_by.as_deref(), &reply).await;
+            relay(reply)
+        }
     }
 }
 
@@ -762,6 +840,9 @@ pub async fn kill(
 struct TakeSizeBody {
     cols: u16,
     rows: u16,
+    /// T18: the panel's viewer id (the OSC 52 typing clock).
+    #[serde(default)]
+    viewer: Option<String>,
 }
 
 pub async fn take_size(
@@ -784,6 +865,10 @@ pub async fn take_size(
         Ok(v) => v,
         Err(_) => return bad_request("malformed take-size body"),
     };
+    let typed_by = match drive_viewer(parsed.viewer.as_deref()) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
     let req = RunnerRequest::TakeSize {
         id: id.clone(),
         cols: parsed.cols,
@@ -794,7 +879,10 @@ pub async fn take_size(
     };
     match call(&state, &req).await {
         Err(e) => e,
-        Ok(reply) => relay(reply),
+        Ok(reply) => {
+            notify_typed(&state, &id, typed_by.as_deref(), &reply).await;
+            relay(reply)
+        }
     }
 }
 
@@ -1057,6 +1145,10 @@ mod tests {
             assert_eq!(status(code), 404, "{code}");
         }
         assert_eq!(status("too-large"), 413);
+        // T18: an upload that is not an allowed picture is 415; a runner
+        // that could not write it is the generic 502.
+        assert_eq!(status("bad-image"), 415);
+        assert_eq!(status("io"), 502);
         for code in [
             "blocked",
             "grid-owned",

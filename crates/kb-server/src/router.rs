@@ -940,6 +940,14 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
             put(routes::artifacts::put_content),
         )
         .layer(DefaultBodyLimit::max(capture_body_limit));
+    // T18 — the phone Drive image upload. Own sub-router purely for its
+    // body limit (the cap plus slack; the handler enforces the exact cap),
+    // merged into the api tree below BEFORE `auth_bearer` exactly like
+    // `capture_routes`, so it inherits host_guard and auth. The terminal
+    // gate itself runs in the handler, as for every `/api/terms` route.
+    let terminal_upload_routes = Router::new()
+        .route("/terms/{id}/upload", post(terminal::upload::terms_upload))
+        .layer(DefaultBodyLimit::max(terminal::upload::UPLOAD_BODY_LIMIT));
     let review_routes = Router::new()
         // R8 — the whole-document write POST is retired; the CLI (R6) and
         // SPA (R7) both mutate through the fine-grained endpoints below.
@@ -1049,6 +1057,7 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
         .merge(review_routes)
         .merge(attachment_routes)
         .merge(capture_routes)
+        .merge(terminal_upload_routes)
         .merge(history_routes)
         // v0.4 A2 — bearer-token auth on matched /api routes.
         // Loopback bypass keeps local CLI/TUI/SPA flows working without
