@@ -53,6 +53,7 @@ const UP_DIR: &str = "up";
 /// Prefix of an in-flight temporary file (never counted as a stored file
 /// once renamed; counted against the quota while it exists).
 const TMP_PREFIX: &str = ".tmp-";
+static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// One stored picture.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -147,7 +148,8 @@ fn usage(up: &Path) -> Result<(usize, u64), RunnerError> {
         let entry = entry.map_err(|e| RunnerError::Io(format!("read upload directory: {e}")))?;
         let meta = std::fs::symlink_metadata(entry.path())
             .map_err(|e| RunnerError::Io(format!("stat upload: {e}")))?;
-        if meta.is_file() {
+        let is_tmp = entry.file_name().to_string_lossy().starts_with(TMP_PREFIX);
+        if meta.is_file() && !is_tmp {
             files += 1;
             total += meta.len();
         }
@@ -209,20 +211,26 @@ pub fn store_upload(
         )));
     }
 
+    // A name unique per CALL (pid + process-wide counter): two concurrent
+    // uploads of identical bytes must never share a temp file, or one's
+    // error path would unlink the other's in-flight write.
+    let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let tmp_path = up.join(format!(
-        "{TMP_PREFIX}{}-{}",
+        "{TMP_PREFIX}{}-{}-{seq}",
         &sha256[..16],
         std::process::id()
     ));
-    let write = || -> std::io::Result<()> {
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&tmp_path)?;
+    // `create_new` is the ownership claim: only a temp this call created
+    // is ever removed by this call.
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&tmp_path)
+        .map_err(|e| RunnerError::Io(format!("write upload: {e}")))?;
+    let mut write = || -> std::io::Result<()> {
         f.write_all(bytes)?;
         f.flush()?;
-        drop(f);
         std::fs::rename(&tmp_path, &final_path)
     };
     if let Err(e) = write() {

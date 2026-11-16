@@ -407,3 +407,30 @@ async fn a_bad_id_or_unknown_session_is_refused_before_the_body_is_read() {
     }
     served.stop().await;
 }
+
+#[test]
+fn concurrent_identical_uploads_all_succeed_with_one_file_and_no_temp_leftovers() {
+    const N: usize = 8;
+    for round in 0..20u32 {
+        let tmp = sessions();
+        let bytes = Arc::new(png(1000 + round));
+        let dir = Arc::new(tmp.path().to_path_buf());
+        let barrier = Arc::new(std::sync::Barrier::new(N));
+        let handles: Vec<_> = (0..N)
+            .map(|_| {
+                let (bytes, dir, barrier) = (bytes.clone(), dir.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    store_upload(&dir, ID, "image/png", &bytes)
+                })
+            })
+            .collect();
+        let want = up_dir(tmp.path(), ID).join(format!("{}.png", sha_hex(&bytes)));
+        for h in handles {
+            let got = h.join().unwrap().expect("every concurrent upload succeeds");
+            assert_eq!(got.path, want);
+        }
+        let names = entries(&up_dir(tmp.path(), ID));
+        assert_eq!(names, vec![format!("{}.png", sha_hex(&bytes))], "{names:?}");
+    }
+}
