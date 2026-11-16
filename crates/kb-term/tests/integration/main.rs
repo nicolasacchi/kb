@@ -605,6 +605,51 @@ async fn term_int_list_data_parses_as_session_infos() {
     }
 }
 
+// The grid fix end to end, against the real pinned tmux: a live pane's
+// `#{pane_dead_status}` is EMPTY, and the list RPC must still report the
+// launch size (a whitespace split once collapsed the empty field and read
+// a 120x40 pane as 40x1).
+#[tokio::test(flavor = "multi_thread")]
+async fn term_int_list_reports_the_launch_grid_for_a_live_pane() {
+    let Some(tmux_bin) = require_tmux() else {
+        return;
+    };
+    let tr = TestRunner::new(tmux_bin);
+    boot_runner(&tr).await;
+    let cwd = tr.dir.path().to_string_lossy().into_owned();
+    let mut req = common::launch_req(vec!["/bin/cat".to_string()], cwd);
+    if let Request::Launch { cols, rows, .. } = &mut req {
+        *cols = Some(132);
+        *rows = Some(37);
+    }
+    let id = match rpc::dispatch(&tr.runner, &req).await {
+        Response::Ok { data } => data["id"].as_str().unwrap().to_string(),
+        Response::Err { code, message } => panic!("launch failed ({code}): {message}"),
+    };
+    // Premise: the live pane really has an empty dead status.
+    let (ok, status) = tr.tmux(
+        &tr.sock(&id),
+        &["display-message", "-p", "-t", "kb", "#{pane_dead_status}"],
+    );
+    assert!(ok, "display-message must succeed on a live pane");
+    assert_eq!(status, "", "a live pane's pane_dead_status is empty");
+    match rpc::dispatch(&tr.runner, &Request::List {}).await {
+        Response::Ok { data } => {
+            let infos: Vec<kb_term::wire::SessionInfo> =
+                serde_json::from_value(data).expect("list data must parse");
+            let info = infos.iter().find(|s| s.id == id).expect("listed");
+            assert_eq!(
+                (info.cols, info.rows),
+                (Some(132), Some(37)),
+                "list must report the launch grid, not shifted columns"
+            );
+            assert!(!info.pane_dead && info.exit_code.is_none());
+            assert!(info.pane_pid.is_some() && !info.stale);
+        }
+        Response::Err { code, message } => panic!("list failed ({code}): {message}"),
+    }
+}
+
 // 8. Runner restart keeps the session and re-anchors it.
 #[tokio::test(flavor = "multi_thread")]
 async fn term_int_runner_restart_keeps_the_session_and_recreates_the_anchor() {

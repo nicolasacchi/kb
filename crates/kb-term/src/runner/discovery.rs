@@ -398,6 +398,44 @@ mod tests {
         assert_eq!(parse_pane_facts("1 2 3 4 5"), None);
     }
 
+    /// The tmux fake answers the pane-facts query in tmux 3.7c's literal-TAB
+    /// shape (empty dead-status field and all), so a describe-style parse of
+    /// its output keeps the grid; the grid's own query is unchanged.
+    #[tokio::test]
+    async fn the_tmux_fake_answers_pane_facts_in_the_real_tab_format() {
+        use crate::runner::tmux::fake::FakeTmux;
+        let fake = FakeTmux::new();
+        *fake.size.lock().unwrap() = (132, 37);
+        let sock = std::path::Path::new("/nonexistent/s/abcd1234.sock");
+        let out = fake
+            .run(
+                sock,
+                &["display-message", "-p", "-t", "kb", PANE_FACTS_FORMAT],
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(out.stdout.contains('\t'), "TAB-separated: {:?}", out.stdout);
+        let f = parse_pane_facts(&out.stdout).expect("the fake's reply parses");
+        assert_eq!((f.cols, f.rows), (Some(132), Some(37)));
+        assert!(!f.pane_dead && f.exit_code.is_none());
+        let grid = fake
+            .run(
+                sock,
+                &[
+                    "display-message",
+                    "-p",
+                    "-t",
+                    "kb",
+                    "#{window_width} #{window_height}",
+                ],
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(grid.stdout, "132 37\n");
+    }
+
     #[test]
     fn list_item_never_serialises_argv_or_env() {
         let entry = SessionEntry {
