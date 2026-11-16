@@ -101,6 +101,8 @@ case "${2:-}" in
     if [ -n "${KB_FAKE_SHOW_DIR:-}" ]; then
       d="$KB_FAKE_SHOW_DIR"
       [ -f "$d/delay" ] && sleep "$(cat "$d/delay")"
+      # delay-once: only the FIRST show call (atomically claimed) is slow.
+      if mv "$d/delay-once" "$d/delay-once.$$" 2>/dev/null; then sleep "$(cat "$d/delay-once.$$")"; fi
       if [ -f "$d/fail-${3:-0}" ]; then
         n="$(cat "$d/fail-${3:-0}")"
         if [ "$n" -gt 0 ]; then echo $((n - 1)) >"$d/fail-${3:-0}"; echo "daemon blip" >&2; exit 1; fi
@@ -531,6 +533,33 @@ test(
     expect(plain[0].at - t0).toBeGreaterThanOrEqual(4_900);
   },
   60_000,
+);
+
+test(
+  "wakes keep watch order even when the first lookup is slower than the second",
+  async () => {
+    const A = "omp-session-order";
+    // The answer (#21) and the done (#23) land back to back; the FIRST `show`
+    // (the answer's lookup) takes 1.5 s, the second returns at once. Unordered
+    // lookups would deliver the done's wake first.
+    scenario(
+      [
+        mkPost({ seq: 21, kind: "answer", re: 40, line: "go with B", prov: op }),
+        mkPost({ seq: 23, kind: "done", re: 40, line: "chat: B", prov: op }),
+      ],
+      { "40.json": show(40, { harness: "omp", session_id: A }), "delay-once": "1.5" },
+    );
+    const { ctx, handlers, sent, wakes } = boot(A);
+    await handlers.get("session_start")({}, ctx);
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline && sent.length < 2) await Bun.sleep(100);
+    await handlers.get("session_shutdown")({}, ctx);
+    const w = wakes();
+    expect(w.length).toBe(2);
+    expect(w[0].m.content).toContain("was answered by [you]: go with B");
+    expect(w[1].m.content).toContain("was closed by [you]: chat: B");
+  },
+  40_000,
 );
 
 test(
