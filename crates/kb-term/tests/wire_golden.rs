@@ -568,7 +568,10 @@ fn epoch_validator_matches_the_shared_golden_table() {
             .collect()
     };
     let (accept, reject) = (list("accept"), list("reject"));
-    assert!(accept.len() >= 8 && reject.len() >= 8, "table not truncated");
+    assert!(
+        accept.len() >= 8 && reject.len() >= 8,
+        "table not truncated"
+    );
     for e in &accept {
         assert!(kb_term::wire::is_valid_epoch(e), "accepts {e:?}");
     }
