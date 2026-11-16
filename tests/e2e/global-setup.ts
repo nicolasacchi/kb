@@ -238,8 +238,10 @@ export default async function globalSetup() {
   // three kb-servers). Never loaded unless the term-e2e job sets the flag, so
   // the default lane's behaviour and spec count are unchanged.
   if (process.env.KB_E2E_TERMINAL === "1") {
+    // Named export: a dynamic import of a CJS-transpiled `export default` can
+    // surface as `{ default: { default: fn } }`.
     const m = await import("./terminal-stack/global-setup-terminal");
-    return m.default();
+    return m.setupTerminalStack();
   }
   const tmpDir = mkdtempSync(join(tmpdir(), "kb-e2e-"));
   const sourceDir = join(tmpDir, "corpus");

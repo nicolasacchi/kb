@@ -104,7 +104,7 @@ function strayPids(root: string): string[] {
   return (r.stdout ?? "").split("\n").map((s) => s.trim()).filter(Boolean);
 }
 
-export default async function setupTerminalStack(): Promise<() => Promise<void>> {
+export async function setupTerminalStack(): Promise<() => Promise<void>> {
   const tmuxBin = need("KB_TMUX_BIN");
   const tapBin = need("KB_TAP_BIN");
   const tmuxVersion = execFileSync(tmuxBin, ["-V"], { encoding: "utf-8" }).trim();
@@ -293,3 +293,5 @@ export default async function setupTerminalStack(): Promise<() => Promise<void>>
     }
   };
 }
+
+export default setupTerminalStack;
