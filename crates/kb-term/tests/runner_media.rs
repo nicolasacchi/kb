@@ -139,7 +139,7 @@ fn rejects_over_20_mib() {
     put(blobs.path(), &sha2, &at_cap);
     let got = read_media_with(sessions.path(), Some(blobs.path()), &sha2).unwrap();
     assert_eq!(got.len(), at_cap.len());
-    assert!(MAX_OMP_BLOB_BYTES < MAX_MEDIA_BYTES);
+    const { assert!(MAX_OMP_BLOB_BYTES < MAX_MEDIA_BYTES) };
 }
 
 #[test]
