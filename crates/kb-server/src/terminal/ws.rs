@@ -21,7 +21,7 @@
 //! [`check_origin`](crate::terminal::gate::check_origin) (absent fails
 //! closed; the loopback bypass does NOT apply — agents run on
 //! loopback) -> caller class (403) -> a missing/invalid query or a
-//! non-upgrade request (the extractors' own 4xx) -> `from` parse (400)
+//! non-upgrade request (the extractors' own 4xx) -> `from`/`epoch`/`mseq` parse (400)
 //! -> socket
 //! cap (reserve/release, 503) -> ticket consume (single-use, bound to
 //! `{id}` + the caller's [`Identity`], 403) -> open the upstream
@@ -59,7 +59,7 @@ use super::events;
 use super::gate::{
     caller_class_admitted, check_origin, disabled, Problem, ERR_TERMINAL_ORIGIN_REFUSED,
 };
-use super::runner_client::{StreamError, StreamItem, TermStream, UnixRunner};
+use super::runner_client::{StreamError, StreamItem, StreamResume, TermStream, UnixRunner};
 use super::ticket::consume_ticket;
 use crate::middleware::Identity;
 use crate::state::KbHandles;
@@ -99,12 +99,60 @@ pub(crate) const BUSY_RETRY_BACKOFF: Duration = Duration::from_millis(150);
 /// resize sent before the first frame); beyond this they are dropped.
 const BUSY_QUEUE_CAP: usize = 64;
 
-/// Query parameters on the upgrade. `from` stays a `String` so a parse
-/// failure is this handler's 400, never an extractor rejection.
+/// Query parameters on the upgrade. `from`, `epoch` and `mseq` stay
+/// `String`s so a parse failure is this handler's 400, never an
+/// extractor rejection. `epoch` (the tap stream epoch the client's
+/// `from` belongs to, from its last `hello`) and `mseq` (the newest
+/// marker sequence it applied) only mean something next to `from`.
 #[derive(Debug, serde::Deserialize)]
 pub(crate) struct WsQuery {
     ticket: String,
     from: Option<String>,
+    epoch: Option<String>,
+    mseq: Option<String>,
+}
+
+/// Longest `epoch` the relay forwards (the tap mints 32 hex characters).
+const MAX_EPOCH_LEN: usize = 64;
+
+/// Largest `mseq` the tap accepts (`Number.MAX_SAFE_INTEGER`): a larger
+/// value would be a tap `bad-frame`, so it is refused here instead.
+const MAX_MSEQ: u64 = 9_007_199_254_740_991;
+
+/// Parse the resume coordinates off the upgrade query. `Err` carries the
+/// 400 detail. `epoch` is 1..=64 ASCII alphanumerics / `-` / `_`; `mseq`
+/// is a decimal `u64` at most [`MAX_MSEQ`]. Both are validated even when
+/// `from` is absent (a malformed value is a client bug worth surfacing),
+/// but only forwarded with a `from`: without an offset the join is full
+/// and an epoch has nothing to resume.
+fn parse_resume(q: &WsQuery) -> Result<StreamResume, &'static str> {
+    let from = match q.from.as_deref() {
+        None => None,
+        Some(raw) => Some(raw.parse::<u64>().map_err(|_| "invalid `from` offset")?),
+    };
+    let epoch = match q.epoch.as_deref() {
+        None => None,
+        Some(e)
+            if !e.is_empty()
+                && e.len() <= MAX_EPOCH_LEN
+                && e.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') =>
+        {
+            Some(e.to_string())
+        }
+        Some(_) => return Err("invalid `epoch`"),
+    };
+    let mseq = match q.mseq.as_deref() {
+        None => None,
+        Some(raw) => match raw.parse::<u64>() {
+            Ok(v) if v <= MAX_MSEQ => Some(v),
+            _ => return Err("invalid `mseq`"),
+        },
+    };
+    Ok(match from {
+        Some(_) => StreamResume { from, epoch, mseq },
+        None => StreamResume::default(),
+    })
 }
 
 /// Relay timers (see `PING_EVERY` / `IDLE_CLOSE_AFTER` /
@@ -237,21 +285,19 @@ pub(crate) async fn upgrade(
         Ok(ws) => ws,
         Err(rejection) => return axum::response::IntoResponse::into_response(rejection),
     };
-    // 5. `from` parse (before the ticket + cap steps so a malformed
-    // value never burns a single-use ticket nor holds a socket slot).
-    let from: Option<u64> = match q.from.as_deref() {
-        None => None,
-        Some(raw) => match raw.parse::<u64>() {
-            Ok(v) => Some(v),
-            Err(_) => {
-                return Problem::response(
-                    "urn:kb:errors:bad-request",
-                    StatusCode::BAD_REQUEST,
-                    "Bad Request",
-                    "invalid `from` offset".to_string(),
-                );
-            }
-        },
+    // 5. `from` / `epoch` / `mseq` parse (before the ticket + cap steps
+    // so a malformed value never burns a single-use ticket nor holds a
+    // socket slot).
+    let resume = match parse_resume(&q) {
+        Ok(r) => r,
+        Err(detail) => {
+            return Problem::response(
+                "urn:kb:errors:bad-request",
+                StatusCode::BAD_REQUEST,
+                "Bad Request",
+                detail.to_string(),
+            );
+        }
     };
     // Socket cap reserve FIRST, then the ticket consume: a cap
     // rejection must not consume the ticket, and any later failure
@@ -270,7 +316,7 @@ pub(crate) async fn upgrade(
         terminal.resolved_runner_socket(),
         Duration::from_secs(terminal.runner_timeout_secs()),
     );
-    let upstream = match runner.open_stream(&id, from).await {
+    let upstream = match runner.open_stream(&id, &resume).await {
         Ok(stream) => stream,
         Err(e @ StreamError::NotFound) => {
             return Problem::response(
@@ -314,7 +360,8 @@ pub(crate) async fn upgrade(
         Box::new(move || {
             let runner = reopen_runner.clone();
             let id = reopen_id.clone();
-            Box::pin(async move { runner.open_stream(&id, from).await })
+            let resume = resume.clone();
+            Box::pin(async move { runner.open_stream(&id, &resume).await })
         }),
         BusyRetry::default(),
     );
@@ -1740,5 +1787,65 @@ mod relay_tests {
             "the cancelled retry resumed; busy was not lost or shown"
         );
         assert_eq!(fresh_sent.lock().unwrap().clone(), vec![resize]);
+    }
+}
+
+#[cfg(test)]
+mod resume_query_tests {
+    //! The `from` / `epoch` / `mseq` upgrade-query grammar.
+
+    use super::*;
+
+    fn q(from: Option<&str>, epoch: Option<&str>, mseq: Option<&str>) -> WsQuery {
+        WsQuery {
+            ticket: "t".to_string(),
+            from: from.map(str::to_string),
+            epoch: epoch.map(str::to_string),
+            mseq: mseq.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn parse_resume_forwards_a_well_formed_epoch_and_mseq_with_from() {
+        let r = parse_resume(&q(Some("1234"), Some("0123abcd-_Z"), Some("7"))).unwrap();
+        assert_eq!(r.from, Some(1234));
+        assert_eq!(r.epoch.as_deref(), Some("0123abcd-_Z"));
+        assert_eq!(r.mseq, Some(7));
+        // A bare resume (the pre-FXEPOCH shape) is still accepted.
+        let r = parse_resume(&q(Some("5"), None, None)).unwrap();
+        assert_eq!((r.from, r.epoch, r.mseq), (Some(5), None, None));
+    }
+
+    #[test]
+    fn parse_resume_drops_epoch_and_mseq_without_from() {
+        let r = parse_resume(&q(None, Some("0123abcd"), Some("7"))).unwrap();
+        assert_eq!(r, StreamResume::default(), "no offset: a full join");
+    }
+
+    #[test]
+    fn parse_resume_refuses_malformed_values() {
+        let long = "a".repeat(MAX_EPOCH_LEN + 1);
+        for bad in ["", "a b", "a/b", "a\"b", "\u{e9}", long.as_str()] {
+            assert_eq!(
+                parse_resume(&q(Some("1"), Some(bad), None)),
+                Err("invalid `epoch`"),
+                "epoch {bad:?}"
+            );
+        }
+        let max = "a".repeat(MAX_EPOCH_LEN);
+        assert!(parse_resume(&q(Some("1"), Some(&max), None)).is_ok());
+        for bad in ["", "-1", "x", "9007199254740992", "18446744073709551616"] {
+            assert_eq!(
+                parse_resume(&q(Some("1"), None, Some(bad))),
+                Err("invalid `mseq`"),
+                "mseq {bad:?}"
+            );
+        }
+        assert_eq!(
+            parse_resume(&q(Some("abc"), None, None)),
+            Err("invalid `from` offset")
+        );
+        // Malformed values are refused even without a `from`.
+        assert!(parse_resume(&q(None, Some("a b"), None)).is_err());
     }
 }

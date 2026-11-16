@@ -210,6 +210,13 @@ pub enum RunnerRequest {
         /// Resume offset, if any.
         #[serde(default)]
         from: Option<u64>,
+        /// Tap stream epoch `from` belongs to (the client's last
+        /// `hello.epoch`); absent = the runner full-joins.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        epoch: Option<String>,
+        /// Newest marker sequence the client applied; absent = 0.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mseq: Option<u64>,
     },
 }
 
@@ -345,6 +352,10 @@ mod tests {
             (
                 "req_stream",
                 include_str!("../../../kb-term/tests/golden/req_stream.json"),
+            ),
+            (
+                "req_stream_resume",
+                include_str!("../../../kb-term/tests/golden/req_stream_resume.json"),
             ),
             (
                 "req_take_size",

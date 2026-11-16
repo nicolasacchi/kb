@@ -208,6 +208,69 @@ describe("TermSession", () => {
     expect(h.urls[2]).not.toContain("from=");
   });
 
+  it("a resume connect carries the stored epoch next to from", async () => {
+    const h = setup();
+    const s = await goLive(h); // hello epoch E1, seed at 105
+    s.closeFromServer(1000);
+    h.fire(h.pendingTimer(250)?.ms ?? 250);
+    await flush();
+    const params = new URL(h.urls[1]).searchParams;
+    expect(params.get("from")).toBe("105");
+    expect(params.get("epoch")).toBe("E1");
+    expect(params.has("mseq")).toBe(false); // no marker seen yet
+  });
+
+  it("a full join (no from) carries no epoch", async () => {
+    const h = setup();
+    const s = await goLive(h);
+    s.pushBinary(999, "far"); // gap: applied discarded, next join is FULL
+    h.fire(h.pendingTimer(250)?.ms ?? 250);
+    await flush();
+    const params = new URL(h.urls[h.urls.length - 1]).searchParams;
+    expect(params.has("from")).toBe(false);
+    expect(params.has("epoch")).toBe(false);
+    expect(params.has("mseq")).toBe(false);
+  });
+
+  it("the newest applied marker seq rides the resume as mseq and never lowers", async () => {
+    const h = setup();
+    const s = await goLive(h);
+    s.pushText({ t: "resize", seq: 3, offset: 105, cols: 100, rows: 30 });
+    s.pushText({ t: "gfxreset", seq: 5, gen: 1, offset: 105 });
+    s.pushText({ t: "sizechanged", seq: 4, cols: 100, rows: 30, by: "v", offset: 105 });
+    await flush();
+    s.closeFromServer(1000);
+    h.fire(h.pendingTimer(250)?.ms ?? 250);
+    await flush();
+    const params = new URL(h.urls[1]).searchParams;
+    expect(params.get("epoch")).toBe("E1");
+    expect(params.get("mseq")).toBe("5");
+  });
+
+  it("an epoch change drops the old epoch's mseq; the new epoch resumes under its own", async () => {
+    const h = setup();
+    const s = await goLive(h);
+    s.pushText({ t: "resize", seq: 9, offset: 105, cols: 100, rows: 30 });
+    await flush();
+    s.closeFromServer(1000);
+    h.fire(h.pendingTimer(250)?.ms ?? 250);
+    await flush();
+    const s2 = h.sockets[1];
+    // The tap restarted: new epoch, full join (seed) on this connection.
+    s2.pushText({ t: "hello", proto: "kb-term/1", session: "s1", epoch: "E2", harness: "omp", bound_sid: null });
+    s2.pushText(PROFILE);
+    s2.pushText({ t: "seed", offset: 40, len: 2 });
+    s2.pushBinary(40, "ok");
+    await flush();
+    s2.closeFromServer(1000);
+    h.fire(h.pendingTimer(500)?.ms ?? 500);
+    await flush();
+    const params = new URL(h.urls[2]).searchParams;
+    expect(params.get("from")).toBe("40");
+    expect(params.get("epoch")).toBe("E2");
+    expect(params.has("mseq")).toBe(false);
+  });
+
   it("backoff is 250,500,1000,... capped at 10000 (jitter 0) and resets only after >=5s live", async () => {
     const h = setup({ random: () => 0.5 });
     const s = await goLive(h);
