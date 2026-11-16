@@ -191,6 +191,9 @@ test('wire_missing_optional_fields_accepted_like_rust', () => {
   expect(() => decodeTextFrame('{"t":"hello","proto":"kb-term/1","session":"s","epoch":"e","harness":"omp","bound_sid":5}')).toThrow(FrameError);
   expect(() => decodeTextFrame('{"t":"exit","seq":10,"code":"1","offset":1234}')).toThrow(FrameError);
   expect(() => decodeTextFrame('{"t":"viewer-open","viewer":"v1","profile":"desktop","resume":"x"}')).toThrow(FrameError);
+  // The hello's viewer id is optional (older taps omit it), but a present one must be a string.
+  expect(decodeTextFrame('{"t":"hello","proto":"kb-term/1","session":"s","epoch":"e","harness":"omp","bound_sid":null,"viewer":"ws-abc"}').kind).toBe('known');
+  expect(() => decodeTextFrame('{"t":"hello","proto":"kb-term/1","session":"s","epoch":"e","harness":"omp","bound_sid":null,"viewer":5}')).toThrow(FrameError);
 });
 
 // Every ServerFrame seq/offset field plus profile.image used to carry a

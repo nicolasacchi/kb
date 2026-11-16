@@ -84,6 +84,45 @@ pub async fn connect_tap<S: crate::runner::supervisor::Supervisor>(
     Ok((tap, viewer))
 }
 
+/// The `typed` control body (`{"t":"typed","viewer":...}`) as one envelope.
+/// Pure so the exact bytes are unit-pinned.
+pub fn typed_envelope(viewer: &str) -> Result<Vec<u8>, wire::WireError> {
+    let body = serde_json::to_vec(&ControlMessage::Typed {
+        viewer: viewer.to_string(),
+    })
+    .map_err(|_| wire::WireError::MalformedJson)?;
+    wire::encode_envelope(wire::ENV_CONTROL, &body)
+}
+
+/// Tell the tap that `viewer` just typed (T18). The tap keeps one
+/// last-typed clock per viewer id across all of its connections, so one
+/// short connection that writes a single `typed` envelope and closes is
+/// enough: no key content ever crosses here, and the tap ignores an id it
+/// does not know. The phone's input travels over REST, not the WebSocket,
+/// so this is the only way the tap hears about it. The id must already be
+/// validated by the caller.
+pub async fn notify_typed<S: crate::runner::supervisor::Supervisor>(
+    runner: &Runner<S>,
+    id: &str,
+    viewer: &str,
+) -> Result<(), RunnerError> {
+    if !runner.sessions_dir().join(id).exists() {
+        return Err(RunnerError::NotFound(format!("no session {id}")));
+    }
+    let path = tap_socket_path(runner, id);
+    let env = typed_envelope(viewer)
+        .map_err(|e| RunnerError::Internal(format!("encode typed envelope: {e}")))?;
+    let attempt = async {
+        let mut tap = tokio::net::UnixStream::connect(&path).await?;
+        tap.write_all(&env).await?;
+        tap.flush().await
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(2), attempt).await {
+        Ok(Ok(())) => Ok(()),
+        _ => Err(RunnerError::TapTimeout(format!("tap unavailable for {id}"))),
+    }
+}
+
 /// Splice tap.sock envelopes between the tap connection and the runner
 /// client halves until either side closes or errors. Bytes are copied
 /// verbatim in both directions — the runner never interprets a frame.
@@ -300,6 +339,72 @@ mod tests {
         assert_eq!(seen.len(), 2);
         assert_ne!(seen[0], seen[1], "the tap saw two DISTINCT viewer-open ids");
         assert!(crate::viewer::valid_viewer(&seen[0]));
+    }
+
+    #[test]
+    fn typed_envelope_is_one_control_envelope_naming_the_viewer() {
+        let bytes = typed_envelope("ws-abcd1234").expect("encode");
+        let mut dec = EnvelopeDecoder::new();
+        let envs = dec.push(&bytes).expect("decode");
+        assert_eq!(envs.len(), 1);
+        assert_eq!(envs[0].kind, wire::ENV_CONTROL);
+        assert_eq!(
+            serde_json::from_slice::<ControlMessage>(&envs[0].body).unwrap(),
+            ControlMessage::Typed {
+                viewer: "ws-abcd1234".to_string()
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn notify_typed_writes_exactly_one_typed_envelope_to_the_tap() {
+        let tmp = tempfile::tempdir().unwrap();
+        let run_dir = tmp.path().join("run");
+        let id = "abcd1234";
+        let session_dir = run_dir.join("s").join(id);
+        std::fs::create_dir_all(&session_dir).unwrap();
+        let listener = tokio::net::UnixListener::bind(session_dir.join("tap.sock")).unwrap();
+        let tap_task = tokio::spawn(async move {
+            let (mut conn, _) = tokio::time::timeout(DEADLINE, listener.accept())
+                .await
+                .expect("accept deadline")
+                .expect("accept");
+            let mut all = Vec::new();
+            tokio::time::timeout(DEADLINE, conn.read_to_end(&mut all))
+                .await
+                .expect("read deadline")
+                .expect("read");
+            all
+        });
+        let cfg =
+            RunnerConfig::test_config(run_dir, "/bin/true".to_string(), tmp.path().join("conf"));
+        let runner = Runner::direct(cfg);
+        notify_typed(&runner, id, "ws-abcd1234")
+            .await
+            .expect("notify");
+        let got = tokio::time::timeout(DEADLINE, tap_task)
+            .await
+            .expect("tap deadline")
+            .unwrap();
+        assert_eq!(got, typed_envelope("ws-abcd1234").unwrap());
+    }
+
+    #[tokio::test]
+    async fn notify_typed_names_an_unknown_session_and_a_silent_tap_apart() {
+        let tmp = tempfile::tempdir().unwrap();
+        let run_dir = tmp.path().join("run");
+        std::fs::create_dir_all(run_dir.join("s")).unwrap();
+        let cfg = RunnerConfig::test_config(
+            run_dir.clone(),
+            "/bin/true".to_string(),
+            tmp.path().join("conf"),
+        );
+        let runner = Runner::direct(cfg);
+        let err = notify_typed(&runner, "abcd1234", "ws-x").await.unwrap_err();
+        assert!(matches!(err, RunnerError::NotFound(_)), "got {err:?}");
+        std::fs::create_dir_all(run_dir.join("s").join("abcd1234")).unwrap();
+        let err = notify_typed(&runner, "abcd1234", "ws-x").await.unwrap_err();
+        assert!(matches!(err, RunnerError::TapTimeout(_)), "got {err:?}");
     }
 
     #[tokio::test]

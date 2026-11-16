@@ -307,6 +307,29 @@ async fn dispatch_inner<S: Supervisor>(
             })
             .map_err(|e| RunnerError::Internal(e.to_string()))?)
         }
+        Request::Typed { id, viewer } => {
+            if !valid_id(id) {
+                return Err(RunnerError::InvalidId);
+            }
+            if !crate::viewer::valid_viewer(viewer) {
+                return Err(RunnerError::BadViewer(format!("bad viewer id `{viewer}`")));
+            }
+            // Cheap presence check (no tmux probe): this runs after every
+            // phone input call, and a missing holder socket is the same
+            // `no-session` the other input ops answer.
+            if !runner.holder_socket(id).exists() {
+                return Err(RunnerError::NoSession(format!("no session {id}")));
+            }
+            crate::runner::stream::notify_typed(runner, id, viewer).await?;
+            Ok(serde_json::to_value(&EmptyData {})
+                .map_err(|e| RunnerError::Internal(e.to_string()))?)
+        }
+        // `upload` carries raw bytes after its request line, which the
+        // envelope-only dispatch cannot express: the connection handler
+        // answers it (`server::respond_upload`) before dispatch.
+        Request::Upload { .. } => Err(RunnerError::BadRequest(
+            "upload is streamed by the connection handler".to_string(),
+        )),
         // `media` carries raw bytes after its header line, which the
         // envelope-only dispatch cannot express: the connection handler
         // answers it (`server::respond_media`) before dispatch. Reaching

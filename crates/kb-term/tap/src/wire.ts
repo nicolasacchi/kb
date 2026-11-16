@@ -29,7 +29,7 @@ export class FrameError extends Error {
 }
 
 export type ServerFrame =
-  | { t: 'hello'; proto: string; session: string; epoch: string; harness: string; bound_sid: string | null }
+  | { t: 'hello'; proto: string; session: string; epoch: string; harness: string; bound_sid: string | null; viewer?: string }
   | {
       t: 'profile';
       xterm: string;
@@ -186,6 +186,9 @@ function validateServerFrame(o: FieldObj, t: string): void {
       const h = reqStr(o, t, 'harness');
       if (!HARNESSES.has(h)) throw new FrameError('bad-frame: hello.harness is not a known harness');
       reqNullableStr(o, t, 'bound_sid');
+      // The viewer id this socket joined under (older taps omit it). Optional, but a
+      // present non-string is a bad frame like any other field.
+      if (o.viewer !== undefined) reqStr(o, t, 'viewer');
       return;
     }
     case 'profile': {

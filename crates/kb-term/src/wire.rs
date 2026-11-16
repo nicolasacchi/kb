@@ -118,6 +118,12 @@ pub enum ServerFrame {
         harness: Harness,
         /// Bound session id, if any.
         bound_sid: Option<String>,
+        /// The viewer id this socket joined the tap under (T18). The phone
+        /// panel names it on its REST input calls so the tap can tell which
+        /// device typed. Absent from older taps and omitted from the wire
+        /// when `None`, so every older golden stays byte-identical.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        viewer: Option<String>,
     },
     /// Terminal profile the viewer should apply.
     Profile {
@@ -741,6 +747,30 @@ pub enum Request {
         /// sha256 of the media bytes, as a hex64 key (see [`is_valid_sha256_hex`]).
         sha256: String,
     },
+    /// Store one picture the operator picked on a phone (T18). The request
+    /// line is followed on the same connection by exactly `len` raw bytes
+    /// (never base64); the runner answers one envelope line carrying
+    /// [`UploadData`]. `len` above the runner's cap is refused WITHOUT
+    /// reading the body, and the connection closes.
+    Upload {
+        /// Session id.
+        id: String,
+        /// The mime type the client declared; the sniffed type is truth and
+        /// must agree.
+        mime: String,
+        /// Number of raw bytes that follow the request line.
+        len: u64,
+    },
+    /// Tell the tap that `viewer` just typed (T18). The phone's composer,
+    /// key bar and choice bar travel over REST, not the WebSocket, so the
+    /// relay reports the typing device here; the tap releases an OSC 52
+    /// clipboard write only to a viewer that typed in the last 10 s.
+    Typed {
+        /// Session id.
+        id: String,
+        /// The viewer id the WebSocket `hello` frame gave that panel.
+        viewer: String,
+    },
     /// Open a byte-stream relay to a session's tap (kb-server's
     /// WebSocket upstream). This op never returns as an ordinary RPC:
     /// the server answers the request line with the standard
@@ -823,6 +853,19 @@ pub struct GridData {
 /// Empty success payload (`{}` for keys / enter / release / resize).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EmptyData {}
+
+/// Success payload for `upload` (`{"path","bytes","mime","sha256"}`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UploadData {
+    /// Absolute path of the stored file (no spaces).
+    pub path: String,
+    /// Number of bytes stored.
+    pub bytes: u64,
+    /// The sniffed mime type.
+    pub mime: String,
+    /// Lowercase hex sha256 of the bytes (also the file stem).
+    pub sha256: String,
+}
 
 /// Header payload of a successful `media` reply (`{"len": N}`). The
 /// envelope line carrying it is followed on the same connection by

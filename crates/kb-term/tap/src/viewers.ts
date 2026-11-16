@@ -494,7 +494,7 @@ export class TapServer {
     const imagedefs = [...this.defsByKey.values()].map((def) =>
       encodeServerFrame({ t: 'imagedef', seq: 0, id: def.id, gen: def.gen, sha256: def.sha256, mime: def.mime, w: def.w, h: def.h, cols: def.cols, rows: def.rows, offset: X }),
     );
-    this.writeText(conn, viewer.id, encodeServerFrame({ t: 'hello', proto: 'kb-term/1', session: this.session, epoch: this.epoch, harness: this.harness, bound_sid: this.boundSid }));
+    this.writeText(conn, viewer.id, encodeServerFrame({ t: 'hello', proto: 'kb-term/1', session: this.session, epoch: this.epoch, harness: this.harness, bound_sid: this.boundSid, viewer: viewer.id }));
     this.writeText(conn, viewer.id, encodeServerFrame(profile));
     for (const frame of imagedefs) this.writeText(conn, viewer.id, frame);
     this.writeText(conn, viewer.id, encodeServerFrame({ t: 'seed', offset: X, len: seed.length }));
@@ -591,7 +591,7 @@ export class TapServer {
     viewer.pending = this.ring.markersAfter(mseq).map((m) => ({ offset: m.offset, frame: m.frame }));
     viewer.pendingBytes = viewer.pending.reduce((n, p) => n + p.frame.length, 0);
     viewer.state = 'live';
-    this.writeText(viewer.connection, viewer.id, encodeServerFrame({ t: 'hello', proto: 'kb-term/1', session: this.session, epoch: this.epoch, harness: this.harness, bound_sid: this.boundSid }));
+    this.writeText(viewer.connection, viewer.id, encodeServerFrame({ t: 'hello', proto: 'kb-term/1', session: this.session, epoch: this.epoch, harness: this.harness, bound_sid: this.boundSid, viewer: viewer.id }));
     this.serviceViewer(viewer);
   }
 
