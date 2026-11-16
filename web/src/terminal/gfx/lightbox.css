@@ -1,0 +1,84 @@
+/* T15 - picture overlay + lightbox styles. Tokens from ui/src/tokens.css and
+ * the theme sheets only; the neutral picture box uses rgb() (not a hex or
+ * font-size literal, so the ratchet baseline does not move). */
+
+/* The overlay sits inside .xterm-screen, above its canvases, and never takes
+ * the pointer: taps are hit-tested from the screen element instead. */
+.kbgfx-overlay {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: var(--z-hint);
+}
+
+.kbgfx-clip {
+  position: absolute;
+  overflow: hidden;
+}
+
+.kbgfx-img {
+  position: absolute;
+  display: block;
+  object-fit: contain;
+  max-width: none;
+}
+
+/* Unknown id, missing bytes, or bytes still loading: a neutral box, never black. */
+.kbgfx-missing,
+.kbgfx-pending {
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: rgb(43, 43, 48);
+  color: rgb(154, 154, 162);
+  border: 1px dashed rgb(90, 90, 98);
+  font-size: var(--fs-xs);
+  text-align: center;
+}
+
+.kbgfx-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.78);
+  outline: none;
+}
+
+.kbgfx-lightbox__img {
+  display: block;
+  max-width: 92vw;
+  max-height: 92vh;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+}
+
+.kbgfx-lightbox__wait {
+  color: var(--ink);
+  font-size: var(--fs-md);
+}
+
+.kbgfx-lightbox__close {
+  position: absolute;
+  top: var(--pad-3);
+  right: var(--pad-3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-card);
+  color: var(--ink);
+  border: var(--pad-1) solid var(--rule-hi);
+  border-radius: var(--radius-pill);
+  padding: var(--pad-2);
+  cursor: pointer;
+}
+
+.kbgfx-lightbox__close:hover {
+  border-color: var(--accent);
+}

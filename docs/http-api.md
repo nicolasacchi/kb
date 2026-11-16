@@ -1638,6 +1638,37 @@ GET    /api/terms/{id}/ws                    SPA-only terminal byte
                                             so a successful long op is
                                             never raced by a 5 s
                                             client timeout.
+GET    /api/terms/media/{sha256}            A stored terminal picture
+                                            (the browser draws it over the
+                                            kitty placeholder cells).
+                                            `sha256` is 64 lowercase hex
+                                            characters (else 400, before
+                                            the runner is reached). A GET
+                                            variant of the gate: the tier
+                                            must be enabled (else a
+                                            bodiless 404) and the request
+                                            must carry `X-Kb-Intent:
+                                            terminal`; a same-origin
+                                            `fetch` GET sends no `Origin`,
+                                            so an absent `Origin` is
+                                            admitted but a present one
+                                            must be exact, and a present
+                                            `Sec-Fetch-Site` must be
+                                            `same-origin` or `none`.
+                                            Loopback does not bypass and
+                                            token callers are refused.
+                                            The runner reads the picture
+                                            from its session store; the
+                                            served type comes from magic
+                                            bytes only (PNG, JPEG, GIF,
+                                            WebP; anything else, SVG
+                                            included, is 415).
+                                            `nosniff`, `Cache-Control:
+                                            private, max-age=31536000,
+                                            immutable`, `Content-Security-
+                                            Policy: default-src 'none';
+                                            sandbox`. Unknown hash 404;
+                                            runner down or unreadable 502.
 GET  /api/sessions/by-artifact/{kb}/{aid}   W2/R11 — the canonical
                                             artifact→session join
                                             (`SessionsGetByArtifactIds`, #11):
@@ -2902,6 +2933,7 @@ GET    /api/terms/{id}/grid                 relay grid report [terminal]
 POST   /api/terms/{id}/release-size         release grid [terminal]
 POST   /api/terms/{id}/resize               resize grid [terminal]
 POST   /api/terms/{id}/viewer-close         close spa viewer [terminal]
+GET    /api/terms/media/{sha256}            stored terminal picture [terminal]
 
 # admin
 GET    /api/kb/{kb}/quarantine              parser-quarantined artifacts

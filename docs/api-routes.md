@@ -247,6 +247,7 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | GET | `/api/stats` | `routes::stats::cross` |
 | GET | `/api/terms` | `routes::terms::list` |
 | POST | `/api/terms` | `routes::terms::launch` |
+| GET | `/api/terms/media/{sha256}` | `terminal::media::serve` |
 | POST | `/api/terms/{id}/enter` | `routes::terms::enter` |
 | GET | `/api/terms/{id}/grid` | `routes::terms::grid` |
 | GET | `/api/terms/{id}/history` | `routes::terms::history` |
@@ -264,4 +265,4 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | GET | `/api/users` | `routes::users::list` |
 | GET | `/api/why` | `routes::sessions::why` |
 
-_254 routes._
+_255 routes._

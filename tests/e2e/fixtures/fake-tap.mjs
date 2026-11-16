@@ -37,7 +37,7 @@ const QUERY_BYTES = Buffer.from(
   "utf8",
 );
 
-function profileFrame(patch) {
+export function profileFrame(patch) {
   return JSON.stringify({
     t: "profile",
     xterm: "6.0.0",
@@ -55,7 +55,7 @@ function profileFrame(patch) {
   });
 }
 
-function helloFrame(epoch) {
+export function helloFrame(epoch) {
   return JSON.stringify({
     t: "hello",
     proto: "kb-term/1",
@@ -66,7 +66,7 @@ function helloFrame(epoch) {
   });
 }
 
-function binary(offset, payload) {
+export function binary(offset, payload) {
   const out = Buffer.alloc(8 + payload.length);
   out.writeBigUInt64BE(BigInt(offset), 0);
   payload.copy(out, 8);
@@ -91,7 +91,7 @@ const OFF_LANE = {
   wrote: 0,
 };
 
-function fixtureCard() {
+export function fixtureCard() {
   return {
     schema: "kb-session-card/1",
     session_id: SID,
