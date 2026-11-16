@@ -431,23 +431,29 @@ test.describe("T14 — desktop terminal panel", () => {
       .toBe(true);
   });
 
-  test("narrow viewport: fit still too wide at fontSize 10 overflows-x auto", async ({
+  test("narrow host: fit still too wide at fontSize 10 overflows-x auto", async ({
     page,
   }) => {
-    await page.setViewportSize({ width: 320, height: 600 });
+    // At and below 860 px the panel is the phone view in a Sheet (T17,
+    // spa-terminal-phone.spec.ts), so the desktop panel's narrow-host
+    // fallback is exercised by narrowing the host itself, not the viewport.
     await installFakeTerminal(page, { total: 300, seedLines: 100 });
-    // At 320 px the session page collapses its sections (mobile); open the
-    // Terminal section by hand, the panel itself is the same desktop panel.
-    await openTerminal(page, async () => {
-      await page.locator('[data-testid="session-sec-terminal"] > summary').click();
-    });
+    await openTerminal(page);
     await expect
       .poll(async () => (await bufferInfo(page)).phase, { timeout: 30_000 })
       .toBe("live");
-    const overflowX = await page.evaluate(() => {
-      const el = document.querySelector("[data-kb-term]") as HTMLElement | null;
-      return el?.style.overflowX ?? "";
-    });
-    expect(overflowX).toBe("auto");
+    await page.addStyleTag({ content: "[data-kb-term]{width:300px}" });
+    // The ResizeObserver refits (100 ms debounce); 300 px cannot hold 120
+    // columns at the 10 px floor, so the host falls back to overflow-x auto.
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => {
+            const el = document.querySelector("[data-kb-term]") as HTMLElement | null;
+            return el?.style.overflowX ?? "";
+          }),
+        { timeout: 10_000 },
+      )
+      .toBe("auto");
   });
 });

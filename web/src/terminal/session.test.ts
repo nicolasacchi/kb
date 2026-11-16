@@ -6,6 +6,7 @@ import { encodeBinaryFrame } from "./wire";
 import {
   TermSession,
   type SessionCallbacks,
+  nextDelay,
   type SessionEffects,
   type SessionSocket,
   type SocketHandlers,
@@ -688,5 +689,70 @@ describe("TermSession", () => {
     s3.pushText({ t: "hello", proto: "kb-term/1", session: "s1", epoch: "E2", harness: "omp", bound_sid: null });
     await flush();
     expect(order.filter((o) => o === "fulljoin")).toHaveLength(2);
+  });
+});
+
+describe("nextDelay (T17)", () => {
+  it("doubles from 250 ms, caps at 10 s, jitters within +/-20 percent", () => {
+    const mid = () => 0.5;
+    expect([0, 1, 2, 3, 4, 5, 6, 7, 20].map((a) => nextDelay(a, mid))).toEqual([
+      250, 500, 1000, 2000, 4000, 8000, 10000, 10000, 10000,
+    ]);
+    for (let a = 0; a < 12; a += 1) {
+      const base = Math.min(10_000, 250 * 2 ** a);
+      expect(nextDelay(a, () => 0)).toBe(Math.round(base * 0.8));
+      expect(nextDelay(a, () => 0.999999)).toBeLessThanOrEqual(Math.round(base * 1.2));
+      expect(nextDelay(a, () => 0.999999)).toBeGreaterThan(base);
+    }
+  });
+
+  it("a network-return trigger skips the pending backoff once", async () => {
+    const h = setup();
+    const s = await goLive(h);
+    s.closeFromServer(1000);
+    expect(h.session.getState().phase).toBe("reconnecting");
+    const pending = h.pendingTimer(250);
+    expect(pending).toBeDefined();
+    const socketsBefore = h.sockets.length;
+    h.session.kick();
+    await flush();
+    expect(pending?.cleared).toBe(true);
+    expect(h.sockets.length).toBe(socketsBefore + 1);
+    // The attempt still advanced: a flapping trigger cannot reset the backoff.
+    expect(h.session.getState().attempt).toBe(1);
+    // Nothing is waiting any more, so a second kick is a no-op.
+    h.session.kick();
+    await flush();
+    expect(h.sockets.length).toBe(socketsBefore + 1);
+  });
+
+  it("kick leaves a live, ended or disposed session alone", async () => {
+    const live = setup();
+    await goLive(live);
+    const n = live.sockets.length;
+    live.session.kick();
+    await flush();
+    expect(live.sockets.length).toBe(n);
+
+    const gone = setup();
+    const gs = await goLive(gone);
+    gs.closeFromServer(1000);
+    gone.session.dispose();
+    gone.session.kick();
+    await flush();
+    expect(gone.sockets.length).toBe(1);
+
+    const ended = setup();
+    const es = await goLive(ended);
+    es.pushText({ t: "exit", seq: 3, code: 0, offset: 105 });
+    expect(ended.session.getState().phase).toBe("ended");
+    es.closeFromServer(1000);
+    await flush();
+    const sockets = ended.sockets.length;
+    const tickets = ended.mintedTickets.length;
+    ended.session.kick();
+    await flush();
+    expect(ended.sockets.length).toBe(sockets);
+    expect(ended.mintedTickets.length).toBe(tickets);
   });
 });

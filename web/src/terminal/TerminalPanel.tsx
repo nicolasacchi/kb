@@ -12,8 +12,20 @@
 // answered by the browser. The panel never sends a resize; `sizechanged`
 // only updates the header caption. No `focus()` on mount (click
 // focuses), no Escape binding, no global key handler.
+//
+// T17 — on a phone (`useIsMobile()`) the SAME terminal, socket and
+// reconnect state render through `PhoneTerminal` inside a `Sheet`. The
+// instance lives here, above the mobile/desktop switch, so a rotation
+// across the breakpoint re-parents the xterm element and never
+// reconnects or re-seeds. A terminal created on a phone gets the DOM
+// renderer only (no WebGL addon: context loss and memory pressure on
+// phones, and a real phone GPU is untested), a 20,000-line scrollback
+// cap and the persisted phone font; it stays that way if the viewport
+// later grows (no mid-session addon load).
 
 import { useEffect, useRef, useState } from "react";
+import { Sheet, type Detent } from "@kb/ui/Sheet";
+import { useIsMobile } from "../hooks/useIsMobile";
 import { Terminal, type IFunctionIdentifier, type ITheme } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { ImageAddon } from "@xterm/addon-image";
@@ -31,9 +43,18 @@ import { useTerms } from "./useTerms";
 import type { ImageDefFrame, ProfileFrame } from "./wire";
 import type { TerminalPanelProps } from "./TerminalPanel.lazy";
 import { osc52ClipboardText, writeClipboardText } from "./clipboard";
+import { PhoneTerminal, attachTerm, type PhoneMode } from "./phone/PhoneTerminal";
+import { readFont } from "./phone/fontSteps";
+import { scrollbackFor } from "./phone/scrollback";
+import { bindNetworkKicks } from "./networkKicks";
+import { createPortal } from "react-dom";
 import "./terminal.css";
 
 const TRANSIENT_MS = 2_000;
+/** Esc inside the terminal belongs to the terminal, never to the Sheet. */
+function terminalOwnsEscape(e: KeyboardEvent): boolean {
+  return e.target instanceof Element && e.target.closest("[data-kb-term-root]") !== null;
+}
 
 /** e2e seam: `container.__kbTerm` exposes the live instance (no window global). */
 type TermSeam = HTMLElement & { __kbTerm?: Terminal };
@@ -93,7 +114,16 @@ function fitNow(term: Terminal, host: HTMLElement, cols: number): void {
 }
 
 export function TerminalPanel(props: TerminalPanelProps) {
+  const isMobile = useIsMobile();
+  const isMobileRef = useRef(isMobile);
+  isMobileRef.current = isMobile;
+  // Whether the live terminal was created for a phone (renderer, scrollback).
+  const createdPhoneRef = useRef(false);
+  const [detent, setDetent] = useState<Detent>("full");
+  const [phoneMode, setPhoneMode] = useState<PhoneMode>("watch");
+  const [termInst, setTermInst] = useState<Terminal | null>(null);
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const phoneHostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const sessionRef = useRef<TermSession | null>(null);
   const lastTypedRef = useRef(0);
@@ -126,12 +156,8 @@ export function TerminalPanel(props: TerminalPanelProps) {
   const rowState = terms.find((t) => t.id === props.termId)?.state ?? null;
 
   useEffect(() => {
-    const host = hostRef.current;
-    if (!host) return;
     let dead = false;
     let transientTimer: number | null = null;
-    let fitTimer: number | null = null;
-    let hostClick: (() => void) | null = null;
 
     const writeClipboardIfRecent = (data: string): void => {
       const text = osc52ClipboardText(data, lastTypedRef.current, Date.now());
@@ -146,6 +172,10 @@ export function TerminalPanel(props: TerminalPanelProps) {
     };
 
     const createTerminal = (profile: ProfileFrame): boolean => {
+      const phone = isMobileRef.current;
+      // The view mounts before the Profile arrives, so its host exists.
+      const host = phone ? phoneHostRef.current : hostRef.current;
+      if (!host) return false;
       if (!profileMatchesBundle(profile)) {
         sessionRef.current?.block("viewer build differs from session profile");
         return false;
@@ -153,20 +183,22 @@ export function TerminalPanel(props: TerminalPanelProps) {
       const term = new Terminal({
         cols: profile.cols,
         rows: profile.rows,
-        scrollback: profile.scrollback,
+        scrollback: scrollbackFor(profile, phone),
         scrollOnEraseInDisplay: true,
         allowProposedApi: true,
         convertEol: false,
         cursorBlink: false,
         // Initial size only; fitNow clamps from the token-derived width.
-        fontSize: Math.max(
-          10,
-          parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--fs-md")) || 14,
-        ),
+        fontSize: phone
+          ? readFont()
+          : Math.max(
+              10,
+              parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--fs-md")) || 14,
+            ),
         fontFamily: "JetBrains Mono, monospace",
         theme: readTheme(profile),
       });
-      term.open(host);
+      attachTerm(term, host);
       term.loadAddon(new UnicodeGraphemesAddon());
       const key = term.unicode.versions.find((k) => /grapheme/i.test(k));
       if (!key) {
@@ -176,16 +208,18 @@ export function TerminalPanel(props: TerminalPanelProps) {
       }
       term.unicode.activeVersion = key;
       term.loadAddon(new ImageAddon({ enableSizeReports: false }));
-      try {
-        const webgl = new WebglAddon();
-        webgl.onContextLoss(() => webgl.dispose());
-        term.loadAddon(webgl);
-      } catch {
-        // DOM renderer fallback.
+      if (!phone) {
+        try {
+          const webgl = new WebglAddon();
+          webgl.onContextLoss(() => webgl.dispose());
+          term.loadAddon(webgl);
+        } catch {
+          // DOM renderer fallback.
+        }
       }
       // T15: the placeholder renderer, media cache and tap-to-open layer.
       const handle = attachGfx(term, {
-        compact: profile.scrollback <= 20_000,
+        compact: scrollbackFor(profile, phone) <= 20_000,
         bg: term.options.theme?.background ?? "",
         onOpenPicture: (p) => setPicture(p),
       });
@@ -249,15 +283,15 @@ export function TerminalPanel(props: TerminalPanelProps) {
           lastTypedRef.current = Date.now();
         }
       });
-      const onHostClick = (): void => term.focus();
-      host.addEventListener("click", onHostClick);
-      hostClick = onHostClick;
-      fitNow(term, host, profile.cols);
+      // Phone: the font is the persisted step (PhoneTerminal owns it); the
+      // grid is never fitted (the session grid pans instead).
+      if (!phone) fitNow(term, host, profile.cols);
+      createdPhoneRef.current = phone;
       termRef.current = term;
-      (host as TermSeam).__kbTerm = term;
+      setTermInst(term);
       gridRef.current = { cols: profile.cols, rows: profile.rows };
       setGrid(gridRef.current);
-      setScrollback(profile.scrollback);
+      setScrollback(scrollbackFor(profile, phone));
       setWidthActive(true);
       return true;
     };
@@ -282,7 +316,9 @@ export function TerminalPanel(props: TerminalPanelProps) {
         // step with the grid the size owner just set.
         gridRef.current = { cols, rows };
         setGrid(gridRef.current);
-        fitNow(term, host, cols);
+        // Phone: the grid is never fitted (the session grid pans instead).
+        const host = isMobileRef.current ? null : hostRef.current;
+        if (host) fitNow(term, host, cols);
       },
     };
 
@@ -331,14 +367,12 @@ export function TerminalPanel(props: TerminalPanelProps) {
           if (
             profile.cols !== existing.cols ||
             profile.rows !== existing.rows ||
-            profile.scrollback !== existing.options.scrollback
+            scrollbackFor(profile, createdPhoneRef.current) !== existing.options.scrollback
           ) {
-            if (hostClick) host.removeEventListener("click", hostClick);
-            hostClick = null;
             disposeGfx();
             existing.dispose();
             termRef.current = null;
-            (host as TermSeam).__kbTerm = undefined;
+            setTermInst(null);
             if (createTerminal(profile)) sessionRef.current?.rejoinFull();
           }
         },
@@ -365,32 +399,69 @@ export function TerminalPanel(props: TerminalPanelProps) {
     sessionRef.current = session;
     session.start();
 
-    const observer = new ResizeObserver(() => {
-      if (fitTimer !== null) window.clearTimeout(fitTimer);
-      fitTimer = window.setTimeout(() => {
-        const term = termRef.current;
-        if (term && gridRef.current) fitNow(term, host, gridRef.current.cols);
-      }, 100);
-    });
-    observer.observe(host);
+    // T17: a returning network (`online`, a bfcache `pageshow`, the tab
+    // turning visible) skips a pending reconnect backoff once.
+    const unbindKicks = bindNetworkKicks(window, document, () => session.kick());
 
     return () => {
       dead = true;
-      observer.disconnect();
-      if (fitTimer !== null) window.clearTimeout(fitTimer);
+      unbindKicks();
       if (transientTimer !== null) window.clearTimeout(transientTimer);
-      if (hostClick) host.removeEventListener("click", hostClick);
-      hostClick = null;
       session.dispose();
       sessionRef.current = null;
       disposeGfx();
       const term = termRef.current;
       termRef.current = null;
-      (host as TermSeam).__kbTerm = undefined;
       term?.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.termId]);
+
+  // Desktop host wiring (click focuses, refit on resize, the e2e seam). A
+  // phone view owns its own host; switching modes re-parents the SAME
+  // xterm element and never touches the socket.
+  useEffect(() => {
+    const term = termInst;
+    const host = hostRef.current;
+    if (!term || isMobile || !host) return;
+    attachTerm(term, host);
+    (host as TermSeam).__kbTerm = term;
+    const onHostClick = (): void => term.focus();
+    host.addEventListener("click", onHostClick);
+    let fitTimer: number | null = null;
+    const refit = (): void => {
+      if (gridRef.current) fitNow(term, host, gridRef.current.cols);
+    };
+    refit();
+    const observer = new ResizeObserver(() => {
+      if (fitTimer !== null) window.clearTimeout(fitTimer);
+      fitTimer = window.setTimeout(refit, 100);
+    });
+    observer.observe(host);
+    return () => {
+      observer.disconnect();
+      if (fitTimer !== null) window.clearTimeout(fitTimer);
+      host.removeEventListener("click", onHostClick);
+      (host as TermSeam).__kbTerm = undefined;
+    };
+  }, [termInst, isMobile]);
+
+  const closePanel = (): void => {
+    if (props.onClose) {
+      props.onClose();
+      return;
+    }
+    sessionRef.current?.dispose();
+    sessionRef.current = null;
+    gfxRef.current?.dispose();
+    gfxRef.current = null;
+    setGfx(null);
+    setPicture(null);
+    termRef.current?.dispose();
+    termRef.current = null;
+    setTermInst(null);
+    setGrid(null);
+  };
 
   const runFind = (dir: 1 | -1): void => {
     const term = termRef.current;
@@ -417,6 +488,34 @@ export function TerminalPanel(props: TerminalPanelProps) {
     term.select(hit.col, Math.min(Math.max(hit.line - buf.baseY, 0), term.rows - 1), hit.length);
     setFindNote(`${countHits(source, findQuery)} matches`);
   };
+
+  if (isMobile) {
+    // Portaled so a collapsed ancestor <details> can never hide a modal sheet
+    // (and strand its body scroll lock) when the viewport crosses the breakpoint.
+    return createPortal(
+      <Sheet
+        open
+        detent={detent}
+        onDetentChange={setDetent}
+        full="92vh"
+        title="Terminal"
+        onClose={closePanel}
+        ignoreEscape={terminalOwnsEscape}
+      >
+        <PhoneTerminal
+          term={termInst}
+          profile={grid}
+          hostRef={phoneHostRef}
+          mode={phoneMode}
+          onMode={setPhoneMode}
+          stream={state}
+          caption={transient ?? state.caption}
+          onClose={closePanel}
+        />
+      </Sheet>,
+      document.body,
+    );
+  }
 
   return (
     <div className="kb-term" data-testid="kb-terminal">
@@ -449,22 +548,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
           type="button"
           className="kb-term__btn"
           data-testid="kb-term-close"
-          onClick={() => {
-            if (props.onClose) {
-              props.onClose();
-              return;
-            }
-            sessionRef.current?.dispose();
-            sessionRef.current = null;
-            gfxRef.current?.dispose();
-            gfxRef.current = null;
-            setGfx(null);
-            setPicture(null);
-            termRef.current?.dispose();
-            termRef.current = null;
-            if (hostRef.current) (hostRef.current as TermSeam).__kbTerm = undefined;
-            setGrid(null);
-          }}
+          onClick={closePanel}
         >
           Close
         </button>

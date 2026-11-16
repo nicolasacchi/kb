@@ -27,6 +27,11 @@ export type SheetProps = {
   /** false: render children in a plain div, no dialog semantics. */
   asSheet?: boolean;
   id?: string;
+  /** Return true for an Escape keydown that must NOT dismiss the sheet (a
+   *  focused terminal or editor inside it owns Esc). Absent: Esc always
+   *  closes. Forwarded to `useCloseRequest` so the platform close request
+   *  that Esc raises is cancelled too. */
+  ignoreEscape?: (e: KeyboardEvent) => boolean;
 };
 
 function toPx(v: string): number {
@@ -53,6 +58,7 @@ export function Sheet({
   full = "92vh",
   asSheet = true,
   id,
+  ignoreEscape,
 }: SheetProps) {
   const rid = useId();
   const titleId = `${id ?? "kb-sheet"}-title-${rid}`;
@@ -72,7 +78,7 @@ export function Sheet({
   }, [active]);
 
   // Android Back / swipe-back dismisses the sheet (never a history entry).
-  useCloseRequest(active, onClose);
+  useCloseRequest(active, onClose, ignoreEscape ? { ignoreEscape } : undefined);
 
   // Focus into the sheet on open, back to the opener on close.
   useEffect(() => {
@@ -101,6 +107,7 @@ export function Sheet({
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.key === "Escape") {
+      if (ignoreEscape?.(e.nativeEvent)) return;
       e.preventDefault();
       onClose();
       return;
