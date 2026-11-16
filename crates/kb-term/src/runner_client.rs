@@ -112,8 +112,10 @@ impl std::error::Error for RunnerClientError {}
 /// request may have reached the runner (a timeout, a read or write
 /// error, a reply that does not pair or parse) drops the connection; the
 /// next call dials a fresh one, whose reply stream cannot hold a stale
-/// line. A runner error reply (`Code`) is a complete, paired answer and
-/// leaves the connection in place.
+/// line. The same holds when the call future is DROPPED mid-call (the
+/// connection is owned by the call while a request is in flight, not
+/// parked in `self`). A runner error reply (`Code`) is a complete, paired
+/// answer and leaves the connection in place.
 pub struct RunnerClient {
     /// The live connection; `None` after a failed call (re-dialled by the
     /// next call).
@@ -144,28 +146,39 @@ impl RunnerClient {
         self.next_id += 1;
         let (mut line, expected) = request_line(id, req).map_err(RunnerClientError::Unreachable)?;
         line.push('\n');
-        if self.stream.is_none() {
-            self.stream = Some(dial(&self.path).await?);
-        }
-        let outcome = self.exchange(line.as_bytes(), &expected).await;
-        if matches!(outcome, Err(RunnerClientError::Unreachable(_))) {
-            // Anything but a clean, paired answer may leave a reply in
-            // flight: never reuse this connection.
-            self.stream = None;
+        // Cancel-safe: the connection is TAKEN out of `self` for the whole
+        // exchange and put back only after a clean, paired answer. A call
+        // future dropped at any await (after the request was written,
+        // before its reply was read) drops the connection with it, so the
+        // next call dials a fresh one and can never read this call's reply.
+        let mut stream = match self.stream.take() {
+            Some(stream) => stream,
+            None => dial(&self.path).await?,
+        };
+        let outcome = Self::exchange(
+            &mut stream,
+            &self.path,
+            self.timeout,
+            line.as_bytes(),
+            &expected,
+        )
+        .await;
+        if !matches!(outcome, Err(RunnerClientError::Unreachable(_))) {
+            // A reply (or a runner error reply) paired to this request:
+            // nothing is in flight, the connection can serve the next call.
+            self.stream = Some(stream);
         }
         outcome
     }
 
     async fn exchange(
-        &mut self,
+        stream: &mut tokio::net::UnixStream,
+        path: &Path,
+        timeout: Duration,
         line: &[u8],
         expected: &serde_json::Value,
     ) -> Result<serde_json::Value, RunnerClientError> {
-        let path = self.path.display().to_string();
-        let timeout = self.timeout;
-        let stream = self.stream.as_mut().ok_or_else(|| {
-            RunnerClientError::Unreachable("runner connection closed".to_string())
-        })?;
+        let path = path.display().to_string();
         stream.write_all(line).await.map_err(|_| {
             RunnerClientError::Unreachable(format!("write to runner socket {path} failed"))
         })?;
@@ -473,6 +486,10 @@ mod tests {
     enum Act {
         Reply(String),
         Delayed(Duration, String),
+        /// Close the connection without answering.
+        Close,
+        /// Answer, then close the connection.
+        ReplyThenClose(String),
     }
 
     /// The `id` a request line carries (a session-id string or the numeric
@@ -518,14 +535,20 @@ mod tests {
                             Ok(0) | Err(_) => return,
                             Ok(_) => {}
                         }
+                        let mut close_after = false;
                         let reply = match script(n, &line) {
+                            Act::Close => return,
+                            Act::ReplyThenClose(r) => {
+                                close_after = true;
+                                r
+                            }
                             Act::Reply(r) => r,
                             Act::Delayed(d, r) => {
                                 tokio::time::sleep(d).await;
                                 r
                             }
                         };
-                        if write.write_all(reply.as_bytes()).await.is_err() {
+                        if write.write_all(reply.as_bytes()).await.is_err() || close_after {
                             return;
                         }
                     }
@@ -623,6 +646,84 @@ mod tests {
             assert_eq!(e.code(), Some("no-session"));
         }
         assert_eq!(conns.load(Ordering::SeqCst), 1, "one connection throughout");
+        task.abort();
+    }
+
+    /// A call future dropped after its request was written (the caller's
+    /// own timeout, a `select!` arm losing) must not leave the request in
+    /// flight on a live connection: the next call would read ITS reply.
+    #[tokio::test]
+    async fn a_call_dropped_mid_flight_never_poisons_the_next_call() {
+        let dir = tempfile::tempdir().unwrap();
+        let (sock, conns, task) = scripted_runner(dir.path(), |conn, line| {
+            let id = line_id(line);
+            if conn == 1 {
+                Act::Delayed(Duration::from_millis(300), ok_line(&id, 1))
+            } else {
+                Act::Reply(ok_line(&id, 2))
+            }
+        });
+        let mut client = RunnerClient::connect(&sock).await.unwrap();
+        let dropped =
+            tokio::time::timeout(Duration::from_millis(100), client.call(&grid("abcd1234"))).await;
+        assert!(dropped.is_err(), "call 1 was cancelled mid-flight");
+        // Let the stale reply reach the abandoned connection.
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        let second = client.call(&grid("abcd1234")).await.unwrap();
+        assert_eq!(second["n"], 2, "call 2 gets its own reply: {second}");
+        assert_eq!(conns.load(Ordering::SeqCst), 2, "a fresh connection");
+        task.abort();
+    }
+
+    /// The runner closing the connection without answering (EOF) fails the
+    /// call and the next call re-dials.
+    #[tokio::test]
+    async fn an_eof_instead_of_a_reply_fails_the_call_and_the_next_call_redials() {
+        let dir = tempfile::tempdir().unwrap();
+        let (sock, conns, task) = scripted_runner(dir.path(), |conn, line| {
+            if conn == 1 {
+                Act::Close
+            } else {
+                Act::Reply(ok_line(&line_id(line), 2))
+            }
+        });
+        let mut client = RunnerClient::connect(&sock).await.unwrap();
+        let first = client.call(&grid("abcd1234")).await;
+        assert!(
+            matches!(&first, Err(RunnerClientError::Unreachable(_))),
+            "EOF is an unreachable runner: {first:?}"
+        );
+        let second = client.call(&grid("abcd1234")).await.unwrap();
+        assert_eq!(second["n"], 2);
+        assert_eq!(conns.load(Ordering::SeqCst), 2, "re-dialled after EOF");
+        task.abort();
+    }
+
+    /// A write onto a connection the runner already closed fails the call
+    /// (write error), and the next call re-dials.
+    #[tokio::test]
+    async fn a_write_error_fails_the_call_and_the_next_call_redials() {
+        let dir = tempfile::tempdir().unwrap();
+        let (sock, conns, task) = scripted_runner(dir.path(), |conn, line| {
+            let reply = ok_line(&line_id(line), conn as u64);
+            if conn == 1 {
+                Act::ReplyThenClose(reply)
+            } else {
+                Act::Reply(reply)
+            }
+        });
+        let mut client = RunnerClient::connect(&sock).await.unwrap();
+        assert_eq!(client.call(&grid("abcd1234")).await.unwrap()["n"], 1);
+        // The runner closed that connection after answering.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let second = client.call(&grid("abcd1234")).await;
+        assert!(
+            matches!(&second, Err(RunnerClientError::Unreachable(m)) if m.contains("write")),
+            "a write onto a closed connection is a write error: {second:?}"
+        );
+        let third = client.call(&grid("abcd1234")).await.unwrap();
+        assert_eq!(third["n"], 2, "the third call is answered on a fresh dial");
+        assert_eq!(conns.load(Ordering::SeqCst), 2);
         task.abort();
     }
 
