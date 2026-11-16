@@ -471,6 +471,9 @@ impl Default for BusyRetry {
     }
 }
 
+/// A re-open in flight.
+type OpenFuture<U> = Pin<Box<dyn Future<Output = Result<U, StreamError>> + Send>>;
+
 /// Re-opens the upstream stream for the same terminal and offset.
 pub(crate) type Reopen<U> =
     Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result<U, StreamError>> + Send>> + Send>;
@@ -568,7 +571,7 @@ pub(crate) struct JoinRetry<U: Upstream> {
     retry_at: Option<tokio::time::Instant>,
     queued: std::collections::VecDeque<StreamItem>,
     /// The re-open in flight (kept across a cancelled `recv`).
-    opening: Option<Pin<Box<dyn Future<Output = Result<U, StreamError>> + Send>>>,
+    opening: Option<OpenFuture<U>>,
     /// The re-open completed and `current` is the fresh stream; the
     /// queued items are being replayed onto it.
     reopened: bool,

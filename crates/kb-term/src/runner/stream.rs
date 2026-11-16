@@ -1407,8 +1407,18 @@ mod tests {
             started.elapsed()
         );
         let mut rest = Vec::new();
-        let n = peer_read.read_to_end(&mut rest).await.unwrap();
-        assert_eq!(n, 0, "the client side sees the connection end (1011)");
+        // The splice dropped its halves with unread client bytes pending,
+        // so the peer sees either a clean EOF or a reset: both are the
+        // connection ending (what kb-server turns into a 1011 close),
+        // never a data frame.
+        match peer_read.read_to_end(&mut rest).await {
+            Ok(n) => assert_eq!(n, 0, "no data after the failure"),
+            Err(e) => assert_eq!(e.kind(), std::io::ErrorKind::ConnectionReset, "{e}"),
+        }
+        assert!(
+            rest.is_empty(),
+            "the client side sees the connection end (1011)"
+        );
         feeder.abort();
         sink.close().await;
     }
