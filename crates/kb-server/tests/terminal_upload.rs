@@ -212,15 +212,29 @@ fn png(len: usize) -> Vec<u8> {
     v
 }
 
-/// A fully valid upload request (Origin, intent, content type) for the
-/// caller to adjust.
-fn upload_req(addr: std::net::SocketAddr, id: &str, body: Vec<u8>) -> reqwest::RequestBuilder {
-    reqwest::Client::new()
+/// An upload request with the given `Content-Type` (none when `None`), valid
+/// Origin and intent. `header()` APPENDS, so a caller that wants a different
+/// content type must start from here rather than add a second one.
+fn upload_req_ct(
+    addr: std::net::SocketAddr,
+    id: &str,
+    body: Vec<u8>,
+    content_type: Option<&str>,
+) -> reqwest::RequestBuilder {
+    let mut req = reqwest::Client::new()
         .post(format!("{}/api/terms/{id}/upload", base(addr)))
         .header("Origin", origin(addr))
         .header("x-kb-intent", "terminal")
-        .header("Content-Type", "image/png")
-        .body(body)
+        .body(body);
+    if let Some(ct) = content_type {
+        req = req.header("Content-Type", ct);
+    }
+    req
+}
+
+/// A fully valid upload request (Origin, intent, `image/png`).
+fn upload_req(addr: std::net::SocketAddr, id: &str, body: Vec<u8>) -> reqwest::RequestBuilder {
+    upload_req_ct(addr, id, body, Some("image/png"))
 }
 
 async fn status_and_text(resp: reqwest::Response) -> (u16, String) {
@@ -373,8 +387,7 @@ async fn only_the_four_picture_content_types_and_valid_ids_reach_the_runner() {
         "multipart/form-data; boundary=x",
         "application/octet-stream",
     ] {
-        let resp = upload_req(addr, TERM_ID, png(64))
-            .header("Content-Type", ct)
+        let resp = upload_req_ct(addr, TERM_ID, png(64), Some(ct))
             .send()
             .await
             .unwrap();
@@ -383,11 +396,7 @@ async fn only_the_four_picture_content_types_and_valid_ids_reach_the_runner() {
         assert_problem(&text, "unsupported-media");
     }
     // No Content-Type at all.
-    let resp = reqwest::Client::new()
-        .post(format!("{}/api/terms/{TERM_ID}/upload", base(addr)))
-        .header("Origin", origin(addr))
-        .header("x-kb-intent", "terminal")
-        .body(png(64))
+    let resp = upload_req_ct(addr, TERM_ID, png(64), None)
         .send()
         .await
         .unwrap();
@@ -454,11 +463,15 @@ async fn the_runner_gets_the_exact_bytes_and_the_response_is_the_typed_shape() {
     fake.set("upload", UPLOAD_OK);
     let (_tmp, addr) = boot(enabled(), &fake, false).await;
     let bytes = png(5000);
-    let resp = upload_req(addr, TERM_ID, bytes.clone())
-        .header("Content-Type", "Image/PNG; charset=binary")
-        .send()
-        .await
-        .unwrap();
+    let resp = upload_req_ct(
+        addr,
+        TERM_ID,
+        bytes.clone(),
+        Some("Image/PNG; charset=binary"),
+    )
+    .send()
+    .await
+    .unwrap();
     assert_eq!(resp.status().as_u16(), 200);
     assert_eq!(
         resp.headers()
