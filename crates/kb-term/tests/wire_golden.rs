@@ -77,6 +77,7 @@ fn request_goldens() -> Vec<&'static str> {
         "req_viewer_close.json",
         "req_media.json",
         "req_stream.json",
+        "req_stream_resume.json",
         "req_upload.json",
         "req_typed.json",
     ]

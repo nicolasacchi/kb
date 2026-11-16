@@ -131,10 +131,19 @@ export async function listTerms(signal?: AbortSignal): Promise<TermRow[]> {
 /**
  * The WebSocket URL for a panel. `ws:`/`wss:` is derived from
  * `currentDaemonBase()` (or `location` for a same-origin daemon);
- * `from` is the resume offset, included only when `from > 0`.
+ * `from` is the resume offset, included only when `from > 0`; `epoch`
+ * (the tap stream epoch `from` belongs to) and `mseq` (newest marker
+ * sequence applied, only when > 0) ride along with it and are dropped
+ * without it.
  * Same-origin daemons only (the server demands exact Origin equality).
  */
-export function wsUrl(termId: string, ticket: string, from?: number): string {
+export function wsUrl(
+  termId: string,
+  ticket: string,
+  from?: number,
+  epoch?: string,
+  mseq?: number,
+): string {
   const base = currentDaemonBase();
   let scheme: string;
   let host: string;
@@ -153,6 +162,12 @@ export function wsUrl(termId: string, ticket: string, from?: number): string {
   }
   const q = new URLSearchParams();
   q.set("ticket", ticket);
-  if (from !== undefined && from > 0) q.set("from", String(from));
+  if (from !== undefined && from > 0) {
+    q.set("from", String(from));
+    // The resume coordinates travel together: an epoch (and the marker
+    // sequence applied under it) means nothing without an offset.
+    if (epoch !== undefined && epoch !== "") q.set("epoch", epoch);
+    if (mseq !== undefined && Number.isSafeInteger(mseq) && mseq > 0) q.set("mseq", String(mseq));
+  }
   return `${scheme}://${host}/api/terms/${encodeURIComponent(termId)}/ws?${q.toString()}`;
 }

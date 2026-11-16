@@ -1171,6 +1171,90 @@ async fn ws_from_param_forwarded() {
     }
 }
 
+/// FXEPOCH: `?epoch=` and `?mseq=` ride the upgrade next to `?from=`
+/// and reach the runner's `stream` request verbatim; malformed values
+/// are a 400 before the ticket is consumed or the upstream is opened.
+/// (The test helpers append `from` raw, so the extra params ride in it.)
+#[tokio::test]
+async fn ws_epoch_and_mseq_forwarded_and_validated() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut replies = HashMap::new();
+    replies.insert("list".to_string(), list_reply(&[TERM_ID]));
+    let fake = spawn_stream_fake(
+        tmp.path(),
+        replies,
+        vec![s2c_envelope(ENV_TEXT, br#"{"t":"hello"}"#)],
+        false,
+    );
+    let (tmp, addr) = boot(enabled_terminal(), &fake).await;
+    let _ = tmp;
+
+    let ticket = mint_ticket(addr, TERM_ID, None).await;
+    let mut ws = match ws_connect(
+        addr,
+        TERM_ID,
+        &ticket,
+        Some("1234&epoch=0123abcd&mseq=7"),
+        &origin_header(addr),
+        None,
+    )
+    .await
+    {
+        WsConnect::Ok(w) => w,
+        other => panic!("connect with ?epoch must succeed, got {other:?}"),
+    };
+    let _ = ws_read_n(&mut ws, 1).await;
+    let reqs = fake.stream_reqs.lock().unwrap().clone();
+    assert_eq!(reqs.len(), 1);
+    assert_eq!(
+        reqs[0].get("from"),
+        Some(&serde_json::json!(1234)),
+        "{}",
+        reqs[0]
+    );
+    assert_eq!(
+        reqs[0].get("epoch"),
+        Some(&serde_json::json!("0123abcd")),
+        "?epoch must reach the runner: {}",
+        reqs[0]
+    );
+    assert_eq!(
+        reqs[0].get("mseq"),
+        Some(&serde_json::json!(7)),
+        "{}",
+        reqs[0]
+    );
+    drop(ws);
+
+    // A malformed epoch / mseq is a 400 before any upstream work and
+    // leaves the ticket usable.
+    let ticket = mint_ticket(addr, TERM_ID, None).await;
+    let conns_before = fake.conns.load(Ordering::SeqCst);
+    for bad in ["5&epoch=a%20b", "5&epoch=", "5&mseq=-1", "5&mseq=x"] {
+        let (status, _text) = ws_http_get(
+            addr,
+            TERM_ID,
+            &ticket,
+            Some(bad),
+            Some(&origin_header(addr)),
+            None,
+        )
+        .await;
+        assert_eq!(status, 400, "`{bad}` must be refused, never a 5xx");
+    }
+    assert_eq!(
+        fake.conns.load(Ordering::SeqCst),
+        conns_before,
+        "a malformed resume query must not open the upstream"
+    );
+    match ws_connect(addr, TERM_ID, &ticket, None, &origin_header(addr), None).await {
+        WsConnect::Ok(mut ws) => {
+            let _ = ws_read_n(&mut ws, 1).await;
+        }
+        other => panic!("the refused-query ticket must survive, got {other:?}"),
+    }
+}
+
 // --------------------------------------------------------------------------
 // Spec 8, test 11.
 // --------------------------------------------------------------------------

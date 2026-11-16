@@ -86,6 +86,20 @@ pub fn is_valid_term_id(s: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
 }
 
+/// Longest accepted tap stream epoch (the tap mints 32 hex characters).
+pub const MAX_EPOCH_LEN: usize = 64;
+
+/// True for a well-formed tap stream epoch as a client may echo it: 1..=64
+/// ASCII alphanumerics, `-` or `_`. The tap compares epochs by equality
+/// only, so this bound exists to keep an arbitrary client string out of
+/// the tap control path, never to interpret an epoch.
+pub fn is_valid_epoch(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= MAX_EPOCH_LEN
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
 /// Whether `s` is a valid sha256 hex digest (a media key).
 ///
 /// Media keys ([`ServerFrame::Imagedef`] and [`Request::Media`]) are 64
@@ -778,13 +792,23 @@ pub enum Request {
     /// envelopes verbatim on the SAME connection until either side
     /// closes. `from` is the absolute byte offset the caller wants to
     /// resume from (`None` = a full join); the tap decides resume vs
-    /// full join.
+    /// full join. `epoch` is the tap stream epoch the offset belongs to
+    /// (the `hello.epoch` the client last saw) and `mseq` the newest
+    /// marker sequence it applied; both are optional and only meaningful
+    /// with `from`. Absent `epoch` is the empty epoch, which the tap
+    /// never matches (a full join), exactly the pre-FXEPOCH behaviour.
     Stream {
         /// Session id.
         id: String,
         /// Resume offset, if any.
         #[serde(default)]
         from: Option<u64>,
+        /// Tap stream epoch `from` belongs to (see [`is_valid_epoch`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        epoch: Option<String>,
+        /// Newest marker sequence the client applied (default 0).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mseq: Option<u64>,
     },
 }
 

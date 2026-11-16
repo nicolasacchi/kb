@@ -437,7 +437,9 @@ mod parse_tests {
             stream,
             Request::Stream {
                 id: "abcd1234".to_string(),
-                from: None
+                from: None,
+                epoch: None,
+                mseq: None,
             }
         );
         let kill = parse_request(br#"{"v":1,"op":"kill","id":"abcd1234","grace_secs":null}"#)
