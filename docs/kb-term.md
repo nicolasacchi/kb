@@ -594,6 +594,14 @@ any check FAILs, and with `--strict` also on any WARN; a SKIP never fails. Check
 | `omp_overlay` | the on-disk omp overlay carries the approved pins |
 | `run_layout` | `/run/kb-term` is 0755, `s/` is 0700, `runner/` is 0750 or 0700, `runner.sock` is 0600, all owned by the current uid |
 | `login_env` | the login shell does not set outer-terminal identity names that a pane would inherit |
+| `termd_enabled` | `kb-termd.service` is enabled so it starts after a reboot (WARN when `static`, `disabled` or masked; SKIP when `systemctl --user` cannot be reached) |
+| `runner_env_sessions_dir` | `KB_SESSIONS_DIR` is set in the RUNNER's environment (read from the running `kb-termd` process); FAIL when unset or empty, because the capture and beat hooks silently do nothing in SPA-launched sessions |
+| `runner_env_kb`, `runner_env_harness_<bin>` | `kb` and each harness binary resolve on the RUNNER's `PATH`, not your shell's; a harness your shell finds but the runner's `PATH` lacks FAILs (the pane would exit 127), `kb` missing WARNs; SKIP for all when `kb-termd` is not running |
+
+**Panes inherit the runner's environment.** Panes get an allowlisted copy of
+the environment of `kb-termd`, which under systemd is the user manager's: a
+minimal `PATH` and no `KB_SESSIONS_DIR`. Put both in a user-unit drop-in (see
+`docs/kb-term-install.md`); the `runner_env_*` checks verify it took effect.
 
 ## Known limits and unverified
 
