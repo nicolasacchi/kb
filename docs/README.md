@@ -57,6 +57,7 @@ pin what you changed.
 | [`reading-lists.md`](reading-lists.md) | Ordered, section-aware reading lists with derived read state: the `kb list` verbs, the `kb-list/1` Markdown/JSON import-export format, section permalinks, the trail queue bar. |
 | [`slate.md`](slate.md) | The per-project blackboard — the twelve post kinds, advisory takes, the digest, exit codes, and how a session reads it at start and after a compaction. |
 | [`live-sessions.md`](live-sessions.md) | The live-sessions cockpit — the working/waiting/finished model, `kb sessions status`, wiring the beat hooks for each harness, and the notification recipes. |
+| [`kb-term.md`](kb-term.md) | Live terminal tier: architecture, security model, install ([`kb-term-install.md`](kb-term-install.md)), phone, host-local `kb-term` tool. |
 | [`extending.md`](extending.md) | Why kb has no generic plugin SDK, the three extension mechanisms it does have, and the sibling-daemon contract. |
 
 ## Reference
