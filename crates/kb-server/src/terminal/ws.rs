@@ -83,6 +83,22 @@ pub(crate) const CLOSE_UPSTREAM: u16 = 1011;
 pub(crate) const CLOSE_IDLE: u16 = 1001;
 pub(crate) const CLOSE_NORMAL: u16 = 1000;
 
+/// Join-retry policy for an upstream `error{busy}` (FXBUSY). The tap
+/// defers a join that cannot reach a quiescent frame boundary within
+/// its own wait (3 s by default), answers `error{busy}` and closes;
+/// its contract is that the CLIENT retries. The relay is that client:
+/// it re-opens the upstream stream (same terminal, same `from`) up to
+/// `BUSY_JOIN_ATTEMPTS` opens in total, sleeping `BUSY_RETRY_BACKOFF`
+/// doubled per retry (150 ms, 300 ms, 600 ms) between them, and never
+/// shows the browser a busy frame it is still retrying. When the
+/// budget is spent the last busy frame is forwarded and the socket
+/// closes 1011 like any other upstream end.
+pub(crate) const BUSY_JOIN_ATTEMPTS: u32 = 4;
+pub(crate) const BUSY_RETRY_BACKOFF: Duration = Duration::from_millis(150);
+/// Browser frames held while a join retry is re-opening (input and
+/// resize sent before the first frame); beyond this they are dropped.
+const BUSY_QUEUE_CAP: usize = 64;
+
 /// Query parameters on the upgrade. `from` stays a `String` so a parse
 /// failure is this handler's 400, never an extractor rejection.
 #[derive(Debug, serde::Deserialize)]
@@ -291,6 +307,17 @@ pub(crate) async fn upgrade(
     let state2 = state.clone();
     let id2 = id.clone();
     let id3 = id2.clone();
+    let reopen_runner = std::sync::Arc::new(runner);
+    let reopen_id = id.clone();
+    let upstream = JoinRetry::new(
+        upstream,
+        Box::new(move || {
+            let runner = reopen_runner.clone();
+            let id = reopen_id.clone();
+            Box::pin(async move { runner.open_stream(&id, from).await })
+        }),
+        BusyRetry::default(),
+    );
     let upgraded = ws
         .max_message_size(256 * 1024)
         .on_upgrade(move |socket| async move {
@@ -357,6 +384,187 @@ struct SlotGuard {
 impl Drop for SlotGuard {
     fn drop(&mut self) {
         self.counter.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Retry policy for [`JoinRetry`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BusyRetry {
+    /// Total opens allowed (the first one included).
+    pub attempts: u32,
+    /// Sleep before the first retry; doubles for each later one.
+    pub backoff: Duration,
+}
+
+impl Default for BusyRetry {
+    fn default() -> Self {
+        Self {
+            attempts: BUSY_JOIN_ATTEMPTS,
+            backoff: BUSY_RETRY_BACKOFF,
+        }
+    }
+}
+
+/// Re-opens the upstream stream for the same terminal and offset.
+pub(crate) type Reopen<U> =
+    Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result<U, StreamError>> + Send>> + Send>;
+
+/// The error frame's discriminator, parsed without touching anything
+/// else in the text frame.
+#[derive(serde::Deserialize)]
+struct ErrFrame {
+    t: Option<String>,
+    code: Option<String>,
+}
+
+fn is_busy_frame(text: &str) -> bool {
+    // Cheap reject: only an error frame naming busy can match.
+    if !text.contains("busy") {
+        return false;
+    }
+    match serde_json::from_str::<ErrFrame>(text) {
+        Ok(f) => f.t.as_deref() == Some("error") && f.code.as_deref() == Some("busy"),
+        Err(_) => false,
+    }
+}
+
+/// An [`Upstream`] that retries a join the tap deferred with
+/// `error{busy}`.
+///
+/// The tap sends that frame (then closes) only from its join path, so
+/// it is retryable exactly until the first binary frame of the join
+/// (the seed or replay) has been handed to the relay. Before that
+/// point a busy frame is swallowed and the stream is re-opened (fresh
+/// viewer, same `from`); the browser sees only the retried stream's
+/// frames. After the first binary frame the stream is live and every
+/// item, a busy frame included, passes through untouched (a busy there
+/// can only answer a browser-sent resume request, and the relay never
+/// rewrites those).
+///
+/// Text frames that precede the busy frame on the same attempt are
+/// forwarded as they arrive; on the tap that is at most an
+/// `offset-ahead` notice for a resume (`?from=`) request, which a
+/// retry can therefore repeat.
+///
+/// `recv` is cancel-safe in the way the relay needs (it sits in a
+/// `select!` beside the browser queue): the busy frame and the pending
+/// re-open are kept in fields, so a dropped `recv` future resumes the
+/// retry on the next call. Browser items sent while the old stream is
+/// dead are queued (bounded) and replayed onto the new stream.
+pub(crate) struct JoinRetry<U: Upstream> {
+    current: U,
+    reopen: Reopen<U>,
+    policy: BusyRetry,
+    /// Opens made so far (the first one counts).
+    opens: u32,
+    /// True once a binary frame was delivered: the join completed.
+    live: bool,
+    /// A busy frame was seen and the re-open has not completed yet.
+    /// While set, `send` queues instead of writing to the dead stream.
+    held_busy: Option<String>,
+    queued: Vec<StreamItem>,
+    /// The last item has been handed out: `recv` now ends the stream.
+    finished: bool,
+}
+
+impl<U: Upstream> JoinRetry<U> {
+    pub(crate) fn new(current: U, reopen: Reopen<U>, policy: BusyRetry) -> Self {
+        Self {
+            current,
+            reopen,
+            policy,
+            opens: 1,
+            live: false,
+            held_busy: None,
+            queued: Vec::new(),
+            finished: false,
+        }
+    }
+
+    fn queue(&mut self, item: StreamItem) {
+        if self.queued.len() < BUSY_QUEUE_CAP {
+            self.queued.push(item);
+        }
+    }
+
+    /// Run the pending retry: back off, re-open, replay queued items.
+    /// `Ok(())` means `current` is the fresh stream; `Err(())` means
+    /// the budget or the runner is gone and the held busy frame must
+    /// be surfaced.
+    async fn retry_open(&mut self) -> Result<(), ()> {
+        if self.opens >= self.policy.attempts {
+            return Err(());
+        }
+        let shift = (self.opens - 1).min(16);
+        tokio::time::sleep(self.policy.backoff.saturating_mul(1u32 << shift)).await;
+        match (self.reopen)().await {
+            Ok(fresh) => {
+                self.current = fresh;
+                self.opens += 1;
+                self.held_busy = None;
+                for item in std::mem::take(&mut self.queued) {
+                    if self.current.send(item).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(())
+            }
+            Err(_) => Err(()),
+        }
+    }
+}
+
+impl<U: Upstream> Upstream for JoinRetry<U> {
+    fn recv<'a>(&'a mut self) -> Pin<Box<dyn Future<Output = Option<StreamItem>> + Send + 'a>> {
+        Box::pin(async move {
+            loop {
+                if self.finished {
+                    return None;
+                }
+                if self.held_busy.is_some() {
+                    if self.retry_open().await.is_err() {
+                        // Spent (or the runner is gone): surface the
+                        // busy frame once, then end the stream.
+                        self.finished = true;
+                        return self.held_busy.take().map(StreamItem::Text);
+                    }
+                    continue;
+                }
+                match self.current.recv().await {
+                    Some(StreamItem::Binary(bytes)) => {
+                        self.live = true;
+                        return Some(StreamItem::Binary(bytes));
+                    }
+                    Some(StreamItem::Text(text)) if !self.live && is_busy_frame(&text) => {
+                        self.held_busy = Some(text);
+                    }
+                    other => return other,
+                }
+            }
+        })
+    }
+
+    fn send<'a>(
+        &'a mut self,
+        item: StreamItem,
+    ) -> Pin<Box<dyn Future<Output = Result<(), StreamError>> + Send + 'a>> {
+        Box::pin(async move {
+            if self.held_busy.is_some() {
+                self.queue(item);
+                return Ok(());
+            }
+            if self.live {
+                return self.current.send(item).await;
+            }
+            // Mid-join: a write that races the tap's busy close must not
+            // end the relay before `recv` has seen the busy frame (a real
+            // dead stream surfaces there as an EOF instead). Keep the
+            // item for a replay onto a re-opened stream.
+            if self.current.send(item.clone()).await.is_err() {
+                self.queue(item);
+            }
+            Ok(())
+        })
     }
 }
 
@@ -1374,5 +1582,163 @@ mod relay_tests {
         }
         let _ = tokio::time::timeout(Duration::from_secs(5), relay).await;
         drop(tx);
+    }
+
+    // ---- FXBUSY: the join retry (JoinRetry) ---------------------------
+
+    const BUSY: &str = r#"{"t":"error","code":"busy","msg":"join deferred: frame in progress"}"#;
+    const HELLO: &str = r#"{"t":"hello","proto":"kb-term/1"}"#;
+
+    fn mem(items: Vec<StreamItem>) -> MemUpstream {
+        MemUpstream::new(items.into_iter().collect(), false)
+    }
+
+    /// A reopen that hands out the queued upstreams in order and counts
+    /// how many times it was called (`Err(Unavailable)` once empty).
+    fn scripted_reopen(
+        queue: Vec<MemUpstream>,
+        calls: std::sync::Arc<AtomicUsize>,
+    ) -> Reopen<MemUpstream> {
+        let queue = std::sync::Arc::new(std::sync::Mutex::new(
+            queue.into_iter().collect::<std::collections::VecDeque<_>>(),
+        ));
+        Box::new(move || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            let next = queue.lock().unwrap().pop_front();
+            Box::pin(async move { next.ok_or(StreamError::Unavailable) })
+        })
+    }
+
+    fn fast(attempts: u32) -> BusyRetry {
+        BusyRetry {
+            attempts,
+            backoff: Duration::from_millis(1),
+        }
+    }
+
+    #[tokio::test]
+    async fn busy_before_the_first_binary_is_retried_and_never_surfaced() {
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let first = mem(vec![StreamItem::Text(BUSY.to_string())]);
+        let second = mem(vec![
+            StreamItem::Text(HELLO.to_string()),
+            StreamItem::Binary(vec![0, 0, 0, 0, 0, 0, 0, 0, b'x']),
+        ]);
+        let mut up = JoinRetry::new(first, scripted_reopen(vec![second], calls.clone()), fast(4));
+        assert_eq!(up.recv().await, Some(StreamItem::Text(HELLO.to_string())));
+        assert_eq!(
+            up.recv().await,
+            Some(StreamItem::Binary(vec![0, 0, 0, 0, 0, 0, 0, 0, b'x']))
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "exactly one re-open");
+    }
+
+    #[tokio::test]
+    async fn busy_on_every_open_is_surfaced_once_after_the_budget_then_ends() {
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let busy = || mem(vec![StreamItem::Text(BUSY.to_string())]);
+        let mut up = JoinRetry::new(
+            busy(),
+            scripted_reopen(vec![busy(), busy(), busy(), busy()], calls.clone()),
+            fast(3),
+        );
+        assert_eq!(up.recv().await, Some(StreamItem::Text(BUSY.to_string())));
+        assert_eq!(up.recv().await, None, "then the stream ends (1011)");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "3 opens in total = the first + 2 re-opens"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_reopen_surfaces_the_busy_frame_and_ends() {
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let mut up = JoinRetry::new(
+            mem(vec![StreamItem::Text(BUSY.to_string())]),
+            scripted_reopen(vec![], calls.clone()),
+            fast(4),
+        );
+        assert_eq!(up.recv().await, Some(StreamItem::Text(BUSY.to_string())));
+        assert_eq!(up.recv().await, None);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn busy_after_the_stream_is_live_passes_through_untouched() {
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let mut up = JoinRetry::new(
+            mem(vec![
+                StreamItem::Binary(vec![0; 8]),
+                StreamItem::Text(BUSY.to_string()),
+            ]),
+            scripted_reopen(vec![mem(vec![])], calls.clone()),
+            fast(4),
+        );
+        assert_eq!(up.recv().await, Some(StreamItem::Binary(vec![0; 8])));
+        assert_eq!(up.recv().await, Some(StreamItem::Text(BUSY.to_string())));
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "a live stream never re-opens"
+        );
+    }
+
+    #[tokio::test]
+    async fn other_error_frames_are_not_retried() {
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let other = r#"{"t":"error","code":"offset-ahead","msg":"busy is not the code"}"#;
+        let mut up = JoinRetry::new(
+            mem(vec![StreamItem::Text(other.to_string())]),
+            scripted_reopen(vec![], calls.clone()),
+            fast(4),
+        );
+        assert_eq!(up.recv().await, Some(StreamItem::Text(other.to_string())));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn browser_items_during_a_retry_replay_onto_the_new_stream() {
+        // The relay's reader selects `recv` against the browser queue, so
+        // a browser item can cancel a `recv` mid-retry. The held busy
+        // frame must survive that, the item must be queued (not written
+        // to the dead stream, which would end the relay), and it must
+        // reach the re-opened stream.
+        let gate = std::sync::Arc::new(tokio::sync::Notify::new());
+        let fresh = mem(vec![
+            StreamItem::Text(HELLO.to_string()),
+            StreamItem::Binary(vec![1; 8]),
+        ]);
+        let fresh_sent = fresh.sent.clone();
+        let slot = std::sync::Arc::new(std::sync::Mutex::new(Some(fresh)));
+        let (gate2, slot2) = (gate.clone(), slot.clone());
+        let reopen: Reopen<MemUpstream> = Box::new(move || {
+            let (gate, slot) = (gate2.clone(), slot2.clone());
+            Box::pin(async move {
+                gate.notified().await;
+                slot.lock().unwrap().take().ok_or(StreamError::Unavailable)
+            })
+        });
+        let mut up = JoinRetry::new(
+            mem(vec![StreamItem::Text(BUSY.to_string())]),
+            reopen,
+            fast(4),
+        );
+        // First recv: sees busy, then parks on the gate; cancel it.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), up.recv())
+                .await
+                .is_err(),
+            "the retry is parked on the re-open"
+        );
+        let resize = StreamItem::Text(r#"{"t":"resize","cols":100,"rows":30}"#.to_string());
+        up.send(resize.clone()).await.expect("queued, not an error");
+        gate.notify_one();
+        assert_eq!(
+            up.recv().await,
+            Some(StreamItem::Text(HELLO.to_string())),
+            "the cancelled retry resumed; busy was not lost or shown"
+        );
+        assert_eq!(fresh_sent.lock().unwrap().clone(), vec![resize]);
     }
 }

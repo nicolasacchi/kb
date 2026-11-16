@@ -13,6 +13,14 @@
 //! shapes. Binary frames carry an 8-byte big-endian u64 absolute offset of
 //! payload byte 0 followed by the payload.
 //!
+//! Envelope id vs session id: on runner.sock each request line is
+//! `{"v":1,"id":<n>,"op":...}` with a numeric request id, but most ops carry
+//! their own string session id in a field also named `id`. The two never
+//! coexist on one line: a client writes the numeric envelope id only for ops
+//! with no `id` (ping, list, launch); an id-carrying op keeps its session id
+//! there, the runner treats a string `id` as the session id, and the reply
+//! echoes whatever `id` the line carried, so the client correlates on it.
+//!
 //! [`Harness`] mirrors `kb_core::sessions::HARNESSES` in kb-core without a
 //! dependency edge; a drift test pinning [`Harness::ALL`] to that constant
 //! lands in a later unit (this crate stays kb-core-free on purpose).

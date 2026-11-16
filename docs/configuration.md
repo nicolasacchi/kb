@@ -364,7 +364,7 @@ is rebuilt empty on every restart. See
 | `runner_socket` | path | `/run/kb-term/runner/runner.sock` | The `kb-termd` runner socket. `~`/`~/rest` is tilde-expanded at read time; anything else is used verbatim. Almost never set (the socket lives under the `/run/kb-term` bind mount the runner owns) except in tests and split deployments. |
 | `ticket_ttl_secs` | u64 | `30` | Single-use WebSocket ticket lifetime in seconds, clamped into `1..=120`. |
 | `refuse_token_callers` | bool | `true` | Refuse `Token`/`Legacy` identity callers on terminal routes (see Security posture below). |
-| `runner_timeout_secs` | u64 | `5` | One runner RPC deadline (connect+write+read) in seconds, clamped into `1..=60`. |
+| `runner_timeout_secs` | u64 | `5` | Base runner RPC deadline (connect+write+read) in seconds, clamped into `1..=60`. Per-op budgets are floors over this base: input ops (paste/keys) use it directly, `list` gets at least 30 s, `enter` at least 15 s, and `launch`/`kill`/`read`/`history` at least 60 s. |
 
 ```toml
 [terminal]
