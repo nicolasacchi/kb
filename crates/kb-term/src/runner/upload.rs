@@ -140,16 +140,39 @@ fn ensure_up_dir(up: &Path) -> Result<(), RunnerError> {
 
 /// Count the regular files and bytes already in `up`.
 fn usage(up: &Path) -> Result<(usize, u64), RunnerError> {
+    usage_with(up, |p| std::fs::symlink_metadata(p))
+}
+
+/// [`usage`] with the stat injected (a test seam for the listing/stat race).
+///
+/// Other uploads run concurrently in the same directory: a temporary file
+/// is renamed or unlinked between the listing and the stat. So temporary
+/// entries are decided from the NAME and never statted, and a `NotFound`
+/// on any other entry means it is gone (swept or removed by another call)
+/// and is skipped. Every other stat error still fails.
+fn usage_with(
+    up: &Path,
+    stat: impl Fn(&Path) -> std::io::Result<std::fs::Metadata>,
+) -> Result<(usize, u64), RunnerError> {
     let mut files = 0usize;
     let mut total = 0u64;
     let entries = std::fs::read_dir(up)
         .map_err(|e| RunnerError::Io(format!("read upload directory: {e}")))?;
     for entry in entries {
-        let entry = entry.map_err(|e| RunnerError::Io(format!("read upload directory: {e}")))?;
-        let meta = std::fs::symlink_metadata(entry.path())
-            .map_err(|e| RunnerError::Io(format!("stat upload: {e}")))?;
-        let is_tmp = entry.file_name().to_string_lossy().starts_with(TMP_PREFIX);
-        if meta.is_file() && !is_tmp {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(RunnerError::Io(format!("read upload directory: {e}"))),
+        };
+        if entry.file_name().to_string_lossy().starts_with(TMP_PREFIX) {
+            continue;
+        }
+        let meta = match stat(&entry.path()) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(RunnerError::Io(format!("stat upload: {e}"))),
+        };
+        if meta.is_file() {
             files += 1;
             total += meta.len();
         }
@@ -300,5 +323,31 @@ mod tests {
             got.path.file_name().unwrap().to_str().unwrap(),
             format!("{want}.png")
         );
+    }
+
+    #[test]
+    fn usage_skips_temp_entries_without_statting_and_entries_that_vanish() {
+        let tmp = tempfile::tempdir().unwrap();
+        let up = tmp.path();
+        std::fs::write(up.join(format!("{TMP_PREFIX}inflight")), b"xxxx").unwrap();
+        std::fs::write(up.join("kept.png"), b"12345").unwrap();
+        std::fs::write(up.join("vanishes.png"), b"123").unwrap();
+        std::fs::write(up.join("broken.png"), b"1").unwrap();
+        let stat = |p: &Path| -> std::io::Result<std::fs::Metadata> {
+            let name = p.file_name().unwrap().to_string_lossy().into_owned();
+            assert!(
+                !name.starts_with(TMP_PREFIX),
+                "a temp entry must never be statted"
+            );
+            match name.as_str() {
+                "vanishes.png" => Err(std::io::ErrorKind::NotFound.into()),
+                "broken.png" => Err(std::io::ErrorKind::PermissionDenied.into()),
+                _ => std::fs::symlink_metadata(p),
+            }
+        };
+        // Any other stat error still fails.
+        assert!(matches!(usage_with(up, stat), Err(RunnerError::Io(_))));
+        std::fs::remove_file(up.join("broken.png")).unwrap();
+        assert_eq!(usage_with(up, stat).unwrap(), (1, 5));
     }
 }
