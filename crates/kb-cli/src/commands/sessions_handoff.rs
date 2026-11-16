@@ -818,7 +818,7 @@ mod tests {
 
     #[test]
     fn sh_quote_leaves_plain_tokens_and_escapes_everything_else() {
-        assert_eq!(sh_quote("/home/nik/proj-1/x.md"), "/home/nik/proj-1/x.md");
+        assert_eq!(sh_quote("/home/u/proj-1/x.md"), "/home/u/proj-1/x.md");
         assert_eq!(sh_quote("/home/my dir"), "'/home/my dir'");
         assert_eq!(sh_quote("it's"), "'it'\\''s'");
         assert_eq!(sh_quote("a$(rm -rf)b"), "'a$(rm -rf)b'");
