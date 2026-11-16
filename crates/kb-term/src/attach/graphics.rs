@@ -23,7 +23,7 @@ use std::collections::{HashMap, HashSet};
 
 use base64::Engine as _;
 
-use crate::wire::ServerFrame;
+use crate::wire::{is_valid_sha256_hex, ServerFrame};
 
 /// How picture rows are drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -261,7 +261,7 @@ impl ImageDef {
                 cols,
                 rows,
                 ..
-            } => Some(Self {
+            } if is_valid_sha256_hex(sha256) => Some(Self {
                 id: *id,
                 gen: *gen,
                 sha256: sha256.clone(),
@@ -276,7 +276,9 @@ impl ImageDef {
 /// Where PNG bytes come from. The attach loop implements it; this
 /// module never does IO.
 pub trait ImageSource {
-    /// The PNG for a sha256 key, if it is still available.
+    /// The PNG for a sha256 key, if it is still available. Keys are
+    /// pre-validated hex64 (see `is_valid_sha256_hex`): the filter never
+    /// passes any other string.
     fn png(&mut self, sha256: &str) -> Option<Vec<u8>>;
 }
 
@@ -332,19 +334,27 @@ impl GraphicsFilter {
         }
     }
 
-    /// Switch kitty mode on or off at runtime (a width change). The
-    /// byte-level parser state is dropped on a change; pictures already
-    /// drawn stay until the next erase.
-    pub fn set_kitty(&mut self, on: bool) {
-        if self.kitty != on {
-            self.kitty = on;
-            self.lex = Lex::Ground;
-            self.params.clear();
-            self.params_overflow = false;
-            self.csi_intermediate = false;
-            self.held.clear();
-            self.fg = None;
+    /// Switch kitty mode on or off at runtime (a width change). Returns
+    /// the bytes of a placeholder glyph prefix that was held back: the
+    /// caller MUST write them before any later output, so no input byte
+    /// is ever dropped. While kitty mode is off the lexer does not see
+    /// the stream, so on a change the byte-level parser state and the
+    /// tracked foreground are reset and the sent set is cleared (an
+    /// erase may have happened unobserved and freed the terminal's image
+    /// data, so every id is transmitted again on its next row).
+    #[must_use]
+    pub fn set_kitty(&mut self, on: bool) -> Vec<u8> {
+        if self.kitty == on {
+            return Vec::new();
         }
+        self.kitty = on;
+        self.lex = Lex::Ground;
+        self.params.clear();
+        self.params_overflow = false;
+        self.csi_intermediate = false;
+        self.fg = None;
+        self.sent.clear();
+        std::mem::take(&mut self.held)
     }
 
     /// Whether kitty mode is on.
@@ -357,6 +367,12 @@ impl GraphicsFilter {
     /// no-op; a different sha256, a higher generation or new geometry
     /// marks the id unsent again.
     pub fn on_image_def(&mut self, def: &ImageDef) {
+        if !is_valid_sha256_hex(&def.sha256) {
+            self.failed.insert(def.id);
+            self.sent.remove(&def.id);
+            self.defs.remove(&def.id);
+            return;
+        }
         let unchanged = self.defs.get(&def.id).is_some_and(|old| {
             old.sha256 == def.sha256
                 && old.gen >= def.gen
@@ -1160,13 +1176,87 @@ mod tests {
     #[test]
     fn labels_mode_filter_is_the_identity() {
         let mut f = filter_with(&[7, 9, 11]);
-        f.set_kitty(false);
+        assert!(f.set_kitty(false).is_empty());
         let mut s = store(&[7, 9, 11]);
         let input = fixture();
         assert_eq!(f.process(&input, &mut s), input);
         assert!(f.flush().is_empty());
         let mut g = GraphicsFilter::new(false);
         assert_eq!(g.process(&input, &mut s), input);
+    }
+
+    #[test]
+    fn toggling_mode_with_a_held_glyph_prefix_drops_no_byte() {
+        // kitty -> labels: a chunk ends inside a glyph; the prefix comes
+        // back from set_kitty and is written first.
+        let mut f = filter_with(&[7]);
+        let mut s = store(&[7]);
+        let mut input = row(7);
+        input.splice(0..0, b"ab".iter().copied());
+        let cut = input.iter().position(|&b| b == 0xF4).unwrap() + 2;
+        let mut got = f.process(&input[..cut], &mut s);
+        got.extend(f.set_kitty(false));
+        got.extend(f.process(&input[cut..], &mut s));
+        got.extend(f.flush());
+        assert_eq!(strip(&got, 7, 90, 19, &png(7)), input);
+        // labels -> kitty mid-row: nothing is lost either.
+        let mut g = GraphicsFilter::new(false);
+        let mut out = g.process(&input[..cut], &mut s);
+        out.extend(g.set_kitty(true));
+        out.extend(g.process(&input[cut..], &mut s));
+        out.extend(g.flush());
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn kitty_labels_erase_kitty_retransmits() {
+        let mut f = filter_with(&[7]);
+        let mut s = store(&[7]);
+        let first = run(&mut f, &mut s, &row(7));
+        assert_eq!(transmits(&first), 1);
+        assert!(f.set_kitty(false).is_empty());
+        assert_eq!(f.process(b"\x1b[2J", &mut s), b"\x1b[2J");
+        assert!(f.set_kitty(true).is_empty());
+        let again = run(&mut f, &mut s, &row(7));
+        assert_eq!(transmits(&again), 1);
+    }
+
+    #[test]
+    fn imagedef_with_an_invalid_key_is_refused() {
+        let frame = |sha: &str| ServerFrame::Imagedef {
+            seq: 0,
+            id: 7,
+            gen: 1,
+            sha256: sha.to_string(),
+            mime: "image/png".to_string(),
+            w: 10,
+            h: 10,
+            cols: 5,
+            rows: 2,
+            offset: 0,
+        };
+        assert!(ImageDef::from_frame(&frame(&sha(7))).is_some());
+        let (g64, a64) = ("g".repeat(64), "A".repeat(64));
+        for bad in ["", "abc", "../etc/passwd", g64.as_str(), a64.as_str()] {
+            assert!(ImageDef::from_frame(&frame(bad)).is_none(), "{bad}");
+        }
+        struct Never;
+        impl ImageSource for Never {
+            fn png(&mut self, _: &str) -> Option<Vec<u8>> {
+                panic!("fetcher called with an unvalidated key");
+            }
+        }
+        let mut f = GraphicsFilter::new(true);
+        f.on_image_def(&ImageDef {
+            id: 7,
+            gen: 1,
+            sha256: "../x".to_string(),
+            cols: 5,
+            rows: 2,
+        });
+        let out = f.process(&row(7), &mut Never);
+        assert_eq!(transmits(&out), 0);
+        assert_eq!(out, row(7));
     }
 
     #[test]
