@@ -81,6 +81,21 @@ describe("terms API", () => {
     expect(wsUrl("t1", "tick")).toBe("wss://kb.example.com/api/terms/t1/ws?ticket=tick");
   });
 
+  it("wsUrl carries epoch and mseq only next to a resume offset", () => {
+    setDaemonBase("http://laptop.local:4000");
+    try {
+      const base = "ws://laptop.local:4000/api/terms/t1/ws?ticket=tick";
+      expect(wsUrl("t1", "tick", 5, "e1")).toBe(`${base}&from=5&epoch=e1`);
+      expect(wsUrl("t1", "tick", 5, "e1", 7)).toBe(`${base}&from=5&epoch=e1&mseq=7`);
+      expect(wsUrl("t1", "tick", 5, "e1", 0)).toBe(`${base}&from=5&epoch=e1`);
+      // No offset: a full join, so the epoch and mseq are dropped.
+      expect(wsUrl("t1", "tick", undefined, "e1", 7)).toBe(base);
+      expect(wsUrl("t1", "tick", 0, "e1", 7)).toBe(base);
+    } finally {
+      setDaemonBase("");
+    }
+  });
+
   it("wsUrl derives scheme and host from a non-empty daemon base", () => {
     setDaemonBase("https://kb.example.com:4000");
     try {

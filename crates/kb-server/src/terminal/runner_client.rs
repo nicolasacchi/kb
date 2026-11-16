@@ -446,8 +446,22 @@ impl TermStream {
     }
 }
 
+/// The resume coordinates a browser reconnect carries on the upgrade
+/// query (`from`, `epoch`, `mseq`), forwarded to the runner verbatim:
+/// the relay never interprets them, the tap decides resume vs full join.
+/// `epoch` and `mseq` are only meaningful with `from`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct StreamResume {
+    /// Absolute byte offset to resume from; `None` = a full join.
+    pub(crate) from: Option<u64>,
+    /// The tap stream epoch `from` belongs to.
+    pub(crate) epoch: Option<String>,
+    /// Newest marker sequence the client applied.
+    pub(crate) mseq: Option<u64>,
+}
+
 impl UnixRunner {
-    /// Open the relay stream for `id` (optional resume offset): sends
+    /// Open the relay stream for `id` (optional resume coordinates): sends
     /// the `stream` request line, reads the ok reply, and returns the
     /// live spliced connection. The runner answers the request line
     /// first, so a runner refusal surfaces here as `NotFound` (or
@@ -455,11 +469,13 @@ impl UnixRunner {
     pub(crate) async fn open_stream(
         &self,
         id: &str,
-        from: Option<u64>,
+        resume: &StreamResume,
     ) -> Result<TermStream, StreamError> {
         let req = RunnerRequest::Stream {
             id: id.to_string(),
-            from,
+            from: resume.from,
+            epoch: resume.epoch.clone(),
+            mseq: resume.mseq,
         };
         let line = serde_json::to_string(&req).map_err(|_| StreamError::BadReply)?;
         let mut stream = tokio::net::UnixStream::connect(&self.path)
@@ -867,7 +883,7 @@ mod tests {
         });
         let runner = UnixRunner::new(sock, Duration::from_secs(5));
         let mut stream = runner
-            .open_stream("abcd1234", None)
+            .open_stream("abcd1234", &StreamResume::default())
             .await
             .expect("open stream");
         let first = tokio::time::timeout(Duration::from_secs(5), stream.recv())
@@ -901,7 +917,10 @@ mod tests {
                 .await;
         });
         let runner = UnixRunner::new(sock, Duration::from_secs(5));
-        match runner.open_stream("abcd1234", None).await {
+        match runner
+            .open_stream("abcd1234", &StreamResume::default())
+            .await
+        {
             Err(StreamError::NotFound) => {}
             Ok(_) => panic!("expected NotFound, got Ok"),
             Err(e) => panic!("expected NotFound, got {e:?}"),
@@ -969,7 +988,9 @@ mod tests {
             }
         });
         let runner = UnixRunner::new(sock, Duration::from_secs(5));
-        let opened = runner.open_stream("abcd1234", None).await;
+        let opened = runner
+            .open_stream("abcd1234", &StreamResume::default())
+            .await;
         (opened, task, dir)
     }
 
@@ -1076,7 +1097,7 @@ mod tests {
         });
         let runner = UnixRunner::new(sock, Duration::from_secs(5));
         let mut stream = runner
-            .open_stream("abcd1234", None)
+            .open_stream("abcd1234", &StreamResume::default())
             .await
             .expect("open stream");
         let first = tokio::time::timeout(Duration::from_secs(5), stream.recv())

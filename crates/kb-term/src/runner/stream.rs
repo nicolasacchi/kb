@@ -11,9 +11,12 @@
 //! binary / control) — never a second one. The subscribe side speaks
 //! T7's join/resume contract: on connect the runner sends one
 //! `viewer-open` control envelope (`resume: null` for a full join,
-//! `{offset, mseq: 0, epoch: ""}` when the client asked to resume —
-//! the runner cannot know the epoch, so the tap's full-join fallback
-//! decides). Client bytes are forwarded to the tap untouched, and tap
+//! `{offset, mseq, epoch}` when the client asked to resume). The
+//! runner cannot know the epoch itself: it carries the one the client
+//! echoes from its last `hello` (and the newest marker sequence it
+//! applied), and the tap decides resume vs full join. A request with no
+//! epoch resumes with the empty epoch, which never matches, so it is a
+//! full join. Client bytes are forwarded to the tap untouched, and tap
 //! envelopes are forwarded verbatim (including any control envelopes
 //! the tap replies with).
 
@@ -36,12 +39,20 @@ pub fn tap_socket_path<S: crate::runner::supervisor::Supervisor>(
 /// The `viewer-open` control body the runner sends on a fresh tap
 /// connection. Pure (no IO) so the join-vs-resume choice is unit-pinned:
 /// `None` is a full join; `Some(offset)` carries the resume coordinates
-/// the tap may accept or downgrade to a full join.
-pub fn join_envelope(viewer: &str, from: Option<u64>) -> Result<Vec<u8>, wire::WireError> {
+/// the tap may accept or downgrade to a full join. `epoch` is the tap
+/// stream epoch the client echoes (absent = the empty epoch, which the
+/// tap never matches) and `mseq` the newest marker sequence it applied
+/// (absent = 0). Both are ignored without `from`.
+pub fn join_envelope(
+    viewer: &str,
+    from: Option<u64>,
+    epoch: Option<&str>,
+    mseq: Option<u64>,
+) -> Result<Vec<u8>, wire::WireError> {
     let resume = from.map(|offset| ResumeInfo {
         offset,
-        mseq: 0,
-        epoch: String::new(),
+        mseq: mseq.unwrap_or(0),
+        epoch: epoch.unwrap_or_default().to_string(),
     });
     let msg = ControlMessage::ViewerOpen {
         viewer: viewer.to_string(),
@@ -62,7 +73,14 @@ pub async fn connect_tap<S: crate::runner::supervisor::Supervisor>(
     runner: &Runner<S>,
     id: &str,
     from: Option<u64>,
+    epoch: Option<&str>,
+    mseq: Option<u64>,
 ) -> Result<(tokio::net::UnixStream, String), RunnerError> {
+    if let Some(e) = epoch {
+        if !wire::is_valid_epoch(e) {
+            return Err(RunnerError::BadRequest("invalid stream epoch".to_string()));
+        }
+    }
     // Session-down vs tap-down: a session whose directory is gone is
     // "no such session" (NotFound -> 404 at kb-server); a session
     // that exists but whose tap socket will not connect is an
@@ -76,7 +94,7 @@ pub async fn connect_tap<S: crate::runner::supervisor::Supervisor>(
         .await
         .map_err(|e| RunnerError::TapTimeout(format!("tap unavailable for {id}: {e}")))?;
     let viewer = crate::runner::ids::generate_viewer_id()?;
-    let join = join_envelope(&viewer, from)
+    let join = join_envelope(&viewer, from, epoch, mseq)
         .map_err(|e| RunnerError::Internal(format!("encode join envelope: {e}")))?;
     tap.write_all(&join)
         .await
@@ -157,7 +175,7 @@ mod tests {
 
     #[test]
     fn join_envelope_full_join_carries_no_resume() {
-        let bytes = join_envelope("abcd1234", None).expect("encode");
+        let bytes = join_envelope("abcd1234", None, None, None).expect("encode");
         let (viewer, profile) = viewer_open(&bytes);
         assert_eq!(viewer, "abcd1234");
         assert_eq!(profile, Profile::Desktop);
@@ -167,27 +185,64 @@ mod tests {
         assert!(text.contains("\"resume\":null"), "full join body: {text}");
     }
 
-    #[test]
-    fn join_envelope_with_from_carries_resume_coordinates() {
-        let bytes = join_envelope("abcd1234", Some(1234)).expect("encode");
+    fn resume_of(bytes: &[u8]) -> ResumeInfo {
         let mut dec = EnvelopeDecoder::new();
-        let envs = dec.push(&bytes).expect("decode");
+        let envs = dec.push(bytes).expect("decode");
         match serde_json::from_slice::<ControlMessage>(&envs[0].body).unwrap() {
             ControlMessage::ViewerOpen {
-                viewer,
-                profile,
-                resume: Some(r),
-            } => {
-                assert_eq!(viewer, "abcd1234");
-                assert_eq!(profile, Profile::Desktop);
-                assert_eq!(r.offset, 1234);
-                assert_eq!(r.mseq, 0, "the runner cannot know the marker seq");
-                assert!(
-                    r.epoch.is_empty(),
-                    "the runner cannot know the epoch; the tap's full-join fallback decides"
-                );
-            }
+                resume: Some(r), ..
+            } => r,
             other => panic!("expected viewer-open with resume, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn join_envelope_with_from_carries_the_clients_epoch_and_mseq() {
+        let bytes =
+            join_envelope("abcd1234", Some(1234), Some("0123abcd"), Some(7)).expect("encode");
+        let (viewer, profile) = viewer_open(&bytes);
+        assert_eq!(viewer, "abcd1234");
+        assert_eq!(profile, Profile::Desktop);
+        let r = resume_of(&bytes);
+        assert_eq!(r.offset, 1234);
+        assert_eq!(
+            r.mseq, 7,
+            "the client's applied marker sequence rides along"
+        );
+        assert_eq!(r.epoch, "0123abcd", "the client's epoch rides along");
+    }
+
+    #[test]
+    fn join_envelope_without_an_epoch_keeps_the_empty_epoch_full_join_fallback() {
+        let r = resume_of(&join_envelope("abcd1234", Some(1234), None, None).expect("encode"));
+        assert_eq!(r.offset, 1234);
+        assert_eq!(r.mseq, 0);
+        assert!(
+            r.epoch.is_empty(),
+            "no epoch: the tap's empty-epoch mismatch decides"
+        );
+    }
+
+    #[test]
+    fn join_envelope_ignores_epoch_and_mseq_without_from() {
+        let bytes = join_envelope("abcd1234", None, Some("0123abcd"), Some(7)).expect("encode");
+        let text = String::from_utf8(bytes[5..].to_vec()).unwrap();
+        assert!(text.contains("\"resume\":null"), "full join body: {text}");
+    }
+
+    #[tokio::test]
+    async fn connect_tap_refuses_a_malformed_epoch_before_dialling() {
+        let tmp = tempfile::tempdir().unwrap();
+        let run_dir = tmp.path().join("run");
+        std::fs::create_dir_all(run_dir.join("s").join("abcd1234")).unwrap();
+        let cfg =
+            RunnerConfig::test_config(run_dir, "/bin/true".to_string(), tmp.path().join("conf"));
+        let runner = Runner::direct(cfg);
+        for bad in ["", "a b", "x\n", &"a".repeat(65)] {
+            let err = connect_tap(&runner, "abcd1234", Some(5), Some(bad), None)
+                .await
+                .unwrap_err();
+            assert_eq!(err.code(), "bad-request", "epoch {bad:?}");
         }
     }
 
@@ -229,10 +284,11 @@ mod tests {
         let cfg =
             RunnerConfig::test_config(run_dir, "/bin/true".to_string(), tmp.path().join("conf"));
         let runner = Runner::direct(cfg);
-        let (tap, minted) = tokio::time::timeout(DEADLINE, connect_tap(&runner, id, None))
-            .await
-            .expect("connect deadline")
-            .expect("connect to fake tap");
+        let (tap, minted) =
+            tokio::time::timeout(DEADLINE, connect_tap(&runner, id, None, None, None))
+                .await
+                .expect("connect deadline")
+                .expect("connect to fake tap");
         let (client_end, mut test_end) = tokio::net::UnixStream::pair().unwrap();
         let (tap_read, tap_write) = tap.into_split();
         let (client_read, client_write) = client_end.into_split();
@@ -290,8 +346,12 @@ mod tests {
         let cfg =
             RunnerConfig::test_config(run_dir, "/bin/true".to_string(), tmp.path().join("conf"));
         let runner = Runner::direct(cfg);
-        let (_t1, v1) = connect_tap(&runner, id, None).await.expect("first");
-        let (_t2, v2) = connect_tap(&runner, id, None).await.expect("second");
+        let (_t1, v1) = connect_tap(&runner, id, None, None, None)
+            .await
+            .expect("first");
+        let (_t2, v2) = connect_tap(&runner, id, None, None, None)
+            .await
+            .expect("second");
         assert_ne!(v1, v2, "each stream open mints its own viewer id");
         let seen = tokio::time::timeout(DEADLINE, tap_task)
             .await
@@ -315,13 +375,17 @@ mod tests {
         let runner = Runner::direct(cfg);
         // No session directory at all: "no such session" (code
         // `not-found`, a 404 at kb-server).
-        let err = connect_tap(&runner, "abcd1234", None).await.unwrap_err();
+        let err = connect_tap(&runner, "abcd1234", None, None, None)
+            .await
+            .unwrap_err();
         assert!(matches!(err, RunnerError::NotFound(_)), "got {err:?}");
         // The session directory exists but nothing listens on its
         // tap.sock: an upstream failure (`tap-timeout`, a 502), never
         // the same 404.
         std::fs::create_dir_all(run_dir.join("s").join("abcd1234")).unwrap();
-        let err = connect_tap(&runner, "abcd1234", None).await.unwrap_err();
+        let err = connect_tap(&runner, "abcd1234", None, None, None)
+            .await
+            .unwrap_err();
         assert!(matches!(err, RunnerError::TapTimeout(_)), "got {err:?}");
     }
 }

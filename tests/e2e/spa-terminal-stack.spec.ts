@@ -440,6 +440,14 @@ const fromOf = (c: Conn): number | null => {
   return v === null ? null : Number(v);
 };
 
+const epochOf = (c: Conn): string | null => new URL(c.url).searchParams.get("epoch");
+
+/** The tap epoch a connection's hello announced (null before the hello arrives). */
+const helloEpoch = (c: Conn): string | null => {
+  const hello = decodeStream(c.rx).texts.find((t) => t.t === "hello");
+  return hello === undefined ? null : String((hello as { epoch?: unknown }).epoch ?? "");
+};
+
 test("ResumeFrom after 3 forced drops, backoff bounded, scrollback complete once", async ({ page, request }) => {
   test.setTimeout(300_000);
   const conns = await proxySockets(page);
@@ -460,9 +468,18 @@ test("ResumeFrom after 3 forced drops, backoff bounded, scrollback complete once
     expect(from, `drop ${i + 1}: the reconnect URL carries from=`).not.toBeNull();
     expect(from!, `drop ${i + 1}: from= is the last applied offset`).toBeGreaterThan(0);
     expect(from!).toBeGreaterThanOrEqual(before.offset);
+    // FXEPOCH: the reconnect echoes the epoch the previous connection's hello announced.
+    const prevEpoch = helloEpoch(conns[n - 1]);
+    expect(prevEpoch, `drop ${i + 1}: the dropped connection received a hello`).toBeTruthy();
+    expect(epochOf(next), `drop ${i + 1}: the reconnect URL carries epoch=`).toBe(prevEpoch);
     const attempts = conns.filter((x) => x.at >= t0 && x.at - t0 < 1000).length;
     expect(attempts, `drop ${i + 1}: reconnect attempts within 1 s`).toBeLessThanOrEqual(3);
     await waitPhase(page, "live");
+    // FXEPOCH: the tap matched the epoch and resumed from its ring: hello and
+    // data, never a seed, and the terminal was not reset.
+    expect(decodeStream(next.rx).texts.some((t) => t.t === "seed"), `drop ${i + 1}: a resume is not answered with a seed`).toBe(false);
+    expect(helloEpoch(next), `drop ${i + 1}: same epoch after the resume`).toBe(prevEpoch);
+    expect((await panelAttrs(page)).resets, `drop ${i + 1}: no term reset across the resume`).toBe(before.resets);
   }
   await waitFile(join(h.out, "expected.json"), 180_000);
   const exp = readExpected(h.out);
@@ -471,13 +488,10 @@ test("ResumeFrom after 3 forced drops, backoff bounded, scrollback complete once
   expect(r.ok, describeNumbered(r)).toBe(true);
 });
 
-test("a resume needs no term reset (KNOWN GAP: the runner cannot carry the tap epoch, every reconnect is a full join)", async ({ page, request }) => {
-  // Marked as an expected failure so the gap stays pinned in both directions:
-  // kb-term's runner opens the stream with an empty epoch (crates/kb-term
-  // runner/stream.rs), so the tap answers `from=` with a FULL join and the SPA
-  // resets. When the epoch is plumbed through this test starts passing, and
-  // Playwright reports an unexpected pass until the marker is removed.
-  test.fail();
+test("a resume needs no term reset", async ({ page, request }) => {
+  // The SPA echoes the tap epoch (and applied marker seq) on the reconnect URL,
+  // the relay and the runner carry it to the tap, and the tap resumes from its
+  // ring instead of full-joining.
   test.setTimeout(240_000);
   const conns = await proxySockets(page);
   const gate = join(scratch("gate"), "go");
@@ -491,6 +505,8 @@ test("a resume needs no term reset (KNOWN GAP: the runner cannot carry the tap e
   cut(conns[n - 1]);
   await expect.poll(() => conns.length, { timeout: 30_000 }).toBeGreaterThan(n);
   await waitPhase(page, "live");
+  expect(epochOf(conns[n]), "the reconnect URL carries the stored epoch").toBeTruthy();
+  expect(decodeStream(conns[n].rx).texts.some((t) => t.t === "seed"), "a resume is not answered with a seed").toBe(false);
   const after = await panelAttrs(page);
   expect(after.resets, "term.reset count unchanged across a resume").toBe(before.resets);
 });
@@ -519,6 +535,8 @@ test("aged-out offset forces a full join", async ({ page, request }) => {
   const attempts = conns.slice(n);
   for (const a of attempts) {
     expect(fromOf(a) ?? -1, "every reconnect after the drop sends the stale offset").toBeGreaterThanOrEqual(before.offset);
+    // FXEPOCH: the epoch is right; only the offset has aged out, so the tap must full-join.
+    expect(epochOf(a), "the stale-offset reconnect still carries the (valid) epoch").toBeTruthy();
   }
   expect(before.offset).toBeGreaterThan(0);
   // The tap parses the whole 40 MB flood before it can answer a join, and a join
