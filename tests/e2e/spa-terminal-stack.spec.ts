@@ -514,15 +514,19 @@ test("aged-out offset forces a full join", async ({ page, request }) => {
   await waitFile(join(h.out, "tail-done"), 400_000);
   await page.unroute("**/api/terms/*/ticket");
   await expect.poll(() => conns.length, { timeout: 60_000 }).toBeGreaterThan(n);
-  const next = conns[n];
-  const from = fromOf(next);
-  expect(from, "the stale offset is sent").not.toBeNull();
-  expect(from!).toBeGreaterThanOrEqual(before.offset);
+  // Attempts made while the tap is still busy with the flood get no frame (the
+  // viewer's first-frame watchdog retries); every one of them sends the stale offset.
+  const attempts = conns.slice(n);
+  for (const a of attempts) {
+    expect(fromOf(a) ?? -1, "every reconnect after the drop sends the stale offset").toBeGreaterThanOrEqual(before.offset);
+  }
+  expect(before.offset).toBeGreaterThan(0);
   // The tap parses the whole 40 MB flood before it can answer a join, and a join
   // waits for a quiet frame boundary: allow minutes, not seconds.
   await waitPhase(page, "live", 480_000);
   expect((await panelAttrs(page)).resets, "a full join (seed) reset the terminal").toBeGreaterThan(before.resets);
-  expect(decodeStream(next.rx).texts.some((t) => t.t === "seed"), "the aged-out reconnect was answered with a seed").toBe(true);
+  const answered = conns.slice(n).filter((a) => decodeStream(a.rx).texts.some((t) => t.t === "seed"));
+  expect(answered.length, "the aged-out offset was answered with a seed (a full join)").toBeGreaterThan(0);
   const text = await waitDone(page, "TAIL-DONE", 120_000);
   const r = checkNumbered(text, { expectTotal: 200 });
   expect(r.ok, describeNumbered(r)).toBe(true);
