@@ -503,3 +503,103 @@ fn doctor_exit_codes() {
         0
     );
 }
+
+#[test]
+fn doctor_termd_enabled() {
+    for ok in ["enabled", "enabled-runtime", "alias", "linked"] {
+        assert_eq!(
+            doctor::decide_termd_enabled(Some(ok)).status,
+            CheckStatus::Pass,
+            "{ok}"
+        );
+    }
+    for bad in ["static", "disabled", "masked"] {
+        let c = doctor::decide_termd_enabled(Some(bad));
+        assert_eq!(c.status, CheckStatus::Warn, "{bad}");
+        assert_eq!(c.id, "termd_enabled");
+        assert!(c.detail.contains(bad));
+    }
+    assert_eq!(doctor::decide_termd_enabled(None).status, CheckStatus::Skip);
+}
+
+#[test]
+fn doctor_parse_environ_splits_nul_pairs() {
+    let env = doctor::parse_environ(b"PATH=/usr/bin:/bin\0KB_SESSIONS_DIR=\0X=a=b\0junk\0");
+    assert_eq!(env.len(), 3);
+    assert_eq!(env[0], ("PATH".to_string(), "/usr/bin:/bin".to_string()));
+    assert_eq!(env[1].1, "");
+    assert_eq!(env[2], ("X".to_string(), "a=b".to_string()));
+}
+
+fn env_of(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+    pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
+fn status_of(checks: &[doctor::Check], id: &str) -> CheckStatus {
+    checks.iter().find(|c| c.id == id).unwrap().status
+}
+
+#[test]
+fn doctor_runner_env_resolves_against_the_runner_not_the_shell() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner_bin = dir.path().join("runner-bin");
+    let shell_bin = dir.path().join("shell-bin");
+    std::fs::create_dir_all(&runner_bin).unwrap();
+    std::fs::create_dir_all(&shell_bin).unwrap();
+    fake_exe(&runner_bin, "kb", "#!/bin/sh\n");
+    fake_exe(&runner_bin, "claude", "#!/bin/sh\n");
+    let omp = fake_exe(&shell_bin, "omp", "#!/bin/sh\n");
+    let env = env_of(&[
+        ("PATH", runner_bin.to_str().unwrap()),
+        ("KB_SESSIONS_DIR", "/srv/sessions"),
+    ]);
+    let harnesses = vec![
+        ("claude".to_string(), Some(runner_bin.join("claude"))),
+        ("omp".to_string(), Some(omp)),
+        ("grok".to_string(), None),
+    ];
+    let checks = doctor::decide_runner_env(Some(&env), &harnesses);
+    assert_eq!(
+        status_of(&checks, "runner_env_sessions_dir"),
+        CheckStatus::Pass
+    );
+    assert_eq!(status_of(&checks, "runner_env_kb"), CheckStatus::Pass);
+    assert_eq!(
+        status_of(&checks, "runner_env_harness_claude"),
+        CheckStatus::Pass
+    );
+    // omp is on the shell PATH only: the pane would exit 127.
+    assert_eq!(
+        status_of(&checks, "runner_env_harness_omp"),
+        CheckStatus::Fail
+    );
+    // Not installed anywhere: no check at all.
+    assert!(checks.iter().all(|c| c.id != "runner_env_harness_grok"));
+}
+
+#[test]
+fn doctor_runner_env_fails_when_sessions_dir_is_unset_or_empty() {
+    for env in [
+        env_of(&[("PATH", "/usr/bin")]),
+        env_of(&[("PATH", "/usr/bin"), ("KB_SESSIONS_DIR", "")]),
+    ] {
+        let checks = doctor::decide_runner_env(Some(&env), &[]);
+        let c = checks
+            .iter()
+            .find(|c| c.id == "runner_env_sessions_dir")
+            .unwrap();
+        assert_eq!(c.status, CheckStatus::Fail);
+        assert!(c.fix.as_deref().unwrap_or("").contains("env.conf"));
+        assert_eq!(status_of(&checks, "runner_env_kb"), CheckStatus::Warn);
+    }
+}
+
+#[test]
+fn doctor_runner_env_skips_when_the_runner_is_unreadable() {
+    let checks = doctor::decide_runner_env(None, &[("omp".to_string(), None)]);
+    assert_eq!(checks.len(), 1);
+    assert_eq!(checks[0].status, CheckStatus::Skip);
+}

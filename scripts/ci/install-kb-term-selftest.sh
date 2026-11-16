@@ -267,6 +267,25 @@ grep -qF "export PATH=\"$work/p4/bin:\$PATH\"" "$work/out" \
   || fail "PATH hint line missing from output"
 say_ok "4 good sidecar installs with correct layout"
 
+# 4b. the runner-environment drop-in step is PRINTED (pre-filled from the
+# current shell), never written
+grep -qF "kb-termd.service.d/env.conf" "$work/out" \
+  || fail "env drop-in step missing from output"
+grep -qF "KB_SESSIONS_DIR is not set in this shell" "$work/out" \
+  || fail "unset KB_SESSIONS_DIR placeholder note missing"
+mkdir -p "$work/hbin"
+printf '#!/bin/sh\n' > "$work/hbin/omp"
+chmod 755 "$work/hbin/omp"
+run "$work/p4b" PATH="$work/hbin:$PATH" KB_SESSIONS_DIR=/tmp/sessions-fixture \
+  || fail "install with a harness on PATH should succeed"
+grep -qF "Environment=KB_SESSIONS_DIR=/tmp/sessions-fixture" "$work/out" \
+  || fail "drop-in is not pre-filled with KB_SESSIONS_DIR"
+grep "Environment=PATH=" "$work/out" | grep -qF "$work/hbin:/usr/local/bin:/usr/bin" \
+  || fail "drop-in PATH does not carry the harness dir"
+[ ! -e "$work/home/.config/systemd/user/kb-termd.service.d" ] \
+  || fail "the installer must not write the drop-in"
+say_ok "4b env drop-in step is printed pre-filled and not written"
+
 # 5. gh attestation fails -> abort with nothing installed; override proceeds
 if run "$work/p5" PATH="$work/gh-bin:$PATH" FAKE_GH_VERIFY=1; then fail "failed attestation must abort"; fi
 [ ! -e "$work/p5/bin/kb-termd" ] || fail "installed despite failed attestation"
