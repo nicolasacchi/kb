@@ -234,6 +234,13 @@ async function waitForDaemon(port: number, timeoutMs: number): Promise<boolean> 
 }
 
 export default async function globalSetup() {
+  // T25 — the opt-in terminal end-to-end stack (real tmux + tap + kb-termd +
+  // three kb-servers). Never loaded unless the term-e2e job sets the flag, so
+  // the default lane's behaviour and spec count are unchanged.
+  if (process.env.KB_E2E_TERMINAL === "1") {
+    const m = await import("./terminal-stack/global-setup-terminal");
+    return m.default();
+  }
   const tmpDir = mkdtempSync(join(tmpdir(), "kb-e2e-"));
   const sourceDir = join(tmpDir, "corpus");
   copyCanon(sourceDir);

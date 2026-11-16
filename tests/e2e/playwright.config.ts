@@ -13,6 +13,12 @@ import type { ReporterDescription } from "@playwright/test";
 // one retry is honest here in a way it would not be if a spec recurred.
 const isCI = !!process.env.CI;
 
+// T25 — the terminal end-to-end spec runs ONLY in the opt-in `terminal-stack`
+// projects (KB_E2E_TERMINAL=1, real tmux + tap + kb-termd; see
+// terminal-stack/README.md). Every default project ignores it.
+const TERMINAL_STACK = process.env.KB_E2E_TERMINAL === "1";
+const STACK_SPEC = /spa-terminal-stack\.spec\.ts/;
+
 // v0.44 F1 -- when KB_WITNESS_DIR is set (CI), ALSO write Playwright's JSON
 // report there. scripts/ci/witness.py decides the lane from that file
 // (unexpected == 0 and executed >= the ci/test-floors.toml floor), not from
@@ -22,7 +28,10 @@ const isCI = !!process.env.CI;
 const reporters: ReporterDescription[] = [["list"]];
 if (isCI) reporters.push(["github"]);
 if (process.env.KB_WITNESS_DIR) {
-  reporters.push(["json", { outputFile: `${process.env.KB_WITNESS_DIR}/pw-e2e.json` }]);
+  // T25 — the opt-in terminal lane writes its own report so the default e2e
+  // witness (pw-e2e.json) is never overwritten or double-counted.
+  const report = TERMINAL_STACK ? "pw-term-e2e.json" : "pw-e2e.json";
+  reporters.push(["json", { outputFile: `${process.env.KB_WITNESS_DIR}/${report}` }]);
 }
 
 /** Chromium flags of the T15 picture projects: the shared host mapping plus SwiftShader WebGL. */
@@ -90,6 +99,7 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
+      testIgnore: STACK_SPEC,
       // The T15 picture specs run only in the chromium-gfx-dpr* projects below.
       grepInvert: /@gfx/,
       use: { ...devices["Desktop Chrome"] },
@@ -103,6 +113,7 @@ export default defineConfig({
     // hence viewport:null + an explicit window size and no deviceScaleFactor.
     {
       name: "chromium-gfx-dpr1",
+      testIgnore: STACK_SPEC,
       grep: /@gfx-dpr1/,
       use: {
         ...devices["Desktop Chrome"],
@@ -111,6 +122,7 @@ export default defineConfig({
     },
     {
       name: "chromium-gfx-dpr2",
+      testIgnore: STACK_SPEC,
       grep: /@gfx-dpr2/,
       use: {
         ...devices["Desktop Chrome"],
@@ -121,6 +133,7 @@ export default defineConfig({
     },
     {
       name: "chromium-gfx-dpr3",
+      testIgnore: STACK_SPEC,
       grep: /@gfx-dpr3/,
       use: {
         ...devices["Desktop Chrome"],
@@ -143,6 +156,7 @@ export default defineConfig({
     // below, and those must not run here.
     {
       name: "firefox",
+      testIgnore: STACK_SPEC,
       grep: /@selection/,
       use: {
         ...devices["Desktop Firefox"],
@@ -157,5 +171,37 @@ export default defineConfig({
         launchOptions: {},
       },
     },
+    // T25 - the real-stack terminal lane. Present only when the term-e2e job
+    // opts in; workers stay 1 and the retry policy is the shared one above.
+    // DPR 2 is a REAL --force-device-scale-factor launch arg (an emulated
+    // deviceScaleFactor never reaches xterm's device-pixel sizing), hence its
+    // own project with viewport:null and an explicit window size.
+    ...(TERMINAL_STACK
+      ? [
+          {
+            name: "terminal-stack",
+            testMatch: STACK_SPEC,
+            grepInvert: /@dpr2/,
+            use: { ...devices["Desktop Chrome"] },
+          },
+          {
+            name: "terminal-stack-dpr2",
+            testMatch: STACK_SPEC,
+            grep: /@dpr2/,
+            use: {
+              ...devices["Desktop Chrome"],
+              viewport: null,
+              deviceScaleFactor: undefined,
+              launchOptions: {
+                args: [
+                  "--host-resolver-rules=MAP kb-host.test 127.0.0.1",
+                  "--force-device-scale-factor=2",
+                  "--window-size=900,700",
+                ],
+              },
+            },
+          },
+        ]
+      : []),
   ],
 });
