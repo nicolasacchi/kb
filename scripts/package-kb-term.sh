@@ -129,7 +129,7 @@ EOF
     say ""
     say "Contents:"
     say "  bin/kb-termd          the kb-term runner (runner.sock)"
-    say "  bin/kb-term           the host-local client (attach|new|ls|doctor)"
+    say "  bin/kb-term           the host-local client (attach|new|ls|kill|doctor)"
     say "  bin/kb-tap            the tap (bun single binary)"
     say "  libexec/kb-term/tmux the pinned tmux 3.7c (never installed on PATH)"
     say "  share/kb-term/        systemd units, tmpfiles.d, omp overlay, kb-term.conf"

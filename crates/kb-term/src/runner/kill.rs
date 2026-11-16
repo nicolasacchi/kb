@@ -20,6 +20,9 @@ pub struct KillOutcome {
     pub exit_code: Option<i32>,
     /// Whether the SIGKILL path ran (or the pane never died in the grace).
     pub forced: bool,
+    /// True when no holder answered and the call only removed the
+    /// leftover socket / session dir of a stale entry.
+    pub stale_removed: bool,
 }
 
 /// Clamp a kill grace to 0..=60 seconds (`None` uses the config default).
@@ -52,15 +55,31 @@ pub async fn kill_session<S: Supervisor>(
     // data: omp waits 300 ms between its `C-c`s.
     let steps = discovery::exit_steps(runner, id).await;
     let sock = runner.holder_socket(id);
-    // The holder must answer at all, or this is `not-found`.
-    let alive = runner
-        .tmux
-        .run(&sock, &["list-sessions"], None)
-        .await
-        .map(|o| o.ok)
-        .unwrap_or(false);
-    if !alive {
-        return Err(RunnerError::NotFound(format!("no holder for {id}")));
+    // The holder must answer at all. A tmux that ANSWERS with an error
+    // (no server, refused connection) is a stale entry: its leftovers
+    // are reaped. A probe that fails to complete (spawn error, timeout)
+    // proves nothing about the holder, so nothing is removed.
+    let probe = runner.tmux.run(&sock, &["list-sessions"], None).await;
+    match probe {
+        Ok(o) if o.ok => {}
+        Ok(_) => {
+            return if reap_stale_entry(&runner.sessions_dir(), id)? {
+                Ok(KillOutcome {
+                    exit_code: None,
+                    forced: false,
+                    stale_removed: true,
+                })
+            } else {
+                Err(RunnerError::NotFound(format!("no holder for {id}")))
+            };
+        }
+        Err(e) => {
+            return if stale_leftovers_exist(&runner.sessions_dir(), id) {
+                Err(e)
+            } else {
+                Err(RunnerError::NotFound(format!("no holder for {id}")))
+            };
+        }
     }
     if let Some(steps) = steps {
         run_exit_steps(runner, &sock, &steps).await;
@@ -136,7 +155,66 @@ pub async fn kill_session<S: Supervisor>(
     Ok(KillOutcome {
         exit_code,
         forced: forced_kill(pane_died, sigkill_ran),
+        stale_removed: false,
     })
+}
+
+fn stale_leftovers_exist(sessions_dir: &std::path::Path, id: &str) -> bool {
+    std::fs::symlink_metadata(sessions_dir.join(format!("{id}.sock"))).is_ok()
+        || std::fs::symlink_metadata(sessions_dir.join(id)).is_ok()
+}
+
+/// Remove exactly `<sessions_dir>/<id>.sock` and `<sessions_dir>/<id>/`,
+/// the leftovers of a session whose holder no longer answers. The caller
+/// has already established that no holder answers and holds the id lock.
+///
+/// Refuses (nothing removed) when the id fails [`valid_id`], when either
+/// entry is a symlink, when the socket entry is not a socket, or when
+/// the session entry is not a directory. Both entries are inspected
+/// with `symlink_metadata` BEFORE anything is removed, so a refusal is
+/// all-or-nothing. Returns `Ok(false)` when neither entry exists.
+pub fn reap_stale_entry(sessions_dir: &std::path::Path, id: &str) -> Result<bool, RunnerError> {
+    use std::os::unix::fs::FileTypeExt;
+    if !valid_id(id) {
+        return Err(RunnerError::InvalidId);
+    }
+    let sock = sessions_dir.join(format!("{id}.sock"));
+    let dir = sessions_dir.join(id);
+    let lstat = |p: &std::path::Path| match std::fs::symlink_metadata(p) {
+        Ok(m) => Ok(Some(m)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(RunnerError::Io(format!(
+            "cannot inspect a session entry: {e}"
+        ))),
+    };
+    let sock_meta = lstat(&sock)?;
+    let dir_meta = lstat(&dir)?;
+    if let Some(m) = &sock_meta {
+        if !m.file_type().is_socket() {
+            return Err(RunnerError::BadRequest(format!(
+                "refusing {id}: the holder entry is not a socket"
+            )));
+        }
+    }
+    if let Some(m) = &dir_meta {
+        if !m.file_type().is_dir() {
+            return Err(RunnerError::BadRequest(format!(
+                "refusing {id}: the session entry is not a plain directory"
+            )));
+        }
+    }
+    if sock_meta.is_none() && dir_meta.is_none() {
+        return Ok(false);
+    }
+    if sock_meta.is_some() {
+        std::fs::remove_file(&sock)
+            .map_err(|e| RunnerError::Io(format!("cannot remove the stale socket: {e}")))?;
+    }
+    if dir_meta.is_some() {
+        std::fs::remove_dir_all(&dir)
+            .map_err(|e| RunnerError::Io(format!("cannot remove the stale session dir: {e}")))?;
+    }
+    Ok(true)
 }
 /// Minimum pause after a key/text send that is not followed by an
 /// explicit `WaitMs` (an input-burst or paste heuristic must not see
@@ -222,6 +300,186 @@ pub fn now_unix() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::symlink;
+    use std::os::unix::net::UnixListener;
+    use std::path::{Path, PathBuf};
+
+    /// A sessions dir holding a bound unix socket `<id>.sock` and a
+    /// `<id>/` dir with one file (what a hand-stopped session leaves).
+    fn leftovers(root: &Path, id: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let dir = root.join("s");
+        std::fs::create_dir_all(dir.join(id)).unwrap();
+        std::fs::write(dir.join(id).join("state"), b"x").unwrap();
+        let sock = dir.join(format!("{id}.sock"));
+        // Binding leaves a real socket inode behind when the listener drops.
+        drop(UnixListener::bind(&sock).unwrap());
+        (dir.clone(), sock, dir.join(id))
+    }
+
+    #[test]
+    fn reaping_removes_exactly_the_one_sessions_socket_and_dir() {
+        let root = tempfile::tempdir().unwrap();
+        let (dir, sock, sdir) = leftovers(root.path(), "abcd1234");
+        let (_, other_sock, other_dir) = leftovers(root.path(), "wxyz9876");
+        assert!(reap_stale_entry(&dir, "abcd1234").unwrap());
+        assert!(!sock.exists() && !sdir.exists(), "the target is gone");
+        assert!(
+            other_sock.exists() && other_dir.join("state").exists(),
+            "a neighbour session is untouched"
+        );
+        // Nothing left: the id is not found, not silently ok.
+        assert!(!reap_stale_entry(&dir, "abcd1234").unwrap());
+    }
+
+    #[test]
+    fn reaping_refuses_malformed_and_traversal_ids_removing_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        let (dir, sock, sdir) = leftovers(root.path(), "abcd1234");
+        let victim = root.path().join("victim");
+        std::fs::create_dir_all(&victim).unwrap();
+        std::fs::write(root.path().join("victim.sock"), b"keep").unwrap();
+        for bad in [
+            "",
+            "../victim",
+            "../s/abcd1234",
+            "ABCD1234",
+            "abcd123",
+            "a/b",
+            "abcd1234/..",
+        ] {
+            assert!(
+                matches!(reap_stale_entry(&dir, bad), Err(RunnerError::InvalidId)),
+                "{bad:?}"
+            );
+        }
+        assert!(sock.exists() && sdir.exists() && victim.exists());
+        assert!(root.path().join("victim.sock").exists());
+    }
+
+    #[test]
+    fn reaping_refuses_a_symlinked_socket_or_dir_removing_nothing() {
+        // Symlinked socket entry: the target and the real dir survive.
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("s");
+        std::fs::create_dir_all(dir.join("abcd1234")).unwrap();
+        let outside = root.path().join("outside.sock");
+        drop(UnixListener::bind(&outside).unwrap());
+        symlink(&outside, dir.join("abcd1234.sock")).unwrap();
+        assert!(matches!(
+            reap_stale_entry(&dir, "abcd1234"),
+            Err(RunnerError::BadRequest(_))
+        ));
+        assert!(outside.exists(), "the symlink target is untouched");
+        assert!(dir.join("abcd1234").is_dir(), "all-or-nothing: dir kept");
+        assert!(std::fs::symlink_metadata(dir.join("abcd1234.sock")).is_ok());
+
+        // Symlinked session dir: its target's contents survive, and the
+        // (valid) socket beside it is kept because the refusal is whole.
+        let root = tempfile::tempdir().unwrap();
+        let (dir, sock, sdir) = leftovers(root.path(), "abcd1234");
+        std::fs::remove_dir_all(&sdir).unwrap();
+        let target = root.path().join("precious");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("keep"), b"k").unwrap();
+        symlink(&target, &sdir).unwrap();
+        assert!(matches!(
+            reap_stale_entry(&dir, "abcd1234"),
+            Err(RunnerError::BadRequest(_))
+        ));
+        assert!(target.join("keep").exists());
+        assert!(sock.exists(), "all-or-nothing: socket kept");
+    }
+
+    #[test]
+    fn reaping_refuses_a_regular_file_posing_as_the_socket() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("s");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("abcd1234.sock"), b"not a socket").unwrap();
+        assert!(matches!(
+            reap_stale_entry(&dir, "abcd1234"),
+            Err(RunnerError::BadRequest(_))
+        ));
+        assert!(dir.join("abcd1234.sock").exists());
+    }
+
+    /// A runner whose tmux is `script` (shell body) over a fresh run dir.
+    fn scripted_runner(
+        root: &Path,
+        body: &str,
+    ) -> crate::runner::Runner<crate::runner::supervisor::fake::FakeSupervisor> {
+        use std::os::unix::fs::PermissionsExt;
+        let script = root.join("tmux.sh");
+        std::fs::write(&script, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let cfg = crate::runner::config::RunnerConfig::test_config(
+            root.join("run"),
+            script.to_string_lossy().into_owned(),
+            PathBuf::from("/dev/null"),
+        );
+        crate::runner::Runner::with_supervisor(
+            cfg,
+            crate::runner::supervisor::fake::FakeSupervisor::new(),
+        )
+    }
+
+    /// The runner's kill op on an id whose holder answers with a tmux error
+    /// (no server): the leftovers go, the reply says so, the supervisor
+    /// is not asked to stop anything.
+    #[tokio::test]
+    async fn kill_of_a_stale_id_reaps_its_files_through_the_runner_op() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = scripted_runner(root.path(), "echo 'no server running' >&2; exit 1");
+        let (_, sock, sdir) = leftovers(&runner.cfg.run_dir, "abcd1234");
+        let out = kill_session(&runner, "abcd1234", Some(1)).await.unwrap();
+        assert!(out.stale_removed && !out.forced && out.exit_code.is_none());
+        assert!(!sock.exists() && !sdir.exists());
+        assert!(runner.supervisor.calls.lock().unwrap().is_empty());
+        // Gone from `ls`, and a second kill is an honest not-found.
+        assert!(crate::runner::discovery::list_sessions(&runner)
+            .await
+            .is_empty());
+        assert!(matches!(
+            kill_session(&runner, "abcd1234", Some(1)).await,
+            Err(RunnerError::NotFound(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn kill_refuses_an_invalid_id_and_a_symlinked_entry() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = scripted_runner(root.path(), "exit 1");
+        let (dir, _, _) = leftovers(&runner.cfg.run_dir, "abcd1234");
+        assert!(matches!(
+            kill_session(&runner, "../s/abcd1234", Some(1)).await,
+            Err(RunnerError::InvalidId)
+        ));
+        let target = root.path().join("precious");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("keep"), b"k").unwrap();
+        symlink(&target, dir.join("wxyz9876")).unwrap();
+        assert!(matches!(
+            kill_session(&runner, "wxyz9876", Some(1)).await,
+            Err(RunnerError::BadRequest(_))
+        ));
+        assert!(target.join("keep").exists());
+        assert!(dir.join("abcd1234.sock").exists(), "other sessions kept");
+    }
+
+    /// A tmux that cannot even be spawned proves nothing about the holder:
+    /// the entry is kept and the failure surfaces.
+    #[tokio::test]
+    async fn kill_keeps_the_files_when_the_probe_fails_to_complete() {
+        let root = tempfile::tempdir().unwrap();
+        let mut runner = scripted_runner(root.path(), "exit 1");
+        runner.tmux = crate::runner::tmux::RealTmux::new("/nonexistent/tmux".to_string());
+        let (_, sock, sdir) = leftovers(&runner.cfg.run_dir, "abcd1234");
+        assert!(matches!(
+            kill_session(&runner, "abcd1234", Some(1)).await,
+            Err(RunnerError::TmuxFailed(_))
+        ));
+        assert!(sock.exists() && sdir.exists());
+    }
 
     #[test]
     fn kill_grace_is_clamped() {
