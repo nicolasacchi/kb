@@ -272,13 +272,16 @@ async fn ensure_spa_viewer(state: &Arc<KbHandles>, id: &str) {
 /// the tap's viewer-id grammar. `Ok(None)` = absent. A bad id is a 400
 /// before any runner call: a client string never reaches the runner
 /// unchecked, and it is never persisted (LF-7).
-fn drive_viewer(viewer: Option<&str>) -> Result<Option<String>, Response<Body>> {
+fn drive_viewer(viewer: Option<&str>) -> Result<Option<String>, BadViewer> {
     match viewer {
         None => Ok(None),
         Some(v) if is_valid_viewer_id(v) => Ok(Some(v.to_string())),
-        Some(_) => Err(bad_request("invalid viewer id")),
+        Some(_) => Err(BadViewer),
     }
 }
+
+/// A drive `viewer` outside the tap's id grammar (the caller answers 400).
+struct BadViewer;
 
 /// T18 — after a drive call SUCCEEDED, tell the tap which device typed.
 /// The phone's composer, key bar and choice bar travel over REST, not the
@@ -620,7 +623,7 @@ pub async fn paste(
     }
     let typed_by = match drive_viewer(parsed.viewer.as_deref()) {
         Ok(v) => v,
-        Err(e) => return e,
+        Err(BadViewer) => return bad_request("invalid viewer id"),
     };
     ensure_spa_viewer(&state, &id).await;
     let req = RunnerRequest::Paste {
@@ -669,7 +672,7 @@ pub async fn enter(
     };
     let typed_by = match drive_viewer(parsed.viewer.as_deref()) {
         Ok(v) => v,
-        Err(e) => return e,
+        Err(BadViewer) => return bad_request("invalid viewer id"),
     };
     // T13 — a bound-but-blocked terminal refuses with 409 BEFORE the
     // runner relay; an unbound terminal is NOT blocked (state unknown)
@@ -761,7 +764,7 @@ pub async fn keys(
     }
     let typed_by = match drive_viewer(parsed.viewer.as_deref()) {
         Ok(v) => v,
-        Err(e) => return e,
+        Err(BadViewer) => return bad_request("invalid viewer id"),
     };
     ensure_spa_viewer(&state, &id).await;
     let req = RunnerRequest::Keys {
@@ -867,7 +870,7 @@ pub async fn take_size(
     };
     let typed_by = match drive_viewer(parsed.viewer.as_deref()) {
         Ok(v) => v,
-        Err(e) => return e,
+        Err(BadViewer) => return bad_request("invalid viewer id"),
     };
     let req = RunnerRequest::TakeSize {
         id: id.clone(),

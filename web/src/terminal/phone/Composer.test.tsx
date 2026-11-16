@@ -73,7 +73,7 @@ describe("Composer", () => {
     expect(ta.getAttribute("enterkeyhint")).toBe("send");
     expect(ta.getAttribute("autocapitalize")).toBe("sentences");
     expect(ta.getAttribute("autocorrect")).toBe("on");
-    expect(ta.spellcheck).toBe(true);
+    expect(ta.getAttribute("spellcheck")).toBe("true");
     expect(ta.inputMode).not.toBe("none");
   });
 
