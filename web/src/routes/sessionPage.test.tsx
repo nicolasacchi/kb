@@ -274,12 +274,17 @@ describe("SessionPage", () => {
     await waitFor(() =>
       expect(screen.getByTestId("session-sec-outcome")).toBeTruthy(),
     );
+    // T21: the Images section rides a lazy chunk; wait for it to mount.
+    await waitFor(() =>
+      expect(screen.getByTestId("session-sec-images")).toBeTruthy(),
+    );
     const ids = [...container.querySelectorAll('[data-testid^="session-sec-"]')].map(
       (el) => el.getAttribute("data-testid"),
     );
     expect(ids).toEqual([
       "session-sec-outcome",
       "session-sec-transcript",
+      "session-sec-images",
       "session-sec-children",
       "session-sec-files",
       "session-sec-decisions",
