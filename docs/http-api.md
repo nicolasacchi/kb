@@ -1675,18 +1675,42 @@ GET    /api/terms/{id}/ws                    SPA-only terminal byte
                                             header; text frames pass
                                             through verbatim, in order);
                                             a join the tap defers with
-                                            `error{busy}` before its
-                                            first binary frame is
-                                            retried by the relay (up to
-                                            4 upstream opens, 150 ms
-                                            doubling backoff, same
-                                            `from`) and the busy frame
-                                            is not forwarded; when the
-                                            retries are spent that
-                                            frame is forwarded once and
-                                            the socket closes 1011. A
-                                            busy after the first binary
-                                            frame passes through.
+                                            `error{busy}` before the
+                                            first `hello`, `seed` or binary
+                                            frame of the join is retried by
+                                            the relay (up to 4 upstream
+                                            opens, 150 ms doubling backoff,
+                                            150/300/600 ms, a deadline
+                                            fixed when the busy frame is
+                                            seen, so browser input cannot
+                                            postpone it; same `from`) and
+                                            the busy frame is not
+                                            forwarded; when the retries
+                                            are spent that frame is
+                                            forwarded once and the socket
+                                            closes 1011. Worst-case silence
+                                            before that surfaced busy is
+                                            about 13 s (4 tap join waits
+                                            of 3 s plus 1.05 s of backoff,
+                                            plus each re-open round trip).
+                                            A busy after the join's first
+                                            `hello`/`seed`/binary frame
+                                            passes through (an empty seed
+                                            sends no binary frame, so
+                                            `hello` is what ends the
+                                            retry window). Browser frames
+                                            sent while a retry is
+                                            re-opening are queued (64 at
+                                            most, in order, the rest
+                                            dropped) and replayed on the
+                                            new stream; a frame the old
+                                            stream had already accepted
+                                            before its busy close is lost,
+                                            which is harmless since the tap
+                                            drops a joining viewer's input.
+                                            The `epoch` grammar is one
+                                            table shared by this relay, the
+                                            runner and the tap.
                                             Frames: binary frames are
                                             `[8-byte big-endian
                                             offset][bytes]`; text

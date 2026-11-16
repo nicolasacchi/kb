@@ -550,3 +550,29 @@ fn hello_viewer_is_optional_and_omitted_when_absent() {
     let frame: ServerFrame = serde_json::from_str(new).expect("hello with viewer");
     assert_eq!(serde_json::to_string(&frame).unwrap(), new);
 }
+
+/// The ONE epoch grammar: the golden table at
+/// `tests/fixtures/epoch-grammar.json` also drives kb-server's
+/// `parse_resume` and the tap's `validEpoch`.
+#[test]
+fn epoch_validator_matches_the_shared_golden_table() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/epoch-grammar.json");
+    let table: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(path).expect("epoch-grammar.json")).unwrap();
+    let list = |k: &str| -> Vec<String> {
+        table[k]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect()
+    };
+    let (accept, reject) = (list("accept"), list("reject"));
+    assert!(accept.len() >= 8 && reject.len() >= 8, "table not truncated");
+    for e in &accept {
+        assert!(kb_term::wire::is_valid_epoch(e), "accepts {e:?}");
+    }
+    for e in &reject {
+        assert!(!kb_term::wire::is_valid_epoch(e), "rejects {e:?}");
+    }
+}
