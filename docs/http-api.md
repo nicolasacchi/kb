@@ -1537,9 +1537,33 @@ POST   /api/terms/{id}/viewer-close         Body `{}`. Closes the
                                             relay's hidden `spa` viewer.
 GET    /api/terms/{id}/ws                    SPA-only terminal byte
                                             stream upgrade (T12).
-                                            `?ticket=<t>&from=<offset>`
-                                            (both optional except
-                                            ticket). Handler-side gate
+                                            `?ticket=<t>&from=<offset>
+                                            &epoch=<e>&mseq=<n>` (all
+                                            optional except ticket). A
+                                            resume carries the tap
+                                            epoch the client's last
+                                            `hello` announced (`epoch`:
+                                            1..=64 of `[A-Za-z0-9_-]`)
+                                            and the newest marker seq it
+                                            applied (`mseq`: decimal, at
+                                            most 2^53-1; 0/absent =
+                                            none). The relay forwards
+                                            them to the runner's
+                                            `stream` request (`{id, from,
+                                            epoch?, mseq?}`, both new
+                                            keys optional and omitted
+                                            when absent) and the runner
+                                            puts them into the tap's
+                                            `ResumeFrom`: the tap
+                                            resumes from its ring only
+                                            when the epoch is its own
+                                            and the offset is still in
+                                            range, else it full-joins
+                                            (seed). `epoch`/`mseq`
+                                            without `from` are
+                                            validated but dropped (a
+                                            full join). Handler-side
+                                            gate
                                             order: enabled (bodiless
                                             404 for ANY request) -> id
                                             shape
@@ -1551,8 +1575,8 @@ GET    /api/terms/{id}/ws                    SPA-only terminal byte
                                             closed) -> caller class
                                             (403) -> missing ticket /
                                             non-upgrade request (the
-                                            extractor's 4xx) -> `from`
-                                            parse (400)
+                                            extractor's 4xx) -> `from`/
+                                            `epoch`/`mseq` parse (400)
                                             -> socket cap 16 (503) ->
                                             single-use ticket (bound
                                             to `{id}` and the caller;

@@ -21,6 +21,10 @@
 //     held `applied` is discarded, and `gaps++`.
 //   * `hello.epoch` differing from the stored epoch discards the held
 //     `applied`; the next connect omits `from`.
+//   * A resume connect carries `?from=<applied>&epoch=<hello.epoch>` (plus
+//     `&mseq=<newest marker seq applied>` once one was seen): the tap
+//     resumes from its ring only when that epoch is the one it is on,
+//     else it full-joins (seed) and this client resets as above.
 //   * `resize` is applied inside the write queue, after prior writes.
 //   * `exit{code,offset}` ends the stream permanently (no reconnect).
 //   * Reconnect delay is `min(10_000, 250 * 2^attempt)` ±20% jitter;
@@ -140,6 +144,8 @@ export class TermSession {
 
   private phase: Phase = "connecting";
   private epoch: string | null = null;
+  /** Newest marker `seq` applied in this epoch (resize/imagedef/...); 0 = none. */
+  private mseq = 0;
   private applied = 0;
   private resets = 0;
   private gaps = 0;
@@ -292,7 +298,13 @@ export class TermSession {
     }
     this.mintAbort = null;
     if (this.disposed || this.isSettled()) return;
-    const url = wsUrl(this.termId, ticket, from);
+    const url = wsUrl(
+      this.termId,
+      ticket,
+      from,
+      from !== undefined ? (this.epoch ?? undefined) : undefined,
+      from !== undefined ? this.mseq : undefined,
+    );
     const gen = ++this.socketGen;
     // A seed cut short by the previous socket must not swallow this
     // connection's data frames as seed payload.
@@ -534,6 +546,7 @@ export class TermSession {
           // omits `from` (full join). The server sends a seed on this
           // connection when the epoch is stale, so we keep reading.
           this.applied = 0;
+          this.mseq = 0;
         }
         this.epoch = frame.epoch;
         // The tap marks the viewer live before writing hello, and a
@@ -555,6 +568,7 @@ export class TermSession {
         }
         break;
       case "imagedef":
+        this.noteMarkerSeq(frame.seq);
         this.cb.onImageDef?.(frame);
         break;
       case "seed": {
@@ -583,6 +597,7 @@ export class TermSession {
         break;
       }
       case "resize":
+        this.noteMarkerSeq(frame.seq);
         if (
           Number.isSafeInteger(frame.cols) && Number.isSafeInteger(frame.rows) &&
           frame.cols >= 1 && frame.cols <= 1000 &&
@@ -592,9 +607,11 @@ export class TermSession {
         }
         break;
       case "sizechanged":
+        this.noteMarkerSeq(frame.seq);
         this.cb.onSizeChanged?.(frame.cols, frame.rows, frame.by);
         break;
       case "gfxreset":
+        this.noteMarkerSeq(frame.seq);
         this.cb.onGfxReset?.(frame.gen);
         break;
       case "clipboard":
@@ -619,6 +636,16 @@ export class TermSession {
         break;
     }
     this.emit();
+  }
+
+  /**
+   * Remember the newest marker sequence applied so a resume tells the tap
+   * which markers it still owes (it replays only `seq > mseq`). Join-time
+   * defs carry seq 0 and never lower it; an unsafe value is ignored so it
+   * cannot poison the next `?mseq=`.
+   */
+  private noteMarkerSeq(seq: number): void {
+    if (Number.isSafeInteger(seq) && seq > this.mseq) this.mseq = seq;
   }
 
   private emit(): void {
