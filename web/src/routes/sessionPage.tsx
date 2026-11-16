@@ -6,7 +6,7 @@
 // `<details>` — open on desktop (viewport wider than useIsMobile's 860px
 // MOBILE_MAX_WIDTH), collapsed on mobile.
 
-import { useMemo, type ReactNode } from "react";
+import { Suspense, lazy, useMemo, type ReactNode } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { StateCard } from "@kb/ui/StateCard";
@@ -34,6 +34,9 @@ import {
 import { replayUrl } from "../lib/sessionsUrl";
 import { artifactHref } from "../lib/artifactHref";
 import { relativeAge } from "../lib/time";
+
+// T21 — the Images strip rides its own lazy chunk (it pulls the picture cache + lightbox).
+const ImagesStrip = lazy(() => import("../terminal/ImagesStrip"));
 
 function fmtDate(unixSeconds: number): string {
   if (!unixSeconds) return "";
@@ -358,6 +361,8 @@ export default function SessionPage() {
           )}
         </p>
       </Section>
+
+      <Suspense fallback={null}><ImagesStrip sid={sid} open={open} /></Suspense>
 
       <ChildrenSection sid={sid} lane={card.children} open={open} />
 
