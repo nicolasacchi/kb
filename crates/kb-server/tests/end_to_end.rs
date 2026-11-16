@@ -6100,6 +6100,8 @@ fn work_seed_row(
         parent_session_id: None,
         root_session_id: None,
         project_slug: None,
+        continued_from_harness: None,
+        continued_from_session_id: None,
     };
     match sid {
         "work-root" => {}
@@ -6166,6 +6168,8 @@ fn work_seed_named(
         parent_session_id: None,
         root_session_id: None,
         project_slug: project_slug.map(str::to_string),
+        continued_from_harness: None,
+        continued_from_session_id: None,
     };
     db.sessions_upsert(&row).unwrap();
     row
@@ -6618,6 +6622,8 @@ async fn sessions_work_reports_scan_capped_at_cap() {
             parent_session_id: None,
             root_session_id: None,
             project_slug: None,
+            continued_from_harness: None,
+            continued_from_session_id: None,
         };
         db.sessions_upsert(&row).unwrap();
     }
@@ -14279,6 +14285,83 @@ async fn session_export_route_streams_a_valid_bundle() {
     // Unknown session → 404.
     let miss = client
         .get(url(addr, "/api/sessions/nope-404/export"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(miss.status(), 404);
+}
+
+/// `GET /api/sessions/{id}/handoff` renders the cross-harness brief from the
+/// newest capture: a Claude-origin session defaults to target `omp`, the brief
+/// opens with the handoff marker, and `command` is the copy-only launch line.
+/// A bad `to` is 400, an unknown session 404.
+#[tokio::test]
+async fn session_handoff_route_renders_a_brief_from_the_capture() {
+    let sid = "sess-handoff-001";
+    let jsonl = format!(
+        "{{\"parentUuid\":null,\"isSidechain\":false,\"cwd\":\"/home/u/proj\",\"sessionId\":\"{sid}\",\"version\":\"2.1.318\",\"timestamp\":\"2026-06-01T10:00:00.000Z\",\"type\":\"user\",\"uuid\":\"11111111-0000-4000-8000-000000000001\",\"message\":{{\"role\":\"user\",\"content\":\"please add a retry to the fetch loop\"}}}}\n\
+         {{\"parentUuid\":\"11111111-0000-4000-8000-000000000001\",\"isSidechain\":false,\"cwd\":\"/home/u/proj\",\"sessionId\":\"{sid}\",\"version\":\"2.1.318\",\"timestamp\":\"2026-06-01T10:00:05.000Z\",\"type\":\"assistant\",\"uuid\":\"11111111-0000-4000-8000-000000000002\",\"message\":{{\"id\":\"msg_01\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-opus-5-5\",\"content\":[{{\"type\":\"text\",\"text\":\"Added a bounded retry with backoff.\"}}],\"stop_reason\":\"end_turn\"}}}}\n"
+    );
+    let global = vec![(
+        "session-20260601T100000Z-sess-handoff-001.html",
+        session_transcript_html(sid, "20260601T100000Z", &jsonl),
+    )];
+    let proj: Vec<(&str, String)> = Vec::new();
+    let (_tmp, addr) = boot_memory_corpora(&global, &proj).await;
+    let client = reqwest::Client::new();
+    wait_for_session(&client, addr, sid).await;
+
+    let resp = client
+        .get(url(addr, &format!("/api/sessions/{sid}/handoff")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["schema"], "kb-handoff/1");
+    assert_eq!(body["source_harness"], "claude");
+    assert_eq!(body["source_kind"], "capture");
+    assert_eq!(body["target"], "omp");
+    assert_eq!(body["scrubbed"], false);
+    assert_eq!(
+        body["command"],
+        format!("kb sessions handoff {sid} --to omp --launch")
+    );
+    let brief = body["brief"].as_str().unwrap();
+    assert!(
+        brief.starts_with(&format!("[kb-handoff from claude session {sid}]")),
+        "brief opens with the marker: {brief}"
+    );
+    assert!(brief.contains("please add a retry to the fetch loop"));
+    assert_eq!(
+        body["chars"].as_u64().unwrap() as usize,
+        brief.chars().count()
+    );
+
+    // Explicit target is honoured.
+    let same: serde_json::Value = client
+        .get(url(addr, &format!("/api/sessions/{sid}/handoff?to=claude")))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(same["target"], "claude");
+    assert_eq!(
+        same["command"],
+        format!("kb sessions handoff {sid} --to claude --launch")
+    );
+
+    // Unknown harness target → 400; unknown session → 404.
+    let bad = client
+        .get(url(addr, &format!("/api/sessions/{sid}/handoff?to=codex")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad.status(), 400);
+    let miss = client
+        .get(url(addr, "/api/sessions/nope-404/handoff"))
         .send()
         .await
         .unwrap();

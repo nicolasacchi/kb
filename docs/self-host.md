@@ -830,6 +830,32 @@ Take the backup BEFORE upgrading; there is no in-place down-migration. The
 columns hold display-only lineage, so losing them loses nothing a
 `kb sessions backfill-tree --apply` cannot re-stamp.
 
+## Rolling back across V0048 (session handoff lineage)
+
+V0048 adds two nullable columns to `sessions` (`continued_from_harness`,
+`continued_from_session_id`) and a non-unique index on the latter; it
+backfills nothing. They record which session a handed-off session continues
+(`kb sessions handoff`, omp ⇄ Claude Code), read from the `[kb-handoff from
+<harness> session <id>]` marker on a session's first real prompt. NULL means
+"not a handoff continuation": every capture indexed before the upgrade stays
+NULL until `kb reindex` re-parses it. Like every schema migration it raises
+the volume's **refinery epoch**, so a daemon built BEFORE V0048 **refuses to
+boot** on a migrated `index.db` (`refusing to boot: schema epoch V48 on disk
+at <path> is NEWER than this binary's V47 …` — the `refuse_if_volume_ahead`
+guard, deliberately loud rather than a silent downgrade). To roll back:
+
+1. Stop the daemon.
+2. Restore each kb's `index.db` from the `kb backup` taken before the upgrade
+   (`kb restore <archive> --kb <name>`), or accept a re-derive: the `sessions`
+   table is rebuilt by `kb reindex` from the capture files, so deleting a kb's
+   `index.db` and reindexing on the older binary is safe for session data
+   (comment sidecars and `.review/` files are untouched either way).
+3. Start the older binary.
+
+Take the backup BEFORE upgrading; there is no in-place down-migration. The
+columns hold display-only lineage derived from the transcripts, so losing
+them loses nothing a reindex cannot rebuild.
+
 ## Backup & restore (B1)
 
 `kb backup <kb>` writes a **consistent** `tar.gz` of a kb's persistent

@@ -950,6 +950,21 @@ GET  /api/sessions[?cursor=<unix>&limit=N   Cross-kb list of captured Claude
                                             a top-level session or a
                                             pre-V0047 capture). SURFACED,
                                             NEVER SCORED (invariant #11).
+                                            V0048 — optional
+                                            `continued_from: {harness,
+                                            session_id}` when the session's
+                                            first real prompt opens with a
+                                            `[kb-handoff from <harness>
+                                            session <id>]` marker (absent
+                                            otherwise). `GET
+                                            /api/sessions/{id}` and the card's
+                                            summary lane also carry
+                                            `continued_in: [{harness,
+                                            session_id}]` — newest sessions
+                                            across all kbs whose
+                                            `continued_from` is this session
+                                            (absent when empty). SURFACED,
+                                            NEVER SCORED.
 GET  /api/sessions/recall-coverage[?days=7]  v0.44 F10 — recall-hook coverage
                                             per harness over the trailing
                                             window (default 7, clamp 1-365),
@@ -1109,6 +1124,45 @@ GET  /api/sessions/{session_id}/commits/{sha}/files
                                             commit's capture-time resolution
                                             never ran or the repo isn't
                                             resolvable on this host.
+GET  /api/sessions/{session_id}/handoff    Cross-harness handoff BRIEF
+     [?to=claude|omp&budget=N&tail=N]       (`kb-handoff/1`, omp ⇄ Claude
+                                            Code): deterministic, LLM-free
+                                            text a NEW session of the target
+                                            harness takes as its first prompt,
+                                            rendered from the NEWEST capture
+                                            (#11). `to` defaults to the other
+                                            harness of the session's source (a
+                                            bad value → 400); `budget` is the
+                                            brief size in chars (default 8000,
+                                            clamped 1000..=32000); `tail` is
+                                            the verbatim recent turns (default
+                                            8, clamped 0..=50). Unknown
+                                            session / unreadable capture /
+                                            capture without a conversation →
+                                            404. Response `HandoffOut`:
+                                            `{schema:"kb-handoff/1",
+                                            session_id, source_harness,
+                                            source_kind:"capture", target,
+                                            brief (starts with the
+                                            `[kb-handoff from <harness>
+                                            session <id>]` marker), chars,
+                                            truncated:[lane…], notes:[…],
+                                            command, scrubbed}`. `command` is
+                                            copy-only text — `kb sessions
+                                            handoff <id> --to <target>
+                                            --launch` — the server never runs
+                                            it; for a session id that is not a
+                                            plain token it is the "not
+                                            resumable" sentence instead.
+                                            **Fail-closed like /export**: a
+                                            non-loopback client always gets the
+                                            `secrets` scrub floor on `brief`
+                                            (#4), reported as `scrubbed:true`.
+                                            Brief only: the native-session
+                                            transplant (`claude -r` / `omp -r`)
+                                            needs the host's harness files, so
+                                            it is CLI-only (`kb sessions
+                                            handoff --transplant`).
 GET  /api/sessions/{session_id}/replay      W3.R-b — the `session-replay/1`
      [?artifact=<id>&limit=N&scrub=…]        timeline: one beat per narrative
                                             moment (prompt · assistant · read/
