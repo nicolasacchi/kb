@@ -567,7 +567,10 @@ fn epoch_validator_matches_the_shared_golden_table() {
             .map(|v| v.as_str().unwrap().to_string())
             .collect()
     };
-    let (accept, reject) = (list("accept"), list("reject"));
+    // The runner's bare-resume marker (`""`) is the tap's alone: a
+    // client-supplied epoch is never empty.
+    let (accept, mut reject) = (list("accept"), list("reject"));
+    reject.extend(list("runner_sentinel"));
     assert!(
         accept.len() >= 8 && reject.len() >= 8,
         "table not truncated"

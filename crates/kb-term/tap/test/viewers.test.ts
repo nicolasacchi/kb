@@ -873,12 +873,13 @@ test('viewers_blocked_viewer_dropped_on_clipboard_pending_overflow', async () =>
 // grammar closes its connection (bad-frame) and registers no viewer; one
 // inside it is accepted (the connection stays open, the viewer registered).
 test('viewers_resume_epoch_follows_the_shared_golden_grammar', async () => {
-  const table = JSON.parse(readFileSync(join(import.meta.dir, '../../tests/fixtures/epoch-grammar.json'), 'utf-8')) as { accept: string[]; reject: string[] };
+  const table = JSON.parse(readFileSync(join(import.meta.dir, '../../tests/fixtures/epoch-grammar.json'), 'utf-8')) as { accept: string[]; reject: string[]; runner_sentinel: string[] };
   expect(table.accept.length).toBeGreaterThanOrEqual(8);
   expect(table.reject.length).toBeGreaterThanOrEqual(8);
   const clock = fakeClock();
   const stubTwin = { feed: async () => {}, serialize: { serialize: () => '' } } as unknown as Twin;
   const server = new TapServer({ session: 'epoch0001', harness: 'omp', epoch: 'e'.repeat(32), twin: stubTwin, now: clock.now, quiesceMs: 0, joinWaitMs: 5000, makeSeed: () => new Uint8Array(0) });
+  expect(table.runner_sentinel).toEqual(['']);
   let accepted = 0;
   for (const [i, epoch] of table.reject.entries()) {
     const t = new MockTransport();
@@ -886,7 +887,9 @@ test('viewers_resume_epoch_follows_the_shared_golden_grammar', async () => {
     expect(t.closed, `rejects ${JSON.stringify(epoch)}`).toBe(true);
   }
   expect(server.viewerCount).toBe(0);
-  for (const [i, epoch] of table.accept.entries()) {
+  // The empty epoch is the runner's bare-resume marker: the tap accepts it
+  // (kb-server and kb-term refuse it, see their tests).
+  for (const [i, epoch] of [...table.accept, ...table.runner_sentinel].entries()) {
     const t = new MockTransport();
     openViewer(server, t, `acc${i}`, 'desktop', { offset: 0, mseq: 0, epoch });
     expect(t.closed, `accepts ${JSON.stringify(epoch)}`).toBe(false);
