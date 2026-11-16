@@ -31,8 +31,23 @@ done
 
 PASS=0
 FAIL=0
-ok() { PASS=$((PASS + 1)); printf 'ok      - %s\n' "$1"; }
-bad() { FAIL=$((FAIL + 1)); printf 'not ok  - %s\n' "$1"; }
+SEG_T0="$(date +%s)"
+seg_elapsed() { printf '%s' "$(($(date +%s) - SEG_T0))"; }
+ok() { PASS=$((PASS + 1)); printf 'ok      - [%4ss] %s\n' "$(seg_elapsed)" "$1"; }
+bad() { FAIL=$((FAIL + 1)); printf 'not ok  - [%4ss] %s\n' "$(seg_elapsed)" "$1"; }
+
+# Scenario groups (FXHANG). The whole matrix used to run as ONE nextest test
+# that took 236-340 s on healthy CI runs against the 360 s limit, so a loaded
+# runner crossed it with nothing in the log. `hook_shell.rs` now runs each
+# group as its own test (SEG_GROUP=g1..g7); with SEG_GROUP unset the script
+# runs everything, as before. An unknown group fails instead of running
+# nothing and passing.
+SEG_GROUP="${SEG_GROUP:-}"
+case "$SEG_GROUP" in
+  '' | g1 | g2 | g3 | g4 | g5 | g6 | g7) ;;
+  *) echo "not ok  - unknown SEG_GROUP '$SEG_GROUP' (g1..g7, or unset for all)"; exit 1 ;;
+esac
+seg_group() { [ -z "$SEG_GROUP" ] || [ "$SEG_GROUP" = "$1" ]; }
 
 TMPROOT="$(mktemp -d "${TMPDIR:-/tmp}/kb-omp-seg.XXXXXX")"
 STARTED_PIDS=()
@@ -160,6 +175,67 @@ KB
 chmod +x "$TMPROOT/kbbin/kb"
 export PATH="$TMPROOT/kbbin:$PATH"
 
+# --- deadlines + diagnostics (FXHANG) -----------------------------------------
+# Every wait in this script is bounded well under nextest's 360 s: a hook pass
+# is capped at SEG_HOOK_MAX_SECS, the whole run at SEG_TOTAL_MAX_SECS (240 s
+# for one group, 900 s for the all-in-one standalone run). On expiry the script
+# dumps what a hang leaves behind (process tree, lock holders, spool and corpus
+# listings, the tail of every log) and fails with the step's name, so a future
+# stall is evidence, not a bare TIMEOUT.
+SEG_HOOK_MAX="${SEG_HOOK_MAX_SECS:-100}"
+if [ -n "$SEG_GROUP" ]; then SEG_TOTAL_MAX="${SEG_TOTAL_MAX_SECS:-240}"; else SEG_TOTAL_MAX="${SEG_TOTAL_MAX_SECS:-900}"; fi
+seg_diag() {
+  local p f lf
+  echo "=== DIAGNOSTICS: $1 (group=${SEG_GROUP:-all}, +$(seg_elapsed)s) ==="
+  echo "--- processes: descendants of this test and every started session"
+  ps -eo pid,ppid,pgid,sid,stat,etime,args 2>/dev/null | awk -v root="$$" -v sids=" ${STARTED_PIDS[*]-} " '
+    NR == 1 { print; next }
+    { pid[$1] = $0; par[$1] = $2; sid[$1] = $4 }
+    END { for (p in pid) { q = p; keep = 0; n = 0
+            while (q != "" && q != 0 && n++ < 64) { if (q == root) { keep = 1; break } q = par[q] }
+            if (!keep && index(sids, " " sid[p] " ")) keep = 1
+            if (keep) print pid[p] } }' | cut -c1-230
+  echo "--- lock files (held = a live owner or a watchdog still holds it)"
+  for f in "$KB_CAPTURE_LOCKS"/*.lock; do
+    [ -e "$f" ] || continue
+    if ( flock -n 8 ) 8>"$f" 2>/dev/null; then echo "free  $f"; else echo "HELD  $f"; fi
+  done
+  echo "--- locks dir";   ls -la "$KB_CAPTURE_LOCKS" 2>&1 | head -40
+  echo "--- spool dir";   ls -la "$KB_CAPTURE_SPOOL" 2>&1 | head -40
+  echo "--- corpus dir";  ls -la "$KB_SESSIONS_DIR" 2>&1 | head -40
+  for lf in "$KB_LOG" "$KB_CAPTURE_TRACE" "$TMPROOT/last.err" "$TMPROOT/last.out" "$TMPROOT/bg.err" "$TMPROOT/bg.out"; do
+    [ -e "$lf" ] || continue
+    echo "--- tail $lf"; tail -n 15 "$lf" | cut -c1-220
+  done
+  echo "=== END DIAGNOSTICS ==="
+}
+seg_die() { # <step description>: dump, fail, stop (the EXIT trap cleans up)
+  bad "DEADLINE: $1"
+  seg_diag "$1"
+  echo "passed=$PASS failed=$FAIL"
+  exit 1
+}
+seg_guard() { # the whole-run budget; called from every hook pass
+  [ "$(seg_elapsed)" -le "$SEG_TOTAL_MAX" ] || seg_die "the run exceeded ${SEG_TOTAL_MAX}s before: $1"
+}
+seg_bounded() { # <step> cmd...: run in the foreground under SEG_HOOK_MAX (stdin/stdout redirects ride the caller)
+  local step="$1" rc
+  shift
+  seg_guard "$step"
+  timeout -k 5 "$SEG_HOOK_MAX" "$@"
+  rc=$?
+  if [ "$rc" = 124 ] || [ "$rc" = 137 ]; then seg_die "$step still running after ${SEG_HOOK_MAX}s"; fi
+  return "$rc"
+}
+# After a TERM the loop that waited for the exit may have given up (the check
+# that follows reports it): never `wait` on a process that is still running -
+# kill it first, or a slow TERM turns a failed assertion into a hang.
+seg_reap() {
+  kill -0 "$1" 2>/dev/null && kill -KILL "$1" 2>/dev/null
+  wait "$1" 2>/dev/null
+  return 0
+}
+
 # --- helpers -----------------------------------------------------------------
 GEN="$FIX/gen-omp-turns.py"
 SEQ=0
@@ -175,9 +251,27 @@ fresh() { # reset corpus/locks/spool/trace for a new scenario
   S="$TMPROOT/work/2026-08-24T10-00-00-000Z_$SID.jsonl"
 }
 hook_input() { printf '{"session_file":"%s","session_id":"%s","cwd":"%s"}' "$1" "$2" "$TMPROOT"; }
-hook_fg() { hook_input "$S" "$SID" | bash "$CAPTURE" >"$TMPROOT/last.out" 2>"$TMPROOT/last.err"; }
+hook_fg() { # one capture pass in the foreground, capped at SEG_HOOK_MAX; returns the hook's rc
+  local p i rc
+  seg_guard "hook_fg"
+  hook_input "$S" "$SID" >"$TMPROOT/in.fg"
+  bash "$CAPTURE" <"$TMPROOT/in.fg" >"$TMPROOT/last.out" 2>"$TMPROOT/last.err" &
+  p=$!
+  for ((i = 0; i < SEG_HOOK_MAX * 20; i++)); do
+    kill -0 "$p" 2>/dev/null || break
+    sleep 0.05
+  done
+  if kill -0 "$p" 2>/dev/null; then
+    STARTED_PIDS+=("$p")
+    seg_die "kb-capture-omp.sh (pid $p) still running after ${SEG_HOOK_MAX}s in a foreground pass"
+  fi
+  wait "$p"
+  rc=$?
+  return "$rc"
+}
 HOOK_N=0
 hook_bg() {
+  seg_guard "hook_bg"
   HOOK_N=$((HOOK_N + 1))
   hook_input "$S" "$SID" >"$TMPROOT/in.$HOOK_N"
   bash "$CAPTURE" <"$TMPROOT/in.$HOOK_N" >"$TMPROOT/bg.out" 2>"$TMPROOT/bg.err" &
@@ -200,6 +294,7 @@ frozen_dups() { grep '^convert .*state=frozen' "$KB_CAPTURE_TRACE" | sort | uniq
 tab_rows() { cat "$KB_CAPTURE_LOCKS"/*.seg 2>/dev/null | wc -l | tr -d ' '; }
 unescaped_all() { local id f; for id in $(part_ids); do f="$(html_of "$id")"; pre_of "$f"; done; }
 
+if seg_group g1; then
 # ---------------------------------------------------------------------------
 # 0. The flag, the probe and the lib helpers.
 fresh
@@ -266,7 +361,8 @@ for flagval in 0 1; do
   S="$TMPROOT/work/SRC.jsonl"
   cp "$FIX/omp-session-ok4.jsonl" "$S"
   export KB_CAPTURE_SEGMENTS="$flagval" KB_CAPTURE_SEGMENT_BYTES=16777216
-  printf '{"session_file":"%s","session_id":"","cwd":"/tmp"}' "$S" | bash "$CAPTURE" >/dev/null 2>&1
+  printf '{"session_file":"%s","session_id":"","cwd":"/tmp"}' "$S" >"$TMPROOT/in.golden"
+  seg_bounded "the below-threshold golden capture" bash "$CAPTURE" <"$TMPROOT/in.golden" >/dev/null 2>&1
   got="$(sed -e "s#$S#@SRC@#g" "$KB_SESSIONS_DIR"/session-*.html)"
   if [ "$got" = "$(cat "$FIX/omp-session-ok4.single-capture.golden.html")" ]; then
     ok "below the threshold the capture is byte-identical to the golden (KB_CAPTURE_SEGMENTS=$flagval)"
@@ -452,6 +548,8 @@ for mode in spooled lost; do
   fi
 done
 
+fi # end seg_group
+if seg_group g2; then
 # ---------------------------------------------------------------------------
 # 6. kill -9 mid catch-up: landed parts survive, the next pass resumes.
 fresh
@@ -599,7 +697,7 @@ term_slow() { # <label> : the slow stage is already armed via env
     kill -TERM "$KT"
     gone=0
     for _ in $(seq 1 120); do kill -0 "$KT" 2>/dev/null || { gone=1; break; }; sleep 0.05; done
-    wait "$KT" 2>/dev/null
+    seg_reap "$KT"
     left=""
     for p in $members; do kill -0 "$p" 2>/dev/null && left="$left $p"; done
     left="$left $(ps -s "$KT" -o pid= 2>/dev/null | tr -d ' ' | tr '\n' ' ')"
@@ -637,6 +735,8 @@ for stage in exit-scan chain-walk; do
   [ "$(n_parts)" -ge 3 ] && ok "recovery after the TERM during the $stage: the next capture lands every part" || bad "no recovery after TERM during $stage ($(n_parts) parts)"
 done
 
+fi # end seg_group
+if seg_group g3; then
 # ---------------------------------------------------------------------------
 # 8. A sidecar change re-lands only the part it belongs to.
 fresh
@@ -712,7 +812,7 @@ if wait_for 20 grep -q '^emit ' "$KB_LOG"; then
   kill -TERM "$KT"
   gone=0
   for _ in $(seq 1 120); do kill -0 "$KT" 2>/dev/null || { gone=1; break; }; sleep 0.05; done
-  wait "$KT" 2>/dev/null
+  seg_reap "$KT"
   left=""
   for p in $members; do kill -0 "$p" 2>/dev/null && left="$left $p"; done
   left="$left $(ps -s "$KT" -o pid= 2>/dev/null | tr -d ' ' | tr '\n' ' ')"
@@ -729,6 +829,8 @@ unset KB_EMIT_SLEEP
 hook_fg
 [ "$(n_parts)" -ge 4 ] && ok "recovery after the TERM: the next capture lands every part" || bad "no recovery after TERM ($(n_parts) parts)"
 
+fi # end seg_group
+if seg_group g4; then
 # ---------------------------------------------------------------------------
 # 11b. The REAL capture engine (`kb sessions capture`): the parts land with the
 #      names/ids the daemon keys on, the continuation links survive the real
@@ -966,6 +1068,7 @@ else
   bad "short hard deadline looped for $SECONDS s"
 fi
 
+fi # end seg_group
 # ---------------------------------------------------------------------------
 # 13. v0.48 SEG-PERF: sidecar-heavy sessions must catch up.
 SGEN="$FIX/gen-omp-sidecars.py"
@@ -975,6 +1078,7 @@ n_holders() { holders | awk '$2 > 0' | wc -l | tr -d ' '; }
 held_by() { holders | awk -v p="$1" '$1 == p { print $2 }'; }
 translates() { grep -c '^translate sidecar=' "$KB_CAPTURE_TRACE" 2>/dev/null || true; }
 
+if seg_group g5; then
 # 13a. omp's real layout: the TITLE SLOT is line 1, the header (with the
 #      timestamp) line 2. Every sidecar used to read "no timestamp" from line 1
 #      and land in the tail; they must spread over the parts they belong to.
@@ -1086,6 +1190,8 @@ else
   bad "bare-id capture not replaced: $whole_size -> $(stat -c %s "$(html_of "$SID")")"
 fi
 
+fi # end seg_group
+if seg_group g6; then
 # 13e. The landing cap fits the part: a tail whose payload is big gets a longer
 #      cap (base + payload / rate), still bounded by the pass deadline and by
 #      KB_CAPTURE_LAND_MAX_SECS. (The stand-in capture sleeps 24 s when the
@@ -1132,6 +1238,8 @@ else
   bad "tail did not recover: parts=$(n_parts) rows=$(tab_rows) marker=$(ls "$KB_CAPTURE_LOCKS" | grep -c tailfail)"
 fi
 
+fi # end seg_group
+if seg_group g7; then
 # 13f. A stuck FROZEN part must not starve the parts behind it nor the tail:
 #      tail fails once (tailfail written), then one frozen part fails on every
 #      capture. Every later pass still lands the other frozen parts and the tail.
@@ -1158,13 +1266,15 @@ python3 "$GEN" create "$S" "$SID" 60 --blob 300
 broken="$TMPROOT/broken-hooks"; mkdir -p "$broken"
 cp "$HOOKS_DIR"/kb-hook-lib.sh "$broken/"
 sed '0,/last \/\/ "omp") as \$dmodel |/s//last \/\/ "omp-drift") as $dmodel |/' "$CAPTURE" >"$broken/kb-capture-omp.sh"
-hook_input "$S" "$SID" | bash "$broken/kb-capture-omp.sh" >/dev/null 2>"$TMPROOT/last.err"
+hook_input "$S" "$SID" >"$TMPROOT/in.drift"
+seg_bounded "the drifted-translator capture" bash "$broken/kb-capture-omp.sh" <"$TMPROOT/in.drift" >/dev/null 2>"$TMPROOT/last.err"
 if [ "$(n_parts)" = 1 ] && grep -q 'translator no longer matches' "$TMPROOT/last.err"; then
   ok "a TRANSLATE edit that breaks a substitution fails closed: warning + single-capture path"
 else
   bad "drift guard: parts=$(n_parts) err=$(head -c 200 "$TMPROOT/last.err")"
 fi
 
+fi # end seg_group
 # ---------------------------------------------------------------------------
 echo
 if ! ps -ef | grep -E "kb-capture-omp.sh.*$TMPROOT" | grep -v grep >/dev/null; then
@@ -1172,5 +1282,9 @@ if ! ps -ef | grep -E "kb-capture-omp.sh.*$TMPROOT" | grep -v grep >/dev/null; t
 else
   bad "a process of ours is still running"
 fi
+if [ -n "$SEG_GROUP" ] && [ "$PASS" -lt 2 ]; then
+  bad "group $SEG_GROUP ran $PASS checks: its section markers no longer wrap anything"
+fi
+echo "group=${SEG_GROUP:-all} elapsed=$(seg_elapsed)s"
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]
