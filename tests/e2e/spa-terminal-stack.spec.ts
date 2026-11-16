@@ -9,13 +9,13 @@
 // PNGs); no real harness, session, image or credential is involved.
 
 import { test, expect, type Page, type TestInfo } from "@playwright/test";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decodePng, forceDom, pixel, type Rgb } from "./spa-terminal-gfx-lib";
 import {
-  Api, MAIN, OFF, TTL, PORT_MAIN, PORT_TTL, PORT_OFF,
+  Api, MAIN, OFF, TTL, alive, procStateOf, PORT_MAIN, PORT_TTL, PORT_OFF,
   beat, bindSession, collectPageErrors, decodeStream, holderDir, idleHarness, keepBound,
   firstTextAt, killLaunched, kittyHarness, launch, listTerms, mintTicket, newSid, numberedHarness, openPanel,
   openPanelWhen, panelAttrs, rawUpgrade, readExpected, readMark, recordSockets, repoRoot, root, scratch,
@@ -128,25 +128,59 @@ test.describe("T25 oracle self-tests", () => {
 });
 
 test.describe("T25 setup robustness", () => {
-  test("a bring-up that fails after starting kb-termd tears it down itself", async () => {
-    test.setTimeout(120_000);
-    // The injected failure fires once kb-termd (and its tmux holder machinery)
-    // is up; the setup returns no teardown closure on failure, so without its
-    // own cleanup the process below would outlive the throw.
-    const logs = mkdtempSync(join(tmpdir(), "kbte-logs-"));
-    let err: (Error & { root?: string }) | undefined;
+  // The setup returns no teardown closure on failure, so without its own
+  // cleanup whatever it had started would outlive the throw. One injection
+  // per phase: the root laid out, kb-termd up, every server up.
+  for (const point of ["after-root", "after-termd", "after-servers"] as const) {
+    test(`a bring-up that fails ${point} tears down what it started`, async () => {
+      test.setTimeout(150_000);
+      const logs = mkdtempSync(join(tmpdir(), "kbte-logs-"));
+      let err: (Error & { root?: string }) | undefined;
+      try {
+        // Ports of their own: the real stack is already listening on 4737-4739.
+        await setupTerminalStack({ injectFailure: point, keepLogsIn: logs, ports: { main: 4747, ttl: 4748, off: 4749 } });
+      } catch (e) {
+        err = e as Error & { root?: string };
+      }
+      expect(err?.message, "the injected failure surfaced").toContain("injected bring-up failure");
+      const root = err?.root;
+      expect(root, "the failure carries the bring-up root").toBeTruthy();
+      const strays = spawnSync("pgrep", ["-f", root!], { encoding: "utf-8" }).stdout.trim();
+      expect(strays, "processes naming the failed bring-up's root").toBe("");
+      expect(existsSync(root!), "the failed bring-up's root was removed").toBe(false);
+      if (point !== "after-root") expect(readdirSync(logs), "the failed bring-up's logs were kept").toContain("kb-termd.log");
+      if (point === "after-servers") {
+        expect(readdirSync(logs), "every server's log was kept").toEqual(
+          expect.arrayContaining(["kb-server-4747.log", "kb-server-4748.log", "kb-server-4749.log"]),
+        );
+      }
+    });
+  }
+
+  test("a zombie counts as dead for the cleanup, a sleeping process does not", async () => {
+    expect(procStateOf("123 (sh) Z 1 123 123 0 -1")).toBe("Z");
+    expect(procStateOf("123 (we ird) name) S 1 123")).toBe("S");
+    expect(procStateOf("garbage")).toBeNull();
+    test.skip(process.platform !== "linux", "needs /proc");
+    // A real zombie: the child exits and its parent never waits for it.
+    const parent = spawn("python3", ["-I", "-c", "import os,time\npid=os.fork()\nif pid==0:\n    os._exit(0)\nprint(pid, flush=True)\ntime.sleep(60)"], { stdio: ["ignore", "pipe", "ignore"] });
     try {
-      await setupTerminalStack({ injectFailure: "after-termd", keepLogsIn: logs });
-    } catch (e) {
-      err = e as Error & { root?: string };
+      const pid = await new Promise<number>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("no child pid from the zombie parent")), 15_000);
+        parent.stdout!.once("data", (d) => {
+          clearTimeout(timer);
+          resolve(Number(String(d).trim()));
+        });
+      });
+      await expect
+        .poll(() => procStateOf(readFileSync(`/proc/${pid}/stat`, "latin1")), { timeout: 10_000 })
+        .toBe("Z");
+      expect(() => process.kill(pid, 0), "control: kill(0) alone still reports the zombie alive").not.toThrow();
+      expect(alive(pid), "alive() treats the zombie as dead").toBe(false);
+      expect(alive(parent.pid!), "alive() still sees a running process").toBe(true);
+    } finally {
+      parent.kill("SIGKILL");
     }
-    expect(err?.message, "the injected failure surfaced").toContain("injected bring-up failure");
-    const root = err?.root;
-    expect(root, "the failure carries the bring-up root").toBeTruthy();
-    const strays = spawnSync("pgrep", ["-f", root!], { encoding: "utf-8" }).stdout.trim();
-    expect(strays, "processes naming the failed bring-up's root").toBe("");
-    expect(existsSync(root!), "the failed bring-up's root was removed").toBe(false);
-    expect(readdirSync(logs), "the failed bring-up's logs were kept").toContain("kb-termd.log");
   });
 });
 
@@ -187,9 +221,12 @@ test("late join between rebuilds sees every line once, and the join is proven to
   const end1 = readMark(h.out, "frame-end-1");
   expect(end1, "the harness stamped the end of rebuild 1").not.toBeNull();
   expect(joinAt, "the join was requested after rebuild 1's frame ended").toBeGreaterThanOrEqual(end1!);
-  const soon2 = readMark(h.out, "soon-2");
-  expect(soon2 === null || soon2 > joinAt, `the join (${joinAt}) preceded rebuild 2's marker (${soon2})`).toBe(true);
   await waitFile(join(h.out, "expected.json"), 180_000);
+  // Read after the run finished so rebuild 2's marker certainly exists: an
+  // absent mark is a failure, never a vacuous pass of the upper bound.
+  const soon2 = readMark(h.out, "soon-2");
+  expect(soon2, "the harness stamped rebuild 2's soon-2 marker").not.toBeNull();
+  expect(soon2!, `the join (${joinAt}) preceded rebuild 2's marker (${soon2})`).toBeGreaterThan(joinAt);
   const exp = readExpected(h.out);
   const text = await waitDone(page);
   const r = checkNumbered(text, { expectTotal: exp.total });
@@ -770,7 +807,6 @@ test.describe("T25 gate matrix on the real server", () => {
     const rowBefore = await rowOf();
     const countBefore = (await listTerms(api)).length;
     const stdinBefore = stdinLog();
-    const ticket = await mintTicket(api, id);
     const mediaRef = (await call(routes.find((r) => r.media)!)).status();
     expect(mediaRef, "control: the media route with the right Origin and intent is not a gate refusal").not.toBe(403);
 
@@ -795,6 +831,9 @@ test.describe("T25 gate matrix on the real server", () => {
       }
     }
     // The WebSocket upgrade: wrong and absent Origin refused with a LIVE ticket in hand.
+    // Minted HERE, not before the ~48 calls above: a ticket lives 30 s and the
+    // matrix can outlast that on a slow runner.
+    const ticket = await mintTicket(api, id);
     expect((await rawUpgrade(PORT_MAIN, `/api/terms/${id}/ws?ticket=${ticket.ticket}`, { Origin: evil })).status, "ws: wrong Origin").toBe(403);
     expect((await rawUpgrade(PORT_MAIN, `/api/terms/${id}/ws?ticket=${ticket.ticket}`)).status, "ws: absent Origin").toBe(403);
 
@@ -928,7 +967,10 @@ test.describe.serial("T25 in-process restart", () => {
       // The browser leg: the page's own WebSocket was closed with 1012, not
       // only the proxy's server side.
       await expect
-        .poll(async () => (await browserCloses(page)).map((x) => x.code), { timeout: 10_000, message: "close codes the page's sockets saw" })
+        .poll(
+          async () => (await browserCloses(page)).filter((x) => /\/api\/terms\/[^/]+\/ws(\?|$)/.test(x.url)).map((x) => x.code),
+          { timeout: 10_000, message: "close codes the terminal WebSockets the page opened saw" },
+        )
         .toContain(1012);
 
       // The daemon comes back; the runner and the tmux holder never moved.
@@ -941,6 +983,21 @@ test.describe.serial("T25 in-process restart", () => {
           }
         }, { timeout: 60_000, intervals: [250, 500, 1000] })
         .toBe(true);
+      // The pinned route above hides a card lane that never recovers: ask the
+      // REAL card (page.route does not intercept the request fixture) and
+      // require the terminal lane to report available again.
+      await expect
+        .poll(async () => {
+          try {
+            const resp = await request.get(`${MAIN}/api/sessions/${c.sid}/card`);
+            if (!resp.ok()) return `status ${resp.status()}`;
+            const body = (await resp.json()) as { terminal?: { available?: boolean } };
+            return body.terminal?.available === true ? "available" : `terminal ${JSON.stringify(body.terminal ?? null)}`;
+          } catch (e) {
+            return `error ${String(e)}`;
+          }
+        }, { timeout: 60_000, intervals: [250, 500, 1000], message: "the unstubbed session card's terminal lane after the restart" })
+        .toBe("available");
       const rowAfter = (await listTerms(c.api)).find((t) => t.id === c.term.id)!;
       expect(rowAfter.pane_pid, "same pane pid").toBe(c.term.panePid);
       expect(rowAfter.pane_dead ?? false).toBe(false);
