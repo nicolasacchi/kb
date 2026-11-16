@@ -1,0 +1,40 @@
+# terminal-stack: the real-stack terminal end-to-end lane (T25)
+
+`tests/e2e/spa-terminal-stack.spec.ts` drives the whole terminal chain with
+synthetic fake harnesses: a pinned tmux 3.7c holder, the compiled tap,
+`kb-termd` (direct supervisor), three `kb-server` processes and the real SPA in
+Chromium. It is CI-only (`term-e2e` job) and opt-in locally.
+
+## Running
+
+Needs `KB_TMUX_BIN` (a tmux 3.7c, see `scripts/ci/build-tmux.sh`), `KB_TAP_BIN`
+(`bun build --compile` of `crates/kb-term/tap/src/main.ts`), fast-profile
+`kb-server` and `kb-termd` binaries, and `web/dist`:
+
+    KB_E2E_TERMINAL=1 npx playwright test --project=terminal-stack --project=terminal-stack-dpr2
+
+Without `KB_E2E_TERMINAL=1` the spec is ignored by every default project and the
+default `e2e` lane is unchanged.
+
+## What the setup does (`global-setup-terminal.ts`)
+
+* Everything lives under one unique temp root; `HOME` and every `XDG_*` of every
+  child point inside it. Nothing reads a real home or a real runtime dir.
+* A fake `omp` is first on the pane `PATH`; it runs `$HOME/scenario.sh`, which
+  each test rewrites just before it launches through `POST /api/terms`.
+* Ports: 4737 terminal enabled (main), 4738 enabled with a 2 s ticket TTL,
+  4739 with no `[terminal]` section (disabled). Never 4000.
+* Teardown kills tmux holders by their own socket, then `pkill -f <root>`, and
+  fails if anything naming the root survives.
+
+## Files
+
+* `oracle.ts`: `checkNumbered` (fails when `highest != total`), `scanForQueries`
+  (independent VT parser, from the spike branch's strip oracle), `frameTracker`.
+* `stack.ts`: addresses, REST helpers, scenario launching, beats, socket
+  recording, scrollback read.
+* `fixtures/numbered_harness.py`: numbered lines, ED2+ED3 rebuild frames, query
+  injection, flood + tail. `fake_harness.py` and `synth_omp_kitty_stream.py` are
+  the merged generators (`crates/kb-term/fixtures`) copied unchanged.
+
+All fixtures are generated at run time; no recording or binary is committed.
