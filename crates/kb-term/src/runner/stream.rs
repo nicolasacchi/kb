@@ -952,9 +952,9 @@ mod tests {
         let script = dir.path().join("fake_tmux.sh");
         let body = std::fs::read_to_string(&script).unwrap();
         let body = body.replace(
-            " *display-message*)",
+            "*display-message*)",
             &format!(
-                " *set-option*) if [ -e {} ]; then sleep 1; fi; exit 0 ;;\n *display-message*)",
+                "*set-option*) if [ -e {} ]; then sleep 1; fi; exit 0 ;;\n*display-message*)",
                 slow.display()
             ),
         );
