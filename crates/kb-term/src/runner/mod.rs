@@ -508,11 +508,10 @@ impl<S: Supervisor> Runner<S> {
     async fn persist_viewers(&self, id: &str) {
         let set: Vec<String> = {
             let viewers = self.viewers.lock().await;
-            viewers
-                .keys()
-                .filter(|(sid, _)| sid == id)
-                .map(|(_, w)| w.clone())
-                .collect()
+            persistable_viewers(
+                viewers.keys().map(|(sid, w)| (sid.as_str(), w.as_str())),
+                id,
+            )
         };
         if let Err(e) = persist::write_viewers(&self.tmux, &self.holder_socket(id), &set).await {
             tracing::warn!(id, %e, "could not persist viewer set");
@@ -682,6 +681,18 @@ impl<S: Supervisor> Runner<S> {
     }
 }
 
+/// The viewer ids of session `id` that belong in the durable
+/// `@kb_viewers` set: every registered viewer except the transient
+/// stream viewers (`ws-…`), whose hidden client dies with its splice.
+pub(crate) fn persistable_viewers<'a>(
+    keys: impl Iterator<Item = (&'a str, &'a str)>,
+    id: &str,
+) -> Vec<String> {
+    keys.filter(|(sid, w)| *sid == id && !crate::runner::ids::is_stream_viewer(w))
+        .map(|(_, w)| w.to_string())
+        .collect()
+}
+
 /// Ensure `<run-dir>`, `s/` and `runner/` exist with the tmpfiles.d modes
 /// in direct mode; in systemd mode fail naming the tmpfiles lines.
 pub async fn ensure_layout(cfg: &RunnerConfig) -> Result<(), RunnerError> {
@@ -843,6 +854,23 @@ mod tests {
         check_tmux_version(&matching, "3.7c")
             .await
             .expect("tmux 3.7c must satisfy expected 3.7c");
+    }
+
+    #[test]
+    fn stream_viewers_never_enter_the_durable_viewer_set() {
+        let keys = [
+            ("abcd1234", "ws-aaaa1111bb"),
+            ("abcd1234", "phone:1"),
+            ("abcd1234", "web"),
+            ("zzzz9999", "other"),
+        ];
+        let mut got = persistable_viewers(keys.iter().copied(), "abcd1234");
+        got.sort();
+        assert_eq!(
+            got,
+            vec!["phone:1".to_string(), "web".to_string()],
+            "a transient ws- viewer must not be re-opened after a runner restart"
+        );
     }
 
     #[test]

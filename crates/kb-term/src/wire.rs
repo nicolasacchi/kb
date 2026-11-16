@@ -274,7 +274,9 @@ pub enum ClientFrame {
         /// Grid rows.
         rows: u16,
     },
-    /// Terminal input bytes as a string.
+    /// Terminal input bytes as a string. The tap has no input path: the
+    /// runner's stream splice intercepts this frame and writes `data` to the
+    /// stream's hidden tmux client instead of forwarding it.
     Input {
         /// Input data.
         data: String,
