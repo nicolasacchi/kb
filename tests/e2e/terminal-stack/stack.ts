@@ -35,6 +35,8 @@ export interface CallOpts {
   /** Send `X-Kb-Intent: terminal` (default true). */
   intent?: boolean;
   data?: unknown;
+  /** Extra request headers (e.g. a Content-Type), merged over the gate's. */
+  headers?: Record<string, string>;
 }
 
 /** A REST client for one terminal-enabled (or disabled) server. */
@@ -49,7 +51,7 @@ export class Api {
     const origin = o.origin === undefined ? this.base : o.origin;
     if (origin) h["Origin"] = origin;
     if (o.intent ?? true) h["X-Kb-Intent"] = "terminal";
-    return h;
+    return { ...h, ...(o.headers ?? {}) };
   }
 
   async call(method: string, path: string, o: CallOpts = {}) {
@@ -169,37 +171,66 @@ export function kittyHarness(
 
 export const idleHarness = (): Harness => ({ out: scratch("idle"), shell: "exec sleep 3600\n" });
 
-const launched: string[] = [];
+const launched: Launched[] = [];
 
 export interface Launched {
   id: string;
   panePid: number;
 }
 
-/** Write the scenario the fake `omp` runs, then launch through the SPA's own REST route. */
+/**
+ * Launch through the SPA's own REST route. Every launch gets its OWN directory
+ * holding its OWN `scenario.sh`, and the pane starts in that directory (the
+ * fake `omp` runs `./scenario.sh`), so a pane that outlives its test can never
+ * read a script a later test rewrote.
+ */
 export async function launch(api: Api, h: Harness, grid?: { cols: number; rows: number }): Promise<Launched> {
-  writeFileSync(join(root(), "home", "scenario.sh"), h.shell);
-  const data: Record<string, unknown> = { harness: "omp", cwd: join(root(), "home") };
+  const dir = scratch("pane");
+  writeFileSync(join(dir, "scenario.sh"), h.shell);
+  const data: Record<string, unknown> = { harness: "omp", cwd: dir };
   if (grid) {
     data.cols = grid.cols;
     data.rows = grid.rows;
   }
   const { status, body } = await api.json<{ id: string; pane_pid: number }>("POST", "/api/terms", { data });
   expect(status, `launch: ${JSON.stringify(body)}`).toBe(201);
-  launched.push(body.id);
-  return { id: body.id, panePid: body.pane_pid };
+  const t = { id: body.id, panePid: body.pane_pid };
+  launched.push(t);
+  return t;
 }
 
-/** Kill every session this test launched (never touches anything else). */
+const alive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Kill every session this test launched (never touches anything else). A
+ * kill that fails, or a pane that is still alive afterwards, is REPORTED (the
+ * afterEach throws it): a surviving pane would leak into later tests. A 404
+ * means the test already removed the terminal itself.
+ */
 export async function killLaunched(api: Api): Promise<void> {
-  const ids = launched.splice(0);
-  for (const id of ids) {
+  const ts = launched.splice(0);
+  const failures: string[] = [];
+  for (const t of ts) {
     try {
-      await api.call("POST", `/api/terms/${id}/kill`, { data: {} });
-    } catch {
-      // best effort: global teardown kills the holder by its socket
+      const r = await api.call("POST", `/api/terms/${t.id}/kill`, { data: {} });
+      if (r.status() !== 200 && r.status() !== 404) failures.push(`kill ${t.id}: HTTP ${r.status()} ${await r.text()}`);
+    } catch (e) {
+      failures.push(`kill ${t.id}: ${String(e)}`);
     }
   }
+  for (const t of ts) {
+    const deadline = Date.now() + 10_000;
+    while (alive(t.panePid) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
+    if (alive(t.panePid)) failures.push(`pane pid ${t.panePid} of ${t.id} is still alive 10 s after the kill`);
+  }
+  if (failures.length > 0) throw new Error(`killLaunched: ${failures.join("; ")}`);
 }
 
 // ------------------------------------------------------- session + beats
@@ -295,8 +326,11 @@ export function keepBound(api: Api, sid: string, t: Launched, everyMs = 250): ()
 export interface Sock {
   url: string;
   rx: Array<string | Buffer>;
+  /** Date.now() at which each `rx` frame arrived (parallel to `rx`). */
+  rxAt: number[];
   tx: Array<string | Buffer>;
   closed: boolean;
+  /** Date.now() when the page created the socket (the join request). */
   openedAt: number;
 }
 
@@ -305,9 +339,12 @@ export function recordSockets(page: Page): Sock[] {
   const socks: Sock[] = [];
   page.on("websocket", (ws) => {
     if (!/\/api\/terms\/[^/]+\/ws/.test(ws.url())) return;
-    const s: Sock = { url: ws.url(), rx: [], tx: [], closed: false, openedAt: Date.now() };
+    const s: Sock = { url: ws.url(), rx: [], rxAt: [], tx: [], closed: false, openedAt: Date.now() };
     socks.push(s);
-    ws.on("framereceived", (e) => s.rx.push(e.payload));
+    ws.on("framereceived", (e) => {
+      s.rx.push(e.payload);
+      s.rxAt.push(Date.now());
+    });
     ws.on("framesent", (e) => s.tx.push(e.payload));
     ws.on("close", () => {
       s.closed = true;
@@ -324,9 +361,20 @@ export function collectPageErrors(page: Page): string[] {
 
 /** Open /sessions/:sid, click Open terminal, wait for the panel to be live. */
 export async function openPanel(page: Page, sid: string, phase = "live"): Promise<void> {
+  await openPanelWhen(page, sid, async () => {}, phase);
+}
+
+/**
+ * Like `openPanel`, but the page is loaded and the Open button is ready FIRST;
+ * `before` then runs (wait for a harness mark) and the click, hence the
+ * WebSocket join, follows immediately. This is how a test lands its join at a
+ * known point of the harness's timeline instead of racing a page load.
+ */
+export async function openPanelWhen(page: Page, sid: string, before: () => Promise<void>, phase = "live"): Promise<void> {
   await page.goto(`${MAIN}/sessions/${sid}`);
   const open = page.locator('[data-testid="kb-term-open"]');
   await expect(open).toBeVisible({ timeout: 30_000 });
+  await before();
   await open.click();
   await expect(page.locator("[data-kb-term]")).toBeVisible({ timeout: 30_000 });
   await waitPhase(page, phase);
@@ -414,6 +462,28 @@ export function readExpected(out: string): Expected {
 
 export async function waitFile(path: string, timeout = 120_000): Promise<void> {
   await expect.poll(() => existsSync(path), { timeout, intervals: [100, 250, 500] }).toBe(true);
+}
+
+/** The epoch-ms timestamp the harness wrote into mark file `name` (soon-N, frame-start-N, frame-end-N), or null if absent. */
+export function readMark(out: string, name: string): number | null {
+  const p = join(out, name);
+  if (!existsSync(p)) return null;
+  const v = Number(readFileSync(p, "utf-8").trim());
+  return Number.isFinite(v) && v > 0 ? v : null;
+}
+
+/** Date.now() at which socket `s` received its first text frame of type `t`, or null. */
+export function firstTextAt(s: Sock, t: string): number | null {
+  for (let i = 0; i < s.rx.length; i += 1) {
+    const f = s.rx[i];
+    if (typeof f !== "string") continue;
+    try {
+      if ((JSON.parse(f) as { t?: unknown }).t === t) return s.rxAt[i] ?? null;
+    } catch {
+      // not JSON
+    }
+  }
+  return null;
 }
 
 export function touch(path: string): void {

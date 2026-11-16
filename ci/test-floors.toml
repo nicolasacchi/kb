@@ -53,6 +53,7 @@ executed = 30
 # T25 — the real-stack terminal end-to-end lane (tests/e2e/spa-terminal-stack.spec.ts,
 # the `term-e2e` job, KB_E2E_TERMINAL=1). Seeded under the spec's case count
 # (27 cases, ~10% under); raised to the witness-suggested value of the first
-# fully green run.
+# fully green run. FXTESTS: 30 executed on the green run -> 30 - 30%5 - 5 = 25
+# (the witness formula; the run was too close to the floor to print it).
 [term-e2e]
-executed = 24
+executed = 25

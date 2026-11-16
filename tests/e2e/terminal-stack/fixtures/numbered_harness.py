@@ -13,6 +13,9 @@ synchronized frame `ESC[?2026h ESC[H ESC[2J ESC[3J` + a full reprint of ALL line
 With --queries it injects terminal queries (DA1, DA2, XTVERSION, CSI 5n/6n, DECRQM 2026,
 CSI ? u, CSI 16t, OSC 10/11 ?, a DCS-tmux-wrapped DA1, and one split across writes) every 40
 lines in both phases.
+Each rebuild stamps soon-<n> (marker line printed), frame-start-<n> (just before the ?2026h
+frame opens) and frame-end-<n> (just after ?2026l), each holding epoch-ms, so a test can prove
+whether its join landed inside a frame or between rebuilds.
 stdin is drained into <out>/stdin.log (echo and canonical mode off), so typed bytes and the
 pane's own query replies are observable by the test.
 When finished it writes <out>/expected.json {total, seed, live, queries_sent} atomically,
@@ -133,12 +136,19 @@ def main():
         lines.append(text)
         out.write(text + "\n")
 
+    def mark(name):
+        """Atomically write the epoch-ms time of an event, so a test can prove where its join landed."""
+        tmp = os.path.join(a.out, name + ".tmp")
+        with open(tmp, "w") as f:
+            f.write(str(int(time.time() * 1000)))
+        os.replace(tmp, os.path.join(a.out, name))
+
     def rebuild(count):
         out.write("REBUILD-SOON\n")
         out.flush()
-        with open(os.path.join(a.out, "soon-%d" % count), "w") as f:
-            f.write("1")
+        mark("soon-%d" % count)
         time.sleep(a.lead_ms / 1000.0)
+        mark("frame-start-%d" % count)
         out.write(ESC + "[?2026h" + ESC + "[H" + ESC + "[2J" + ESC + "[3J")
         chunk = 200
         for i in range(0, len(lines), chunk):
@@ -148,6 +158,7 @@ def main():
                 time.sleep(a.slow_rebuild_ms / 1000.0)
         out.write(ESC + "[?2026l")
         out.flush()
+        mark("frame-end-%d" % count)
 
     # seed phase
     for n in range(1, a.seed + 1):

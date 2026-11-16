@@ -20,8 +20,12 @@ default `e2e` lane is unchanged.
 
 * Everything lives under one unique temp root; `HOME` and every `XDG_*` of every
   child point inside it. Nothing reads a real home or a real runtime dir.
-* A fake `omp` is first on the pane `PATH`; it runs `$HOME/scenario.sh`, which
-  each test rewrites just before it launches through `POST /api/terms`.
+* A fake `omp` is first on the pane `PATH`; it runs `./scenario.sh` in the
+  pane's working directory. Each launch (`POST /api/terms`) gets its own
+  directory and its own script, so panes never share a file; the per-test
+  cleanup reports a kill that failed or a pane that is still alive.
+* A bring-up that fails part-way tears down what it started and rethrows
+  (the setup self-test injects such a failure and looks for survivors).
 * Ports: 4737 terminal enabled (main), 4738 enabled with a 2 s ticket TTL,
   4739 with no `[terminal]` section (disabled). Never 4000.
 * Teardown kills tmux holders by their own socket, then `pkill -f <root>`, and
@@ -33,8 +37,9 @@ default `e2e` lane is unchanged.
   (independent VT parser, from the spike branch's strip oracle), `frameTracker`.
 * `stack.ts`: addresses, REST helpers, scenario launching, beats, socket
   recording, scrollback read.
-* `fixtures/numbered_harness.py`: numbered lines, ED2+ED3 rebuild frames, query
-  injection, flood + tail. `fake_harness.py` and `synth_omp_kitty_stream.py` are
+* `fixtures/numbered_harness.py`: numbered lines, ED2+ED3 rebuild frames (each
+  stamps `soon-N`, `frame-start-N`, `frame-end-N` with epoch-ms so the join
+  tests can prove where their join landed), query injection, flood + tail. `fake_harness.py` and `synth_omp_kitty_stream.py` are
   the merged generators (`crates/kb-term/fixtures`) copied unchanged.
 
 All fixtures are generated at run time; no recording or binary is committed.
