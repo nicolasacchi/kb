@@ -501,7 +501,10 @@ registering anywhere `kb-memory` is already installed. Design:
     them, compaction and exit records included; a part uses the model in force
     at its start, which is the more accurate of the two); a subagent that keeps writing re-converts and re-lands
     its part on every pass.
-  Tests: `tests/test-capture-omp-segments.sh` (run by `hook_shell.rs`, against
+  Tests: `tests/test-capture-omp-segments.sh` (run by `hook_shell.rs` as seven parallel
+  groups, `SEG_GROUP=g1..g7`, because the whole matrix took 236-340 s of nextest's
+  360 s limit; every wait has a deadline and a stall dumps process tree, lock
+  holders and logs; against
   the real planner and `drop-part`; with an older kb it uses
   `tests/fixtures/fake-segment-plan.py`), `tests/test-capture-omp-segments-scale.sh`.
 - **One per-session key (v0.45 N4)** - every per-session file name (capture
