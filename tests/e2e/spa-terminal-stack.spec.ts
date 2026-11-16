@@ -726,6 +726,7 @@ test.describe("T25 gate matrix on the real server", () => {
     const id = t.id;
     const evil = `http://evil.test:${PORT_MAIN}`;
     const ORIGIN_URN = "urn:kb:errors:terminal-origin-refused";
+    const MIDDLEWARE_ORIGIN_URN = "urn:kb:errors:origin-refused";
     const INTENT_URN = "urn:kb:errors:terminal-intent-required";
     const png = Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.alloc(24)]);
     interface Route {
@@ -781,7 +782,9 @@ test.describe("T25 gate matrix on the real server", () => {
       }
       const wrong = await call(r, { origin: evil });
       expect(wrong.status(), `${r.name}: wrong Origin`).toBe(403);
-      expect(await problemType(wrong), `${r.name}: wrong Origin -> the origin refusal`).toBe(ORIGIN_URN);
+      // A wrong Origin on a POST is stopped one layer earlier, by the daemon's
+      // origin allowlist middleware (its own urn); a GET reaches the terminal gate.
+      expect(await problemType(wrong), `${r.name}: wrong Origin -> the origin refusal`).toBe(r.method === "POST" ? MIDDLEWARE_ORIGIN_URN : ORIGIN_URN);
       const absent = await call(r, { origin: null });
       if (r.media) {
         // The media GET is same-origin `fetch`, which sends no Origin: absent is admitted (module docs, terminal/media.rs).
