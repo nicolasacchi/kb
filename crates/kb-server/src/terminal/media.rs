@@ -16,6 +16,10 @@
 //! The loopback bypass does not apply. Intent is the part a cross-site
 //! page cannot forge; the rest narrows what a browser may send.
 //!
+//! The URL is content-addressed, so the response carries `ETag: "<sha256>"`
+//! and an `If-None-Match` naming it answers 304 (after the gate and the
+//! hash check passed, never before: a refused caller learns nothing).
+//!
 //! Bytes are served only if their magic says PNG, JPEG, GIF or WebP
 //! (the content type comes from that sniff, never from a stored or
 //! client-supplied mime); anything else, SVG included, is a 415.
@@ -159,9 +163,12 @@ fn runner_err(code: &str, message: &str) -> Response<Body> {
 /// The response for sniffed picture bytes: the sniffed type, nosniff,
 /// a year-long private immutable cache (the URL is content-addressed),
 /// a sandboxing CSP, inline disposition.
-fn picture(content_type: &'static str, bytes: Vec<u8>) -> Response<Body> {
+fn picture(content_type: &'static str, bytes: Vec<u8>, sha256: &str) -> Response<Body> {
     let mut resp = Response::new(Body::from(bytes));
     let h = resp.headers_mut();
+    if let Ok(v) = HeaderValue::from_str(&format!("\"{sha256}\"")) {
+        h.insert(header::ETAG, v);
+    }
     h.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
     h.insert(
         header::X_CONTENT_TYPE_OPTIONS,
@@ -178,6 +185,35 @@ fn picture(content_type: &'static str, bytes: Vec<u8>) -> Response<Body> {
     h.insert(
         header::CONTENT_DISPOSITION,
         HeaderValue::from_static("inline"),
+    );
+    resp
+}
+
+/// True iff an `If-None-Match` header names `"<sha256>"` (strong or weak
+/// form). `*` is not honoured: it would claim a picture the runner never
+/// confirmed exists.
+fn if_none_match_hits(headers: &HeaderMap, sha256: &str) -> bool {
+    let strong = format!("\"{sha256}\"");
+    headers
+        .get_all(header::IF_NONE_MATCH)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(','))
+        .map(str::trim)
+        .any(|t| t == strong || t.strip_prefix("W/") == Some(strong.as_str()))
+}
+
+/// The 304 for a cached picture: validators only, no body.
+fn not_modified(sha256: &str) -> Response<Body> {
+    let mut resp = Response::new(Body::empty());
+    *resp.status_mut() = StatusCode::NOT_MODIFIED;
+    let h = resp.headers_mut();
+    if let Ok(v) = HeaderValue::from_str(&format!("\"{sha256}\"")) {
+        h.insert(header::ETAG, v);
+    }
+    h.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, max-age=31536000, immutable"),
     );
     resp
 }
@@ -201,6 +237,9 @@ pub async fn serve(
             "media key must be 64 lowercase hex characters",
         );
     }
+    if if_none_match_hits(&headers, &sha256) {
+        return not_modified(&sha256);
+    }
     let runner = {
         let cfg = state.config.read().await;
         let terminal = &cfg.terminal;
@@ -211,7 +250,7 @@ pub async fn serve(
     };
     match runner.media(&sha256).await {
         Ok(MediaReply::Bytes(bytes)) => match sniff_image(&bytes) {
-            Some(ct) => picture(ct, bytes),
+            Some(ct) => picture(ct, bytes, &sha256),
             None => problem(
                 ERR_UNSUPPORTED_MEDIA,
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
@@ -245,6 +284,29 @@ mod tests {
         assert!(!is_valid_sha256(&format!("{ok}0")));
         assert!(!is_valid_sha256(""));
         assert!(!is_valid_sha256(&format!("{}g", &ok[..63])));
+    }
+
+    #[test]
+    fn if_none_match_matches_strong_weak_star_and_lists_only() {
+        let sha = "ab".repeat(32);
+        let mk = |v: &str| {
+            let mut h = HeaderMap::new();
+            h.insert(header::IF_NONE_MATCH, HeaderValue::from_str(v).unwrap());
+            h
+        };
+        assert!(if_none_match_hits(&mk(&format!("\"{sha}\"")), &sha));
+        assert!(if_none_match_hits(&mk(&format!("W/\"{sha}\"")), &sha));
+        assert!(!if_none_match_hits(&mk("*"), &sha));
+        assert!(if_none_match_hits(&mk(&format!("\"x\", \"{sha}\"")), &sha));
+        assert!(!if_none_match_hits(
+            &mk(&format!("\"{}\"", "cd".repeat(32))),
+            &sha
+        ));
+        assert!(
+            !if_none_match_hits(&mk(&sha), &sha),
+            "unquoted is no validator"
+        );
+        assert!(!if_none_match_hits(&HeaderMap::new(), &sha));
     }
 
     #[test]

@@ -1,0 +1,70 @@
+/* T21 - the Images strip of the session page. Tokens only. */
+.kb-imgs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pad-3);
+}
+.kb-imgs__tile {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-1);
+  width: 160px;
+  padding: var(--pad-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--ink);
+  font-size: var(--fs-xs);
+  text-align: left;
+}
+.kb-imgs__open {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+.kb-imgs__thumb {
+  display: block;
+  width: 100%;
+  height: 96px;
+  object-fit: contain;
+  background: var(--bg);
+}
+.kb-imgs__missing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 96px;
+  color: var(--ink-mute);
+  text-align: center;
+  border: 1px dashed var(--rule);
+}
+.kb-imgs__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--pad-2);
+  color: var(--ink-mute);
+}
+.kb-imgs__empty {
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
+}
+@media (max-width: 480px) {
+  .kb-imgs {
+    flex-direction: column;
+  }
+  .kb-imgs__tile {
+    width: 100%;
+    flex-direction: row;
+    align-items: center;
+  }
+  .kb-imgs__thumb,
+  .kb-imgs__missing {
+    width: 96px;
+    height: 96px;
+    flex: none;
+  }
+}

@@ -14,9 +14,22 @@
 //! (the kitty transmit cap), so an oversized file is `too-large`, never
 //! truncated. The reply is the usual envelope header with `{"len":N}`
 //! followed by exactly N raw bytes (see `server::respond_media`).
+//!
+//! **Second source: omp blobs.** omp keeps its pictures content-addressed
+//! in a blob directory (`KB_TERM_OMP_BLOBS`, else `$HOME/.omp/agent/blobs`;
+//! the kb container cannot see the host home, so the bytes come through
+//! this runner). The tap store is consulted first and wins. A blob
+//! candidate path is the validated hash plus one literal suffix from
+//! [`OMP_SUFFIXES`] and nothing else from the request. The blob is served
+//! only if it is a regular file (no symlink, `O_NOFOLLOW`, re-checked on
+//! the descriptor) of at most [`MAX_OMP_BLOB_BYTES`], its SHA-256 equals
+//! the requested hash (a mis-named or tampered file is refused), and its
+//! magic is PNG, JPEG, GIF or WebP (never SVG, text or PDF). Every
+//! refusal of a blob is plain `not-found`: the reply never says why.
 
+use sha2::{Digest, Sha256};
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::runner::ids::valid_id;
 use crate::runner::RunnerError;
@@ -24,20 +37,117 @@ use crate::runner::RunnerError;
 /// Largest picture the runner will hand out (the tap's kitty cap).
 pub const MAX_MEDIA_BYTES: u64 = 32 * 1024 * 1024;
 
+/// Largest omp blob the runner will hand out.
+pub const MAX_OMP_BLOB_BYTES: u64 = 20 * 1024 * 1024;
+
+/// The only filename suffixes tried after the hash in the omp blob dir.
+pub const OMP_SUFFIXES: [&str; 4] = ["", ".jpg", ".png", ".webp"];
+
+/// The omp blob directory: `KB_TERM_OMP_BLOBS` when set and non-empty,
+/// else `$HOME/.omp/agent/blobs`. `None` when neither is known.
+pub fn omp_blobs_dir() -> Option<PathBuf> {
+    if let Some(v) = std::env::var_os("KB_TERM_OMP_BLOBS") {
+        if !v.is_empty() {
+            return Some(PathBuf::from(v));
+        }
+    }
+    let home = std::env::var_os("HOME").filter(|h| !h.is_empty())?;
+    Some(PathBuf::from(home).join(".omp").join("agent").join("blobs"))
+}
+
+/// Magic-byte sniff for the served picture types. Mirrors the image arms
+/// of kb-core's attachment sniff (kb-term has no kb-core edge); SVG, text
+/// and PDF are deliberately absent.
+fn sniff_image(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) {
+        Some("image/png")
+    } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
+}
+
 /// True iff `s` is exactly 64 lowercase hex characters.
 pub fn valid_sha256(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-/// Read the stored picture `sha` from any session under `sessions_dir`.
+/// Read the picture `sha`: the tap stores under `sessions_dir` first, then
+/// the omp blob directory ([`omp_blobs_dir`]).
 ///
 /// Blocking file I/O: callers run it on a blocking thread.
 pub fn read_media(sessions_dir: &Path, sha: &str) -> Result<Vec<u8>, RunnerError> {
+    read_media_with(sessions_dir, omp_blobs_dir().as_deref(), sha)
+}
+
+/// [`read_media`] with the omp blob directory given explicitly (tests).
+pub fn read_media_with(
+    sessions_dir: &Path,
+    omp_dir: Option<&Path>,
+    sha: &str,
+) -> Result<Vec<u8>, RunnerError> {
     if !valid_sha256(sha) {
         return Err(RunnerError::BadRequest(
             "media key must be 64 lowercase hex characters".to_string(),
         ));
     }
+    // A tap hit (or a tap-side `too-large`) is final; only a miss falls
+    // through to the omp blobs.
+    match read_tap_store(sessions_dir, sha) {
+        Err(RunnerError::NotFound(_)) => {}
+        other => return other,
+    }
+    if let Some(bytes) = omp_dir.and_then(|d| read_omp_blob(d, sha)) {
+        return Ok(bytes);
+    }
+    Err(RunnerError::NotFound("no such picture".to_string()))
+}
+
+/// Read one omp blob by content hash. Every refusal is `None`.
+fn read_omp_blob(dir: &Path, sha: &str) -> Option<Vec<u8>> {
+    use std::os::unix::fs::OpenOptionsExt;
+    for suffix in OMP_SUFFIXES {
+        let path = dir.join(format!("{sha}{suffix}"));
+        let meta = match std::fs::symlink_metadata(&path) {
+            Ok(m) if m.is_file() && m.len() <= MAX_OMP_BLOB_BYTES => m,
+            _ => continue,
+        };
+        let Ok(file) = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&path)
+        else {
+            continue;
+        };
+        match file.metadata() {
+            Ok(m) if m.is_file() && m.len() <= MAX_OMP_BLOB_BYTES => {}
+            _ => continue,
+        }
+        let mut buf = Vec::with_capacity(meta.len() as usize);
+        if file
+            .take(MAX_OMP_BLOB_BYTES + 1)
+            .read_to_end(&mut buf)
+            .is_err()
+            || buf.len() as u64 > MAX_OMP_BLOB_BYTES
+        {
+            continue;
+        }
+        let digest = Sha256::digest(&buf);
+        if hex::encode(&digest[..]) != sha || sniff_image(&buf).is_none() {
+            continue;
+        }
+        return Some(buf);
+    }
+    None
+}
+
+/// The tap-store half of [`read_media`] (hash already validated).
+fn read_tap_store(sessions_dir: &Path, sha: &str) -> Result<Vec<u8>, RunnerError> {
     let entries = std::fs::read_dir(sessions_dir)
         .map_err(|_| RunnerError::NotFound("no such picture".to_string()))?;
     for entry in entries.flatten() {
