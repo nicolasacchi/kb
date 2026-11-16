@@ -11207,6 +11207,30 @@ mod live_follow_tests {
     }
 
     #[test]
+    fn build_live_delta_raw_mode_swaps_inline_images() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("s.jsonl");
+        // ~700 KiB of base64 (`A` decodes to zero bits) in one tool_result
+        // image line: it exceeds the 512 KiB delta cap on its own.
+        let data = "A".repeat(700 * 1024);
+        let line = format!(
+            r#"{{"type":"user","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"toolu_1","content":[{{"type":"image","source":{{"type":"base64","media_type":"image/png","data":"{data}"}}}}]}}]}}}}"#
+        );
+        std::fs::write(&p, format!("{line}\n{{\"a\":1}}\n")).unwrap();
+        let cache = crate::live_tail_cache::LiveTailCache::default();
+        let resp = build_live_delta("sid-1", &p, 0, true, 120, None, &cache).unwrap();
+        let raw = resp.raw_lines.unwrap();
+        assert_eq!(raw.len(), 2);
+        let total: usize = raw.iter().map(String::len).sum();
+        assert!(total < 4096, "raw lines carry {total} bytes");
+        assert!(raw[0].contains(r#""type":"ref""#));
+        assert!(!raw[0].contains("AAAAAAAA"));
+        // Offsets are source-file bytes, not the swapped text's length.
+        assert_eq!(resp.next_from, resp.size);
+        assert!(resp.size > 700 * 1024);
+    }
+
+    #[test]
     fn build_live_delta_interpreted_mode_bootstraps_on_a_cold_start() {
         let tmp = tempfile::tempdir().unwrap();
         let p = tmp.path().join("s.jsonl");

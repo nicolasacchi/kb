@@ -19,10 +19,26 @@
 //! restarts from byte 0 rather than seeking past EOF. A single unterminated
 //! line that grows past [`MAX_FRAGMENT_BYTES`] is dropped with a resync
 //! (`fragment_dropped`) rather than buffered without bound.
+//!
+//! **Inline images never leave this module** ([`swap_inline_images`]). A
+//! single Claude screenshot line (one base64 tool-result image is 145-560
+//! KB, a multi-frame result several MB) blew the 512 KiB live-delta cap
+//! (a line is returned whole, it cannot be split) and the raw lane
+//! shipped the pixels verbatim to every consumer. Both
+//! [`TailReader::read_delta`] and [`read_bootstrap_window`] therefore
+//! replace each inline base64 payload with a `ref` (sha256 of the decoded
+//! bytes + length) AFTER the byte slice is cut, so every offset stays a
+//! source-file byte offset and the swap sits below the route, the cache
+//! and the CLI alike. The swap is not a scrub: `/live` stays loopback-only.
 
+use std::borrow::Cow;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+
+use base64::Engine as _;
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 use crate::config::SessionsSection;
 use crate::session_bundle::claude_project_slug;
@@ -49,7 +65,9 @@ const RESOLVE_GLOB_CAP: usize = 4096;
 /// One [`TailReader::read_delta`] result.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TailDelta {
-    /// Decoded, newline-terminated lines only. Empty when nothing new has
+    /// Decoded, newline-terminated lines only, AFTER [`swap_inline_images`]
+    /// (so it may be shorter than `next_offset - from`: offsets are
+    /// source-file bytes, this text is not). Empty when nothing new has
     /// landed, or when the only new bytes are an unterminated trailing line
     /// still being written.
     pub complete_lines: String,
@@ -123,7 +141,7 @@ impl TailReader {
         if let Some(last_nl) = buf.iter().rposition(|&b| b == b'\n') {
             let text = String::from_utf8_lossy(&buf[..=last_nl]).into_owned();
             return Ok(TailDelta {
-                complete_lines: text,
+                complete_lines: swap_inline_images(&text).into_owned(),
                 next_offset: start + last_nl as u64 + 1,
                 size,
                 truncated_restart,
@@ -158,7 +176,7 @@ impl TailReader {
         if let Some(last_nl) = buf.iter().rposition(|&b| b == b'\n') {
             let text = String::from_utf8_lossy(&buf[..=last_nl]).into_owned();
             return Ok(TailDelta {
-                complete_lines: text,
+                complete_lines: swap_inline_images(&text).into_owned(),
                 next_offset: start + last_nl as u64 + 1,
                 size,
                 truncated_restart,
@@ -231,9 +249,178 @@ pub fn read_bootstrap_window(path: &Path) -> std::io::Result<(String, u64)> {
         None => 0,
     };
 
-    let window = String::from_utf8_lossy(&slice[..window_end]).into_owned();
+    let raw = String::from_utf8_lossy(&slice[..window_end]);
+    // `resume_offset` below is computed from the raw slice lengths, never
+    // from the swapped text.
+    let window = swap_inline_images(&raw).into_owned();
     let resume_offset = start + window_start as u64 + window_end as u64;
     Ok((window, resume_offset))
+}
+
+/// Safety-net threshold: a string leaf this long made only of base64
+/// alphabet characters is a payload even when no known shape names it.
+const B64_LEAF_MIN_BYTES: usize = 32 * 1024;
+/// Deepest nesting the swap walks (reaches `toolUseResult.file`).
+const SWAP_MAX_DEPTH: usize = 10;
+
+/// Replace every inline base64 payload in one or more complete JSONL
+/// lines with a reference. Lines without `"base64"` are returned
+/// byte-identical (borrowed, never re-serialized). Changed lines are
+/// re-serialized with serde_json, so key order may differ from the source.
+///
+/// Three shapes are swapped (bounded walk, depth <= 10):
+/// 1. an object whose `source` is `{"type":"base64","data":...}` (`image`
+///    and `document` blocks) becomes
+///    `source: {"type":"ref","media_type":..,"sha256":..,"bytes":..}`;
+/// 2. an object with a string `base64` key (the Read tool's
+///    `toolUseResult.file`) loses it and gains `sha256`, `bytes`, `ref`;
+/// 3. any remaining base64-alphabet string leaf of >= 32 KiB becomes
+///    `[base64 elided: <n> bytes sha256:<hex>]`.
+///
+/// `sha256` is over the DECODED bytes (whitespace and padding tolerated).
+/// An undecodable payload gets `undecodable: true` and no `sha256`; the
+/// original string never survives. A `ref` block is never touched, so the
+/// function is idempotent. A line that does not parse is copied as is.
+pub fn swap_inline_images(lines: &str) -> Cow<'_, str> {
+    if !lines.contains("\"base64\"") {
+        return Cow::Borrowed(lines);
+    }
+    let mut out = String::with_capacity(lines.len().min(64 * 1024));
+    let mut changed = false;
+    for seg in lines.split_inclusive('\n') {
+        if seg.contains("\"base64\"") {
+            let (body, nl) = match seg.strip_suffix('\n') {
+                Some(b) => (b, "\n"),
+                None => (seg, ""),
+            };
+            if let Ok(mut v) = serde_json::from_str::<Value>(body) {
+                if swap_value(&mut v, 0) {
+                    if let Ok(s) = serde_json::to_string(&v) {
+                        out.push_str(&s);
+                        out.push_str(nl);
+                        changed = true;
+                        continue;
+                    }
+                }
+            }
+        }
+        out.push_str(seg);
+    }
+    if changed {
+        Cow::Owned(out)
+    } else {
+        Cow::Borrowed(lines)
+    }
+}
+
+/// `(sha256 hex, decoded length)` of a base64 payload, or `None` when it
+/// does not decode.
+fn digest_b64(data: &str) -> Option<(String, usize)> {
+    let cleaned: String = data.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+    let bytes = base64::engine::general_purpose::STANDARD_NO_PAD
+        .decode(cleaned.trim_end_matches('='))
+        .ok()?;
+    let mut h = Sha256::new();
+    h.update(&bytes);
+    let digest = h.finalize();
+    Some((hex::encode(&digest[..]), bytes.len()))
+}
+
+fn looks_like_b64_payload(s: &str) -> bool {
+    if s.len() < B64_LEAF_MIN_BYTES {
+        return false;
+    }
+    let mut ws = 0usize;
+    for b in s.bytes() {
+        if b.is_ascii_whitespace() {
+            ws += 1;
+        } else if !(b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=' | b'-' | b'_')) {
+            return false;
+        }
+    }
+    // MIME-style wrapping puts a newline every ~76 chars; prose is
+    // whitespace-dense, a payload never is.
+    ws * 20 <= s.len()
+}
+
+/// Mutate `v` in place; `true` when anything was replaced.
+fn swap_value(v: &mut Value, depth: usize) -> bool {
+    if depth > SWAP_MAX_DEPTH {
+        return false;
+    }
+    match v {
+        Value::String(s) => {
+            if looks_like_b64_payload(s) {
+                let note = match digest_b64(s) {
+                    Some((sha, n)) => format!("[base64 elided: {n} bytes sha256:{sha}]"),
+                    None => format!("[base64 elided: {} bytes undecodable]", s.len()),
+                };
+                *v = Value::String(note);
+                true
+            } else {
+                false
+            }
+        }
+        Value::Array(a) => {
+            let mut changed = false;
+            for x in a.iter_mut() {
+                changed |= swap_value(x, depth + 1);
+            }
+            changed
+        }
+        Value::Object(o) => {
+            let mut changed = false;
+            // (a) source block
+            let is_b64_source = o.get("source").is_some_and(|s| {
+                s.get("type").and_then(Value::as_str) == Some("base64")
+                    && s.get("data").is_some_and(Value::is_string)
+            });
+            if is_b64_source {
+                if let Some(src) = o.get("source") {
+                    let media = src
+                        .get("media_type")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    let data = src.get("data").and_then(Value::as_str).unwrap_or("");
+                    let r = match digest_b64(data) {
+                        Some((sha, n)) => json!({
+                            "type": "ref", "media_type": media, "sha256": sha, "bytes": n
+                        }),
+                        None => json!({
+                            "type": "ref", "media_type": media,
+                            "bytes": data.len(), "undecodable": true
+                        }),
+                    };
+                    o.insert("source".to_string(), r);
+                    changed = true;
+                }
+            }
+            // (b) file shape
+            if o.get("base64").is_some_and(Value::is_string) {
+                if let Some(Value::String(data)) = o.remove("base64") {
+                    match digest_b64(&data) {
+                        Some((sha, n)) => {
+                            o.insert("sha256".to_string(), json!(sha));
+                            o.insert("bytes".to_string(), json!(n));
+                        }
+                        None => {
+                            o.insert("bytes".to_string(), json!(data.len()));
+                            o.insert("undecodable".to_string(), json!(true));
+                        }
+                    }
+                    o.insert("ref".to_string(), json!(true));
+                    changed = true;
+                }
+            }
+            // (c) recurse (a replaced `source` is a ref now: untouched).
+            for (_, x) in o.iter_mut() {
+                changed |= swap_value(x, depth + 1);
+            }
+            changed
+        }
+        _ => false,
+    }
 }
 
 /// LF-4 — the resolver shared by the `/live` route and `kb sessions read
@@ -462,6 +649,251 @@ mod tests {
         let (window, resume) = read_bootstrap_window(&p).unwrap();
         assert_eq!(window, "");
         assert_eq!(resume, 0);
+    }
+
+    // ---- swap_inline_images ----
+
+    /// Synthetic "PNG": the magic plus `n` bytes of filler.
+    fn fake_png(n: usize) -> Vec<u8> {
+        let mut v = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        v.extend((0..n).map(|i| (i % 251) as u8));
+        v
+    }
+
+    fn sha_hex(bytes: &[u8]) -> String {
+        let digest = Sha256::digest(bytes);
+        hex::encode(&digest[..])
+    }
+
+    fn b64(bytes: &[u8]) -> String {
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    }
+
+    /// A Claude tool_result line carrying one inline image.
+    fn image_line(bytes: &[u8]) -> String {
+        format!(
+            r#"{{"type":"user","uuid":"00000001-0000-4000-8000-000000000001","timestamp":"2026-06-04T09:00:10.000Z","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"toolu_1","content":[{{"type":"text","text":"shot"}},{{"type":"image","source":{{"type":"base64","media_type":"image/png","data":"{}"}}}}]}}]}}}}"#,
+            b64(bytes)
+        )
+    }
+
+    /// Longest run of base64-alphabet characters in `s`.
+    fn longest_b64_run(s: &str) -> usize {
+        let mut best = 0;
+        let mut cur = 0;
+        for b in s.bytes() {
+            if b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=') {
+                cur += 1;
+                best = best.max(cur);
+            } else {
+                cur = 0;
+            }
+        }
+        best
+    }
+
+    #[test]
+    fn read_delta_swaps_inline_image_for_ref() {
+        let tmp = tempfile::tempdir().unwrap();
+        let png = fake_png(450 * 1024);
+        let content = format!(
+            "{}\n{{\"type\":\"summary\",\"summary\":\"after\"}}\n",
+            image_line(&png)
+        );
+        assert!(content.len() > 600 * 1024);
+        let p = write_file(tmp.path(), "s.jsonl", content.as_bytes());
+        let d = TailReader::new(p, 0)
+            .read_delta(LIVE_DELTA_MAX_BYTES)
+            .unwrap();
+        assert!(
+            d.complete_lines.len() < 4096,
+            "got {}",
+            d.complete_lines.len()
+        );
+        assert!(longest_b64_run(&d.complete_lines) < 200);
+        let first = d.complete_lines.lines().next().unwrap();
+        let v: Value = serde_json::from_str(first).unwrap();
+        let blk = &v["message"]["content"][0]["content"][1];
+        assert_eq!(blk["type"], "image");
+        assert_eq!(blk["source"]["type"], "ref");
+        assert_eq!(blk["source"]["media_type"], "image/png");
+        assert_eq!(blk["source"]["sha256"], sha_hex(&png));
+        assert_eq!(blk["source"]["bytes"], png.len());
+        assert_eq!(v["message"]["content"][0]["tool_use_id"], "toolu_1");
+        assert_eq!(v["uuid"], "00000001-0000-4000-8000-000000000001");
+        assert!(d.complete_lines.contains("\"after\""));
+    }
+
+    #[test]
+    fn read_delta_offsets_stay_source_offsets() {
+        let tmp = tempfile::tempdir().unwrap();
+        let content = format!("{}\n{{\"a\":1}}\n", image_line(&fake_png(200 * 1024)));
+        let p = write_file(tmp.path(), "s.jsonl", content.as_bytes());
+        let file_len = fs::metadata(&p).unwrap().len();
+        let d = TailReader::new(p.clone(), 0)
+            .read_delta(LIVE_DELTA_MAX_BYTES)
+            .unwrap();
+        assert!((d.complete_lines.len() as u64) < file_len);
+        assert_eq!(d.next_offset, file_len);
+        assert_eq!(d.size, file_len);
+        let again = TailReader::new(p, d.next_offset)
+            .read_delta(LIVE_DELTA_MAX_BYTES)
+            .unwrap();
+        assert_eq!(again.complete_lines, "");
+    }
+
+    #[test]
+    fn multi_megabyte_image_line_stays_under_the_live_delta_cap() {
+        let tmp = tempfile::tempdir().unwrap();
+        let content = format!("{}\n", image_line(&fake_png(2300 * 1024)));
+        assert!(content.len() > 3 * 1024 * 1024);
+        let p = write_file(tmp.path(), "s.jsonl", content.as_bytes());
+        let d = TailReader::new(p, 0)
+            .read_delta(LIVE_DELTA_MAX_BYTES)
+            .unwrap();
+        assert!(!d.fragment_dropped);
+        assert!(d.complete_lines.len() < LIVE_DELTA_MAX_BYTES as usize);
+        assert_eq!(d.next_offset, content.len() as u64);
+    }
+
+    #[test]
+    fn lines_without_images_are_byte_identical() {
+        let plain = "{\"type\":\"user\",\"message\":{\"content\":\"hi\"}}\n{\"b\":2}\n";
+        assert!(matches!(swap_inline_images(plain), Cow::Borrowed(_)));
+        // The word appears as a quoted JSON string value but carries no
+        // payload and no `source`/`base64` shape: nothing to swap.
+        let prose = "{\"type\":\"assistant\",\"note\":\"base64\"}\n{\"c\":3}\n";
+        let got = swap_inline_images(prose);
+        assert_eq!(got, prose);
+        assert!(matches!(got, Cow::Borrowed(_)));
+        // Mixed: untouched lines keep their exact bytes (spacing included).
+        let spaced = "{ \"a\" : 1 }\n";
+        let mixed = format!("{spaced}{}\n{spaced}", image_line(&fake_png(64)));
+        let out = swap_inline_images(&mixed).into_owned();
+        assert!(out.starts_with(spaced));
+        assert!(out.ends_with(spaced));
+    }
+
+    #[test]
+    fn swap_is_idempotent() {
+        let once = swap_inline_images(&format!("{}\n", image_line(&fake_png(5000)))).into_owned();
+        assert!(!once.contains("\"base64\""));
+        let twice = swap_inline_images(&once);
+        assert!(matches!(twice, Cow::Borrowed(_)));
+        assert_eq!(twice, once);
+    }
+
+    #[test]
+    fn undecodable_base64_is_still_swapped() {
+        let line = r#"{"m":{"type":"image","source":{"type":"base64","media_type":"image/png","data":"!!!not base64!!!"}}}"#;
+        let out = swap_inline_images(line).into_owned();
+        assert!(!out.contains("not base64"));
+        let v: Value = serde_json::from_str(&out).unwrap();
+        let src = &v["m"]["source"];
+        assert_eq!(src["type"], "ref");
+        assert_eq!(src["undecodable"], true);
+        assert!(src.get("sha256").is_none());
+        assert_eq!(src["bytes"], "!!!not base64!!!".len());
+    }
+
+    #[test]
+    fn known_vector() {
+        let abc = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        let mk = |data: &str| {
+            format!(r#"{{"source":{{"type":"base64","media_type":"image/png","data":"{data}"}}}}"#)
+        };
+        for data in ["YWJj", "YW\\nJj", "YWJj==", "YWJj\\n"] {
+            let out = swap_inline_images(&mk(data)).into_owned();
+            let v: Value = serde_json::from_str(&out).unwrap();
+            assert_eq!(v["source"]["sha256"], abc, "payload {data}");
+            assert_eq!(v["source"]["bytes"], 3);
+        }
+        // Unpadded input of a length that normally needs padding.
+        let out = swap_inline_images(&mk("YWI")).into_owned();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["source"]["sha256"], sha_hex(b"ab"));
+    }
+
+    #[test]
+    fn bootstrap_window_swaps_images_and_keeps_resume_offset() {
+        let tmp = tempfile::tempdir().unwrap();
+        let content = format!(
+            "{}\n{{\"a\":1}}\n{{\"partial\":tr",
+            image_line(&fake_png(100 * 1024))
+        );
+        let p = write_file(tmp.path(), "s.jsonl", content.as_bytes());
+        let (window, resume) = read_bootstrap_window(&p).unwrap();
+        assert!(window.len() < 4096);
+        assert!(!window.contains("\"base64\""));
+        assert!(window.contains("\"type\":\"ref\""));
+        let expected = content.rfind("{\"partial\"").unwrap() as u64;
+        assert_eq!(resume, expected, "resume is a source-file offset");
+    }
+
+    #[test]
+    fn unparseable_line_with_base64_text_is_copied_untouched() {
+        let broken = "{\"source\":{\"type\":\"base64\",\"data\":\"QUJD\"\n";
+        let got = swap_inline_images(broken);
+        assert_eq!(got, broken);
+        assert!(matches!(got, Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn file_shape_and_document_and_long_leaf_are_swapped() {
+        let payload = b64(&fake_png(40 * 1024));
+        let file = format!(
+            r#"{{"type":"user","toolUseResult":{{"type":"image","file":{{"base64":"{payload}","type":"image/png","originalSize":123}}}}}}"#
+        );
+        let doc = format!(
+            r#"{{"message":{{"content":[{{"type":"document","title":"d","source":{{"type":"base64","media_type":"application/pdf","data":"{payload}"}}}}]}}}}"#
+        );
+        let leaf = format!(r#"{{"weird":{{"blob":"{payload}"}},"base64":"flag-only"}}"#);
+        let all = format!("{file}\n{doc}\n{leaf}\n");
+        let out = swap_inline_images(&all).into_owned();
+        assert!(longest_b64_run(&out) < 200, "run {}", longest_b64_run(&out));
+        let mut lines = out.lines();
+        let f: Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+        let fl = &f["toolUseResult"]["file"];
+        assert!(fl.get("base64").is_none());
+        assert_eq!(fl["ref"], true);
+        assert_eq!(fl["type"], "image/png");
+        assert_eq!(fl["originalSize"], 123);
+        assert_eq!(fl["sha256"], sha_hex(&fake_png(40 * 1024)));
+        let d: Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+        assert_eq!(d["message"]["content"][0]["source"]["type"], "ref");
+        assert_eq!(d["message"]["content"][0]["title"], "d");
+        let l: Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+        assert!(l["weird"]["blob"]
+            .as_str()
+            .unwrap()
+            .starts_with("[base64 elided:"));
+    }
+
+    #[test]
+    fn a_whitespace_dense_long_string_is_not_mistaken_for_a_payload() {
+        let prose = "lorem ipsum dolor sit amet ".repeat(2000);
+        let line = format!("{{\"text\":\"{prose}\",\"k\":\"base64\"}}\n");
+        assert!(matches!(swap_inline_images(&line), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn view_append_over_a_swapped_line_yields_an_image_item() {
+        use crate::sessions::view::{view_append, view_finish, ViewCarry};
+        let png = fake_png(30 * 1024);
+        let data = b64(&png);
+        let lines = [
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Read","input":{"file_path":"/tmp/x.png"}}]}}"#.to_string(),
+            image_line(&png),
+        ]
+        .join("\n")
+            + "\n";
+        let swapped = swap_inline_images(&lines).into_owned();
+        let (mut events, mut carry) = view_append(ViewCarry::default(), &swapped);
+        events.extend(view_finish(&mut carry));
+        let json = serde_json::to_string(&events).unwrap();
+        assert!(json.contains("\"Image\""), "{json}");
+        assert!(json.contains(&sha_hex(&png)), "{json}");
+        assert!(!json.contains(&data[..200]));
     }
 
     // ---- resolve_live_transcript ----
