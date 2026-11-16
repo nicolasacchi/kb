@@ -8,8 +8,11 @@
 //! the real `kb` with a developer's real HOME and its replay deleted their
 //! parked capture spool.
 
+use std::io::Read;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 fn tests_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -53,21 +56,75 @@ fn hook_command(script: &str) -> (Command, tempfile::TempDir) {
     (cmd, sandbox)
 }
 
+/// Outer deadline for one hook script. Well under nextest's 360 s terminate
+/// limit (never raised): a script that stalls fails HERE with the output it
+/// had produced, instead of a bare TIMEOUT with nothing in the log. The long
+/// scripts also carry their own, earlier per-step deadlines and diagnostics.
+const HOOK_SCRIPT_DEADLINE: Duration = Duration::from_secs(300);
+
+/// Collect a pipe on its own thread into a shared buffer, so a descendant that
+/// still holds the pipe open after the script is gone can never block the test
+/// (`Command::output` waits for EOF on both pipes).
+fn drain<R: Read + Send + 'static>(
+    mut pipe: R,
+) -> (Arc<Mutex<Vec<u8>>>, std::thread::JoinHandle<()>) {
+    let buf = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&buf);
+    let handle = std::thread::spawn(move || {
+        let mut chunk = [0u8; 8192];
+        while let Ok(n) = pipe.read(&mut chunk) {
+            if n == 0 {
+                break;
+            }
+            sink.lock().unwrap().extend_from_slice(&chunk[..n]);
+        }
+    });
+    (buf, handle)
+}
+
 fn run_hook(script: &str, real_kb: bool, env: &[(&str, &str)]) {
     let (mut cmd, _sandbox) = hook_command(script);
     if real_kb {
         let kb = PathBuf::from(env!("CARGO_BIN_EXE_kb"));
         cmd.env("KB_BIN_DIR", kb.parent().unwrap());
     }
-    let out = cmd
+    let mut child = cmd
         .envs(env.iter().copied())
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .expect("bash is required to run the hook shell tests");
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    let (out_buf, out_thread) = drain(child.stdout.take().unwrap());
+    let (err_buf, err_thread) = drain(child.stderr.take().unwrap());
+    let started = Instant::now();
+    let (status, timed_out) = loop {
+        if let Some(status) = child.try_wait().expect("poll the hook script") {
+            break (Some(status), false);
+        }
+        if started.elapsed() > HOOK_SCRIPT_DEADLINE {
+            let _ = child.kill();
+            let _ = child.wait();
+            break (None, true);
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    // Give the readers a moment to flush; never join a thread whose pipe a
+    // leaked descendant may still hold.
+    let flush_until = Instant::now() + Duration::from_secs(10);
+    while !(out_thread.is_finished() && err_thread.is_finished()) && Instant::now() < flush_until {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let stdout = String::from_utf8_lossy(&out_buf.lock().unwrap()).into_owned();
+    let stderr = String::from_utf8_lossy(&err_buf.lock().unwrap()).into_owned();
     assert!(
-        out.status.success() && !stdout.contains("not ok"),
-        "{script} failed:\n{stdout}\n{}",
-        String::from_utf8_lossy(&out.stderr)
+        !timed_out,
+        "{script} exceeded {HOOK_SCRIPT_DEADLINE:?} and was killed (its own step deadlines did not fire first):\n{stdout}\n{stderr}"
+    );
+    let status = status.expect("exit status when not timed out");
+    assert!(
+        status.success() && !stdout.contains("not ok"),
+        "{script} failed:\n{stdout}\n{stderr}"
     );
 }
 
@@ -251,9 +308,109 @@ fn grok_distill_pending_relay() {
 /// sidecar change re-lands only its part, the size cap halves the target, the
 /// spool is capped, TERM reaps every descendant, and below the threshold the
 /// capture is byte-identical to the pre-segmentation golden.
+///
+/// FXHANG: the matrix is one script, run as seven tests (`SEG_GROUP`), because
+/// as a single test it took 236-340 s on healthy CI runs against nextest's
+/// 360 s limit: not a hang, a load-sensitive wall time with nothing in the log
+/// when it crossed. `SEG_GROUPS` and the script's `if seg_group gN; then`
+/// markers are checked against each other by
+/// `omp_segmented_capture_groups_cover_the_whole_script`.
+const SEG_GROUPS: [&str; 7] = ["g1", "g2", "g3", "g4", "g5", "g6", "g7"];
+
+fn omp_segments_group(group: &str) {
+    assert!(SEG_GROUPS.contains(&group), "unknown group {group}");
+    run_with_real_kb_env("test-capture-omp-segments.sh", &[("SEG_GROUP", group)]);
+}
+
+/// Flag/probe/lib helpers, the below-threshold golden, a long session's ids and
+/// links, concatenation equals the single capture, title-only re-land, rc 1/2.
 #[test]
-fn omp_segmented_capture_lands_a_chain_resumes_and_drops_orphans() {
-    run_with_real_kb("test-capture-omp-segments.sh");
+fn omp_segmented_capture_flag_golden_chain_and_failed_landings() {
+    omp_segments_group("g1");
+}
+
+/// kill -9 mid catch-up resumes; rewind/fork/clear re-land in place and drop
+/// orphans (a failed drop is retried); TERM during a slow exit scan / chain walk.
+#[test]
+fn omp_segmented_capture_kill9_resume_rewind_and_term_reaping() {
+    omp_segments_group("g2");
+}
+
+/// Sidecar change re-lands only its part; size cap halves the target; spool cap;
+/// TERM mid planner-emit.
+#[test]
+fn omp_segmented_capture_sidecar_size_cap_spool_cap_and_emit_term() {
+    omp_segments_group("g3");
+}
+
+/// The real capture engine, the session-exit marker follows the resolved chain,
+/// parked-but-unlanded parts, flag switching, a landing that leaves no file,
+/// out-of-time with nothing landed.
+#[test]
+fn omp_segmented_capture_real_engine_exit_marker_and_flag_switching() {
+    omp_segments_group("g4");
+}
+
+/// SEG-PERF: sidecar-heavy sessions catch up (title slot, mtime placement,
+/// the per-sidecar translation cache, a slow tail).
+#[test]
+fn omp_segmented_capture_sidecar_heavy_sessions_catch_up() {
+    omp_segments_group("g5");
+}
+
+/// The landing cap scales with the payload and stays bounded; the pass after a
+/// failed tail is frozen-first. (Holds the deliberate 20 s+ stand-in sleeps.)
+#[test]
+fn omp_segmented_capture_landing_cap_scales_and_is_bounded() {
+    omp_segments_group("g6");
+}
+
+/// A permanently failing frozen part starves nothing; a drifted translator
+/// fails closed.
+#[test]
+fn omp_segmented_capture_stuck_frozen_part_and_translator_drift() {
+    omp_segments_group("g7");
+}
+
+/// The group split cannot silently drop a scenario: the script carries exactly
+/// one `if seg_group gN; then` per group named here, each closed by a `fi`.
+#[test]
+fn omp_segmented_capture_groups_cover_the_whole_script() {
+    let src = std::fs::read_to_string(tests_dir().join("test-capture-omp-segments.sh"))
+        .expect("read the segmented capture script");
+    let markers: Vec<&str> = src
+        .lines()
+        .filter(|l| l.starts_with("if seg_group "))
+        .collect();
+    let want: Vec<String> = SEG_GROUPS
+        .iter()
+        .map(|g| format!("if seg_group {g}; then"))
+        .collect();
+    assert_eq!(
+        markers, want,
+        "group markers must be g1..g7 in order, each once"
+    );
+    // Markers alternate open/close (`fi # end seg_group`), and no scenario
+    // (`fresh` on its own line) sits outside a group: it would run in all
+    // seven tests and in none of them by name.
+    let mut open = false;
+    let mut closed = 0;
+    for l in src.lines() {
+        if l.starts_with("if seg_group ") {
+            assert!(!open, "a group opened inside another");
+            open = true;
+        } else if l == "fi # end seg_group" {
+            assert!(open, "a group closed without being open");
+            open = false;
+            closed += 1;
+        } else if !open && l.trim() == "fresh" {
+            panic!("a scenario (`fresh`) sits outside every group");
+        }
+    }
+    assert!(
+        !open && closed == SEG_GROUPS.len(),
+        "every group must be closed once"
+    );
 }
 
 /// v0.46 SEG-PR2 - the scale gate at a CI-sized session: a linked synthetic
