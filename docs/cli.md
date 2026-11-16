@@ -11,6 +11,7 @@ from `~/.config/kb/token`; see [self-host.md](self-host.md) for the token
 and [configuration.md](configuration.md) for `kb.toml`.
 
 Related: [HTTP API](http-api.md) · [kb-code](kb-code.md) ·
+[kb-term (host-local terminal tool, not a kb verb)](kb-term.md) ·
 [project overview](../README.md).
 
 ```

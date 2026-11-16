@@ -1836,3 +1836,113 @@ Recorded limits:
 - `[you]` is client-declared and unverified (one trust tier): the carve-out
   settles the question asked, it is not proof of identity; destructive
   actions are confirmed in chat.
+
+## kb-term — a live terminal in kb (KBT tracks T/A)
+
+Shipped 2026-11. Reference: [kb-term.md](kb-term.md); install guide:
+[kb-term-install.md](kb-term-install.md). Verification for the whole program
+was GitHub-hosted CI only (no local build or test on the development host).
+
+### What shipped
+
+- **Foundations (T0, T1, T2, T22).** The mirror stand-in and its checker, the
+  `kb-term` crate scaffold with the wire types and goldens, the pinned tmux 3.7c
+  build and the `term-tap`/`term-int` lanes, and the ruling text as amendments to
+  invariants #4, #11, #13, #23 and #24 (no new numbered invariant).
+- **Tap (T3 to T7).** The control-mode decoder and the query stripper by
+  shape, the headless twin with pause-after stall policy and quiescent reseed,
+  the picture extraction into a sha256 store with `ImageDef` events, the
+  state-restore seed with quiescent joins, and the 32 MiB ring with absolute
+  offsets, epochs and `ResumeFrom`.
+- **Runner (T8, T9, T10).** `kb-termd` with a private tmux holder per session,
+  the fixed start order, the responder anchor, paste/enter/keys with grid
+  ownership, per-harness launch profiles, the pane environment allowlist and
+  `kb-term doctor`.
+- **kb-server (T11, T12, T13).** The SPA-only `/api/terms` routes behind
+  `[terminal] enabled=false`, the in-handler gate and single-use tickets, the
+  WebSocket relay with close 1012 on restart and the `term.*` events, and the
+  beat `term` binding.
+- **SPA (T14, T15, T17, T18).** The desktop panel on the session page, omp
+  pictures drawn over placeholder cells with the media route and lightbox, the
+  phone Watch and Read views, and phone Drive (composer, key bar, choice bar,
+  Claude guards, Fit to phone, image upload).
+- **Sessions (A1 to A6, T20, T21).** Omp subagents stop taking the process
+  identity, session lineage and the session card, the per-session page, the work
+  grouping, `Item::Image` references in `session-view/1`, the live-tail swap of
+  inline pictures for references, and the Images strip.
+- **Local tool and release (T16, T19, T24 core).** `kb-term attach|new|ls`, the
+  release archive with `install-kb-term.sh`, and the pure core of the optional
+  Ghostty graphics mode (not wired into `attach`).
+- **End to end (T25).** A real tmux, tap, runner, kb-server and SPA lane driven by
+  synthetic harnesses.
+- **Post-merge fix-ups.** Tap, runner, session and SPA fix rounds (the `FX*`
+  commits), among them the runner envelope id, the tap-epoch resume across SPA
+  reconnects, the relay's retry of a busy join, and the term-id grammar.
+
+### Findings worth keeping
+
+1. **Draining the control-mode client without `pause-after` is unbounded.** tmux
+   holds the backlog for a stalled client at roughly the output rate and drops
+   the client after a few minutes, discarding what it held. The tap therefore
+   sets `pause-after=20`, resumes on `%pause` and reseeds from the pane.
+2. **Hold-back caps are query bypasses.** A stripper that must bound its buffers
+   has to pass a sequence that grows past the cap, so a padded query escapes it.
+   The responder on the anchor client is the backstop; stripping is best effort.
+3. **Strip order matters.** A query inside a DCS-tmux wrapper is invisible to a
+   stripper that runs before the unwrap, and mixed wrappers smuggle queries if
+   unwrapped late. Unwrap, C1 filter, then strip, and drop (never emit) any
+   aborted partial so a deletion cannot splice two fragments into a new query.
+4. **`serialize()` alone is not a faithful seed.** The seed needs a state-restore
+   tail (scroll region, saved cursor, modes, pen) and a join only at a quiescent
+   point, because a join inside a synchronized frame or mid-escape corrupts the
+   late viewer.
+5. **omp `tui.maxInlineImages: 0` means keep every image.** It is not an off
+   switch; the private overlay uses it on purpose.
+6. **A rebuild re-transmits every image omp currently draws under the same ids,
+   exactly once each.** That is why an id map that survives deletes, and a new
+   generation only when an id returns with different bytes, keeps old rows right.
+7. **A silent anchor client breaks harness identity and colour probes.** tmux
+   answers in-pane colour and cell-size queries from the client it recorded first,
+   so a client that cannot answer makes the harness fall back; the anchor carries
+   a responder and attaches before the tap.
+8. **xterm.js 6.0.0 has no touch scrolling.** The phone view is a pointer-event
+   scroller around the terminal, plus a separate native-scroll Read view.
+9. **WebGL at a device pixel ratio above 1 in CI needs a real
+   `--force-device-scale-factor`.** Playwright's emulated factor never reaches the
+   size the WebGL add-on measures. The pixel probes run on software GL.
+10. **Hosted runners ship an older tmux than 3.7c**, so CI builds a pinned,
+    checksummed tmux source tarball and caches it.
+11. **The omp extension published one process-wide `KB_SESSION_ID` for every
+    agent including subagents.** Fixed in A1: only the main agent publishes the
+    identity and beats. Other harnesses were not audited for the same class.
+12. **The attach mirror's local scrollback is complete only while the local pane
+    equals the grid.** zellij moves a scrolled row into scrollback only when the
+    scroll region is the whole pane.
+13. **IIP and SIXEL are stubbed, not drawn.** The tap replaces their payloads in
+    the viewer stream with a small stub and keeps the original in the session
+    store; the SPA has no handler for the stub. Only omp's kitty placeholders
+    render as pictures.
+14. **The design's list of kb-term.conf options was a subset of the shipped
+    file, and the pane command is a non-login shell.** The shipped conf also sets
+    `default-terminal`, `default-size`, `status off` and an empty
+    `remain-on-exit-format`; the grid is changed by the runner's explicit
+    `resize-window`, not by the conf.
+
+T4 result, exactly as measured: on a 201x48 zellij pane over mosh, the mirror
+stand-in showed the seed reachable from L000001, 0 duplicates, 0 missing, in
+order, after 3 framed rebuilds, **but the dump ended at L002714 of 3300 total**,
+so the tail was not verified and the cause of the missing 586 lines is unknown.
+The T0 follow-up made the checker fail when the highest line is below the
+expected total; the operator re-check is pending and no result is recorded. A
+larger `scroll_buffer_size` and Shift+Enter through omp are not yet checked.
+
+**Not built / open.** Ghostty `--graphics` for `kb-term attach` (the pure core is
+merged but not called by the attach loop and never ran on a real Ghostty or
+kitty); real-device phone checks (iOS and Android, bfcache, a real soft
+keyboard); real-GPU WebGL output; long-session reprint cost with
+`display.collapseCompacted: false`; grok and opencode profiles (experimental);
+claude, codex and kimi exit sequences (unverified, the cgroup kill is the
+backstop); Claude's classic-renderer reprint behaviour; sustained multi-viewer
+grid contention; the T4 re-check on the operator's machine; drawing IIP and SIXEL
+pictures; a sub-agent check of the terminal binding for harnesses
+other than omp.

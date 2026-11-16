@@ -356,7 +356,11 @@ runner owns every terminal on the host (tmux, the tap, the responder)
 and speaks one-JSON-line RPCs over its unix socket; kb-server is only a
 relay and keeps no terminal state except an in-memory ticket table that
 is rebuilt empty on every restart. See
-[`docs/http-api.md`](http-api.md) for the route shapes.
+[`docs/http-api.md`](http-api.md) for the route shapes and
+[`docs/kb-term.md`](kb-term.md) for the architecture, install guide and
+security model. If `kb.toml` is mounted read-only into the container, a
+config edit cannot be written back through the daemon: edit the host
+copy of the file instead.
 
 | key | type | default | meaning |
 |---|---|---|---|
@@ -375,8 +379,15 @@ enabled = true
 # runner_timeout_secs = 5  # default; 1..=60
 ```
 
-**Security posture.** Terminal routes are SPA-only, behind `enabled =
-false` by default. Every route needs an exact `Origin` (absent fails
+Limits that are not `kb.toml` keys: the runner's own settings (the quiet
+interval before `enter` presses Enter, 400 ms by default, and its 5 s
+give-up; the default grid; the cell pixel size) are `kb-termd` flags with
+built-in defaults, and the 16-socket cap, the 32 KiB paste cap and the
+8 MiB upload cap are fixed constants.
+
+**Security posture** (the full model is in
+[`docs/kb-term.md`](kb-term.md#security-model)). Terminal routes are
+SPA-only, behind `enabled = false` by default. Every route needs an exact `Origin` (absent fails
 closed; only the configured parent Origin or a same-host Origin passes
 — artifact-subdomain origins never do, even on GETs), and every POST
 needs an `X-Kb-Intent: terminal` header. The WebSocket upgrade needs a
@@ -387,7 +398,8 @@ but never sufficient. Terminal bytes and pictures are unscrubbed and
 never leave this gate; the CLI and agents never call these routes (there
 is no CLI verb). A config edit restarts the daemon in-process (invariant
 #13), so a new `runner_socket` or timeout applies to the very next
-request; a ticket never survives that restart. `refuse_token_callers`
+request; open terminal sockets close with code 1012 (the holders, tap and
+runner are untouched) and a ticket never survives that restart. `refuse_token_callers`
 proxy caveat: where a reverse proxy injects the shared token into every
 request (e.g. a "kb-inject-bearer" style layer), the identity ladder
 (registry token > trusted-hop header > legacy token) resolves an

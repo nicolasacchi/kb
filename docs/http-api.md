@@ -1453,7 +1453,13 @@ GET  /api/terms                             SPA-only terminal relays
                                             400); every response carries
                                             `Cache-Control: no-store`.
                                             No CLI verb; agents never
-                                            call these routes.
+                                            call these routes. These
+                                            routes are NOT in
+                                            docs/public-mirror/
+                                            allowlist.txt and must
+                                            never be. Architecture and
+                                            the security model:
+                                            docs/kb-term.md.
 GET    /api/terms                           Relay the runner's session
                                             list as `{"terms":[...]}`.
 POST   /api/terms                           Launch: body `{harness,
@@ -1540,10 +1546,23 @@ POST   /api/terms/{id}/paste                Body `{text, viewer?}`; decoded
                                             never persisted. Same field
                                             on `enter`, `keys` and
                                             `take-size`.
-POST   /api/terms/{id}/enter                Body `{viewer?}`. Relays the
-                                            beat-derived entered flag
-                                            (currently the constant
-                                            unblocked; T13 replaces it).
+POST   /api/terms/{id}/enter                Body `{viewer?}`. While the
+                                            session bound to this
+                                            terminal (see the beat's
+                                            optional `term`) is
+                                            blocked on the operator the
+                                            relay answers 409
+                                            `urn:kb:errors:term-blocked`
+                                            before the runner is
+                                            reached; an unbound terminal
+                                            is treated as not blocked
+                                            and its reply carries
+                                            `x-kb-term-state: unbound`.
+                                            The runner then waits for
+                                            the pane to be quiet (400 ms
+                                            by default) and answers
+                                            `busy` (409) if it never
+                                            is within 5 s.
                                             The relay always sends
                                             `from_composer: true`, so a
                                             composer Enter after a
@@ -1668,6 +1687,23 @@ GET    /api/terms/{id}/ws                    SPA-only terminal byte
                                             the socket closes 1011. A
                                             busy after the first binary
                                             frame passes through.
+                                            Frames: binary frames are
+                                            `[8-byte big-endian
+                                            offset][bytes]`; text
+                                            frames are JSON with a `t`
+                                            tag. Server to client:
+                                            `hello`, `profile`,
+                                            `imagedef`, `seed`,
+                                            `resize`, `sizechanged`,
+                                            `gfxreset`, `exit`,
+                                            `clipboard`, `error`.
+                                            Client to server (unknown
+                                            fields rejected):
+                                            `resumefrom`, `takesize`,
+                                            `input`, `ping`. The golden
+                                            JSON under crates/kb-term/
+                                            tests/golden is the
+                                            contract.
                                             Browser frames go upstream on the
                                             same socket: a client `input`
                                             frame `{"t":"input","data":...}`
