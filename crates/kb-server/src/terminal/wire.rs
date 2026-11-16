@@ -201,6 +201,26 @@ pub enum RunnerRequest {
         /// sha256 of the media bytes.
         sha256: String,
     },
+    /// Store one picture (T18). The request line is followed on the
+    /// same connection by exactly `len` raw bytes; the runner answers
+    /// one reply line carrying [`UploadData`].
+    Upload {
+        /// Session id.
+        id: String,
+        /// The mime type the client declared (the runner sniffs the
+        /// bytes and the two must agree).
+        mime: String,
+        /// Number of raw bytes that follow the request line.
+        len: u64,
+    },
+    /// Tell the tap that `viewer` just typed (T18), so an OSC 52
+    /// clipboard write reaches only the device that typed.
+    Typed {
+        /// Session id.
+        id: String,
+        /// The viewer id the WebSocket `hello` frame gave that panel.
+        viewer: String,
+    },
     /// Open a byte-stream relay to a session's tap (the WS upstream).
     /// The server answers the request line with `RunnerReply::Ok` and
     /// then splices tap.sock envelopes on the same connection.
@@ -218,6 +238,21 @@ pub enum RunnerRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         mseq: Option<u64>,
     },
+}
+
+/// The `data` of a successful `upload` reply, and the body kb-server
+/// answers the SPA with. Mirrors `kb-term`'s `UploadData`. Deliberately
+/// NOT `ts-export`: the SPA's copy is hand-written in `driveApi.ts`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UploadData {
+    /// Absolute path of the stored file.
+    pub path: String,
+    /// Number of bytes stored.
+    pub bytes: u64,
+    /// The sniffed mime type.
+    pub mime: String,
+    /// Lowercase hex sha256 of the bytes.
+    pub sha256: String,
 }
 
 /// Key input for the `keys` RPC (kind-tagged; unknown fields rejected).
@@ -382,6 +417,14 @@ mod tests {
                 include_str!("../../../kb-term/tests/golden/req_grid.json"),
             ),
             (
+                "req_upload",
+                include_str!("../../../kb-term/tests/golden/req_upload.json"),
+            ),
+            (
+                "req_typed",
+                include_str!("../../../kb-term/tests/golden/req_typed.json"),
+            ),
+            (
                 "resp_ok",
                 include_str!("../../../kb-term/tests/golden/resp_ok.json"),
             ),
@@ -435,6 +478,13 @@ mod tests {
                 "harness {i} must line up with kb_core::sessions::HARNESSES"
             );
         }
+    }
+
+    #[test]
+    fn upload_data_matches_the_runner_golden() {
+        let golden = include_str!("../../../kb-term/tests/golden/upload_data.json").trim_end();
+        let data: UploadData = serde_json::from_str(golden).expect("upload_data golden");
+        assert_eq!(serde_json::to_string(&data).unwrap(), golden);
     }
 
     #[test]

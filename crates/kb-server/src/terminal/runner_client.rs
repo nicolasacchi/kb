@@ -86,6 +86,9 @@ fn op_budget(req: &RunnerRequest, base: Duration) -> Duration {
         | RunnerRequest::Read { .. }
         | RunnerRequest::History { .. } => Duration::from_secs(60),
         RunnerRequest::Enter { .. } => Duration::from_secs(15),
+        // The runner reads the body under its own 10 s deadline; the
+        // relay's must not be the shorter of the two.
+        RunnerRequest::Upload { .. } => Duration::from_secs(10),
         RunnerRequest::List {} => Duration::from_secs(30),
         _ => base,
     };
@@ -105,9 +108,24 @@ impl UnixRunner {
     /// launch/kill is never raced by a 5 s client timeout while the
     /// runner keeps mutating after a 503.
     pub(crate) async fn call(&self, req: &RunnerRequest) -> Result<RunnerReply, RunnerError> {
+        self.call_with_body(req, &[]).await
+    }
+
+    /// Like [`call`](Self::call), for an op whose request line is followed
+    /// on the same connection by raw bytes (`upload`): write the line, then
+    /// exactly `body.len()` bytes, then read one reply line, all under the
+    /// op's budget. A runner that refuses before reading the body (bad id,
+    /// no such session) replies and closes while the body is still being
+    /// written, so a failed body write does NOT end the exchange: the
+    /// reply the runner already queued is read and returned.
+    pub(crate) async fn call_with_body(
+        &self,
+        req: &RunnerRequest,
+        body: &[u8],
+    ) -> Result<RunnerReply, RunnerError> {
         let line = serde_json::to_string(req).map_err(|_| RunnerError::BadReply)?;
         let budget = op_budget(req, self.timeout);
-        let outcome = tokio::time::timeout(budget, self.round_trip(line)).await;
+        let outcome = tokio::time::timeout(budget, self.round_trip(line, body)).await;
         match outcome {
             Err(_) => Err(RunnerError::Timeout),
             Ok(Ok(bytes)) => {
@@ -191,7 +209,7 @@ impl UnixRunner {
         Ok(MediaReply::Bytes(body))
     }
 
-    async fn round_trip(&self, line: String) -> Result<Vec<u8>, RunnerError> {
+    async fn round_trip(&self, line: String, body: &[u8]) -> Result<Vec<u8>, RunnerError> {
         let mut stream = tokio::net::UnixStream::connect(&self.path)
             .await
             .map_err(|_| RunnerError::Unavailable)?;
@@ -203,6 +221,14 @@ impl UnixRunner {
             .write_all(b"\n")
             .await
             .map_err(|_| RunnerError::Unavailable)?;
+        if !body.is_empty() {
+            // A body write that fails (the runner refused early and
+            // closed) falls through to the reply read below: the refusal
+            // is the answer, not "unavailable".
+            if stream.write_all(body).await.is_ok() {
+                let _ = stream.flush().await;
+            }
+        }
 
         // Bounded read: the cap is enforced DURING I/O, not after a
         // whole line is buffered. The take adapter caps the bytes the

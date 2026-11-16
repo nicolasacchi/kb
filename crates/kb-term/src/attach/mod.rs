@@ -1266,6 +1266,7 @@ mod tests {
             epoch: epoch.into(),
             harness: crate::wire::Harness::Omp,
             bound_sid: None,
+            viewer: None,
         }
     }
 

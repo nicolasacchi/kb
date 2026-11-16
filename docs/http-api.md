@@ -1486,13 +1486,61 @@ POST   /api/terms/{id}/ticket               Mint a single-use
                                             bound to the terminal and the
                                             caller; consumed once at
                                             the upgrade.
-POST   /api/terms/{id}/paste                Body `{text}`; decoded
+POST   /api/terms/{id}/upload               Phone Drive: store one
+                                            picture and answer its path.
+                                            Raw body (NOT multipart),
+                                            `Content-Type` one of
+                                            `image/png`, `image/jpeg`,
+                                            `image/gif`, `image/webp`
+                                            (else 415), at most 8 MiB
+                                            (else 413; the limit is
+                                            enforced twice, by the body
+                                            extractor and by the
+                                            handler). Same terminal-tier
+                                            gate as every POST above
+                                            (exact Origin, intent
+                                            header, no loopback bypass);
+                                            the bytes are NOT scrubbed
+                                            and never leave the gate.
+                                            The runner sniffs the bytes
+                                            (PNG/JPEG/GIF/WebP magic
+                                            only, never SVG, HTML, PDF
+                                            or text; a declared type
+                                            that disagrees is 415),
+                                            names the file by its
+                                            sha256 inside the session's
+                                            own upload directory (mode
+                                            0700, tmpfs, removed with
+                                            the session; at most 64
+                                            files / 128 MiB per session,
+                                            else 413 naming the quota;
+                                            an identical picture is a
+                                            success without a rewrite)
+                                            and returns `{"path",
+                                            "bytes","mime","sha256"}`,
+                                            an absolute path with no
+                                            spaces. kb persists no
+                                            pixels. The SPA pastes the
+                                            path, never Enter. Unknown
+                                            session 404.
+POST   /api/terms/{id}/paste                Body `{text, viewer?}`; decoded
                                             text over 32 KiB is 413
                                             (the cap counts bytes, so
                                             multibyte characters count
                                             by their byte length).
                                             Relayed verbatim.
-POST   /api/terms/{id}/enter                Body `{}`. Relays the
+                                            `viewer` (the id the panel's
+                                            WebSocket `hello` frame
+                                            gave it, `[a-z0-9:_-]{1,64}`,
+                                            else 400) tells the tap which
+                                            device typed, so an OSC 52
+                                            clipboard write reaches only
+                                            that device; it is passed on
+                                            after a SUCCESSFUL call and
+                                            never persisted. Same field
+                                            on `enter`, `keys` and
+                                            `take-size`.
+POST   /api/terms/{id}/enter                Body `{viewer?}`. Relays the
                                             beat-derived entered flag
                                             (currently the constant
                                             unblocked; T13 replaces it).
@@ -1508,14 +1556,22 @@ POST   /api/terms/{id}/enter                Body `{}`. Relays the
                                             (same for paste/keys) so
                                             input works without an
                                             explicit viewer-open call.
-POST   /api/terms/{id}/keys                 Body `{keys:[...]}` — 1..=32
-                                            entries, each <= 16 bytes of
-                                            `[A-Za-z0-9_-]`.
+POST   /api/terms/{id}/keys                 Body `{keys:[...], viewer?}` —
+                                            1..=32 entries from a CLOSED
+                                            vocabulary (the runner's key
+                                            table): `Esc Tab S-Tab Enter
+                                            Up Down Right Left C-c C-d
+                                            C-u BSpace Slash 1 2 3 4 5
+                                            6 7 8 9 y n`. Any other
+                                            name is 400
+                                            `urn:kb:errors:bad-key`;
+                                            more than 32 entries is
+                                            400.
 POST   /api/terms/{id}/kill                 Kill the terminal. A
                                             successful kill also closes
                                             the relay's `spa` viewer
                                             best-effort.
-POST   /api/terms/{id}/take-size            Body `{cols,rows}`. Takes
+POST   /api/terms/{id}/take-size            Body `{cols,rows,viewer?}`. Takes
                                             (or reports) the grid.
                                             Sent with `force: false`:
                                             a foreign grid owner
@@ -2984,6 +3040,7 @@ GET    /api/desk[?kb=]                      federated handoff aggregate: every
 GET    /api/terms                           SPA-only terminal list [terminal]
 POST   /api/terms                           SPA-only terminal launch [terminal]
 POST   /api/terms/{id}/ticket               mint single-use WS ticket [terminal]
+POST   /api/terms/{id}/upload               store a picture, answer its path [terminal]
 POST   /api/terms/{id}/paste                paste text [terminal]
 POST   /api/terms/{id}/enter                mark entered [terminal]
 POST   /api/terms/{id}/keys                 send keys [terminal]

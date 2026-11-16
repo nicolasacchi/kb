@@ -44,6 +44,8 @@ import type { ImageDefFrame, ProfileFrame } from "./wire";
 import type { TerminalPanelProps } from "./TerminalPanel.lazy";
 import { osc52ClipboardText, writeClipboardText } from "./clipboard";
 import { PhoneTerminal, attachTerm, type PhoneMode } from "./phone/PhoneTerminal";
+import { DriveDock } from "./phone/DriveDock";
+import { terminalOwnsEscape } from "./phone/escape";
 import { readFont } from "./phone/fontSteps";
 import { scrollbackFor } from "./phone/scrollback";
 import { bindNetworkKicks } from "./networkKicks";
@@ -51,10 +53,6 @@ import { createPortal } from "react-dom";
 import "./terminal.css";
 
 const TRANSIENT_MS = 2_000;
-/** Esc inside the terminal belongs to the terminal, never to the Sheet. */
-function terminalOwnsEscape(e: KeyboardEvent): boolean {
-  return e.target instanceof Element && e.target.closest("[data-kb-term-root]") !== null;
-}
 
 /** e2e seam: `container.__kbTerm` exposes the live instance (no window global). */
 type TermSeam = HTMLElement & { __kbTerm?: Terminal };
@@ -127,6 +125,8 @@ export function TerminalPanel(props: TerminalPanelProps) {
   const termRef = useRef<Terminal | null>(null);
   const sessionRef = useRef<TermSession | null>(null);
   const lastTypedRef = useRef(0);
+  // T18 — the viewer id the tap's hello named for THIS socket (the Drive layer reports it on its REST input calls).
+  const [viewer, setViewer] = useState<string | null>(null);
   const [state, setState] = useState<SessionState>({
     phase: "connecting",
     epoch: null,
@@ -153,7 +153,8 @@ export function TerminalPanel(props: TerminalPanelProps) {
   const [gfx, setGfx] = useState<GfxHandle | null>(null);
   const [picture, setPicture] = useState<OpenPicture | null>(null);
   const { terms } = useTerms();
-  const rowState = terms.find((t) => t.id === props.termId)?.state ?? null;
+  const termRow = terms.find((t) => t.id === props.termId);
+  const rowState = termRow?.state ?? null;
 
   useEffect(() => {
     let dead = false;
@@ -394,6 +395,9 @@ export function TerminalPanel(props: TerminalPanelProps) {
         onClipboard: (dataB64) => {
           writeClipboardIfRecent(`c;${dataB64}`);
         },
+        onViewer: (v) => {
+          if (!dead) setViewer(v);
+        },
       },
     });
     sessionRef.current = session;
@@ -511,6 +515,18 @@ export function TerminalPanel(props: TerminalPanelProps) {
           stream={state}
           caption={transient ?? state.caption}
           onClose={closePanel}
+          renderDrive={({ measure }) => (
+            <DriveDock
+              termId={props.termId}
+              harness={props.harness}
+              viewer={viewer}
+              row={termRow}
+              measure={measure}
+              onTyped={() => {
+                lastTypedRef.current = Date.now();
+              }}
+            />
+          )}
         />
       </Sheet>,
       document.body,
