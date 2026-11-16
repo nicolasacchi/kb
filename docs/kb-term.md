@@ -24,7 +24,7 @@ and not stated as fact.
 - **SPA-only.** The browser is the only caller of `/api/terms`. The `kb` CLI and
   agents never attach to, type into or launch terminals over kb's HTTP surface;
   there is no `kb` verb for it and `kb tools` does not list one.
-- **`kb-term attach|new|ls|doctor` is a host-local tool, not a kb verb.** It
+- **`kb-term attach|new|ls|kill|doctor` is a host-local tool, not a kb verb.** It
   talks to the runner socket and the per-session tap socket on the same machine
   and never goes through the kb daemon. It is not in the verb list of
   [cli.md](cli.md).
@@ -526,12 +526,28 @@ kb-term attach <ID> [--watch] [--runner-sock PATH] [--no-labels-dim]
 kb-term new <HARNESS> [--resume SID] [--cwd DIR] [--cols N] [--rows N]
                       [--attach | --no-attach] [--runner-sock PATH]
 kb-term ls [--json] [--runner-sock PATH]
+kb-term kill <ID> [--grace SECS] [--runner-sock PATH]
 ```
 
 `--runner-sock` defaults to `$KB_TERM_RUNNER_SOCK`, then
 `/run/kb-term/runner/runner.sock`. `HARNESS` is one of
 `claude|codex|opencode|grok|kimi|omp`. `new` attaches after launch unless
 `--no-attach`, which prints the new id.
+
+`kill` ends a session through the runner's own kill op (the one the SPA's kill
+uses): the exit keys, then a whole-holder stop, then the holder, tap and session
+files are removed. It never stops systemd units itself. If no holder answers for
+the id (for example the `kb-term@<id>` and `kb-tap@<id>` units were stopped by
+hand and `ls` shows the id as `stale`), the runner removes exactly that
+session's `s/<id>.sock` and `s/<id>/` and says so; discovery itself never
+deletes. The runner owns the run directory, so the cleanup lives in its kill op,
+not in the CLI: the CLI cannot be tricked into deleting paths, and the REST kill
+gets the same cleanup. The id must match the runner's id grammar; a malformed or
+path-traversing id, a symlinked entry, or an entry that is not a socket or a
+plain directory is refused with nothing removed, and a probe that fails to
+complete (as opposed to a tmux that answers "no server") removes nothing.
+Exit codes: 0 done, 2 usage (bad id), 3 runner unreachable, 4 nothing by that
+id, 1 anything else.
 
 `attach` mirrors a session into the terminal's **native scrollback**: it writes
 `ESC[3J`, then the seed, then the live stream from the exact offset the seed was
@@ -575,8 +591,12 @@ The step-by-step guide is [kb-term-install.md](kb-term-install.md). In short:
   `/run/kb-term/runner:/run/kb-term/runner` (the runner directory only, never the
   session sockets) plus `[terminal] enabled = true` in the host copy of
   `kb.toml`. The order is tmpfiles, then `kb-termd`, then the kb container; the
-  bind source must exist before `docker compose up`. `loginctl enable-linger`
-  keeps the user manager alive across logout.
+  bind source must exist before `docker compose up`. The second step also covers
+  the runner's environment: a user-unit drop-in (`env.conf`) giving `kb-termd`
+  a `PATH` that holds the directory of `kb` and of every harness, and
+  `KB_SESSIONS_DIR` (the installer prints it pre-filled and quoted; see
+  [kb-term-install.md](kb-term-install.md)). `loginctl enable-linger` keeps the
+  user manager alive across logout.
 - **Do not restart `kb-term@*` holder units to pick up an upgrade**: that ends
   every live session. Restart `kb-termd` only.
 - **Alternative:** run kb itself as a systemd user service. It removes the bind
@@ -594,13 +614,13 @@ any check FAILs, and with `--strict` also on any WARN; a SKIP never fails. Check
 | `tmux_sha256` | the tmux binary matches its recorded sidecar digest |
 | `tap_binary` | `kb-tap` exists and is executable |
 | `xterm_pins` | the tap reports the pinned xterm package set (SKIP if it reports none) |
-| `harness_claude`, `harness_codex`, `harness_opencode`, `harness_grok`, `harness_kimi`, `harness_omp` | the harness binary is found and its version is shown; WARN when it differs from the known-good version doctor was written against (omp, claude, codex and opencode have one); SKIP when not installed |
+| `harness_claude`, `harness_codex`, `harness_opencode`, `harness_grok`, `harness_kimi`, `harness_omp` | the harness binary is found and its version is shown; WARN when it differs from the known-good version doctor was written against (omp, claude, codex and opencode have one); WARN when it is found but `--version` exits non-zero (the exit code and first stderr line are shown) or does not finish in 20 s (so a slow cold start is not reported as a missing binary); SKIP only when it is not installed |
 | `omp_overlay` | the on-disk omp overlay carries the approved pins |
 | `run_layout` | `/run/kb-term` is 0755, `s/` is 0700, `runner/` is 0750 or 0700, `runner.sock` is 0600, all owned by the current uid |
 | `login_env` | the login shell does not set outer-terminal identity names that a pane would inherit |
 | `termd_enabled` | `kb-termd.service` is enabled so it starts after a reboot (WARN when `static`, `disabled` or masked; SKIP when `systemctl --user` cannot be reached) |
 | `runner_env_sessions_dir` | `KB_SESSIONS_DIR` is set in the RUNNER's environment (read from the running `kb-termd` process); FAIL when unset or empty, because the capture and beat hooks silently do nothing in SPA-launched sessions |
-| `runner_env_kb`, `runner_env_harness_<bin>` | `kb` and each harness binary resolve on the RUNNER's `PATH`, not your shell's; a harness your shell finds but the runner's `PATH` lacks FAILs (the pane would exit 127), `kb` missing WARNs; SKIP for all when `kb-termd` is not running |
+| `runner_env_kb`, `runner_env_harness_<bin>` | `kb` and each harness binary resolve on the RUNNER's `PATH`, not your shell's; a harness your shell finds but the runner's `PATH` lacks WARNs (launching it would exit 127; a WARN rather than a FAIL because doctor cannot know which harnesses you launch and the runner itself works), `kb` missing WARNs; SKIP for all when `kb-termd` is not running. The runner is the process the unit's `MainPID` names; only when `systemctl --user` cannot be asked does doctor scan `/proc` for your own `kb-termd`, and it reads nothing if that is ambiguous |
 
 **Panes inherit the runner's environment.** Panes get an allowlisted copy of
 the environment of `kb-termd`, which under systemd is the user manager's: a
