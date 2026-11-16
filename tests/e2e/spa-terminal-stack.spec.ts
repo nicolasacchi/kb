@@ -261,14 +261,11 @@ test("keys sent through the REST composer path reach the pane (control for the s
     .toContain("yn7");
 });
 
-test("typed keys sent over the WebSocket reach the pane (KNOWN GAP: the tap ignores client input frames)", async ({ page, request }) => {
-  // Expected failure, pinned in both directions: tap/src/viewers.ts accepts a
-  // client `input` frame and drops it (`ping and any other C->S text frame:
-  // accepted, no reply`), so what the operator types in the panel never
-  // reaches the pane today; input goes through the REST composer routes.
-  // When the tap forwards input this passes, and Playwright reports an
-  // unexpected pass until the marker is removed.
-  test.fail();
+test("typed keys sent over the WebSocket reach the pane", async ({ page, request }) => {
+  // The panel sends client `input` frames over the WebSocket. The tap has no
+  // input path (it ignores them), so the runner's stream splice takes them out
+  // and writes them to this stream's hidden tmux client (FXINPUT): what the
+  // operator types in the panel reaches the harness's stdin.
   test.setTimeout(180_000);
   const gate = join(scratch("gate"), "go");
   const h = numberedHarness({ gate, seed: 100, live: 50, rebuildEvery: 0, rate: 100 });

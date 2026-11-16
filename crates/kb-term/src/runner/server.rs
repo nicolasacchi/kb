@@ -202,8 +202,22 @@ async fn handle_connection<S: Supervisor + 'static>(runner: Arc<Runner<S>>, stre
                 return;
             }
             let (tap_read, tap_write) = tap.into_split();
-            let _ =
-                crate::runner::stream::splice(tap_read, tap_write, client_read, write_half).await;
+            let mut input = crate::runner::stream::HiddenInput::new(&runner, &id, &viewer);
+            let ended = crate::runner::stream::splice(
+                tap_read,
+                tap_write,
+                client_read,
+                write_half,
+                &viewer,
+                &mut input,
+            )
+            .await;
+            // The viewer's hidden client (if the user typed) dies with
+            // its stream, whichever side ended it.
+            input.close().await;
+            if let Err(e) = ended {
+                tracing::debug!(%id, %viewer, error = %e, "stream splice ended with an error");
+            }
             return;
         }
         let resp = match rpc::parse_request(line.as_bytes()) {

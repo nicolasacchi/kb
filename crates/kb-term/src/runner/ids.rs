@@ -47,7 +47,19 @@ pub fn generate_id(sessions_dir: &Path) -> Result<String, RunnerError> {
 /// `stream` open gets its own: the tap keys viewers by id, and a shared
 /// id would make a second socket displace the first.
 pub fn generate_viewer_id() -> Result<String, RunnerError> {
-    Ok(format!("ws-{}", random_id()?))
+    Ok(format!("{STREAM_VIEWER_PREFIX}{}", random_id()?))
+}
+
+/// The prefix of every runner-minted stream viewer id. Such a viewer's
+/// hidden client lives only as long as its stream splice (FXINPUT), so it
+/// is never written into the durable `@kb_viewers` set: a runner restart
+/// must not re-open a hidden client for a socket that no longer exists.
+pub const STREAM_VIEWER_PREFIX: &str = "ws-";
+
+/// Whether `viewer` is a runner-minted stream viewer (see
+/// [`STREAM_VIEWER_PREFIX`]).
+pub fn is_stream_viewer(viewer: &str) -> bool {
+    viewer.starts_with(STREAM_VIEWER_PREFIX)
 }
 
 fn random_id() -> Result<String, RunnerError> {

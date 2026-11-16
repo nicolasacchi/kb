@@ -13,15 +13,28 @@
 //! `viewer-open` control envelope (`resume: null` for a full join,
 //! `{offset, mseq: 0, epoch: ""}` when the client asked to resume —
 //! the runner cannot know the epoch, so the tap's full-join fallback
-//! decides). Client bytes are forwarded to the tap untouched, and tap
-//! envelopes are forwarded verbatim (including any control envelopes
-//! the tap replies with).
+//! decides). Tap envelopes are forwarded verbatim to the client
+//! (including any control envelopes the tap replies with).
+//!
+//! The client-to-tap half is NOT blind (FXINPUT): the tap is a
+//! read-only viewer and has no input path, so a client `input` frame
+//! (`{"t":"input","data":...}`, wrapped in the stream's own viewer-id
+//! prefix) is taken out of the stream here and written, whole and in
+//! order, to THIS stream's hidden tmux client (the same per-viewer
+//! client the host CLI types through), followed by a `typed` control
+//! notification to the tap so its clipboard window opens exactly as it
+//! does for the CLI. Every other client frame is re-encoded
+//! byte-identically and forwarded to the tap. The hidden client is
+//! opened lazily on the first input byte (a watch-only stream never
+//! spawns one) and closed when the splice ends.
 
 use std::path::PathBuf;
 
+use std::future::Future;
+
 use crate::runner::{Runner, RunnerError};
-use crate::wire::{self, ControlMessage, Profile, ResumeInfo};
-use tokio::io::AsyncWriteExt;
+use crate::wire::{self, ClientFrame, ControlMessage, Envelope, Profile, ResumeInfo};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// The tap socket for `id`: `<run-dir>/s/<id>/tap.sock` — the exact
 /// path the tap's `TapServer` binds (its constructor joins the same
@@ -84,24 +97,179 @@ pub async fn connect_tap<S: crate::runner::supervisor::Supervisor>(
     Ok((tap, viewer))
 }
 
+/// Where a client `input` frame's bytes go (the stream's hidden tmux
+/// client in production; a recorder in unit tests). Deliveries are
+/// awaited one at a time, so input stays ordered.
+pub trait InputSink: Send {
+    /// Write `bytes` (whole, byte-exact) to the viewer's input path.
+    fn deliver(&mut self, bytes: Vec<u8>) -> impl Future<Output = Result<(), RunnerError>> + Send;
+}
+
+/// The production [`InputSink`]: the runner's per-viewer hidden client
+/// for the stream's own `(session, viewer)` pair, never another.
+pub struct HiddenInput<'a, S: crate::runner::supervisor::Supervisor> {
+    runner: &'a Runner<S>,
+    id: &'a str,
+    viewer: &'a str,
+    opened: bool,
+}
+
+impl<'a, S: crate::runner::supervisor::Supervisor> HiddenInput<'a, S> {
+    /// Input route for stream viewer `viewer` of session `id`. Nothing is
+    /// spawned until the first [`InputSink::deliver`].
+    pub fn new(runner: &'a Runner<S>, id: &'a str, viewer: &'a str) -> Self {
+        Self {
+            runner,
+            id,
+            viewer,
+            opened: false,
+        }
+    }
+
+    /// Close the hidden client if this stream opened one (idempotent;
+    /// the session may already be gone, which is fine).
+    pub async fn close(&mut self) {
+        if self.opened {
+            self.opened = false;
+            let _ = self.runner.viewer_close(self.id, self.viewer).await;
+        }
+    }
+}
+
+impl<S: crate::runner::supervisor::Supervisor> InputSink for HiddenInput<'_, S> {
+    async fn deliver(&mut self, bytes: Vec<u8>) -> Result<(), RunnerError> {
+        if !self.opened {
+            if !self.runner.session_live(self.id).await {
+                return Err(RunnerError::NoSession(format!("no session {}", self.id)));
+            }
+            let (cols, rows) = self
+                .runner
+                .current_grid(self.id)
+                .await
+                .unwrap_or((self.runner.cfg.default_cols, self.runner.cfg.default_rows));
+            self.runner
+                .viewer_open(self.id, self.viewer, cols, rows)
+                .await?;
+            self.opened = true;
+        }
+        let pump = self
+            .runner
+            .viewer_pump(self.id, self.viewer)
+            .await
+            .ok_or_else(|| {
+                RunnerError::NoViewer(format!("no viewer `{}` for {}", self.viewer, self.id))
+            })?;
+        pump.write(bytes).await?;
+        // Typing clears a `paste_only` latch, like the `keys` RPC; the
+        // durable write only happens when the latch is actually set.
+        if self.runner.paste_only(self.id).await {
+            self.runner.set_paste_only(self.id, false).await;
+        }
+        Ok(())
+    }
+}
+
+/// What the client-to-tap half does with one decoded client envelope.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ClientRoute {
+    /// An `input` frame for this stream's viewer: these bytes go to the
+    /// hidden client, never to the tap.
+    Input(Vec<u8>),
+    /// An `input` frame naming some OTHER viewer: dropped (no input to
+    /// another viewer, and not forwarded either).
+    Drop,
+    /// Anything else: forwarded to the tap unchanged.
+    Forward,
+}
+
+/// Pure routing decision for one client envelope. Only a text envelope
+/// whose S2C-wrapped frame parses as a client `input` is intercepted;
+/// every other shape (resumefrom, ping, takesize, binary, control,
+/// unparsable) is the tap's to judge, exactly as before.
+pub fn classify_client_envelope(env: &Envelope, viewer: &str) -> ClientRoute {
+    if env.kind != wire::ENV_TEXT {
+        return ClientRoute::Forward;
+    }
+    let Ok((id, frame)) = wire::parse_s2c_body(&env.body) else {
+        return ClientRoute::Forward;
+    };
+    match serde_json::from_slice::<ClientFrame>(frame) {
+        Ok(ClientFrame::Input { data }) => {
+            if id == viewer {
+                ClientRoute::Input(data.into_bytes())
+            } else {
+                ClientRoute::Drop
+            }
+        }
+        _ => ClientRoute::Forward,
+    }
+}
+
+async fn client_to_tap<I: InputSink>(
+    mut client_read: tokio::net::unix::OwnedReadHalf,
+    mut tap_write: tokio::net::unix::OwnedWriteHalf,
+    viewer: &str,
+    sink: &mut I,
+) -> std::io::Result<()> {
+    let invalid = |e: String| std::io::Error::new(std::io::ErrorKind::InvalidData, e);
+    let mut decoder = wire::EnvelopeDecoder::new();
+    let mut chunk = vec![0u8; 16 * 1024];
+    loop {
+        let n = client_read.read(&mut chunk).await?;
+        if n == 0 {
+            return Ok(());
+        }
+        let envs = decoder
+            .push(&chunk[..n])
+            .map_err(|e| invalid(e.to_string()))?;
+        for env in envs {
+            match classify_client_envelope(&env, viewer) {
+                ClientRoute::Forward => {
+                    let bytes = wire::encode_envelope(env.kind, &env.body)
+                        .map_err(|e| invalid(e.to_string()))?;
+                    tap_write.write_all(&bytes).await?;
+                }
+                ClientRoute::Drop => {}
+                ClientRoute::Input(bytes) => {
+                    if bytes.is_empty() {
+                        continue;
+                    }
+                    sink.deliver(bytes)
+                        .await
+                        .map_err(|e| std::io::Error::other(e.to_string()))?;
+                    let typed = serde_json::to_vec(&ControlMessage::Typed {
+                        viewer: viewer.to_string(),
+                    })
+                    .map_err(|e| invalid(e.to_string()))?;
+                    let bytes = wire::encode_envelope(wire::ENV_CONTROL, &typed)
+                        .map_err(|e| invalid(e.to_string()))?;
+                    tap_write.write_all(&bytes).await?;
+                }
+            }
+        }
+    }
+}
+
 /// Splice tap.sock envelopes between the tap connection and the runner
-/// client halves until either side closes or errors. Bytes are copied
-/// verbatim in both directions — the runner never interprets a frame.
+/// client halves until either side closes or errors. Tap-to-client bytes
+/// are copied verbatim; client-to-tap envelopes are routed by
+/// [`classify_client_envelope`] (input to `sink`, the rest to the tap).
 /// Taking halves (not streams) lets the RPC loop hand the client-side
 /// halves it already owns after answering the `stream` request line;
-/// callers with whole streams should `into_split()` first.
-pub async fn splice(
+/// callers with whole streams should `into_split()` first. `viewer` is
+/// the id this stream joined the tap under.
+pub async fn splice<I: InputSink>(
     tap_read: tokio::net::unix::OwnedReadHalf,
     tap_write: tokio::net::unix::OwnedWriteHalf,
     client_read: tokio::net::unix::OwnedReadHalf,
     client_write: tokio::net::unix::OwnedWriteHalf,
+    viewer: &str,
+    sink: &mut I,
 ) -> std::io::Result<()> {
     let mut tap_read = tap_read;
-    let mut tap_write = tap_write;
-    let mut client_read = client_read;
     let mut client_write = client_write;
     let to_client = tokio::io::copy(&mut tap_read, &mut client_write);
-    let to_tap = tokio::io::copy(&mut client_read, &mut tap_write);
+    let to_tap = client_to_tap(client_read, tap_write, viewer, sink);
     // The first half to finish owns the close: select returns when the
     // first completes, dropping the other future — and with it (at
     // return) the sockets, which is how the far side observes the
@@ -109,10 +277,10 @@ pub async fn splice(
     // and a dead tap ends the client's stream). try_join would wait
     // for both halves on a clean EOF and hang.
     match tokio::select! {
-        r = to_client => r,
+        r = to_client => r.map(|_| ()),
         r = to_tap => r,
     } {
-        Ok(_) => Ok(()),
+        Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
         Err(e) => Err(e),
     }
@@ -236,7 +404,19 @@ mod tests {
         let (client_end, mut test_end) = tokio::net::UnixStream::pair().unwrap();
         let (tap_read, tap_write) = tap.into_split();
         let (client_read, client_write) = client_end.into_split();
-        let splice = tokio::spawn(splice(tap_read, tap_write, client_read, client_write));
+        let splice_viewer = minted.clone();
+        let splice = tokio::spawn(async move {
+            let mut sink = RecordingSink::default();
+            splice(
+                tap_read,
+                tap_write,
+                client_read,
+                client_write,
+                &splice_viewer,
+                &mut sink,
+            )
+            .await
+        });
         let join = tokio::time::timeout(DEADLINE, join_rx)
             .await
             .expect("fake tap deadline")
@@ -323,5 +503,382 @@ mod tests {
         std::fs::create_dir_all(run_dir.join("s").join("abcd1234")).unwrap();
         let err = connect_tap(&runner, "abcd1234", None).await.unwrap_err();
         assert!(matches!(err, RunnerError::TapTimeout(_)), "got {err:?}");
+    }
+
+    /// Records every delivery (the stand-in for the hidden client).
+    #[derive(Default, Clone)]
+    struct RecordingSink {
+        got: std::sync::Arc<std::sync::Mutex<Vec<Vec<u8>>>>,
+        fail: bool,
+    }
+
+    impl InputSink for RecordingSink {
+        async fn deliver(&mut self, bytes: Vec<u8>) -> Result<(), RunnerError> {
+            if self.fail {
+                return Err(RunnerError::BusyPty("client writer busy".to_string()));
+            }
+            self.got.lock().unwrap().push(bytes);
+            Ok(())
+        }
+    }
+
+    /// A client-to-server text envelope: the browser frame wrapped in
+    /// the stream's viewer-id prefix, exactly what `kb-server` writes.
+    fn c2s_text(viewer: &str, json: &str) -> Vec<u8> {
+        let body = wire::s2c_body(viewer, json.as_bytes()).unwrap();
+        wire::encode_envelope(wire::ENV_TEXT, &body).unwrap()
+    }
+
+    fn input_json(data: &str) -> String {
+        serde_json::to_string(&ClientFrame::Input {
+            data: data.to_string(),
+        })
+        .unwrap()
+    }
+
+    fn env_of(bytes: &[u8]) -> Envelope {
+        let mut dec = EnvelopeDecoder::new();
+        let mut envs = dec.push(bytes).unwrap();
+        assert_eq!(envs.len(), 1);
+        envs.remove(0)
+    }
+
+    #[test]
+    fn classify_intercepts_only_this_viewers_input_frames() {
+        let v = "ws-aaaa1111bb";
+        let input = env_of(&c2s_text(v, &input_json("a\u{1b}[A\u{e9}")));
+        assert_eq!(
+            classify_client_envelope(&input, v),
+            ClientRoute::Input("a\u{1b}[A\u{e9}".as_bytes().to_vec())
+        );
+        // Another viewer's id prefix: dropped, never delivered, never forwarded.
+        assert_eq!(
+            classify_client_envelope(&input, "ws-other0000"),
+            ClientRoute::Drop
+        );
+        // Everything else is the tap's to judge.
+        for json in [
+            r#"{"t":"ping"}"#,
+            r#"{"t":"takesize","cols":80,"rows":24}"#,
+            r#"{"t":"resumefrom","offset":1,"mseq":0,"epoch":"e"}"#,
+            r#"{"t":"input","data":"x","extra":1}"#,
+            "not json",
+        ] {
+            let env = env_of(&c2s_text(v, json));
+            assert_eq!(
+                classify_client_envelope(&env, v),
+                ClientRoute::Forward,
+                "{json} must be forwarded to the tap"
+            );
+        }
+        // A binary or control envelope is never input.
+        let bin = Envelope {
+            kind: wire::ENV_BINARY,
+            body: wire::s2c_body(v, input_json("x").as_bytes()).unwrap(),
+        };
+        assert_eq!(classify_client_envelope(&bin, v), ClientRoute::Forward);
+        // An unwrapped body (no id prefix) cannot parse and is forwarded.
+        let bare = Envelope {
+            kind: wire::ENV_TEXT,
+            body: b"hello".to_vec(),
+        };
+        assert_eq!(classify_client_envelope(&bare, v), ClientRoute::Forward);
+    }
+
+    /// Run a splice over socket pairs with `sink`; returns what the tap
+    /// side received after the join (decoded) once `client_bytes` were
+    /// written and the client closed.
+    async fn run_splice<I: InputSink + 'static>(
+        viewer: &str,
+        client_bytes: Vec<Vec<u8>>,
+        mut sink: I,
+    ) -> (Vec<Envelope>, std::io::Result<()>, I) {
+        let (tap_end, mut tap_peer) = tokio::net::UnixStream::pair().unwrap();
+        let (client_end, mut client_peer) = tokio::net::UnixStream::pair().unwrap();
+        let (tap_read, tap_write) = tap_end.into_split();
+        let (client_read, client_write) = client_end.into_split();
+        let v = viewer.to_string();
+        let task = tokio::spawn(async move {
+            let r = splice(
+                tap_read,
+                tap_write,
+                client_read,
+                client_write,
+                &v,
+                &mut sink,
+            )
+            .await;
+            (r, sink)
+        });
+        for chunk in client_bytes {
+            client_peer.write_all(&chunk).await.unwrap();
+        }
+        // Closing the client ends the splice (or it already ended on error).
+        drop(client_peer);
+        let (res, sink) = tokio::time::timeout(DEADLINE, task)
+            .await
+            .expect("splice end deadline")
+            .unwrap();
+        // The splice dropped its tap write half: read the tap side to EOF.
+        let mut seen = Vec::new();
+        let mut buf = vec![0u8; 8192];
+        loop {
+            match tokio::time::timeout(DEADLINE, tap_peer.read(&mut buf)).await {
+                Ok(Ok(0)) | Ok(Err(_)) => break,
+                Ok(Ok(n)) => seen.extend_from_slice(&buf[..n]),
+                Err(_) => panic!("tap read deadline"),
+            }
+        }
+        let envs = EnvelopeDecoder::new().push(&seen).unwrap();
+        (envs, res, sink)
+    }
+
+    #[tokio::test]
+    async fn input_frames_reach_the_sink_in_order_and_never_the_tap() {
+        let v = "ws-aaaa1111bb";
+        let sink = RecordingSink::default();
+        let got = sink.got.clone();
+        // Coalesce several envelopes in ONE write (and split another
+        // across two) so the framing, not the read boundaries, decides.
+        let mut first = Vec::new();
+        first.extend(c2s_text(v, &input_json("a")));
+        first.extend(c2s_text(v, r#"{"t":"ping"}"#));
+        first.extend(c2s_text(v, &input_json("\u{1b}[200~x\r\n\u{1b}[201~")));
+        let second = c2s_text(v, &input_json("\u{e9}\u{3}\u{7f}"));
+        let (a, b) = second.split_at(7);
+        let other = c2s_text("ws-other0000", &input_json("SPOOF"));
+        let resume = c2s_text(v, r#"{"t":"resumefrom","offset":9,"mseq":0,"epoch":"e"}"#);
+        let (envs, res, _) = run_splice(
+            v,
+            vec![first, a.to_vec(), b.to_vec(), other, resume.clone()],
+            sink,
+        )
+        .await;
+        assert!(res.is_ok(), "{res:?}");
+        let delivered = got.lock().unwrap().clone();
+        assert_eq!(
+            delivered,
+            vec![
+                b"a".to_vec(),
+                b"\x1b[200~x\r\n\x1b[201~".to_vec(),
+                "\u{e9}\u{3}\u{7f}".as_bytes().to_vec(),
+            ],
+            "input frames arrive whole, byte-exact, in send order; a foreign viewer's frame is dropped"
+        );
+        // The tap saw: ping, typed, typed... in order, no input frame at all.
+        let kinds: Vec<String> = envs
+            .iter()
+            .map(|e| {
+                if e.kind == wire::ENV_CONTROL {
+                    match serde_json::from_slice::<ControlMessage>(&e.body).unwrap() {
+                        ControlMessage::Typed { viewer } => {
+                            assert_eq!(viewer, v);
+                            "typed".to_string()
+                        }
+                        other => panic!("unexpected control {other:?}"),
+                    }
+                } else {
+                    let (_, frame) = wire::parse_s2c_body(&e.body).unwrap();
+                    let text = std::str::from_utf8(frame).unwrap();
+                    assert!(
+                        !text.contains("\"input\""),
+                        "input leaked to the tap: {text}"
+                    );
+                    text.to_string()
+                }
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                "typed".to_string(), // after "a"
+                r#"{"t":"ping"}"#.to_string(),
+                "typed".to_string(), // after the paste
+                "typed".to_string(), // after the split frame
+                r#"{"t":"resumefrom","offset":9,"mseq":0,"epoch":"e"}"#.to_string(),
+            ],
+            "non-input frames reach the tap byte-identically, interleaved in order"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_delivery_ends_the_splice_and_is_not_silently_dropped() {
+        let v = "ws-aaaa1111bb";
+        let sink = RecordingSink {
+            fail: true,
+            ..RecordingSink::default()
+        };
+        let (envs, res, _) = run_splice(v, vec![c2s_text(v, &input_json("k"))], sink).await;
+        assert!(res.is_err(), "a delivery failure must end the splice");
+        assert!(
+            envs.is_empty(),
+            "no typed notification for undelivered input"
+        );
+    }
+
+    /// A fake tmux whose `attach-session` is a raw-mode byte recorder:
+    /// the hidden client's pty slave is `cat >> OUT` after `stty raw
+    /// -echo` (READY is touched once raw), every other tmux call
+    /// succeeds, and `display-message` reports a live 80x24 pane.
+    fn fake_tmux_runner() -> (
+        Runner<crate::runner::supervisor::DirectSupervisor>,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        tempfile::TempDir,
+    ) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("typed.bin");
+        let ready = dir.path().join("ready");
+        let script = dir.path().join("fake_tmux.sh");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\n\
+                 case \"$*\" in\n\
+                 *attach-session*) stty raw -echo; : > {ready}; exec cat >> {out} ;;\n\
+                 *display-message*) printf '1234 0 0 80 24 0\\n'; exit 0 ;;\n\
+                 esac\n\
+                 exit 0\n",
+                ready = ready.display(),
+                out = out.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let run_dir = dir.path().join("run");
+        std::fs::create_dir_all(run_dir.join("s")).unwrap();
+        std::fs::create_dir_all(run_dir.join("runner")).unwrap();
+        // Discovery globs `<run>/s/<id>.sock`: a placeholder file is
+        // enough for the fake tmux to answer as a live holder.
+        std::fs::write(run_dir.join("s").join("abcd1234.sock"), b"").unwrap();
+        let cfg = RunnerConfig::test_config(
+            run_dir,
+            script.to_string_lossy().into_owned(),
+            dir.path().join("conf"),
+        );
+        (Runner::direct(cfg), out, ready, dir)
+    }
+
+    async fn wait_for(path: &std::path::Path, want_len: usize) -> Vec<u8> {
+        let start = std::time::Instant::now();
+        loop {
+            if path.exists() {
+                let bytes = std::fs::read(path).unwrap_or_default();
+                if bytes.len() >= want_len {
+                    return bytes;
+                }
+            }
+            assert!(
+                start.elapsed() < DEADLINE,
+                "timed out waiting for {want_len} bytes at {}",
+                path.display()
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn browser_input_reaches_the_viewers_hidden_client_byte_exact_and_in_order() {
+        let (runner, out, ready, _dir) = fake_tmux_runner();
+        let id = "abcd1234";
+        let viewer = "ws-aaaa1111bb";
+        // Bring the hidden client up and wait until its pty is raw: bytes
+        // written earlier would still be line-disciplined (the real tmux
+        // client is not, so this only synchronises the fake).
+        runner.viewer_open(id, viewer, 80, 24).await.unwrap();
+        wait_for(&ready, 0).await;
+        let payloads: Vec<String> = vec![
+            "a".into(),
+            "\u{1b}[A".into(),
+            "h\u{e9}llo \u{1f600}".into(),
+            "\u{1b}[200~line1\rline2\u{1b}[201~".into(),
+            "\u{3}\u{7f}\r".into(),
+        ];
+        let mut client_bytes = Vec::new();
+        for p in &payloads {
+            client_bytes.push(c2s_text(viewer, &input_json(p)));
+        }
+        let mut sink = HiddenInput::new(&runner, id, viewer);
+        let (tap_end, _tap_peer) = tokio::net::UnixStream::pair().unwrap();
+        let (client_end, mut client_peer) = tokio::net::UnixStream::pair().unwrap();
+        let (tap_read, tap_write) = tap_end.into_split();
+        let (client_read, client_write) = client_end.into_split();
+        let task = async {
+            splice(
+                tap_read,
+                tap_write,
+                client_read,
+                client_write,
+                viewer,
+                &mut sink,
+            )
+            .await
+        };
+        let feed = async {
+            for chunk in client_bytes {
+                client_peer.write_all(&chunk).await.unwrap();
+            }
+            let want: Vec<u8> = payloads
+                .iter()
+                .flat_map(|p| p.as_bytes().to_vec())
+                .collect();
+            let got = wait_for(&out, want.len()).await;
+            assert_eq!(
+                got, want,
+                "hidden client received exactly the typed bytes, in order"
+            );
+            drop(client_peer);
+        };
+        let (res, ()) = tokio::time::timeout(DEADLINE, async { tokio::join!(task, feed) })
+            .await
+            .expect("splice deadline");
+        assert!(res.is_ok(), "{res:?}");
+        assert!(
+            runner.has_viewer(id, viewer).await,
+            "the hidden client lives until the stream owner closes it"
+        );
+        sink.close().await;
+        assert!(
+            !runner.has_viewer(id, viewer).await,
+            "closing the stream closes its hidden client"
+        );
+        let pump_gone = runner.viewer_pump(id, viewer).await.is_none();
+        assert!(pump_gone);
+    }
+
+    #[tokio::test]
+    async fn a_watch_only_stream_never_spawns_a_hidden_client() {
+        let (runner, _out, ready, _dir) = fake_tmux_runner();
+        let id = "abcd1234";
+        let viewer = "ws-bbbb2222cc";
+        let mut sink = HiddenInput::new(&runner, id, viewer);
+        let (tap_end, _tap_peer) = tokio::net::UnixStream::pair().unwrap();
+        let (client_end, mut client_peer) = tokio::net::UnixStream::pair().unwrap();
+        let (tap_read, tap_write) = tap_end.into_split();
+        let (client_read, client_write) = client_end.into_split();
+        // Only non-input traffic: the sink must stay untouched.
+        client_peer
+            .write_all(&c2s_text(viewer, r#"{"t":"ping"}"#))
+            .await
+            .unwrap();
+        drop(client_peer);
+        let res = tokio::time::timeout(
+            DEADLINE,
+            splice(
+                tap_read,
+                tap_write,
+                client_read,
+                client_write,
+                viewer,
+                &mut sink,
+            ),
+        )
+        .await
+        .expect("splice deadline");
+        assert!(res.is_ok(), "{res:?}");
+        assert!(!runner.has_viewer(id, viewer).await);
+        assert!(!ready.exists(), "no attach-session was ever spawned");
+        sink.close().await;
     }
 }
