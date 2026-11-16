@@ -562,6 +562,40 @@
   float: none;
   flex: none;
 }
+
+/* Cross-harness handoff panel (components/HandoffPanel.tsx) — reuses the
+ * resume-command row + copy button; only the stacking/meta lines are new. */
+.kb-ses__handoff {
+  margin: 8px 0 4px;
+}
+.kb-ses__handoff .kb-ses__resume-copy {
+  float: none;
+}
+.kb-ses__handoff-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  margin: 4px 0;
+}
+.kb-ses__handoff-meta {
+  color: var(--ink-mute);
+  font-size: 0.85em;
+}
+.kb-ses__handoff-warn {
+  color: var(--warn);
+  margin: 4px 0;
+}
+.kb-ses__handoff-notes {
+  color: var(--ink-mute);
+  margin: 4px 0;
+  padding-left: 1.2em;
+}
+.kb-ses__handoff-preview > summary {
+  color: var(--ink-mute);
+  cursor: pointer;
+  margin: 4px 0;
+}
 .kb-ses__ins-errors {
   color: var(--danger, #f08079);
 }

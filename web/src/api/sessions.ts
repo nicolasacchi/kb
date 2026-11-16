@@ -28,6 +28,11 @@ import type { DecisionOut } from "./generated/DecisionOut";
 import type { SessionDecisionsResponse } from "./generated/SessionDecisionsResponse";
 import type { CommitOut } from "./generated/CommitOut";
 import type { SessionCommitsResponse } from "./generated/SessionCommitsResponse";
+// Cross-harness handoff (omp ⇄ Claude Code): the brief a NEW session of the
+// other harness receives as its first prompt, and the lineage link a session
+// carries once such a brief was pasted into it.
+import type { HandoffOut } from "./generated/HandoffOut";
+import type { SessionLink } from "./generated/SessionLink";
 // MI-W4.6 — the provenance thread's 3rd hop: per-commit touched-file
 // staleness.
 import type { TouchedFileOut } from "./generated/TouchedFileOut";
@@ -239,6 +244,10 @@ export type SummaryLane = {
   parent_session_id?: string,
   child_total: number,
   resume: string,
+  /// Handoff lineage — both OMITTED from the JSON when empty (a missing
+  /// field means "none").
+  continued_from?: SessionLink,
+  continued_in?: SessionLink[],
 };
 
 export type OutcomeLane = {
@@ -466,6 +475,39 @@ export async function fetchSessionCard(
     throw new Error(reason);
   }
   return (await r.json()) as SessionCard;
+}
+
+/// Handoff — the deterministic brief that starts a NEW session of the target
+/// harness from this one (`…/handoff?to=&budget=&tail=`). `to` defaults
+/// server-side to the other harness. Failures THROW with the server's reason
+/// (problem+json `title: detail`, else `<status> <statusText>`), mirroring
+/// `fetchSessionCard`: a 404 (no capture) must surface, not render an empty
+/// brief.
+export async function fetchSessionHandoff(
+  sessionId: string,
+  opts: { to?: "claude" | "omp"; budget?: number; tail?: number } = {},
+  signal?: AbortSignal,
+): Promise<HandoffOut> {
+  const params = new URLSearchParams();
+  if (opts.to) params.set("to", opts.to);
+  if (opts.budget !== undefined) params.set("budget", String(opts.budget));
+  if (opts.tail !== undefined) params.set("tail", String(opts.tail));
+  const qs = params.toString();
+  const r = await fetch(
+    `${currentDaemonBase()}/api/sessions/${encodeURIComponent(sessionId)}/handoff${qs ? `?${qs}` : ""}`,
+    { headers: { Accept: "application/json" }, signal },
+  );
+  if (!r.ok) {
+    let reason = `${r.status} ${r.statusText}`;
+    try {
+      const p = (await r.json()) as { title?: string; detail?: string };
+      if (p.title) reason = `${p.title}: ${p.detail ?? ""}`;
+    } catch {
+      // Unparseable body — the status line above is the reason.
+    }
+    throw new Error(reason);
+  }
+  return (await r.json()) as HandoffOut;
 }
 
 /// A4 — one page of a session's children (`…/children?after=&limit=`),
