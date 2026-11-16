@@ -992,6 +992,14 @@ fn kill_error_exit(code: Option<&str>) -> u8 {
 /// removes that session's leftover socket and directory. Exit codes: 0 done;
 /// 1 other failure; 2 usage (bad id); 3 runner unreachable; 4 not found.
 pub async fn run_kill(args: KillArgs) -> u8 {
+    run_kill_with(args, None).await
+}
+
+/// The kill runs exit keys, waits up to the grace and then stops the holder,
+/// so the default 10 s per-call deadline is far too short: the budget is
+/// the grace (the runner clamps it to 60 s) plus 30 s. `budget` overrides
+/// that (tests).
+async fn run_kill_with(args: KillArgs, budget: Option<Duration>) -> u8 {
     if !crate::wire::is_valid_term_id(&args.id) {
         eprintln!("kb-term: invalid session id");
         return 2;
@@ -1013,6 +1021,9 @@ pub async fn run_kill(args: KillArgs) -> u8 {
             return 1;
         }
     };
+    runner.set_timeout(
+        budget.unwrap_or_else(|| Duration::from_secs(args.grace_secs.unwrap_or(60).min(60) + 30)),
+    );
     match runner
         .call(&Request::Kill {
             id: args.id.clone(),
@@ -1023,6 +1034,14 @@ pub async fn run_kill(args: KillArgs) -> u8 {
         Ok(reply) => {
             println!("{}", render_kill_reply(&args.id, &reply));
             0
+        }
+        Err(e @ RunnerClientError::Unreachable(_)) if runner.last_call_timed_out() => {
+            eprintln!("kb-term: {e}");
+            eprintln!(
+                "kb-term: the kill outcome is unknown (the runner may still be working); \
+                 check `kb-term ls`"
+            );
+            1
         }
         Err(e @ RunnerClientError::Unreachable(_)) => unreachable(&e),
         Err(e) => {
@@ -1292,6 +1311,51 @@ mod tests {
     }
 
     use super::*;
+
+    /// A runner that answers Kill only after a delay longer than the
+    /// client's call deadline must still yield exit 0 when the kill budget
+    /// covers it (before the fix the flat 10 s deadline made this exit 3).
+    #[tokio::test]
+    async fn kill_budget_outlasts_a_slow_runner_reply() {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("r.sock");
+        let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+        let server = tokio::spawn(async move {
+            let (st, _) = listener.accept().await.unwrap();
+            let (r, mut w) = st.into_split();
+            let mut line = String::new();
+            BufReader::new(r).read_line(&mut line).await.unwrap();
+            let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            let reply = serde_json::json!({"v":1,"id":v["id"],"status":"ok",
+                "data":{"exit_code":0,"forced":false}});
+            w.write_all(format!("{reply}\n").as_bytes()).await.unwrap();
+        });
+        let args = |s: &std::path::Path| KillArgs {
+            id: "abcd1234".to_string(),
+            grace_secs: None,
+            runner_sock: Some(s.display().to_string()),
+        };
+        let code = run_kill_with(args(&sock), Some(Duration::from_secs(5))).await;
+        assert_eq!(code, 0);
+        server.await.unwrap();
+
+        // A budget shorter than the reply is an UNKNOWN outcome (exit 1),
+        // never the "unit not running" exit 3.
+        let sock2 = dir.path().join("r2.sock");
+        let listener = tokio::net::UnixListener::bind(&sock2).unwrap();
+        let server = tokio::spawn(async move {
+            let (st, _) = listener.accept().await.unwrap();
+            let (r, _w) = st.into_split();
+            let mut line = String::new();
+            BufReader::new(r).read_line(&mut line).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(600)).await;
+        });
+        let code = run_kill_with(args(&sock2), Some(Duration::from_millis(150))).await;
+        assert_eq!(code, 1);
+        server.await.unwrap();
+    }
 
     #[test]
     fn backoff_is_exponential_with_cap_and_resets_on_success() {

@@ -123,6 +123,9 @@ pub struct RunnerClient {
     path: PathBuf,
     /// Per-call deadline.
     timeout: Duration,
+    /// True when the most recent call failed because the deadline expired
+    /// (the request may still be running on the runner).
+    timed_out: bool,
 }
 
 impl RunnerClient {
@@ -134,7 +137,19 @@ impl RunnerClient {
             next_id: 1,
             path: path.to_path_buf(),
             timeout: Duration::from_secs(10),
+            timed_out: false,
         })
+    }
+
+    /// Override the per-call deadline (for ops that legitimately run long,
+    /// such as a graceful kill).
+    pub fn set_timeout(&mut self, timeout: Duration) {
+        self.timeout = timeout;
+    }
+
+    /// Whether the last call failed by deadline expiry, not a dead socket.
+    pub fn last_call_timed_out(&self) -> bool {
+        self.timed_out
     }
 
     /// Send one request, return the response payload `data`, or an
@@ -147,6 +162,7 @@ impl RunnerClient {
         if self.stream.is_none() {
             self.stream = Some(dial(&self.path).await?);
         }
+        self.timed_out = false;
         let outcome = self.exchange(line.as_bytes(), &expected).await;
         if matches!(outcome, Err(RunnerClientError::Unreachable(_))) {
             // Anything but a clean, paired answer may leave a reply in
@@ -172,6 +188,7 @@ impl RunnerClient {
         let body = tokio::time::timeout(timeout, read_response_line(stream))
             .await
             .map_err(|_| {
+                self.timed_out = true;
                 RunnerClientError::Unreachable(format!(
                     "runner socket {path} did not answer in time"
                 ))
