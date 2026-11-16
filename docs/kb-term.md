@@ -85,7 +85,11 @@ compiled single binary; `PartOf=kb-term@<id>`) attaches to the holder in tmux
 control mode, sanitises and numbers the byte stream, keeps a twin terminal and
 a ring, and serves viewers over a per-session unix socket. Viewer keystrokes do
 not travel through the tap: they go through a per-viewer hidden tmux client
-whose output is drained and discarded.
+whose output is drained and discarded. One session accepts at most
+`max_viewers_per_session` (default 8) viewers, counted across the host CLI,
+the REST routes and browser streams alike; a stream opened at the cap is
+refused up front with `too-many-viewers`, instead of being admitted and ended
+at its first keystroke.
 
 `kb-termd` (Rust) is the runner: it fronts launch, kill, paste, keys, read and
 history over `runner.sock` (mode 0600, connections from another uid are
