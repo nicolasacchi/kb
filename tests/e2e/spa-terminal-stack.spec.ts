@@ -10,18 +10,20 @@
 
 import { test, expect, type Page, type TestInfo } from "@playwright/test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decodePng, forceDom, pixel, type Rgb } from "./spa-terminal-gfx-lib";
 import {
   Api, MAIN, OFF, TTL, PORT_MAIN, PORT_TTL, PORT_OFF,
   beat, bindSession, collectPageErrors, decodeStream, holderDir, idleHarness, keepBound,
-  killLaunched, kittyHarness, launch, listTerms, mintTicket, newSid, numberedHarness, openPanel,
-  panelAttrs, rawUpgrade, readExpected, recordSockets, repoRoot, scratch,
+  firstTextAt, killLaunched, kittyHarness, launch, listTerms, mintTicket, newSid, numberedHarness, openPanel,
+  openPanelWhen, panelAttrs, rawUpgrade, readExpected, readMark, recordSockets, repoRoot, root, scratch,
   sha256, tmuxBin, touch, waitDone, waitFile, waitPhase,
   type Harness, type Launched, type Sock,
 } from "./terminal-stack/stack";
 import { checkNumbered, describeNumbered, frameTracker, scanForQueries } from "./terminal-stack/oracle";
+import { setupTerminalStack } from "./terminal-stack/global-setup-terminal";
 
 // ------------------------------------------------------------ shared bits
 
@@ -125,6 +127,29 @@ test.describe("T25 oracle self-tests", () => {
   });
 });
 
+test.describe("T25 setup robustness", () => {
+  test("a bring-up that fails after starting kb-termd tears it down itself", async () => {
+    test.setTimeout(120_000);
+    // The injected failure fires once kb-termd (and its tmux holder machinery)
+    // is up; the setup returns no teardown closure on failure, so without its
+    // own cleanup the process below would outlive the throw.
+    const logs = mkdtempSync(join(tmpdir(), "kbte-logs-"));
+    let err: (Error & { root?: string }) | undefined;
+    try {
+      await setupTerminalStack({ injectFailure: "after-termd", keepLogsIn: logs });
+    } catch (e) {
+      err = e as Error & { root?: string };
+    }
+    expect(err?.message, "the injected failure surfaced").toContain("injected bring-up failure");
+    const root = err?.root;
+    expect(root, "the failure carries the bring-up root").toBeTruthy();
+    const strays = spawnSync("pgrep", ["-f", root!], { encoding: "utf-8" }).stdout.trim();
+    expect(strays, "processes naming the failed bring-up's root").toBe("");
+    expect(existsSync(root!), "the failed bring-up's root was removed").toBe(false);
+    expect(readdirSync(logs), "the failed bring-up's logs were kept").toContain("kb-termd.log");
+  });
+});
+
 // ================================================== scrollback (Spec 5)
 
 for (const g of [
@@ -150,15 +175,20 @@ for (const g of [
   });
 }
 
-test("late join between rebuilds sees every line once", async ({ page, request }) => {
+test("late join between rebuilds sees every line once, and the join is proven to land between two rebuilds", async ({ page, request }) => {
   test.setTimeout(240_000);
-  // 12 lines/s: ~8 s between rebuilds, so a join that lands after rebuild 1's
-  // marker (+ the lead-in and frame) is between rebuilds 1 and 2.
+  // 12 lines/s: ~8 s between rebuilds. The page is loaded first and the click
+  // (the join) waits for the harness's own frame-end-1 mark, so the join lands
+  // right after rebuild 1's frame and ~8 s before rebuild 2's marker.
   const h = numberedHarness({ seed: 3000, live: 400, rebuildEvery: 100, rate: 12, leadMs: 800 });
   const c = await prepare(page, request, h);
-  await waitFile(join(h.out, "soon-1"), 120_000);
-  await new Promise((r) => setTimeout(r, 1800));
-  await openPanel(page, c.sid);
+  await openPanelWhen(page, c.sid, () => waitFile(join(h.out, "frame-end-1"), 120_000));
+  const joinAt = c.socks[0].openedAt;
+  const end1 = readMark(h.out, "frame-end-1");
+  expect(end1, "the harness stamped the end of rebuild 1").not.toBeNull();
+  expect(joinAt, "the join was requested after rebuild 1's frame ended").toBeGreaterThanOrEqual(end1!);
+  const soon2 = readMark(h.out, "soon-2");
+  expect(soon2 === null || soon2 > joinAt, `the join (${joinAt}) preceded rebuild 2's marker (${soon2})`).toBe(true);
   await waitFile(join(h.out, "expected.json"), 180_000);
   const exp = readExpected(h.out);
   const text = await waitDone(page);
@@ -166,22 +196,36 @@ test("late join between rebuilds sees every line once", async ({ page, request }
   expect(r.ok, describeNumbered(r)).toBe(true);
 });
 
-test("join waits for the frame to end: the first data after the seed is outside any ?2026 frame", async ({ page, request }) => {
+test("join waits for the frame to end: a join requested INSIDE a ?2026 frame is seeded after it, outside any frame", async ({ page, request }) => {
   test.setTimeout(240_000);
-  // A slow rebuild (16 chunks x 100 ms) keeps the synchronized frame open ~1.6 s;
-  // the viewer is opened the moment the marker appears, so its join races it.
+  // A slow rebuild (16 chunks x 250 ms) keeps the synchronized frame open ~4 s.
+  // The page is loaded first; the click (the join) is released only by the
+  // harness's own frame-start-1 mark, so the join request lands inside the frame.
   const gate = join(scratch("gate"), "go");
-  const h = numberedHarness({ gate, seed: 3000, live: 300, rebuildEvery: 100, rate: 60, leadMs: 1200, slowRebuildMs: 100 });
+  const h = numberedHarness({ gate, seed: 3000, live: 300, rebuildEvery: 100, rate: 60, leadMs: 300, slowRebuildMs: 250 });
   const c = await prepare(page, request, h);
-  touch(gate);
-  await waitFile(join(h.out, "soon-1"), 120_000);
-  await openPanel(page, c.sid);
+  await openPanelWhen(page, c.sid, async () => {
+    touch(gate);
+    await waitFile(join(h.out, "frame-start-1"), 120_000);
+  });
+  await waitFile(join(h.out, "frame-end-1"), 60_000);
+  const start1 = readMark(h.out, "frame-start-1")!;
+  const end1 = readMark(h.out, "frame-end-1")!;
+  expect(end1 - start1, "the slow frame really stayed open").toBeGreaterThan(2000);
+  // The join: the first socket that was answered with a seed.
+  const joined = c.socks.find((s) => decodeStream(s.rx).texts.some((t) => t.t === "seed"));
+  expect(joined, "a socket received a seed").toBeDefined();
+  const joinAt = joined!.openedAt;
+  expect(joinAt, "the join was requested after the frame opened").toBeGreaterThanOrEqual(start1);
+  expect(joinAt, "the join was requested before the frame closed").toBeLessThan(end1);
+  const seedAt = firstTextAt(joined!, "seed")!;
+  // 250 ms of slack: the harness stamps frame-end just after it flushes.
+  expect(seedAt, `the seed (${seedAt}) waited for the frame to end (${end1})`).toBeGreaterThanOrEqual(end1 - 250);
   await waitFile(join(h.out, "expected.json"), 180_000);
   const exp = readExpected(h.out);
   const text = await waitDone(page);
   const r = checkNumbered(text, { expectTotal: exp.total });
   expect(r.ok, describeNumbered(r)).toBe(true);
-  expect(c.socks.length).toBeGreaterThan(0);
   for (const s of c.socks) {
     const d = decodeStream(s.rx);
     if (!d.texts.some((t) => t.t === "seed")) continue; // a resume has no seed to check
@@ -284,6 +328,11 @@ test("typed keys sent over the WebSocket reach the pane", async ({ page, request
 // =============================================== pictures (Spec 7)
 
 const KITTY_ID = 0x66cf38;
+// Per-channel tolerance for the centre-row probe: the spec's 2 (T25 shipped 3).
+// The probed pixels are checker-square centres (flat colour). Every run
+// annotates the worst delta it measured, so a tolerance that is too tight (or
+// loose) shows up as data, not as a guess.
+const PIXEL_TOL = 2;
 
 async function pictureChecks(page: Page, api: Api, c: Ctx, dpr: number, placements = 1): Promise<{ sha: string }> {
   expect(await page.evaluate(() => window.devicePixelRatio)).toBe(dpr);
@@ -328,14 +377,17 @@ async function pictureChecks(page: Page, api: Api, c: Ctx, dpr: number, placemen
   const near = (a: Rgb | null, b: Rgb | null, tol: number): boolean =>
     !!a && !!b && a.every((v, i) => Math.abs(v - b[i]) <= tol);
   const bad: string[] = [];
+  let worst = 0;
   const y = 50;
   for (const x of [30, 130, 210]) {
     if (x >= src.w || y >= src.h) continue;
     const want = pixel(src, x, y);
     const got = pixel(shot, (x / src.w) * shot.w, (y / src.h) * shot.h);
     expect(Math.max(...(want ?? [0])), "reference pixel is not black").toBeGreaterThan(100);
-    if (!near(got, want, 3)) bad.push(`(${x},${y}) got ${JSON.stringify(got)} want ${JSON.stringify(want)}`);
+    if (!near(got, want, PIXEL_TOL)) bad.push(`(${x},${y}) got ${JSON.stringify(got)} want ${JSON.stringify(want)}`);
+    if (got && want) worst = Math.max(worst, ...want.map((v, i) => Math.abs(v - got[i])));
   }
+  test.info().annotations.push({ type: "pixel-delta", description: `worst per-channel delta on the centre row, DPR ${dpr}: ${worst} (tolerance ${PIXEL_TOL})` });
   expect(bad, "drawn pixels that differ from the served PNG").toEqual([]);
   const g = [0.25, 0.5, 0.75].map((f) => pixel(shot, 0.5 * shot.w, f * shot.h)?.[1] ?? -1);
   expect(g[0], `green rises down the picture: ${g.join(",")}`).toBeGreaterThanOrEqual(0);
@@ -586,6 +638,28 @@ async function seedAndBeat(request: import("@playwright/test").APIRequestContext
   expect(await beat(request, { sid, event, pid, term })).toBe(200);
 }
 
+test("KNOWN LIMIT: a same-pid same-term `start` beat from another session steals the binding (terminal/binding.rs)", async ({ request }) => {
+  // binding.rs documents it: `start` is the rebind signal, so anything that
+  // beats `start` with the terminal's own pid and term id (a subagent harness
+  // is the known source) takes the binding over. This pins the behaviour as it
+  // is, so a change to it is a deliberate decision, not a silent drift.
+  test.setTimeout(120_000);
+  const api = new Api(request);
+  const a = await launch(api, idleHarness());
+  const sidA = newSid();
+  await bindSession(api, sidA, a);
+  const rowOf = async () => (await listTerms(api)).find((t) => t.id === a.id)!;
+  expect((await rowOf()).session_id).toBe(sidA);
+  const sidThief = newSid();
+  // Binding times are whole seconds: leave a second so the later claim is strictly newer.
+  await new Promise((r) => setTimeout(r, 1100));
+  await listTerms(api);
+  expect(await beat(request, { sid: sidThief, event: "start", pid: a.panePid, term: a.id })).toBe(200);
+  await expect
+    .poll(async () => (await rowOf()).session_id, { timeout: 15_000, message: "the same-pid same-term start beat took the binding" })
+    .toBe(sidThief);
+});
+
 // ============================================= security (Spec 12)
 
 test.describe("T25 gate matrix on the real server", () => {
@@ -643,12 +717,109 @@ test.describe("T25 gate matrix on the real server", () => {
     expect((await rawUpgrade(PORT_MAIN, `/api/terms/${t.id}/ws?ticket=${ticket}`, { Origin: MAIN })).status).toBe(101);
   });
 
+  test("every /api/terms route refuses no intent, a wrong Origin and an absent Origin, and a refusal touches no state", async ({ request }) => {
+    test.setTimeout(180_000);
+    const api = new Api(request);
+    const h = numberedHarness({ seed: 50, live: 10, rebuildEvery: 0, rate: 100 });
+    const t = await launch(api, h);
+    await waitFile(join(h.out, "expected.json"), 60_000);
+    const id = t.id;
+    const evil = `http://evil.test:${PORT_MAIN}`;
+    const ORIGIN_URN = "urn:kb:errors:terminal-origin-refused";
+    const INTENT_URN = "urn:kb:errors:terminal-intent-required";
+    const png = Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.alloc(24)]);
+    interface Route {
+      name: string;
+      method: "GET" | "POST";
+      path: string;
+      body?: unknown;
+      headers?: Record<string, string>;
+      /** The media GET: it DOES require the intent header (unlike the other GETs) and an absent Origin is its normal same-origin shape. */
+      media?: boolean;
+    }
+    const routes: Route[] = [
+      { name: "list", method: "GET", path: "/api/terms" },
+      { name: "launch", method: "POST", path: "/api/terms", body: { harness: "omp", cwd: root() } },
+      { name: "media", method: "GET", path: `/api/terms/media/${"0".repeat(64)}`, media: true },
+      { name: "ticket", method: "POST", path: `/api/terms/${id}/ticket`, body: {} },
+      { name: "paste", method: "POST", path: `/api/terms/${id}/paste`, body: { text: "GATEPASTE" } },
+      { name: "enter", method: "POST", path: `/api/terms/${id}/enter`, body: {} },
+      { name: "keys", method: "POST", path: `/api/terms/${id}/keys`, body: { keys: ["z", "q", "9"] } },
+      { name: "take-size", method: "POST", path: `/api/terms/${id}/take-size`, body: { cols: 90, rows: 30 } },
+      { name: "release-size", method: "POST", path: `/api/terms/${id}/release-size`, body: {} },
+      { name: "resize", method: "POST", path: `/api/terms/${id}/resize`, body: { cols: 90, rows: 30 } },
+      { name: "viewer-close", method: "POST", path: `/api/terms/${id}/viewer-close`, body: {} },
+      { name: "upload", method: "POST", path: `/api/terms/${id}/upload`, body: png, headers: { "Content-Type": "image/png" } },
+      { name: "read", method: "GET", path: `/api/terms/${id}/read` },
+      { name: "history", method: "GET", path: `/api/terms/${id}/history` },
+      { name: "grid", method: "GET", path: `/api/terms/${id}/grid` },
+      { name: "kill", method: "POST", path: `/api/terms/${id}/kill`, body: {} },
+    ];
+    const call = (r: Route, o: { origin?: string | null; intent?: boolean } = {}) =>
+      api.call(r.method, r.path, { ...o, data: r.body, headers: r.headers });
+    const problemType = async (resp: import("@playwright/test").APIResponse): Promise<string> =>
+      ((await resp.json()) as { type?: string }).type ?? "";
+
+    // State the refusals must leave alone.
+    const rowOf = async () => {
+      const row = (await listTerms(api)).find((x) => x.id === id);
+      return JSON.stringify({ pane_pid: row?.pane_pid, cols: row?.cols, rows: row?.rows, dead: row?.pane_dead ?? false, stale: row?.stale ?? false });
+    };
+    const stdinLog = (): string => (existsSync(join(h.out, "stdin.log")) ? readFileSync(join(h.out, "stdin.log"), "latin1") : "");
+    const rowBefore = await rowOf();
+    const countBefore = (await listTerms(api)).length;
+    const stdinBefore = stdinLog();
+    const ticket = await mintTicket(api, id);
+    const mediaRef = (await call(routes.find((r) => r.media)!)).status();
+    expect(mediaRef, "control: the media route with the right Origin and intent is not a gate refusal").not.toBe(403);
+
+    for (const r of routes) {
+      if (r.method === "POST" || r.media) {
+        const resp = await call(r, { intent: false });
+        expect(resp.status(), `${r.name}: no intent`).toBe(403);
+        expect(await problemType(resp), `${r.name}: no intent -> the intent refusal`).toBe(INTENT_URN);
+      }
+      const wrong = await call(r, { origin: evil });
+      expect(wrong.status(), `${r.name}: wrong Origin`).toBe(403);
+      expect(await problemType(wrong), `${r.name}: wrong Origin -> the origin refusal`).toBe(ORIGIN_URN);
+      const absent = await call(r, { origin: null });
+      if (r.media) {
+        // The media GET is same-origin `fetch`, which sends no Origin: absent is admitted (module docs, terminal/media.rs).
+        expect(absent.status(), "media: an absent Origin is the normal same-origin shape, answered like the right Origin").toBe(mediaRef);
+      } else {
+        expect(absent.status(), `${r.name}: absent Origin`).toBe(403);
+        expect(await problemType(absent), `${r.name}: absent Origin -> the origin refusal`).toBe(ORIGIN_URN);
+      }
+    }
+    // The WebSocket upgrade: wrong and absent Origin refused with a LIVE ticket in hand.
+    expect((await rawUpgrade(PORT_MAIN, `/api/terms/${id}/ws?ticket=${ticket.ticket}`, { Origin: evil })).status, "ws: wrong Origin").toBe(403);
+    expect((await rawUpgrade(PORT_MAIN, `/api/terms/${id}/ws?ticket=${ticket.ticket}`)).status, "ws: absent Origin").toBe(403);
+
+    // Nothing the refusals asked for happened.
+    expect(await rowOf(), "the terminal's row (pid, size, liveness) is unchanged").toBe(rowBefore);
+    expect((await listTerms(api)).length, "no terminal was launched or killed").toBe(countBefore);
+    expect(() => process.kill(t.panePid, 0), "the pane survived the refused kill").not.toThrow();
+    expect(stdinLog(), "nothing was pasted, typed or entered into the pane").toBe(stdinBefore);
+    expect((await rawUpgrade(PORT_MAIN, `/api/terms/${id}/ws?ticket=${ticket.ticket}`, { Origin: MAIN })).status, "the ticket was not spent by any refusal").toBe(101);
+
+    // Control: with the right Origin and intent, no route is a gate refusal
+    // (the 403 above came from the gate, not from the route or the body).
+    for (const r of routes) {
+      const body = r.name === "launch" ? {} : r.body; // an empty launch body is a 400, so the control creates nothing
+      const resp = await api.call(r.method, r.path, { data: body, headers: r.headers });
+      expect(resp.status(), `${r.name}: control with the right Origin and intent`).not.toBe(403);
+    }
+  });
+
   test("WebSocket tickets: none refused, replayed refused, a ticket for session A refused on B", async ({ request }) => {
     const api = new Api(request);
     const a = await launch(api, idleHarness());
     const b = await launch(api, idleHarness());
     const noTicket = await rawUpgrade(PORT_MAIN, `/api/terms/${a.id}/ws`, { Origin: MAIN });
-    expect([400, 403]).toContain(noTicket.status);
+    // `WsQuery.ticket` is a required `String` (terminal/ws.rs): after the Origin
+    // and caller-class steps pass, the Query extractor rejects the missing
+    // field with axum's 400, before any ticket lookup.
+    expect(noTicket.status, "an upgrade with no ticket parameter").toBe(400);
     const bogus = await rawUpgrade(PORT_MAIN, `/api/terms/${a.id}/ws?ticket=${"0".repeat(32)}`, { Origin: MAIN });
     expect(bogus.status).toBe(403);
     const t1 = await mintTicket(api, a.id);
@@ -673,10 +844,67 @@ test.describe("T25 gate matrix on the real server", () => {
 
 // ================================================ restart (Spec 10)
 
+/** Record the close code the BROWSER's own WebSocket objects see (the browser leg, past the proxy). */
+async function recordBrowserCloses(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const Orig = window.WebSocket;
+    window.WebSocket = new Proxy(Orig, {
+      construct(target, args: ConstructorParameters<typeof WebSocket>) {
+        const ws = new target(...args);
+        ws.addEventListener("close", (e) => {
+          const w = window as unknown as { __t25Closes?: Array<{ url: string; code: number }> };
+          (w.__t25Closes ??= []).push({ url: ws.url, code: e.code });
+        });
+        return ws;
+      },
+    });
+  });
+}
+
+const browserCloses = (page: Page): Promise<Array<{ url: string; code: number }>> =>
+  page.evaluate(() => (window as unknown as { __t25Closes?: Array<{ url: string; code: number }> }).__t25Closes ?? []);
+
+/**
+ * While the daemon restarts its card route is briefly empty/unavailable, which
+ * unmounts the session page's terminal slot (a product behaviour about the CARD
+ * lane, not about the socket under test). Serving the last good terminal card
+ * through the outage keeps the panel mounted, so the reconnect that follows is
+ * always the panel's own, with its stored offset and epoch.
+ */
+async function pinTerminalCard(page: Page): Promise<void> {
+  let lastGood: string | null = null;
+  await page.route(/\/api\/sessions\/[^/]+\/card(\?.*)?$/, async (route) => {
+    const good = (body: string): boolean => {
+      try {
+        return (JSON.parse(body) as { terminal?: { available?: boolean } }).terminal?.available === true;
+      } catch {
+        return false;
+      }
+    };
+    try {
+      const resp = await route.fetch();
+      const body = await resp.text();
+      if (resp.ok() && good(body)) {
+        lastGood = body;
+        await route.fulfill({ response: resp, body });
+      } else if (lastGood !== null) {
+        await route.fulfill({ status: 200, contentType: "application/json", body: lastGood });
+      } else {
+        await route.fulfill({ response: resp, body });
+      }
+    } catch {
+      if (lastGood !== null) await route.fulfill({ status: 200, contentType: "application/json", body: lastGood });
+      else await route.abort();
+    }
+  });
+}
+
 test.describe.serial("T25 in-process restart", () => {
-  test("kb restart closes 1012 within 3 s, holder survives, scrollback intact", async ({ page, request }) => {
+  test("kb restart closes 1012 within 3 s (proxy and browser), holder survives, the panel resumes with from= and the epoch, scrollback intact", async ({ page, request }) => {
     test.setTimeout(300_000);
     const conns = await proxySockets(page);
+    await recordBrowserCloses(page);
+    await pinTerminalCard(page);
     const gate = join(scratch("gate"), "go");
     const h = numberedHarness({ gate, seed: 3000, live: 700, rebuildEvery: 0, rate: 40 });
     const c = await prepare(page, request, h);
@@ -694,6 +922,11 @@ test.describe.serial("T25 in-process restart", () => {
       expect(put.status(), await put.text()).toBe(200);
       await expect.poll(() => conns[0].serverClose?.code, { timeout: 10_000 }).toBe(1012);
       expect(conns[0].serverClose!.at - t0, "ms from the restart request to the 1012 close").toBeLessThan(3000);
+      // The browser leg: the page's own WebSocket was closed with 1012, not
+      // only the proxy's server side.
+      await expect
+        .poll(async () => (await browserCloses(page)).map((x) => x.code), { timeout: 10_000, message: "close codes the page's sockets saw" })
+        .toContain(1012);
 
       // The daemon comes back; the runner and the tmux holder never moved.
       await expect
@@ -713,28 +946,22 @@ test.describe.serial("T25 in-process restart", () => {
       const holder = spawnSync(tmuxBin(), ["-S", join(holderDir(), `${c.term.id}.sock`), "list-sessions"], { encoding: "utf-8" });
       expect(holder.status, `tmux holder: ${holder.stderr}`).toBe(0);
 
-      // The SPA reconnects (new ticket); if the panel survived, with from=.
-      // If the card lane flapped while the registry was empty the slot re-mounts closed: reopen it.
-      const giveUp = Date.now() + 20_000;
-      while (!(await page.locator("[data-kb-term]").count())) {
-        if (await page.locator('[data-testid="kb-term-open"]').count()) {
-          await page.locator('[data-testid="kb-term-open"]').click();
-        } else if (Date.now() > giveUp) {
-          await page.goto(`${MAIN}/sessions/${c.sid}`);
-          await page.locator('[data-testid="kb-term-open"]').click();
-        }
-        await new Promise((r) => setTimeout(r, 500));
-      }
-      await expect.poll(() => conns.length, { timeout: 60_000 }).toBeGreaterThan(1);
+      // The panel (never re-mounted, the card is pinned) reconnects on its own.
       await waitPhase(page, "live", 60_000);
-      const same = await page.evaluate(() => document.querySelector("[data-kb-term]")?.getAttribute("data-t25-mark") === "1");
-      if (same) {
-        const from = fromOf(conns[1]);
-        expect(from, "the reconnect after a restart carries from=").not.toBeNull();
-        expect(from!).toBeGreaterThan(0);
-      } else {
-        test.info().annotations.push({ type: "note", description: "the panel was re-mounted after the restart (card lane briefly unavailable): reconnected with a fresh join" });
-      }
+      expect(
+        await page.evaluate(() => document.querySelector("[data-kb-term]")?.getAttribute("data-t25-mark") === "1"),
+        "the panel element survived the restart (no re-mount)",
+      ).toBe(true);
+      // Reconnect attempts while the daemon is down may be refused before they
+      // get a hello; the resume is the first attempt the daemon answered.
+      await expect.poll(() => conns.slice(1).some((x) => helloEpoch(x) !== null), { timeout: 60_000 }).toBe(true);
+      const resumed = conns.slice(1).find((x) => helloEpoch(x) !== null)!;
+      const from = fromOf(resumed);
+      expect(from, "the reconnect after a restart carries from=").not.toBeNull();
+      expect(from!, "from= is the last applied offset").toBeGreaterThan(0);
+      const prevEpoch = helloEpoch(conns[0]);
+      expect(prevEpoch, "the first connection received a hello").toBeTruthy();
+      expect(epochOf(resumed), "the reconnect echoes the epoch the first connection announced").toBe(prevEpoch);
       await waitFile(join(h.out, "expected.json"), 180_000);
       const exp = readExpected(h.out);
       const text = await waitDone(page);
