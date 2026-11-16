@@ -16,3 +16,6 @@ Restart=on-failure
 KillMode=process
 
 Type=simple
+
+[Install]
+WantedBy=default.target

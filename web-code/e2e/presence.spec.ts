@@ -111,7 +111,13 @@ test.describe("Presence in the file tree", () => {
     await row(page).click();
     await expect(row(page)).not.toHaveAttribute("data-kbc-presence-level", /.+/);
     // Open a different file: a later touch on the first lights it again.
-    await page.locator(".kbc-tree__row", { hasText: CALLER_FILE }).first().click();
+    const caller = page.locator(".kbc-tree__row", { hasText: CALLER_FILE }).first();
+    await caller.click();
+    // The open file is router state: until the tree shows the new selection,
+    // the store still treats KNOWN_FILE as the open one and a touch on it is
+    // "seen as it lands". Wait for the real navigation before touching.
+    await expect(caller).toHaveClass(/kbc-tree__row--selected/);
+    await expect(row(page)).not.toHaveClass(/kbc-tree__row--selected/);
     await mirrorTouch(page, [KNOWN_FILE]);
     await expect(row(page)).toHaveAttribute("data-kbc-presence-level", /.+/);
   });
