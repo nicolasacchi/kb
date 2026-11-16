@@ -21,10 +21,20 @@ type Options = {
 /// calls preventDefault when a step is available or the tail of a step's own
 /// gesture is being swallowed.
 export function useSemanticZoom({ node, view, gesture, onStep }: Options) {
+  // The rung the NEXT step is computed from. Resynced from the prop on every
+  // render (so external navigation wins), and advanced optimistically by `stepRef`
+  // below: the caller navigates exactly to the rung it is handed, but the
+  // navigation lands before the re-render that delivers the new `view` prop, so
+  // a second keypress or wheel notch in that window would otherwise step from
+  // the stale rung (skipping or repeating one).
   const viewRef = useRef(view);
   viewRef.current = view;
   const onStepRef = useRef(onStep);
   onStepRef.current = onStep;
+  const stepRef = useRef((to: ZoomView) => {
+    viewRef.current = to;
+    onStepRef.current(to);
+  });
 
   useEffect(() => {
     if (!node || !gesture) return;
@@ -42,7 +52,7 @@ export function useSemanticZoom({ node, view, gesture, onStep }: Options) {
       e.stopPropagation();
       if (r.action === "step" && r.dir) {
         const to = nextView(viewRef.current, r.dir);
-        if (to) onStepRef.current(to);
+        if (to) stepRef.current(to);
       }
     };
     // Capture phase + non-passive so we run before the atlas canvas handler.
@@ -58,7 +68,7 @@ export function useSemanticZoom({ node, view, gesture, onStep }: Options) {
       const to = nextView(viewRef.current, e.key === "=" ? "in" : "out");
       if (!to) return;
       e.preventDefault();
-      onStepRef.current(to);
+      stepRef.current(to);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

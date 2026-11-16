@@ -105,7 +105,26 @@ describe("useSemanticZoom", () => {
     document.body.append(input);
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "=", bubbles: true }));
     input.remove();
-    expect(steps).toEqual(["grid", "atlas"]);
+    expect(steps).toEqual(["grid", "list"]);
+  });
+
+  it("steps from the rung it just stepped to, before the view prop catches up", async () => {
+    const steps: ZoomView[] = [];
+    await mount("list", steps); // onStep never re-renders: the prop stays "list"
+    const key = (k: string) => window.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true }));
+    key("=");
+    key("-");
+    key("-");
+    expect(steps).toEqual(["grid", "list", "atlas"]);
+  });
+
+  it("wheel notches also step from the rung just stepped to", async () => {
+    const steps: ZoomView[] = [];
+    await mount("atlas", steps);
+    wheel(content, -100); // atlas -> list
+    await new Promise((r) => setTimeout(r, 400)); // let the gesture settle
+    wheel(content, -100); // must continue list -> grid, not repeat atlas -> list
+    expect(steps).toEqual(["list", "grid"]);
   });
 
   it("ignores key auto-repeat so holding a key takes one step", async () => {
