@@ -43,12 +43,15 @@ async function openPhone(page: Page, opts: Record<string, unknown>): Promise<Sta
   await expect(page.locator(VP)).toBeVisible({ timeout: 15_000 });
   await expect(page.locator(VP)).toHaveAttribute("data-kb-term-phase", "live", { timeout: 30_000 });
   // The seed is applied before it is parsed: wait for the buffer to stop growing
-  // so a test never measures a position that is still moving under it.
-  let last = -1;
+  // so a test never measures a position that is still moving under it. The
+  // viewport position is part of the signature: on WebKit CI the bottom position
+  // was seen to move by one line (1961 -> 1960) after a test had taken its
+  // baseline `vy`, with a sub-lock-distance touch as the only gesture in between.
+  let last = "";
   let since = Date.now();
   for (let i = 0; i < 200; i += 1) {
     await page.waitForTimeout(50);
-    const len = await num(page, "len");
+    const len = `${await num(page, "len")}/${await num(page, "vy")}/${await num(page, "base")}`;
     if (len !== last) {
       last = len;
       since = Date.now();
