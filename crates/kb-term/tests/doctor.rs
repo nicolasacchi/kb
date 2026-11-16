@@ -571,10 +571,16 @@ fn doctor_runner_env_resolves_against_the_runner_not_the_shell() {
         status_of(&checks, "runner_env_harness_claude"),
         CheckStatus::Pass
     );
-    // omp is on the shell PATH only: the pane would exit 127.
+    // omp is on the shell PATH only: launching it would exit 127, but the
+    // runner works, so this is a WARN (never a FAIL that exits 1 for every
+    // installed-but-unused harness).
     assert_eq!(
         status_of(&checks, "runner_env_harness_omp"),
-        CheckStatus::Fail
+        CheckStatus::Warn
+    );
+    assert!(
+        checks.iter().all(|c| c.status != CheckStatus::Fail),
+        "an off-PATH harness alone must not fail the doctor"
     );
     // Not installed anywhere: no check at all.
     assert!(checks.iter().all(|c| c.id != "runner_env_harness_grok"));
@@ -602,4 +608,219 @@ fn doctor_runner_env_skips_when_the_runner_is_unreadable() {
     let checks = doctor::decide_runner_env(None, &[("omp".to_string(), None)]);
     assert_eq!(checks.len(), 1);
     assert_eq!(checks[0].status, CheckStatus::Skip);
+}
+
+// ---- FXTERMCLI: honest harness probe outcomes -------------------------
+
+fn probe(dir: &std::path::Path, body: &str, secs: u64) -> doctor::HarnessProbe {
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let exe = fake_exe(dir, &format!("harness{n}"), body);
+    doctor::probe_harness_at(&exe, &[], std::time::Duration::from_secs(secs))
+}
+
+#[test]
+fn doctor_harness_probe_tells_failure_timeout_and_silence_apart() {
+    let dir = tempfile::tempdir().unwrap();
+    // A good version line.
+    match probe(dir.path(), "#!/bin/sh\necho 'tool 2.2.7'\n", 5) {
+        doctor::HarnessProbe::Version { line, .. } => assert_eq!(line, "tool 2.2.7"),
+        other => panic!("{other:?}"),
+    }
+    // A non-zero exit carries the code and the first stderr line.
+    let failed = probe(dir.path(), "#!/bin/sh\necho 'no HOME set' >&2\nexit 7\n", 5);
+    assert!(matches!(
+        &failed,
+        doctor::HarnessProbe::Failed { exit: Some(7), stderr, .. } if stderr == "no HOME set"
+    ));
+    // A hang is a timeout, not a failure and not "not found".
+    let slow = probe(dir.path(), "#!/bin/sh\nexec sleep 30\n", 1);
+    assert!(matches!(
+        &slow,
+        doctor::HarnessProbe::TimedOut { secs: 1, .. }
+    ));
+    // Exit 0 with no output is its own case.
+    let silent = probe(dir.path(), "#!/bin/sh\nexit 0\n", 5);
+    assert!(matches!(&silent, doctor::HarnessProbe::NoOutput { .. }));
+    // Verdicts: the three found-but-unverified cases WARN naming the
+    // path and the cause, and none claims the binary is missing.
+    for (p, want) in [
+        (&failed, "exit 7"),
+        (&slow, "timed out after 1s"),
+        (&silent, "printed no version"),
+    ] {
+        let c = doctor::decide_harness_probe("opencode", p, None, false);
+        assert_eq!(c.status, CheckStatus::Warn, "{p:?}");
+        assert!(c.detail.contains(want), "{}", c.detail);
+        assert!(c.detail.contains("found at"), "{}", c.detail);
+        assert!(!c.detail.contains("not found"), "{}", c.detail);
+    }
+    // Only a genuinely absent binary is "not found" (SKIP).
+    let c = doctor::decide_harness_probe("opencode", &doctor::HarnessProbe::NotFound, None, false);
+    assert_eq!(c.status, CheckStatus::Skip);
+    assert!(c.detail.contains("not found"));
+    // A spawn failure (not executable content) is reported as such.
+    let exe = dir.path().join("noexec");
+    std::fs::write(&exe, "x").unwrap();
+    let c = doctor::probe_harness_at(&exe, &[], std::time::Duration::from_secs(2));
+    assert!(matches!(c, doctor::HarnessProbe::NoOutput { .. }), "{c:?}");
+}
+
+// ---- FXTERMCLI: injected host seams ------------------------------------
+
+#[derive(Default)]
+struct FakeHost {
+    /// `show MainPID` answer: None = systemctl unavailable.
+    main_pid: Option<(bool, String)>,
+    enabled: Option<String>,
+    procs: Vec<(u32, String, Option<u32>)>,
+    uid: Option<u32>,
+    environ: std::collections::HashMap<u32, Vec<u8>>,
+    asked: std::cell::RefCell<Vec<String>>,
+}
+
+impl doctor::HostProbe for FakeHost {
+    fn systemctl_user(&self, args: &[&str]) -> Option<(bool, String, String)> {
+        self.asked.borrow_mut().push(args.join(" "));
+        match args.first().copied() {
+            Some("show") => self
+                .main_pid
+                .clone()
+                .map(|(ok, out)| (ok, out, String::new())),
+            Some("is-enabled") => self.enabled.clone().map(|o| (true, o, String::new())),
+            _ => None,
+        }
+    }
+    fn processes(&self) -> Vec<(u32, String, Option<u32>)> {
+        self.procs.clone()
+    }
+    fn my_uid(&self) -> Option<u32> {
+        self.uid
+    }
+    fn read_environ(&self, pid: u32) -> Option<Vec<u8>> {
+        self.environ.get(&pid).cloned()
+    }
+}
+
+fn termd(pid: u32, uid: u32) -> (u32, String, Option<u32>) {
+    (pid, "kb-termd".to_string(), Some(uid))
+}
+
+#[test]
+fn doctor_runner_pid_prefers_mainpid_over_a_stray_same_uid_process() {
+    // The unit's MainPID wins even when another kb-termd of ours exists.
+    let host = FakeHost {
+        main_pid: Some((true, "4242\n".into())),
+        procs: vec![termd(1111, 1000)],
+        uid: Some(1000),
+        ..FakeHost::default()
+    };
+    assert_eq!(doctor::probe_runner_pid_with(&host), Some(4242));
+    // MainPID=0 (unit stopped): systemd answered, so a stray process is NOT
+    // adopted as the runner.
+    let host = FakeHost {
+        main_pid: Some((true, "0\n".into())),
+        procs: vec![termd(1111, 1000)],
+        uid: Some(1000),
+        ..FakeHost::default()
+    };
+    assert_eq!(doctor::probe_runner_pid_with(&host), None);
+}
+
+#[test]
+fn doctor_runner_pid_proc_fallback_only_when_systemd_cannot_answer() {
+    let procs = vec![
+        (1, "init".to_string(), Some(0)),
+        termd(900, 2000), // another user's runner
+        termd(901, 1000),
+        (902, "kb-termd-x".to_string(), Some(1000)),
+    ];
+    for unavailable in [
+        None,
+        Some((false, String::new())),
+        Some((true, "junk\n".into())),
+    ] {
+        let host = FakeHost {
+            main_pid: unavailable,
+            procs: procs.clone(),
+            uid: Some(1000),
+            ..FakeHost::default()
+        };
+        assert_eq!(doctor::probe_runner_pid_with(&host), Some(901));
+    }
+    // Two of our own: ambiguous, so none.
+    let mut two = procs.clone();
+    two.push(termd(903, 1000));
+    let host = FakeHost {
+        procs: two,
+        uid: Some(1000),
+        ..FakeHost::default()
+    };
+    assert_eq!(doctor::probe_runner_pid_with(&host), None);
+    // Unknown own uid: nothing is matched.
+    let host = FakeHost {
+        procs,
+        uid: None,
+        ..FakeHost::default()
+    };
+    assert_eq!(doctor::probe_runner_pid_with(&host), None);
+}
+
+#[test]
+fn doctor_termd_enabled_reads_the_state_word_through_the_seam() {
+    let host = FakeHost {
+        enabled: Some("static\n".into()),
+        ..FakeHost::default()
+    };
+    assert_eq!(
+        doctor::probe_termd_enabled_with(&host).as_deref(),
+        Some("static")
+    );
+    assert_eq!(
+        doctor::probe_termd_enabled_with(&FakeHost::default()),
+        None,
+        "systemd unavailable is None, which decides to SKIP"
+    );
+}
+
+/// The wiring `run_checks` uses: boot enablement, then the runner env read
+/// from the pid the unit names, through the seam only.
+#[test]
+fn doctor_host_state_checks_wire_pid_environ_and_enablement_together() {
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    fake_exe(&bin, "kb", "#!/bin/sh\n");
+    let mut environ = std::collections::HashMap::new();
+    environ.insert(
+        4242,
+        format!("PATH={}\0KB_SESSIONS_DIR=/s\0", bin.display()).into_bytes(),
+    );
+    // A different kb-termd with a bad env must not be the one read.
+    environ.insert(1111, b"PATH=/nowhere\0".to_vec());
+    let host = FakeHost {
+        main_pid: Some((true, "4242\n".into())),
+        enabled: Some("enabled\n".into()),
+        procs: vec![termd(1111, 1000)],
+        uid: Some(1000),
+        environ,
+        ..FakeHost::default()
+    };
+    let checks = doctor::host_state_checks(&host, &[]);
+    assert_eq!(status_of(&checks, "termd_enabled"), CheckStatus::Pass);
+    assert_eq!(
+        status_of(&checks, "runner_env_sessions_dir"),
+        CheckStatus::Pass
+    );
+    assert_eq!(status_of(&checks, "runner_env_kb"), CheckStatus::Pass);
+    // Unreadable environ: one runner_env SKIP, still alongside termd_enabled.
+    let host = FakeHost {
+        main_pid: Some((true, "4242\n".into())),
+        enabled: Some("disabled\n".into()),
+        uid: Some(1000),
+        ..FakeHost::default()
+    };
+    let checks = doctor::host_state_checks(&host, &[]);
+    assert_eq!(status_of(&checks, "termd_enabled"), CheckStatus::Warn);
+    assert_eq!(status_of(&checks, "runner_env"), CheckStatus::Skip);
 }
