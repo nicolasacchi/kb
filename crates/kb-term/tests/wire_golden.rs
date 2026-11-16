@@ -410,6 +410,7 @@ fn golden_files_are_complete() {
             "resp_err.json",
             "resp_list.json",
             "session_info.json",
+            "upload_data.json",
         ])
         .map(str::to_string)
         .collect();
