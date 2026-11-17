@@ -82,7 +82,35 @@ fn drain<R: Read + Send + 'static>(
     (buf, handle)
 }
 
+/// What one script run left behind (see `spawn_hook`).
+struct HookRun {
+    status: Option<std::process::ExitStatus>,
+    timed_out: bool,
+    stdout: String,
+    stderr: String,
+}
+
 fn run_hook(script: &str, real_kb: bool, env: &[(&str, &str)]) {
+    let HookRun {
+        status,
+        timed_out,
+        stdout,
+        stderr,
+    } = spawn_hook(script, real_kb, env);
+    assert!(
+        !timed_out,
+        "{script} exceeded {HOOK_SCRIPT_DEADLINE:?} and was killed (its own step deadlines did not fire first):\n{stdout}\n{stderr}"
+    );
+    let status = status.expect("exit status when not timed out");
+    assert!(
+        status.success() && !stdout.contains("not ok"),
+        "{script} failed:\n{stdout}\n{stderr}"
+    );
+}
+
+/// Spawn one script under the shared deadline and collect its output without
+/// judging the exit status (a self-test that EXPECTS a failure needs it).
+fn spawn_hook(script: &str, real_kb: bool, env: &[(&str, &str)]) -> HookRun {
     let (mut cmd, _sandbox) = hook_command(script);
     if real_kb {
         let kb = PathBuf::from(env!("CARGO_BIN_EXE_kb"));
@@ -117,15 +145,12 @@ fn run_hook(script: &str, real_kb: bool, env: &[(&str, &str)]) {
     }
     let stdout = String::from_utf8_lossy(&out_buf.lock().unwrap()).into_owned();
     let stderr = String::from_utf8_lossy(&err_buf.lock().unwrap()).into_owned();
-    assert!(
-        !timed_out,
-        "{script} exceeded {HOOK_SCRIPT_DEADLINE:?} and was killed (its own step deadlines did not fire first):\n{stdout}\n{stderr}"
-    );
-    let status = status.expect("exit status when not timed out");
-    assert!(
-        status.success() && !stdout.contains("not ok"),
-        "{script} failed:\n{stdout}\n{stderr}"
-    );
+    HookRun {
+        status,
+        timed_out,
+        stdout,
+        stderr,
+    }
 }
 
 fn run(script: &str) {
@@ -354,6 +379,57 @@ fn omp_segmented_capture_landing_cap_scales_and_is_bounded() {
 #[test]
 fn omp_segmented_capture_stuck_frozen_part_and_translator_drift() {
     omp_segments_group("g7");
+}
+
+/// FXMINTEST - the deadline diagnostics of the segmented capture script had
+/// never run: `seg_die`/`seg_diag` fire only on a stall. `SEG_SELFTEST=deadline`
+/// makes the script stall on purpose in its own sandbox (a step sleeping past
+/// a 1 s deadline, with a held lock, a parked spool item and a log line), so
+/// this asserts from outside that the run FAILS and that the dump names the
+/// step and carries every section a real stall would need.
+#[test]
+fn omp_segmented_capture_deadline_dump_names_the_step_and_every_section() {
+    let run = spawn_hook(
+        "test-capture-omp-segments.sh",
+        false,
+        &[("SEG_SELFTEST", "deadline")],
+    );
+    let out = format!("{}\n{}", run.stdout, run.stderr);
+    assert!(
+        !run.timed_out,
+        "the self-test must hit its own 1 s deadline, not the outer one:\n{out}"
+    );
+    let status = run.status.expect("exit status when not timed out");
+    assert!(
+        !status.success(),
+        "a deadline expiry must exit non-zero:\n{out}"
+    );
+    let step = "selftest deadline step still running after 1s";
+    let deadline = format!("DEADLINE: {step}");
+    let header = format!("=== DIAGNOSTICS: {step}");
+    for want in [
+        "not ok  - [",
+        deadline.as_str(),
+        header.as_str(),
+        "--- processes",
+        "sleep 31",
+        "--- lock files",
+        "HELD  ",
+        "selftest.lock",
+        "--- locks dir",
+        "--- spool dir",
+        "selftest-item",
+        "--- corpus dir",
+        "--- tail ",
+        "selftest-log-marker",
+        "=== END DIAGNOSTICS ===",
+        "passed=0 failed=1",
+    ] {
+        assert!(
+            out.contains(want),
+            "the deadline dump lacks {want:?}:\n{out}"
+        );
+    }
 }
 
 /// The group split cannot silently drop a scenario: the script carries exactly
