@@ -35,3 +35,7 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# `start_paused` tests (runner_client, runner kill/stream) need the paused
+# clock; declared here so a `-p kb-term` build does not rely on another
+# crate's feature unification.
+tokio = { workspace = true, features = ["test-util"] }

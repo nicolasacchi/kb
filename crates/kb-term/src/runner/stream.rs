@@ -1358,7 +1358,8 @@ mod tests {
     /// 2 s write bound fire: the delivery fails `busy-pty`, and that error
     /// ENDS the splice. The runner connection closing is what the browser
     /// socket sees as an upstream end (kb-server closes 1011 on it), so the
-    /// client side must read EOF (not a frame) once the splice returns.
+    /// client side must see the connection end (EOF or a reset, never a
+    /// frame) once the splice returns.
     /// Runs on a paused clock: the bound is measured on virtual time, so
     /// the test neither sleeps 2 s nor depends on host speed.
     #[tokio::test(start_paused = true)]
@@ -1408,9 +1409,10 @@ mod tests {
         );
         let mut rest = Vec::new();
         // The splice dropped its halves with unread client bytes pending,
-        // so the peer sees either a clean EOF or a reset: both are the
-        // connection ending (what kb-server turns into a 1011 close),
-        // never a data frame.
+        // so the peer sees either a clean EOF or a reset. This test pins
+        // only "the connection ends and no data frame follows"; which of
+        // the two the kernel reports is deliberately NOT pinned (it
+        // depends on whether unread bytes were still queued).
         match peer_read.read_to_end(&mut rest).await {
             Ok(n) => assert_eq!(n, 0, "no data after the failure"),
             Err(e) => assert_eq!(e.kind(), std::io::ErrorKind::ConnectionReset, "{e}"),
@@ -1468,6 +1470,50 @@ mod tests {
         let (reply, _reader) = open_stream(&sock, id).await;
         assert_eq!(reply["status"], "err", "{reply}");
         assert_eq!(reply["code"], "too-many-viewers", "{reply}");
+        let _ = tx.send(());
+        let _ = tokio::time::timeout(DEADLINE, server).await;
+    }
+
+    /// FXMINTERM: the connection handler holds the stream's slot for the
+    /// WHOLE splice. Binding it to `_` (an immediate drop) would admit a
+    /// second viewer past the cap while the first is live, which this pins
+    /// over the real runner socket: cap = 1, a live stream refuses a second
+    /// `stream` and a `viewer_open` with `too-many-viewers`; once the first
+    /// stream ends the slot is free again.
+    #[tokio::test]
+    async fn the_stream_handler_holds_its_slot_for_the_whole_splice() {
+        let (mut runner, _out, _ready, _dir) = fake_tmux_runner();
+        runner.cfg.max_viewers_per_session = 1;
+        let id = "abcd1234";
+        let tap_dir = runner.sessions_dir().join(id);
+        std::fs::create_dir_all(&tap_dir).unwrap();
+        let tap_listener = tokio::net::UnixListener::bind(tap_dir.join("tap.sock")).unwrap();
+        // A tap that accepts every connection and holds it open.
+        let tap = tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((conn, _)) = tap_listener.accept().await {
+                held.push(conn);
+            }
+        });
+        let (runner, sock, tx, server) = serve_runner(runner);
+        let (first, reader) = open_stream(&sock, id).await;
+        assert_eq!(first["status"], "ok", "{first}");
+        // The first stream is live: its slot is taken.
+        let (second, _second_reader) = open_stream(&sock, id).await;
+        assert_eq!(second["status"], "err", "{second}");
+        assert_eq!(second["code"], "too-many-viewers", "{second}");
+        let err = runner.viewer_open(id, "cli-a", 80, 24).await.unwrap_err();
+        assert_eq!(err.code(), "too-many-viewers", "{err}");
+        // The first client goes away: the splice ends and frees the slot.
+        drop(reader);
+        let start = std::time::Instant::now();
+        while runner.viewers_full(id).await {
+            assert!(start.elapsed() < DEADLINE, "the slot was never released");
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let (third, _third_reader) = open_stream(&sock, id).await;
+        assert_eq!(third["status"], "ok", "the slot is free again: {third}");
+        tap.abort();
         let _ = tx.send(());
         let _ = tokio::time::timeout(DEADLINE, server).await;
     }
