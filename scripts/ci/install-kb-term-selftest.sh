@@ -336,6 +336,30 @@ assert found.get("KB_SESSIONS_DIR") == want_sess, found.get("KB_SESSIONS_DIR")
 PYEOF
 say_ok "4c drop-in carries kb's dir and quotes values for systemd"
 
+# 4d. a harness dir the printed PATH cannot carry is skipped WITH a warning on
+# stderr naming the dir (not silently), and the install still succeeds. `command
+# -v` resolves through PATH, which splits at ':', so a colon dir is unreachable
+# from here; the newline arm of the same `case` is driven instead and the
+# warning text covers both characters.
+nldir="$work/nl
+dir"
+mkdir -p "$nldir"
+printf '#!/bin/sh\n' > "$nldir/omp"; chmod 755 "$nldir/omp"
+env -i HOME="$work/home" XDG_CONFIG_HOME="$work/home/.config" \
+    PATH="$nldir:$PATH" PREFIX="$work/p4d" \
+    KB_BASE_URL="file://$work/mirror" KB_VERSION="$ver" \
+    sh "$install_sh" >"$work/out" 2>"$work/err" \
+  || { cat "$work/err" >&2; fail "install with an unprintable harness dir should succeed"; }
+grep -q 'install-kb-term: warning: not adding the directory of omp' "$work/err" \
+  || { cat "$work/err" >&2; fail "no stderr warning for the skipped PATH dir"; }
+grep -qF "$work/nl" "$work/err" && grep -qx 'dir' "$work/err" \
+  || { cat "$work/err" >&2; fail "the warning does not name the dir"; }
+if grep -q 'warning: not adding' "$work/out"; then fail "the warning must go to stderr, not stdout"; fi
+if grep 'Environment="PATH=' "$work/out" | grep -qF "$work/nl"; then
+  fail "the skipped dir leaked into the printed PATH"
+fi
+say_ok "4d an unprintable PATH dir is skipped with a stderr warning"
+
 # 5. gh attestation fails -> abort with nothing installed; override proceeds
 if run "$work/p5" PATH="$work/gh-bin:$PATH" FAKE_GH_VERIFY=1; then fail "failed attestation must abort"; fi
 [ ! -e "$work/p5/bin/kb-termd" ] || fail "installed despite failed attestation"

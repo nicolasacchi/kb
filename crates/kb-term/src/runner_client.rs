@@ -161,6 +161,9 @@ impl RunnerClient {
         self.next_id += 1;
         let (mut line, expected) = request_line(id, req).map_err(RunnerClientError::Unreachable)?;
         line.push('\n');
+        // The flag describes THIS call: reset it before anything can fail
+        // (a failed dial must not report the previous call's timeout).
+        self.timed_out = false;
         // Cancel-safe: the connection is TAKEN out of `self` for the whole
         // exchange and put back only after a clean, paired answer. A call
         // future dropped at any await (after the request was written,
@@ -170,7 +173,6 @@ impl RunnerClient {
             Some(stream) => stream,
             None => dial(&self.path).await?,
         };
-        self.timed_out = false;
         let outcome = Self::exchange(
             &mut stream,
             &self.path,
@@ -502,14 +504,34 @@ mod tests {
     use std::sync::Arc;
     use tokio::io::AsyncBufReadExt;
 
+    /// A gate a scripted reply waits on, with a signal for "the reply was
+    /// written (or the write failed)". Both are `Notify` permits, so the
+    /// order of the test's `notify_one` and the server's `notified` never
+    /// matters and no wall-clock sleep is needed.
+    #[derive(Default)]
+    struct Gate {
+        release: tokio::sync::Notify,
+        delivered: tokio::sync::Notify,
+    }
+
     /// What the scripted runner does with one request line.
     enum Act {
         Reply(String),
-        Delayed(Duration, String),
+        /// Hold the reply until `Gate::release` fires, write it, then fire
+        /// `Gate::delivered` (whether or not the write landed).
+        Gated(Arc<Gate>, String),
         /// Close the connection without answering.
         Close,
         /// Answer, then close the connection.
         ReplyThenClose(String),
+    }
+
+    /// Signals from the scripted runner's connection tasks.
+    #[derive(Default)]
+    struct Signals {
+        /// Fires once a connection task has finished and dropped both of
+        /// its halves (the peer is then really closed).
+        closed: tokio::sync::Notify,
     }
 
     /// The `id` a request line carries (a session-id string or the numeric
@@ -528,17 +550,72 @@ mod tests {
         )
     }
 
+    /// One scripted connection; both halves drop when it returns.
+    async fn serve_conn(
+        conn: tokio::net::UnixStream,
+        n: usize,
+        script: Arc<impl Fn(usize, &str) -> Act>,
+    ) {
+        let (read, mut write) = conn.into_split();
+        let mut read = tokio::io::BufReader::new(read);
+        loop {
+            let mut line = String::new();
+            match read.read_line(&mut line).await {
+                Ok(0) | Err(_) => return,
+                Ok(_) => {}
+            }
+            let mut close_after = false;
+            let mut gate = None;
+            let reply = match script(n, &line) {
+                Act::Close => return,
+                Act::ReplyThenClose(r) => {
+                    close_after = true;
+                    r
+                }
+                Act::Reply(r) => r,
+                Act::Gated(g, r) => {
+                    g.release.notified().await;
+                    gate = Some(g);
+                    r
+                }
+            };
+            let wrote = write.write_all(reply.as_bytes()).await;
+            if let Some(g) = gate {
+                g.delivered.notify_one();
+            }
+            if wrote.is_err() || close_after {
+                return;
+            }
+        }
+    }
+
     /// A scripted runner.sock: `script(connection number from 1, request
     /// line)` decides each answer. Returns the accept count.
     fn scripted_runner(
         dir: &Path,
         script: impl Fn(usize, &str) -> Act + Send + Sync + 'static,
     ) -> (PathBuf, Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {
+        let (sock, conns, task, _signals) = scripted_runner_signals(dir, script);
+        (sock, conns, task)
+    }
+
+    /// [`scripted_runner`] plus its [`Signals`].
+    fn scripted_runner_signals(
+        dir: &Path,
+        script: impl Fn(usize, &str) -> Act + Send + Sync + 'static,
+    ) -> (
+        PathBuf,
+        Arc<AtomicUsize>,
+        tokio::task::JoinHandle<()>,
+        Arc<Signals>,
+    ) {
         let sock = dir.join("scripted.sock");
         let listener = tokio::net::UnixListener::bind(&sock).unwrap();
         let conns = Arc::new(AtomicUsize::new(0));
         let script = Arc::new(script);
+        let signals = Arc::new(Signals::default());
         let accepted = conns.clone();
+        let sig = signals.clone();
         let task = tokio::spawn(async move {
             loop {
                 let Ok((conn, _)) = listener.accept().await else {
@@ -546,36 +623,14 @@ mod tests {
                 };
                 let n = accepted.fetch_add(1, Ordering::SeqCst) + 1;
                 let script = script.clone();
+                let sig = sig.clone();
                 tokio::spawn(async move {
-                    let (read, mut write) = conn.into_split();
-                    let mut read = tokio::io::BufReader::new(read);
-                    loop {
-                        let mut line = String::new();
-                        match read.read_line(&mut line).await {
-                            Ok(0) | Err(_) => return,
-                            Ok(_) => {}
-                        }
-                        let mut close_after = false;
-                        let reply = match script(n, &line) {
-                            Act::Close => return,
-                            Act::ReplyThenClose(r) => {
-                                close_after = true;
-                                r
-                            }
-                            Act::Reply(r) => r,
-                            Act::Delayed(d, r) => {
-                                tokio::time::sleep(d).await;
-                                r
-                            }
-                        };
-                        if write.write_all(reply.as_bytes()).await.is_err() || close_after {
-                            return;
-                        }
-                    }
+                    serve_conn(conn, n, script).await;
+                    sig.closed.notify_one();
                 });
             }
         });
-        (sock, conns, task)
+        (sock, conns, task, signals)
     }
 
     fn grid(id: &str) -> Request {
@@ -586,13 +641,15 @@ mod tests {
     /// the same session, so both replies echo the same `id`: before the fix
     /// the next call read the stale reply off the same connection and
     /// returned reply 1 as the answer to call 2.
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_late_reply_is_never_taken_for_the_next_calls_answer() {
         let dir = tempfile::tempdir().unwrap();
-        let (sock, conns, task) = scripted_runner(dir.path(), |conn, line| {
+        let gate = Arc::new(Gate::default());
+        let held = gate.clone();
+        let (sock, conns, task) = scripted_runner(dir.path(), move |conn, line| {
             let id = line_id(line);
             if conn == 1 {
-                Act::Delayed(Duration::from_millis(300), ok_line(&id, 1))
+                Act::Gated(held.clone(), ok_line(&id, 1))
             } else {
                 Act::Reply(ok_line(&id, 2))
             }
@@ -604,8 +661,9 @@ mod tests {
             matches!(&first, Err(RunnerClientError::Unreachable(m)) if m.contains("in time")),
             "call 1 must time out: {first:?}"
         );
-        // Let the stale reply reach the dead connection's socket buffer.
-        tokio::time::sleep(Duration::from_millis(450)).await;
+        // Release the stale reply and wait until the runner wrote it.
+        gate.release.notify_one();
+        gate.delivered.notified().await;
         let second = client.call(&grid("abcd1234")).await.unwrap();
         assert_eq!(
             second["n"], 2,
@@ -617,6 +675,41 @@ mod tests {
             "the timeout dropped the connection; call 2 dialled a fresh one"
         );
         task.abort();
+    }
+
+    /// `last_call_timed_out` describes the LAST call. After a call that
+    /// timed out, a call whose DIAL fails must report "not a timeout": the
+    /// flag was once reset only after the dial, so the dial failure kept
+    /// the previous call's `true`.
+    #[tokio::test(start_paused = true)]
+    async fn a_dial_failure_does_not_report_the_previous_calls_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let gate = Arc::new(Gate::default());
+        let held = gate.clone();
+        let (sock, _conns, task) = scripted_runner(dir.path(), move |_, line| {
+            Act::Gated(held.clone(), ok_line(&line_id(line), 1))
+        });
+        let mut client = RunnerClient::connect(&sock).await.unwrap();
+        client.timeout = Duration::from_millis(150);
+        let first = client.call(&grid("abcd1234")).await;
+        assert!(first.is_err());
+        assert!(
+            client.last_call_timed_out(),
+            "precondition: call 1 timed out"
+        );
+        // The runner goes away entirely: the next call must re-dial and fail.
+        task.abort();
+        let _ = task.await;
+        std::fs::remove_file(&sock).unwrap();
+        let second = client.call(&grid("abcd1234")).await;
+        assert!(
+            matches!(&second, Err(RunnerClientError::Unreachable(m)) if m.contains("cannot connect")),
+            "call 2 fails at the dial: {second:?}"
+        );
+        assert!(
+            !client.last_call_timed_out(),
+            "a dial failure is not a timeout, whatever the previous call did"
+        );
     }
 
     /// A reply naming some other id, and a reply with a null id, are each a
@@ -672,13 +765,15 @@ mod tests {
     /// A call future dropped after its request was written (the caller's
     /// own timeout, a `select!` arm losing) must not leave the request in
     /// flight on a live connection: the next call would read ITS reply.
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_call_dropped_mid_flight_never_poisons_the_next_call() {
         let dir = tempfile::tempdir().unwrap();
-        let (sock, conns, task) = scripted_runner(dir.path(), |conn, line| {
+        let gate = Arc::new(Gate::default());
+        let held = gate.clone();
+        let (sock, conns, task) = scripted_runner(dir.path(), move |conn, line| {
             let id = line_id(line);
             if conn == 1 {
-                Act::Delayed(Duration::from_millis(300), ok_line(&id, 1))
+                Act::Gated(held.clone(), ok_line(&id, 1))
             } else {
                 Act::Reply(ok_line(&id, 2))
             }
@@ -687,8 +782,9 @@ mod tests {
         let dropped =
             tokio::time::timeout(Duration::from_millis(100), client.call(&grid("abcd1234"))).await;
         assert!(dropped.is_err(), "call 1 was cancelled mid-flight");
-        // Let the stale reply reach the abandoned connection.
-        tokio::time::sleep(Duration::from_millis(400)).await;
+        // Release the stale reply and wait until the runner wrote it.
+        gate.release.notify_one();
+        gate.delivered.notified().await;
         let second = client.call(&grid("abcd1234")).await.unwrap();
         assert_eq!(second["n"], 2, "call 2 gets its own reply: {second}");
         assert_eq!(conns.load(Ordering::SeqCst), 2, "a fresh connection");
@@ -724,7 +820,7 @@ mod tests {
     #[tokio::test]
     async fn a_write_error_fails_the_call_and_the_next_call_redials() {
         let dir = tempfile::tempdir().unwrap();
-        let (sock, conns, task) = scripted_runner(dir.path(), |conn, line| {
+        let (sock, conns, task, signals) = scripted_runner_signals(dir.path(), |conn, line| {
             let reply = ok_line(&line_id(line), conn as u64);
             if conn == 1 {
                 Act::ReplyThenClose(reply)
@@ -734,8 +830,11 @@ mod tests {
         });
         let mut client = RunnerClient::connect(&sock).await.unwrap();
         assert_eq!(client.call(&grid("abcd1234")).await.unwrap()["n"], 1);
-        // The runner closed that connection after answering.
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        // Wait for the runner's signal that it closed that connection
+        // (both halves dropped) after answering.
+        tokio::time::timeout(Duration::from_secs(10), signals.closed.notified())
+            .await
+            .expect("the runner closes the connection");
         let second = client.call(&grid("abcd1234")).await;
         assert!(
             matches!(&second, Err(RunnerClientError::Unreachable(m)) if m.contains("write")),
