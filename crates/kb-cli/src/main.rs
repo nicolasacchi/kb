@@ -4225,6 +4225,13 @@ enum AtlasAction {
 
 #[derive(Subcommand, Debug, Clone)]
 enum BenchAction {
+    /// SG-M1: the memory-recall policy bench. Calls a throwaway daemon's
+    /// recall route for every row of a labelled fixture (top-50 pool, no
+    /// floor, with and without context composition), recomputes the
+    /// shipped / content / ce arms locally with a pinned clock and prints
+    /// an aggregates-only report. Internal policy validation, not a
+    /// leaderboard.
+    Recall(commands::recall_bench::RecallArgs),
     /// Scaffold a `queries.jsonl` template by sampling N artifacts at
     /// random from a corpus dir. Writes lines with an empty `query`
     /// field and a `relevant` array pre-seeded with the sampled
@@ -7975,6 +7982,10 @@ async fn main() -> Result<()> {
             }
         }
         Cmd::Bench { action } => match action {
+            BenchAction::Recall(args) => {
+                let bearer = read_bearer();
+                commands::recall_bench::run(args, bearer.as_deref()).await
+            }
             BenchAction::Init {
                 corpus,
                 output,

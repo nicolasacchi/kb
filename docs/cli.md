@@ -642,6 +642,54 @@ kb synth --out DIR [--docs N] [--seed S]
 kb bench {init,discover,run}        retrieval-quality bake-off: scaffold a
                                     queries.jsonl, discover relevant ids, then
                                     compute Recall@k / MRR / nDCG per (kb × mode)
+kb bench recall --fixture F --daemon URL --clock T
+                                    memory-recall POLICY bench (internal policy
+                                    validation, not a leaderboard). For each
+                                    JSONL row (id, query, optional chronological
+                                    `context` [{role human|assistant, text}],
+                                    `labels` {memory id or kb:id -> 0|1|2,
+                                    unlisted = 0}, class legacy|real|null|
+                                    trivial, language tag, split dev|heldout;
+                                    strict, errors name the line) it calls the
+                                    daemon's recall route with no_floor and the
+                                    route's hard maximum limit (pool = top 50),
+                                    once with the bare prompt and once with the
+                                    SG-Q2 composed query. --daemon is required
+                                    and is meant to be a THROWAWAY daemon over a
+                                    frozen copy of the memory corpora. Arms,
+                                    computed locally from the pool: `shipped`
+                                    (route order), `content` (retrieval rank),
+                                    `ce` (cross-encoder logit on title + full
+                                    body, x bounded salience/decay multipliers,
+                                    logit floor; --ce-salience-coef,
+                                    --ce-decay-coef, --ce-floor,
+                                    --reranker-model, --body-chars). --clock
+                                    (unix or RFC 3339) pins the decay clock. ce
+                                    spawns the kb-embedder sidecar (kb links no
+                                    ONNX); a missing binary reports ce as
+                                    skipped, not failed (--skip-ce forces it).
+                                    Per arm and per all/class/language stratum:
+                                    recall@5, MRR (rows with a grade-2 label),
+                                    pool recall@50, injected and off-topic
+                                    injections per prompt (--inject-k, default
+                                    5), false-injection rate on null+trivial
+                                    with a Wilson 95% upper bound, a paired
+                                    win/loss/tie table vs shipped, and rerank
+                                    p50/p95 plus sidecar cold start. --split
+                                    dev|heldout restricts scoring; --sweep
+                                    prints the ce floor operating curve on the
+                                    dev split (--sweep-from/-to/-step,
+                                    --sweep-form). Output: Markdown (--output,
+                                    else stdout) and JSON (--json), AGGREGATES
+                                    ONLY; the writer refuses (and writes
+                                    nothing) if the rendered report contains any
+                                    fixture query/context or pool memory
+                                    title/body. The report records the daemon
+                                    build sha, fixture hash, clock, pool cap and
+                                    reranker model. Not implemented (the route
+                                    returns no raw per-arm scores): the
+                                    vector-cosine floor and BM25-and-vector
+                                    agreement arms.
 kb bench run --federated            also score a federated cell per mode (report kb
                                     label `*`): `scope=all`, no `kb=`. `relevant`
                                     entries may be `kb:id` (exact (kb,id) match;
