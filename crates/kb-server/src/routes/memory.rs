@@ -1391,6 +1391,12 @@ pub(crate) async fn recall_compose(
             }
         }
     }
+    // Known limitation (SG-R1 F6): the scorer collapses hits by id alone, so
+    // when one id collides across two memory corpora only the higher-scoring
+    // copy reaches the exclusion below; if that copy was served, the other
+    // corpus's unserved copy is not offered. Rare (ids hash the
+    // source-relative path); not fixable here without changing the scorer's
+    // inputs, which would alter survivors' decomposition (#10).
     // With dedup active the scorer must not truncate: the candidate pool
     // (`per_corpus`, derived from the request's own `limit`) is unchanged,
     // so every survivor's decomposition equals the no-dedup request's.

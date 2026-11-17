@@ -2518,7 +2518,15 @@ GET    /api/memory/recall?q=…[&scope=global|project|all&for_kb=NAME&visible_to
                                             newest capture + live serves, over
                                             the segment chain) with
                                             recalled_at >= `served_after`
-                                            (unix; default 0 = all). An
+                                            (unix; default 0 = all; with a
+                                            cutoff a NULL-recalled_at capture
+                                            row is judged by its session's
+                                            ended_at). Limitation: an id
+                                            colliding across two memory
+                                            corpora is collapsed by the
+                                            scorer first, so an unserved
+                                            twin of a served copy is not
+                                            offered. An
                                             exclusion after scoring and before
                                             the `limit` cut, never a score
                                             term: each surviving hit's

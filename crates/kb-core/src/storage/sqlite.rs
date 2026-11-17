@@ -4990,7 +4990,19 @@ impl Db {
 
     /// SG-Q3 — the distinct `(memory_kb, memory_id)` pairs already served to
     /// ONE logical session (`COALESCE(segment_of, session_id) = logical_sid`)
-    /// at or after `since_unix` (rows with a NULL `recalled_at` count).
+    /// at or after `since_unix`.
+    ///
+    /// A NULL `recalled_at` only occurs on CAPTURE rows (the enclosing Turn
+    /// carried no `ts`; V0035); live-serve rows always carry `served_at`.
+    /// With `since_unix <= 0` every row counts, NULL included (unchanged).
+    /// With `since_unix > 0` a NULL row is judged by its owning capture's
+    /// `sessions.ended_at` (joined on `artifact_id`), and when no such
+    /// session row exists it is treated as BEFORE the cutoff (not served),
+    /// so a /compact or /clear reset is never defeated by timestamp-less
+    /// rows. `ended_at` can overestimate a turn's time (it is the capture's
+    /// last activity), so a capture spanning the cutoff keeps its NULL rows
+    /// as served. (A capture row with no sessions row never matches the
+    /// newest-capture predicate at all.)
     ///
     /// Two row classes, each through the EXISTING predicates (no re-derived
     /// coverage rule): capture rows of the newest capture of any session in
@@ -5008,7 +5020,11 @@ impl Db {
                        AND (sg.session_id = ?1 OR sg.segment_of = ?1)";
         let sql = format!(
             "SELECT DISTINCT memory_kb, memory_id FROM memory_recalls \
-             WHERE (recalled_at IS NULL OR recalled_at >= ?2) \
+             WHERE (?2 <= 0 \
+                    OR COALESCE(recalled_at, \
+                         (SELECT sx.ended_at FROM sessions sx \
+                          WHERE sx.artifact_id = memory_recalls.artifact_id \
+                          LIMIT 1)) >= ?2) \
                AND ( (artifact_id NOT LIKE 'served-%' \
                       AND session_id IN ({chain}) AND {cap}) \
                   OR (session_id IN (SELECT ?1 UNION \
@@ -13683,6 +13699,41 @@ mod tests {
             .memory_recalls_served_to_session("sid-none", 0)
             .unwrap()
             .is_empty());
+    }
+
+    /// SG-Q3 — NULL `recalled_at` capture rows: all count at since=0; with a
+    /// cutoff they are judged by the owning session's `ended_at`.
+    #[test]
+    fn served_to_session_null_recalled_at_judged_by_capture_time() {
+        let mut db = db();
+        db.sessions_upsert(&session_row("cap-old", "sid-a", 1_000))
+            .unwrap(); // ended_at 1_600
+        db.memory_recalls_replace(
+            "cap-old",
+            &[memory_recall_row(
+                "notes",
+                "beforebefore",
+                "sid-a",
+                "t-0",
+                None,
+                "cap-old",
+            )],
+        )
+        .unwrap();
+        let got = db.memory_recalls_served_to_session("sid-a", 0).unwrap();
+        assert_eq!(got.len(), 1);
+        // cutoff after the capture ended: not served
+        assert!(db
+            .memory_recalls_served_to_session("sid-a", 2_000)
+            .unwrap()
+            .is_empty());
+        // cutoff before the capture ended: served
+        assert_eq!(
+            db.memory_recalls_served_to_session("sid-a", 1_500)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     /// SG-Q3 — a capture row counts, and a serve it covers is not a second
