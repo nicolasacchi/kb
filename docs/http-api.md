@@ -1730,9 +1730,13 @@ GET    /api/terms/{id}/ws                    SPA-only terminal byte
                                             to `{id}` and the caller;
                                             every failure is the same
                                             403) -> upstream stream
-                                            (404 no such terminal, 502
-                                            runner unreachable/bad
-                                            reply) -> upgrade. Neither
+                                            (404 no such terminal, 409
+                                            `terminal-conflict` naming
+                                            `too-many-viewers` when the
+                                            session is at its viewer
+                                            cap, 502 runner
+                                            unreachable/bad reply) ->
+                                            upgrade. Neither
                                             a cap rejection nor a bad
                                             `from` consumes the ticket
                                             (both run before the
@@ -1783,7 +1787,12 @@ GET    /api/terms/{id}/ws                    SPA-only terminal byte
                                             drops a joining viewer's input.
                                             The `epoch` grammar is one
                                             table shared by this relay, the
-                                            runner and the tap.
+                                            runner and the tap; the tap
+                                            alone also accepts the empty
+                                            epoch, the runner's bare-resume
+                                            sentinel (a client cannot send
+                                            it: the relay refuses an empty
+                                            `epoch` with a 400).
                                             Frames: binary frames are
                                             `[8-byte big-endian
                                             offset][bytes]`; text

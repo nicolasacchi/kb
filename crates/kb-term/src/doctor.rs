@@ -153,6 +153,24 @@ pub fn to_json(checks: &[Check]) -> String {
 
 // ---------------------------------------------------------------- probes
 
+/// How one bounded probe ended. [`run_with_timeout`] collapses every
+/// non-`Done` case to `None`; callers that must tell a missing binary from
+/// a slow one use [`run_probe`] directly.
+#[derive(Debug)]
+enum ProbeRun {
+    /// The child exited inside the deadline.
+    Done {
+        ok: bool,
+        code: Option<i32>,
+        stdout: String,
+        stderr: String,
+    },
+    /// The child could not be started (carries the io error kind).
+    SpawnFailed(String),
+    /// The deadline passed (the process group was killed).
+    TimedOut,
+}
+
 /// Run `exe args` with an allowlisted env and a hard deadline:
 /// `None` on timeout/spawn failure (the caller maps it to FAIL/WARN).
 /// Piped output is drained incrementally (64 KiB cap per stream, so a
@@ -169,8 +187,17 @@ pub fn run_with_timeout(
     env: &[(String, String)],
     timeout: Duration,
 ) -> Option<(bool, String, String)> {
+    match run_probe(exe, args, env, timeout) {
+        ProbeRun::Done {
+            ok, stdout, stderr, ..
+        } => Some((ok, stdout, stderr)),
+        _ => None,
+    }
+}
+
+fn run_probe(exe: &Path, args: &[&str], env: &[(String, String)], timeout: Duration) -> ProbeRun {
     use std::os::unix::process::CommandExt;
-    let mut child = Command::new(exe)
+    let mut child = match Command::new(exe)
         .args(args)
         .env_clear()
         .envs(env.iter().cloned())
@@ -179,11 +206,14 @@ pub fn run_with_timeout(
         .stderr(Stdio::piped())
         .process_group(0)
         .spawn()
-        .ok()?;
+    {
+        Ok(c) => c,
+        Err(e) => return ProbeRun::SpawnFailed(e.kind().to_string()),
+    };
     let pid = child.id();
     let (Some(stdout_pipe), Some(stderr_pipe)) = (child.stdout.take(), child.stderr.take()) else {
         kill_probe_group(pid, &mut child);
-        return None;
+        return ProbeRun::TimedOut;
     };
     const CAP: usize = 64 * 1024;
     let out_rx = drain(stdout_pipe, CAP);
@@ -198,24 +228,25 @@ pub fn run_with_timeout(
                 let (Ok(out), Ok(err)) = (out, err) else {
                     // A grandchild still holds a pipe at the deadline.
                     kill_probe_group(pid, &mut child);
-                    return None;
+                    return ProbeRun::TimedOut;
                 };
-                return Some((
-                    status.success(),
-                    String::from_utf8_lossy(&out).into_owned(),
-                    String::from_utf8_lossy(&err).into_owned(),
-                ));
+                return ProbeRun::Done {
+                    ok: status.success(),
+                    code: status.code(),
+                    stdout: String::from_utf8_lossy(&out).into_owned(),
+                    stderr: String::from_utf8_lossy(&err).into_owned(),
+                };
             }
             Ok(None) => {
                 if Instant::now() >= deadline {
                     kill_probe_group(pid, &mut child);
-                    return None;
+                    return ProbeRun::TimedOut;
                 }
                 std::thread::sleep(Duration::from_millis(10));
             }
             Err(_) => {
                 kill_probe_group(pid, &mut child);
-                return None;
+                return ProbeRun::TimedOut;
             }
         }
     }
@@ -511,17 +542,79 @@ pub fn harness_bin_path(name: &str) -> Option<PathBuf> {
     None
 }
 
-pub fn probe_harness_version(path: &Path) -> Option<String> {
-    let (ok, stdout, stderr) = run_with_timeout(
-        path,
-        &["--version"],
-        &allowlisted_env(),
-        Duration::from_secs(5),
-    )?;
-    if !ok {
-        return None;
+/// A cold, very large harness binary (hundreds of MB) can take several
+/// seconds to answer its first `--version`; this is generous on purpose
+/// and the probe reports a timeout as a timeout, never as "not found".
+pub const HARNESS_PROBE_SECS: u64 = 20;
+
+/// What running `<harness> --version` showed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HarnessProbe {
+    /// No executable on the search path.
+    NotFound,
+    /// The first non-empty output line.
+    Version { path: PathBuf, line: String },
+    /// Found, but `--version` exited non-zero (carries the exit code, when
+    /// the process had one, and the first stderr line, capped).
+    Failed {
+        path: PathBuf,
+        exit: Option<i32>,
+        stderr: String,
+    },
+    /// Found, but `--version` did not finish inside the deadline.
+    TimedOut { path: PathBuf, secs: u64 },
+    /// Found and it exited 0, but printed nothing, or could not be spawned.
+    NoOutput { path: PathBuf, why: String },
+}
+
+/// Run `<path> --version` under the allowlisted env and report the exact
+/// outcome ([`HarnessProbe`]).
+pub fn probe_harness_at(path: &Path, env: &[(String, String)], timeout: Duration) -> HarnessProbe {
+    let path = path.to_path_buf();
+    match run_probe(&path, &["--version"], env, timeout) {
+        ProbeRun::TimedOut => HarnessProbe::TimedOut {
+            path,
+            secs: timeout.as_secs(),
+        },
+        ProbeRun::SpawnFailed(kind) => HarnessProbe::NoOutput {
+            path,
+            why: format!("could not be started ({kind})"),
+        },
+        ProbeRun::Done {
+            ok: false,
+            code,
+            stderr,
+            stdout,
+        } => HarnessProbe::Failed {
+            path,
+            exit: code,
+            stderr: first_line(&stderr)
+                .or_else(|| first_line(&stdout))
+                .map(|l| l.chars().take(120).collect())
+                .unwrap_or_default(),
+        },
+        ProbeRun::Done { stdout, stderr, .. } => {
+            match first_line(&stdout).or_else(|| first_line(&stderr)) {
+                Some(line) => HarnessProbe::Version { path, line },
+                None => HarnessProbe::NoOutput {
+                    path,
+                    why: "exited 0 but printed no version".to_string(),
+                },
+            }
+        }
     }
-    first_line(&stdout).or_else(|| first_line(&stderr))
+}
+
+/// [`probe_harness_at`] for a harness name on the doctor's own search path.
+pub fn probe_harness(name: &str) -> HarnessProbe {
+    match harness_bin_path(name) {
+        None => HarnessProbe::NotFound,
+        Some(p) => probe_harness_at(
+            &p,
+            &allowlisted_env(),
+            Duration::from_secs(HARNESS_PROBE_SECS),
+        ),
+    }
 }
 
 /// The version token of a `--version` line: its first token that
@@ -556,6 +649,47 @@ pub fn decide_harness(
         // `18.17.0-extra` warn, while `omp 18.17.0` passes.
         Some(want) if version_token(v) == want => Check::pass(id, detail),
         Some(want) => Check::warn(id, format!("{detail} (known good {want})")),
+    }
+}
+
+/// [`decide_harness`] over a full [`HarnessProbe`]: "not found" is a SKIP
+/// (the harness is simply not installed); a harness that IS installed but
+/// whose `--version` failed or timed out is a WARN that says which, with the
+/// path, so a slow cold start is never reported as a missing binary.
+pub fn decide_harness_probe(
+    name: &str,
+    probe: &HarnessProbe,
+    known_good: Option<&str>,
+    experimental: bool,
+) -> Check {
+    let id = format!("harness_{name}");
+    match probe {
+        HarnessProbe::NotFound => decide_harness(name, None, known_good, experimental),
+        HarnessProbe::Version { line, .. } => {
+            decide_harness(name, Some(line.as_str()), known_good, experimental)
+        }
+        HarnessProbe::Failed { path, exit, stderr } => {
+            let code = exit.map_or("killed by a signal".to_string(), |c| format!("exit {c}"));
+            let mut detail = format!(
+                "found at {}, but `--version` failed ({code})",
+                path.display()
+            );
+            if !stderr.is_empty() {
+                detail.push_str(&format!(": {stderr}"));
+            }
+            Check::warn(id, detail)
+        }
+        HarnessProbe::TimedOut { path, secs } => Check::warn(
+            id,
+            format!(
+                "found at {}, but `--version` timed out after {secs}s (a cold start of a large binary?)",
+                path.display()
+            ),
+        ),
+        HarnessProbe::NoOutput { path, why } => Check::warn(
+            id,
+            format!("found at {}, but `--version` {why}", path.display()),
+        ),
     }
 }
 
@@ -814,33 +948,77 @@ pub fn login_env_check(shell: &str, names: Option<&[String]>) -> Check {
 
 // ------------------------------------------------- boot enablement + runner env
 
-/// `systemctl --user` (absolute path: the probe env is cleared) with just
-/// enough environment to reach the user manager.
-fn systemctl_user(args: &[&str]) -> Option<(bool, String, String)> {
-    let exe = ["/usr/bin/systemctl", "/bin/systemctl"]
-        .iter()
-        .map(Path::new)
-        .find(|p| is_executable(p))?;
-    let env: Vec<(String, String)> = current_env()
-        .into_iter()
-        .filter(|(k, _)| {
-            matches!(
-                k.as_str(),
-                "PATH" | "HOME" | "XDG_RUNTIME_DIR" | "DBUS_SESSION_BUS_ADDRESS"
-            )
-        })
-        .collect();
-    let mut full = vec!["--user"];
-    full.extend_from_slice(args);
-    run_with_timeout(exe, &full, &env, Duration::from_secs(5))
+/// The host facts the boot-enablement and runner-env probes read, behind a
+/// seam so tests inject systemd and `/proc` instead of touching the real host.
+pub trait HostProbe {
+    /// `systemctl --user <args>`: `(exit ok, stdout, stderr)`, or `None`
+    /// when systemd cannot be asked at all (no binary, timeout).
+    fn systemctl_user(&self, args: &[&str]) -> Option<(bool, String, String)>;
+    /// Every process visible as `(pid, comm, owner uid)`.
+    fn processes(&self) -> Vec<(u32, String, Option<u32>)>;
+    /// The doctor's own uid.
+    fn my_uid(&self) -> Option<u32>;
+    /// `/proc/<pid>/environ` bytes, when readable.
+    fn read_environ(&self, pid: u32) -> Option<Vec<u8>>;
+}
+
+/// The real host.
+pub struct RealHost;
+
+impl HostProbe for RealHost {
+    fn systemctl_user(&self, args: &[&str]) -> Option<(bool, String, String)> {
+        let exe = ["/usr/bin/systemctl", "/bin/systemctl"]
+            .iter()
+            .map(Path::new)
+            .find(|p| is_executable(p))?;
+        let env: Vec<(String, String)> = current_env()
+            .into_iter()
+            .filter(|(k, _)| {
+                matches!(
+                    k.as_str(),
+                    "PATH" | "HOME" | "XDG_RUNTIME_DIR" | "DBUS_SESSION_BUS_ADDRESS"
+                )
+            })
+            .collect();
+        let mut full = vec!["--user"];
+        full.extend_from_slice(args);
+        run_with_timeout(exe, &full, &env, Duration::from_secs(5))
+    }
+
+    fn processes(&self) -> Vec<(u32, String, Option<u32>)> {
+        let Ok(rd) = std::fs::read_dir("/proc") else {
+            return Vec::new();
+        };
+        rd.flatten()
+            .filter_map(|entry| {
+                let pid = entry.file_name().to_str()?.parse::<u32>().ok()?;
+                let comm = std::fs::read_to_string(entry.path().join("comm")).ok()?;
+                let uid = std::fs::metadata(entry.path()).map(|m| m.uid()).ok();
+                Some((pid, comm.trim().to_string(), uid))
+            })
+            .collect()
+    }
+
+    fn my_uid(&self) -> Option<u32> {
+        std::fs::metadata("/proc/self").map(|m| m.uid()).ok()
+    }
+
+    fn read_environ(&self, pid: u32) -> Option<Vec<u8>> {
+        std::fs::read(format!("/proc/{pid}/environ")).ok()
+    }
 }
 
 /// `systemctl --user is-enabled kb-termd.service` state word
 /// (`enabled`, `static`, `disabled`, ...); `None` when systemd cannot be
 /// asked. The state is read from stdout even on a non-zero exit.
-pub fn probe_termd_enabled() -> Option<String> {
-    let (_, stdout, _) = systemctl_user(&["is-enabled", "kb-termd.service"])?;
+pub fn probe_termd_enabled_with(host: &dyn HostProbe) -> Option<String> {
+    let (_, stdout, _) = host.systemctl_user(&["is-enabled", "kb-termd.service"])?;
     first_line(&stdout)
+}
+
+/// [`probe_termd_enabled_with`] on the real host.
+pub fn probe_termd_enabled() -> Option<String> {
+    probe_termd_enabled_with(&RealHost)
 }
 
 /// kb-termd must be enabled so it starts after a reboot. A `static`
@@ -863,35 +1041,34 @@ pub fn decide_termd_enabled(state: Option<&str>) -> Check {
     }
 }
 
-/// The runner's pid: the unit's `MainPID`, else a `/proc` scan for a
-/// process of ours named `kb-termd`.
-pub fn probe_runner_pid() -> Option<u32> {
+/// The runner's pid. The unit's `MainPID` is authoritative: when systemd
+/// answers, `MainPID=0` means the unit is not running and NO process is
+/// guessed (a stray same-uid `kb-termd` is not the unit's runner). Only when
+/// systemd cannot be asked (no `systemctl`, a failed or garbled answer) does
+/// the `/proc` scan run, over this uid's processes named `kb-termd`; it
+/// refuses to pick one when several match.
+pub fn probe_runner_pid_with(host: &dyn HostProbe) -> Option<u32> {
     if let Some((true, out, _)) =
-        systemctl_user(&["show", "-p", "MainPID", "--value", "kb-termd.service"])
+        host.systemctl_user(&["show", "-p", "MainPID", "--value", "kb-termd.service"])
     {
         if let Some(pid) = first_line(&out).and_then(|l| l.parse::<u32>().ok()) {
-            if pid > 0 {
-                return Some(pid);
-            }
+            return (pid > 0).then_some(pid);
         }
     }
-    let me = std::fs::metadata("/proc/self").map(|m| m.uid()).ok()?;
-    for entry in std::fs::read_dir("/proc").ok()?.flatten() {
-        let Some(pid) = entry
-            .file_name()
-            .to_str()
-            .and_then(|n| n.parse::<u32>().ok())
-        else {
-            continue;
-        };
-        let comm = std::fs::read_to_string(entry.path().join("comm")).unwrap_or_default();
-        if comm.trim() == "kb-termd"
-            && std::fs::metadata(entry.path()).map(|m| m.uid()).ok() == Some(me)
-        {
-            return Some(pid);
-        }
-    }
-    None
+    let me = host.my_uid()?;
+    let mut found = host
+        .processes()
+        .into_iter()
+        .filter(|(_, comm, uid)| comm == "kb-termd" && *uid == Some(me))
+        .map(|(pid, _, _)| pid);
+    let first = found.next()?;
+    // Two candidates: ambiguous, so say nothing rather than read the wrong env.
+    found.next().is_none().then_some(first)
+}
+
+/// [`probe_runner_pid_with`] on the real host.
+pub fn probe_runner_pid() -> Option<u32> {
+    probe_runner_pid_with(&RealHost)
 }
 
 /// Parse a `/proc/<pid>/environ` blob (NUL-separated `K=V`).
@@ -907,10 +1084,14 @@ pub fn parse_environ(raw: &[u8]) -> Vec<(String, String)> {
 
 /// The runner's own environment (what its panes inherit), or `None`
 /// when it is not running or `/proc/<pid>/environ` is unreadable.
+pub fn probe_runner_env_with(host: &dyn HostProbe) -> Option<Vec<(String, String)>> {
+    let pid = probe_runner_pid_with(host)?;
+    Some(parse_environ(&host.read_environ(pid)?))
+}
+
+/// [`probe_runner_env_with`] on the real host.
 pub fn probe_runner_env() -> Option<Vec<(String, String)>> {
-    let pid = probe_runner_pid()?;
-    let raw = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
-    Some(parse_environ(&raw))
+    probe_runner_env_with(&RealHost)
 }
 
 /// Resolve `name` on a `PATH` string only (no `~/.local/bin` fallback:
@@ -970,11 +1151,15 @@ pub fn decide_runner_env(
                 id,
                 format!("{name} resolves on the runner PATH ({})", p.display()),
             )),
+            // WARN, not FAIL: the runner itself works, and only a launch of
+            // THIS harness would exit 127. Doctor cannot know which
+            // harnesses the operator launches, and a FAIL for every
+            // installed-but-unused one made a healthy host exit 1.
             (None, Some(l)) => out.push(
-                Check::fail(
+                Check::warn(
                     id,
                     format!(
-                        "{name} is at {} for your shell but not on the runner PATH: a pane would exit 127",
+                        "{name} is at {} for your shell but not on the runner PATH: launching it from the terminal would exit 127",
                         l.display()
                     ),
                 )
@@ -987,6 +1172,34 @@ pub fn decide_runner_env(
 }
 
 // ---------------------------------------------------------------- driver
+
+/// Each harness binary name paired with where doctor's own shell finds it.
+fn local_harness_bins() -> Vec<(String, Option<PathBuf>)> {
+    crate::profiles::HARNESSES
+        .iter()
+        .map(|n| {
+            let bin = crate::profiles::table::row(n).map(|r| r.bin).unwrap_or(*n);
+            (bin.to_string(), harness_bin_path(bin))
+        })
+        .collect()
+}
+
+/// The checks that read host state through a [`HostProbe`]: boot enablement
+/// then the runner's own environment. `run_checks` calls this with the real
+/// host; tests call it with a fake.
+pub fn host_state_checks(
+    host: &dyn HostProbe,
+    harnesses: &[(String, Option<PathBuf>)],
+) -> Vec<Check> {
+    let mut checks = vec![decide_termd_enabled(
+        probe_termd_enabled_with(host).as_deref(),
+    )];
+    checks.extend(decide_runner_env(
+        probe_runner_env_with(host).as_deref(),
+        harnesses,
+    ));
+    checks
+}
 
 /// Run every check against the real host state.
 pub fn run_checks() -> Vec<Check> {
@@ -1014,15 +1227,13 @@ pub fn run_checks() -> Vec<Check> {
     checks.push(decide_xterm_pins(pins.as_deref()));
     // harnesses
     for name in crate::profiles::HARNESSES {
-        let path = harness_bin_path(name);
-        let vline = path.as_ref().and_then(|p| probe_harness_version(p));
         let known_good = KNOWN_GOOD.iter().find(|(n, _)| *n == name).map(|(_, v)| *v);
         let experimental = crate::profiles::table::row(name)
             .map(|r| r.experimental)
             .unwrap_or(false);
-        checks.push(decide_harness(
+        checks.push(decide_harness_probe(
             name,
-            vline.as_deref(),
+            &probe_harness(name),
             known_good,
             experimental,
         ));
@@ -1045,15 +1256,7 @@ pub fn run_checks() -> Vec<Check> {
         }
     }
     // boot enablement + the runner's own environment
-    checks.push(decide_termd_enabled(probe_termd_enabled().as_deref()));
-    let local: Vec<(String, Option<PathBuf>)> = crate::profiles::HARNESSES
-        .iter()
-        .map(|n| {
-            let bin = crate::profiles::table::row(n).map(|r| r.bin).unwrap_or(*n);
-            (bin.to_string(), harness_bin_path(bin))
-        })
-        .collect();
-    checks.extend(decide_runner_env(probe_runner_env().as_deref(), &local));
+    checks.extend(host_state_checks(&RealHost, &local_harness_bins()));
     checks
 }
 

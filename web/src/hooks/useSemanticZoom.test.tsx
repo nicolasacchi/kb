@@ -47,6 +47,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  window.history.replaceState(null, "", "/");
   flushSync(() => root.unmount());
   content.remove();
   host.remove();
@@ -129,6 +130,34 @@ describe("useSemanticZoom", () => {
     await mount("atlas", steps); // external navigation: the prop changed, resync
     key("=");
     expect(steps).toEqual(["grid", "list", "list"]);
+  });
+
+  it("an external navigation that leaves the view prop unchanged resyncs the rung from the URL", async () => {
+    const steps: ZoomView[] = [];
+    await mount("list", steps); // the prop stays "list" for the whole test
+    const key = (k: string) => window.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true }));
+    key("="); // optimistic rung: grid, the navigation is in flight
+    key("="); // still in flight (location unchanged): the end of the ladder, no step
+    expect(steps).toEqual(["grid"]);
+    // Another navigation supersedes the step and the page ends up on `list`
+    // again: the prop never changed, so only the URL says where we are.
+    window.history.pushState(null, "", "/?view=list&tag=x");
+    key("="); // from list, so grid again; a stranded optimistic rung would stay silent
+    expect(steps).toEqual(["grid", "grid"]);
+    // And a navigation that lands somewhere else entirely is followed too.
+    window.history.pushState(null, "", "/?view=atlas");
+    key("=");
+    expect(steps).toEqual(["grid", "grid", "list"]);
+  });
+
+  it("an absent ?view= after an external navigation means the shelf", async () => {
+    const steps: ZoomView[] = [];
+    await mount("list", steps);
+    const key = (k: string) => window.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true }));
+    key("="); // grid, in flight
+    window.history.pushState(null, "", "/?tag=x");
+    key("-"); // grid is the default rung: out of it is list
+    expect(steps).toEqual(["grid", "list"]);
   });
 
   it("wheel notches also step from the rung just stepped to", async () => {

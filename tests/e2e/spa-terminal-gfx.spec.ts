@@ -146,10 +146,14 @@ for (const [title, dom, edge] of [
         for (const [pg, fk] of [[page, live], [page2, late]] as const) {
           await pg.bringToFront();
           await scrollToLine(pg, t.line0 + off);
+          // One poll for both: "no pending boxes" alone is also true before the
+          // scrolled-to pictures have been created.
           await expect
-            .poll(async () => (await overlayInfo(pg))?.pending ?? -1, { timeout: 20_000 })
-            .toBe(0);
-          await expect.poll(async () => (await overlayInfo(pg))?.imgs ?? 0).toBeGreaterThan(0);
+            .poll(async () => {
+              const i = await overlayInfo(pg);
+              return i ? i.pending === 0 && i.imgs > 0 : false;
+            }, { timeout: 20_000 })
+            .toBe(true);
           const mm = await settledMetrics(pg);
           const img = await shot(pg);
           expectGood(checkPictures(img, mm, [t], mm.viewportY, { edgeDev: edge }), 5);
@@ -398,6 +402,13 @@ test("rebuild redraw: ED2+ED3 reprint with the same ids @gfx-dpr1", async ({ pag
   again.blank().textLines(1, "middle").blank();
   again.image({ id: 0x1b4c9d, c: 20, r: 6, indent: 51, variant: 1, pngBuf: src2, announce: false });
   fake.push(`\x1b[?2026h\x1b[2J\x1b[3J\x1b[H${again.build()}\x1b[?2026l`);
+  // The first scenario already left the overlay at clips 2 / live 16, so that
+  // state proves nothing about the reprint. Wait for the reprint itself (the
+  // overlay created decorations beyond the first scenario's), THEN the
+  // steady state.
+  await expect
+    .poll(async () => (await overlayInfo(page))?.created ?? -1, { timeout: 15_000 })
+    .toBeGreaterThan(created0);
   await expect
     .poll(async () => {
       const i = await overlayInfo(page);

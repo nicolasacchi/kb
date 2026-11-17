@@ -312,9 +312,18 @@ pub mod fake {
                         && !self.canned.lock().unwrap().contains_key("display-message") =>
                 {
                     let (cols, rows) = *self.size.lock().unwrap();
+                    // The pane-facts query (discovery's TAB-separated
+                    // format, `#{pane_dead_status}` empty for a live pane)
+                    // answers as tmux 3.7c does; the grid's own
+                    // `<cols> <rows>` query keeps its space-separated form.
+                    let stdout = if args.iter().any(|a| a.contains("pane_pid")) {
+                        format!("4242\t0\t\t{cols}\t{rows}\t0\n")
+                    } else {
+                        format!("{cols} {rows}\n")
+                    };
                     return Ok(TmuxOut {
                         ok: true,
-                        stdout: format!("{cols} {rows}\n"),
+                        stdout,
                         stderr: String::new(),
                     });
                 }

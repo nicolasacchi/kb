@@ -2,7 +2,7 @@
 
 kb-term has four host pieces that `kb` itself cannot ship inside the kb
 container: the runner `kb-termd`, the operator-local client `kb-term`
-(`attach|new|ls|doctor`), the compiled tap `kb-tap`, and a pinned private
+(`attach|new|ls|kill|doctor`), the compiled tap `kb-tap`, and a pinned private
 tmux 3.7c. The kb container image carries no tmux and no host `HOME`, so
 this install puts the pieces on the host under `~/.local` and adds one
 bind mount so the container can reach the runner socket.
@@ -107,16 +107,26 @@ exact path, so a distro tmux upgrade cannot kill or mismatch any session.
    mkdir -p ~/.config/systemd/user/kb-termd.service.d
    cat > ~/.config/systemd/user/kb-termd.service.d/env.conf <<'EOF'
    [Service]
-   Environment=PATH=/path/to/harness/bin:/usr/local/bin:/usr/bin
-   Environment=KB_SESSIONS_DIR=/path/to/the/sessions/corpus
+   Environment="PATH=/path/to/kb/bin:/path/to/harness/bin:/usr/local/bin:/usr/bin"
+   Environment="KB_SESSIONS_DIR=/path/to/the/sessions/corpus"
    EOF
    systemctl --user daemon-reload
    systemctl --user restart kb-termd.service
    ```
 
-   `kb-term doctor` reads the running runner's environment and FAILs
-   (`runner_env_sessions_dir`, `runner_env_harness_*`) when either is
-   missing there.
+   The `PATH` always includes the directory `kb` resolves from, then the
+   directory of every harness found, then `/usr/local/bin:/usr/bin`. Each
+   assignment is one double-quoted word, as systemd requires for a value with
+   a space; inside the quotes a backslash and a double quote are
+   backslash-escaped and `%` is written `%%` (systemd expands `%x` in unit
+   files). The installer does this for you; if you edit the file by hand,
+   keep the quotes.
+
+   `kb-term doctor` reads the running runner's environment (the process the
+   unit's `MainPID` names) and FAILs `runner_env_sessions_dir` when
+   `KB_SESSIONS_DIR` is missing there, and WARNs `runner_env_kb` or
+   `runner_env_harness_*` when `kb` or a harness your shell finds is not on
+   the runner's `PATH`.
 
    Anything that did not change the machine (a tmpfiles re-run, a schema
    note) needs no restart. Do **not** restart `kb-term@*` holder units to
@@ -145,6 +155,12 @@ exact path, so a distro tmux upgrade cannot kill or mismatch any session.
    ```bash
    loginctl enable-linger "$(id -un)"
    ```
+
+To end a session from the host, use `kb-term kill <id>`; it goes through the
+runner, so the holder, tap and session files are cleaned up. If you stopped
+the `kb-term@<id>` and `kb-tap@<id>` units by hand and `kb-term ls` shows the
+id as `stale`, `kb-term kill <id>` removes that session's leftover socket and
+directory.
 
 Verify with `kb-term doctor`, which checks the host: tmux version and sha,
 the tap binary, the omp overlay, and the `/run/kb-term` layout.

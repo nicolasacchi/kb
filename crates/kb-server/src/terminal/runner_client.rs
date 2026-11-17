@@ -286,13 +286,17 @@ pub(crate) enum StreamItem {
 }
 
 /// Why opening the upstream stream failed. `NotFound` is the runner's
-/// refusal ("no such session"); `Unavailable` is any connect/IO
+/// refusal ("no such session"); `TooManyViewers` is its viewer-cap
+/// refusal; `Unavailable` is any connect/IO
 /// failure (the socket path never leaks into either arm's message).
 #[derive(Debug)]
 pub(crate) enum StreamError {
     NotFound,
     Unavailable,
     BadReply,
+    /// The runner refused the open with `too-many-viewers` (the
+    /// per-session viewer cap).
+    TooManyViewers,
 }
 
 impl StreamError {
@@ -301,6 +305,7 @@ impl StreamError {
             StreamError::NotFound => "no such terminal",
             StreamError::Unavailable => "runner unavailable",
             StreamError::BadReply => "bad runner reply",
+            StreamError::TooManyViewers => "too many viewers on this terminal (too-many-viewers)",
         }
     }
 }
@@ -534,6 +539,9 @@ impl UnixRunner {
                 if code == "not-found" || code == "no-session" || code == "invalid-id" =>
             {
                 return Err(StreamError::NotFound);
+            }
+            RunnerReply::Err { code, .. } if code == "too-many-viewers" => {
+                return Err(StreamError::TooManyViewers);
             }
             RunnerReply::Err { .. } => return Err(StreamError::BadReply),
         };
@@ -1020,6 +1028,24 @@ mod tests {
             .open_stream("abcd1234", &StreamResume::default())
             .await;
         (opened, task, dir)
+    }
+
+    #[tokio::test]
+    async fn a_too_many_viewers_refusal_is_its_own_stream_error_not_a_bad_reply() {
+        let reply = "{\"status\":\"err\",\"code\":\"too-many-viewers\",\"message\":\"full\"}\n";
+        let (opened, _task, _dir) = open_with_reply(reply).await;
+        assert!(
+            matches!(opened, Err(StreamError::TooManyViewers)),
+            "got {:?}",
+            opened.err()
+        );
+        // Any other unknown code stays a bad reply.
+        let other = "{\"status\":\"err\",\"code\":\"weird\",\"message\":\"x\"}\n";
+        let (opened, _task, _dir) = open_with_reply(other).await;
+        assert!(matches!(opened, Err(StreamError::BadReply)));
+        assert!(StreamError::TooManyViewers
+            .message()
+            .contains("too-many-viewers"));
     }
 
     #[tokio::test]

@@ -1,4 +1,4 @@
-//! `kb-term` operator-local client binary: `attach|new|ls` (the
+//! `kb-term` operator-local client binary: `attach|new|ls|kill` (the
 //! local mirror — see [`kb_term::attach`]) and `doctor` (host-local
 //! diagnostics).
 
@@ -125,6 +125,32 @@ fn cli() -> Command {
                 .arg(runner_sock_arg()),
         )
         .subcommand(
+            Command::new("kill")
+                .about("end a session through the runner (also reaps a stale entry)")
+                .long_about(
+                    "End a session through the runner's kill op: exit keys, then a \
+                    whole-holder stop. If no holder answers for the id, the runner \
+                    removes that session's leftover socket and directory instead. \
+                    The user units are never stopped from here.\n\nExit codes: 0 \
+                    done; 1 failure; 2 usage (bad id); 3 runner unreachable; 4 \
+                    session not found.",
+                )
+                .arg(
+                    Arg::new("id")
+                        .value_name("ID")
+                        .required(true)
+                        .help("session id"),
+                )
+                .arg(
+                    Arg::new("grace")
+                        .long("grace")
+                        .value_name("SECS")
+                        .value_parser(clap::value_parser!(u64))
+                        .help("seconds to wait for a graceful exit (runner default; max 60)"),
+                )
+                .arg(runner_sock_arg()),
+        )
+        .subcommand(
             Command::new("ls")
                 .about("list sessions")
                 .arg(
@@ -179,6 +205,14 @@ fn main() {
                 }
             }
             block_on(kb_term::attach::run_new(args))
+        }
+        Some(("kill", sub)) => {
+            let args = kb_term::attach::KillArgs {
+                id: sub.get_one::<String>("id").cloned().unwrap_or_default(),
+                grace_secs: sub.get_one::<u64>("grace").copied(),
+                runner_sock: sub.get_one::<String>("runner-sock").cloned(),
+            };
+            block_on(kb_term::attach::run_kill(args))
         }
         Some(("ls", sub)) => {
             let args = kb_term::attach::LsArgs {
