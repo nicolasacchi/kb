@@ -1301,6 +1301,30 @@ ignores `--transcript` (one stderr line) when the daemon URL is not loopback,
 since transcript text is unscrubbed. Claude Code only; other harnesses stay
 prompt-only. Test: `tests/test-recall-context.sh`.
 
+## Per-session dedup, compact reset, trivial-prompt skip (SG-Q3)
+
+**Dedup (default ON).** With a session id, `kb-recall.sh` passes
+`--dedup-session` to `kb recall` / `kb turn`, so the daemon drops memories it
+already served to this logical session (an exclusion after scoring; survivors
+keep their exact score decomposition). `KB_RECALL_DEDUP=0` turns it off. A
+`kb` binary that rejects the flag is retried once without it, so a stale CLI
+loses dedup, never the injection.
+
+**Compact reset.** After `/compact` (and `/clear`) the earlier injections are
+gone from the model's context. `kb-wake.sh` reads the SessionStart payload's
+`source` field (`startup|resume|clear|compact|fork`) and, for `compact` or
+`clear`, writes the current unix time to `~/.cache/kb/recall-epoch-<sid>`
+(`XDG_CACHE_HOME` honoured). `kb-recall.sh` passes its content as
+`--served-after`, so only serves after the compact count.
+
+**Trivial-prompt skip (default ON).** With no context transcript being passed
+(`KB_RECALL_CONTEXT` off), a prompt that starts with `/` or has fewer than two
+word tokens of 3+ unicode letters/digits skips the RECALL lane only; the
+turn-1 scent and the slate lane behave as before (under `KB_TURN=1` the
+`recall` lane is dropped from `--lanes`). `KB_RECALL_SKIP_TRIVIAL=0` disables
+it. Test: `tests/test-recall-dedup.sh` (the older recall tests export
+`KB_RECALL_SKIP_TRIVIAL=0`: their prompts are deliberately short).
+
 `kb-hook-lib.sh` holds what the hooks used to copy: `run_to <cap> cmd…` (each
 call runs under `min(cap, what is left of KB_HOOK_BUDGET_SECS, default 13)` on
 a millisecond clock; nothing left means skipped, rc 124) and the session-key

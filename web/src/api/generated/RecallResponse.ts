@@ -7,4 +7,10 @@ export type RecallResponse = { hits: Array<RecallHit>, ms: number,
  * Swallowed per-corpus failures. Absent when empty so a healthy
  * recall stays byte-identical.
  */
-degraded?: Array<DegradedLane>, };
+degraded?: Array<DegradedLane>, 
+/**
+ * SG-Q3 — how many hits `dedup_session=1` removed from the page that
+ * would otherwise have been served. Absent when zero (every existing
+ * response stays byte-identical).
+ */
+dedup_removed?: number, };

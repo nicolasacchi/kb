@@ -270,6 +270,16 @@ enum Cmd {
         /// Recent transcript turns to fold into the query (with `--transcript`).
         #[arg(long, default_value_t = 4)]
         turns: usize,
+        /// SG-Q3: exclude memories already served to this session (the
+        /// session id the hook passes via `KB_RECALL_SESSION`, or the
+        /// current-session marker). Applied after scoring; survivors keep
+        /// their score decomposition.
+        #[arg(long)]
+        dedup_session: bool,
+        /// SG-Q3: with `--dedup-session`, only serves at or after this unix
+        /// time count (a compact starts the count over).
+        #[arg(long)]
+        served_after: Option<i64>,
         #[arg(long)]
         daemon: Option<String>,
         #[arg(long)]
@@ -356,6 +366,13 @@ enum Cmd {
         /// Recent transcript turns to fold into the prompt (with `--transcript`).
         #[arg(long, default_value_t = 4)]
         turns: usize,
+        /// SG-Q3: exclude memories already served to `--session` (needs it).
+        #[arg(long)]
+        dedup_session: bool,
+        /// SG-Q3: with `--dedup-session`, only serves at or after this unix
+        /// time count (a compact starts the count over).
+        #[arg(long)]
+        served_after: Option<i64>,
         #[arg(long)]
         daemon: Option<String>,
         #[arg(long)]
@@ -4806,6 +4823,8 @@ async fn main() -> Result<()> {
             explain,
             transcript,
             turns,
+            dedup_session,
+            served_after,
             daemon,
             json,
             timeout,
@@ -4830,6 +4849,8 @@ async fn main() -> Result<()> {
                 bearer.as_deref(),
                 json,
                 timeout,
+                dedup_session,
+                served_after,
             )
             .await
         }
@@ -4867,6 +4888,8 @@ async fn main() -> Result<()> {
             slate_since,
             transcript,
             turns,
+            dedup_session,
+            served_after,
             daemon,
             json,
         } => {
@@ -4885,6 +4908,8 @@ async fn main() -> Result<()> {
                 lanes.as_deref(),
                 slate.as_deref(),
                 slate_since,
+                dedup_session,
+                served_after,
                 daemon.as_deref(),
                 bearer.as_deref(),
                 json,

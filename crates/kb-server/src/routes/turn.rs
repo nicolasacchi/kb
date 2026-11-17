@@ -75,6 +75,12 @@ pub struct TurnParams {
     /// The caller's slate cursor: given ⇒ the delta since it, absent ⇒ the
     /// hybrid seed.
     pub slate_since: Option<u64>,
+    /// SG-Q3 - `1`/`true`: drop recall hits already served to `session`.
+    /// Only meaningful with `session=`; absent is today's response.
+    pub dedup_session: Option<String>,
+    /// SG-Q3 - unix seconds; only serves at or after it count (a compact
+    /// resets the epoch). Absent = everything.
+    pub served_after: Option<i64>,
 }
 
 /// Which lanes a request wants. `slate` is `None` when `lanes` did not say
@@ -175,6 +181,14 @@ pub struct TurnResponse {
     /// Swallowed lane failures. Absent when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub degraded: Vec<DegradedLane>,
+    /// SG-Q3 - hits `dedup_session=1` removed from the served page. Absent
+    /// when zero.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub dedup_removed: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 /// The immediate TCP peer, from the request extensions. `None` (no
@@ -226,6 +240,18 @@ pub async fn get(
 
     // Sequential on purpose: both lanes embed the same text, and the context
     // composer already refuses to run its embed-bearing arms concurrently.
+    let dedup = if memory::flag_on(params.dedup_session.as_deref()) {
+        session
+            .as_deref()
+            .and_then(accept_turn_session)
+            .map(|session_id| memory::DedupSpec {
+                session_id,
+                served_after: params.served_after.unwrap_or(0),
+            })
+    } else {
+        None
+    };
+    let mut dedup_removed = 0usize;
     let hits = if !want_recall {
         Vec::new()
     } else {
@@ -235,6 +261,7 @@ pub async fn get(
             &q,
             project,
             visible_to,
+            dedup,
             remaining_ms(deadline),
             deadline,
         )
@@ -242,6 +269,7 @@ pub async fn get(
         {
             Ok(recall) => {
                 extend_degraded(&mut degraded, recall.degraded);
+                dedup_removed = recall.dedup_removed;
                 recall.hits
             }
             Err(class) => {
@@ -340,6 +368,7 @@ pub async fn get(
             recalled,
             head_seq,
             degraded,
+            dedup_removed,
         }),
     )
         .into_response()
@@ -354,12 +383,14 @@ fn non_empty(s: &str) -> Option<String> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_recall(
     state: &Arc<KbHandles>,
     identity: crate::middleware::Identity,
     q: &str,
     project: Option<String>,
     visible_to: Option<String>,
+    dedup: Option<memory::DedupSpec>,
     deadline_ms: Option<u64>,
     deadline: Option<std::time::Instant>,
 ) -> Result<memory::RecallResponse, QueryErrorClass> {
@@ -384,6 +415,7 @@ async fn run_recall(
                 no_floor: false,
                 with_weekly: false,
                 deadline_ms,
+                dedup,
             },
         ),
     )

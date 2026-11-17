@@ -2278,7 +2278,17 @@ GET  /api/events/schema/{kind}/{version}    per-type payload schema
 # v0.44 F6 — the per-prompt turn block
 GET  /api/turn?q=…|prompt=…[&session=SID&cwd=PATH&deadline_ms=N
                     &project=CORPUS[,CORPUS…]&visible_to=CSV
-                    &lanes=recall,context,slate&slate=SLUG&slate_since=SEQ]
+                    &lanes=recall,context,slate&slate=SLUG&slate_since=SEQ
+                    &dedup_session=1&served_after=UNIX]
+                                            SG-Q3: `dedup_session=1` (with
+                                            `session=`) excludes recall hits
+                                            already served to that logical
+                                            session since `served_after`
+                                            (default 0), applied after
+                                            scoring, before the 5-hit cut;
+                                            `dedup_removed` (omitted at 0)
+                                            counts them. Same semantics as on
+                                            /api/memory/recall below.
                                             recall + the turn-1 context scent
                                             composed in-process under ONE
                                             shared deadline. Returns
@@ -2499,7 +2509,29 @@ GET  /api/context?q=…[&cwd=PATH&budget=N&session=SID&no_floor=true
                                             [--no-floor] [--json]`.
 
 # v0.9+ M — agent memory (Claude Code's persistent memory)
-GET    /api/memory/recall?q=…[&scope=global|project|all&for_kb=NAME&visible_to=CSV&limit=N]
+GET    /api/memory/recall?q=…[&scope=global|project|all&for_kb=NAME&visible_to=CSV&limit=N
+                       &session=SID&dedup_session=1&served_after=UNIX]
+                                            SG-Q3: with `session=SID`,
+                                            `dedup_session=1` EXCLUDES hits
+                                            already served to that logical
+                                            session (capture rows of its
+                                            newest capture + live serves, over
+                                            the segment chain) with
+                                            recalled_at >= `served_after`
+                                            (unix; default 0 = all). An
+                                            exclusion after scoring and before
+                                            the `limit` cut, never a score
+                                            term: each surviving hit's
+                                            score/rel/decay is byte-identical
+                                            to the same request without it, and
+                                            the next-ranked hit replaces an
+                                            excluded one. The response gains
+                                            `dedup_removed` (omitted when 0).
+                                            No sessions ledger, or a failed
+                                            read: nothing is excluded and
+                                            degraded[] names lane
+                                            `recall.dedup`. Absent parameter =
+                                            byte-identical response.
                                             cross-corpus recall ranked on
                                             rank-position × salience × decay
                                             (supersede/forget drops applied at

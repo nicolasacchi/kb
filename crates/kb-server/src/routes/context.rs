@@ -741,6 +741,7 @@ pub async fn get(
             no_floor: params.no_floor,
             with_weekly: false,
             deadline_ms: remaining_ms(deadline),
+            dedup: None,
         },
     )
     .await
@@ -753,6 +754,7 @@ pub async fn get(
             hits: Vec::new(),
             ms: 0,
             degraded: Vec::new(),
+            dedup_removed: 0,
         },
     };
     let recall_degraded = recall.degraded;

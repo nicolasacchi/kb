@@ -479,6 +479,7 @@ pub async fn recall(
 ) -> Result<()> {
     recall_with_timeout(
         query, scope, project, cwd, limit, for_kb, no_floor, explain, daemon, bearer, json, None,
+        false, None,
     )
     .await
 }
@@ -501,6 +502,8 @@ pub async fn recall_with_timeout(
     bearer: Option<&str>,
     json: bool,
     timeout_secs: Option<u64>,
+    dedup_session: bool,
+    served_after: Option<i64>,
 ) -> Result<()> {
     let res = recall_inner(
         query,
@@ -513,6 +516,8 @@ pub async fn recall_with_timeout(
         daemon,
         bearer,
         timeout_secs,
+        dedup_session,
+        served_after,
     )
     .await;
     match res {
@@ -803,6 +808,8 @@ async fn recall_inner(
     daemon: Option<&str>,
     bearer: Option<&str>,
     timeout_secs: Option<u64>,
+    dedup_session: bool,
+    served_after: Option<i64>,
 ) -> Result<(String, serde_json::Value)> {
     let url = require_daemon(daemon, bearer).await?;
     // Shell git ONLY when the caller actually asked for `auto` — every
@@ -881,6 +888,9 @@ async fn recall_inner(
     // no `session=` param. An old daemon ignores the param; a missing
     // session must not become `session=`.
     append_recall_session(&mut q, recall_session_id().as_deref());
+    // SG-Q3: opt-in exclusion of hits already served to this session. Absent
+    // flags leave the URL byte-identical.
+    append_recall_dedup(&mut q, dedup_session, served_after);
     // Recall embeds the query (a large model like bge-large is ~1024-dim and
     // costly on a busy CPU) then fans out FTS + vector queries across every
     // in-scope memory corpus, so a cold/loaded recall can run ~10-20s. The
@@ -917,6 +927,18 @@ fn append_recall_session(q: &mut String, session: Option<&str>) {
     };
     q.push_str("&session=");
     q.push_str(&http::encode_path_segment(sid));
+}
+
+/// SG-Q3: append `&dedup_session=1` / `&served_after=<unix>` (opt-in).
+/// `served_after` only rides along with `dedup_session`.
+fn append_recall_dedup(q: &mut String, dedup_session: bool, served_after: Option<i64>) {
+    if !dedup_session {
+        return;
+    }
+    q.push_str("&dedup_session=1");
+    if let Some(t) = served_after {
+        q.push_str(&format!("&served_after={t}"));
+    }
 }
 
 /// Session id for `session=` on `GET /api/memory/recall`.
@@ -2668,6 +2690,20 @@ mod tests {
         append_recall_session(&mut q, Some(""));
         append_recall_session(&mut q, Some("  "));
         assert_eq!(q, before);
+    }
+
+    #[test]
+    fn append_recall_dedup_is_opt_in_and_byte_identical_when_off() {
+        let mut q = "u?q=x".to_string();
+        append_recall_dedup(&mut q, false, Some(5));
+        assert_eq!(q, "u?q=x", "served_after alone never rides along");
+        append_recall_dedup(&mut q, true, None);
+        assert_eq!(q, "u?q=x&dedup_session=1");
+        append_recall_dedup(&mut q, true, Some(1700000000));
+        assert_eq!(
+            q,
+            "u?q=x&dedup_session=1&dedup_session=1&served_after=1700000000"
+        );
     }
 
     #[test]

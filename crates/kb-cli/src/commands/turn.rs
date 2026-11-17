@@ -107,6 +107,8 @@ pub async fn turn(
     lanes: Option<&str>,
     slate: Option<&str>,
     slate_since: Option<u64>,
+    dedup_session: bool,
+    served_after: Option<i64>,
     daemon: Option<&str>,
     bearer: Option<&str>,
     json: bool,
@@ -132,6 +134,13 @@ pub async fn turn(
     }
     if let Some(s) = session {
         req = req.query(&[("session", s)]);
+    }
+    // SG-Q3: opt-in; absent flags leave the request byte-identical.
+    if dedup_session {
+        req = req.query(&[("dedup_session", "1")]);
+        if let Some(t) = served_after {
+            req = req.query(&[("served_after", t.to_string().as_str())]);
+        }
     }
     // `--lanes ...slate` without `--slate` names this repo's slate (the same
     // cwd -> main-checkout-basename slug `kb slate` uses) - what lets the hook

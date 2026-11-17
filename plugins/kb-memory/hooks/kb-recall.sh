@@ -92,6 +92,37 @@ if [ "${KB_RECALL_CONTEXT:-}" = "1" ]; then
   [ -n "$tpath" ] && [ -r "$tpath" ] && ctx_flags=(--transcript "$tpath")
 fi
 
+# SG-Q3 — per-session dedup. With a known session id the daemon drops memories
+# already served to this logical session (an EXCLUSION after scoring; nothing
+# from the ledger enters ranking). `recall-epoch-<sid>` is written by
+# kb-wake.sh on SessionStart source=compact|clear: after a compact the earlier
+# injections are gone from the model's context, so the count starts over
+# (--served-after <unix>). Kill switch: KB_RECALL_DEDUP=0. No sid, no dedup.
+dedup_flags=()
+if [ "${KB_RECALL_DEDUP:-1}" != "0" ] && [ -n "$sid" ]; then
+  dedup_flags=(--dedup-session)
+  epoch_file="${XDG_CACHE_HOME:-$HOME/.cache}/kb/recall-epoch-$sid"
+  if [ -f "$epoch_file" ]; then
+    epoch="$(head -n 1 "$epoch_file" 2>/dev/null | tr -d '[:space:]')"
+    case "$epoch" in '' | *[!0-9]*) ;; *) dedup_flags+=(--served-after "$epoch") ;; esac
+  fi
+fi
+
+# SG-Q3 — trivial-prompt skip: with no context transcript being passed
+# (KB_RECALL_CONTEXT off), a slash command or a prompt with fewer than two
+# word tokens (3+ unicode letters/digits) carries nothing to recall on. Skips
+# the RECALL lane only; scent and slate lanes run as before.
+# Kill switch: KB_RECALL_SKIP_TRIVIAL=0.
+skip_recall=0
+if [ "${KB_RECALL_SKIP_TRIVIAL:-1}" != "0" ] && [ "${#ctx_flags[@]}" -eq 0 ]; then
+  if [ "$(printf '%s' "$prompt" | jq -Rrs '
+        (sub("^\\s+"; "")) as $p
+        | if ($p | startswith("/")) or (([$p | scan("[\\p{L}\\p{N}]{3,}")] | length) < 2)
+          then "1" else "0" end' 2>/dev/null)" = "1" ]; then
+    skip_recall=1
+  fi
+fi
+
 # CT-D1 — the SCENT branch, first UserPromptSubmit of a session ONLY.
 #
 # On turn 1 the hook has what nothing else in kb has: the real task text AND
@@ -177,10 +208,17 @@ turn_note=""
 if [ "${KB_TURN:-}" = "1" ] && [ "${KB_RECALL_LAYOUT:-v2}" = "v2" ]; then
   turn_lanes="recall"
   [ "$first_turn" = "1" ] && turn_lanes="recall,context"
+  # SG-Q3 — trivial prompt: no recall lane (context/slate unchanged).
+  if [ "$skip_recall" = "1" ]; then
+    turn_lanes=""
+    [ "$first_turn" = "1" ] && turn_lanes="context"
+  fi
   # The slate lane rides the same call (the CLI resolves cwd -> slug, exactly
   # as `kb slate delta --cwd` does). A cursor asks for the delta since it; no
   # cursor seeds (the hybrid block), like the shell lane below.
-  [ -n "$slate_sid" ] && turn_lanes="$turn_lanes,slate"
+  if [ -n "$slate_sid" ]; then
+    if [ -n "$turn_lanes" ]; then turn_lanes="$turn_lanes,slate"; else turn_lanes="slate"; fi
+  fi
   # Daemon budget: what is left of the shared deadline minus 1.5s for process
   # start + HTTP, capped at 9s (the route's design point), floored at 0.5s.
   turn_dl=$(( $(hook_left_ms 2>/dev/null || echo 10500) - 1500 ))
@@ -190,7 +228,15 @@ if [ "${KB_TURN:-}" = "1" ] && [ "${KB_RECALL_LAYOUT:-v2}" = "v2" ]; then
   [ -n "$cwd" ] && turn_args+=(--cwd "$cwd")
   [ -n "$sid" ] && turn_args+=(--session "$sid")
   case "$cursor" in '' | *[!0-9]*) ;; *) turn_args+=(--slate-since "$cursor") ;; esac
-  turn_json="$(run_to 11 kb turn "$prompt" "${extra[@]}" "${ctx_flags[@]}" "${turn_args[@]}" --json 2>/dev/null)" || turn_json=""
+  turn_json=""
+  if [ -n "$turn_lanes" ]; then
+    turn_json="$(run_to 11 kb turn "$prompt" "${extra[@]}" "${ctx_flags[@]}" "${dedup_flags[@]}" "${turn_args[@]}" --json 2>/dev/null)" || turn_json=""
+    # A CLI older than the dedup flags exits non-zero on them: retry once
+    # without, so a skewed binary loses dedup, never the injection.
+    if [ -z "$turn_json" ] && [ "${#dedup_flags[@]}" -gt 0 ]; then
+      turn_json="$(run_to 11 kb turn "$prompt" "${extra[@]}" "${ctx_flags[@]}" "${turn_args[@]}" --json 2>/dev/null)" || turn_json=""
+    fi
+  fi
   if [ -n "$turn_json" ] && printf '%s' "$turn_json" | jq -e 'has("text")' >/dev/null 2>&1; then
     turn_ok=1
     turn_text="$(printf '%s' "$turn_json" | jq -r '.text // empty' 2>/dev/null)" || turn_text=""
@@ -253,8 +299,12 @@ recall_args=()
 # spent) and the slate lane below still runs, so neither is thrown away.
 recall_prefix=(env "KB_RECALL_SESSION=${sid}")
 hits=""
-if [ "$turn_ok" != "1" ]; then
-  hits="$(run_to 6 "${recall_prefix[@]}" kb recall "$prompt" "${extra[@]}" "${ctx_flags[@]}" "${recall_args[@]}" --limit 5 --json 2>/dev/null)" || hits=""
+if [ "$turn_ok" != "1" ] && [ "$skip_recall" != "1" ]; then
+  hits="$(run_to 6 "${recall_prefix[@]}" kb recall "$prompt" "${extra[@]}" "${ctx_flags[@]}" "${dedup_flags[@]}" "${recall_args[@]}" --limit 5 --json 2>/dev/null)" || hits=""
+  # Same skew fallback as the turn call above.
+  if [ -z "$hits" ] && [ "${#dedup_flags[@]}" -gt 0 ]; then
+    hits="$(run_to 6 "${recall_prefix[@]}" kb recall "$prompt" "${extra[@]}" "${ctx_flags[@]}" "${recall_args[@]}" --limit 5 --json 2>/dev/null)" || hits=""
+  fi
 fi
 
 # CT-A3 — alongside the human-readable line, append ONE machine-readable

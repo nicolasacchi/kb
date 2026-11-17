@@ -885,7 +885,16 @@ kb proposals reject <id> [--kb NAME]
                                     discard the candidate; writes nothing.
 kb recall <query> [--scope auto|all|global|project] [--project NAME]
    [--cwd PATH] [--limit N] [--for-kb NAME] [--no-floor] [--explain]
-   [--transcript PATH] [--turns N] [--daemon URL] [--json]
+   [--transcript PATH] [--turns N] [--dedup-session] [--served-after UNIX]
+   [--daemon URL] [--json]
+                                    SG-Q3: --dedup-session drops memories
+                                    already served to this session (the
+                                    session id from KB_RECALL_SESSION or the
+                                    current-session marker), --served-after
+                                    only counts serves at/after that unix
+                                    time (a compact starts over). The
+                                    daemon excludes after scoring; survivors
+                                    keep their score decomposition.
                                     SG-Q2: --transcript composes the query
                                     CLIENT-side from the prompt plus the last
                                     --turns (default 4) turns of a live Claude
@@ -981,7 +990,10 @@ kb changes [--since WHEN] [--project ID|LABEL] [--session SID]
                                     marked read. GET /api/changes.
 kb turn <prompt> [--cwd PATH] [--session SID] [--deadline-ms N]
    [--lanes recall,context,slate] [--slate SLUG] [--slate-since SEQ]
-   [--transcript PATH] [--turns N] [--daemon URL] [--json]
+   [--transcript PATH] [--turns N] [--dedup-session] [--served-after UNIX]
+   [--daemon URL] [--json]
+                                    SG-Q3: --dedup-session (needs --session)
+                                    and --served-after, as on `kb recall`.
                                     SG-Q2: --transcript/--turns fold recent
                                     transcript turns into the prompt exactly
                                     as `kb recall` does (loopback only).
