@@ -25,7 +25,7 @@ fn runner_sock_arg() -> Arg {
 
 fn cli() -> Command {
     Command::new("kb-term")
-        .version(env!("CARGO_PKG_VERSION"))
+        .version(kb_term::version::own_version())
         .about("kb-term operator-local client")
         .subcommand(
             Command::new("doctor")
@@ -164,6 +164,12 @@ fn cli() -> Command {
 }
 
 fn main() {
+    // Stamp from compile-time env (the lib must not link kb-buildstamp): a
+    // tag build reports its tag, a main build `main-<sha12>`, a dev build
+    // `0.0.0-dev`. The doctor compares the tap's version with this.
+    kb_term::version::set_own_version(kb_term::version::stamped_version(option_env!(
+        "KB_BUILD_VERSION"
+    )));
     let matches = cli().get_matches();
     let code = match matches.subcommand() {
         Some(("doctor", sub)) => {

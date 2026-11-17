@@ -26,5 +26,6 @@ pub mod pty;
 pub mod responder;
 pub mod runner;
 pub mod runner_client;
+pub mod version;
 pub mod viewer;
 pub mod wire;
