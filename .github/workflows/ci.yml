@@ -1732,14 +1732,20 @@ jobs:
         run: bash -n scripts/package-kb-term.sh scripts/ci/install-kb-term-selftest.sh
 
       - name: Build kb-term (runner + client)
-        run: cargo build --release --locked -p kb-term --bins
+        # The archive's version (FXVER): the bins read KB_BUILD_VERSION at
+        # compile time, so kb-term/kb-termd report exactly the version the
+        # archive is named for. package-kb-term.sh asserts it.
+        run: |
+          export KB_BUILD_VERSION="main-${GITHUB_SHA::12}"
+          cargo build --release --locked -p kb-term --bins
 
       - name: Build the kb-tap binary
-        # The exact compile command of the term-tap job above (checked
-        # there every PR).
+        # The compile command of the term-tap job above (checked there every
+        # PR) plus the version stamp, so the tap reports the archive version.
         run: |
           cd crates/kb-term/tap
-          bun build --compile src/main.ts --outfile "$RUNNER_TEMP/kb-tap"
+          bun build --compile --define "KB_TAP_VERSION=\"main-${GITHUB_SHA::12}\"" \
+            src/main.ts --outfile "$RUNNER_TEMP/kb-tap"
 
       - name: Package kb-term archive
         env:
@@ -1775,8 +1781,10 @@ jobs:
             sh scripts/install-kb-term.sh
           P="${home_tmp}/.local"
           test "$("$P/libexec/kb-term/tmux" -V)" = "tmux 3.7c"
-          "$P/bin/kb-term" --version >/dev/null
-          "$P/bin/kb-termd" --version >/dev/null
+          # FXVER: the installed binaries report the archive version.
+          test "$("$P/bin/kb-term" --version)" = "kb-term main-${sha12}"
+          test "$("$P/bin/kb-termd" --version)" = "kb-termd main-${sha12}"
+          test "$("$P/bin/kb-tap" --version)" = "kb-tap main-${sha12}"
           test "$(head -c4 "$P/bin/kb-tap" | od -An -tx1 | tr -d ' \n')" = "7f454c46"
           test "$("$P/bin/kb-tap")" = "kb-tap placeholder"
           # VERSIONS carries every build fact the packager records.

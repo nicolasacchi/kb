@@ -40,6 +40,17 @@ require_executable() {
   fi
 }
 
+assert_reports_version() {
+  # $1 = variable naming the binary, $2 = the name its --version line starts
+  # with. The first line must be exactly `<name> <KB_TERM_VERSION>`.
+  bin="${!1}"
+  want="$2 ${KB_TERM_VERSION}"
+  got="$("${bin}" --version 2>/dev/null | head -n1 || true)"
+  if [ "${got}" != "${want}" ]; then
+    err "$1 ($bin) reports '${got}' but the archive version is '${KB_TERM_VERSION}' (expected '${want}') — refusing to package"
+  fi
+}
+
 main() {
   require_executable KB_TERMD_BIN
   require_executable KB_TERM_BIN
@@ -73,6 +84,16 @@ main() {
   if [ "${tmux_version}" != "tmux 3.7c" ]; then
     err "pinned tmux must report 'tmux 3.7c' (got '${tmux_version}') — refusing to package"
   fi
+
+  # FXVER: every shipped binary must report the archive's own version
+  # (release: the tag without its v; main builds: main-<sha12>). The version
+  # is stamped in at compile time (KB_BUILD_VERSION for the Rust bins,
+  # `bun build --define KB_TAP_VERSION` for the tap); a binary built without
+  # the stamp reports 0.0.0-dev and is refused here, so an archive can never
+  # ship a version that disagrees with its own name.
+  assert_reports_version KB_TERMD_BIN kb-termd
+  assert_reports_version KB_TERM_BIN kb-term
+  assert_reports_version KB_TAP_BIN kb-tap
 
   name="kb-term-${KB_TERM_VERSION}-${KB_TERM_TARGET}"
   stage="$(mktemp -d)"

@@ -7,7 +7,7 @@ import { test, expect } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { chmodSync, mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { PINS_JSON, SESSION_RE, createTapStack, parseArgs } from '../src/main.ts';
+import { PINS_JSON, SESSION_RE, TAP_VERSION, UNSTAMPED_TAP_VERSION, createTapStack, parseArgs, stampedTapVersion } from '../src/main.ts';
 import { connect, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -640,6 +640,8 @@ test('compiled_binary_smoke_pins_version_placeholder_and_listen', async () => {
     const version = spawnSync(bin, ['--version'], { encoding: 'utf-8', timeout: 30_000 });
     expect(version.status).toBe(0);
     expect((version.stdout as string).startsWith('kb-tap ')).toBe(true);
+    // Unstamped build: the dev marker, never a bare `0.0.0`.
+    expect((version.stdout as string).trim()).toBe(`kb-tap ${UNSTAMPED_TAP_VERSION}`);
 
     const pins = spawnSync(bin, ['--pins'], { encoding: 'utf-8', timeout: 30_000 });
     expect(pins.status).toBe(0);
@@ -679,6 +681,38 @@ test('compiled_binary_smoke_pins_version_placeholder_and_listen', async () => {
     }
     proc.kill();
     expect(sawSock).toBe(true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ------------------------------------------------ version stamping (FXVER)
+test('tap_version_normalises_a_stamp_and_never_reports_a_bare_zero', () => {
+  expect(stampedTapVersion('v0.52.1')).toBe('0.52.1');
+  expect(stampedTapVersion('0.52.1')).toBe('0.52.1');
+  expect(stampedTapVersion('main-0123456789ab')).toBe('main-0123456789ab');
+  expect(stampedTapVersion(' v1.2 ')).toBe('1.2');
+  expect(stampedTapVersion('vx')).toBe('vx');
+  expect(stampedTapVersion(undefined)).toBe('0.0.0-dev');
+  expect(stampedTapVersion('')).toBe('0.0.0-dev');
+  expect(UNSTAMPED_TAP_VERSION).not.toBe('0.0.0');
+  // Under `bun test` nothing defines KB_TAP_VERSION: the dev marker.
+  expect(TAP_VERSION).toBe('0.0.0-dev');
+});
+
+test('compiled_binary_reports_the_define_d_version', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'kbt-ver-'));
+  const bin = join(dir, 'kb-tap');
+  const build = spawnSync(
+    'bun',
+    ['build', '--compile', '--define', 'KB_TAP_VERSION="v9.8.7"', 'src/main.ts', '--outfile', bin],
+    { cwd: process.cwd(), encoding: 'utf-8', timeout: 300_000 },
+  );
+  try {
+    expect(build.status).toBe(0);
+    const version = spawnSync(bin, ['--version'], { encoding: 'utf-8', timeout: 30_000 });
+    expect(version.status).toBe(0);
+    expect((version.stdout as string).trim()).toBe('kb-tap 9.8.7');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

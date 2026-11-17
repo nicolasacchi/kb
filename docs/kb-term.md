@@ -635,7 +635,8 @@ any check FAILs, and with `--strict` also on any WARN; a SKIP never fails. Check
 |---|---|
 | `tmux_version` | the pinned tmux reports `tmux 3.7c` (WARN on another version, FAIL if missing) |
 | `tmux_sha256` | the tmux binary matches its recorded sidecar digest |
-| `tap_binary` | `kb-tap` exists and is executable |
+| `tap_binary` | `kb-tap` exists and is executable; its `--version` line is shown |
+| `tap_version` | `kb-tap` reports the same version as this `kb-term` (WARN on a mixed install; SKIP when the tap reports none) |
 | `xterm_pins` | the tap reports the pinned xterm package set (SKIP if it reports none) |
 | `harness_claude`, `harness_codex`, `harness_opencode`, `harness_grok`, `harness_kimi`, `harness_omp` | the harness binary is found and its version is shown; WARN when it differs from the known-good version doctor was written against (omp, claude, codex and opencode have one); WARN when it is found but `--version` exits non-zero (the exit code and first stderr line are shown) or does not finish in 20 s (so a slow cold start is not reported as a missing binary); SKIP only when it is not installed |
 | `omp_overlay` | the on-disk omp overlay carries the approved pins |
