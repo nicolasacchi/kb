@@ -113,6 +113,9 @@ pub struct ValidatedLaunch {
     pub argv: Vec<String>,
     /// Resume session id, if any.
     pub resume_sid: Option<String>,
+    /// Source session id of a cross-harness handoff (validated plain
+    /// token; `claude`/`omp` only; exclusive with `resume_sid`).
+    pub handoff_from: Option<String>,
     /// Working directory.
     pub cwd: std::path::PathBuf,
     /// Grid columns.
@@ -148,6 +151,7 @@ pub fn validate_launch(req: &Request, cfg: &RunnerConfig) -> Result<ValidatedLau
         harness,
         argv,
         resume_sid,
+        handoff_from,
         cwd,
         cols,
         rows,
@@ -212,6 +216,31 @@ pub fn validate_launch(req: &Request, cfg: &RunnerConfig) -> Result<ValidatedLau
             ));
         }
     }
+    // `handoff_from` becomes a fixed-position argv token of `kb sessions
+    // handoff`: plain token only, handoff targets only, never combined
+    // with a resume, and the runner always builds the argv itself.
+    if let Some(sid) = handoff_from {
+        if !profiles::is_plain_token(sid) {
+            return Err(RunnerError::BadRequest(
+                "handoff_from must be a plain token (at most 128 bytes)".to_string(),
+            ));
+        }
+        if !matches!(harness, Harness::Claude | Harness::Omp) {
+            return Err(RunnerError::BadRequest(
+                "handoff_from requires harness claude or omp".to_string(),
+            ));
+        }
+        if resume_sid.is_some() {
+            return Err(RunnerError::BadRequest(
+                "handoff_from and resume_sid are mutually exclusive".to_string(),
+            ));
+        }
+        if !argv.is_empty() {
+            return Err(RunnerError::BadRequest(
+                "handoff_from does not take a caller argv".to_string(),
+            ));
+        }
+    }
     let cwd_path = std::path::Path::new(cwd);
     if !cwd_path.is_absolute() {
         return Err(RunnerError::BadRequest("cwd must be absolute".to_string()));
@@ -268,6 +297,7 @@ pub fn validate_launch(req: &Request, cfg: &RunnerConfig) -> Result<ValidatedLau
         harness: harness.as_str().to_string(),
         argv: argv.clone(),
         resume_sid: resume_sid.clone(),
+        handoff_from: handoff_from.clone(),
         cwd: cwd_path.to_path_buf(),
         cols,
         rows,
@@ -533,6 +563,9 @@ async fn set_user_options<S: Supervisor>(
     if let Some(sid) = &spec.resume_sid {
         opts.push(("@kb_resume_sid", sid.clone()));
     }
+    if let Some(sid) = &spec.handoff_from {
+        opts.push(("@kb_handoff_from", sid.clone()));
+    }
     // (step 6 writes `@kb_anchor_pid`; until then it reads as absent and
     // adoption treats that as "recreate".)
     // tmux 3.7c's `set-option` has no `--` terminator: `key -- value`
@@ -570,6 +603,7 @@ fn build_launch_plan<S: Supervisor>(
         harness: &spec.harness,
         term_id: id,
         resume_sid: spec.resume_sid.as_deref(),
+        handoff_from: spec.handoff_from.as_deref(),
         cwd: &cwd,
         job_ulid: None,
         run_dir: &run_dir,
@@ -936,6 +970,7 @@ mod tests {
             harness: Harness::Omp,
             argv: Some(vec!["/usr/bin/omp".to_string()]),
             resume_sid: None,
+            handoff_from: None,
             cwd: "/tmp".to_string(),
             cols: Some(120),
             rows: Some(40),
@@ -1014,6 +1049,78 @@ mod tests {
         );
     }
 
+    fn handoff_req(harness: Harness, sid: &str) -> Request {
+        Request::Launch {
+            harness,
+            argv: None,
+            resume_sid: None,
+            handoff_from: Some(sid.to_string()),
+            cwd: "/tmp".to_string(),
+            cols: Some(120),
+            rows: Some(40),
+            env: None,
+            exit_keys: None,
+        }
+    }
+
+    /// `handoff_from` validates for claude/omp with a plain token and is
+    /// carried into the validated spec; every unsafe shape is `bad-request`.
+    #[test]
+    fn validate_handoff_from_accepts_plain_token_and_rejects_the_rest() {
+        let cfg = cfg();
+        for harness in [Harness::Claude, Harness::Omp] {
+            let spec = validate_launch(&handoff_req(harness, "a1b2.c_d:e-f"), &cfg).unwrap();
+            assert_eq!(spec.handoff_from.as_deref(), Some("a1b2.c_d:e-f"));
+            assert_eq!(spec.resume_sid, None);
+        }
+        validate_launch(&handoff_req(Harness::Claude, &"s".repeat(128)), &cfg).unwrap();
+        let too_long = "s".repeat(129);
+        for bad in ["", "a;b", "-x", "a b", "a/b", "a\0b", too_long.as_str()] {
+            let err = validate_launch(&handoff_req(Harness::Claude, bad), &cfg).unwrap_err();
+            assert_eq!(err.code(), "bad-request", "sid {bad:?}");
+        }
+        for harness in [
+            Harness::Codex,
+            Harness::Opencode,
+            Harness::Grok,
+            Harness::Kimi,
+        ] {
+            let err = validate_launch(&handoff_req(harness, "sid-1"), &cfg).unwrap_err();
+            assert_eq!(err.code(), "bad-request", "harness {harness:?}");
+        }
+    }
+
+    /// `handoff_from` is exclusive with `resume_sid`, requires an absolute
+    /// cwd, and takes no caller argv.
+    #[test]
+    fn validate_handoff_from_rejects_resume_relative_cwd_and_argv() {
+        let cfg = cfg();
+        let mut req = handoff_req(Harness::Omp, "sid-1");
+        if let Request::Launch { resume_sid, .. } = &mut req {
+            *resume_sid = Some("other".to_string());
+        }
+        assert_eq!(
+            validate_launch(&req, &cfg).unwrap_err().code(),
+            "bad-request"
+        );
+        let mut req = handoff_req(Harness::Omp, "sid-1");
+        if let Request::Launch { cwd, .. } = &mut req {
+            *cwd = "relative".to_string();
+        }
+        assert_eq!(
+            validate_launch(&req, &cfg).unwrap_err().code(),
+            "bad-request"
+        );
+        let mut req = handoff_req(Harness::Omp, "sid-1");
+        if let Request::Launch { argv, .. } = &mut req {
+            *argv = Some(vec!["/usr/bin/omp".to_string()]);
+        }
+        assert_eq!(
+            validate_launch(&req, &cfg).unwrap_err().code(),
+            "bad-request"
+        );
+    }
+
     /// The launch teardown context carries the pane and server pids read
     /// best-effort (a stubborn pane is then SIGKILLable); an empty
     /// StopCtx would send SIGTERMs to nobody and leak it.
@@ -1087,6 +1194,7 @@ mod tests {
             harness: Harness::Omp,
             argv: None,
             resume_sid: None,
+            handoff_from: None,
             cwd: dir.path().to_string_lossy().into_owned(),
             cols: None,
             rows: None,
@@ -1127,6 +1235,7 @@ mod tests {
             harness: Harness::Omp,
             argv: Some(vec!["relative-argv".to_string()]),
             resume_sid: None,
+            handoff_from: None,
             cwd: "/tmp".to_string(),
             cols: Some(120),
             rows: Some(40),
@@ -1163,6 +1272,7 @@ mod tests {
             harness: Harness::Omp,
             argv: Some(argv.iter().map(ToString::to_string).collect()),
             resume_sid: None,
+            handoff_from: None,
             cwd: "/tmp".to_string(),
             cols: Some(120),
             rows: Some(40),
@@ -1196,6 +1306,7 @@ mod tests {
             harness: Harness::Omp,
             argv: None,
             resume_sid: None,
+            handoff_from: None,
             cwd: "/tmp".to_string(),
             cols: Some(120),
             rows: Some(40),
@@ -1221,6 +1332,7 @@ mod tests {
             harness: Harness::Omp,
             argv: Some(vec![]),
             resume_sid: None,
+            handoff_from: None,
             cwd: "/tmp".to_string(),
             cols: Some(120),
             rows: Some(40),
@@ -1365,6 +1477,7 @@ mod tests {
             harness: "claude",
             term_id: "abc123",
             resume_sid: None,
+            handoff_from: None,
             cwd: "/tmp",
             job_ulid: None,
             run_dir: std::path::Path::new("/tmp/kb-term-test"),
@@ -1376,6 +1489,7 @@ mod tests {
             harness: "claude".to_string(),
             argv: vec!["claude".to_string()],
             resume_sid: None,
+            handoff_from: None,
             cwd: PathBuf::from("/tmp"),
             cols: 120,
             rows: 40,
@@ -1425,6 +1539,7 @@ mod tests {
                 harness: "claude",
                 term_id: "abc123",
                 resume_sid: None,
+                handoff_from: None,
                 cwd: "/tmp",
                 job_ulid: None,
                 run_dir: std::path::Path::new("/tmp/kb-term-test"),

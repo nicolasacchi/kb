@@ -658,6 +658,124 @@ async fn launch_rejects_unknown_harness_and_bad_cwd() {
     }
 }
 
+/// POST `/api/terms` with the SPA's operator-intent headers.
+async fn post_launch(
+    c: &reqwest::Client,
+    addr: std::net::SocketAddr,
+    body: &str,
+) -> reqwest::Response {
+    c.post(format!("{}/api/terms", base_url(addr)))
+        .header("Origin", origin_header(addr))
+        .header("x-kb-intent", "terminal")
+        .header("Content-Type", "application/json")
+        .body(body.to_string())
+        .send()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn handoff_launch_forwards_handoff_from_to_the_runner() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert(
+        "launch".to_string(),
+        ok_reply("{\"id\":\"abcd1234\",\"harness\":\"claude\"}"),
+    );
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), replies);
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    let resp = post_launch(
+        &c,
+        addr,
+        "{\"harness\":\"claude\",\"cwd\":\"/work/proj\",\"handoff_from\":\"019e-abc_1.2:x\"}",
+    )
+    .await;
+    assert_eq!(resp.status().as_u16(), 201);
+    let reqs = fake.reqs.lock().unwrap().clone();
+    assert_eq!(reqs.len(), 1, "{reqs:?}");
+    assert_eq!(
+        reqs[0],
+        serde_json::json!({
+            "op": "launch", "harness": "claude", "argv": null, "resume_sid": null,
+            "cwd": "/work/proj", "cols": null, "rows": null, "env": null,
+            "exit_keys": null, "handoff_from": "019e-abc_1.2:x",
+        })
+    );
+    // The omp target is accepted too.
+    let resp = post_launch(
+        &c,
+        addr,
+        "{\"harness\":\"omp\",\"cwd\":\"/work/proj\",\"handoff_from\":\"sid-1\"}",
+    )
+    .await;
+    assert_eq!(resp.status().as_u16(), 201);
+}
+
+#[tokio::test]
+async fn handoff_launch_without_handoff_from_forwards_no_key() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert(
+        "launch".to_string(),
+        ok_reply("{\"id\":\"abcd1234\",\"harness\":\"claude\"}"),
+    );
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), replies);
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    let resp = post_launch(&c, addr, "{\"harness\":\"claude\",\"cwd\":\"/work/proj\"}").await;
+    assert_eq!(resp.status().as_u16(), 201);
+    let reqs = fake.reqs.lock().unwrap().clone();
+    assert_eq!(reqs.len(), 1, "{reqs:?}");
+    assert!(
+        reqs[0].get("handoff_from").is_none(),
+        "no handoff_from key expected: {}",
+        reqs[0]
+    );
+}
+
+#[tokio::test]
+async fn handoff_launch_validation_rejects_before_the_runner() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert(
+        "launch".to_string(),
+        ok_reply("{\"id\":\"abcd1234\",\"harness\":\"claude\"}"),
+    );
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), replies);
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    let too_long = format!(
+        "{{\"harness\":\"claude\",\"cwd\":\"/work/proj\",\"handoff_from\":\"{}\"}}",
+        "a".repeat(129)
+    );
+    for body in [
+        // Only claude/omp are handoff targets.
+        "{\"harness\":\"codex\",\"cwd\":\"/work/proj\",\"handoff_from\":\"sid-1\"}".to_string(),
+        // Mutually exclusive with resume_sid.
+        "{\"harness\":\"claude\",\"cwd\":\"/work/proj\",\"handoff_from\":\"sid-1\",\"resume_sid\":\"other\"}"
+            .to_string(),
+        // cwd is required ...
+        "{\"harness\":\"claude\",\"handoff_from\":\"sid-1\"}".to_string(),
+        // ... and absolute.
+        "{\"harness\":\"claude\",\"cwd\":\"rel/path\",\"handoff_from\":\"sid-1\"}".to_string(),
+        // Not a plain token.
+        "{\"harness\":\"claude\",\"cwd\":\"/work/proj\",\"handoff_from\":\"a b\"}".to_string(),
+        "{\"harness\":\"claude\",\"cwd\":\"/work/proj\",\"handoff_from\":\"a;rm -rf\"}"
+            .to_string(),
+        "{\"harness\":\"claude\",\"cwd\":\"/work/proj\",\"handoff_from\":\"-rf\"}".to_string(),
+        "{\"harness\":\"claude\",\"cwd\":\"/work/proj\",\"handoff_from\":\"../x\"}".to_string(),
+        "{\"harness\":\"claude\",\"cwd\":\"/work/proj\",\"handoff_from\":\"\"}".to_string(),
+        too_long,
+    ] {
+        let resp = post_launch(&c, addr, &body).await;
+        assert_eq!(resp.status().as_u16(), 400, "body {body}");
+        let (_s, text) = body_text(resp).await;
+        assert_problem(&text, "bad-request");
+    }
+    assert_eq!(fake.conns.load(Ordering::SeqCst), 0, "0 runner connections");
+}
+
 #[tokio::test]
 async fn paste_over_32kib_is_413_and_unknown_field_is_400() {
     let tmp = tempfile::tempdir().unwrap();

@@ -655,6 +655,14 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
             "/sessions/{session_id}/export",
             get(routes::sessions::export),
         )
+        // Cross-harness handoff BRIEF (kb-handoff/1) rendered from the newest
+        // capture; brief only (the native-session transplant needs host
+        // files: CLI only). Forces the redaction floor on a non-loopback
+        // client exactly as `/export` does (invariant #4).
+        .route(
+            "/sessions/{session_id}/handoff",
+            get(routes::session_handoff::handoff),
+        )
         // W3.R-b — the session-replay/1 timeline: prompts, tool calls, edits,
         // commits and decisions on the transcript's own clock, each beat
         // resolved to (kb, artifact, heading). Forces the redaction floor on a

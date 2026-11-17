@@ -783,6 +783,45 @@ kb sessions replay <id> [--json]       Replay beat by beat on the transcript's c
 kb sessions resume <id> [--json]       Resume-context block (goal + branch + edited files + decisions); OL IDEA3 adds `Checks: <phrase>` + `  $ <command>` and `Not committed: no commit detected in this session` before `Resume:`
 kb sessions export <id> [--from URL]   Bundle a session as a portable `<sid>.kbsession.zip`
 kb sessions rehydrate <bundle>         Place a bundle's transcript under `~/.claude/projects/` so `claude -r <id>` finds it
+kb sessions handoff <id> [--to claude|omp] [--transplant] [--budget CHARS] [--tail TURNS]
+   [--cwd DIR] [--from-capture] [--from DIR] [--claude-config-dir DIR] [--out FILE]
+   [--print] [--launch] [--dry-run] [--json]
+                                    Hand a session over to the OTHER harness (omp <-> Claude Code; `--to`
+                                    overrides). Offline, no daemon. SOURCE: the harness's own session file
+                                    first (`~/.omp/agent/sessions`, `$CLAUDE_CONFIG_DIR`/`~/.claude`/
+                                    `~/.claude-accounts/*` projects dirs; `<id>` may be a unique prefix —
+                                    several matches is an error listing them), else the newest kb capture
+                                    (`--from`, default `KB_SESSIONS_DIR`; lossy for omp: leaf chain only,
+                                    tool results capped at 2000 chars; stderr says so). `--from-capture`
+                                    skips the raw files. BRIEF (default): deterministic, LLM-free text —
+                                    goal/prompts, files touched, decisions, the last turns — that is the NEW
+                                    session's first prompt. Written (0600) to `--out` or
+                                    `$XDG_CACHE_HOME/kb/handoff/<sid>-to-<target>.md` (fallback
+                                    `~/.cache/kb/handoff/`), then the command is printed:
+                                    `cd <cwd> && claude "$(cat <file>)"`. `--budget` caps its characters
+                                    (default 8000), `--tail` the verbatim recent turns (default 8).
+                                    `--print` writes only the brief to stdout; `--launch` replaces the process
+                                    with `claude`/`omp` in the cwd, brief as the positional prompt (argv, no
+                                    shell; needs an existing cwd — `--cwd DIR` overrides the session's).
+                                    TRANSPLANT (`--transplant`): places a NEW native session file (never
+                                    overwrites; `--dry-run` writes nothing) — `<projects>/<slug(cwd)>/<id>.jsonl`
+                                    for Claude, `~/.omp/agent/sessions/<bucket>/` for omp — holding a summary
+                                    preamble plus the most recent turns verbatim (`--budget` = tail size, default
+                                    200000 chars); shell/read/write tool calls stay real tool calls, all other
+                                    tools are flattened to text. Prints `cd <cwd> && claude -r <id>` / `omp -r <id>`;
+                                    an explicit `--claude-config-dir D` (made absolute) is carried into the printed
+                                    claude command as `CLAUDE_CONFIG_DIR=D` and into `--launch` (brief and transplant);
+                                    a `$CLAUDE_CONFIG_DIR` from the environment is simply inherited. A relative
+                                    `--out` is resolved against the invocation dir, so the printed command works after the `cd`;
+                                    `--launch` runs it. LINEAGE: every brief and transplant preamble opens with
+                                    `[kb-handoff from <harness> session <id>]`; kb reads that marker from the new
+                                    session's first prompt as `continued_from` (surfaced as `continued_in` on the
+                                    source session, never scored). `--json` prints one `kb-handoff/1` object
+                                    (`mode`, `source`, `target`, `cwd`, `notes`, `command`, `dry_run`, plus
+                                    `chars`/`truncated`/`brief_path` or `transcript_path`/`new_session_id`/
+                                    `omitted_turns`); it cannot be combined with `--print`/`--launch`.
+                                    e.g. `kb sessions handoff 01a1e4a1 --launch` (omp -> Claude Code, brief),
+                                    `kb sessions handoff 08cb5496 --to omp --transplant --dry-run`
 kb sessions pull <id> [--from URL]     Fetch a session bundle from a remote kb daemon, optionally rehydrate
 kb sessions provenance-report --repo PATH
                                     W0.6 — wedge instrument: classify every commit (trailer / recorded / pre-capture / non-session / orphan)

@@ -237,6 +237,13 @@ pub struct SessionOut {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-export", ts(optional))]
     pub project_slug: Option<String>,
+    /// V0048 — handoff lineage, SURFACED never scored (invariant #11): the
+    /// session this one continues (`kb sessions handoff`), read from the
+    /// marker on its first real prompt. Omitted for an ordinary session so
+    /// a lineage-less row serialises byte-identically.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub continued_from: Option<kb_core::sessions::card::SessionLink>,
     /// The full parsed evidence, for the detail route's per-check list. Never
     /// serialised.
     #[serde(skip)]
@@ -453,6 +460,41 @@ pub(crate) async fn session_chain_parts(
     parts
 }
 
+/// V0048 — the sessions that continue `session_id` by handoff, across every
+/// kb: each kb's newest-capture rows whose `continued_from_session_id`
+/// equals it (newest start first within a kb), deduplicated by session id.
+/// A failing kb reader is logged and skipped. SURFACED, never scored.
+pub(crate) async fn continued_in(
+    state: &Arc<KbHandles>,
+    session_id: &str,
+) -> Vec<kb_core::sessions::card::SessionLink> {
+    let mut futs: Vec<super::CorpusFut<'_, Vec<(String, String)>>> = Vec::new();
+    for (kb_name, ctx) in state.kbs.iter() {
+        futs.push(Box::pin(async move {
+            ctx.storage
+                .sessions_continued_in(session_id.to_string())
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!(kb = %kb_name, error = %e, "sessions_continued_in failed");
+                    Vec::new()
+                })
+        }));
+    }
+    let mut seen = std::collections::HashSet::new();
+    super::buffered_join(futs, state.fanout_cap)
+        .await
+        .into_iter()
+        .flatten()
+        .filter(|(_, sid)| sid != session_id && seen.insert(sid.clone()))
+        .map(
+            |(harness, session_id)| kb_core::sessions::card::SessionLink {
+                harness,
+                session_id,
+            },
+        )
+        .collect()
+}
+
 /// V0045/seg1 — `session-view/1`'s additive `segment` block: where this
 /// capture sits in its chain. `None` for an ordinary (unsegmented) session.
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
@@ -602,6 +644,13 @@ impl SessionOut {
             // Filled per page/get by `annotate_child_counts`; 0 until then.
             child_count: 0,
             project_slug: row.project_slug,
+            continued_from: match (row.continued_from_harness, row.continued_from_session_id) {
+                (Some(harness), Some(session_id)) => Some(kb_core::sessions::card::SessionLink {
+                    harness,
+                    session_id,
+                }),
+                _ => None,
+            },
             evidence_full,
         }
     }
@@ -939,6 +988,10 @@ pub struct SessionDetailResponse {
     /// walks it.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub segment_chain: Vec<String>,
+    /// V0048 — handoff lineage, SURFACED never scored: the newest sessions
+    /// (any kb) whose `continued_from` is this session. Absent when none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub continued_in: Vec<kb_core::sessions::card::SessionLink>,
     /// OL IDEA3 -- the newest 16 checks the capture's main transcript ran,
     /// oldest first, each flagged before or after the last edit. Absent when
     /// the capture has none (or is `not_extracted`).
@@ -6271,6 +6324,7 @@ pub async fn get(
         .collect();
     memory_ids.sort();
     memory_ids.dedup();
+    let continued_in = continued_in(&state, &session.session_id).await;
     let (checks, unnamed_edits, unnamed_edits_total) = match session.evidence_full.as_ref() {
         Some(ev) => (
             ev.checks.iter().map(|c| check_out(ev, c)).collect(),
@@ -6283,6 +6337,7 @@ pub async fn get(
         session,
         memory_ids,
         segment_chain,
+        continued_in,
         checks,
         unnamed_edits,
         unnamed_edits_total,

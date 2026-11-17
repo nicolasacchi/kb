@@ -65,6 +65,11 @@ pub struct PlanRequest<'a> {
     pub term_id: &'a str,
     /// `None` = fresh launch.
     pub resume_sid: Option<&'a str>,
+    /// Source session id of a cross-harness handoff (`claude`/`omp`
+    /// targets only; exclusive with `resume_sid`): the pane runs
+    /// `kb sessions handoff <id> --to <harness> --transplant --launch
+    /// --cwd <cwd>` instead of the harness binary.
+    pub handoff_from: Option<&'a str>,
     /// Absolute, no control chars.
     pub cwd: &'a str,
     pub job_ulid: Option<&'a str>,
@@ -103,6 +108,11 @@ pub enum PlanError {
     /// request). Callers map this to an internal error, never a
     /// `bad-request`.
     Io(String),
+    /// `handoff_from` was set for a harness that is not a handoff target
+    /// (only `claude` and `omp` are).
+    HandoffUnsupported,
+    /// `handoff_from` and `resume_sid` were both set.
+    HandoffWithResume,
 }
 
 impl std::fmt::Display for PlanError {
@@ -116,6 +126,12 @@ impl std::fmt::Display for PlanError {
             }
             PlanError::BadTermId => write!(f, "term id must match [a-z0-9]{{1,16}}"),
             PlanError::Io(msg) => write!(f, "host IO failure: {msg}"),
+            PlanError::HandoffUnsupported => {
+                write!(f, "handoff_from requires harness claude or omp")
+            }
+            PlanError::HandoffWithResume => {
+                write!(f, "handoff_from and resume_sid are mutually exclusive")
+            }
         }
     }
 }
@@ -158,6 +174,17 @@ pub fn plan(req: &PlanRequest<'_>) -> Result<LaunchPlan, PlanError> {
     if let Some(sid) = req.resume_sid {
         if !is_plain_token(sid) {
             return Err(PlanError::UnsafeToken("resume_sid"));
+        }
+    }
+    if let Some(sid) = req.handoff_from {
+        if !is_plain_token(sid) {
+            return Err(PlanError::UnsafeToken("handoff_from"));
+        }
+        if !matches!(req.harness, "claude" | "omp") {
+            return Err(PlanError::HandoffUnsupported);
+        }
+        if req.resume_sid.is_some() {
+            return Err(PlanError::HandoffWithResume);
         }
     }
     if let Some(ulid) = req.job_ulid {
@@ -213,15 +240,24 @@ pub fn plan(req: &PlanRequest<'_>) -> Result<LaunchPlan, PlanError> {
     if let Some(ulid) = req.job_ulid {
         out_env.insert("KB_JOB_ULID".to_string(), ulid.to_string());
     }
-    let argv = match req.resume_sid {
-        Some(sid) => {
+    let argv = match (req.handoff_from, req.resume_sid) {
+        // Fixed tokens plus the validated sid, the closed harness name and
+        // the validated absolute cwd; the pane PATH resolves bare `kb`.
+        // The target harness's profile env/overlay/exit steps above and
+        // below are unchanged: `kb` execs the harness, which inherits them.
+        (Some(sid), _) => ["kb", "sessions", "handoff", sid, "--to", req.harness]
+            .into_iter()
+            .chain(["--transplant", "--launch", "--cwd", req.cwd])
+            .map(str::to_string)
+            .collect(),
+        (None, Some(sid)) => {
             let tail = resume_tail(req.harness, sid, Some(req.cwd))?;
             let mut argv = vec![tail[0].clone()];
             argv.extend(row.fresh_flags.iter().map(|s| s.to_string()));
             argv.extend(tail[1..].iter().cloned());
             argv
         }
-        None => {
+        (None, None) => {
             let mut argv = vec![row.bin.to_string()];
             argv.extend(row.fresh_flags.iter().map(|s| s.to_string()));
             argv
@@ -258,3 +294,126 @@ fn write_overlay(dir: &Path, path: &Path) -> Result<(), PlanError> {
 
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::PermissionsExt;
+
+#[cfg(test)]
+mod handoff_tests {
+    use super::*;
+
+    fn base_env() -> Vec<(String, String)> {
+        vec![
+            ("HOME".into(), "/home/x".into()),
+            ("PATH".into(), "/usr/bin:/bin".into()),
+        ]
+    }
+
+    fn request<'a>(
+        harness: &'a str,
+        run_dir: &'a Path,
+        env: &'a [(String, String)],
+        handoff_from: Option<&'a str>,
+    ) -> PlanRequest<'a> {
+        PlanRequest {
+            harness,
+            term_id: "abc123",
+            resume_sid: None,
+            handoff_from,
+            cwd: "/w/x",
+            job_ulid: None,
+            run_dir,
+            base_env: env,
+            extra_passthrough: &[],
+        }
+    }
+
+    fn argv(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(ToString::to_string).collect()
+    }
+
+    /// claude and omp: the argv is exactly the fixed `kb sessions handoff`
+    /// form, while env keys, overlay and exit steps equal a plain launch of
+    /// that harness.
+    #[test]
+    fn handoff_plan_runs_kb_with_the_target_harness_profile() {
+        let env = base_env();
+        for harness in ["claude", "omp"] {
+            let dir = tempfile::tempdir().unwrap();
+            let plain = plan(&request(harness, dir.path(), &env, None)).unwrap();
+            let handoff = plan(&request(harness, dir.path(), &env, Some("sid-1.a:b_c"))).unwrap();
+            assert_eq!(
+                handoff.argv,
+                argv(&[
+                    "kb",
+                    "sessions",
+                    "handoff",
+                    "sid-1.a:b_c",
+                    "--to",
+                    harness,
+                    "--transplant",
+                    "--launch",
+                    "--cwd",
+                    "/w/x",
+                ])
+            );
+            assert_eq!(handoff.env, plain.env, "{harness}: env keys/values");
+            assert_eq!(
+                handoff.overlay_path, plain.overlay_path,
+                "{harness}: overlay"
+            );
+            assert_eq!(
+                handoff.exit_steps, plain.exit_steps,
+                "{harness}: exit steps"
+            );
+            assert_eq!(handoff.unset_after_login, plain.unset_after_login);
+            assert_eq!(handoff.experimental, plain.experimental);
+            assert!(handoff
+                .env
+                .contains(&("KB_TERM_ID".to_string(), "abc123".to_string())));
+            for arg in &handoff.argv {
+                assert!(!table::FORBIDDEN_ARGV.contains(&arg.as_str()), "{arg}");
+            }
+        }
+        // omp: the private overlay is written and PI_CONFIG_FILES points at it.
+        let dir = tempfile::tempdir().unwrap();
+        let handoff = plan(&request("omp", dir.path(), &env, Some("sid-1"))).unwrap();
+        let overlay = handoff.overlay_path.expect("omp overlay");
+        assert!(overlay.is_file(), "overlay written");
+        assert!(handoff.env.contains(&(
+            "PI_CONFIG_FILES".to_string(),
+            overlay.to_string_lossy().into_owned()
+        )));
+        // claude: its profile env, no overlay.
+        let handoff = plan(&request("claude", dir.path(), &env, Some("sid-1"))).unwrap();
+        assert!(handoff.overlay_path.is_none());
+        assert!(handoff.env.contains(&(
+            "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN".to_string(),
+            "1".to_string()
+        )));
+    }
+
+    #[test]
+    fn handoff_plan_rejects_unsupported_harnesses_resume_and_unsafe_sids() {
+        let env = base_env();
+        let dir = tempfile::tempdir().unwrap();
+        for harness in ["codex", "opencode", "grok", "kimi"] {
+            assert_eq!(
+                plan(&request(harness, dir.path(), &env, Some("sid-1"))).unwrap_err(),
+                PlanError::HandoffUnsupported,
+                "{harness}"
+            );
+        }
+        let mut req = request("claude", dir.path(), &env, Some("sid-1"));
+        req.resume_sid = Some("other");
+        assert_eq!(plan(&req).unwrap_err(), PlanError::HandoffWithResume);
+        let too_long = "s".repeat(129);
+        for bad in ["a;b", "-x", "", "a b", too_long.as_str()] {
+            assert_eq!(
+                plan(&request("omp", dir.path(), &env, Some(bad))).unwrap_err(),
+                PlanError::UnsafeToken("handoff_from"),
+                "sid {bad:?}"
+            );
+        }
+        // Exactly 128 bytes is still fine.
+        let max = "s".repeat(128);
+        assert!(plan(&request("omp", dir.path(), &env, Some(max.as_str()))).is_ok());
+    }
+}

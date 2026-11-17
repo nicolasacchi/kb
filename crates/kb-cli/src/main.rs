@@ -2993,6 +2993,57 @@ enum SessionsAction {
         #[arg(long)]
         json: bool,
     },
+    /// Hand a session over to the OTHER harness (omp <-> Claude Code). Default:
+    /// a deterministic, LLM-free BRIEF — the new session's first prompt — written
+    /// to `$XDG_CACHE_HOME/kb/handoff/` with a copy-paste command. `--transplant`
+    /// places a native session file instead (`claude -r` / `omp -r`). Offline:
+    /// reads the harness's own session files, falling back to the newest kb
+    /// capture (`--from`, default `KB_SESSIONS_DIR`).
+    Handoff {
+        /// The source session id (full or a unique prefix).
+        session_id: String,
+        /// Target harness. Default: the other one than the source.
+        #[arg(long, value_parser = ["claude", "omp"])]
+        to: Option<String>,
+        /// Place a native session file the target resumes with `-r`, instead
+        /// of writing a brief.
+        #[arg(long)]
+        transplant: bool,
+        /// Brief: max characters (default 8000). With --transplant: max
+        /// characters of verbatim tail (default 200000).
+        #[arg(long)]
+        budget: Option<usize>,
+        /// Brief only: how many recent turns to carry (default 8).
+        #[arg(long)]
+        tail: Option<usize>,
+        /// Working directory of the new session. Default: the session's cwd.
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+        /// Skip the harness's own session files; read the newest kb capture.
+        #[arg(long)]
+        from_capture: bool,
+        /// Sessions corpus dir for the capture fallback. Default `KB_SESSIONS_DIR`.
+        #[arg(long)]
+        from: Option<PathBuf>,
+        /// Claude Code config dir (default `$CLAUDE_CONFIG_DIR`, else `~/.claude`).
+        #[arg(long)]
+        claude_config_dir: Option<PathBuf>,
+        /// Brief file path. Default `$XDG_CACHE_HOME/kb/handoff/<sid>-to-<target>.md`.
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Print only the brief text to stdout (nothing is written).
+        #[arg(long)]
+        print: bool,
+        /// Replace this process with the target harness, brief (or resumed
+        /// transplant) loaded, in the session's cwd.
+        #[arg(long)]
+        launch: bool,
+        /// Report what would be written without writing.
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// Fetch a session bundle from a REMOTE kb daemon (`--from <url>`) over its
     /// authenticated API, then optionally rehydrate it here. A public remote
     /// forces the redaction floor before streaming (invariant #4).
@@ -6600,6 +6651,37 @@ async fn main() -> Result<()> {
                 force,
                 json,
             } => commands::session_bundle::rehydrate(&bundle, cwd, dry_run, force, json).await,
+            SessionsAction::Handoff {
+                session_id,
+                to,
+                transplant,
+                budget,
+                tail,
+                cwd,
+                from_capture,
+                from,
+                claude_config_dir,
+                out,
+                print,
+                launch,
+                dry_run,
+                json,
+            } => commands::sessions_handoff::run(commands::sessions_handoff::HandoffArgs {
+                session_id,
+                to,
+                transplant,
+                budget,
+                tail,
+                cwd,
+                from_capture,
+                from,
+                claude_config_dir,
+                out,
+                print,
+                launch,
+                dry_run,
+                json,
+            }),
             SessionsAction::Pull {
                 session_id,
                 from,

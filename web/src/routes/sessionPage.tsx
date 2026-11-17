@@ -24,6 +24,7 @@ import {
 import { TerminalSlot, shouldRenderTerminal } from "../components/TerminalSlot";
 import { CodeLaneSection } from "../components/sessions/CodeLaneSection";
 import { ChecksSection, CommitsSection, ResumeCommand } from "./sessions";
+import { HandoffPanel } from "../components/HandoffPanel";
 import { sessionDisplayName } from "../lib/sessionDisplayName";
 import {
   formatActiveDuration,
@@ -251,6 +252,25 @@ export default function SessionPage() {
                 {sum.root_session_id ? "root session" : "parent session"}
               </Link>
             </>
+          )}
+          {sum.continued_from && (
+            <>
+              {" · "}
+              <Link to={leaf(sum.continued_from.session_id)} data-testid="session-continued-from">
+                continued from {sum.continued_from.harness} session
+              </Link>
+            </>
+          )}
+          {sum.continued_in && sum.continued_in.length > 0 && (
+            <span data-testid="session-continued-in">
+              {" · continued in "}
+              {sum.continued_in.map((l, i) => (
+                <span key={`${l.session_id}:${i}`}>
+                  {i > 0 && ", "}
+                  <Link to={leaf(l.session_id)}>{l.harness} session</Link>
+                </span>
+              ))}
+            </span>
           )}
         </p>
         <h1 className="kb-sp__title">{title}</h1>
@@ -589,6 +609,13 @@ export default function SessionPage() {
 
       <Section name="resume" title="Resume" open={open}>
         <ResumeCommand sessionId={sid} resume={sum.resume} />
+        <HandoffPanel
+          key={sid}
+          sessionId={sid}
+          harness={sum.harness}
+          terminalAdmitted={card.terminal.admitted && card.terminal.reason !== "terminal disabled"}
+          cwd={detail?.cwd}
+        />
       </Section>
     </main>
   );

@@ -489,6 +489,7 @@ async fn ws_real_tap_roundtrip() {
             "40".into(),
         ]),
         resume_sid: None,
+        handoff_from: None,
         cwd: run_dir.to_string_lossy().into_owned(),
         cols: Some(120),
         rows: Some(40),

@@ -219,6 +219,7 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | GET | `/api/sessions/{session_id}/decisions` | `routes::sessions::decisions` |
 | GET | `/api/sessions/{session_id}/export` | `routes::sessions::export` |
 | GET | `/api/sessions/{session_id}/files` | `routes::sessions::files` |
+| GET | `/api/sessions/{session_id}/handoff` | `routes::session_handoff::handoff` |
 | GET | `/api/sessions/{session_id}/live` | `routes::sessions::live` |
 | GET | `/api/sessions/{session_id}/memories` | `routes::sessions::memories` |
 | GET | `/api/sessions/{session_id}/raw` | `routes::sessions::raw` |
@@ -266,4 +267,4 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | GET | `/api/users` | `routes::users::list` |
 | GET | `/api/why` | `routes::sessions::why` |
 
-_256 routes._
+_257 routes._

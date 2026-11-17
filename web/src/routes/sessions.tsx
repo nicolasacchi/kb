@@ -97,6 +97,7 @@ import { artifactHref } from "../lib/artifactHref";
 import { groupIdsByKb } from "../lib/idsPivot";
 import IdsGalleryChip from "../components/IdsGalleryChip";
 import CitationText from "../components/CitationText";
+import { HandoffPanel } from "../components/HandoffPanel";
 import { useCodeUrlForKb } from "../hooks/useCodeUrlForKb";
 
 // v0.14 S8 — hover-prefetch delay. Long enough that a fast cursor
@@ -2035,6 +2036,7 @@ function SessionInspector(props: {
 
       {/* The per-harness resume command (server-computed `resume`). */}
       <ResumeCommand sessionId={row.session_id} resume={row.resume} />
+      <HandoffPanel key={row.session_id} sessionId={row.session_id} harness={row.harness} />
 
       {/* W3.C/S1/S2 — the outcome block: the session's CLOSURE (the S3
           SessionContextCard's peer). Deviation from S2's literal
