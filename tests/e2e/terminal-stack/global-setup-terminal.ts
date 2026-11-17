@@ -106,12 +106,19 @@ function strayPids(root: string): string[] {
 
 export interface SetupOptions {
   /**
-   * Self-test hook: throw once kb-termd is up, i.e. a bring-up that fails
-   * AFTER it has started a process. The setup must then tear everything down
-   * itself (it never returns a teardown closure on failure). The thrown error
-   * carries the unique root so the caller can look for survivors.
+   * Self-test hook: throw at one named point of the bring-up: "after-root"
+   * (the temp root and its directories exist, nothing is running yet),
+   * "after-termd" (kb-termd is up) or "after-servers" (every kb-server answered).
+   * The setup must then tear everything down itself (it never returns a
+   * teardown closure on failure). The thrown error carries the unique root so
+   * the caller can look for survivors.
    */
-  injectFailure?: "after-termd";
+  injectFailure?: "after-termd" | "after-servers" | "after-root";
+  /**
+   * Ports for the three servers. Default: the lane's own 4737-4739. A self-test
+   * that brings servers up while the real stack is running MUST pass others.
+   */
+  ports?: { main: number; ttl: number; off: number };
   /** Where teardown copies the child logs (default: the CI artifact dir). */
   keepLogsIn?: string;
 }
@@ -138,22 +145,8 @@ export async function setupTerminalStack(opts: SetupOptions = {}): Promise<() =>
   const home = join(root, "home");
   const binDir = join(root, "bin");
   const logDir = join(root, "logs");
-  for (const d of [runDir, home, binDir, logDir]) mkdirSync(d, { recursive: true });
   const runnerSock = join(runDir, "runner", "runner.sock");
   const holderDir = join(runDir, "s");
-
-  // The fake `omp` the runner's launch table resolves on the pane PATH. It runs
-  // `./scenario.sh` in the pane's working directory: every launch gets its own
-  // directory with its own script (see `launch` in stack.ts), so no two panes
-  // ever share a script file.
-  writeFileSync(join(binDir, "omp"), '#!/bin/sh\nexec /bin/sh ./scenario.sh\n');
-  chmodSync(join(binDir, "omp"), 0o755);
-  // Tap wrapper: same binary, stderr kept for the failure artifacts.
-  writeFileSync(
-    join(binDir, "kb-tap-wrapper.sh"),
-    `#!/bin/sh\nexec '${tapBin}' "$@" 2>>'${join(logDir, "tap.err")}'\n`,
-  );
-  chmodSync(join(binDir, "kb-tap-wrapper.sh"), 0o755);
 
   const childEnv = (extra: Record<string, string>): NodeJS.ProcessEnv => ({
     ...process.env,
@@ -165,10 +158,6 @@ export async function setupTerminalStack(opts: SetupOptions = {}): Promise<() =>
     XDG_RUNTIME_DIR: join(root, "xdg-run"),
     ...extra,
   });
-  for (const d of ["xdg-config", "xdg-data", "xdg-state", "xdg-cache", "xdg-run"]) {
-    mkdirSync(join(root, d), { recursive: true, mode: 0o700 });
-  }
-
   const launched: Launched[] = [];
 
   let tornDown = false;
@@ -232,6 +221,26 @@ export async function setupTerminalStack(opts: SetupOptions = {}): Promise<() =>
   // tmux holder, some kb-servers) and the caller never receives the teardown
   // closure: run it here, then rethrow, so nothing leaks.
   try {
+    // Everything that touches the disk lives inside the try: a failure while
+    // laying out the root (a full disk, a bad copy) must also remove it.
+    for (const d of [runDir, home, binDir, logDir]) mkdirSync(d, { recursive: true });
+    for (const d of ["xdg-config", "xdg-data", "xdg-state", "xdg-cache", "xdg-run"]) {
+      mkdirSync(join(root, d), { recursive: true, mode: 0o700 });
+    }
+    // The fake `omp` the runner's launch table resolves on the pane PATH. It runs
+    // `./scenario.sh` in the pane's working directory: every launch gets its own
+    // directory with its own script (see `launch` in stack.ts), so no two panes
+    // ever share a script file.
+    writeFileSync(join(binDir, "omp"), '#!/bin/sh\nexec /bin/sh ./scenario.sh\n');
+    chmodSync(join(binDir, "omp"), 0o755);
+    // Tap wrapper: same binary, stderr kept for the failure artifacts.
+    writeFileSync(
+      join(binDir, "kb-tap-wrapper.sh"),
+      `#!/bin/sh\nexec '${tapBin}' "$@" 2>>'${join(logDir, "tap.err")}'\n`,
+    );
+    chmodSync(join(binDir, "kb-tap-wrapper.sh"), 0o755);
+    if (opts.injectFailure === "after-root") throw new Error("terminal e2e: injected bring-up failure after the root was laid out");
+
     const termd = start(
       "kb-termd",
       KB_TERMD_BIN,
@@ -252,9 +261,9 @@ export async function setupTerminalStack(opts: SetupOptions = {}): Promise<() =>
     if (opts.injectFailure === "after-termd") throw new Error("terminal e2e: injected bring-up failure after kb-termd started");
 
     const servers: Array<{ name: string; port: number; ttl?: number; enabled: boolean }> = [
-      { name: "main", port: PORT_MAIN, enabled: true },
-      { name: "ttl", port: PORT_TTL, ttl: SHORT_TTL_SECS, enabled: true },
-      { name: "off", port: PORT_OFF, enabled: false },
+      { name: "main", port: opts.ports?.main ?? PORT_MAIN, enabled: true },
+      { name: "ttl", port: opts.ports?.ttl ?? PORT_TTL, ttl: SHORT_TTL_SECS, enabled: true },
+      { name: "off", port: opts.ports?.off ?? PORT_OFF, enabled: false },
     ];
     const procs: Record<string, ChildProcess> = {};
     for (const s of servers) {
@@ -296,6 +305,8 @@ export async function setupTerminalStack(opts: SetupOptions = {}): Promise<() =>
         return identityOk(s.port);
       }, 60_000);
     }
+
+    if (opts.injectFailure === "after-servers") throw new Error("terminal e2e: injected bring-up failure after the servers started");
 
     // Workers are separate processes: hand them everything through env.
     process.env.KB_E2E_PORT = String(PORT_MAIN);

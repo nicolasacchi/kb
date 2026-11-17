@@ -199,13 +199,32 @@ export async function launch(api: Api, h: Harness, grid?: { cols: number; rows: 
   return t;
 }
 
-const alive = (pid: number): boolean => {
+/**
+ * The state letter of a `/proc/<pid>/stat` line (field 3). The command name is
+ * parenthesised and may itself contain spaces and parentheses, so the state is
+ * the first token after the LAST `)`.
+ */
+export function procStateOf(stat: string): string | null {
+  const i = stat.lastIndexOf(")");
+  if (i < 0) return null;
+  const m = /^\s*([A-Za-z])/.exec(stat.slice(i + 1));
+  return m ? m[1] : null;
+}
+
+/** `kill(pid, 0)` succeeds for a zombie (state Z, or X when dying), which is dead for every purpose here. */
+export const alive = (pid: number): boolean => {
   try {
     process.kill(pid, 0);
-    return true;
   } catch {
     return false;
   }
+  try {
+    const state = procStateOf(readFileSync(`/proc/${pid}/stat`, "latin1"));
+    if (state === "Z" || state === "X") return false;
+  } catch {
+    // no /proc (not Linux) or the process vanished between the two calls: kill(0) already said alive
+  }
+  return true;
 };
 
 /**
