@@ -552,9 +552,21 @@ fn completes_join(text: &str) -> bool {
 /// the retry on the next call: it neither restarts the backoff, nor
 /// restarts the re-open, nor loses or repeats a queued item. Items sent
 /// while the replay runs join the back of the same queue, so order is
-/// preserved. (A send cancelled mid-write is the one residual edge: the
-/// envelopes are small writes onto a local socket, and the tap drops a
-/// joining viewer's input anyway.)
+/// preserved. Delivery onto the new stream is AT-LEAST-ONCE: a replayed
+/// send is cancelled and resumed at item granularity (an item leaves the
+/// queue only after its send completed), so an item whose write had
+/// already reached the stream when its send was cancelled is sent again.
+/// The envelopes are small writes onto a local socket, and the tap drops
+/// a joining viewer's input anyway.
+///
+/// A re-open the runner refuses with `too-many-viewers` is retried, not
+/// failed: the old stream's viewer slot is released on the runner only when
+/// its splice has ended (after the hidden client is closed), so a re-open
+/// at the per-session cap can lose that race to the very stream it
+/// replaces. Each refused attempt consumes one of the `attempts` and
+/// backs off like any other, so the budget is unchanged; when it is spent
+/// the held busy frame is surfaced as before. Any other re-open failure
+/// still ends the retry at once.
 pub(crate) struct JoinRetry<U: Upstream> {
     current: U,
     reopen: Reopen<U>,
@@ -599,10 +611,16 @@ impl<U: Upstream> JoinRetry<U> {
     /// Hold a busy frame and fix the instant its re-open may run:
     /// `backoff` doubled per retry already made.
     fn hold_busy(&mut self, text: String) {
+        self.schedule_retry();
+        self.held_busy = Some(text);
+    }
+
+    /// Fix the instant the next open may run: `backoff` doubled per
+    /// attempt already made.
+    fn schedule_retry(&mut self) {
         let shift = self.opens.saturating_sub(1).min(16);
         self.retry_at =
             Some(tokio::time::Instant::now() + self.policy.backoff.saturating_mul(1u32 << shift));
-        self.held_busy = Some(text);
     }
 
     fn queue(&mut self, item: StreamItem) {
@@ -618,27 +636,38 @@ impl<U: Upstream> JoinRetry<U> {
     /// `self` (see the type docs).
     async fn retry_open(&mut self) -> Result<(), ()> {
         if !self.reopened {
-            if self.opening.is_none() {
-                if self.opens >= self.policy.attempts {
-                    return Err(());
+            loop {
+                if self.opening.is_none() {
+                    if self.opens >= self.policy.attempts {
+                        return Err(());
+                    }
+                    if let Some(at) = self.retry_at {
+                        tokio::time::sleep_until(at).await;
+                    }
+                    self.opening = Some((self.reopen)());
                 }
-                if let Some(at) = self.retry_at {
-                    tokio::time::sleep_until(at).await;
+                let opened = match self.opening.as_mut() {
+                    Some(fut) => fut.await,
+                    None => return Err(()),
+                };
+                self.opening = None;
+                match opened {
+                    Ok(fresh) => {
+                        self.current = fresh;
+                        self.opens += 1;
+                        self.reopened = true;
+                        break;
+                    }
+                    // The runner's viewer cap: the slot of the stream being
+                    // replaced may not be free yet. Count the attempt and
+                    // schedule the next one (all state is in fields, so a
+                    // cancelled `recv` resumes exactly here).
+                    Err(StreamError::TooManyViewers) => {
+                        self.opens += 1;
+                        self.schedule_retry();
+                    }
+                    Err(_) => return Err(()),
                 }
-                self.opening = Some((self.reopen)());
-            }
-            let opened = match self.opening.as_mut() {
-                Some(fut) => fut.await,
-                None => return Err(()),
-            };
-            self.opening = None;
-            match opened {
-                Ok(fresh) => {
-                    self.current = fresh;
-                    self.opens += 1;
-                    self.reopened = true;
-                }
-                Err(_) => return Err(()),
             }
         }
         // `held_busy` stays set through the replay so `send` keeps
@@ -996,6 +1025,10 @@ mod relay_tests {
         sent: std::sync::Arc<std::sync::Mutex<Vec<StreamItem>>>,
         recv_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
         block: bool,
+        /// When set, every `send` pends this long (virtual time under a
+        /// paused clock) BEFORE recording the item, so a send cancelled
+        /// during the wait records nothing.
+        send_delay: Option<Duration>,
     }
 
     impl MemUpstream {
@@ -1005,6 +1038,7 @@ mod relay_tests {
                 sent: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
                 recv_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 block,
+                send_delay: None,
             }
         }
     }
@@ -1031,7 +1065,11 @@ mod relay_tests {
             item: StreamItem,
         ) -> Pin<Box<dyn Future<Output = Result<(), StreamError>> + Send + 'a>> {
             let sent = self.sent.clone();
+            let delay = self.send_delay;
             Box::pin(async move {
+                if let Some(d) = delay {
+                    tokio::time::sleep(d).await;
+                }
                 sent.lock().unwrap().push(item);
                 Ok(())
             })
@@ -2008,6 +2046,165 @@ mod relay_tests {
             fresh_sent.lock().unwrap().clone(),
             sent_items,
             "every item sent during the re-open is replayed exactly once, in order"
+        );
+    }
+
+    /// A reopen handing out scripted results in order (`Unavailable` once
+    /// empty) and counting its calls.
+    fn result_reopen(
+        results: Vec<Result<MemUpstream, StreamError>>,
+        calls: std::sync::Arc<AtomicUsize>,
+    ) -> Reopen<MemUpstream> {
+        let queue = std::sync::Arc::new(std::sync::Mutex::new(
+            results
+                .into_iter()
+                .collect::<std::collections::VecDeque<_>>(),
+        ));
+        Box::new(move || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            let next = queue.lock().unwrap().pop_front();
+            Box::pin(async move { next.unwrap_or(Err(StreamError::Unavailable)) })
+        })
+    }
+
+    /// FXMINTERM: a re-open refused `too-many-viewers` (the replaced
+    /// stream's slot is not free yet) is retried inside the attempt budget
+    /// instead of ending the relay; the item queued while the retry was
+    /// pending still reaches the stream that finally opens, once.
+    #[tokio::test(start_paused = true)]
+    async fn a_reopen_refused_too_many_viewers_is_retried_and_loses_no_queued_item() {
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let fresh = mem(vec![
+            StreamItem::Text(HELLO.to_string()),
+            StreamItem::Binary(vec![0; 8]),
+        ]);
+        let fresh_sent = fresh.sent.clone();
+        let policy = BusyRetry {
+            attempts: 4,
+            backoff: Duration::from_millis(10),
+        };
+        let mut up = JoinRetry::new(
+            mem(vec![StreamItem::Text(BUSY.to_string())]),
+            result_reopen(
+                vec![Err(StreamError::TooManyViewers), Ok(fresh)],
+                calls.clone(),
+            ),
+            policy,
+        );
+        // Park the retry on its backoff (10 ms) and cancel that recv.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(2), up.recv())
+                .await
+                .is_err(),
+            "the retry is waiting out its backoff"
+        );
+        let resize = StreamItem::Text(r#"{"t":"resize","cols":100,"rows":30}"#.to_string());
+        up.send(resize.clone()).await.expect("queued, not an error");
+        assert_eq!(
+            up.recv().await,
+            Some(StreamItem::Text(HELLO.to_string())),
+            "the second re-open succeeded; the refusal was not surfaced"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "refused once, then opened");
+        assert_eq!(
+            fresh_sent.lock().unwrap().clone(),
+            vec![resize],
+            "the queued item reached the stream that opened, exactly once"
+        );
+    }
+
+    /// The `too-many-viewers` retry spends the SAME attempt budget: with 3
+    /// attempts (the first open + 2 re-opens) two refusals surface the held
+    /// busy frame, then the stream ends.
+    #[tokio::test(start_paused = true)]
+    async fn a_reopen_refused_too_many_viewers_every_time_surfaces_busy_after_the_budget() {
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let mut up = JoinRetry::new(
+            mem(vec![StreamItem::Text(BUSY.to_string())]),
+            result_reopen(
+                vec![
+                    Err(StreamError::TooManyViewers),
+                    Err(StreamError::TooManyViewers),
+                    Ok(mem(vec![StreamItem::Text(HELLO.to_string())])),
+                ],
+                calls.clone(),
+            ),
+            fast(3),
+        );
+        assert_eq!(up.recv().await, Some(StreamItem::Text(BUSY.to_string())));
+        assert_eq!(up.recv().await, None);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "no attempt past the budget"
+        );
+    }
+
+    /// FXMINTERM: the replay survives a fresh upstream whose `send` itself
+    /// pends (30 ms per item) under 20 ms cancelling ticks: every cancel
+    /// drops the in-flight send, the next `recv` resumes the SAME front
+    /// item, and each queued item reaches the stream in order, exactly once
+    /// at item granularity (this mock records only a completed send, so a
+    /// duplicate here would be a replay bug; a real send cancelled after
+    /// its write landed is re-sent, hence "at-least-once" in the type docs).
+    #[tokio::test(start_paused = true)]
+    async fn a_replay_with_a_pending_send_under_cancelling_ticks_delivers_each_item_once_in_order()
+    {
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let mut fresh = mem(vec![
+            StreamItem::Text(HELLO.to_string()),
+            StreamItem::Binary(vec![0; 8]),
+        ]);
+        fresh.send_delay = Some(Duration::from_millis(30));
+        let fresh_sent = fresh.sent.clone();
+        let slot = std::sync::Arc::new(std::sync::Mutex::new(Some(fresh)));
+        let calls2 = calls.clone();
+        // The re-open takes 50 ms, so the first ticks queue items behind it.
+        let reopen: Reopen<MemUpstream> = Box::new(move || {
+            calls2.fetch_add(1, Ordering::SeqCst);
+            let slot = slot.clone();
+            Box::pin(async move {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                slot.lock().unwrap().take().ok_or(StreamError::Unavailable)
+            })
+        });
+        let mut up = JoinRetry::new(
+            mem(vec![StreamItem::Text(BUSY.to_string())]),
+            reopen,
+            fast(4),
+        );
+        let start = tokio::time::Instant::now();
+        let mut ticks =
+            tokio::time::interval_at(start + Duration::from_millis(20), Duration::from_millis(20));
+        let mut sent_items = Vec::new();
+        let mut ticked = 0;
+        let got = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                // Six ticks (20..=120 ms) keep cancelling the replay's
+                // pending send; after that the replay runs undisturbed.
+                if ticked >= 6 {
+                    break up.recv().await;
+                }
+                tokio::select! {
+                    item = up.recv() => break item,
+                    _ = ticks.tick() => {
+                        ticked += 1;
+                        let item = StreamItem::Text(format!("{{\"t\":\"k\",\"n\":{}}}", sent_items.len()));
+                        sent_items.push(item.clone());
+                        up.send(item).await.expect("queued, never an error");
+                    }
+                }
+            }
+        })
+        .await
+        .expect("the replay must finish once the ticks stop");
+        assert_eq!(got, Some(StreamItem::Text(HELLO.to_string())));
+        assert_eq!(sent_items.len(), 6, "all six ticks fired");
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "one re-open");
+        assert_eq!(
+            fresh_sent.lock().unwrap().clone(),
+            sent_items,
+            "every queued item arrived once, in order, despite the cancelled sends"
         );
     }
 

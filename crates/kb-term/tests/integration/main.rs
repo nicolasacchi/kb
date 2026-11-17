@@ -1222,6 +1222,81 @@ async fn term_int_kill_after_restart_reaps_holder() {
     );
 }
 
+// 10c. FXMINTERM: a session whose tmux server died out from under it (so
+// its socket inode and session dir are left behind) is a STALE entry:
+// `kill` reaps exactly those leftovers (reply `stale_removed`), and the
+// entry is gone from `ls`. Against the real pinned tmux: the server is
+// SIGKILLed, so the socket is left as a dead inode and tmux itself answers
+// the "no server" shape the reap keys on.
+#[tokio::test(flavor = "multi_thread")]
+async fn term_int_kill_reaps_a_stale_entry_whose_tmux_server_died() {
+    let Some(tmux_bin) = require_tmux() else {
+        return;
+    };
+    let tr = TestRunner::with_tap(tmux_bin, false, false);
+    boot_runner(&tr).await;
+    let (id, pane_pid) = tr.launch(vec!["/bin/cat".to_string()]).await;
+    let (_, server_pid) = discovery::pane_and_server_pids(&tr.runner, &id).await;
+    let server_pid = server_pid.expect("the server pid is readable while it lives");
+    let sock = tr.sock(&id);
+    assert!(sock.exists(), "a live holder has its socket");
+    // Kill the tmux server out from under the session.
+    // SAFETY: plain kill(2) on a pid this test just read from tmux itself.
+    let rc = unsafe { libc::kill(server_pid as i32, libc::SIGKILL) };
+    assert_eq!(rc, 0, "SIGKILL the tmux server");
+    let dead = poll_until(
+        Duration::from_secs(10),
+        || async move { pid_gone(server_pid) },
+    )
+    .await;
+    assert!(dead, "the tmux server must be gone");
+    // The pane's process dies with its pty (best effort; not asserted).
+    let _ = poll_until(Duration::from_secs(5), || async move { pid_gone(pane_pid) }).await;
+    // The leftovers are still there: a dead socket inode and the session dir.
+    assert!(sock.exists(), "SIGKILL leaves the socket inode behind");
+    assert!(tr.runner.sessions_dir().join(&id).exists());
+    assert!(
+        !tr.tmux(&sock, &["list-sessions"]).0,
+        "no tmux answers on the leftover socket"
+    );
+    assert!(
+        discovery::list_sessions(&tr.runner)
+            .await
+            .iter()
+            .any(|e| e.id == id),
+        "precondition: the stale entry is listed"
+    );
+    // The operator's `kb-term kill <id>` is exactly this runner op.
+    match rpc::dispatch(
+        &tr.runner,
+        &Request::Kill {
+            id: id.clone(),
+            grace_secs: Some(2),
+        },
+    )
+    .await
+    {
+        Response::Ok { data } => {
+            assert_eq!(data["stale_removed"], true, "{data}");
+            assert_eq!(data["forced"], false, "{data}");
+            assert!(data["exit_code"].is_null(), "{data}");
+        }
+        Response::Err { code, message } => panic!("stale kill failed ({code}): {message}"),
+    }
+    assert!(!sock.exists(), "the stale socket is removed");
+    assert!(
+        !tr.runner.sessions_dir().join(&id).exists(),
+        "the stale session dir is removed"
+    );
+    assert!(
+        !discovery::list_sessions(&tr.runner)
+            .await
+            .iter()
+            .any(|e| e.id == id),
+        "the entry is gone from ls"
+    );
+}
+
 // ---- T9: responder identity, viewer bridge, paste/enter/keys, grid ----
 
 use base64::Engine;

@@ -995,10 +995,16 @@ pub async fn run_kill(args: KillArgs) -> u8 {
     run_kill_with(args, None).await
 }
 
+/// The default call budget of a kill: the grace (`None` means the CLI's own
+/// default of 60 s; the runner clamps any grace to 60 s, so this does too)
+/// plus 30 s for the stop path. Pure, so the formula is unit-tested.
+fn kill_call_budget(grace_secs: Option<u64>) -> Duration {
+    Duration::from_secs(grace_secs.unwrap_or(60).min(60) + 30)
+}
+
 /// The kill runs exit keys, waits up to the grace and then stops the holder,
 /// so the default 10 s per-call deadline is far too short: the budget is
-/// the grace (the runner clamps it to 60 s) plus 30 s. `budget` overrides
-/// that (tests).
+/// [`kill_call_budget`]. `budget` overrides that (tests).
 async fn run_kill_with(args: KillArgs, budget: Option<Duration>) -> u8 {
     if !crate::wire::is_valid_term_id(&args.id) {
         eprintln!("kb-term: invalid session id");
@@ -1021,9 +1027,7 @@ async fn run_kill_with(args: KillArgs, budget: Option<Duration>) -> u8 {
             return 1;
         }
     };
-    runner.set_timeout(
-        budget.unwrap_or_else(|| Duration::from_secs(args.grace_secs.unwrap_or(60).min(60) + 30)),
-    );
+    runner.set_timeout(budget.unwrap_or_else(|| kill_call_budget(args.grace_secs)));
     match runner
         .call(&Request::Kill {
             id: args.id.clone(),
@@ -1356,6 +1360,20 @@ mod tests {
         let code = run_kill_with(args(&sock2), Some(Duration::from_millis(150))).await;
         assert_eq!(code, 1);
         server.await.unwrap();
+    }
+
+    /// The DEFAULT kill call budget (the `kill_budget_*` test overrides it,
+    /// so this is the only place the formula is exercised): grace + 30 s,
+    /// the grace clamped to 60 s like the runner clamps it, no overflow.
+    #[test]
+    fn the_default_kill_call_budget_is_the_clamped_grace_plus_thirty_seconds() {
+        let secs = |g| kill_call_budget(g).as_secs();
+        assert_eq!(secs(None), 90, "no grace = the 60 s default + 30");
+        assert_eq!(secs(Some(0)), 30);
+        assert_eq!(secs(Some(5)), 35);
+        assert_eq!(secs(Some(60)), 90);
+        assert_eq!(secs(Some(61)), 90, "clamped to 60 like the runner");
+        assert_eq!(secs(Some(u64::MAX)), 90, "no overflow");
     }
 
     #[test]

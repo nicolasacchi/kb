@@ -1662,7 +1662,22 @@ POST   /api/terms/{id}/keys                 Body `{keys:[...], viewer?}` —
 POST   /api/terms/{id}/kill                 Kill the terminal. A
                                             successful kill also closes
                                             the relay's `spa` viewer
-                                            best-effort.
+                                            best-effort. An id whose
+                                            holder no longer answers
+                                            (the tmux server is gone)
+                                            is not a 404: the runner
+                                            removes that session's
+                                            leftover socket and
+                                            directory and the reply is
+                                            200 `{exit_code: null,
+                                            forced: false,
+                                            stale_removed: true}`
+                                            (the key is absent on a
+                                            live kill). A holder that
+                                            answers with any other
+                                            tmux error, or not at all
+                                            in time, removes nothing
+                                            and fails.
 POST   /api/terms/{id}/take-size            Body `{cols,rows,viewer?}`. Takes
                                             (or reports) the grid.
                                             Sent with `force: false`:

@@ -223,10 +223,19 @@ pub struct StreamSlot {
 
 impl Drop for StreamSlot {
     fn drop(&mut self) {
-        if let Ok(mut set) = self.slots.lock() {
-            set.remove(&self.key);
-        }
+        lock_slots(&self.slots).remove(&self.key);
     }
+}
+
+/// Lock the reserved-slot set, ignoring poison. The set is plain data
+/// (insert/remove/count) that a panicking holder cannot leave half-written,
+/// so recovering the guard is always sound; treating a poisoned lock as
+/// "no slots" would make the viewer cap read 0 (fail open) and leak the
+/// key of every slot dropped afterwards.
+fn lock_slots(
+    slots: &StreamSlots,
+) -> std::sync::MutexGuard<'_, std::collections::HashSet<(String, String)>> {
+    slots.lock().unwrap_or_else(|p| p.into_inner())
 }
 
 pub struct Runner<S: Supervisor> {
@@ -509,15 +518,10 @@ impl<S: Supervisor> Runner<S> {
                 .filter(|((sid, _), v)| sid == id && !v.stream)
                 .count()
         };
-        let reserved = self
-            .stream_slots
-            .lock()
-            .map(|set| {
-                set.iter()
-                    .filter(|(sid, w)| sid == id && Some(w.as_str()) != skip)
-                    .count()
-            })
-            .unwrap_or(0);
+        let reserved = lock_slots(&self.stream_slots)
+            .iter()
+            .filter(|(sid, w)| sid == id && Some(w.as_str()) != skip)
+            .count();
         registered + reserved
     }
 
@@ -539,10 +543,7 @@ impl<S: Supervisor> Runner<S> {
             )));
         }
         let key = (id.to_string(), viewer.to_string());
-        self.stream_slots
-            .lock()
-            .map_err(|_| RunnerError::Internal("stream slots poisoned".to_string()))?
-            .insert(key.clone());
+        lock_slots(&self.stream_slots).insert(key.clone());
         Ok(StreamSlot {
             slots: self.stream_slots.clone(),
             key,
@@ -1096,5 +1097,53 @@ mod tests {
             recorded.contains("@kb_anchor_pid"),
             "the healthy session must still be adopted: {recorded}"
         );
+    }
+
+    /// FXMINTERM: a reserved-slot set whose lock was poisoned by a panic
+    /// must still COUNT its slots (the cap must not read 0 and fail open)
+    /// and must still release a slot on drop (no leaked key).
+    #[tokio::test]
+    async fn a_poisoned_slot_lock_neither_fails_open_nor_leaks_the_key() {
+        let (mut runner, _dir) = {
+            let dir = tempfile::tempdir().unwrap();
+            let cfg = RunnerConfig::test_config(
+                dir.path().join("run"),
+                "/bin/true".to_string(),
+                std::path::PathBuf::from("/dev/null"),
+            );
+            (Runner::direct(cfg), dir)
+        };
+        runner.cfg.max_viewers_per_session = 1;
+        let id = "abcd1234";
+        let slot = runner
+            .reserve_stream_slot(id, "ws-aaaa1111bb")
+            .await
+            .expect("an empty session has a free slot");
+        // Poison the lock: a thread panics while holding the guard.
+        let slots = runner.stream_slots.clone();
+        let poisoner = std::thread::spawn(move || {
+            let _guard = slots.lock().unwrap();
+            panic!("poison the slot lock");
+        });
+        assert!(poisoner.join().is_err());
+        assert!(runner.stream_slots.is_poisoned(), "precondition: poisoned");
+        assert!(
+            runner.viewers_full(id).await,
+            "a poisoned lock still counts the reserved slot (cap 1)"
+        );
+        let err = runner
+            .reserve_stream_slot(id, "ws-bbbb2222cc")
+            .await
+            .expect_err("the full session must refuse while poisoned");
+        assert_eq!(err.code(), "too-many-viewers", "{err}");
+        drop(slot);
+        assert!(
+            !runner.viewers_full(id).await,
+            "dropping the slot removes its key even through a poisoned lock"
+        );
+        runner
+            .reserve_stream_slot(id, "ws-cccc3333dd")
+            .await
+            .expect("the released slot is reusable");
     }
 }
