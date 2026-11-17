@@ -843,3 +843,41 @@ fn doctor_host_state_checks_wire_pid_environ_and_enablement_together() {
     assert_eq!(status_of(&checks, "termd_enabled"), CheckStatus::Warn);
     assert_eq!(status_of(&checks, "runner_env"), CheckStatus::Skip);
 }
+
+#[test]
+fn doctor_tap_version_warns_on_a_mixed_install_and_passes_on_a_match() {
+    let same = doctor::decide_tap_version(Some("kb-tap 0.52.1"), "0.52.1");
+    assert_eq!(same.status, CheckStatus::Pass);
+    assert_eq!(same.id, "tap_version");
+    let mixed = doctor::decide_tap_version(Some("kb-tap 0.52.0"), "0.52.1");
+    assert_eq!(mixed.status, CheckStatus::Warn);
+    assert!(mixed.detail.contains("0.52.0") && mixed.detail.contains("0.52.1"));
+    assert!(mixed.fix.is_some());
+    // A dev tap next to a release kb-term is mixed too.
+    let dev = doctor::decide_tap_version(Some("kb-tap 0.0.0-dev"), "0.52.1");
+    assert_eq!(dev.status, CheckStatus::Warn);
+    // Nothing to compare (tap missing, silent or not a kb-tap line): SKIP.
+    assert_eq!(
+        doctor::decide_tap_version(None, "0.52.1").status,
+        CheckStatus::Skip
+    );
+    assert_eq!(
+        doctor::decide_tap_version(Some("garbage"), "0.52.1").status,
+        CheckStatus::Skip
+    );
+}
+
+#[test]
+fn doctor_reads_the_real_taps_version_line_into_the_comparison() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = fake_exe(dir.path(), "kb-tap", "#!/bin/sh\necho 'kb-tap 9.9.9'\n");
+    let line = doctor::probe_tap_version(&fake).unwrap();
+    assert_eq!(
+        doctor::decide_tap_version(Some(&line), "9.9.9").status,
+        CheckStatus::Pass
+    );
+    assert_eq!(
+        doctor::decide_tap_version(Some(&line), "9.9.8").status,
+        CheckStatus::Warn
+    );
+}
