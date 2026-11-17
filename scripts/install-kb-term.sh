@@ -43,6 +43,7 @@ say()  { printf '%s\n' "$*"; }
 step() { printf '\n==> %s\n' "$*"; }
 info() { printf '    %s\n' "$*"; }
 err()  { printf 'install-kb-term: error: %s\n' "$*" >&2; exit 1; }
+warn() { printf 'install-kb-term: warning: %s\n' "$*" >&2; }
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -240,9 +241,14 @@ print_env_dropin() {
     d="$(dirname "$p")"
     case "$d" in /usr/bin|/usr/local/bin) continue ;; esac
     # A PATH entry cannot carry a colon or a newline; skip rather than
-    # print a drop-in that silently splits the directory.
+    # print a drop-in that silently splits the directory, and SAY so: a
+    # harness or `kb` in that dir will not be found by the panes.
     case "$d" in *:*|*"
-"*) continue ;; esac
+"*)
+      warn "not adding the directory of ${bin} to the printed PATH (a PATH entry cannot contain ':' or a newline): $d"
+      continue
+      ;;
+    esac
     case ":${dirs}:" in *":${d}:"*) continue ;; esac
     dirs="${dirs:+${dirs}:}${d}"
   done
