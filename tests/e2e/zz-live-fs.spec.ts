@@ -15,32 +15,38 @@ import { PORT } from "./helpers";
 // file then can't perturb the doc-count assertions in the other specs.
 test.describe("live filesystem updates", () => {
   const CORPUS = process.env.KB_E2E_CORPUS;
-  const PROBE_NAME = "live-fs-probe.html";
-  const PROBE_TITLE = "Live FS Probe Artifact";
-  const PROBE_HTML = `<!doctype html>
+  // Each attempt writes its OWN probe (name + title carry the retry index),
+  // so a probe an earlier attempt leaked can never fail a later attempt's
+  // "not present yet" precondition. The removal assertion below is unchanged.
+  const probeFor = (attempt: number) => {
+    const title = `Live FS Probe Artifact attempt-${attempt}`;
+    const html = `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>${PROBE_TITLE}</title>
+    <title>${title}</title>
     <meta name="kb-tags" content="e2e, live-fs" />
     <meta name="kb-category" content="notes" />
   </head>
   <body>
-    <h1>${PROBE_TITLE}</h1>
+    <h1>${title}</h1>
     <p>Written by zz-live-fs.spec.ts to exercise watcher → SSE → gallery.</p>
   </body>
 </html>
 `;
+    return { name: `live-fs-probe-${attempt}.html`, title, html };
+  };
 
   test("a newly-written artifact appears in the gallery; removal clears it", async ({
     page,
-  }) => {
+  }, testInfo) => {
+    const probe = probeFor(testInfo.retry);
     expect(
       CORPUS,
       "KB_E2E_CORPUS must be exported by global-setup.ts",
     ).toBeTruthy();
-    const probePath = join(CORPUS as string, PROBE_NAME);
-    const card = page.getByRole("link", { name: new RegExp(PROBE_TITLE) });
+    const probePath = join(CORPUS as string, probe.name);
+    const card = page.getByRole("link", { name: new RegExp(probe.title) });
 
     await page.goto(`http://127.0.0.1:${PORT}/`);
     // Gallery is up (a known canon card is visible) and the probe
@@ -54,7 +60,7 @@ test.describe("live filesystem updates", () => {
     await page.waitForTimeout(1500);
 
     try {
-      writeFileSync(probePath, PROBE_HTML, "utf-8");
+      writeFileSync(probePath, probe.html, "utf-8");
       // No page.reload() — gallery.tsx must refetch off the SSE frame.
       await expect(card).toBeVisible({ timeout: 20_000 });
     } finally {
