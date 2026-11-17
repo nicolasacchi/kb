@@ -1,3 +1,8 @@
+//! NOKIMI: kimi support was removed, but these ledgers keep posts whose
+//! provenance names `kimi` ON PURPOSE: a deployed slate may hold such posts,
+//! and the projection must keep rendering them (it never validates
+//! `prov.harness` on read; only new posts are checked).
+//!
 //! SL1 goldens for the `kb-slate/1` projection (design §19
 //! "Verification" → "Board-amendment goldens").
 //!
