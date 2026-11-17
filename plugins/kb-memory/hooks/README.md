@@ -1307,8 +1307,12 @@ prompt-only. Test: `tests/test-recall-context.sh`.
 `--dedup-session` to `kb recall` / `kb turn`, so the daemon drops memories it
 already served to this logical session (an exclusion after scoring; survivors
 keep their exact score decomposition). `KB_RECALL_DEDUP=0` turns it off. A
-`kb` binary that rejects the flag is retried once without it, so a stale CLI
-loses dedup, never the injection.
+`kb` binary that rejects the flag as an unknown argument (clap exit code 2 with
+`unexpected argument` on stderr) is retried once without it, so a stale CLI
+loses dedup, never the injection. Any other failure (timeout, exit 1, empty
+output) is NOT retried, so it cannot burn the hook budget; stderr is never
+injected. The session id must match `[A-Za-z0-9._-]+` (not `.`/`..`) to key the
+epoch file; otherwise the epoch feature is skipped (no write, no `--served-after`).
 
 **Compact reset.** After `/compact` (and `/clear`) the earlier injections are
 gone from the model's context. `kb-wake.sh` reads the SessionStart payload's
@@ -1318,8 +1322,10 @@ gone from the model's context. `kb-wake.sh` reads the SessionStart payload's
 `--served-after`, so only serves after the compact count.
 
 **Trivial-prompt skip (default ON).** With no context transcript being passed
-(`KB_RECALL_CONTEXT` off), a prompt that starts with `/` or has fewer than two
-word tokens of 3+ unicode letters/digits skips the RECALL lane only; the
+(`KB_RECALL_CONTEXT` off), a prompt whose first token is a slash command (`/name`, no further `/`, so an
+absolute path like `/home/x/foo.rs why…` is NOT one) or that has fewer than two
+word tokens of 3+ unicode letters/digits (a prompt with two or more CJK
+characters is never trivial) skips the RECALL lane only; the
 turn-1 scent and the slate lane behave as before (under `KB_TURN=1` the
 `recall` lane is dropped from `--lanes`). `KB_RECALL_SKIP_TRIVIAL=0` disables
 it. Test: `tests/test-recall-dedup.sh` (the older recall tests export

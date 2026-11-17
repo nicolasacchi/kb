@@ -102,11 +102,33 @@ dedup_flags=()
 if [ "${KB_RECALL_DEDUP:-1}" != "0" ] && [ -n "$sid" ]; then
   dedup_flags=(--dedup-session)
   epoch_file="${XDG_CACHE_HOME:-$HOME/.cache}/kb/recall-epoch-$sid"
-  if [ -f "$epoch_file" ]; then
+  # The sid becomes a path component: only [A-Za-z0-9._-]+ (not "." / "..")
+  # may name the epoch file; anything else skips the epoch feature.
+  case "$sid" in '.' | '..' | *[!A-Za-z0-9._-]*) epoch_file="" ;; esac
+  if [ -n "$epoch_file" ] && [ -f "$epoch_file" ]; then
     epoch="$(head -n 1 "$epoch_file" 2>/dev/null | tr -d '[:space:]')"
     case "$epoch" in '' | *[!0-9]*) ;; *) dedup_flags+=(--served-after "$epoch") ;; esac
   fi
 fi
+
+# SG-R1/F4 — run a CLI call, keeping stderr OUT of the output. Sets
+# _out (stdout) and _skew=1 only for a clap unknown-argument failure (exit 2 +
+# "unexpected argument" on stderr): the one case a retry without the dedup
+# flags can fix. Timeouts (124), other failures and empty successes do not.
+run_skew() {
+  local cap="$1" errf rc
+  shift
+  _skew=0
+  errf="$(mktemp 2>/dev/null)" || errf=/dev/null
+  _out="$(run_to "$cap" "$@" 2>"$errf")"
+  rc=$?
+  if [ "$rc" -eq 2 ] && [ "$errf" != /dev/null ] && grep -qi 'unexpected argument' "$errf" 2>/dev/null; then
+    _skew=1
+  fi
+  [ "$errf" = /dev/null ] || rm -f "$errf"
+  [ "$rc" -eq 0 ] || _out=""
+  return 0
+}
 
 # SG-Q3 — trivial-prompt skip: with no context transcript being passed
 # (KB_RECALL_CONTEXT off), a slash command or a prompt with fewer than two
@@ -117,7 +139,9 @@ skip_recall=0
 if [ "${KB_RECALL_SKIP_TRIVIAL:-1}" != "0" ] && [ "${#ctx_flags[@]}" -eq 0 ]; then
   if [ "$(printf '%s' "$prompt" | jq -Rrs '
         (sub("^\\s+"; "")) as $p
-        | if ($p | startswith("/")) or (([$p | scan("[\\p{L}\\p{N}]{3,}")] | length) < 2)
+        | (($p | split(" ")[0] | split("\n")[0] | split("\t")[0]) | test("^/[A-Za-z0-9_:-]+$")) as $slash
+        | (([$p | scan("[\\p{Han}\\p{Hiragana}\\p{Katakana}\\p{Hangul}]")] | length) >= 2) as $cjk
+        | if $slash or (($cjk | not) and (([$p | scan("[\\p{L}\\p{N}]{3,}")] | length) < 2))
           then "1" else "0" end' 2>/dev/null)" = "1" ]; then
     skip_recall=1
   fi
@@ -230,10 +254,12 @@ if [ "${KB_TURN:-}" = "1" ] && [ "${KB_RECALL_LAYOUT:-v2}" = "v2" ]; then
   case "$cursor" in '' | *[!0-9]*) ;; *) turn_args+=(--slate-since "$cursor") ;; esac
   turn_json=""
   if [ -n "$turn_lanes" ]; then
-    turn_json="$(run_to 11 kb turn "$prompt" "${extra[@]}" "${ctx_flags[@]}" "${dedup_flags[@]}" "${turn_args[@]}" --json 2>/dev/null)" || turn_json=""
-    # A CLI older than the dedup flags exits non-zero on them: retry once
-    # without, so a skewed binary loses dedup, never the injection.
-    if [ -z "$turn_json" ] && [ "${#dedup_flags[@]}" -gt 0 ]; then
+    run_skew 11 kb turn "$prompt" "${extra[@]}" "${ctx_flags[@]}" "${dedup_flags[@]}" "${turn_args[@]}" --json
+    turn_json="$_out"
+    # A CLI older than the dedup flags rejects them as unknown arguments
+    # (clap exit 2): retry once without, so a skewed binary loses dedup, never
+    # the injection. No other failure (timeout, exit 1, empty) retries.
+    if [ -z "$turn_json" ] && [ "$_skew" = "1" ] && [ "${#dedup_flags[@]}" -gt 0 ]; then
       turn_json="$(run_to 11 kb turn "$prompt" "${extra[@]}" "${ctx_flags[@]}" "${turn_args[@]}" --json 2>/dev/null)" || turn_json=""
     fi
   fi
@@ -300,9 +326,10 @@ recall_args=()
 recall_prefix=(env "KB_RECALL_SESSION=${sid}")
 hits=""
 if [ "$turn_ok" != "1" ] && [ "$skip_recall" != "1" ]; then
-  hits="$(run_to 6 "${recall_prefix[@]}" kb recall "$prompt" "${extra[@]}" "${ctx_flags[@]}" "${dedup_flags[@]}" "${recall_args[@]}" --limit 5 --json 2>/dev/null)" || hits=""
+  run_skew 6 "${recall_prefix[@]}" kb recall "$prompt" "${extra[@]}" "${ctx_flags[@]}" "${dedup_flags[@]}" "${recall_args[@]}" --limit 5 --json
+  hits="$_out"
   # Same skew fallback as the turn call above.
-  if [ -z "$hits" ] && [ "${#dedup_flags[@]}" -gt 0 ]; then
+  if [ -z "$hits" ] && [ "$_skew" = "1" ] && [ "${#dedup_flags[@]}" -gt 0 ]; then
     hits="$(run_to 6 "${recall_prefix[@]}" kb recall "$prompt" "${extra[@]}" "${ctx_flags[@]}" "${recall_args[@]}" --limit 5 --json 2>/dev/null)" || hits=""
   fi
 fi

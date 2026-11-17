@@ -32,7 +32,11 @@ fi
 # (or clear) the earlier injections are gone from the model's context, so
 # kb-recall.sh must stop excluding what was served before this moment: it
 # reads this epoch and passes it as `--served-after`. Best-effort, silent.
-if [ -n "$sid" ]; then
+# The sid becomes a path component: only [A-Za-z0-9._-]+ (not "." / "..")
+# is accepted; anything else skips the epoch (kb-recall.sh then sends no
+# --served-after).
+case "$sid" in '' | '.' | '..' | *[!A-Za-z0-9._-]*) epoch_sid_ok=0 ;; *) epoch_sid_ok=1 ;; esac
+if [ "$epoch_sid_ok" = "1" ]; then
   wake_source="$(printf '%s' "$input" | jq -r '.source // empty' 2>/dev/null)"
   case "$wake_source" in
     compact | clear)

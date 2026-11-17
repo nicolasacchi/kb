@@ -42,7 +42,12 @@ export LOG="$TMPROOT/calls.log"
 cat >"$TMPROOT/bin/kb" <<'EOF2'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$LOG"
-if [ -n "${FAKE_OLD_CLI:-}" ] && printf '%s' "$*" | grep -q -- '--dedup-session'; then exit 2; fi
+if printf '%s' "$*" | grep -q -- '--dedup-session'; then
+  [ -n "${FAKE_OLD_CLI:-}" ] && { echo "error: unexpected argument '--dedup-session' found" >&2; exit 2; }
+  [ -n "${FAKE_EXIT2_QUIET:-}" ] && exit 2
+  [ -n "${FAKE_EXIT1:-}" ] && { echo "boom" >&2; exit 1; }
+  [ -n "${FAKE_TIMEOUT:-}" ] && exit 124
+fi
 case "$1" in
   turn) printf '%s' '{"text":"T","recalled":[]}'; exit 0 ;;
   recall) printf '%s' '{"hits":[{"title":"OLD","kb":"main","id":"abc123def456"}]}'; exit 0 ;;
@@ -101,6 +106,34 @@ if grep '^turn ' "$LOG" | grep -q -- '--dedup-session --served-after 1700000123'
 hook "$SENT" "sid-a" FAKE_OLD_CLI=1
 if [ "$(grep -c '^recall ' "$LOG")" = "2" ] && grep -q 'OLD' "$TMPROOT/out.txt"; then ok "old CLI: retried without dedup, injection kept"; else bad "old CLI: $(cat "$LOG")"; fi
 
+# F4: only a clap unknown-argument failure retries; stderr never leaks.
+hook "$SENT" "sid-a" FAKE_OLD_CLI=1
+if ! grep -q 'unexpected argument' "$TMPROOT/out.txt"; then ok "skew: stderr kept out of injected output"; else bad "stderr leaked"; fi
+for mode in FAKE_EXIT1 FAKE_TIMEOUT FAKE_EXIT2_QUIET; do
+  hook "$SENT" "sid-a" "$mode=1"
+  if [ "$(grep -c '^recall ' "$LOG")" = "1" ]; then ok "$mode: no retry"; else bad "$mode retried: $(cat "$LOG")"; fi
+done
+hook "$SENT" "sid-a" FAKE_OLD_CLI=1 KB_TURN=1
+if [ "$(grep -c '^turn ' "$LOG")" = "2" ] && ! grep '^turn ' "$LOG" | tail -n 1 | grep -q -- '--dedup-session'; then ok "turn: skew retried once without dedup"; else bad "turn skew: $(cat "$LOG")"; fi
+hook "$SENT" "sid-a" FAKE_EXIT1=1 KB_TURN=1
+if [ "$(grep -c '^turn ' "$LOG")" = "1" ]; then ok "turn: exit 1 no retry"; else bad "turn exit1: $(cat "$LOG")"; fi
+
+echo "== sid sanitisation (F7) =="
+mkdir -p "$CACHE"
+printf '1700000999\n' >"$CACHE/recall-epoch-.."
+hook "$SENT" ".."
+if ! grep -q -- '--served-after' "$LOG"; then ok "sid '..': epoch not read"; else bad "dotdot: $(cat "$LOG")"; fi
+printf '1700000999\n' >"$TMPROOT/evil"
+hook "$SENT" "x/../../evil"
+if ! grep -q -- '--served-after' "$LOG"; then ok "sid with slash: epoch not read"; else bad "slash: $(cat "$LOG")"; fi
+hook "$SENT" "sid.b_1"
+! grep -q -- '--served-after' "$LOG" && ok "sid with dot/underscore: allowed, no marker" || bad "dot sid"
+rm -f "$CACHE/recall-epoch-.."
+wake "x/y" "compact"; wake ".." "compact"; wake "a b" "clear"
+if [ ! -e "$CACHE/recall-epoch-x" ] && [ ! -e "$CACHE/recall-epoch-.." ] && [ ! -e "$CACHE/recall-epoch-.. .tmp" ] && ! ls "$CACHE" | grep -q 'recall-epoch-a b'; then ok "wake: unsafe sids write no epoch"; else bad "wake wrote: $(ls -a "$CACHE")"; fi
+wake "ok.sid_1" "compact"
+[ -f "$CACHE/recall-epoch-ok.sid_1" ] && ok "wake: safe sid with ._ writes epoch" || bad "wake safe sid"
+
 echo "== compact epoch marker =="
 rm -f "$CACHE"/recall-epoch-w-*
 wake "w-startup" "startup"
@@ -120,6 +153,14 @@ echo "== trivial-prompt skip =="
 for p in "ok" "vai" "/compact" "sì" "  /review the diff please" "ok grazie"; do
   hook "$p" "sid-t"
   if ! recalled; then ok "skips recall: '$p'"; else bad "recalled for trivial '$p'"; fi
+done
+for p in "/home/x/foo.rs why does this panic" "/tmp/a.log perché fallisce il test" "这个函数为什么会崩溃" "なぜこの関数はクラッシュしますか" "한국어 질문입니다"; do
+  hook "$p" "sid-t"
+  if recalled; then ok "recalls (path/CJK): '$p'"; else bad "skipped a real prompt '$p'"; fi
+done
+for p in "sì procedi" "ok" "/clear" "/foo:bar"; do
+  hook "$p" "sid-t"
+  if ! recalled; then ok "skips recall (it): '$p'"; else bad "recalled for trivial '$p'"; fi
 done
 for p in "come funziona il deploy della pipeline" "please explain the deploy pipeline" "fix bug 42"; do
   hook "$p" "sid-t"
