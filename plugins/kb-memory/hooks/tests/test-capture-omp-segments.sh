@@ -294,6 +294,27 @@ frozen_dups() { grep '^convert .*state=frozen' "$KB_CAPTURE_TRACE" | sort | uniq
 tab_rows() { cat "$KB_CAPTURE_LOCKS"/*.seg 2>/dev/null | wc -l | tr -d ' '; }
 unescaped_all() { local id f; for id in $(part_ids); do f="$(html_of "$id")"; pre_of "$f"; done; }
 
+# --- deadline-diagnostics self-test (FXMINTEST) ---------------------------------
+# seg_die/seg_diag only fire on a stall, so nothing ever proved they print what
+# a stall needs. SEG_SELFTEST=deadline provokes one on purpose in this sandbox:
+# a step that sleeps past a 1 s deadline override, with a lock held by a live
+# process, a parked spool item and a log line to tail. It never touches the
+# product hook. The dump must name the step and carry every section, and the
+# run must exit non-zero; hook_shell.rs asserts exactly that from outside.
+if [ "${SEG_SELFTEST:-}" = deadline ]; then
+  fresh >/dev/null
+  mkdir -p "$KB_CAPTURE_LOCKS" "$KB_CAPTURE_SPOOL"
+  : >"$KB_CAPTURE_SPOOL/selftest-item"
+  echo "selftest-log-marker" >>"$KB_LOG"
+  ( exec 8>"$KB_CAPTURE_LOCKS/selftest.lock"; flock 8 && : >"$TMPROOT/selftest-ready" && exec sleep 31 ) >/dev/null 2>&1 &
+  STARTED_PIDS+=("$!")
+  wait_for 5 test -e "$TMPROOT/selftest-ready" || { bad "selftest: the lock holder never started"; exit 1; }
+  SEG_HOOK_MAX=1
+  seg_bounded "selftest deadline step" sleep 30
+  bad "selftest: the deadline never fired"
+  exit 1
+fi
+
 if seg_group g1; then
 # ---------------------------------------------------------------------------
 # 0. The flag, the probe and the lib helpers.
