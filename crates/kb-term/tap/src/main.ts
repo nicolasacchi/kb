@@ -31,7 +31,7 @@ import { ImageStore } from './imagestore.ts';
 /** The tmux session name every runner-launched terminal uses. */
 export const TMUX_SESSION_NAME = 'kb';
 
-export const HARNESSES = ['claude', 'codex', 'opencode', 'grok', 'kimi', 'omp'] as const;
+export const HARNESSES = ['claude', 'codex', 'opencode', 'grok', 'omp'] as const;
 
 /** tap/package.json "version"/"dependencies" pins, mirrored as constants so
  * the compiled binary needs no package.json at runtime. */

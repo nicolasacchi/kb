@@ -223,7 +223,7 @@ Two client-side markers, both keyed on the session id, both files under
 - `slate-topic-<sid>` — written by `open --topic T`; every posting verb
   reads it as a default topic unless `--topic` is given explicitly.
 
-Injection wiring (Claude Code): `kb-wake.sh`/`kb-wake-kimi.sh` append the
+Injection wiring (Claude Code): `kb-wake.sh` appends the
 HYBRID block (NOW/WARN/unacknowledged HAND in full, counts for the rest,
 ≤2 KB) after the memory index at session start and on `/compact`;
 `kb-recall.sh` appends the per-prompt DELTA (≤1.5 KB, only when the
@@ -272,7 +272,6 @@ with <default>"`. Real decisions only: asks share the digest budget.
 | Codex CLI | first-prompt UserPromptSubmit, re-fires on compact | per-prompt delta under the ~2,500-token hook cap | shell | wire two beat entries (see the hooks README) |
 | omp | `before_agent_start` hidden message (runs kb-wake/kb-recall); `session.compacting` re-injects | per-call transform | native `kb_slate_*` tools or shell | live |
 | OpenCode | `experimental.chat.system.transform` | same, each call | shell | wire the README event snippet |
-| Kimi Code | first-prompt `kb-wake-kimi.sh` (plain stdout) | per-prompt via `KB_HOOK_FMT=kimi kb-recall.sh` | shell | re-run `install-kimi-hooks.sh` |
 | Grok Build | instruction text only; headless `--rules "$(kb slate open)"` | optional PreToolUse delta (≤10,000 chars) | shell | none — labelled unknown |
 | Headless workers (grokclaude dispatcher) | digest prepended to the on-disk brief (`kb slate open --budget 3000`) | none mid-run | posts a `take` on spawn, `--origin import --job <ulid>` | job lease = the job's budget |
 
@@ -283,9 +282,9 @@ conversation only, not a subagent, not `claude -p`; 0 answered or closed,
 that line only on a positive Claude signal, never because the harness is
 unset); omp is woken by an answer or a closing done on its own asks
 (`triggerTurn`, bypassing the 30 s push floor; asks addressed to someone
-else are not pushed to it); Kimi, Codex and OpenCode see answers in full in
+else are not pushed to it); Codex and OpenCode see answers in full in
 their next prompt's slate delta and must never run `wait`. Per-harness
-injection points: Claude Code (`kb-wake.sh`), Kimi (`kb-wake-kimi.sh`) and
+injection points: Claude Code (`kb-wake.sh`) and
 omp (`kb-omp.ts`) carry the shared paragraph plus their own delivery line
 automatically. Codex has no injection point at all (its `hooks.json` runs
 only `kb-recall.sh`), and OpenCode's plugin shells `kb-wake.sh` (so it gets
@@ -391,7 +390,7 @@ honestly rather than pretending push parity that doesn't exist yet.
   refusal with its reasoning.
 - [`plugins/kb-memory/hooks/README.md`](../plugins/kb-memory/hooks/README.md) —
   the hook-by-hook wiring detail (`kb-wake.sh`/`kb-recall.sh`'s slate
-  blocks, `KB_HOOK_FMT`, the codex/kimi/opencode registration snippets).
+  blocks, `KB_HOOK_FMT`, the codex/opencode registration snippets).
 - [`plugins/kb-memory/skills/kb-slate-tidy/SKILL.md`](../plugins/kb-memory/skills/kb-slate-tidy/SKILL.md)
   and
   [`plugins/kb-memory/skills/kb-slate-distill/SKILL.md`](../plugins/kb-memory/skills/kb-slate-distill/SKILL.md) —

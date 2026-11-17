@@ -61,7 +61,7 @@ pub use constants::{
 };
 
 /// LSC-5 (`docs/research/kb-live-sessions-cockpit-2026-08.html` §4) — the
-/// four non-Claude harness adapters (codex/grok/kimi/opencode), each a
+/// three non-Claude harness adapters (codex/grok/opencode), each a
 /// sibling of [`live`]'s Claude Code adapter sharing its shape, plus
 /// [`live_adapters::scan_all`] — the ONE entry point `kb sessions status`
 /// fans out to across every harness. Pull-only / direct-disk, same as

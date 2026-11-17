@@ -16,7 +16,7 @@ use crate::wire;
 use super::RunnerError;
 
 /// The closed harness set, in `kb_core::sessions::HARNESSES` order.
-pub const HARNESSES: [&str; 6] = ["claude", "codex", "opencode", "grok", "kimi", "omp"];
+pub const HARNESSES: [&str; 5] = ["claude", "codex", "opencode", "grok", "omp"];
 
 /// Whether `id` may be used in a path, socket name, unit name or argv.
 pub fn valid_id(id: &str) -> bool {
@@ -111,14 +111,12 @@ mod tests {
 
     #[test]
     fn harness_closed_set() {
-        assert_eq!(
-            HARNESSES,
-            ["claude", "codex", "opencode", "grok", "kimi", "omp"]
-        );
+        assert_eq!(HARNESSES, ["claude", "codex", "opencode", "grok", "omp"]);
         for good in HARNESSES {
             assert!(valid_harness(good), "harness {good} must be accepted");
         }
         assert!(!valid_harness("bash"), "bash must be rejected");
+        assert!(!valid_harness("kimi"), "removed kimi must be rejected");
         assert!(!valid_harness("omp "), "trailing space must be rejected");
         assert!(!valid_harness(""), "empty must be rejected");
     }

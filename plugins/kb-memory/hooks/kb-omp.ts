@@ -1156,7 +1156,7 @@ export default function kbMemoryOmp(pi: {
           .string()
           .optional()
           .describe(
-            "ask only: who should answer. `you` = the operator, or a harness (claude, omp, codex, kimi, opencode, grok), or `any`. Absent = anyone",
+            "ask only: who should answer. `you` = the operator, or a harness (claude, omp, codex, opencode, grok), or `any`. Absent = anyone",
           ),
         anyway: z
           .boolean()

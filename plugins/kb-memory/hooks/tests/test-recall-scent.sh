@@ -239,18 +239,18 @@ case "$out8" in
   *) bad "an unwritable cache dir falls back to recall (got: $out8)" ;;
 esac
 
-# --- 9. kimi format: bare stdout, same scent text -------------------------
+# --- 9. plain format: bare stdout, same scent text -------------------------
 write_kb_both
-out9="$(printf '%s' '{"session_id":"sc-6","cwd":"/tmp","prompt":[{"type":"text","text":"kimi turn one"}]}' \
-  | KB_HOOK_FMT=kimi "$RECALL")"
+out9="$(printf '%s' '{"session_id":"sc-6","cwd":"/tmp","prompt":[{"type":"text","text":"plain turn one"}]}' \
+  | KB_HOOK_FMT=plain "$RECALL")"
 case "$out9" in
-  *"hookSpecificOutput"*) bad "kimi format must print the block bare (got: $out9)" ;;
-  *) ok "kimi format prints the scent bare (no envelope)" ;;
+  *"hookSpecificOutput"*) bad "plain format must print the block bare (got: $out9)" ;;
+  *) ok "plain format prints the scent bare (no envelope)" ;;
 esac
 case "$out9" in
   *"3 prior sessions · 2 open comments · 5 memories"*)
-    ok "kimi format carries the same scent text" ;;
-  *) bad "kimi format carries the same scent text (got: $out9)" ;;
+    ok "plain format carries the same scent text" ;;
+  *) bad "plain format carries the same scent text (got: $out9)" ;;
 esac
 
 # --- 10. the scent branch forwards --cwd and --session to `kb context` ----

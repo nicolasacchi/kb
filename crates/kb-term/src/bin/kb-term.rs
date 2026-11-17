@@ -11,7 +11,7 @@ use clap::{Arg, ArgAction, ArgGroup, Command};
 /// `kb_core::sessions::HARNESSES` at
 /// `crates/kb-core/src/sessions/constants.rs:29`, drift-tested in
 /// kb-server; this crate has no kb-core edge).
-const HARNESS_NAMES: [&str; 6] = kb_term::profiles::HARNESSES;
+const HARNESS_NAMES: [&str; 5] = kb_term::profiles::HARNESSES;
 
 fn runner_sock_arg() -> Arg {
     Arg::new("runner-sock")
@@ -83,7 +83,7 @@ fn cli() -> Command {
                         .value_name("HARNESS")
                         .required(true)
                         .value_parser(HARNESS_NAMES)
-                        .help("harness to run (claude|codex|opencode|grok|kimi|omp)"),
+                        .help("harness to run (claude|codex|opencode|grok|omp)"),
                 )
                 .arg(Arg::new("resume").long("resume").value_name("SID").help(
                     "resume this harness session id (passed to the runner; \

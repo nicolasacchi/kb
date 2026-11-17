@@ -30,7 +30,7 @@
 # Claude's Stop fires at the end of EVERY assistant turn, not only the last,
 # so the systemMessage can land mid-session; the nudge is therefore also
 # appended `claude <sid> <epoch>` to the shared distill-pending
-# ledger ($XDG_CACHE_HOME/kb/distill-pending, same line grok/kimi/omp
+# ledger ($XDG_CACHE_HOME/kb/distill-pending, same line grok/omp
 # already write). The next SessionStart's kb-wake.sh surfaces and consumes
 # it. Deduped by session id, same as queue_distill_pending. Best-effort:
 # a ledger failure must not block the nudge, and a nudge must never block.
@@ -77,7 +77,7 @@ grep -qE 'remembered [0-9a-f]{12}' "${files[@]}" 2>/dev/null && exit 0
 
 mkdir -p "$marker_dir" 2>/dev/null && : >"$marker" 2>/dev/null
 # Shared ledger relay. Marker above already caps this at once per session;
-# the grep is the same session-id dedup grok/kimi use if the marker is gone.
+# the grep is the same session-id dedup grok uses if the marker is gone.
 ledger="$marker_dir/distill-pending"
 if [ -f "$ledger" ] && grep -qF "claude $sid " "$ledger" 2>/dev/null; then
   :

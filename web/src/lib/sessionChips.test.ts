@@ -21,7 +21,6 @@ describe("harnessGlyph", () => {
     expect(harnessGlyph("codex")).toBe("⬢");
     expect(harnessGlyph("opencode")).toBe("⬡");
     expect(harnessGlyph("grok")).toBe("✦");
-    expect(harnessGlyph("kimi")).toBe("☾");
     expect(harnessGlyph("omp")).toBe("π");
   });
 
@@ -29,6 +28,8 @@ describe("harnessGlyph", () => {
     expect(harnessGlyph(null)).toBe("◆");
     expect(harnessGlyph(undefined)).toBe("◆");
     expect(harnessGlyph("some-future-harness")).toBe("●");
+    // kimi support was removed: a legacy row gets the neutral dot.
+    expect(harnessGlyph("kimi")).toBe("●");
   });
 });
 

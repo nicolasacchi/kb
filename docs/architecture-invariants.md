@@ -1417,23 +1417,28 @@ so it did not consume the V0029 reindex budget above.
 **W5 amendment — the harness lane (memo R5/R8, moonshots M5 Phase 1),
 2026-07-29.** `sessions.harness` (V0029, `NOT NULL DEFAULT 'claude'`)
 records which of the CLOSED set `kb_core::sessions::HARNESSES =
-["claude","codex","opencode","grok","kimi"]` produced a capture — extraction
+["claude","codex","opencode","grok","omp"]` produced a capture — extraction
 ladder: an adapter-meta JSONL first line (`harness:"codex"|"opencode"|
-"grok"|"kimi"`) → `<meta name="kb-harness">` → `HARNESS_DEFAULT` (`'claude'`: a
+"grok"|"omp"`) → `<meta name="kb-harness">` → `HARNESS_DEFAULT` (`'claude'`: a
 transcript with no adapter fingerprint came from Claude Code itself;
 un-backfilled history reads as honestly Claude, never a `NULL` hole).
-Four sibling capture adapters translate a foreign harness's own transcript
+Sibling capture adapters translate a foreign harness's own transcript
 format into the SAME Claude-Code-shaped JSONL-in-`<pre>` envelope every
 other amendment here already governs
-(`plugins/kb-memory/hooks/kb-capture-{codex,opencode,grok,kimi}.sh`) — `grok` is
+(`plugins/kb-memory/hooks/kb-capture-{codex,opencode,grok}.sh`) — `grok` is
 a DIALECT label, not a driver name (a grok capture launched via the
 grokclaude skill or any other route is still `harness:"grok"`; the
 launching tool may additionally be recorded in `adapter-meta`).
-*2026-08-12:* `kimi` joined the set — Kimi Code's hook payload has no
-`transcript_path`, so `kb-capture-kimi.sh` derives the session's
-`agents/main/wire.jsonl` from `cwd`+`session_id`
-(`wd_<basename>_<sha256(cwd)[0:12]>`), and its wake/recall hooks emit plain
-stdout (only `UserPromptSubmit` stdout reaches the model there).
+*2026-08-12:* `kimi` joined the set. *2026-11-17:* kimi support was REMOVED
+(NOKIMI) — capture, live adapter, hooks, installer and kb-term profile are
+gone and `kimi` left `HARNESSES`. Deployed corpora may still hold sessions
+whose stored `sessions.harness` is `kimi` (and slate posts whose provenance
+names it): no migration rewrites them, every read path lists and renders them
+verbatim (fallback glyph, an honest not-resumable resume sentence), and a NEW
+beat, `?harness=` filter, slate post or terminal launch naming `kimi` is
+refused like any unknown harness. A legacy capture re-extracted from its
+transcript falls back to `HARNESS_DEFAULT` (the ladder's rule for a value
+outside the set).
 `kb-capture-grok.sh` is the newest and most elaborate: PREFERS the same
 Rust shared writer (`kb sessions capture --transcript … --session-id …`)
 every adapter prefers (atomic writes, one-file-per-sid reuse, git-commit
@@ -1554,7 +1559,7 @@ transcript adapter, `kb sessions status --local`), LSC-3
 (`plugins/kb-memory/hooks/kb-beat.sh` — the push side), LSC-2
 (`kb-server/src/live_registry.rs` + `routes/sessions.rs`'s `beat`/
 `live_status` — the daemon side), LSC-5 (`kb-core/src/sessions/
-live_adapters/{codex,grok,kimi,opencode}.rs` — the four sibling adapters +
+live_adapters/{codex,grok,opencode}.rs` — the three sibling adapters +
 `scan_all`, plus the abandon horizon below).
 
 - **The model is two INDEPENDENT axes, not three buckets** (design §3):
@@ -1701,8 +1706,7 @@ live_adapters/{codex,grok,kimi,opencode}.rs` — the four sibling adapters +
   `kb-beat.sh` into Claude Code's full lifecycle (`SessionStart`/
   `UserPromptSubmit`/`Stop`/`SessionEnd`/`Notification` + a throttled
   `PostToolUse` heartbeat), codex's `UserPromptSubmit`/`Stop` only (no
-  verified `SessionEnd`/`Notification`-equivalent hook exists yet), and
-  Kimi Code's `UserPromptSubmit`/`Stop`/`SessionEnd`. opencode's beat
+  verified `SessionEnd`/`Notification`-equivalent hook exists yet); opencode's beat
   wiring is a documented TS snippet for the operator-managed
   `~/.config/opencode/plugin/kb-memory.ts` (outside this repo, not
   auto-applied). Grok has NO push wiring in this phase — `kb-beat.sh`'s
@@ -1715,7 +1719,7 @@ live_adapters/{codex,grok,kimi,opencode}.rs` — the four sibling adapters +
   --local` (LSC-5's `live_adapters::scan_all`) is unaffected by any of
   this: it reads each harness's own on-disk event file directly
   (`~/.claude/projects`, `~/.codex/sessions`, `~/.grok/sessions`,
-  `~/.kimi-code`, `~/.local/share/opencode/opencode.db`), independent of
+  `~/.local/share/opencode/opencode.db`), independent of
   whether a push hook is wired for it.
 
 *KT amendment (2026-11): the operator-intent terminal tier.* Add a
@@ -3090,7 +3094,7 @@ together, with goldens.
 | Slate engine (kb-slate/1: types, validation, `project`/`project_append`/`project_finish`, liveness, displaced/nudge) | `crates/kb-core/src/slate.rs` + `crates/kb-core/src/paths.rs` (`slate_dir`/`slate_ledger_file`/`slate_meta_file`/`slate_archive_file`) + `crates/kb-core/tests/slate_fixtures/*.jsonl` (see invariant #6's SLATE amendment) |
 | Slate HTTP routes + per-slate lock + `slate.updated` SSE | `crates/kb-server/src/routes/slates.rs` + `crates/kb-server/src/slate_registry.rs` (`SlateRegistry`, the `LiveRegistry` precedent) + `KbHandles::slate_lock_for` in `state.rs` |
 | Slate CLI verbs (`kb slate open/take/found/drop/edit/mark/pin/promote/…`) | `crates/kb-cli/src/commands/slate.rs` (see its module doc — the CLI never renders a digest, exit codes 1/2/3, the client-side cursor/topic markers) + `Cmd::Slate`/`SlateAction` in `main.rs` |
-| Slate hook wiring (session-start hybrid block, per-prompt delta, protocol paragraph) | `plugins/kb-memory/hooks/{kb-wake.sh,kb-wake-kimi.sh,kb-recall.sh,kb-omp.ts,memory-protocol.txt,CLAUDE.memory.md}` + `plugins/kb-memory/hooks/tests/test-*-slate.sh` |
+| Slate hook wiring (session-start hybrid block, per-prompt delta, protocol paragraph) | `plugins/kb-memory/hooks/{kb-wake.sh,kb-recall.sh,kb-omp.ts,memory-protocol.txt,CLAUDE.memory.md}` + `plugins/kb-memory/hooks/tests/test-*-slate.sh` |
 | Slate tidy/distill skills | `plugins/kb-memory/skills/{kb-slate-tidy,kb-slate-distill}/SKILL.md` |
 | Slate operator doc | `docs/slate.md` |
 | Slate dispatcher bridge (digest-in / take-on-spawn / harvest-out, all five job-exit paths) | an external, separately-repo'd dispatcher tool (`with_kb_slate_digest`, `post_kb_slate_take`, `trigger_kb_slate`/`trigger_kb_slate_abandoned`, `reap` — outside this repo, not shipped here) + `plugins/kb-memory/hooks/kb-slate-harvest.sh` (kb-side adapter) + `plugins/kb-memory/hooks/tests/test-slate-harvest.sh` |

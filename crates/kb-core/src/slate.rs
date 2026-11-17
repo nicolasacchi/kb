@@ -1785,7 +1785,7 @@ pub fn author_tag(p: &Post) -> String {
 }
 
 /// Is this a canonical UUID whose version digit is 7? UUIDv7 leads with a
-/// millisecond timestamp (omp/grok/codex/kimi ids), so its first characters
+/// millisecond timestamp (omp/grok/codex ids), so its first characters
 /// are identical for every session started in the same ~50-day window.
 fn is_uuid_v7(s: &str) -> bool {
     let b = s.as_bytes();
@@ -4601,14 +4601,14 @@ mod tests {
 
     #[test]
     fn ask_to_is_validated_on_ask_only() {
-        for good in ["you", "any", "omp", "claude", "kimi"] {
+        for good in ["you", "any", "omp", "claude"] {
             let b = PostBody {
                 to: Some(good.into()),
                 ..body(Kind::Ask, "ok?")
             };
             assert!(validate_post(&b, 1, &[]).is_ok(), "{good}");
         }
-        for bad in ["operator", "You", "", "gpt", "omp "] {
+        for bad in ["operator", "You", "", "gpt", "omp ", "kimi"] {
             let b = PostBody {
                 to: Some(bad.into()),
                 ..body(Kind::Ask, "ok?")

@@ -108,7 +108,7 @@ impl HookCheck {
 /// every harness. Printed once, human mode only (also carried in `--json`'s
 /// `notes`). The "Claude Code only" clause stays — older consumers pin it.
 const HARNESS_SCOPE_NOTE: &str = "harness scope: v1 checks Claude Code only — \
-     the codex/kimi capture + distill-nudge adapters exist but aren't probed \
+     the codex capture + distill-nudge adapters exist but aren't probed \
      by the marker/hook checks; recall-outcome reads the sessions census for \
      every harness";
 
@@ -1200,7 +1200,8 @@ struct StaleSlateMarker {
 ///
 /// `context-scent-` (`kb-recall.sh`), `beat-heartbeat-` (`kb-beat-throttle.sh`),
 /// `beat-tool-` (`kb-beat-pretool.sh`, the last tool-start name sent) and
-/// `waked-` (`kb-wake-kimi.sh`'s `waked-kimi-<sid>`) are the other
+/// `waked-` (the `waked-kimi-<sid>` files the removed kimi wake hook left
+/// behind; nothing writes them any more) are the other
 /// per-session files that accumulate forever beside the slate cursor/topic
 /// pair. The slate ledger is not in this list and is never touched. Files
 /// younger than [`SLATE_MARKER_MAX_AGE_SECS`] are not selected — a live
@@ -1382,7 +1383,7 @@ fn outbox_check(cache_dir: Option<&Path>) -> HookCheck {
 // ============================================ i) recall-outcome census
 //
 // `kb doctor --hooks` used to probe Claude's marker files and could PASS
-// while codex/kimi/grok/omp captures carried no `<!--kb-recall/1` markers.
+// while codex/grok/omp captures carried no `<!--kb-recall/1` markers.
 // The census is the three V0039 columns (`recall_marker_parsed` /
 // `recall_fallback_parsed` / `recall_failed`), summed per harness over the
 // newest capture. No HTTP route exposes that breakdown, so a loopback
@@ -3629,7 +3630,7 @@ mod tests {
     #[test]
     fn recall_outcomes_does_not_treat_an_uncensused_capture_as_a_measured_zero() {
         // NULL census (censused == 0) is not "zero parsed markers".
-        let c = decide_recall_outcomes(&[census("kimi", 5, 0, 0, 0, 0)]);
+        let c = decide_recall_outcomes(&[census("grok", 5, 0, 0, 0, 0)]);
         assert_eq!(c.status, CheckStatus::Skip);
         assert!(c.detail.contains("not a measured zero"), "{}", c.detail);
     }

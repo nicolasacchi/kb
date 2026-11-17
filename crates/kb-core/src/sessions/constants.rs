@@ -18,7 +18,8 @@
 /// value — the memo renamed it when it became a stable deep-link target.
 pub const SES_OUTCOME_ANCHOR: &str = "ses-outcome";
 
-/// R5 — the CLOSED set of harness identities a capture may declare, in the
+/// R5 — the CLOSED set of harness identities a capture may declare (kimi
+/// support was removed; legacy stored `kimi` rows stay readable), in the
 /// canonical order the facet/glyph surfaces render them.
 ///
 /// These are *dialects*, not drivers: `grok` covers any Grok-Build capture
@@ -26,7 +27,7 @@ pub const SES_OUTCOME_ANCHOR: &str = "ses-outcome";
 /// `driver:"grokclaude"` in its `adapter-meta` line). A value outside this set
 /// means the extraction ladder failed and the row falls back to
 /// [`HARNESS_DEFAULT`].
-pub const HARNESSES: [&str; 6] = ["claude", "codex", "opencode", "grok", "kimi", "omp"];
+pub const HARNESSES: [&str; 5] = ["claude", "codex", "opencode", "grok", "omp"];
 
 /// R5 — the harness a capture is attributed to when no adapter-meta line and
 /// no `<meta name="kb-harness">` is present: a transcript that parsed as a
@@ -132,10 +133,11 @@ mod tests {
     /// this test is the tripwire.
     #[test]
     fn harness_set_and_default_are_pinned() {
-        assert_eq!(
-            HARNESSES,
-            ["claude", "codex", "opencode", "grok", "kimi", "omp"]
-        );
+        assert_eq!(HARNESSES, ["claude", "codex", "opencode", "grok", "omp"]);
+        // kimi support was removed (NOKIMI): it is no longer a member, so a
+        // new beat/capture/filter/slate post naming it is refused like any
+        // unknown harness. Legacy stored rows still read verbatim.
+        assert!(!HARNESSES.contains(&"kimi"));
         assert_eq!(HARNESS_DEFAULT, "claude");
         assert!(
             HARNESSES.contains(&HARNESS_DEFAULT),

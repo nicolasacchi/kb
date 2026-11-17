@@ -6,8 +6,8 @@
 # any failure (daemon down, jq hiccup, no hits) exits 0 with nothing
 # injected. Requires `kb` on PATH and a running kb daemon.
 input="$(cat)"
-# Kimi Code's UserPromptSubmit payload carries .prompt as a content-parts
-# ARRAY ([{"type":"text","text":...}], verified live) — join its text
+# A UserPromptSubmit payload may carry .prompt as a content-parts
+# ARRAY ([{"type":"text","text":...}]) — join its text
 # parts. Claude/Codex send a plain string; `.input` is a fallback alias.
 prompt="$(printf '%s' "$input" | jq -r '
   def texts($v): if ($v | type) == "array" then ([$v[]? | .text // empty] | join("\n"))
@@ -114,7 +114,7 @@ extra=()
 }
 hook_deadline_init
 # v0.44 X4 — attribute shell `kb` writes of this session. This hook serves
-# claude, codex and kimi, so the harness is only named when it is knowable
+# claude and codex, so the harness is only named when it is knowable
 # (an already-set KB_HARNESS, else Claude's plugin root); never guessed.
 hook_export_identity "$sid" "${KB_HARNESS:-$([ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && echo claude)}"
 
@@ -350,8 +350,8 @@ elif [ -z "$block" ]; then
   block="$scent_line"
 fi
 
-# SL3 — the slate per-prompt lane. With a cursor file (seeded by kb-wake.sh /
-# kb-wake-kimi.sh, or by this hook on an earlier prompt) it is the DELTA
+# SL3 — the slate per-prompt lane. With a cursor file (seeded by kb-wake.sh,
+# or by this hook on an earlier prompt) it is the DELTA
 # since that cursor; without one it SEEDS: the hybrid block (`kb slate open
 # --hybrid`), once, and writes the cursor — Codex has no session-start hook
 # and reads the slate through this lane alone (design §12). The cursor is
@@ -396,10 +396,11 @@ fi
 
 [ -n "$block" ] || exit 0
 
-# Kimi Code appends a hook's PLAIN stdout to the model's context — no
-# hookSpecificOutput envelope — so KB_HOOK_FMT=kimi prints the block
-# bare. Default stays byte-identical to the Claude/Codex shape.
-if [ "${KB_HOOK_FMT:-}" = "kimi" ]; then
+# KB_HOOK_FMT=plain prints the block bare (no hookSpecificOutput envelope).
+# No shipped harness registers it: the shell tests and the bench probe use it
+# to compare the block's bytes without the JSON wrapper. Default stays
+# byte-identical to the Claude/Codex shape.
+if [ "${KB_HOOK_FMT:-}" = "plain" ]; then
   printf '%s\n' "$block"
 else
   jq -n --arg ctx "$block" \

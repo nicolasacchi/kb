@@ -1079,12 +1079,7 @@ mod tests {
             let err = validate_launch(&handoff_req(Harness::Claude, bad), &cfg).unwrap_err();
             assert_eq!(err.code(), "bad-request", "sid {bad:?}");
         }
-        for harness in [
-            Harness::Codex,
-            Harness::Opencode,
-            Harness::Grok,
-            Harness::Kimi,
-        ] {
+        for harness in [Harness::Codex, Harness::Opencode, Harness::Grok] {
             let err = validate_launch(&handoff_req(harness, "sid-1"), &cfg).unwrap_err();
             assert_eq!(err.code(), "bad-request", "harness {harness:?}");
         }

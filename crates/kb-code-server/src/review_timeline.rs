@@ -95,7 +95,9 @@ pub const SCHEMA: &str = "review-timeline/2";
 /// unchanged. The set is kb's own closed harness vocabulary
 /// (`kb_core::sessions::HARNESSES`) plus the generic `agent`, pinned to it
 /// by [`tests::the_agent_author_set_tracks_kbs_harness_vocabulary`] so the
-/// two cannot drift.
+/// two cannot drift. `kimi` is the one LEGACY name kept beyond that
+/// vocabulary: kimi support was removed, but review comments it already
+/// authored must keep reading as agent (never flip to human).
 pub const AGENT_AUTHOR_NAMES: &[&str] = &[
     "claude", "codex", "opencode", "grok", "kimi", "omp", "agent",
 ];
@@ -1576,9 +1578,11 @@ mod v2_tests {
                 "kb added the harness {h:?}; kb-code's timeline would read it as a HUMAN author"
             );
         }
+        // `agent` plus the one legacy name (`kimi`, support removed).
+        assert!(AGENT_AUTHOR_NAMES.contains(&"kimi"));
         assert_eq!(
             AGENT_AUTHOR_NAMES.len(),
-            kb_core::sessions::HARNESSES.len() + 1
+            kb_core::sessions::HARNESSES.len() + 2
         );
     }
 

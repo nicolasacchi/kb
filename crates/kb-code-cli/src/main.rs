@@ -2866,7 +2866,7 @@ enum AnnotateCmd {
         #[arg(long = "ignore-author")]
         ignore_author: Vec<String>,
         /// Skip items authored by ANY agent name the daemon recognises
-        /// (claude, codex, opencode, grok, kimi, omp, agent) — the form to
+        /// (claude, codex, opencode, grok, omp, agent) — the form to
         /// use now that agent replies carry the harness name (v0.44 F5).
         #[arg(long = "ignore-agents")]
         ignore_agents: bool,
