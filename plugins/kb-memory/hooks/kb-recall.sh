@@ -6,6 +6,13 @@
 # any failure (daemon down, jq hiccup, no hits) exits 0 with nothing
 # injected. Requires `kb` on PATH and a running kb daemon.
 input="$(cat)"
+# SG-Q1 payload check (2026-11-17): Claude Code's UserPromptSubmit stdin JSON
+# carries `transcript_path` (the hooks reference's "Common input fields" apply
+# to every event; source: https://code.claude.com/docs/en/hooks). The doc
+# warns the file is written asynchronously and may LAG the in-memory
+# conversation, so it may not yet hold the current prompt (use `.prompt` for
+# that). Other harnesses differ (Kimi has NO transcript_path). SG-Q2 will read
+# `.transcript_path` and call the kb-core recent-turns helper; not wired yet.
 # Kimi Code's UserPromptSubmit payload carries .prompt as a content-parts
 # ARRAY ([{"type":"text","text":...}], verified live) — join its text
 # parts. Claude/Codex send a plain string; `.input` is a fallback alias.

@@ -33,6 +33,12 @@ pub mod view;
 /// route AND `kb sessions read --live`/`--follow` both call.
 pub mod tail;
 
+/// SG-Q1 — the last few human/assistant prose turns of a LIVE Claude Code
+/// transcript, for building a recall query. A selector over `view`'s turns
+/// (no second interpreter); total — never errors.
+pub mod recent;
+pub use recent::{recent_turns, recent_turns_with, RecentTurn, RecentTurnsOpts};
+
 /// A3 — `kb-session-card/1`: one daemon-rendered session card (pure types +
 /// text renderer; the fan-out that fills them is kb-server's).
 pub mod card;
