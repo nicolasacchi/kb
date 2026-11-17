@@ -79,7 +79,8 @@ fi
 
 # CI builds kb from source: there the REAL planner and drop-part are mandatory,
 # or the lane would silently pin only the offline stand-ins.
-if [ -n "${CI:-}" ] && { [ -z "$REAL_PLANNER" ] || [ -z "$REAL_DROP" ]; }; then
+# (The deadline self-test below needs neither, and runs without a real kb.)
+if [ -n "${CI:-}" ] && [ -z "${SEG_SELFTEST:-}" ] && { [ -z "$REAL_PLANNER" ] || [ -z "$REAL_DROP" ]; }; then
   bad "CI must run against the real planner and drop-part (planner=${REAL_PLANNER:-missing} drop-part=${REAL_DROP:-missing}; KB_BIN_DIR=${KB_BIN_DIR:-unset})"
 fi
 
