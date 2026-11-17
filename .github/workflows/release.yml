@@ -246,6 +246,19 @@ jobs:
         uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
           shared-key: release-${{ matrix.target }}
+          # RESTORE-ONLY, for the same reason ci.yml's lint lanes are: this
+          # workflow runs on a TAG ref, and an Actions cache is restorable
+          # only from its own ref or the default branch. The next release is
+          # a different tag, so what a release run saves here is reachable by
+          # nobody but a re-run of the very same tag -- while it still counts
+          # against the repository's 10 GB cap. Measured 2026-11-17: the v0.52.1
+          # run left two entries of ~1.8 GB each (x86_64 + aarch64), taking the
+          # repo to 12.3 GB, and LRU eviction then dropped the entries CI
+          # actually restores (the code, code-drift and code-e2e-fast families
+          # were gone, so code-test/code-drift/code-e2e ran cold). Nothing on
+          # main ever writes a `release-*` key, so restore is a cheap no-op
+          # until one exists; a release build is as cold as it was before.
+          save-if: 'false'
 
       - name: Stamp the build (one sha for the binaries AND the SPAs)
         # build.rs honours KB_BUILD_SHA; vite honours KB_GIT_SHA. Both get the
