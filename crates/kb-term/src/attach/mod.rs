@@ -1,4 +1,4 @@
-//! `kb-term attach|new|ls`: the host-local mirror client.
+//! `kb-term attach|new|ls|kill`: the host-local mirror client.
 //!
 //! The mirror is a normal tap viewer (`<run-dir>/s/<id>/tap.sock`):
 //! it writes the leading `ESC[3J` itself, then the twin SEED, then the
@@ -943,7 +943,113 @@ async fn connect_tap(
     })
 }
 
-// ------------------------------------------------------------------- new/ls
+// ------------------------------------------------------------ new/ls/kill
+
+/// Arguments for `kb-term kill`.
+#[derive(Debug, Clone)]
+pub struct KillArgs {
+    /// Session id.
+    pub id: String,
+    /// Kill grace in seconds (the runner clamps it; `None` = its default).
+    pub grace_secs: Option<u64>,
+    /// Runner socket path (flag/env override).
+    pub runner_sock: Option<String>,
+}
+
+/// The one line `kb-term kill` prints for a successful runner reply.
+fn render_kill_reply(id: &str, reply: &serde_json::Value) -> String {
+    if reply
+        .get("stale_removed")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+    {
+        return format!("removed stale session {id} (no holder answered)");
+    }
+    let forced = reply
+        .get("forced")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let code = reply.get("exit_code").and_then(serde_json::Value::as_i64);
+    match (forced, code) {
+        (true, _) => format!("killed {id} (forced)"),
+        (false, Some(c)) => format!("killed {id} (exit {c})"),
+        (false, None) => format!("killed {id}"),
+    }
+}
+
+/// The exit code for a runner error on `kill`: 4 not found (same as
+/// `attach`), 2 an id the runner refuses as malformed, 1 anything else.
+fn kill_error_exit(code: Option<&str>) -> u8 {
+    match code {
+        Some("not-found") => 4,
+        Some("invalid-id") => 2,
+        _ => 1,
+    }
+}
+
+/// `kb-term kill <id>`: the runner's graceful kill op (exit keys, then the
+/// whole-holder stop). For an id whose holder no longer answers the runner
+/// removes that session's leftover socket and directory. Exit codes: 0 done;
+/// 1 other failure; 2 usage (bad id); 3 runner unreachable; 4 not found.
+pub async fn run_kill(args: KillArgs) -> u8 {
+    run_kill_with(args, None).await
+}
+
+/// The kill runs exit keys, waits up to the grace and then stops the holder,
+/// so the default 10 s per-call deadline is far too short: the budget is
+/// the grace (the runner clamps it to 60 s) plus 30 s. `budget` overrides
+/// that (tests).
+async fn run_kill_with(args: KillArgs, budget: Option<Duration>) -> u8 {
+    if !crate::wire::is_valid_term_id(&args.id) {
+        eprintln!("kb-term: invalid session id");
+        return 2;
+    }
+    let runner_sock = crate::runner_client::resolve_runner_socket(args.runner_sock.as_deref());
+    let unreachable = |e: &RunnerClientError| {
+        eprintln!("kb-term: {e}");
+        eprintln!(
+            "kb-term: the kb-termd user unit may not be running (socket: {})",
+            runner_sock.display()
+        );
+        3
+    };
+    let mut runner = match RunnerClient::connect(&runner_sock).await {
+        Ok(c) => c,
+        Err(e @ RunnerClientError::Unreachable(_)) => return unreachable(&e),
+        Err(e) => {
+            eprintln!("kb-term: {e}");
+            return 1;
+        }
+    };
+    runner.set_timeout(
+        budget.unwrap_or_else(|| Duration::from_secs(args.grace_secs.unwrap_or(60).min(60) + 30)),
+    );
+    match runner
+        .call(&Request::Kill {
+            id: args.id.clone(),
+            grace_secs: args.grace_secs,
+        })
+        .await
+    {
+        Ok(reply) => {
+            println!("{}", render_kill_reply(&args.id, &reply));
+            0
+        }
+        Err(e @ RunnerClientError::Unreachable(_)) if runner.last_call_timed_out() => {
+            eprintln!("kb-term: {e}");
+            eprintln!(
+                "kb-term: the kill outcome is unknown (the runner may still be working); \
+                 check `kb-term ls`"
+            );
+            1
+        }
+        Err(e @ RunnerClientError::Unreachable(_)) => unreachable(&e),
+        Err(e) => {
+            eprintln!("kb-term: {e}");
+            kill_error_exit(e.code())
+        }
+    }
+}
 
 pub async fn run_ls(args: LsArgs) -> u8 {
     let runner_sock = crate::runner_client::resolve_runner_socket(args.runner_sock.as_deref());
@@ -1157,7 +1263,99 @@ pub async fn run_new(args: NewArgs) -> u8 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn kill_reply_lines_and_exit_codes() {
+        use serde_json::json;
+        assert_eq!(
+            render_kill_reply("abcd1234", &json!({"exit_code": 0, "forced": false})),
+            "killed abcd1234 (exit 0)"
+        );
+        assert_eq!(
+            render_kill_reply("abcd1234", &json!({"exit_code": null, "forced": true})),
+            "killed abcd1234 (forced)"
+        );
+        assert_eq!(
+            render_kill_reply(
+                "abcd1234",
+                &json!({"exit_code": null, "forced": false, "stale_removed": true})
+            ),
+            "removed stale session abcd1234 (no holder answered)"
+        );
+        assert_eq!(kill_error_exit(Some("not-found")), 4);
+        assert_eq!(kill_error_exit(Some("invalid-id")), 2);
+        assert_eq!(kill_error_exit(Some("bad-request")), 1);
+        assert_eq!(kill_error_exit(None), 1);
+    }
+
+    /// A malformed id never reaches the runner: exit 2 with no socket
+    /// dialled (the path below does not exist).
+    #[tokio::test]
+    async fn kill_rejects_a_bad_id_before_dialling() {
+        for bad in ["", "../x", "a/b", "ABC", "x y", "a\u{0}b"] {
+            let code = run_kill(KillArgs {
+                id: bad.to_string(),
+                grace_secs: None,
+                runner_sock: Some("/nonexistent-kb-term-test/runner.sock".to_string()),
+            })
+            .await;
+            assert_eq!(code, 2, "id {bad:?}");
+        }
+        // A valid id with no runner is exit 3, not 2.
+        let code = run_kill(KillArgs {
+            id: "abcd1234".to_string(),
+            grace_secs: None,
+            runner_sock: Some("/nonexistent-kb-term-test/runner.sock".to_string()),
+        })
+        .await;
+        assert_eq!(code, 3);
+    }
+
     use super::*;
+
+    /// A runner that answers Kill only after a delay longer than the
+    /// client's call deadline must still yield exit 0 when the kill budget
+    /// covers it (before the fix the flat 10 s deadline made this exit 3).
+    #[tokio::test]
+    async fn kill_budget_outlasts_a_slow_runner_reply() {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("r.sock");
+        let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+        let server = tokio::spawn(async move {
+            let (st, _) = listener.accept().await.unwrap();
+            let (r, mut w) = st.into_split();
+            let mut line = String::new();
+            BufReader::new(r).read_line(&mut line).await.unwrap();
+            let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            let reply = serde_json::json!({"v":1,"id":v["id"],"status":"ok",
+                "data":{"exit_code":0,"forced":false}});
+            w.write_all(format!("{reply}\n").as_bytes()).await.unwrap();
+        });
+        let args = |s: &std::path::Path| KillArgs {
+            id: "abcd1234".to_string(),
+            grace_secs: None,
+            runner_sock: Some(s.display().to_string()),
+        };
+        let code = run_kill_with(args(&sock), Some(Duration::from_secs(5))).await;
+        assert_eq!(code, 0);
+        server.await.unwrap();
+
+        // A budget shorter than the reply is an UNKNOWN outcome (exit 1),
+        // never the "unit not running" exit 3.
+        let sock2 = dir.path().join("r2.sock");
+        let listener = tokio::net::UnixListener::bind(&sock2).unwrap();
+        let server = tokio::spawn(async move {
+            let (st, _) = listener.accept().await.unwrap();
+            let (r, _w) = st.into_split();
+            let mut line = String::new();
+            BufReader::new(r).read_line(&mut line).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(600)).await;
+        });
+        let code = run_kill_with(args(&sock2), Some(Duration::from_millis(150))).await;
+        assert_eq!(code, 1);
+        server.await.unwrap();
+    }
 
     #[test]
     fn backoff_is_exponential_with_cap_and_resets_on_success() {

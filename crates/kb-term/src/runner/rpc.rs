@@ -102,10 +102,16 @@ async fn dispatch_inner<S: Supervisor>(
                 return Err(RunnerError::InvalidId);
             }
             let out = kill::kill_session(runner, id, *grace_secs).await?;
-            Ok(json!({
+            let mut reply = json!({
                 "exit_code": out.exit_code,
                 "forced": out.forced,
-            }))
+            });
+            // Only present when a stale entry was reaped, so the live
+            // reply stays byte-identical.
+            if out.stale_removed {
+                reply["stale_removed"] = json!(true);
+            }
+            Ok(reply)
         }
         Request::Resize { id, cols, rows } => {
             if !valid_id(id) {
