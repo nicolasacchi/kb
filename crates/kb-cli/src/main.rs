@@ -261,6 +261,15 @@ enum Cmd {
         /// these; this only renders what's already on the wire.
         #[arg(long)]
         explain: bool,
+        /// SG-Q2: path to a live Claude Code transcript; the query becomes
+        /// the prompt plus the last `--turns` turns (composed here, sent as
+        /// the ordinary query). Loopback daemons only — ignored with a
+        /// stderr line otherwise.
+        #[arg(long)]
+        transcript: Option<String>,
+        /// Recent transcript turns to fold into the query (with `--transcript`).
+        #[arg(long, default_value_t = 4)]
+        turns: usize,
         #[arg(long)]
         daemon: Option<String>,
         #[arg(long)]
@@ -340,6 +349,13 @@ enum Cmd {
         /// seed, as `kb slate open --hybrid`).
         #[arg(long)]
         slate_since: Option<u64>,
+        /// SG-Q2: path to a live Claude Code transcript; the prompt sent is
+        /// the prompt plus the last `--turns` turns. Loopback daemons only.
+        #[arg(long)]
+        transcript: Option<String>,
+        /// Recent transcript turns to fold into the prompt (with `--transcript`).
+        #[arg(long, default_value_t = 4)]
+        turns: usize,
         #[arg(long)]
         daemon: Option<String>,
         #[arg(long)]
@@ -4788,11 +4804,19 @@ async fn main() -> Result<()> {
             for_kb,
             no_floor,
             explain,
+            transcript,
+            turns,
             daemon,
             json,
             timeout,
         } => {
             let bearer = read_bearer();
+            let query = commands::recall_ctx::query_with_context(
+                &query,
+                transcript.as_deref(),
+                turns,
+                daemon.as_deref(),
+            );
             commands::memory::recall_with_timeout(
                 &query,
                 &scope,
@@ -4841,10 +4865,18 @@ async fn main() -> Result<()> {
             lanes,
             slate,
             slate_since,
+            transcript,
+            turns,
             daemon,
             json,
         } => {
             let bearer = read_bearer();
+            let prompt = commands::recall_ctx::query_with_context(
+                &prompt,
+                transcript.as_deref(),
+                turns,
+                daemon.as_deref(),
+            );
             commands::turn::turn(
                 &prompt,
                 cwd.as_deref(),

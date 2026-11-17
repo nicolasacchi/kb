@@ -1287,6 +1287,20 @@ cwd -> repo slug; outside a repo the lane is dropped). A golden test pins that
 KB_TURN=1 and the legacy path inject identical bytes. Test:
 `tests/test-recall-turn.sh`.
 
+## `KB_RECALL_CONTEXT` (SG-Q2)
+
+`KB_RECALL_CONTEXT=1` makes `kb-recall.sh` fold the recent conversation into the
+recall query. When the payload carries `.transcript_path` and that file is
+readable, the hook passes `--transcript <path>` to `kb recall` and, under
+`KB_TURN=1`, to `kb turn`; the CLI reads the last 4 turns (`--turns`), composes
+the query (current prompt first, then prior turns newest first, capped at 1200
+chars) and sends it as the ordinary query. The current prompt always comes
+from `.prompt` (the transcript is written asynchronously and may lag). Opt-in:
+unset, or with a missing file, every call is byte-identical to before. The CLI
+ignores `--transcript` (one stderr line) when the daemon URL is not loopback,
+since transcript text is unscrubbed. Claude Code only; other harnesses stay
+prompt-only. Test: `tests/test-recall-context.sh`.
+
 `kb-hook-lib.sh` holds what the hooks used to copy: `run_to <cap> cmd…` (each
 call runs under `min(cap, what is left of KB_HOOK_BUDGET_SECS, default 13)` on
 a millisecond clock; nothing left means skipped, rc 124) and the session-key

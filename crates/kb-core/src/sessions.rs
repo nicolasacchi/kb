@@ -37,7 +37,10 @@ pub mod tail;
 /// transcript, for building a recall query. A selector over `view`'s turns
 /// (no second interpreter); total — never errors.
 pub mod recent;
-pub use recent::{recent_turns, recent_turns_with, RecentTurn, RecentTurnsOpts};
+pub use recent::{
+    compose_recall_query, recent_turns, recent_turns_with, RecentTurn, RecentTurnsOpts,
+    RECALL_QUERY_DEFAULT_TOTAL_CHARS,
+};
 
 /// A3 — `kb-session-card/1`: one daemon-rendered session card (pure types +
 /// text renderer; the fan-out that fills them is kb-server's).

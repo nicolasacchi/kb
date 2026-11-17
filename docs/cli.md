@@ -885,7 +885,16 @@ kb proposals reject <id> [--kb NAME]
                                     discard the candidate; writes nothing.
 kb recall <query> [--scope auto|all|global|project] [--project NAME]
    [--cwd PATH] [--limit N] [--for-kb NAME] [--no-floor] [--explain]
-   [--daemon URL] [--json]
+   [--transcript PATH] [--turns N] [--daemon URL] [--json]
+                                    SG-Q2: --transcript composes the query
+                                    CLIENT-side from the prompt plus the last
+                                    --turns (default 4) turns of a live Claude
+                                    Code transcript (prompt first, prior turns
+                                    newest first, 1200-char cap) and sends it
+                                    as the ordinary query; no server change,
+                                    absent = byte-identical. Loopback daemons
+                                    only (127.0.0.0/8, ::1, localhost):
+                                    otherwise ignored with one stderr line.
                                     v0.9 M5: recall memories relevant to a
                                     query, ranked across in-scope memory
                                     corpora by recency × salience × decay.
@@ -972,7 +981,10 @@ kb changes [--since WHEN] [--project ID|LABEL] [--session SID]
                                     marked read. GET /api/changes.
 kb turn <prompt> [--cwd PATH] [--session SID] [--deadline-ms N]
    [--lanes recall,context,slate] [--slate SLUG] [--slate-since SEQ]
-   [--daemon URL] [--json]
+   [--transcript PATH] [--turns N] [--daemon URL] [--json]
+                                    SG-Q2: --transcript/--turns fold recent
+                                    transcript turns into the prompt exactly
+                                    as `kb recall` does (loopback only).
                                     v0.44 F6: the per-prompt hook's ONE call
                                     over `GET /api/turn` (recall + turn-1
                                     scent, composed by the daemon under a

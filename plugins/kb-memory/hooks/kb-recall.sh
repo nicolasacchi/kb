@@ -11,8 +11,10 @@ input="$(cat)"
 # to every event; source: https://code.claude.com/docs/en/hooks). The doc
 # warns the file is written asynchronously and may LAG the in-memory
 # conversation, so it may not yet hold the current prompt (use `.prompt` for
-# that). Other harnesses differ (Kimi has NO transcript_path). SG-Q2 will read
-# `.transcript_path` and call the kb-core recent-turns helper; not wired yet.
+# that). Other harnesses differ (Kimi has NO transcript_path). SG-Q2: OPT-IN via
+# KB_RECALL_CONTEXT=1, `.transcript_path` is handed to `kb recall`/`kb turn`
+# `--transcript` (the CLI composes the query, loopback daemons only); the
+# current prompt always comes from `.prompt`.
 # Kimi Code's UserPromptSubmit payload carries .prompt as a content-parts
 # ARRAY ([{"type":"text","text":...}], verified live) — join its text
 # parts. Claude/Codex send a plain string; `.input` is a fallback alias.
@@ -80,6 +82,15 @@ fi
 # (via .claude/settings.json `env`) point this hook at a non-default port.
 extra=()
 [ -n "${KB_DAEMON_URL:-}" ] && extra+=(--daemon "$KB_DAEMON_URL")
+
+# SG-Q2 — opt-in recent-conversation context for the recall query. Needs
+# KB_RECALL_CONTEXT=1 AND a readable .transcript_path; anything else leaves
+# every call byte-identical to before. Only `kb recall` / `kb turn` get it.
+ctx_flags=()
+if [ "${KB_RECALL_CONTEXT:-}" = "1" ]; then
+  tpath="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)" || tpath=""
+  [ -n "$tpath" ] && [ -r "$tpath" ] && ctx_flags=(--transcript "$tpath")
+fi
 
 # CT-D1 — the SCENT branch, first UserPromptSubmit of a session ONLY.
 #
@@ -179,7 +190,7 @@ if [ "${KB_TURN:-}" = "1" ] && [ "${KB_RECALL_LAYOUT:-v2}" = "v2" ]; then
   [ -n "$cwd" ] && turn_args+=(--cwd "$cwd")
   [ -n "$sid" ] && turn_args+=(--session "$sid")
   case "$cursor" in '' | *[!0-9]*) ;; *) turn_args+=(--slate-since "$cursor") ;; esac
-  turn_json="$(run_to 11 kb turn "$prompt" "${extra[@]}" "${turn_args[@]}" --json 2>/dev/null)" || turn_json=""
+  turn_json="$(run_to 11 kb turn "$prompt" "${extra[@]}" "${ctx_flags[@]}" "${turn_args[@]}" --json 2>/dev/null)" || turn_json=""
   if [ -n "$turn_json" ] && printf '%s' "$turn_json" | jq -e 'has("text")' >/dev/null 2>&1; then
     turn_ok=1
     turn_text="$(printf '%s' "$turn_json" | jq -r '.text // empty' 2>/dev/null)" || turn_text=""
@@ -243,7 +254,7 @@ recall_args=()
 recall_prefix=(env "KB_RECALL_SESSION=${sid}")
 hits=""
 if [ "$turn_ok" != "1" ]; then
-  hits="$(run_to 6 "${recall_prefix[@]}" kb recall "$prompt" "${extra[@]}" "${recall_args[@]}" --limit 5 --json 2>/dev/null)" || hits=""
+  hits="$(run_to 6 "${recall_prefix[@]}" kb recall "$prompt" "${extra[@]}" "${ctx_flags[@]}" "${recall_args[@]}" --limit 5 --json 2>/dev/null)" || hits=""
 fi
 
 # CT-A3 — alongside the human-readable line, append ONE machine-readable

@@ -196,6 +196,53 @@ fn cap(text: &str, max: usize, keep_end: bool) -> String {
     }
 }
 
+/// Default total character cap of [`compose_recall_query`].
+pub const RECALL_QUERY_DEFAULT_TOTAL_CHARS: usize = 1200;
+
+fn collapse_ws(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// SG-Q2 — compose a recall query from the CURRENT prompt plus the recent
+/// transcript turns (oldest first, as [`recent_turns_with`] returns them).
+///
+/// The prompt comes FIRST (whitespace-collapsed, cut only if it alone exceeds
+/// `total_cap`); then prior turns newest first, one per line, each collapsed
+/// and clipped to what is left of the cap (char-safe). If the newest turn is
+/// a human turn with the same text as the prompt (the transcript did not
+/// lag) it is dropped so the prompt is not duplicated. No turns left =>
+/// the prompt UNCHANGED (byte-identical, not even collapsed). Pure.
+pub fn compose_recall_query(prompt: &str, turns: &[RecentTurn], total_cap: usize) -> String {
+    let p = collapse_ws(prompt);
+    let mut prior: Vec<&RecentTurn> = turns.iter().collect();
+    if let Some(last) = prior.last() {
+        if last.role == Role::Human && collapse_ws(&last.text) == p {
+            prior.pop();
+        }
+    }
+    if prior.is_empty() {
+        return prompt.to_string();
+    }
+    let mut out = cap(&p, total_cap, false);
+    let mut used = out.chars().count();
+    for t in prior.into_iter().rev() {
+        let line = collapse_ws(&t.text);
+        if line.is_empty() {
+            continue;
+        }
+        // one char for the newline separator
+        if used + 1 >= total_cap {
+            break;
+        }
+        let room = total_cap - used - 1;
+        let line = cap(&line, room, t.role == Role::Assistant);
+        used += 1 + line.chars().count();
+        out.push('\n');
+        out.push_str(&line);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -425,5 +472,59 @@ mod tests {
         assert!(v.len() <= RECENT_TURNS_DEFAULT_N);
         let t = texts(&v);
         assert_eq!(t[t.len() - 2..], ["the last question", "the last answer"]);
+    }
+
+    fn rt(role: Role, t: &str) -> RecentTurn {
+        RecentTurn {
+            role,
+            text: t.into(),
+        }
+    }
+
+    #[test]
+    fn compose_empty_turns_is_byte_identical() {
+        assert_eq!(compose_recall_query("  a   b\n", &[], 1200), "  a   b\n");
+    }
+
+    #[test]
+    fn compose_golden_prompt_first_newest_first() {
+        let turns = [
+            rt(Role::Human, "first   question"),
+            rt(Role::Assistant, "an answer\nover lines"),
+            rt(Role::Human, "follow up"),
+        ];
+        assert_eq!(
+            compose_recall_query("now do  X", &turns, 1200),
+            "now do X\nfollow up\nan answer over lines\nfirst question"
+        );
+    }
+
+    #[test]
+    fn compose_drops_duplicate_newest_human() {
+        let turns = [rt(Role::Assistant, "ok"), rt(Role::Human, "now  do X")];
+        assert_eq!(
+            compose_recall_query("now do X", &turns, 1200),
+            "now do X\nok"
+        );
+        // only a duplicate: prompt unchanged
+        let only = [rt(Role::Human, "now do X")];
+        assert_eq!(compose_recall_query("now do X", &only, 1200), "now do X");
+        // an assistant turn with the same text is not a duplicate
+        let a = [rt(Role::Assistant, "now do X")];
+        assert_eq!(
+            compose_recall_query("now do X", &a, 1200),
+            "now do X\nnow do X"
+        );
+    }
+
+    #[test]
+    fn compose_cap_is_char_safe_and_prompt_wins() {
+        let turns = [rt(Role::Human, "ééééé"), rt(Role::Assistant, "0123456789")];
+        // "abc" + \n + 6 chars of room: assistant keeps its END
+        assert_eq!(compose_recall_query("abc", &turns, 10), "abc\n456789");
+        // no room left for older turns
+        assert_eq!(compose_recall_query("abc", &turns, 4), "abc");
+        // prompt alone longer than the cap is cut, turns dropped
+        assert_eq!(compose_recall_query("ééééé", &turns, 3), "ééé");
     }
 }
