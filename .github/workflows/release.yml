@@ -494,6 +494,11 @@ jobs:
         # Separate cargo invocation for the kb-term crate: it has no ONNX
         # Runtime edge (invariant #26 does not apply here) and building it
         # with kb-embedder would only lengthen the embedder link.
+        # FXVER: the bins stamp the tag (v0.52.1 -> 0.52.1) from this env at
+        # compile time, the same string KB_TERM_VERSION below names the
+        # archive with; package-kb-term.sh asserts all three binaries match.
+        env:
+          KB_BUILD_VERSION: ${{ github.ref_name }}
         run: cargo build --release --locked -p kb-term --bins
 
       - name: Install tap dependencies (bun, exact pins)
@@ -506,9 +511,11 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         # The exact compile command of the term-tap job in ci.yml (checked
         # there every PR).
+        # FXVER: --define stamps the tag (without its v) into `kb-tap --version`.
         run: |
           cd crates/kb-term/tap
-          bun build --compile src/main.ts --outfile "$RUNNER_TEMP/kb-tap"
+          bun build --compile --define "KB_TAP_VERSION=\"${GITHUB_REF_NAME#v}\"" \
+            src/main.ts --outfile "$RUNNER_TEMP/kb-tap"
 
       - name: Runner image id (tmux cache key)
         if: matrix.target == 'x86_64-unknown-linux-gnu'

@@ -501,9 +501,11 @@ say_ok "18 corrupt archive fails at extract"
 # (the CI lane only ever feeds it good inputs, so these are the false
 # witnesses for its gates: unset var, non-file input, tmux 3.4).
 mkdir -p "$work/pkgin" "$work/pkgout"
-printf '#!/bin/sh\nexit 0\n' > "$work/pkgin/termd"
-printf '#!/bin/sh\nexit 0\n' > "$work/pkgin/term"
-printf '#!/bin/sh\nexit 0\n' > "$work/pkgin/tap"
+# Stubs answer `--version` like the stamped real binaries (FXVER): the
+# packager refuses a binary whose version differs from KB_TERM_VERSION.
+printf '#!/bin/sh\necho "kb-termd 9.9.9"\n' > "$work/pkgin/termd"
+printf '#!/bin/sh\necho "kb-term 9.9.9"\n' > "$work/pkgin/term"
+printf '#!/bin/sh\necho "kb-tap 9.9.9"\n' > "$work/pkgin/tap"
 printf '#!/bin/sh\necho "tmux 3.7c"\n' > "$work/pkgin/tmux"
 printf '#!/bin/sh\necho "tmux 3.4"\n' > "$work/pkgin/tmux34"
 chmod +x "$work/pkgin/termd" "$work/pkgin/term" "$work/pkgin/tap" \
@@ -670,5 +672,25 @@ else
     && fail "INSTALL must omit the ldd block for a static tmux"
 fi
 say_ok "28 INSTALL ldd block follows tmux dynamism"
+
+# 29. FXVER: the packager refuses a binary whose --version is not the archive
+# version: unstamped (0.0.0-dev), the old bare 0.0.0, another release, no
+# output at all, and a v-prefixed stamp; each of the three, naming it.
+for pair in "KB_TERMD_BIN:termd:kb-termd" "KB_TERM_BIN:term:kb-term" "KB_TAP_BIN:tap:kb-tap"; do
+  var="${pair%%:*}"; rest="${pair#*:}"; file="${rest%%:*}"; bname="${rest#*:}"
+  for bad in "0.0.0-dev" "0.0.0" "9.9.8" "v9.9.9" ""; do
+    printf '#!/bin/sh\necho "%s %s"\n' "$bname" "$bad" > "$work/pkgin/${file}-bad"
+    chmod +x "$work/pkgin/${file}-bad"
+    if pkg_run "${var}=$work/pkgin/${file}-bad"; then
+      fail "${var} reporting '${bname} ${bad}' must fail the packager"
+    fi
+    grep -qF "${var} (" "$work/out" || fail "version error does not name ${var} (bad='${bad}')"
+    grep -qF "archive version is '9.9.9'" "$work/out" \
+      || fail "version error does not name the archive version (${var}, bad='${bad}')"
+  done
+done
+printf '#!/bin/sh\nexit 0\n' > "$work/pkgin/silent"; chmod +x "$work/pkgin/silent"
+if pkg_run KB_TAP_BIN="$work/pkgin/silent"; then fail "a binary with no --version output must fail"; fi
+say_ok "29 packager refuses a binary that does not report the archive version"
 
 echo "install-kb-term selftest OK"
