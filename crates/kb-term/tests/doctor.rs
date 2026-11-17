@@ -663,7 +663,26 @@ fn doctor_harness_probe_tells_failure_timeout_and_silence_apart() {
     let exe = dir.path().join("noexec");
     std::fs::write(&exe, "x").unwrap();
     let c = doctor::probe_harness_at(&exe, &[], std::time::Duration::from_secs(2));
-    assert!(matches!(c, doctor::HarnessProbe::NoOutput { .. }), "{c:?}");
+    // The variant alone would also match "exited 0 but printed nothing":
+    // pin the path and the REASON, and what the WARN tells the operator.
+    match &c {
+        doctor::HarnessProbe::NoOutput { path, why } => {
+            assert_eq!(path, &exe, "the probe names the binary it tried");
+            assert!(
+                why.starts_with("could not be started ("),
+                "the reason says it was not started, not that it was silent: {why}"
+            );
+            assert!(!why.contains("printed no version"), "{why}");
+        }
+        other => panic!("{other:?}"),
+    }
+    let v = doctor::decide_harness_probe("opencode", &c, None, false);
+    assert_eq!(v.status, CheckStatus::Warn);
+    assert!(
+        v.detail.contains(&exe.display().to_string()) && v.detail.contains("could not be started"),
+        "{}",
+        v.detail
+    );
 }
 
 // ---- FXTERMCLI: injected host seams ------------------------------------

@@ -459,3 +459,75 @@ mod parse_tests {
         );
     }
 }
+
+/// FXMINTERM: the `kill` reply shape through `dispatch` (what the REST relay
+/// forwards): `stale_removed` appears ONLY when a stale entry was reaped.
+#[cfg(test)]
+mod kill_reply_tests {
+    use super::*;
+    use crate::runner::supervisor::fake::FakeSupervisor;
+    use crate::wire::Request;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn runner_with_tmux(
+        root: &std::path::Path,
+        body: &str,
+    ) -> Runner<crate::runner::supervisor::fake::FakeSupervisor> {
+        let script = root.join("tmux.sh");
+        std::fs::write(&script, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let cfg = crate::runner::config::RunnerConfig::test_config(
+            root.join("run"),
+            script.to_string_lossy().into_owned(),
+            std::path::PathBuf::from("/dev/null"),
+        );
+        Runner::with_supervisor(cfg, FakeSupervisor::new())
+    }
+
+    fn kill_req() -> Request {
+        Request::Kill {
+            id: "abcd1234".to_string(),
+            grace_secs: Some(2),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_stale_kill_replies_ok_with_stale_removed_and_a_live_kill_does_not() {
+        // Stale: the holder answers "no server running"; its leftovers go.
+        let root = tempfile::tempdir().unwrap();
+        let runner = runner_with_tmux(root.path(), "echo 'no server running' >&2; exit 1");
+        let sdir = runner.sessions_dir();
+        std::fs::create_dir_all(sdir.join("abcd1234")).unwrap();
+        drop(std::os::unix::net::UnixListener::bind(sdir.join("abcd1234.sock")).unwrap());
+        match dispatch(&runner, &kill_req()).await {
+            Response::Ok { data } => assert_eq!(
+                data,
+                json!({"exit_code": null, "forced": false, "stale_removed": true}),
+                "a reaped stale entry is a 200 carrying stale_removed"
+            ),
+            Response::Err { code, message } => panic!("stale kill failed ({code}): {message}"),
+        }
+        assert!(!sdir.join("abcd1234").exists() && !sdir.join("abcd1234.sock").exists());
+
+        // Live: a holder that answers and whose pane is dead (exit 0): the
+        // reply is byte-identical to before, with NO stale_removed key.
+        let root = tempfile::tempdir().unwrap();
+        let runner = runner_with_tmux(
+            root.path(),
+            "case \"$*\" in\n\
+             *@kb_exit_steps*) echo '[]'; exit 0 ;;\n\
+             *'#{pane_dead}'*) printf '1 0\\n'; exit 0 ;;\n\
+             esac\n\
+             exit 0",
+        );
+        std::fs::create_dir_all(runner.sessions_dir()).unwrap();
+        match dispatch(&runner, &kill_req()).await {
+            Response::Ok { data } => assert_eq!(
+                data,
+                json!({"exit_code": 0, "forced": false}),
+                "the live reply carries no stale_removed"
+            ),
+            Response::Err { code, message } => panic!("live kill failed ({code}): {message}"),
+        }
+    }
+}

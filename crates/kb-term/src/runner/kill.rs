@@ -55,14 +55,16 @@ pub async fn kill_session<S: Supervisor>(
     // data: omp waits 300 ms between its `C-c`s.
     let steps = discovery::exit_steps(runner, id).await;
     let sock = runner.holder_socket(id);
-    // The holder must answer at all. A tmux that ANSWERS with an error
-    // (no server, refused connection) is a stale entry: its leftovers
-    // are reaped. A probe that fails to complete (spawn error, timeout)
-    // proves nothing about the holder, so nothing is removed.
+    // The holder must answer at all. A tmux that ANSWERS that no server
+    // is there (no server running, connection refused, socket file gone)
+    // marks a stale entry: its leftovers are reaped. Any other answer (an
+    // error we do not recognise) and a probe that fails to complete (spawn
+    // error, timeout) prove nothing about the holder, so nothing is
+    // removed and the failure surfaces.
     let probe = runner.tmux.run(&sock, &["list-sessions"], None).await;
     match probe {
         Ok(o) if o.ok => {}
-        Ok(_) => {
+        Ok(o) if is_no_server_answer(&o.stderr) => {
             return if reap_stale_entry(&runner.sessions_dir(), id)? {
                 Ok(KillOutcome {
                     exit_code: None,
@@ -72,6 +74,19 @@ pub async fn kill_session<S: Supervisor>(
             } else {
                 Err(RunnerError::NotFound(format!("no holder for {id}")))
             };
+        }
+        Ok(o) => {
+            let first: String = o
+                .stderr
+                .lines()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take(160)
+                .collect();
+            return Err(RunnerError::TmuxFailed(format!(
+                "the holder of {id} answered an unexpected error, nothing removed: {first}"
+            )));
         }
         Err(e) => {
             return if stale_leftovers_exist(&runner.sessions_dir(), id) {
@@ -157,6 +172,19 @@ pub async fn kill_session<S: Supervisor>(
         forced: forced_kill(pane_died, sigkill_ran),
         stale_removed: false,
     })
+}
+
+/// Whether a failed `tmux list-sessions` says "there is no server here":
+/// `no server running on <sock>`, or `error connecting to <sock>` ending in
+/// `(Connection refused)` or `(No such file or directory)` (a dead holder
+/// that left its socket inode, or one that took it along). Everything else
+/// (permission errors, a protocol mismatch, an empty message) is NOT a stale
+/// holder and must never trigger the reap.
+pub fn is_no_server_answer(stderr: &str) -> bool {
+    stderr.contains("no server running")
+        || (stderr.contains("error connecting to")
+            && (stderr.contains("(Connection refused)")
+                || stderr.contains("(No such file or directory)")))
 }
 
 fn stale_leftovers_exist(sessions_dir: &std::path::Path, id: &str) -> bool {
@@ -448,7 +476,7 @@ mod tests {
     #[tokio::test]
     async fn kill_refuses_an_invalid_id_and_a_symlinked_entry() {
         let root = tempfile::tempdir().unwrap();
-        let runner = scripted_runner(root.path(), "exit 1");
+        let runner = scripted_runner(root.path(), "echo 'no server running' >&2; exit 1");
         let (dir, _, _) = leftovers(&runner.cfg.run_dir, "abcd1234");
         assert!(matches!(
             kill_session(&runner, "../s/abcd1234", Some(1)).await,
@@ -479,6 +507,67 @@ mod tests {
             Err(RunnerError::TmuxFailed(_))
         ));
         assert!(sock.exists() && sdir.exists());
+    }
+
+    #[test]
+    fn only_a_no_server_answer_counts_as_a_stale_holder() {
+        for yes in [
+            "no server running on /run/kb-term/s/abcd1234.sock",
+            "error connecting to /run/kb-term/s/abcd1234.sock (Connection refused)",
+            "error connecting to /run/kb-term/s/abcd1234.sock (No such file or directory)\n",
+        ] {
+            assert!(is_no_server_answer(yes), "{yes:?}");
+        }
+        for no in [
+            "",
+            "error connecting to /x.sock (Permission denied)",
+            "protocol version mismatch (client 8, server 7)",
+            "lost server",
+            "server exited unexpectedly",
+        ] {
+            assert!(!is_no_server_answer(no), "{no:?}");
+        }
+    }
+
+    /// A tmux that answers non-ok with something that is NOT a no-server
+    /// shape (a permission error here) proves nothing about the holder:
+    /// the leftovers stay and the failure surfaces. Reaping on any non-ok
+    /// answer would delete a live session's files.
+    #[tokio::test]
+    async fn kill_keeps_the_files_when_tmux_answers_an_unrecognised_error() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = scripted_runner(
+            root.path(),
+            "echo 'error connecting to x (Permission denied)' >&2; exit 1",
+        );
+        let (_, sock, sdir) = leftovers(&runner.cfg.run_dir, "abcd1234");
+        let err = kill_session(&runner, "abcd1234", Some(1))
+            .await
+            .expect_err("an unrecognised error is a failure, not a stale entry");
+        assert!(
+            matches!(&err, RunnerError::TmuxFailed(m) if m.contains("Permission denied")),
+            "{err:?}"
+        );
+        assert!(sock.exists() && sdir.exists(), "nothing was removed");
+        assert!(runner.supervisor.calls.lock().unwrap().is_empty());
+    }
+
+    /// The timeout branch of the probe: a tmux that hangs (the 5 s default
+    /// timeout fires on the paused clock, so the test spends no real time)
+    /// removes nothing either.
+    #[tokio::test(start_paused = true)]
+    async fn kill_keeps_the_files_when_the_probe_times_out() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = scripted_runner(root.path(), "exec sleep 30");
+        let (_, sock, sdir) = leftovers(&runner.cfg.run_dir, "abcd1234");
+        let err = kill_session(&runner, "abcd1234", Some(1))
+            .await
+            .expect_err("a hung probe is a failure");
+        assert!(
+            matches!(&err, RunnerError::TmuxFailed(m) if m.contains("timed out")),
+            "{err:?}"
+        );
+        assert!(sock.exists() && sdir.exists(), "a timeout removes nothing");
     }
 
     #[test]
