@@ -1436,9 +1436,11 @@ whose stored `sessions.harness` is `kimi` (and slate posts whose provenance
 names it): no migration rewrites them, every read path lists and renders them
 verbatim (fallback glyph, an honest not-resumable resume sentence), and a NEW
 beat, `?harness=` filter, slate post or terminal launch naming `kimi` is
-refused like any unknown harness. A legacy capture re-extracted from its
-transcript falls back to `HARNESS_DEFAULT` (the ladder's rule for a value
-outside the set).
+refused like any unknown harness. A capture whose adapter-meta or
+`kb-harness` meta names `kimi` (a legacy capture re-extracted) stores it
+VERBATIM: the ladder's rungs 1 and 2 never check `HARNESSES`, and
+`HARNESS_DEFAULT` applies only when the value is absent (pinned by
+`adapter_meta_harness_kimi_is_stored_verbatim`).
 `kb-capture-grok.sh` is the newest and most elaborate: PREFERS the same
 Rust shared writer (`kb sessions capture --transcript … --session-id …`)
 every adapter prefers (atomic writes, one-file-per-sid reuse, git-commit

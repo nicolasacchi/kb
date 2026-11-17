@@ -3986,6 +3986,17 @@ mod tests {
     }
 
     #[test]
+    fn adapter_meta_harness_kimi_is_stored_verbatim() {
+        // NOKIMI r1: a removed/out-of-set harness in adapter-meta is kept
+        // as written (legacy rows stay readable); the HARNESS_DEFAULT
+        // fallback fires only when the value is absent.
+        let jsonl = r#"{"sessionId":"S1","type":"adapter-meta","adapter":"kb-capture-kimi/1","harness":"kimi"}"#;
+        let act = parse_session_activity(jsonl);
+        assert_eq!(act.harness.as_deref(), Some("kimi"));
+        assert_ne!(act.harness.as_deref(), Some(HARNESS_DEFAULT));
+    }
+
+    #[test]
     fn parse_extracts_grok_job_child_side_from_adapter_meta_job_ulid() {
         // W5/R8/ADD-2 — the CHILD side of the join: a grok session capture's
         // OWN adapter-meta line (as `kb-capture-grok.sh` stamps it) carries
