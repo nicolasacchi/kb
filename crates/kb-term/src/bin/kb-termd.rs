@@ -18,8 +18,11 @@ fn init_tracing() {
 
 #[tokio::main]
 async fn main() {
+    // Stamp from compile-time env (the lib must not link kb-buildstamp).
+    let version = kb_term::version::stamped_version(option_env!("KB_BUILD_VERSION"));
+    kb_term::version::set_own_version(version);
+    let cfg = kb_term::runner::RunnerConfig::from_cli(version);
     init_tracing();
-    let cfg = kb_term::runner::RunnerConfig::from_cli();
     if let Err(e) = run(cfg).await {
         // Error codes are part of the interface (e.g. `tmux-version`).
         eprintln!("kb-termd: {e}");

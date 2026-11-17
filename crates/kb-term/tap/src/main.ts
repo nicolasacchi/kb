@@ -12,7 +12,7 @@
 // TapServer's twin feed, runs the Reseeder against the same twin, then
 // resumes (viewers.ts setTwinPaused — audit F4).
 //
-// `--version` prints `kb-tap <pkg version>`; `--pins` prints the tap's
+// `--version` prints `kb-tap <build stamp>`; `--pins` prints the tap's
 // pinned @xterm dependency set as a JSON map for kb-term doctor's probe.
 // Without --session (and without an info flag) it prints the placeholder
 // line (the term-tap lane's compile smoke expects exactly that output from
@@ -33,9 +33,28 @@ export const TMUX_SESSION_NAME = 'kb';
 
 export const HARNESSES = ['claude', 'codex', 'opencode', 'grok', 'kimi', 'omp'] as const;
 
-/** tap/package.json "version"/"dependencies" pins, mirrored as constants so
- * the compiled binary needs no package.json at runtime. */
-export const TAP_VERSION = '0.0.0';
+/** Injected at compile time by `bun build --compile --define
+ * KB_TAP_VERSION='"<version>"'` (release: the tag without its `v`; main
+ * builds: `main-<sha12>`). Absent under `bun test` and an unstamped build. */
+declare const KB_TAP_VERSION: string | undefined;
+
+/** The version a tap reports for a raw stamp: whitespace dropped, one leading
+ * `v` stripped when a digit follows, and an empty or missing stamp is the dev
+ * marker (never a bare `0.0.0` that reads like a release). Mirrors
+ * kb_term::version::normalize_stamp_version in Rust. */
+export function stampedTapVersion(raw: string | undefined): string {
+  const t = (raw ?? '').trim();
+  const v = /^v[0-9]/.test(t) ? t.slice(1) : t;
+  return v === '' ? UNSTAMPED_TAP_VERSION : v;
+}
+
+export const UNSTAMPED_TAP_VERSION = '0.0.0-dev';
+
+/** What `--version` prints after `kb-tap `. package.json's "version" is not
+ * the source (it stays 0.0.0 and is never hand-edited per release). */
+export const TAP_VERSION = stampedTapVersion(
+  typeof KB_TAP_VERSION === 'string' ? KB_TAP_VERSION : undefined,
+);
 
 /** The pinned xterm set the tap is built against (tap/package.json
  * `dependencies`). kb-term doctor's PINS expects exactly this set; the

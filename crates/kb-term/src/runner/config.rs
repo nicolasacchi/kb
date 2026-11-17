@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, ValueEnum};
+use clap::{CommandFactory, FromArgMatches, Parser, ValueEnum};
 
 /// How holders are started and stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -157,8 +157,12 @@ fn default_conf() -> String {
 
 impl RunnerConfig {
     /// Parse the command line (called by the kb-termd binary).
-    pub fn from_cli() -> Self {
-        let cli = Cli::parse();
+    ///
+    /// `version` is what `--version` prints (the build's stamp, never the
+    /// workspace's pinned `0.0.0`).
+    pub fn from_cli(version: &'static str) -> Self {
+        let matches = Cli::command().version(version).get_matches();
+        let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
         Self::from_cli_parts(cli)
     }
 

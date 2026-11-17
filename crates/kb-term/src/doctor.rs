@@ -443,6 +443,24 @@ pub fn decide_tap_binary(found: bool, version_line: Option<&str>) -> Check {
     }
 }
 
+/// A tap whose version differs from this kb-term's is a mixed install (an
+/// archive half-upgraded by hand): WARN, naming both. SKIP when the tap's
+/// version is unknown (`tap_binary` already says why).
+pub fn decide_tap_version(tap_line: Option<&str>, own: &str) -> Check {
+    let Some(tap) = tap_line.and_then(crate::version::tap_line_version) else {
+        return Check::skip("tap_version", "the tap reported no version to compare");
+    };
+    if tap == own {
+        Check::pass("tap_version", format!("kb-tap and kb-term are both {own}"))
+    } else {
+        Check::warn(
+            "tap_version",
+            format!("kb-tap is {tap} but kb-term is {own}: a mixed install"),
+        )
+        .with_fix("reinstall the kb-term archive so kb-term, kb-termd and kb-tap match")
+    }
+}
+
 /// `kb-tap --pins` JSON stdout when it exits zero.
 pub fn probe_tap_pins(path: &Path) -> Option<String> {
     if !is_executable(path) {
@@ -1219,6 +1237,10 @@ pub fn run_checks() -> Vec<Check> {
         None
     };
     checks.push(decide_tap_binary(tap_found, tver.as_deref()));
+    checks.push(decide_tap_version(
+        tver.as_deref(),
+        crate::version::own_version(),
+    ));
     let pins = if tap_found {
         probe_tap_pins(&tap)
     } else {
