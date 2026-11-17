@@ -137,6 +137,8 @@ describe("slateGlyphs — the author chip", () => {
     expect(
       authorChip({ origin: "agent", harness: "claude", session_short: "4b7e" }),
     ).toBe("claude/4b7e");
+    // Legacy provenance: kimi support was removed, but an old slate post
+    // that names it still renders its label verbatim.
     expect(authorChip({ origin: "agent", harness: "kimi", session_short: "" })).toBe("kimi");
   });
 });

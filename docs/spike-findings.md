@@ -1946,3 +1946,18 @@ backstop); Claude's classic-renderer reprint behaviour; sustained multi-viewer
 grid contention; the T4 re-check on the operator's machine; drawing IIP and SIXEL
 pictures; a sub-agent check of the terminal binding for harnesses
 other than omp.
+
+## kimi support removed (2026-11-17, NOKIMI)
+
+Kimi Code is no longer a supported harness. Gone: the capture, distill-nudge
+and wake hooks and the hooks installer, the live-session adapter behind
+`kb sessions status --local`, the kb-term launch profile and doctor check, the
+`HARNESSES` closed-set member (six to five) and every SPA facet, glyph and
+menu entry. Old data stays readable: a stored `kimi` session row and a slate
+post whose provenance names kimi are listed and rendered verbatim (fallback
+glyph, an honest not-resumable resume sentence), and no migration rewrites
+them. New kimi input (a beat, a `?harness=` filter, a slate post, a terminal
+launch) is refused like any unknown harness. kb-code keeps `kimi` in its
+agent-author name list only so comments it already authored still read as
+agent. The `KB_HOOK_FMT=kimi` bare-stdout recall format became the
+harness-neutral `KB_HOOK_FMT=plain`, used by the shell tests.

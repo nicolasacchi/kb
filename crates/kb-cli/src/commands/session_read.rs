@@ -800,7 +800,6 @@ fn harness_glyph(harness: &str) -> &'static str {
         "codex" => "▲",
         "opencode" => "■",
         "grok" => "✶",
-        "kimi" => "☾",
         _ => "○",
     }
 }

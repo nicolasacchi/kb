@@ -13,7 +13,7 @@
 //
 // The injected digest gets NONE of this (an emoji costs 2–3 tokens on
 // OpenAI encodings and more on Claude's, a kind word costs one, and no
-// legend is live for Codex/Kimi/OpenCode/Grok). This file exists so the
+// legend is live for Codex/OpenCode/Grok). This file exists so the
 // SPA — the one presenter with a screen — can render what the digest
 // refuses, off the SAME projection fields.
 

@@ -45,13 +45,6 @@ static CODEX_EXIT: &[ExitStep] = &[
     ExitStep::Keys(&["C-c"]),
 ];
 
-/// kimi (T3 flags). UNVERIFIED: cgroup kill is the backstop.
-static KIMI_EXIT: &[ExitStep] = &[
-    ExitStep::Keys(&["C-d"]),
-    ExitStep::WaitMs(300),
-    ExitStep::Keys(&["C-d"]),
-];
-
 /// grok (1.0.46/1.0.77, T3 flags; spike reached only sign-in).
 /// EXPERIMENTAL. UNVERIFIED: cgroup kill is the backstop.
 static GROK_EXIT: &[ExitStep] = &[
@@ -86,12 +79,6 @@ pub static CODEX_ROW: Row = Row {
     experimental: false,
     exit_steps: CODEX_EXIT,
 };
-pub static KIMI_ROW: Row = Row {
-    bin: "kimi",
-    fresh_flags: &[],
-    experimental: false,
-    exit_steps: KIMI_EXIT,
-};
 pub static GROK_ROW: Row = Row {
     bin: "grok",
     fresh_flags: &["--minimal", "--no-alt-screen"],
@@ -111,7 +98,6 @@ pub fn row(harness: &str) -> Option<&'static Row> {
         "omp" => Some(&OMP_ROW),
         "claude" => Some(&CLAUDE_ROW),
         "codex" => Some(&CODEX_ROW),
-        "kimi" => Some(&KIMI_ROW),
         "grok" => Some(&GROK_ROW),
         "opencode" => Some(&OPENCODE_ROW),
         _ => None,
@@ -147,9 +133,6 @@ pub fn resume_tail(harness: &str, sid: &str, cwd: Option<&str>) -> Result<Vec<St
                 argv.push(c.to_string());
             }
             return Ok(argv);
-        }
-        "kimi" => {
-            argv.push("-S".to_string());
         }
         "opencode" => {
             argv.push("--session".to_string());

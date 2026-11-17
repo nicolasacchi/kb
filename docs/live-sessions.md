@@ -63,7 +63,6 @@ column above you're reading:**
 |---|---|---|
 | Claude Code | Full lifecycle: `SessionStart`/`UserPromptSubmit`/`Stop`/`SessionEnd`/`Notification` + a throttled `PostToolUse` heartbeat + a deduped `PreToolUse` tool-start beat. | Reads `~/.claude/projects` directly. |
 | Codex | `UserPromptSubmit`/`Stop` only — no verified `SessionEnd`/`Notification`-equivalent hook exists yet, so "finished" stays ambiguous for codex (it exits after `exec`, lingers interactively). | Reads `~/.codex/sessions`. |
-| Kimi Code | `UserPromptSubmit`/`Stop`/`SessionEnd`. | Reads `~/.kimi-code` (or wherever `KIMI_CODE_HOME` points). |
 | opencode | **Not wired until you apply it** — see below; the plugin file lives outside this repo. | Reads `~/.local/share/opencode/opencode.db` (sqlite; opencode has no durable busy/idle state at all, so this lane is `Presumed`-only by construction — "who spoke last", never a real live signal). |
 | Grok | **None.** `kb-beat.sh`'s own dispatch calls this out: "best-effort — no live-verified push-hook payload shape exists yet; dormant". | Reads `~/.grok/sessions/<url-encoded-cwd>/<session_id>/events.jsonl` directly — this is the ONLY way to see a live grok session; deliberately does not read `active_sessions.json` (verified empty for headless use) or the grokclaude job tier (proven stale `"running"` status). |
 
@@ -153,10 +152,10 @@ Flags that actually exist (`kb sessions status --help`):
 | Flag | Meaning |
 |---|---|
 | `--local` | Direct-disk snapshot, zero daemon, fans out across every harness (`kb_core::sessions::live_adapters::scan_all`). Omit for the daemon-backed default. |
-| `--root DIR` | Overrides **only** the Claude Code transcripts root (`[sessions] live_transcripts_dir` from `kb.toml`, else `~/.claude/projects`). The other four harnesses always use their real default locations — there are no per-harness root flags yet. |
+| `--root DIR` | Overrides **only** the Claude Code transcripts root (`[sessions] live_transcripts_dir` from `kb.toml`, else `~/.claude/projects`). The other harnesses always use their real default locations — there are no per-harness root flags yet. |
 | `--state S,…` | csv over `working,stalled,waiting,cold,finished,presumed_ended`. |
 | `--project P` | Restrict to one project (derived `project` field). |
-| `--harness H` | One value from `claude,codex,opencode,grok,kimi` (rejected otherwise). |
+| `--harness H` | One value from `claude,codex,opencode,grok,omp` (rejected otherwise). Kimi support was removed: a stored legacy `kimi` row still lists, but it is no longer a filter value. |
 | `--limit N` | Caps rows **per lane**, so a small limit still shows a balanced snapshot rather than letting a busy IN PROGRESS lane crowd WAITING out. |
 | `--json` | Machine surface — the human table and `--json` are built from the exact same filtered/sorted rows. |
 | `--no-color` | Plain output. |
@@ -212,7 +211,6 @@ response cannot contain an absolute path and the caller supplies no roots.
 |---|---|---|
 | Claude Code | yes | `Edit`/`Write`/`MultiEdit`/`NotebookEdit`, through `kb-beat-throttle.sh` on `PostToolUse`. |
 | codex | yes | `apply_patch` only (the patch-in-`command` shape is from the codex docs, not observed live); the file names come from the patch headers (`PostToolUse`, `kb-beat-throttle.sh codex`). The patch text itself is never sent. |
-| Kimi | yes | `Write`/`Edit`, `tool_input.path` (`PostToolUse`; the installer registers it). |
 | omp | yes, in part | `edit`/`write` with a `path` input (sent from `tool_call`, which fires before the tool runs: a path beat is pre-execution intent and can name an edit that is then refused or fails; the omp shape is from `types.ts`, not observed live). omp's hashline and apply_patch edit modes keep their paths in a text input, which is not read: those calls report no file. |
 | opencode | only with a plugin edit | No in-repo opencode plugin; the README snippet forwards `edit`/`write`, and its `filePath` key is unverified against a live opencode. |
 | grok | no | Its edit tool's input keys are not documented, so none are guessed. |
@@ -271,14 +269,12 @@ path), and the same one every other `kb` CLI daemon call reads.
 
 ### Registering the beat for harnesses whose config lives outside this repo
 
-Codex and Kimi Code registration are one-time edits to files outside this
-repo (`~/.codex/hooks.json`, `${KIMI_CODE_HOME:-~/.kimi-code}/config.toml`
-— Kimi's installer, `install-kimi-hooks.sh`, wires it automatically). The
+Codex registration is a one-time edit to a file outside this
+repo (`~/.codex/hooks.json`). The
 exact snippets — including the caveat that codex has no verified
 `SessionEnd` yet, so `start`/`end` stay unwired for it (its `PermissionRequest`
 and `PostToolUse` entries carry blocked and file presence) — live
 in [`plugins/kb-memory/hooks/README.md`](../plugins/kb-memory/hooks/README.md#codex-cli-registration)
-and its ["Kimi Code registration"](../plugins/kb-memory/hooks/README.md#kimi-code-registration)
 section; don't duplicate them here, they'll drift.
 
 opencode is the one that needs **manual** action even though the plugin
@@ -348,7 +344,6 @@ gate and `KB_BEAT_HEARTBEAT=0` (it is a lifecycle beat), once per block.
 | omp | Explicit `tool_approval_requested` / `tool_approval_resolved` events, unchanged. |
 | opencode | Only if its README plugin snippet is applied. |
 | codex | `PermissionRequest` hook raises it; cleared by the inferred `unblocked` (the next `PostToolUse`), a prompt, or turn end. Needs the hook entries in `~/.codex/hooks.json` (README). |
-| Kimi | `PermissionRequest` raises it, `PermissionResult` (granted or denied; from the bundled source, not observed live) clears it. The reason is `permission request: <tool>` only; the action text is never sent. The installer registers both. |
 | Grok | A `permission_prompt` Notification raises it; cleared like Claude. Needs a hook file the operator adds (README); grok has no grant event. |
 
 **Honest gaps.**
@@ -360,7 +355,7 @@ gate and `KB_BEAT_HEARTBEAT=0` (it is a lifecycle beat), once per block.
   agent, even if another tool is still waiting on its prompt.
 - A denied prompt clears at your next prompt or at turn end.
 - The "honest gaps" above describe the harnesses that infer the unblock
-  (Claude Code, codex, Grok). Kimi, omp and opencode report the answer
+  (Claude Code, codex, Grok). omp and opencode report the answer
   explicitly, so a denied prompt clears at once there. Files changed through a
   shell command are invisible on every harness.
 - A prompt you answer within about 6 seconds never notifies, so it never
@@ -548,4 +543,4 @@ case the design set out to satisfy.
   full field reference and SSRF policy behind Path A.
 - [`plugins/kb-memory/hooks/README.md`](../plugins/kb-memory/hooks/README.md) —
   every hook's full behavior, including `kb-beat.sh`/`kb-beat-throttle.sh`'s
-  own table rows and the codex/Kimi/opencode registration snippets.
+  own table rows and the codex/opencode registration snippets.

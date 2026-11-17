@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # kb-capture-omp — capture adapter: Oh My Pi (omp) session JSONL → kb
 # session-capture HTML (Claude-Code-shaped JSONL inside a <pre>).
-# Sibling of kb-capture-codex.sh / kb-capture-kimi.sh / kb-capture-grok.sh.
+# Sibling of kb-capture-codex.sh / kb-capture-grok.sh.
 #
 # omp sessions live at
 #   ~/.omp/agent/sessions/<encoded-cwd>/<timestamp>_<sessionId>.jsonl

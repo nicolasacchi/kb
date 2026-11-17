@@ -169,14 +169,6 @@ fn codex_and_opencode_adapters_scrub_secrets_and_fail_closed() {
     run_with_real_kb("test-capture-scrub.sh");
 }
 
-/// v0.45 N4 - the kimi adapter matrix (stand-in `kb`, fixtures) was not run by
-/// any CI lane before; it needs `jq`, which CI runners ship. omp's matrix runs
-/// in `omp_sidecar_names_disambiguate_only_on_collision_and_spool_with_the_item`.
-#[test]
-fn kimi_adapter_shell_tests() {
-    run("test-capture-kimi.sh");
-}
-
 /// v0.44 F8 — the once-a-day CLI/hook skew notice.
 #[test]
 fn wake_hook_names_cli_skew_once_a_day() {
@@ -189,21 +181,13 @@ fn wake_hook_appends_the_chores_line() {
     run("test-wake-chores.sh");
 }
 
-/// v0.45 N5 - the kimi wake hook carries the same chores line on its first
-/// prompt.
-#[test]
-fn wake_kimi_hook_appends_the_chores_line() {
-    run("test-wake-kimi-chores.sh");
-}
-
-/// The four distill nudges (which since SLATE2 post nothing to the slate);
+/// The three distill nudges (which since SLATE2 post nothing to the slate);
 /// these run each end to end.
 #[test]
 fn distill_nudge_hook_shell_tests() {
     for s in [
         "test-distill-nudge.sh",
         "test-distill-nudge-codex.sh",
-        "test-distill-nudge-kimi.sh",
         "test-distill-nudge-omp.sh",
     ] {
         run(s);
@@ -257,7 +241,7 @@ fn run_with_real_kb_env(script: &str, env: &[(&str, &str)]) {
     run_hook(script, true, env);
 }
 
-/// v0.45 N4 - codex/opencode/kimi/omp/grok park their translated transcript
+/// v0.45 N4 - codex/opencode/omp/grok park their translated transcript
 /// in the private spool when `kb sessions capture` fails or `kb` is missing
 /// (never raw HTML in the corpus); the replay lands it scrubbed with the
 /// harness intact and the session's true start stamp in the filename.

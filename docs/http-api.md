@@ -829,7 +829,7 @@ GET  /api/sessions[?cursor=<unix>&limit=N   Cross-kb list of captured Claude
                                             rows, which always count as
                                             substantive). `harness=` (W5/I)
                                             is a csv over the closed set
-                                            `claude|codex|opencode|grok|kimi`
+                                            `claude|codex|opencode|grok|omp`
                                             (`kb_core::sessions::HARNESSES`),
                                             closed-set validated (an unknown
                                             token is a 400, OK1); absent/empty
