@@ -203,20 +203,41 @@ fn collapse_ws(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Shortest prefix (chars) that still counts as "the same prompt": a clipped
+/// copy of a long prompt is far longer than this, a 3-char turn is not.
+const DUP_PREFIX_MIN_CHARS: usize = 16;
+
+/// Whether the (whitespace-collapsed) newest human turn `turn` is the
+/// (collapsed) `prompt`: equal, or one a prefix of the other. The prefix arm
+/// exists because [`recent_turns_with`] clips a human turn to `item_chars`,
+/// so a long prompt never equals its own transcript copy; it is guarded by a
+/// minimum length so a short turn is never dropped as a mere "prefix".
+fn is_same_prompt(turn: &str, prompt: &str) -> bool {
+    if turn == prompt {
+        return true;
+    }
+    let (short, long) = if turn.len() <= prompt.len() {
+        (turn, prompt)
+    } else {
+        (prompt, turn)
+    };
+    short.chars().count() >= DUP_PREFIX_MIN_CHARS && long.starts_with(short)
+}
+
 /// SG-Q2 — compose a recall query from the CURRENT prompt plus the recent
 /// transcript turns (oldest first, as [`recent_turns_with`] returns them).
 ///
 /// The prompt comes FIRST (whitespace-collapsed, cut only if it alone exceeds
 /// `total_cap`); then prior turns newest first, one per line, each collapsed
 /// and clipped to what is left of the cap (char-safe). If the newest turn is
-/// a human turn with the same text as the prompt (the transcript did not
-/// lag) it is dropped so the prompt is not duplicated. No turns left =>
+/// a human turn with the same text as the prompt, or a clipped prefix of it
+/// (the transcript did not lag) it is dropped so the prompt is not duplicated. No turns left =>
 /// the prompt UNCHANGED (byte-identical, not even collapsed). Pure.
 pub fn compose_recall_query(prompt: &str, turns: &[RecentTurn], total_cap: usize) -> String {
     let p = collapse_ws(prompt);
     let mut prior: Vec<&RecentTurn> = turns.iter().collect();
     if let Some(last) = prior.last() {
-        if last.role == Role::Human && collapse_ws(&last.text) == p {
+        if last.role == Role::Human && is_same_prompt(&collapse_ws(&last.text), &p) {
             prior.pop();
         }
     }
@@ -514,6 +535,38 @@ mod tests {
         assert_eq!(
             compose_recall_query("now do X", &a, 1200),
             "now do X\nnow do X"
+        );
+    }
+
+    #[test]
+    fn compose_drops_clipped_prefix_of_a_long_prompt() {
+        // invented text; > the 600-char per-item clip
+        let long = "alpha beta gamma delta ".repeat(60);
+        let long = long.trim();
+        assert!(long.chars().count() > RECENT_TURNS_DEFAULT_ITEM_CHARS);
+        let clipped: String = long.chars().take(RECENT_TURNS_DEFAULT_ITEM_CHARS).collect();
+        let turns = [
+            rt(Role::Assistant, "earlier answer"),
+            rt(Role::Human, &clipped),
+        ];
+        let q = compose_recall_query(long, &turns, 4000);
+        assert_eq!(q, format!("{}\nearlier answer", collapse_ws(long)));
+        assert_eq!(q.matches("alpha beta").count(), 60, "prompt appears once");
+        // the reverse (turn longer than the prompt, prompt a prefix) also drops
+        let turns = [rt(Role::Assistant, "earlier answer"), rt(Role::Human, long)];
+        let q = compose_recall_query(&clipped, &turns, 4000);
+        assert_eq!(q.matches("earlier answer").count(), 1);
+        assert!(q.starts_with(&collapse_ws(&clipped)));
+        assert!(!q.contains(&format!("\n{}", &collapse_ws(long)[..40])));
+    }
+
+    #[test]
+    fn compose_keeps_a_short_prefix_turn() {
+        // 3 chars is a prefix of the prompt but must not be dropped
+        let turns = [rt(Role::Assistant, "ok"), rt(Role::Human, "now")];
+        assert_eq!(
+            compose_recall_query("now do the whole thing", &turns, 1200),
+            "now do the whole thing\nnow\nok"
         );
     }
 

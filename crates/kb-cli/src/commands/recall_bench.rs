@@ -5,14 +5,30 @@
 //! validation: the fixture is labelled by the operator, the corpus is a frozen
 //! copy served by a throwaway daemon, and the report carries aggregates only.
 //!
-//! Data path: for each fixture row the bench calls `GET /api/memory/recall`
-//! on the daemon named by `--daemon` with `no_floor=true` and the route's hard
-//! maximum `limit` ([`POOL_CAP`] = 50), once with the bare prompt and once
-//! with the SG-Q2 composed query (`compose_recall_query`). The returned hits
-//! plus their score decomposition are the POOL. Every arm is then computed
-//! here, from the pool, with a pinned clock:
+//! Data path: for each fixture row (and each query form: the bare prompt and
+//! the SG-Q2 composed query, `compose_recall_query`) the bench sends TWO
+//! requests to `GET /api/memory/recall` on the daemon named by `--daemon`:
 //!
-//! - `shipped`: the route's own order.
+//! - the SHIPPED request: what the hook's `kb recall` sends, i.e. `--limit`
+//!   = `--inject-k` (5), the salience floor ON (no `no_floor`), and the
+//!   production scope params. The server's candidate depth
+//!   (`per_corpus = (limit*4).clamp(20, MAX)`) and the min-max relevance
+//!   normalisation over the survivor set both depend on `limit` and the
+//!   floor, so the deployed order can only be measured by the deployed
+//!   request. The scope params come from `confirmed_recall_wire`, the same
+//!   function `kb recall` runs for `--scope auto` (`--project <slug>`, or a
+//!   fixture row's own `project`); with neither, the CLI's no-repo default.
+//! - the POOL request: `no_floor=true` and the route's hard maximum `limit`
+//!   ([`POOL_CAP`] = 50), the same scope params. Its hits plus score
+//!   decomposition feed the `content` and `ce` arms (and the pool-recall
+//!   ceiling), with a pinned clock.
+//!
+//! Arms:
+//!
+//! - `shipped`: the route's own order for the SHIPPED request.
+//! - `shipped-pool`: the route's order over the 50-pool. NOT the deployed
+//!   policy (different candidate depth, floor off, different relevance
+//!   normalisation); kept only to show how far the pool drifts from it.
 //! - `content`: retrieval-rank order only (no salience/decay).
 //! - `ce`: cross-encoder logit as the base, two bounded multipliers
 //!   (salience, decay), and a logit floor. Needs the `kb-embedder` sidecar
@@ -24,9 +40,12 @@
 //! no per-arm raw scores (no cosine, no BM25 rank), and this phase must not
 //! change the route.
 //!
-//! Report hygiene: the report writer refuses to emit any string that
-//! originates in the fixture (query, context) or the pool (memory title,
-//! body); see [`check_no_leak`].
+//! Report hygiene: the report types are aggregates by construction. They
+//! hold no free-text field sourced from fixture rows or the pool: strata are
+//! keyed by `class=`/`lang=` only and nothing is printed per row (no row id,
+//! query, memory id or title). As a sanity net the writer also runs
+//! [`check_no_leak`], a verbatim-run check over prompts, context turns,
+//! memory titles/bodies and memory ids. It is not a semantic scrubber.
 
 use crate::http;
 use anyhow::{anyhow, bail, Context, Result};
@@ -106,6 +125,10 @@ pub struct FixtureRow {
     pub class: Class,
     pub language: String,
     pub split: Split,
+    /// Repo slug (basename) this row's prompt was typed in. Optional; falls
+    /// back to `--project`. Drives the same auto-scope the CLI derives.
+    #[serde(default)]
+    pub project: Option<String>,
 }
 
 impl FixtureRow {
@@ -169,6 +192,11 @@ pub fn load_fixture(text: &str) -> Result<Vec<FixtureRow>> {
                  ([a-z0-9-]), e.g. \"en\" or \"it\""
             );
         }
+        if let Some(p) = &row.project {
+            if p.trim().is_empty() || p.chars().any(|c| c.is_whitespace() || c == ',') {
+                bail!("fixture line {ln}: `project` must be a repo slug (no whitespace or commas)");
+            }
+        }
         for (k, g) in &row.labels {
             if k.trim().is_empty() || k.chars().any(char::is_whitespace) {
                 bail!("fixture line {ln}: label key {k:?} must be a non-empty memory id");
@@ -230,9 +258,14 @@ pub struct PoolHit {
 
 #[derive(Debug, Clone, Default)]
 pub struct RowPool {
+    /// The 50-pool (`no_floor`, limit 50): feeds `content`, `ce`, `shipped-pool`.
     pub plain: Vec<PoolHit>,
     /// `None` = the row has no usable context; the plain pool is reused.
     pub ctx: Option<Vec<PoolHit>>,
+    /// The hits of the SHIPPED request (production limit, floor on).
+    pub shipped_plain: Vec<PoolHit>,
+    /// `None` = no usable context; `shipped_plain` is reused.
+    pub shipped_ctx: Option<Vec<PoolHit>>,
 }
 
 impl RowPool {
@@ -240,6 +273,12 @@ impl RowPool {
         match f {
             Form::Plain => &self.plain,
             Form::Context => self.ctx.as_deref().unwrap_or(&self.plain),
+        }
+    }
+    fn shipped_form(&self, f: Form) -> &[PoolHit] {
+        match f {
+            Form::Plain => &self.shipped_plain,
+            Form::Context => self.shipped_ctx.as_deref().unwrap_or(&self.shipped_plain),
         }
     }
 }
@@ -296,13 +335,75 @@ fn parse_hits(v: &serde_json::Value, fetched_unix: i64) -> Vec<PoolHit> {
         .collect()
 }
 
-async fn fetch_pool(client: &reqwest::Client, base: &str, q: &str) -> Result<Vec<PoolHit>> {
-    let req = client.get(format!("{base}/api/memory/recall")).query(&[
-        ("q", q),
-        ("scope", "all"),
-        ("limit", &POOL_CAP.to_string()),
-        ("no_floor", "true"),
-    ]);
+/// The scope params of one recall request, as `kb recall --scope auto` would
+/// send them for a repo slug.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Wire {
+    pub scope: String,
+    pub project: Option<String>,
+    pub visible_to: Option<String>,
+}
+
+impl Wire {
+    fn describe(&self) -> String {
+        format!(
+            "scope={} project={} visible_to={}",
+            self.scope,
+            self.project.as_deref().unwrap_or("-"),
+            self.visible_to.as_deref().unwrap_or("-")
+        )
+    }
+}
+
+/// Query params of one `GET /api/memory/recall` (no session / dedup: the
+/// bench is not a session).
+pub fn recall_params(
+    q: &str,
+    wire: &Wire,
+    limit: usize,
+    no_floor: bool,
+) -> Vec<(&'static str, String)> {
+    let mut v = vec![
+        ("q", q.to_string()),
+        ("scope", wire.scope.clone()),
+        ("limit", limit.to_string()),
+    ];
+    if let Some(p) = &wire.project {
+        v.push(("project", p.clone()));
+    }
+    if no_floor {
+        v.push(("no_floor", "true".to_string()));
+    }
+    if let Some(vt) = &wire.visible_to {
+        v.push(("visible_to", vt.clone()));
+    }
+    v
+}
+
+/// Header line naming a request's parameters (never the query text).
+pub fn describe_request(wire: &Wire, limit: usize, no_floor: bool) -> String {
+    format!(
+        "limit={limit} floor={} {}",
+        if no_floor {
+            "off (no_floor=true)"
+        } else {
+            "on"
+        },
+        wire.describe()
+    )
+}
+
+async fn fetch_hits(
+    client: &reqwest::Client,
+    base: &str,
+    q: &str,
+    wire: &Wire,
+    limit: usize,
+    no_floor: bool,
+) -> Result<Vec<PoolHit>> {
+    let req = client
+        .get(format!("{base}/api/memory/recall"))
+        .query(&recall_params(q, wire, limit, no_floor));
     let v = http::send_json(req, "GET /api/memory/recall").await?;
     Ok(parse_hits(&v, chrono::Utc::now().timestamp()))
 }
@@ -312,6 +413,7 @@ async fn fetch_pool(client: &reqwest::Client, base: &str, q: &str) -> Result<Vec
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Arm {
     Shipped,
+    ShippedPool,
     Content,
     Ce,
 }
@@ -320,6 +422,7 @@ impl Arm {
     fn as_str(self) -> &'static str {
         match self {
             Arm::Shipped => "shipped",
+            Arm::ShippedPool => "shipped-pool",
             Arm::Content => "content",
             Arm::Ce => "ce",
         }
@@ -364,7 +467,7 @@ pub fn arm_order(
     clock_unix: i64,
 ) -> Vec<usize> {
     match arm {
-        Arm::Shipped => (0..pool.len()).collect(),
+        Arm::Shipped | Arm::ShippedPool => (0..pool.len()).collect(),
         Arm::Content => {
             let mut idx: Vec<usize> = (0..pool.len()).collect();
             idx.sort_by_key(|&i| pool[i].rank);
@@ -582,6 +685,10 @@ pub struct Report {
     pub clock_unix: i64,
     pub pool_cap: usize,
     pub inject_k: usize,
+    /// Parameters of the SHIPPED request, one entry per distinct scope.
+    pub shipped_requests: Vec<String>,
+    /// Parameters of the POOL request, one entry per distinct scope.
+    pub pool_requests: Vec<String>,
     pub reranker_model: String,
     pub ce_params: CeParams,
     pub ce_status: String,
@@ -623,10 +730,17 @@ fn outcomes_for(inp: &Inputs, arm: Arm, form: Form, ce: &CeParams) -> Vec<RowOut
         .map(|(i, row)| {
             let pool = inp.pools[i].form(form);
             let logits = inp.logits.map(|l| l[i].form(form));
-            let order = arm_order(arm, pool, logits, ce, inp.clock_unix);
+            // `shipped` reads its OWN request's hits; every other arm reads
+            // the 50-pool.
+            let src = if arm == Arm::Shipped {
+                inp.pools[i].shipped_form(form)
+            } else {
+                pool
+            };
+            let order = arm_order(arm, src, logits, ce, inp.clock_unix);
             let grades: Vec<u8> = order
                 .iter()
-                .map(|&j| row.grade_of(&pool[j].kb, &pool[j].id))
+                .map(|&j| row.grade_of(&src[j].kb, &src[j].id))
                 .collect();
             let pool_g2 = pool
                 .iter()
@@ -647,7 +761,7 @@ pub fn compute_forms(
     for form in [Form::Plain, Form::Context] {
         let shipped = outcomes_for(inp, Arm::Shipped, form, &inp.ce);
         let mut arms = BTreeMap::new();
-        let mut arm_list = vec![Arm::Shipped, Arm::Content];
+        let mut arm_list = vec![Arm::Shipped, Arm::ShippedPool, Arm::Content];
         if inp.logits.is_some() {
             arm_list.push(Arm::Ce);
         }
@@ -714,6 +828,17 @@ pub fn render_markdown(r: &Report) -> String {
         r.pool_cap
     ));
     s.push_str(&format!("- injected per prompt (k): {}\n", r.inject_k));
+    for q in &r.shipped_requests {
+        s.push_str(&format!("- shipped request (arms `shipped`): {q}\n"));
+    }
+    for q in &r.pool_requests {
+        s.push_str(&format!(
+            "- pool request (arms `content`, `ce`, `shipped-pool`, pool recall): {q}\n"
+        ));
+    }
+    s.push_str(
+        "- `shipped-pool` = the shipped ordering over the pool request; NOT the deployed policy\n",
+    );
     s.push_str(&format!("- reranker model: {}\n", r.reranker_model));
     s.push_str(&format!(
         "- ce params: salience_coef {}, decay_coef {}, floor {}\n",
@@ -908,11 +1033,20 @@ fn forbidden_texts(
         }
     }
     let mut titles: BTreeSet<&str> = BTreeSet::new();
+    let mut ids: BTreeSet<&str> = BTreeSet::new();
     for p in pools {
-        for h in p.plain.iter().chain(p.ctx.iter().flatten()) {
+        for h in p
+            .plain
+            .iter()
+            .chain(p.ctx.iter().flatten())
+            .chain(&p.shipped_plain)
+            .chain(p.shipped_ctx.iter().flatten())
+        {
             titles.insert(&h.title);
+            ids.insert(&h.id);
         }
     }
+    v.extend(ids.into_iter().map(|t| ("memory id", t.to_string())));
     v.extend(titles.into_iter().map(|t| ("memory title", t.to_string())));
     v.extend(bodies.values().map(|b| ("memory body", b.clone())));
     v
@@ -1027,6 +1161,12 @@ pub struct RecallArgs {
     /// Memories injected per prompt (the hook's `--limit`).
     #[arg(long, default_value_t = 5)]
     pub inject_k: usize,
+    /// Repo slug the prompts were typed in (default for rows without their
+    /// own `project`). The bench sends the scope params `kb recall --scope
+    /// auto` would send from that repo (project `memory-<slug>` + `visible_to`
+    /// after the same `GET /api/kbs` confirmation). Absent = no repo.
+    #[arg(long)]
+    pub project: Option<String>,
     /// Reranker model for the ce arm.
     #[arg(long, default_value = "bge-reranker-base")]
     pub reranker_model: String,
@@ -1124,7 +1264,7 @@ pub async fn run(args: RecallArgs, bearer: Option<&str>) -> Result<()> {
     }
 
     let base = args.daemon.trim_end_matches('/').to_string();
-    let client = http::client_with_timeout_and_bearer(60, bearer)?;
+    let client = http::client_for_daemon(60, bearer, &base)?;
     let ident = http::send_json(
         client.get(format!("{base}/api/identity")),
         "GET /api/identity",
@@ -1136,17 +1276,60 @@ pub async fn run(args: RecallArgs, bearer: Option<&str>) -> Result<()> {
         .unwrap_or("unknown")
         .to_string();
 
-    // Pools.
+    // Scope params: the CLI's own auto-scope resolution, once per slug.
+    let mut wires: BTreeMap<Option<String>, Wire> = BTreeMap::new();
+    for r in &rows {
+        let slug = r.project.clone().or_else(|| args.project.clone());
+        if !wires.contains_key(&slug) {
+            let (scope, project, visible_to) =
+                super::memory::confirmed_recall_wire(&base, bearer, "auto", None, slug.as_deref())
+                    .await;
+            wires.insert(
+                slug.clone(),
+                Wire {
+                    scope,
+                    project,
+                    visible_to,
+                },
+            );
+        }
+    }
+    let shipped_requests: Vec<String> = wires
+        .values()
+        .map(|w| describe_request(w, args.inject_k, false))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let pool_requests: Vec<String> = wires
+        .values()
+        .map(|w| describe_request(w, POOL_CAP, true))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+
+    // Pools: the 50-pool and the shipped request, per query form.
     let mut pools: Vec<RowPool> = Vec::with_capacity(rows.len());
     for r in &rows {
-        let plain = fetch_pool(&client, &base, &r.query).await?;
+        let slug = r.project.clone().or_else(|| args.project.clone());
+        let wire = &wires[&slug];
+        let plain = fetch_hits(&client, &base, &r.query, wire, POOL_CAP, true).await?;
+        let shipped_plain =
+            fetch_hits(&client, &base, &r.query, wire, args.inject_k, false).await?;
         let composed = r.composed_query();
-        let ctx = if composed != r.query {
-            Some(fetch_pool(&client, &base, &composed).await?)
+        let (ctx, shipped_ctx) = if composed != r.query {
+            (
+                Some(fetch_hits(&client, &base, &composed, wire, POOL_CAP, true).await?),
+                Some(fetch_hits(&client, &base, &composed, wire, args.inject_k, false).await?),
+            )
         } else {
-            None
+            (None, None)
         };
-        pools.push(RowPool { plain, ctx });
+        pools.push(RowPool {
+            plain,
+            ctx,
+            shipped_plain,
+            shipped_ctx,
+        });
     }
 
     // ce arm: sidecar + bodies.
@@ -1292,6 +1475,8 @@ pub async fn run(args: RecallArgs, bearer: Option<&str>) -> Result<()> {
         clock_unix: clock,
         pool_cap: POOL_CAP,
         inject_k: args.inject_k,
+        shipped_requests,
+        pool_requests,
         reranker_model: args.reranker_model.clone(),
         ce_params: ce,
         ce_status,
@@ -1536,12 +1721,155 @@ mod tests {
         assert_eq!(percentile(&[], 50.0), None);
     }
 
+    fn test_wire() -> Wire {
+        Wire {
+            scope: "all".into(),
+            project: Some("memory-demo".into()),
+            visible_to: Some("demo,memory-demo".into()),
+        }
+    }
+
+    #[test]
+    fn shipped_request_is_production_shaped_and_pool_request_is_not() {
+        let w = test_wire();
+        let shipped = recall_params("q", &w, 5, false);
+        let get =
+            |v: &[(&str, String)], k: &str| v.iter().find(|(n, _)| *n == k).map(|(_, x)| x.clone());
+        assert_eq!(get(&shipped, "limit").as_deref(), Some("5"));
+        assert_eq!(get(&shipped, "no_floor"), None, "floor stays ON");
+        assert_eq!(get(&shipped, "scope").as_deref(), Some("all"));
+        assert_eq!(get(&shipped, "project").as_deref(), Some("memory-demo"));
+        assert_eq!(
+            get(&shipped, "visible_to").as_deref(),
+            Some("demo,memory-demo")
+        );
+        let pool = recall_params("q", &w, POOL_CAP, true);
+        assert_eq!(get(&pool, "limit").as_deref(), Some("50"));
+        assert_eq!(get(&pool, "no_floor").as_deref(), Some("true"));
+        // same scope params on both requests
+        for k in ["scope", "project", "visible_to"] {
+            assert_eq!(get(&shipped, k), get(&pool, k), "{k}");
+        }
+        // no repo => the CLI's no-repo default: no project, no visible_to
+        let none = Wire {
+            scope: "all".into(),
+            project: None,
+            visible_to: None,
+        };
+        let p = recall_params("q", &none, 5, false);
+        assert!(get(&p, "project").is_none() && get(&p, "visible_to").is_none());
+        let d = describe_request(&w, 5, false);
+        assert!(d.contains("limit=5") && d.contains("floor=on") && d.contains("memory-demo"));
+        assert!(describe_request(&w, 50, true).contains("no_floor=true"));
+    }
+
+    #[test]
+    fn shipped_arm_reads_its_own_request_not_the_pool() {
+        let rows = load_fixture(&row("a", "real", "dev", r#"{"m2":2}"#)).unwrap();
+        let (pools, _) = canned_inputs(&rows);
+        let ce = CeParams {
+            salience_coef: 0.0,
+            decay_coef: 0.0,
+            floor: 0.0,
+        };
+        let inp = Inputs {
+            rows: &rows,
+            pools: &pools,
+            logits: None,
+            ce,
+            clock_unix: 0,
+            inject_k: 5,
+        };
+        let f = compute_forms(&inp);
+        // shipped list = [m2] -> first hit relevant; pool order = [m1, m2]
+        assert_eq!(f["plain"]["shipped"]["all"].mrr, Some(1.0));
+        assert_eq!(f["plain"]["shipped-pool"]["all"].mrr, Some(0.5));
+        assert_eq!(f["plain"]["shipped"]["all"].injected_per_prompt, Some(1.0));
+        assert_eq!(
+            f["plain"]["shipped-pool"]["all"].injected_per_prompt,
+            Some(2.0)
+        );
+    }
+
+    #[test]
+    fn report_has_no_fixture_sourced_free_text() {
+        let rows = load_fixture(FIXTURE).unwrap();
+        let r = sample_report(&rows);
+        let json = serde_json::to_value(&r).unwrap();
+        fn walk(v: &serde_json::Value, out: &mut Vec<String>) {
+            match v {
+                serde_json::Value::String(s) => out.push(s.clone()),
+                serde_json::Value::Array(a) => a.iter().for_each(|x| walk(x, out)),
+                serde_json::Value::Object(m) => m.iter().for_each(|(k, x)| {
+                    out.push(k.clone());
+                    walk(x, out);
+                }),
+                _ => {}
+            }
+        }
+        let mut strings = Vec::new();
+        walk(&json, &mut strings);
+        let (pools, _) = canned_inputs(&rows);
+        for row in &rows {
+            let mut secrets = vec![row.id.clone(), row.query.clone(), row.composed_query()];
+            secrets.extend(row.context.iter().map(|t| t.text.clone()));
+            secrets.extend(row.labels.keys().cloned());
+            for p in &pools {
+                for h in p.plain.iter().chain(&p.shipped_plain) {
+                    secrets.push(h.id.clone());
+                    secrets.push(h.title.clone());
+                }
+            }
+            for sec in secrets {
+                assert!(
+                    !strings
+                        .iter()
+                        .any(|s| s == &sec || s.contains(&sec) && sec.len() > 6),
+                    "report carries fixture/pool text {sec:?}"
+                );
+            }
+        }
+        // every stratum key is `all`, `class=<c>` or `lang=<l>`
+        let st = strata_index(&rows);
+        assert!(st
+            .keys()
+            .all(|k| k == "all" || k.starts_with("class=") || k.starts_with("lang=")));
+    }
+
+    #[test]
+    fn fixture_project_field_is_validated() {
+        let ok = r#"{"id":"a","query":"q","class":"null","language":"en","split":"dev","project":"demo-app"}"#;
+        assert_eq!(
+            load_fixture(ok).unwrap()[0].project.as_deref(),
+            Some("demo-app")
+        );
+        let bad = ok.replace("demo-app", "has space");
+        assert!(load_fixture(&bad)
+            .unwrap_err()
+            .to_string()
+            .contains("`project`"));
+    }
+
+    #[test]
+    fn report_markdown_names_both_requests() {
+        let rows = load_fixture(FIXTURE).unwrap();
+        let md = render_markdown(&sample_report(&rows));
+        assert!(md.contains("shipped request"), "{md}");
+        assert!(md.contains("floor=on"));
+        assert!(md.contains("pool request"));
+        assert!(md.contains("no_floor=true"));
+        assert!(md.contains("NOT the deployed policy"));
+    }
+
     fn canned_inputs(rows: &[FixtureRow]) -> (Vec<RowPool>, Vec<RowLogits>) {
         let pools: Vec<RowPool> = rows
             .iter()
             .map(|_| RowPool {
                 plain: vec![hit("m1", 1, 1.0, 1.0), hit("m2", 2, 1.0, 1.0)],
                 ctx: None,
+                // the shipped request returned a DIFFERENT, shorter list
+                shipped_plain: vec![hit("m2", 1, 1.0, 1.0)],
+                shipped_ctx: None,
             })
             .collect();
         let logits = rows
@@ -1579,6 +1907,8 @@ mod tests {
             clock_unix: 0,
             pool_cap: POOL_CAP,
             inject_k: 5,
+            shipped_requests: vec![describe_request(&test_wire(), 5, false)],
+            pool_requests: vec![describe_request(&test_wire(), POOL_CAP, true)],
             reranker_model: "bge-reranker-base".into(),
             ce_params: ce,
             ce_status: "ran".into(),

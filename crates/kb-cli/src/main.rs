@@ -261,7 +261,7 @@ enum Cmd {
         /// these; this only renders what's already on the wire.
         #[arg(long)]
         explain: bool,
-        /// SG-Q2: path to a live Claude Code transcript; the query becomes
+        /// path to a live Claude Code transcript; the query becomes
         /// the prompt plus the last `--turns` turns (composed here, sent as
         /// the ordinary query). Loopback daemons only — ignored with a
         /// stderr line otherwise.
@@ -270,13 +270,13 @@ enum Cmd {
         /// Recent transcript turns to fold into the query (with `--transcript`).
         #[arg(long, default_value_t = 4)]
         turns: usize,
-        /// SG-Q3: exclude memories already served to this session (the
+        /// exclude memories already served to this session (the
         /// session id the hook passes via `KB_RECALL_SESSION`, or the
         /// current-session marker). Applied after scoring; survivors keep
         /// their score decomposition.
         #[arg(long)]
         dedup_session: bool,
-        /// SG-Q3: with `--dedup-session`, only serves at or after this unix
+        /// with `--dedup-session`, only serves at or after this unix
         /// time count (a compact starts the count over).
         #[arg(long)]
         served_after: Option<i64>,
@@ -359,17 +359,17 @@ enum Cmd {
         /// seed, as `kb slate open --hybrid`).
         #[arg(long)]
         slate_since: Option<u64>,
-        /// SG-Q2: path to a live Claude Code transcript; the prompt sent is
+        /// path to a live Claude Code transcript; the prompt sent is
         /// the prompt plus the last `--turns` turns. Loopback daemons only.
         #[arg(long)]
         transcript: Option<String>,
         /// Recent transcript turns to fold into the prompt (with `--transcript`).
         #[arg(long, default_value_t = 4)]
         turns: usize,
-        /// SG-Q3: exclude memories already served to `--session` (needs it).
+        /// exclude memories already served to `--session` (needs it).
         #[arg(long)]
         dedup_session: bool,
-        /// SG-Q3: with `--dedup-session`, only serves at or after this unix
+        /// with `--dedup-session`, only serves at or after this unix
         /// time count (a compact starts the count over).
         #[arg(long)]
         served_after: Option<i64>,
@@ -4225,11 +4225,12 @@ enum AtlasAction {
 
 #[derive(Subcommand, Debug, Clone)]
 enum BenchAction {
-    /// SG-M1: the memory-recall policy bench. Calls a throwaway daemon's
-    /// recall route for every row of a labelled fixture (top-50 pool, no
-    /// floor, with and without context composition), recomputes the
-    /// shipped / content / ce arms locally with a pinned clock and prints
-    /// an aggregates-only report. Internal policy validation, not a
+    /// Memory-recall policy bench. Calls a throwaway daemon's recall route
+    /// for every row of a labelled fixture: the shipped request (hook
+    /// limit, floor on) and a top-50 no-floor pool, each with and without
+    /// context composition; scores the shipped arm from its own request
+    /// and the content / ce arms from the pool with a pinned clock, and
+    /// prints an aggregates-only report. Internal policy validation, not a
     /// leaderboard.
     Recall(commands::recall_bench::RecallArgs),
     /// Scaffold a `queries.jsonl` template by sampling N artifacts at

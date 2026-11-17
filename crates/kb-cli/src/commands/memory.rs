@@ -796,6 +796,57 @@ async fn fetch_kbs_with_client(
     Ok(kbs)
 }
 
+/// The wire `(scope, project, visible_to)` triple `kb recall` sends, with the
+/// ux-01 `GET /api/kbs` confirmation of a derived project. ONE function for
+/// `recall_inner` and `kb bench recall`, so the bench's "shipped" request is
+/// built by the very code the hook's `kb recall` runs. `slug` is the repo
+/// basename (already derived; `None` = not in a repo).
+pub(crate) async fn confirmed_recall_wire(
+    url: &str,
+    bearer: Option<&str>,
+    scope: &str,
+    project: Option<&str>,
+    slug: Option<&str>,
+) -> (String, Option<String>, Option<String>) {
+    let (wire_scope, mut wire_project, mut wire_visible_to) =
+        resolve_recall_wire(scope, project.map(str::to_string), slug.map(str::to_string));
+    // ux-01 — a derived project filter is sent only after GET /api/kbs
+    // confirms the name (or a project_slugs alias) exists. A miss drops
+    // both project and visible_to: fail open to unfiltered recall, one
+    // stderr line, never a filter that matches nothing. An explicit
+    // --project is the caller's name and is not checked here.
+    if scope == "auto" && project.is_none() {
+        if let Some(s) = slug {
+            if wire_project.is_some() {
+                match fetch_kbs(url, bearer).await {
+                    Ok(kbs) => {
+                        let local = local_project_slug_aliases();
+                        let alias = aliased_corpus_name(s, &kbs, &local);
+                        let known = corpus_names(&kbs);
+                        let (confirmed, visible, miss) = confirm_derived_project(s, &known, alias);
+                        wire_project = confirmed;
+                        wire_visible_to = visible;
+                        if let Some(derived) = miss {
+                            eprintln!("{}", derived_project_miss_line(&derived));
+                        }
+                    }
+                    Err(e) => {
+                        // Could not verify. Sending the derived name would
+                        // be a filter that might match nothing. This is not
+                        // a confirmed miss, so it does not use that line.
+                        wire_project = None;
+                        wire_visible_to = None;
+                        eprintln!(
+                            "note: derived project corpus memory-{s} could not be checked against GET /api/kbs ({e}); sending no project filter"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    (wire_scope, wire_project, wire_visible_to)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn recall_inner(
     query: &str,
@@ -824,42 +875,8 @@ async fn recall_inner(
     } else {
         None
     };
-    let (wire_scope, mut wire_project, mut wire_visible_to) =
-        resolve_recall_wire(scope, project.map(str::to_string), slug.clone());
-    // ux-01 — a derived project filter is sent only after GET /api/kbs
-    // confirms the name (or a project_slugs alias) exists. A miss drops
-    // both project and visible_to: fail open to unfiltered recall, one
-    // stderr line, never a filter that matches nothing. An explicit
-    // --project is the caller's name and is not checked here.
-    if scope == "auto" && project.is_none() {
-        if let Some(s) = slug.as_deref() {
-            if wire_project.is_some() {
-                match fetch_kbs(&url, bearer).await {
-                    Ok(kbs) => {
-                        let local = local_project_slug_aliases();
-                        let alias = aliased_corpus_name(s, &kbs, &local);
-                        let known = corpus_names(&kbs);
-                        let (confirmed, visible, miss) = confirm_derived_project(s, &known, alias);
-                        wire_project = confirmed;
-                        wire_visible_to = visible;
-                        if let Some(derived) = miss {
-                            eprintln!("{}", derived_project_miss_line(&derived));
-                        }
-                    }
-                    Err(e) => {
-                        // Could not verify. Sending the derived name would
-                        // be a filter that might match nothing. This is not
-                        // a confirmed miss, so it does not use that line.
-                        wire_project = None;
-                        wire_visible_to = None;
-                        eprintln!(
-                            "note: derived project corpus memory-{s} could not be checked against GET /api/kbs ({e}); sending no project filter"
-                        );
-                    }
-                }
-            }
-        }
-    }
+    let (wire_scope, wire_project, wire_visible_to) =
+        confirmed_recall_wire(&url, bearer, scope, project, slug.as_deref()).await;
     let mut q = format!(
         "{url}/api/memory/recall?q={}&scope={}&limit={limit}",
         http::encode_path_segment(query),
@@ -898,7 +915,7 @@ async fn recall_inner(
     // while still bounding a genuinely-stuck daemon. `--timeout` (when the
     // caller passes one) replaces that cap; a hit fails soft.
     let secs = timeout_secs.unwrap_or(30);
-    let client = http::client_with_timeout_and_bearer(secs, bearer)?;
+    let client = http::client_for_daemon(secs, bearer, &url)?;
     let resp = match client.get(&q).send().await {
         Ok(r) => r,
         Err(e) if e.is_timeout() => {
@@ -2694,16 +2711,25 @@ mod tests {
 
     #[test]
     fn append_recall_dedup_is_opt_in_and_byte_identical_when_off() {
-        let mut q = "u?q=x".to_string();
-        append_recall_dedup(&mut q, false, Some(5));
-        assert_eq!(q, "u?q=x", "served_after alone never rides along");
+        let base = "u?q=x";
+        // off: byte-identical, whatever served_after says.
+        for after in [None, Some(5)] {
+            let mut q = base.to_string();
+            append_recall_dedup(&mut q, false, after);
+            assert_eq!(q, base, "off must not touch the URL");
+        }
+        // on, no served_after: exactly one pair, no served_after.
+        let mut q = base.to_string();
         append_recall_dedup(&mut q, true, None);
         assert_eq!(q, "u?q=x&dedup_session=1");
+        assert_eq!(q.matches("dedup_session=").count(), 1);
+        assert!(!q.contains("served_after"));
+        // on + served_after: one dedup pair, one served_after pair.
+        let mut q = base.to_string();
         append_recall_dedup(&mut q, true, Some(1700000000));
-        assert_eq!(
-            q,
-            "u?q=x&dedup_session=1&dedup_session=1&served_after=1700000000"
-        );
+        assert_eq!(q, "u?q=x&dedup_session=1&served_after=1700000000");
+        assert_eq!(q.matches("dedup_session=").count(), 1);
+        assert_eq!(q.matches("served_after=").count(), 1);
     }
 
     #[test]

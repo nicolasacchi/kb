@@ -642,7 +642,7 @@ kb synth --out DIR [--docs N] [--seed S]
 kb bench {init,discover,run}        retrieval-quality bake-off: scaffold a
                                     queries.jsonl, discover relevant ids, then
                                     compute Recall@k / MRR / nDCG per (kb × mode)
-kb bench recall --fixture F --daemon URL --clock T
+kb bench recall --fixture F --daemon URL --clock T [--project SLUG]
                                     memory-recall POLICY bench (internal policy
                                     validation, not a leaderboard). For each
                                     JSONL row (id, query, optional chronological
@@ -651,14 +651,24 @@ kb bench recall --fixture F --daemon URL --clock T
                                     unlisted = 0}, class legacy|real|null|
                                     trivial, language tag, split dev|heldout;
                                     strict, errors name the line) it calls the
-                                    daemon's recall route with no_floor and the
-                                    route's hard maximum limit (pool = top 50),
-                                    once with the bare prompt and once with the
-                                    SG-Q2 composed query. --daemon is required
+                                    daemon's recall route twice, for the bare
+                                    prompt and for the SG-Q2 composed query:
+                                    the SHIPPED request (what the hook's `kb
+                                    recall` sends: --inject-k limit, floor ON,
+                                    the auto scope params) and the POOL request
+                                    (no_floor, limit 50, same scope params).
+                                    Scope params come from the CLI's own
+                                    auto-scope resolution for --project SLUG
+                                    (or a row's optional `project`; absent =
+                                    no repo); the report header names both
+                                    requests' parameters. --daemon is required
                                     and is meant to be a THROWAWAY daemon over a
-                                    frozen copy of the memory corpora. Arms,
-                                    computed locally from the pool: `shipped`
-                                    (route order), `content` (retrieval rank),
+                                    frozen copy of the memory corpora. Arms:
+                                    `shipped` (the shipped request's own
+                                    order), `shipped-pool` (route order over
+                                    the pool; NOT the deployed policy, kept to
+                                    show drift), then computed locally from the
+                                    pool: `content` (retrieval rank),
                                     `ce` (cross-encoder logit on title + full
                                     body, x bounded salience/decay multipliers,
                                     logit floor; --ce-salience-coef,
@@ -681,10 +691,14 @@ kb bench recall --fixture F --daemon URL --clock T
                                     dev split (--sweep-from/-to/-step,
                                     --sweep-form). Output: Markdown (--output,
                                     else stdout) and JSON (--json), AGGREGATES
-                                    ONLY; the writer refuses (and writes
-                                    nothing) if the rendered report contains any
-                                    fixture query/context or pool memory
-                                    title/body. The report records the daemon
+                                    BY CONSTRUCTION: the report types hold no
+                                    per-row data (no row id, query, memory id
+                                    or title; strata are class=/lang= only).
+                                    As a sanity net the writer runs a
+                                    verbatim-run check over prompts, context
+                                    turns, memory titles/bodies and memory ids
+                                    and refuses (writing nothing) on a hit; it
+                                    is not a semantic scrubber. The report records the daemon
                                     build sha, fixture hash, clock, pool cap and
                                     reranker model. Not implemented (the route
                                     returns no raw per-arm scores): the
@@ -950,8 +964,15 @@ kb recall <query> [--scope auto|all|global|project] [--project NAME]
                                     newest first, 1200-char cap) and sends it
                                     as the ordinary query; no server change,
                                     absent = byte-identical. Loopback daemons
-                                    only (127.0.0.0/8, ::1, localhost):
-                                    otherwise ignored with one stderr line.
+                                    only: the daemon URL must be http(s) and
+                                    its PARSED host 127.0.0.0/8, ::1 or
+                                    localhost, with no userinfo and no
+                                    backslash; otherwise ignored with one
+                                    stderr line. On a loopback URL the request
+                                    ignores HTTP_PROXY/ALL_PROXY and follows no
+                                    redirect, so the composed query can only
+                                    reach that address (same for `kb turn` and
+                                    `kb bench recall`).
                                     v0.9 M5: recall memories relevant to a
                                     query, ranked across in-scope memory
                                     corpora by recency × salience × decay.

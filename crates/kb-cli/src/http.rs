@@ -61,6 +61,32 @@ pub(crate) fn client_with_exact_timeout(
     timeout: Duration,
     bearer: Option<&str>,
 ) -> Result<reqwest::Client> {
+    build_client(timeout, bearer, false)
+}
+
+/// [`client_with_timeout_and_bearer`] for a request that may carry
+/// transcript-composed text. The loopback check in `recall_ctx` inspects the
+/// URL string, not the connection, so for a loopback `daemon` URL this client
+/// ALSO ignores `HTTP_PROXY`/`ALL_PROXY` (no proxy) and refuses to follow any
+/// redirect: the text can only go to the daemon at that address. A
+/// non-loopback URL gets the ordinary client (the caller already dropped the
+/// transcript text in that case).
+pub fn client_for_daemon(
+    secs: u64,
+    bearer: Option<&str>,
+    daemon_url: &str,
+) -> Result<reqwest::Client> {
+    if !crate::commands::recall_ctx::is_loopback_url(daemon_url) {
+        return client_with_timeout_and_bearer(secs, bearer);
+    }
+    let secs = std::env::var("KB_TEST_HTTP_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(secs);
+    build_client(Duration::from_secs(secs), bearer, true)
+}
+
+fn build_client(timeout: Duration, bearer: Option<&str>, isolate: bool) -> Result<reqwest::Client> {
     let mut headers = reqwest::header::HeaderMap::new();
     // M6: every kb-cli request advertises itself as a first-party
     // client so the daemon's Origin-allowlist middleware lets the
@@ -75,11 +101,13 @@ pub(crate) fn client_with_exact_timeout(
             .context("bearer token contained an invalid header byte")?;
         headers.insert(reqwest::header::AUTHORIZATION, value);
     }
-    reqwest::Client::builder()
+    let mut b = reqwest::Client::builder()
         .timeout(timeout)
-        .default_headers(headers)
-        .build()
-        .context("reqwest client")
+        .default_headers(headers);
+    if isolate {
+        b = b.no_proxy().redirect(reqwest::redirect::Policy::none());
+    }
+    b.build().context("reqwest client")
 }
 
 /// Exchange OAuth2 `client_credentials` for an access token (RFC 6749
@@ -440,6 +468,24 @@ pub async fn send_json(req: reqwest::RequestBuilder, what: &str) -> Result<serde
 
 #[cfg(test)]
 pub(crate) mod tests {
+    #[tokio::test]
+    async fn daemon_client_does_not_follow_redirects_on_loopback() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut s, _) = l.accept().await.unwrap();
+            let mut b = [0u8; 1024];
+            let _ = s.read(&mut b).await;
+            let _ = s
+                .write_all(b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:9/x\r\nContent-Length: 0\r\n\r\n")
+                .await;
+        });
+        let url = format!("http://127.0.0.1:{port}");
+        let c = super::client_for_daemon(5, None, &url).unwrap();
+        let r = c.get(format!("{url}/a")).send().await.unwrap();
+        assert_eq!(r.status().as_u16(), 302, "redirect must not be followed");
+    }
 
     /// Test-only daemon stub: answers EVERY request with `body` and records
     /// each request line, so a test can assert what a verb asked for.

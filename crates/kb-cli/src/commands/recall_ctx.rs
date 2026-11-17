@@ -8,35 +8,38 @@
 use kb_core::sessions::{
     compose_recall_query, recent_turns_with, RecentTurnsOpts, RECALL_QUERY_DEFAULT_TOTAL_CHARS,
 };
-use std::net::IpAddr;
 use std::path::Path;
 
 /// Where a daemon URL with no `--daemon` points (mirrors `http::detect_daemon`).
 pub const DEFAULT_DAEMON_URL: &str = "http://127.0.0.1:4000";
 
-/// True iff `url`'s host is loopback: 127.0.0.0/8, `::1`, or the literal
-/// `localhost`. A URL with no parseable host is NOT loopback (fail closed).
+/// True iff `url` is an http(s) URL whose PARSED host is loopback: 127.0.0.0/8,
+/// `::1`, or the literal `localhost`. Fails closed: anything unparseable, any
+/// other scheme, any backslash (WHATWG treats `\\` as `/` in special URLs,
+/// so a hand-split authority and the HTTP client disagree on the host) and
+/// any userinfo is NOT loopback.
 pub fn is_loopback_url(url: &str) -> bool {
-    let rest = url.split_once("://").map_or(url, |(_, r)| r);
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let hostport = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
-    let host = if let Some(r) = hostport.strip_prefix('[') {
-        match r.split_once(']') {
-            Some((h, _)) => h,
-            None => return false,
-        }
-    } else {
-        match hostport.rsplit_once(':') {
-            // a bare IPv6 literal has several colons and no brackets: not a URL host
-            Some((h, p)) if !h.contains(':') && p.chars().all(|c| c.is_ascii_digit()) => h,
-            Some(_) => return false,
-            None => hostport,
-        }
+    if url.contains('\\') {
+        return false;
+    }
+    let Ok(u) = reqwest::Url::parse(url.trim()) else {
+        return false;
+    };
+    if !matches!(u.scheme(), "http" | "https") {
+        return false;
+    }
+    if !u.username().is_empty() || u.password().is_some() {
+        return false;
+    }
+    let Some(host) = u.host_str() else {
+        return false;
     };
     if host.eq_ignore_ascii_case("localhost") {
         return true;
     }
-    host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    bare.parse::<std::net::IpAddr>()
+        .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// The query to send: `prompt` unchanged unless `transcript` is given, the
@@ -78,7 +81,7 @@ mod tests {
             "http://[::1]",
             "http://localhost:4000/",
             "http://LOCALHOST",
-            "localhost:4000",
+            "https://127.0.0.1:4000",
         ] {
             assert!(is_loopback_url(u), "{u}");
         }
@@ -92,6 +95,17 @@ mod tests {
             "http://user@evil.com:4000/127.0.0.1",
             "http://[::1",
             "",
+            // bypass: the client connects to evil.com, a hand split saw 127.0.0.1
+            "http://evil.com\\@127.0.0.1:4000",
+            "http://127.0.0.1\\@evil.com",
+            // userinfo, even with a loopback host
+            "http://user@127.0.0.1:4000",
+            "http://user:pw@localhost:4000",
+            // non-http schemes and scheme-less input
+            "ftp://127.0.0.1",
+            "file:///etc/passwd",
+            "localhost:4000",
+            "127.0.0.1:4000",
         ] {
             assert!(!is_loopback_url(u), "{u}");
         }

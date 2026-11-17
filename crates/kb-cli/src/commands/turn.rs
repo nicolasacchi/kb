@@ -124,7 +124,7 @@ pub async fn turn(
     };
     let (project, visible_to) = turn_scope(&slug, &local_project_slug_aliases());
     let secs = deadline.div_ceil(1000) + HTTP_MARGIN_SECS;
-    let client = http::client_with_timeout_and_bearer(secs, bearer)?;
+    let client = http::client_for_daemon(secs, bearer, &base)?;
     let deadline_str = deadline.to_string();
     let mut req = client
         .get(format!("{base}/api/turn"))
