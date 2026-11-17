@@ -107,7 +107,7 @@ any, pins its shape.
      per endpoint against the fake LSP, which is its own lane. The blob-hash
      guard and the 1-based-line/byte-column codec are covered by kb-lip's own
      tests.
-   - The other capture adapters (`kb-capture-codex/1`, `kb-capture-kimi/1`, `kb-capture-omp/1`, `kb-capture-opencode/1`): the same family as
+   - The other capture adapters (`kb-capture-codex/1`, `kb-capture-omp/1`, `kb-capture-opencode/1`): the same family as
      `kb-capture-grok/1`, each with its own key set in its own jq template.
      Register them with the same template-versus-schema parity test the grok
      one has.

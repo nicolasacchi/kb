@@ -221,12 +221,11 @@ pub enum ExitSignal {
 
 /// Closed table covering every entry of [`HARNESSES`] (pinned by
 /// `harness_exit_table_covers_every_harness`).
-pub const HARNESS_EXIT_SIGNAL: [(&str, ExitSignal); 6] = [
+pub const HARNESS_EXIT_SIGNAL: [(&str, ExitSignal); 5] = [
     ("claude", ExitSignal::Claude),
     ("codex", ExitSignal::Codex),
     ("opencode", ExitSignal::None),
     ("grok", ExitSignal::None),
-    ("kimi", ExitSignal::None),
     ("omp", ExitSignal::None),
 ];
 
@@ -1281,7 +1280,7 @@ fn is_sidechain(v: &Value) -> bool {
 
 /// Agent bookkeeping and scratch paths: edits there are not "the code".
 fn is_ignored_path(p: &str) -> bool {
-    ["/.claude/", "/.codex/", "/.kimi/", "/.omp/", "/.grok/"]
+    ["/.claude/", "/.codex/", "/.omp/", "/.grok/"]
         .iter()
         .any(|m| p.contains(m))
         || p.starts_with("/tmp/")
@@ -2605,8 +2604,8 @@ mod tests {
             (Unknown, None, Some(Why::NoExitCode), None)
         );
 
-        // The four no-signal harnesses fall to the output grammar.
-        for h in ["opencode", "grok", "kimi", "omp"] {
+        // The three no-signal harnesses fall to the output grammar.
+        for h in ["opencode", "grok", "omp"] {
             let p = with_result(base_run(true, true, None), false, None, None, OutV::Pass);
             assert_eq!(rs(&p, h), (Pass, Some(Basis::Output), None, None), "{h}");
             let f = with_result(base_run(true, true, None), false, None, None, OutV::Fail);

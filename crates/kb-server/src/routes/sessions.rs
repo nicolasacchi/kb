@@ -816,7 +816,7 @@ pub struct ListParams {
     /// are NEVER hidden by omission).
     pub substance: Option<String>,
     /// W5/I — csv over `kb_core::sessions::HARNESSES`
-    /// (`claude|codex|opencode|grok|kimi|omp`). Absent/empty = no filter.
+    /// (`claude|codex|opencode|grok|omp`). Absent/empty = no filter.
     /// *OK1 amendment:* an EXPLICITLY provided token outside the closed set
     /// 400s (mirrors the beat route's "unknown beat harness" error) rather
     /// than silently dropping — a caller that typos (or targets a harness
@@ -914,11 +914,10 @@ mod harness_csv_tests {
     /// that `omp` actually filters rather than vanishing from the set.
     #[test]
     fn every_closed_set_member_including_omp_survives_parsing() {
-        let got = parse_harness_csv("claude,codex,opencode,grok,kimi,omp").unwrap();
-        assert_eq!(
-            got,
-            vec!["claude", "codex", "opencode", "grok", "kimi", "omp"]
-        );
+        let got = parse_harness_csv("claude,codex,opencode,grok,omp").unwrap();
+        assert_eq!(got, vec!["claude", "codex", "opencode", "grok", "omp"]);
+        // kimi support was removed: it is no longer a filter value.
+        assert!(parse_harness_csv("kimi").is_err());
         // Single-token form too — the shape `?harness=omp` actually sends.
         assert_eq!(parse_harness_csv("omp").unwrap(), vec!["omp"]);
     }

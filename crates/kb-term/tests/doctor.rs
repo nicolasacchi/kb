@@ -147,11 +147,11 @@ fn doctor_harness() {
     assert!(!check.detail.contains("experimental"));
     let check = doctor::decide_harness("omp", Some("18.16.0"), Some("18.17.0"), false);
     assert_eq!(check.status, CheckStatus::Warn);
-    // kimi and grok never warn on version (unreconciled).
-    let check = doctor::decide_harness("kimi", Some("0.42.0"), None, false);
+    // grok never warns on version (unreconciled).
+    let check = doctor::decide_harness("grok", Some("0.42.0"), None, false);
     assert_eq!(check.status, CheckStatus::Pass);
     assert!(check.detail.contains("unreconciled"));
-    let check = doctor::decide_harness("kimi", Some("2.5.1"), None, false);
+    let check = doctor::decide_harness("grok", Some("2.5.1"), None, false);
     assert_eq!(check.status, CheckStatus::Pass);
     let check = doctor::decide_harness("grok", Some("1.0.77"), None, true);
     assert_eq!(check.status, CheckStatus::Pass);

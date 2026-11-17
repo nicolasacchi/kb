@@ -47,14 +47,14 @@ chmod +x "$TMPROOT/bin/kb"
 export PATH="$TMPROOT/bin:$PATH"
 export XDG_CACHE_HOME="$TMPROOT/cache"
 
-# KB_HOOK_FMT=kimi so the block is the BARE stdout — the envelope is
+# KB_HOOK_FMT=plain so the block is the BARE stdout — the envelope is
 # KB_HOOK_FMT's job and orthogonal to the layout under test (asserted at
 # the bottom).
 n=0
 render() {
   n=$((n + 1))
   printf '%s' "{\"session_id\":\"s-layout-$n\",\"cwd\":\"/tmp\",\"prompt\":\"q\"}" \
-    | KB_HOOK_FMT=kimi KB_RECALL_LAYOUT="$1" "$RECALL" 2>"$TMPROOT/err-$n.txt"
+    | KB_HOOK_FMT=plain KB_RECALL_LAYOUT="$1" "$RECALL" 2>"$TMPROOT/err-$n.txt"
 }
 
 echo "== kb-recall.sh KB_RECALL_LAYOUT test matrix =="
@@ -193,14 +193,14 @@ fi
 
 # --- 10. an UNSET / empty layout is v2, and never warns -----------------
 unset_out="$(printf '%s' '{"session_id":"s-unset","cwd":"/tmp","prompt":"q"}' \
-  | KB_HOOK_FMT=kimi "$RECALL" 2>"$TMPROOT/err-unset.txt")"
+  | KB_HOOK_FMT=plain "$RECALL" 2>"$TMPROOT/err-unset.txt")"
 if [ "$unset_out" = "$(cat "$TMPROOT/v2.txt")" ]; then
   ok "an unset KB_RECALL_LAYOUT is v2 (the default)"
 else
   bad "an unset KB_RECALL_LAYOUT is v2 (the default)"
 fi
 empty_out="$(printf '%s' '{"session_id":"s-empty","cwd":"/tmp","prompt":"q"}' \
-  | KB_HOOK_FMT=kimi KB_RECALL_LAYOUT= "$RECALL" 2>>"$TMPROOT/err-unset.txt")"
+  | KB_HOOK_FMT=plain KB_RECALL_LAYOUT= "$RECALL" 2>>"$TMPROOT/err-unset.txt")"
 if [ "$empty_out" = "$(cat "$TMPROOT/v2.txt")" ]; then
   ok "an EMPTY KB_RECALL_LAYOUT is v2, not an unknown value"
 else

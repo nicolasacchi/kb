@@ -2,7 +2,7 @@
 
 kb-term is kb's operator-intent terminal tier: from the SPA's session page
 (desktop or phone) the operator can launch, watch, type into and kill an agent
-session (claude, codex, opencode, grok, kimi or omp) that runs on the kb host,
+session (claude, codex, opencode, grok or omp; kimi support was removed) that runs on the kb host,
 and from a local shell the operator can mirror the same session into a native
 terminal. It is built for one machine in a controlled environment, it is off
 by default, and it is deliberately not a general remote shell. This page is the
@@ -363,7 +363,6 @@ time of writing (the profiles module is the authority):
 | `omp` | none | `PI_FORCE_IMAGE_PROTOCOL=kitty`, `PI_CONFIG_FILES=<private overlay>` | `-r <sid>` | Ctrl-C, 300 ms, Ctrl-C, 300 ms, Ctrl-D | marked verified in the table's source comment |
 | `claude` | none | `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1` | `-r <sid>` | text `/exit`, Enter | exit sequence not verified; the cgroup kill is the backstop |
 | `codex` | `--no-alt-screen` | none | `resume <sid>` | Ctrl-C, 300 ms, Ctrl-C | not verified; the cgroup kill is the backstop |
-| `kimi` | none | `PI_IMAGE_PROTOCOL=iterm2` | `-S <sid>` | Ctrl-D, 300 ms, Ctrl-D | not verified; the cgroup kill is the backstop |
 | `grok` | `--minimal --no-alt-screen` | none | `-r <sid>` plus `--cwd <cwd>` for an absolute clean cwd | Ctrl-C, 300 ms, Ctrl-C | **experimental** |
 | `opencode` | `--mini` | none | `--session <sid>` | Ctrl-C, 300 ms, Ctrl-C | **experimental** |
 | handoff (`omp` or `claude` target) | none | the target harness's profile env, plus `KB_TERM_ID` | `kb sessions handoff <sid> --to <harness> --transplant --launch --cwd <cwd>` replaces the harness binary | the target harness's | not verified; the cgroup kill is the backstop |
@@ -554,7 +553,7 @@ kb-term kill <ID> [--grace SECS] [--runner-sock PATH]
 
 `--runner-sock` defaults to `$KB_TERM_RUNNER_SOCK`, then
 `/run/kb-term/runner/runner.sock`. `HARNESS` is one of
-`claude|codex|opencode|grok|kimi|omp`. `new` attaches after launch unless
+`claude|codex|opencode|grok|omp`. `new` attaches after launch unless
 `--no-attach`, which prints the new id.
 
 `kill` ends a session through the runner's own kill op (the one the SPA's kill
@@ -638,7 +637,7 @@ any check FAILs, and with `--strict` also on any WARN; a SKIP never fails. Check
 | `tap_binary` | `kb-tap` exists and is executable; its `--version` line is shown |
 | `tap_version` | `kb-tap` reports the same version as this `kb-term` (WARN on a mixed install; SKIP when the tap reports none) |
 | `xterm_pins` | the tap reports the pinned xterm package set (SKIP if it reports none) |
-| `harness_claude`, `harness_codex`, `harness_opencode`, `harness_grok`, `harness_kimi`, `harness_omp` | the harness binary is found and its version is shown; WARN when it differs from the known-good version doctor was written against (omp, claude, codex and opencode have one); WARN when it is found but `--version` exits non-zero (the exit code and first stderr line are shown) or does not finish in 20 s (so a slow cold start is not reported as a missing binary); SKIP only when it is not installed |
+| `harness_claude`, `harness_codex`, `harness_opencode`, `harness_grok`, `harness_omp` | the harness binary is found and its version is shown; WARN when it differs from the known-good version doctor was written against (omp, claude, codex and opencode have one); WARN when it is found but `--version` exits non-zero (the exit code and first stderr line are shown) or does not finish in 20 s (so a slow cold start is not reported as a missing binary); SKIP only when it is not installed |
 | `omp_overlay` | the on-disk omp overlay carries the approved pins |
 | `run_layout` | `/run/kb-term` is 0755, `s/` is 0700, `runner/` is 0750 or 0700, `runner.sock` is 0600, all owned by the current uid |
 | `login_env` | the login shell does not set outer-terminal identity names that a pane would inherit |
@@ -684,7 +683,7 @@ minimal `PATH` and no `KB_SESSIONS_DIR`. Put both in a user-unit drop-in (see
   (`@xterm/headless` 6.0.0, serialize add-on 0.14.0, graphemes add-on 0.4.0,
   unicode11 add-on 0.9.0 in the tap; `@xterm/xterm` 6.0.0, image add-on 0.9.0 and
   WebGL add-on 0.19.0 in the SPA). `kb-term doctor` stamps harness versions.
-- **Harnesses.** grok and opencode are experimental. Claude, codex and kimi exit
+- **Harnesses.** grok and opencode are experimental. Claude and codex exit
   sequences are unverified (the cgroup kill is the backstop). Claude's
   classic-renderer reprint behaviour is not characterised.
 - **Binding.** See [Binding a terminal to a session](#binding-a-terminal-to-a-session).

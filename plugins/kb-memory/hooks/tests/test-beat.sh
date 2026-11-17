@@ -782,11 +782,10 @@ fi
 # =====================================================================
 # OL PRES4 - file presence and blocked-on-you beyond Claude. Each harness is
 # fed the payload shape its own hook documentation gives (codex: snake_case
-# with apply_patch's patch text in tool_input.command; kimi: snake_case with
-# `path`; grok: camelCase; omp/opencode: the extension's normalised payload).
+# with apply_patch's patch text in tool_input.command; grok: camelCase; omp/opencode: the extension's normalised payload).
 # =====================================================================
 echo
-echo "== PRES4: presence + blocked beats for codex / kimi / omp / opencode / grok =="
+echo "== PRES4: presence + blocked beats for codex / omp / opencode / grok =="
 CWD4="/tmp/proj-p4"
 
 # --- 40. codex apply_patch: every file header in the patch is a path --------
@@ -808,21 +807,6 @@ o="$(beat_dryrun codex tool "$(jq -nc --arg cwd "$CWD4" '{session_id:"p4-codex",
 if ! printf '%s' "$o" | jq -e '.detail' >/dev/null 2>&1; then ok "codex Bash with patch-looking text is not a write tool: no paths"; else bad "codex Bash must not carry paths (got: $o)"; fi
 o="$(beat_dryrun claude tool "$cp_payload")"
 if ! printf '%s' "$o" | jq -e '.detail' >/dev/null 2>&1; then ok "claude does not treat apply_patch as a write tool"; else bad "claude apply_patch (got: $o)"; fi
-
-# --- 41. kimi Edit/Write carry `path`; Read and a foreign name do not --------
-for t in Edit Write; do
-  o="$(beat_dryrun kimi tool "$(jq -nc --arg t "$t" --arg cwd "$CWD4" '{session_id:"p4-kimi",cwd:$cwd,hook_event_name:"PostToolUse",tool_name:$t,tool_input:{path:"x/y.rs",content:"BODY"}}')")"
-  if [ "$(jget "$o" '.detail.tool')" = "$t" ] && [ "$(jget "$o" '.detail.paths | join(",")')" = "$CWD4/x/y.rs" ] \
-     && ! printf '%s' "$o" | grep -q BODY; then
-    ok "kimi $t: tool_input.path becomes detail.paths (no body in the beat)"
-  else
-    bad "kimi $t (got: $o)"
-  fi
-done
-o="$(beat_dryrun kimi tool "$(jq -nc --arg cwd "$CWD4" '{session_id:"p4-kimi",cwd:$cwd,tool_name:"Read",tool_input:{path:"x/y.rs"}}')")"
-if ! printf '%s' "$o" | jq -e '.detail' >/dev/null 2>&1; then ok "kimi Read is not a write tool: no paths"; else bad "kimi Read (got: $o)"; fi
-o="$(beat_dryrun kimi tool "$(jq -nc --arg cwd "$CWD4" '{session_id:"p4-kimi",cwd:$cwd,tool_name:"apply_patch",tool_input:{path:"x"}}')")"
-if ! printf '%s' "$o" | jq -e '.detail' >/dev/null 2>&1; then ok "kimi: another harness's write-tool name is not a write tool"; else bad "kimi apply_patch (got: $o)"; fi
 
 # --- 42. omp / opencode: lower-case edit|write; a URI target is no file ------
 o="$(beat_dryrun omp tool "$(jq -nc --arg cwd "$CWD4" '{session_id:"p4-omp",cwd:$cwd,tool_name:"edit",tool_input:{path:"src/m.ts"}}')")"
@@ -893,24 +877,6 @@ else
   bad "codex unblock with differing ids (got: $o)"
 fi
 
-# --- 45. kimi: explicit PermissionRequest / PermissionResult, no marker ------
-mp="$(marker_path p4-kimi-b)"
-rm -f "$mp"
-o="$(beat_dryrun kimi blocked "$(jq -nc --arg cwd "$CWD4" '{session_id:"p4-kimi-b",cwd:$cwd,hook_event_name:"PermissionRequest",tool_name:"Write",action:"Write to a.rs",tool_input:{path:"a.rs"}}')")"
-if [ "$(jget "$o" '.event')" = "blocked" ] && [ "$(jget "$o" '.detail.tool')" = "Write" ] \
-   && [ "$(jget "$o" '.detail.reason')" = "permission request: Write" ] && [ ! -e "$mp" ] \
-   && ! printf '%s' "$o" | grep -q 'a.rs'; then
-  ok "kimi PermissionRequest -> blocked (tool name only, action text dropped), no inferred-unblock marker"
-else
-  bad "kimi blocked (got: $o)"
-fi
-o="$(beat_dryrun kimi unblocked "$(jq -nc --arg cwd "$CWD4" '{session_id:"p4-kimi-b",cwd:$cwd,hook_event_name:"PermissionResult",tool_name:"Write"}')")"
-if [ "$(jget "$o" '.event')" = "unblocked" ] && [ "$(jget "$o" '.harness')" = "kimi" ]; then
-  ok "kimi PermissionResult -> unblocked"
-else
-  bad "kimi unblocked (got: $o)"
-fi
-
 # --- 46. grok: only a permission_prompt Notification blocks; camelCase ------
 mp="$(marker_path p4-grok-b)"
 rm -f "$mp"
@@ -930,31 +896,19 @@ else
   bad "grok inferred unblock (got: $o)"
 fi
 
-# --- 47. the throttle sends a codex / kimi write tool straight through -------
+# --- 47. the throttle sends a codex / omp write tool straight through -------
 cpw() { # cpw <harness> <payload-json> [env...]
   local h="$1" payload="$2"
   shift 2
   printf '%s' "$payload" | env KB_BEAT_DRYRUN=1 KB_BEAT_HEARTBEAT_MIN_INTERVAL_SECS=180 "$@" "$BEAT_THROTTLE" "$h" 2>/dev/null
 }
-cpt kimi p4-gate Read >/dev/null   # opens the interval window
-o="$(cpw kimi "$(jq -nc --arg cwd "$CWD4" '{session_id:"p4-gate",cwd:$cwd,tool_name:"Edit",tool_input:{path:"k.rs"}}')")"
-if [ "$(jget "$o" '.detail.paths | join(",")')" = "$CWD4/k.rs" ]; then ok "kimi Edit bypasses the throttle gate with its path"; else bad "kimi throttle write (got: $o)"; fi
+cpt omp p4-gate Read >/dev/null   # opens the interval window
+o="$(cpw omp "$(jq -nc --arg cwd "$CWD4" '{session_id:"p4-gate",cwd:$cwd,tool_name:"edit",tool_input:{path:"k.rs"}}')")"
+if [ "$(jget "$o" '.detail.paths | join(",")')" = "$CWD4/k.rs" ]; then ok "omp edit bypasses the throttle gate with its path"; else bad "omp throttle write (got: $o)"; fi
 o="$(cpw codex "$(printf '%s' "$cp_payload" | jq -c '.session_id="p4-gate"')")"
 if [ "$(jget "$o" '.detail.paths | length')" = "4" ]; then ok "codex apply_patch bypasses the throttle gate with its paths"; else bad "codex throttle write (got: $o)"; fi
-o="$(cpt kimi p4-gate Read)"
-if [ -z "$o" ]; then ok "kimi Read inside the interval stays throttled"; else bad "kimi Read must stay throttled (got: $o)"; fi
-
-# --- 48. install-kimi-hooks.sh registers the three PRES4 entries ------------
-KCFG="$TMPROOT/kimi-config.toml"
-printf '[models]\n' >"$KCFG"
-if "$HOOKS_DIR/install-kimi-hooks.sh" --config "$KCFG" --sessions-dir "$TMPROOT/s" >/dev/null 2>&1 \
-   && grep -q 'event = "PostToolUse"' "$KCFG" && grep -q 'kb-beat-throttle.sh kimi"' "$KCFG" \
-   && grep -q 'event = "PermissionRequest"' "$KCFG" && grep -q 'kb-beat.sh kimi blocked' "$KCFG" \
-   && grep -q 'event = "PermissionResult"' "$KCFG" && grep -q 'kb-beat.sh kimi unblocked' "$KCFG"; then
-  ok "install-kimi-hooks.sh writes PostToolUse + PermissionRequest + PermissionResult entries"
-else
-  bad "install-kimi-hooks.sh PRES4 entries"
-fi
+o="$(cpt omp p4-gate Read)"
+if [ -z "$o" ]; then ok "omp Read inside the interval stays throttled"; else bad "omp Read must stay throttled (got: $o)"; fi
 
 echo
 echo "== AH7: Stop background_tasks -> detail.background (counts by bucket) =="

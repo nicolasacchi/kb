@@ -2,7 +2,7 @@
 //!
 //! Four producers drifted: live-status showed `omp resume <sid>` / `grok
 //! resume <sid>` (neither exists), the grok live adapter said `grok
-//! --resume`, the CLI called kimi/opencode not resumable while their
+//! --resume`, the CLI called opencode not resumable while their
 //! adapters printed real commands, and the sessions inspector showed
 //! `claude -r` for every harness. Copy-only text: kb never runs it.
 
@@ -59,7 +59,6 @@ pub fn resume_command(harness: &str, session_id: &str, cwd: Option<&str>) -> Str
             Some(c) => format!("grok -r {session_id} --cwd {c}"),
             None => format!("grok -r {session_id}"),
         },
-        "kimi" => format!("kimi -S {session_id}"),
         "opencode" => format!("opencode --session {session_id}"),
         // omp's `--resume` searches the current-cwd bucket then ALL sessions
         // globally, so no cwd is needed (unlike grok).
@@ -83,7 +82,6 @@ mod tests {
         assert_eq!(resume_command("claude", "sid1", None), "claude -r sid1");
         assert_eq!(resume_command("codex", "sid1", None), "codex resume sid1");
         assert_eq!(resume_command("grok", "sid1", None), "grok -r sid1");
-        assert_eq!(resume_command("kimi", "sid1", None), "kimi -S sid1");
         assert_eq!(
             resume_command("opencode", "sid1", None),
             "opencode --session sid1"
@@ -126,7 +124,7 @@ mod tests {
 
     #[test]
     fn cwd_is_ignored_for_every_harness_except_grok() {
-        for h in ["claude", "codex", "kimi", "opencode", "omp"] {
+        for h in ["claude", "codex", "opencode", "omp"] {
             assert_eq!(
                 resume_command(h, "sid1", Some("/w/x")),
                 resume_command(h, "sid1", None),
@@ -163,11 +161,21 @@ mod tests {
         }
     }
 
+    /// kimi support was removed: a legacy `kimi` row gets the honest
+    /// not-resumable text (verbatim label, no command), never a panic.
+    #[test]
+    fn a_legacy_kimi_row_is_not_resumable_but_renders() {
+        assert_eq!(
+            resume_command("kimi", "sid1", None),
+            "kimi — not resumable from this machine (no known kimi resume command; session id: sid1)"
+        );
+    }
+
     #[test]
     fn unknown_plain_harness_gets_the_honest_fallback() {
         assert_eq!(
-            resume_command("kimi-x", "sid1", None),
-            "kimi-x — not resumable from this machine (no known kimi-x resume command; session id: sid1)"
+            resume_command("zed-x", "sid1", None),
+            "zed-x — not resumable from this machine (no known zed-x resume command; session id: sid1)"
         );
     }
 }

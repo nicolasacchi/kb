@@ -96,7 +96,7 @@ pub const PINS: &[(&str, &str)] = &[
     ("@xterm/addon-unicode11", "0.9.0"),
 ];
 
-/// Known-good harness versions (kimi/grok unreconciled: never warned).
+/// Known-good harness versions (grok unreconciled: never warned).
 pub const KNOWN_GOOD: &[(&str, &str)] = &[
     ("omp", "18.17.0"),
     ("claude", "2.1.300"),

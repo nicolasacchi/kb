@@ -4,13 +4,12 @@ Deterministic, **LLM-free** hooks that wire the kb daemon in as an agent
 harness's memory. Every hook just runs a `kb` verb (or, for the `Stop`
 hooks, plain file operations). Most target Claude Code directly; the rest
 are capture/nudge adapters for other coding-agent harnesses (Codex,
-opencode, Grok Build, Kimi Code) and a full extension-based wiring for omp
+opencode, Grok Build) and a full extension-based wiring for omp
 (Oh My Pi).
 
 | Hook | Event | What it does |
 |---|---|---|
-| `kb-recall.sh` | `UserPromptSubmit` | Runs `kb recall <prompt> --cwd <payload cwd>` and injects the top memories as turn context. Silent on no hits / daemon down. **Project-scoped recall**: passing `--cwd` (never `--scope all`) lets the CLI resolve its own default "auto" scope — global corpora plus the caller repo's own `memory-<slug>` corpus, derived from the payload's `cwd` rather than this hook's process cwd (some harnesses run hooks with an unrelated `$PWD`). Outside a repo, or against a daemon too old to know "auto", the CLI degrades to the old fleet-wide behavior on its own. **Also works unchanged as a codex `UserPromptSubmit` hook** (same `.prompt` stdin field, same `hookSpecificOutput.additionalContext` output). For **Kimi Code**, run it with `KB_HOOK_FMT=kimi` — plain-stdout output instead of the JSON envelope, and it reads Kimi's array-shaped `.prompt` (`[{"type":"text","text":…}]`) as well as Claude/codex's string form. **CT-A3**: alongside each hit's human-readable line, it appends a machine-readable `<!--kb-recall/1 kb=<kb-name> id=<hex12>[ pos=<n>]-->` marker (the `pos=` rank pair is MR1; see [`KB_RECALL_LAYOUT`](#kb_recall_layout--the-shape-of-the-injected-block-mr1)), folded into that hit's block — the `memory_recalls` ledger's capture-side parse (`kb_core::sessions::view::derive_memory_recalls`) prefers this marker and falls back to the free-text line only when it's absent (older captures, a hand-edited transcript). **CT-D1**: on the **first** `UserPromptSubmit` of a session id it ALSO makes one `kb context "<prompt>" --cwd … --session …` call and APPENDS its COUNTS line ("3 prior sessions · 2 open comments · 5 memories") plus "run `kb context`" beneath the ordinary recall block. The scent is **additive, never a replacement** (ruling 2026-08-22): recall has pushed memory titles on every turn since v0.9 and invariant #11's R0/R3 governs EPISODIC material — so transcripts stay counts-and-pointers-only ("pulled on demand, never auto-injected") while turn 1 keeps the memory titles it always had. Either half may be empty: an empty recall window with prior sessions/comments emits the scent alone, and both empty exits silently as before. First-turn proxy = an ATOMIC `set -o noclobber` create of `~/.cache/kb/context-scent-<sid>`, so it fires exactly once per session id. EVERY miss degrades to the plain recall block — no session id, an unwritable cache dir, a resumed session, a daemon too old to serve `/api/context`, or an empty corpus (`"no prior context"` is never injected). Turns 2..n never enter the branch and are byte-identical to pre-CT-D1. **MR1**: the SHAPE of the block is selected by `KB_RECALL_LAYOUT` (`v1` \| `v2`, the default \| `v2-last`) — see the section below. Tests: `tests/test-recall-scent.sh`, `tests/test-recall-layout.sh`, plus `tests/test-recall-{flagged,warns,drift,kimi}.sh`. |
-| `kb-wake-kimi.sh` | `UserPromptSubmit` (Kimi Code) | The Kimi wake path. Kimi's `SessionStart` stdout never reaches the model (probe-verified: only `UserPromptSubmit` stdout is appended to context, as a `<hook_result>` user message), so the wake content rides the first prompt instead: once per session (marker `~/.cache/kb/waked-kimi-<sid>`) it emits the memory protocol (shared `memory-protocol.txt`), the recent-memories index (`kb recall '' --cwd <payload cwd>`, same project-scoped `--cwd`/no-`--scope all` as `kb-recall.sh`), and the distill-pending ledger surface-and-consume (same relay as `kb-wake.sh`, harness-labeled). **v0.45 N5**: appends, last, the first line of `kb chores --line` (same block as `kb-wake.sh`: at most once per UTC day via the CLI's own stamp, `KB_SKEW_SHOWN=0` because this script has no skew notice, 3s bound, nothing on any failure). Session marker files are left to `kb-recall.sh`, registered on the same event. Tests: `tests/test-wake-kimi.sh`, `tests/test-wake-kimi-chores.sh`. |
+| `kb-recall.sh` | `UserPromptSubmit` | Runs `kb recall <prompt> --cwd <payload cwd>` and injects the top memories as turn context. Silent on no hits / daemon down. **Project-scoped recall**: passing `--cwd` (never `--scope all`) lets the CLI resolve its own default "auto" scope — global corpora plus the caller repo's own `memory-<slug>` corpus, derived from the payload's `cwd` rather than this hook's process cwd (some harnesses run hooks with an unrelated `$PWD`). Outside a repo, or against a daemon too old to know "auto", the CLI degrades to the old fleet-wide behavior on its own. **Also works unchanged as a codex `UserPromptSubmit` hook** (same `.prompt` stdin field, same `hookSpecificOutput.additionalContext` output). `KB_HOOK_FMT=plain` prints the block as plain stdout instead of the JSON envelope (the shell tests and the bench probe use it; no shipped harness registers it), and the hook reads an array-shaped `.prompt` (`[{"type":"text","text":…}]`) as well as the string form. **CT-A3**: alongside each hit's human-readable line, it appends a machine-readable `<!--kb-recall/1 kb=<kb-name> id=<hex12>[ pos=<n>]-->` marker (the `pos=` rank pair is MR1; see [`KB_RECALL_LAYOUT`](#kb_recall_layout--the-shape-of-the-injected-block-mr1)), folded into that hit's block — the `memory_recalls` ledger's capture-side parse (`kb_core::sessions::view::derive_memory_recalls`) prefers this marker and falls back to the free-text line only when it's absent (older captures, a hand-edited transcript). **CT-D1**: on the **first** `UserPromptSubmit` of a session id it ALSO makes one `kb context "<prompt>" --cwd … --session …` call and APPENDS its COUNTS line ("3 prior sessions · 2 open comments · 5 memories") plus "run `kb context`" beneath the ordinary recall block. The scent is **additive, never a replacement** (ruling 2026-08-22): recall has pushed memory titles on every turn since v0.9 and invariant #11's R0/R3 governs EPISODIC material — so transcripts stay counts-and-pointers-only ("pulled on demand, never auto-injected") while turn 1 keeps the memory titles it always had. Either half may be empty: an empty recall window with prior sessions/comments emits the scent alone, and both empty exits silently as before. First-turn proxy = an ATOMIC `set -o noclobber` create of `~/.cache/kb/context-scent-<sid>`, so it fires exactly once per session id. EVERY miss degrades to the plain recall block — no session id, an unwritable cache dir, a resumed session, a daemon too old to serve `/api/context`, or an empty corpus (`"no prior context"` is never injected). Turns 2..n never enter the branch and are byte-identical to pre-CT-D1. **MR1**: the SHAPE of the block is selected by `KB_RECALL_LAYOUT` (`v1` \| `v2`, the default \| `v2-last`) — see the section below. Tests: `tests/test-recall-scent.sh`, `tests/test-recall-layout.sh`, plus `tests/test-recall-{flagged,warns,drift}.sh`. |
 | `kb-wake.sh` | `SessionStart` | Re-injects the memory protocol + a compact index of recent memories (`kb recall '' --cwd <payload cwd>`, project-scoped like `kb-recall.sh` — no more `--scope all`). **MI-W0.3**: also surfaces (and consumes) the `~/.cache/kb/distill-pending` ledger — up to the 3 newest grok sessions queued by `kb-capture-grok.sh` that committed without a successful `kb remember`, dropping entries older than 14 days. See "Grok distill-pending relay" below. **v0.44 F10**: appends the first line of `kb chores --line` (at most once per UTC day, kept by the CLI; nothing when nothing is due, the daemon is down or the CLI predates the verb; 3s bound). Test: `tests/test-wake-chores.sh`. |
 | `kb-capture.sh` | `Stop` | Captures the conversation transcript into the `[kb.sessions]` corpus (set `KB_SESSIONS_DIR`) via `kb sessions capture` (scrubbed). A failed capture is spooled privately and replayed, never embedded raw - see "A failed capture is spooled" below. |
 | `kb-capture-codex.sh` | `Stop` (codex) | Capture adapter for OpenAI Codex CLI: translates the rollout JSONL named by `transcript_path` into a Claude-shaped session capture (commits, file edits from `patch_apply_end`, web searches, usage) so the digest, `kb why`, and `kb recollect` work across harnesses. Also runs as a CLI backfill: `kb-capture-codex.sh <rollout.jsonl>…`. Lossy by design (outputs capped, reasoning dropped); the raw rollout path rides an `adapter-meta` line. Same `KB_SESSIONS_DIR` gate + atomic overwrite-per-session contract as `kb-capture.sh`. Design + e2e evidence: [docs/research/kb-memory-for-foreign-harnesses-2026-07.html](../../../docs/research/kb-memory-for-foreign-harnesses-2026-07.html). |
@@ -19,10 +18,8 @@ opencode, Grok Build, Kimi Code) and a full extension-based wiring for omp
 | `kb-capture-throttle.sh` | `PostToolUse`, `PreCompact` | LF-3a/D2 — a min-interval gate (`KB_CAPTURE_MIN_INTERVAL_SECS`, default 240s) in front of `kb-capture.sh`, so a long session gets a fresh capture every few minutes instead of only at Stop (makes the staleness badge + presence chip honest at minutes-granularity). **Default OFF** — opt in with `KB_CAPTURE_LIVE=1`; the hook entries are always registered, the script itself is the gate. `PreCompact` captures the pre-compaction tail, the one moment that content is otherwise lost. Test: `tests/test-capture-throttle.sh`. |
 | `kb-distill-nudge.sh` | `Stop` | When the session ran `git commit` but `kb remember` never SUCCEEDED, shows a one-line suggestion to run `/kb-distill <session-id>` (the episodic→semantic distiller, a skill in this plugin). Two transcript greps — the parent transcript AND any Task-tool subagent sidecars under `<session-id>/subagents/*.jsonl` (**MI-W0.3**) — no daemon round-trip; once per session (marker in `~/.cache/kb/`); same `KB_SESSIONS_DIR` gate as capture. **MI-W0.3**: suppression is success-aware — it greps for `kb remember`'s own `remembered <12-hex-id>` stdout line, not just the command being run, so a FAILED remember (daemon down, 400, …) no longer silently suppresses the nudge. A `--json` remember success prints no such line, so a spurious nudge is possible — an accepted bias (losing a fact silently was worse). Test: `tests/test-distill-nudge.sh`. |
 | `kb-distill-nudge-codex.sh` | `Stop` (codex) | **MI-W0.3** — the codex-side twin of `kb-distill-nudge.sh`: same git-commit-without-a-successful-remember check, but greps the CODEX rollout named by `.transcript_path` instead of a Claude transcript (tool-call lines matched on `"name":"(exec_command\|shell\|local_shell)"`, then the literal substring `git commit`; the `remembered <12-hex-id>` success marker is plain text either way, so it's the same regex). Session id read from the rollout's own `session_meta.payload.id`. Once per session (its own `distill-nudged-codex-*` marker namespace under `~/.cache/kb/`). Registered in `~/.codex/hooks.json`'s `Stop` chain after the capture entry (see "Codex CLI registration" below). Test: `tests/test-distill-nudge-codex.sh`. |
-| `kb-capture-kimi.sh` | `Stop` / `SessionEnd` / `PreCompact` (Kimi Code) | Capture adapter for Kimi Code: Kimi's hook payload has no `transcript_path`, so the script derives the wire itself — `${KIMI_CODE_HOME:-~/.kimi-code}/sessions/wd_<basename(cwd)>_<sha256(cwd)[0:12]>/<session_id>/agents/main/wire.jsonl`. Translates the wire (`turn.prompt`, `content.part` text/think, `tool.call`/`tool.result` — Kimi tool names are already Claude-shaped; Write/Edit `.args.path` → `file_path`, usage `inputOther+inputCacheRead+inputCacheCreation`/`output` → `input_tokens`/`output_tokens`) into the same Claude-shaped JSONL and writes via the SAME preferred path (`kb sessions capture`, bash fallback with `kb-harness: kimi`). CLI backfill: `kb-capture-kimi.sh <wire.jsonl>…`. Test: `tests/test-capture-kimi.sh`. |
-| `kb-distill-nudge-kimi.sh` | `Stop` (Kimi Code) | The Kimi-side twin of the distill nudge: greps the wire's `"name":"Bash"` `tool.call` lines for `git commit`, suppresses on a successful `remembered <12-hex-id>`, once per session (`distill-nudged-kimi-*` marker). On a hit it prints the one-line nudge (Stop stdout may be shown to the user) AND appends `kimi <sid> <epoch>` to the shared `~/.cache/kb/distill-pending` ledger, so the next interactive session's wake (any harness) surfaces it. Test: `tests/test-distill-nudge-kimi.sh`. |
 | `kb-capture-omp.sh` | `session_stop` / `session.compacting` / `session_shutdown` (omp, via `kb-omp.ts`) | Capture adapter for Oh My Pi (omp): translates an omp v3 session JSONL (`~/.omp/agent/sessions/<encoded-cwd>/<ts>_<sid>.jsonl`) into the same Claude-shaped JSONL. omp sessions are an append-only TREE (`id`/`parentId`), so a single backward pass from the last entry captures the LEAF CHAIN only — abandoned branch experiments never pollute the activity — and everything at-or-before a trailing `reset_boundary` (`/clear`) is cut. Tool names are canonicalized (`bash`→`Bash`, …), Write/Edit `.arguments.path` → `file_path`, per-assistant `usage{input,output,cacheRead,cacheWrite}` → summed `input_tokens`/`output_tokens`; own injected `custom_message` entries are dropped so kb's context never echoes back into the corpus. Lenient pre-clean drops torn trailing lines (crash or active append) instead of aborting. Same preferred path + fallback + overwrite contract as the other adapters. **Lifecycle (v0.45 OC)**: one active conversion per session file across processes, a hard deadline, and every child reaped on cancel - see "The omp capture owns its lifecycle" below. **Segmented capture (v0.46 SEG-PR2, opt-in)**: a session whose leaf chain outgrows 16 MiB is landed as an ordered chain of ordinary sessions instead of one O(session) conversion - see "Segmented omp capture" below. CLI backfill: `kb-capture-omp.sh <session.jsonl>…`. Tests: `tests/test-capture-omp.sh`, `tests/test-capture-omp-lifecycle.sh`, `tests/test-capture-omp-segments.sh`, `tests/test-capture-omp-segments-scale.sh`, `tests/test-omp-capture-lifecycle.sh` (the `kb-omp.ts` spawn path, bun). |
-| `kb-beat.sh` | `SessionStart`/`UserPromptSubmit`/`Stop`/`SessionEnd`/`Notification` (Claude Code); registered analogously for codex, Kimi Code, opencode, omp | **LSC-3** push collection for the live-sessions cockpit (design: [docs/research/kb-live-sessions-cockpit-2026-08.html](../../../docs/research/kb-live-sessions-cockpit-2026-08.html) §4/§5). One script for all harnesses: `kb-beat.sh <harness> <event>` reads the hook payload on stdin, maps it to the canonical `kb-live/1` beat (`v`, `session_id`, `harness`, `event` — one of `start\|prompt\|tool\|turn_end\|blocked\|unblocked\|end`, never a derived state — `at`, `host`, `pid`, `cwd`, `model`, `lease_secs`, optional `title`/`last_line`/`detail`), and POSTs it fire-and-forget (detached background subshell, `curl --max-time 2 --connect-timeout 1`) to `${KB_DAEMON_URL:-http://127.0.0.1:4000}${KB_BEAT_PATH:-/api/sessions/beat}`. Every failure path — no `curl`/`jq`, no daemon, the route not existing yet, malformed stdin — is silent and `exit 0`; this ships safely ahead of the server-side route. Kill switch `KB_BEAT=0`; opt out of `last_line` content with `KB_BEAT_CONTENT=0`; `KB_BEAT_DRYRUN=1` prints the JSON body to stdout instead of posting (used by `tests/test-beat.sh` and for manual sanity checks). Claude's Stop event carries `.last_assistant_message` verbatim (capped 240 chars) as `last_line`; on `turn_end` it also adds `detail.background` (`{agent,shell,other}` counts from Stop's `background_tasks`, by closed bucket and capped at 99; never an id, description or command; `KB_BEAT_BACKGROUND=0` omits it); codex resolves the canonical `session_id` from the rollout's own `session_meta.payload.id` (same ground-truth preference as every other adapter here), falling back to a bare `.session_id` if present. `KB_SESSIONS_DIR` gates it exactly like every capture hook (kb not configured for this project ⇒ no-op). Test: `tests/test-beat.sh`. For Claude's `Notification` only `notification_type` `permission_prompt`, `elicitation_dialog` and `elicitation_url_dialog` (or, with no type, the text "Claude needs your permission") become a `blocked` beat (reason capped at 120 chars, `detail.tool` parsed from the canonical text); `idle_prompt` and every other type send nothing. A blocked beat also writes `beat-blocked-<sid>` (the blocking `agent_id`) for the throttle (OL IDEA1). Takes an optional third argument, honoured only as `start` on a `tool` event (`kb-beat.sh claude tool start`, called by `kb-beat-pretool.sh`): it adds `detail.tool` (capped at 64 bytes) and `detail.phase`; any other third argument is ignored. |
+| `kb-beat.sh` | `SessionStart`/`UserPromptSubmit`/`Stop`/`SessionEnd`/`Notification` (Claude Code); registered analogously for codex, opencode, omp | **LSC-3** push collection for the live-sessions cockpit (design: [docs/research/kb-live-sessions-cockpit-2026-08.html](../../../docs/research/kb-live-sessions-cockpit-2026-08.html) §4/§5). One script for all harnesses: `kb-beat.sh <harness> <event>` reads the hook payload on stdin, maps it to the canonical `kb-live/1` beat (`v`, `session_id`, `harness`, `event` — one of `start\|prompt\|tool\|turn_end\|blocked\|unblocked\|end`, never a derived state — `at`, `host`, `pid`, `cwd`, `model`, `lease_secs`, optional `title`/`last_line`/`detail`), and POSTs it fire-and-forget (detached background subshell, `curl --max-time 2 --connect-timeout 1`) to `${KB_DAEMON_URL:-http://127.0.0.1:4000}${KB_BEAT_PATH:-/api/sessions/beat}`. Every failure path — no `curl`/`jq`, no daemon, the route not existing yet, malformed stdin — is silent and `exit 0`; this ships safely ahead of the server-side route. Kill switch `KB_BEAT=0`; opt out of `last_line` content with `KB_BEAT_CONTENT=0`; `KB_BEAT_DRYRUN=1` prints the JSON body to stdout instead of posting (used by `tests/test-beat.sh` and for manual sanity checks). Claude's Stop event carries `.last_assistant_message` verbatim (capped 240 chars) as `last_line`; on `turn_end` it also adds `detail.background` (`{agent,shell,other}` counts from Stop's `background_tasks`, by closed bucket and capped at 99; never an id, description or command; `KB_BEAT_BACKGROUND=0` omits it); codex resolves the canonical `session_id` from the rollout's own `session_meta.payload.id` (same ground-truth preference as every other adapter here), falling back to a bare `.session_id` if present. `KB_SESSIONS_DIR` gates it exactly like every capture hook (kb not configured for this project ⇒ no-op). Test: `tests/test-beat.sh`. For Claude's `Notification` only `notification_type` `permission_prompt`, `elicitation_dialog` and `elicitation_url_dialog` (or, with no type, the text "Claude needs your permission") become a `blocked` beat (reason capped at 120 chars, `detail.tool` parsed from the canonical text); `idle_prompt` and every other type send nothing. A blocked beat also writes `beat-blocked-<sid>` (the blocking `agent_id`) for the throttle (OL IDEA1). Takes an optional third argument, honoured only as `start` on a `tool` event (`kb-beat.sh claude tool start`, called by `kb-beat-pretool.sh`): it adds `detail.tool` (capped at 64 bytes) and `detail.phase`; any other third argument is ignored. |
 | `kb-beat-throttle.sh` | `PostToolUse` (Claude Code) | A min-interval gate (`KB_BEAT_HEARTBEAT_MIN_INTERVAL_SECS`, default 180s) in front of `kb-beat.sh <harness> tool`, mirroring `kb-capture-throttle.sh`'s pattern but keyed on a per-session marker file's mtime (no artifact to stat here). Exists so a single long tool call (a 20-minute build) still refreshes the session's `lease_secs` mid-turn instead of only at the next `Stop` — design §11's named mitigation for "per-tool beats would be hundreds per session." Default **ON** (unlike the capture throttle — a beat is a tiny POST, not a multi-MB re-serialize); `KB_BEAT_HEARTBEAT=0` disables just the heartbeat, `KB_BEAT=0` disables every beat. It also resolves a Claude block: the first `PostToolUse` from the agent named in `beat-blocked-<sid>` emits one `unblocked` beat, bypassing the interval gate and `KB_BEAT_HEARTBEAT=0` (OL IDEA1). |
 | `kb-beat-pretool.sh` | `PreToolUse` (Claude Code) | **OL IDEA4** — a deduped tool-START beat: `kb-beat.sh claude tool start` carrying `detail.tool` (the tool NAME only; `tool_input` is never read) and `detail.phase: "start"`, so a quiet `stalled?` row can say `last: Bash · 38m`. Sends only when the tool name changes or `KB_BEAT_TOOLS_MIN_INTERVAL_SECS` (default 180) has passed, keyed on a `beat-tool-<sid>` marker holding the last name sent. Subagent calls (non-empty `agent_id`) send nothing. Kill switches: `KB_BEAT=0`, `KB_BEAT_HEARTBEAT=0`, `KB_BEAT_TOOLS=0`. Never blocks or denies a tool; always exits 0. |
 
@@ -33,13 +30,12 @@ Hooks never block: any internal failure exits 0 with nothing injected.
 SL3 wires `kb slate` — the per-project SHARED WORKING STATE (who is on
 what, open questions, hypotheses, dead ends; **not** memory) — into the
 SAME two lanes every harness already shares for memory
-(`kb-wake.sh`/`kb-wake-kimi.sh`, `kb-recall.sh`), so nothing new needs
+(`kb-wake.sh`, `kb-recall.sh`), so nothing new needs
 registering anywhere `kb-memory` is already installed. Design:
 [docs/research/kb-slate-design-2026-09.html](../../../docs/research/kb-slate-design-2026-09.html)
 §12 (harness reach) + §16 (SL3).
 
-- **The HYBRID block** (`kb-wake.sh` / `kb-wake-kimi.sh`, session start /
-  Kimi's first prompt): `timeout 4 kb slate open --hybrid --budget 2000
+- **The HYBRID block** (`kb-wake.sh`, session start): `timeout 4 kb slate open --hybrid --budget 2000
   --session-id <sid> --cwd <payload cwd> --json`, appended (blank-line
   separated) after the memory index and the distill-pending block. Takes
   `.text` for the injected block and `.head_seq`, written to
@@ -54,14 +50,13 @@ registering anywhere `kb-memory` is already installed. Design:
   `timeout 2 kb slate delta --since <cursor> --session-id <sid> --cwd
   <payload cwd> --budget 1500 --json`; a non-empty `.text` is appended
   (blank-line separated) and the cursor advances to `.head_seq`. The
-  `KB_HOOK_FMT=kimi` bare-stdout branch carries the same block — it rides
+  `KB_HOOK_FMT=plain` bare-stdout branch carries the same block — it rides
   the shared `block` variable, no separate wiring.
 - **Session id ladder** (both blocks): the hook payload's own
   `session_id` → `KB_SESSION_ID` (env override) → the `current-session`
   marker `kb-wake.sh`/`kb-recall.sh` already write on every turn — so a
   resumed or foreign-harness session still resolves the SAME cursor file
-  the wake lane seeded. `kb-wake-kimi.sh` skips the ladder (its
-  once-per-session gate already requires a payload session id).
+  the wake lane seeded.
 - **Markers**, both under `~/.cache/kb`, read/written only by these hooks
   and the CLI:
   - `slate-cursor-<sid>` — this session's slate read position (a bare
@@ -87,7 +82,7 @@ registering anywhere `kb-memory` is already installed. Design:
   (e.g. a manual `KB_SESSION_ID=abc123 kb-wake.sh </dev/null` sanity
   check) where no payload session id exists to read.
 - **Identity export (v0.44)** — the other direction: the hooks now
-  *publish* the identity. `kb-wake.sh`, `kb-wake-kimi.sh` and `kb-recall.sh`
+  *publish* the identity. `kb-wake.sh` and `kb-recall.sh`
   export `KB_SESSION_ID` (+ `KB_HARNESS` when knowable) for the `kb` they
   spawn; on Claude's SessionStart they also append the same two lines to
   `$CLAUDE_ENV_FILE`, the one channel that reaches the agent's later Bash
@@ -115,7 +110,6 @@ registering anywhere `kb-memory` is already installed. Design:
   | omp | `kb-omp.ts` (and the kb-code omp hooks) set `process.env.KB_SESSION_ID`/`KB_HARNESS` for the MAIN agent only (`ctx.agent.kind === "main"`; subagents never write it, so concurrent task/eval/`/tan` agents cannot steal the identity); omp spawns its bash tool from it; covered by `tests/test-omp-slate.sh` and `tests/test-omp-beats.sh`, which CI runs under bun | git trailer: `KB_SESSION_ID` rung, then repo marker |
   | Grok | `GROK_SESSION_ID` (ladder rung 4), when the harness exports it | repo marker |
   | Codex | none - no env-file or process.env channel | repo marker written by `kb-recall.sh` on every prompt |
-  | Kimi Code | none | repo marker written by `kb-recall.sh`/`kb-wake-kimi.sh` |
   | opencode | none documented (the plugin sets `shell.env` for proxies only) | repo marker |
 
   A harness on the "repo marker" row is attributed to the most recent session
@@ -129,7 +123,7 @@ registering anywhere `kb-memory` is already installed. Design:
   first — kb-omp.ts publishes it only for the main agent, and a stale
   `KB_SESSION_ID` exported in a long-lived shell mis-stamps commits.
 
-  A capture adapter (omp, codex, kimi, opencode) stamps `job_ulid` on its
+  A capture adapter (omp, codex, opencode) stamps `job_ulid` on its
   adapter-meta line when `KB_JOB_ULID` is set (shape `^[A-Za-z0-9_-]{1,64}$`
   only), and `kb sessions by-job <ulid>` then finds the session. Because the
   env is process-wide, an omp process's subagent captures carry the same
@@ -144,7 +138,7 @@ registering anywhere `kb-memory` is already installed. Design:
   pushes each item through the normal scrubbed capture path and deletes it;
   `kb doctor --hooks` (check `outbox`) counts what is waiting. Test:
   `tests/test-capture-spool.sh`.
-- **The codex/opencode/kimi/omp/grok adapters spool too (v0.45 N4)** - none of
+- **The codex/opencode/omp/grok adapters spool too (v0.45 N4)** - none of
   them writes session HTML any more. Each translates its harness transcript to
   Claude-shaped JSONL (the first record is an `adapter-meta` line carrying
   `harness`, which is rung 1 of the enrich harness ladder, so the harness
@@ -517,7 +511,7 @@ registering anywhere `kb-memory` is already installed. Design:
   `sanitize_sid_matches_hook_spool_key_golden_table`). Captures written under
   the old lossy name are never renamed: the throttle and the capture engine
   still recognise one, but only when the id embedded in the file equals the raw
-  id. The once-per-session markers (distill nudge, kimi wake, beat heartbeat)
+  id. The once-per-session markers (distill nudge, beat heartbeat)
   use the same key; the nudge/wake gates also honour a marker left under the old
   lossy name (`hook_marker_seen`), so an upgrade never double-fires. The omp
   sidecar file name (`agent-<name>.jsonl`) stays readable and gains a short hash
@@ -535,7 +529,7 @@ registering anywhere `kb-memory` is already installed. Design:
   unscrubbed. They probe `$KB_BIN_DIR`, `~/.local/bin`, `~/.cargo/bin`,
   `/usr/local/bin` and `/opt/homebrew/bin` before giving up, so a minimal
   hook PATH is usually fine; if your harness strips even `$HOME`, export
-  `KB_BIN_DIR`. The kimi/omp/grok adapters prefer `kb sessions capture` and,
+  `KB_BIN_DIR`. The omp/grok adapters prefer `kb sessions capture` and,
   when that fails, scrub their bash-fallback output the same way (and write
   nothing if the scrubber is missing).
 
@@ -559,9 +553,6 @@ nothing new needs registering where `kb-memory` is already wired:
 
   Answers to your own asks arrive in full in the slate delta of your next
   prompt.
-- **Kimi Code** — re-run `install-kimi-hooks.sh`: it already wires
-  `kb-wake-kimi.sh` (hybrid, first prompt) and `KB_HOOK_FMT=kimi
-  kb-recall.sh` (delta, every prompt) — no new `[[hooks]]` entry needed.
 - **OpenCode** — the operator's `~/.config/opencode/plugin/kb-memory.ts`
   already shells `kb-wake.sh`/`kb-recall.sh` from its
   `experimental.chat.system.transform` handler the same way its beat
@@ -588,14 +579,13 @@ Two live-session facts need a hook that can observe them: which **file** a
 session is editing (`detail.paths`, drawn as the glow in kb-code) and that a
 session is **blocked on a permission prompt**. What each harness's hook surface
 can observe, from its own documentation or shipped sources (checked
-2026-11-01 against codex-cli 0.149.0, Kimi Code 0.42.0, grok 1.0.46, omp 18.13.3,
+2026-11-01 against codex-cli 0.149.0, grok 1.0.46, omp 18.13.3,
 opencode's plugin docs):
 
 | Harness | Write/edit event with the file path | Permission event | Turn boundaries | What kb sends |
 |---|---|---|---|---|
 | Claude Code | `PostToolUse` for `Edit`/`Write`/`MultiEdit`/`NotebookEdit`, `tool_input.file_path` | `Notification` (`permission_prompt`, `elicitation_*`); no resolution event | `UserPromptSubmit`, `Stop`, `SessionStart`, `SessionEnd` | paths; blocked; unblocked inferred from the next `PostToolUse` |
 | codex | `PostToolUse` for `apply_patch`; `tool_input.command` is the patch text (from the codex docs, **not observed live**), the `*** Add/Update/Delete File:` and `*** Move to:` headers name the files | `PermissionRequest` hook (`tool_name`, `tool_input`); no resolution event | `UserPromptSubmit`, `Stop`, `SessionStart` (`SessionEnd` is named in the binary, not wired or verified here) | paths; blocked; unblocked inferred from the next `PostToolUse` |
-| Kimi Code | `PostToolUse` for `Write`/`Edit`; `tool_input.path` | `PermissionRequest` and `PermissionResult` (fires when the prompt is answered, granted or denied: from the bundled source, **not observed live**; if it does not fire on a denial the row stays blocked until the next prompt or turn end) | `UserPromptSubmit`, `Stop`, `SessionEnd` (not under `kimi -p`) | paths; blocked; unblocked (explicit) |
 | omp | `tool_call` extension event for `edit`/`write`; the call's `input.path` (from omp's `types.ts`, **not observed live**; the event fires before the tool runs, so a path beat is pre-execution intent and can name an edit that is then refused or fails). The hashline and apply_patch edit modes carry their paths inside a text `input`, which is **not read**: those calls beat without a path | `tool_approval_requested` / `tool_approval_resolved` | `before_agent_start`, `session_stop`, `session_start`, `session_shutdown` | paths (replace/patch modes); blocked; unblocked (explicit) |
 | opencode | `tool.execute.before`/`after` plugin hooks name the tool; the path key of `edit`/`write` args is **not documented** and `filePath` is what `kb-beat.sh` reads, so this half is plugin-side and unverified against a live opencode | `permission.asked` / `permission.replied` events | `session.status` busy/idle | blocked; unblocked (explicit); paths only if the operator's plugin applies the snippet below |
 | grok | `PostToolUse` fires for every tool with `toolName`/`toolInput` (camelCase), but grok's edit tool (`search_replace`) has **undocumented input keys**: **unknown, no path is sent** | `Notification` with `notificationType: permission_prompt`; `PermissionDenied` for a denial; no grant event | `UserPromptSubmit`, `Stop`, `StopFailure`, `StopCancelled`, `SessionStart`, `SessionEnd` | blocked; unblocked inferred from the next `PostToolUse` |
@@ -609,12 +599,12 @@ every harness.
 How it is wired: `kb-hook-lib.sh` owns two tables, `hook_write_tool <harness>
 <tool>` (which tool names are write tools, each harness's own name) and
 `hook_inferred_unblock <harness>` (claude, codex, grok: the block is resolved by
-the first `PostToolUse` after it, through `kb-beat-throttle.sh`; kimi, omp and
+the first `PostToolUse` after it, through `kb-beat-throttle.sh`; omp and
 opencode send an explicit `unblocked`). `kb-beat.sh` reads both spellings of
 the payload keys (`session_id`/`sessionId`, `tool_name`/`toolName`,
 `tool_input`/`toolInput`) so grok's camelCase payload works unchanged.
-A blocked beat's `reason` is the tool name only for codex and kimi
-(`permission request: <tool>`; their free-text action/command fields are never
+A blocked beat's `reason` is the tool name only for codex
+(`permission request: <tool>`; its free-text action/command fields are never
 forwarded) and is capped at 120 characters for every other harness. For codex
 the unblock marker is keyed by the rollout's `session_meta` id, in both
 `kb-beat.sh` and `kb-beat-throttle.sh`, so a payload `session_id` that differs
@@ -690,98 +680,6 @@ Agent-initiated `kb` calls (search/why/recollect/remember) additionally need
 loopback network inside codex's sandbox — `[sandbox_workspace_write]
 network_access = true` in `~/.codex/config.toml`. The hooks themselves run
 outside the sandbox and need nothing.
-
-## Kimi Code registration
-
-Kimi Code hooks are `[[hooks]]` entries in
-`${KIMI_CODE_HOME:-~/.kimi-code}/config.toml` (fields: `event`, `matcher`,
-`command`, `timeout`; stdin payload carries `hook_event_name`, `session_id`,
-`cwd`, `client_type`; exit 0 / fail-open, same contract as Claude's).
-Install (idempotent, marker-delimited block, backs up the config,
-`--uninstall` to remove):
-
-```sh
-plugins/kb-memory/hooks/install-kimi-hooks.sh [--sessions-dir DIR]
-```
-
-which writes the equivalent of:
-
-```toml
-[[hooks]]
-event = "UserPromptSubmit"
-command = "/path/to/kb/plugins/kb-memory/hooks/kb-wake-kimi.sh"
-timeout = 15
-
-[[hooks]]
-event = "UserPromptSubmit"
-command = "env KB_HOOK_FMT=kimi /path/to/kb/plugins/kb-memory/hooks/kb-recall.sh"
-timeout = 15
-
-[[hooks]]
-event = "UserPromptSubmit"
-command = "env KB_SESSIONS_DIR=$HOME/kb/sessions /path/to/kb/plugins/kb-memory/hooks/kb-beat.sh kimi prompt"
-timeout = 5
-
-[[hooks]]
-event = "Stop"
-command = "env KB_SESSIONS_DIR=$HOME/kb/sessions /path/to/kb/plugins/kb-memory/hooks/kb-capture-kimi.sh"
-timeout = 120
-
-[[hooks]]
-event = "Stop"
-command = "env KB_SESSIONS_DIR=$HOME/kb/sessions /path/to/kb/plugins/kb-memory/hooks/kb-distill-nudge-kimi.sh"
-timeout = 10
-
-[[hooks]]
-event = "Stop"
-command = "env KB_SESSIONS_DIR=$HOME/kb/sessions /path/to/kb/plugins/kb-memory/hooks/kb-beat.sh kimi turn_end"
-timeout = 5
-
-[[hooks]]
-event = "SessionEnd"
-command = "env KB_SESSIONS_DIR=$HOME/kb/sessions /path/to/kb/plugins/kb-memory/hooks/kb-capture-kimi.sh"
-timeout = 120
-
-[[hooks]]
-event = "SessionEnd"
-command = "env KB_SESSIONS_DIR=$HOME/kb/sessions /path/to/kb/plugins/kb-memory/hooks/kb-beat.sh kimi end"
-timeout = 5
-
-[[hooks]]
-event = "PreCompact"
-command = "env KB_SESSIONS_DIR=$HOME/kb/sessions /path/to/kb/plugins/kb-memory/hooks/kb-capture-kimi.sh"
-timeout = 120
-```
-
-**OL PRES4:** the installer also registers `PostToolUse`
-(`kb-beat-throttle.sh kimi`: heartbeat + the file a `Write`/`Edit` touched),
-`PermissionRequest` (`kb-beat.sh kimi blocked`) and `PermissionResult`
-(`kb-beat.sh kimi unblocked`). Re-run the installer to pick them up.
-
-The three `kb-beat.sh kimi …` entries (**LSC-3**) push live-session beats
-the same way the Claude Code registration does — see `kb-beat.sh`'s table
-row above. `SessionEnd` is the one that matters most here too: per the
-"Kimi quirks" note below, it's the reliable "finished" signal for
-interactive Kimi sessions (it does not fire under headless `kimi -p`,
-where `Stop`'s `turn_end` beats remain the only signal).
-
-Kimi quirks that shape the above (probe-verified against the live CLI, not
-just the docs):
-
-- Only `UserPromptSubmit` stdout reaches the model (appended as a
-  `<hook_result hook_event="UserPromptSubmit">` user message). `SessionStart`
-  and `Stop` stdout is dropped — hence the wake/protocol injection rides the
-  first prompt (`kb-wake-kimi.sh`), not `SessionStart`.
-- `.prompt` in the `UserPromptSubmit` payload is a content-parts ARRAY
-  (`[{"type":"text","text":…}]`), not a string; `kb-recall.sh` handles both.
-- No `transcript_path` anywhere; the transcript is the session's
-  `agents/main/wire.jsonl` under
-  `~/.kimi-code/sessions/wd_<basename(cwd)>_<sha256(cwd)[0:12]>/<session_id>/`.
-- `SessionEnd` does not fire in headless `kimi -p` runs; `Stop` is the
-  reliable capture trigger (it fires per turn, and re-capture overwrites the
-  same per-session file, same contract as `kb-capture.sh`).
-- Hooks load at session start — edits to `config.toml` apply to the NEXT
-  session.
 
 ## opencode registration (LSC-3 beats)
 
@@ -939,7 +837,7 @@ omp quirks that shape the above (verified against the installed
 - Extensions load at startup; edits apply to the NEXT session.
 - `before_agent_start` carries the prompt text and can return
   `{ message: { customType, content, display } }` — the only prompt-time
-  injection channel, so the wake rides the first prompt (Kimi-style)
+  injection channel, so the wake rides the first prompt
   instead of `session_start`, whose emissions reach nobody.
 - `session_stop` is the direct `Stop` analog: fires per agent settle for the
   main session only (never subagents), carries `session_id` + `session_file`.
@@ -1052,7 +950,7 @@ Tests: `tests/test-capture-omp.sh`, `tests/test-distill-nudge-omp.sh`,
 cadence, driven through a fake `pi` with a fake `kb` on PATH, `HOME` and
 `KB_HOOKS_DIR` both redirected so it can never reach the live fleet; skips
 with a message when `bun` is absent) — all self-contained and fake-`kb`
-hermetic like the kimi suites. Live e2e:
+hermetic like the other hook suites. Live e2e:
 `KB_SESSIONS_DIR=… omp -p "hi"` produces a `session-*_<sid>.html` in the
 sessions corpus and a hidden `kb-memory-context` message in the session
 JSONL.
@@ -1067,7 +965,7 @@ commit-without-a-successful-remember check against the Claude-shaped
 JSONL it just synthesized and, on a hit, appends one line
 (`grok <session-id> <epoch-seconds>`, deduped by session id) to
 `$XDG_CACHE_HOME/kb/distill-pending` (default `~/.cache/kb/`). The next
-INTERACTIVE session's `kb-wake.sh` (or `kb-wake-kimi.sh` on Kimi Code)
+INTERACTIVE session's `kb-wake.sh`
 reads that ledger, drops entries older
 than 14 days, surfaces up to the 3 newest as one line in the injected
 context (`Pending distill (<harness[,…]>): N session(s) with commits but no
@@ -1192,8 +1090,8 @@ New corpora are picked up at daemon **(re)start**, not hot-added.
 `kb-recall.sh` renders each recalled hit as a bullet, an optional `↳`
 summary continuation and a `<!--kb-recall/1 …-->` machine marker.
 `KB_RECALL_LAYOUT` picks the shape of that block. It is **orthogonal to
-`KB_HOOK_FMT`**, which only picks the envelope (Claude/codex JSON vs Kimi's
-bare stdout) — every layout works under both.
+`KB_HOOK_FMT`**, which only picks the envelope (Claude/codex JSON vs plain
+stdout) — every layout works under both.
 
 Design of record: [docs/research/kb-slate-design-2026-09.html](../../../docs/research/kb-slate-design-2026-09.html)
 §11 "The memory recall line"; verdict artifact:

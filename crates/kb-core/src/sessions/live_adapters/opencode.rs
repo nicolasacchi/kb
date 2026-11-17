@@ -19,7 +19,7 @@
 //! disk. The `permission` table doesn't even carry a `session_id` column
 //! (its unique index is `(project_id, action, resource)` — an allow-list
 //! of past decisions, not a live per-session pending-request queue), so
-//! this adapter cannot honestly attempt Grok/Kimi's blocked detection at
+//! this adapter cannot honestly attempt Grok's blocked detection at
 //! all; there is no schema-level thread from a permission row back to a
 //! session. Live busy/idle truth exists only in memory inside an
 //! ephemeral, randomly-ported `opencode serve` process this adapter never

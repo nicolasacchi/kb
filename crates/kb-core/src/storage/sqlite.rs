@@ -12606,6 +12606,32 @@ mod tests {
         );
     }
 
+    /// NOKIMI — kimi support was removed, but a row whose stored harness is
+    /// `kimi` (a deployed corpus; no migration rewrites it) still round-trips
+    /// through the list, the detail read and the harness-mix rollup, with the
+    /// label verbatim.
+    #[test]
+    fn a_legacy_kimi_harness_row_stays_readable() {
+        let mut db = db();
+        let mut r = session_row("art-kimi", "sid-kimi", 1_700_000_100);
+        r.harness = "kimi".into();
+        db.sessions_upsert(&r).unwrap();
+        let listed = db
+            .sessions_list(10, None, None, None, None, &Default::default(), &[], &[])
+            .unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].harness, "kimi");
+        assert_eq!(
+            db.sessions_get("sid-kimi").unwrap().unwrap().harness,
+            "kimi"
+        );
+        // The harness-mix rollup groups by the stored string, no closed-set join.
+        let mix = db.sessions_projects_harness_mix().unwrap();
+        assert!(mix.iter().any(|m| m.harness == "kimi"), "{mix:?}");
+        // The shared resume table gives it an honest not-resumable sentence.
+        assert!(crate::sessions::resume_command("kimi", "sid-kimi", None).contains("not resumable"));
+    }
+
     // invariant:11 newest-capture
     #[test]
     fn multi_capture_collapses_to_newest_in_list_and_detail() {

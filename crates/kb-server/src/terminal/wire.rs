@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 
 /// A harness known to the terminal substrate (closed set). Mirrors
 /// `kb_core::sessions::HARNESSES` (`sessions/constants.rs`, `["claude",
-/// "codex", "opencode", "grok", "kimi", "omp"]`) without a dependency
+/// "codex", "opencode", "grok", "omp"]`) without a dependency
 /// edge; the runner validates the name against the same constant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -37,20 +37,17 @@ pub enum Harness {
     Opencode,
     /// Grok.
     Grok,
-    /// Kimi.
-    Kimi,
     /// Omp.
     Omp,
 }
 
 impl Harness {
     /// Every harness in wire order.
-    pub const ALL: [Harness; 6] = [
+    pub const ALL: [Harness; 5] = [
         Harness::Claude,
         Harness::Codex,
         Harness::Opencode,
         Harness::Grok,
-        Harness::Kimi,
         Harness::Omp,
     ];
 
@@ -61,7 +58,6 @@ impl Harness {
             Harness::Codex => "codex",
             Harness::Opencode => "opencode",
             Harness::Grok => "grok",
-            Harness::Kimi => "kimi",
             Harness::Omp => "omp",
         }
     }

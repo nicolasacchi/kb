@@ -150,7 +150,7 @@ render_block() { # $1=pack json, $2=layout
   printf '%s' "$1" >"$PACKFILE"
   printf '%s' '{"session_id":"probe","cwd":"/tmp","prompt":"probe"}' \
     | PATH="$FAKEBIN:$PATH" XDG_CACHE_HOME="$FAKEBIN/cache" \
-      KB_HOOK_FMT=kimi KB_RECALL_LAYOUT="$2" "$RECALL" 2>/dev/null
+      KB_HOOK_FMT=plain KB_RECALL_LAYOUT="$2" "$RECALL" 2>/dev/null
 }
 
 # ─── scoring: normalized exact match ────────────────────────────────────────

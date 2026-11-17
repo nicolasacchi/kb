@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// Pinned copy of `kb_core::sessions::HARNESSES` (same order).
-pub const HARNESSES: [&str; 6] = ["claude", "codex", "opencode", "grok", "kimi", "omp"];
+pub const HARNESSES: [&str; 5] = ["claude", "codex", "opencode", "grok", "omp"];
 
 /// The approved private omp overlay (never touch the user's global
 /// config): image/recapture pins only.
@@ -221,9 +221,6 @@ pub fn plan(req: &PlanRequest<'_>) -> Result<LaunchPlan, PlanError> {
                 "1".to_string(),
             );
         }
-        "kimi" => {
-            out_env.insert("PI_IMAGE_PROTOCOL".to_string(), "iterm2".to_string());
-        }
         "omp" => {
             out_env.insert("PI_FORCE_IMAGE_PROTOCOL".to_string(), "kitty".to_string());
             let path = overlay_path
@@ -390,11 +387,29 @@ mod handoff_tests {
         )));
     }
 
+    /// kimi support was removed: a launch plan naming it is an unknown
+    /// harness, with or without a handoff or resume sid.
+    #[test]
+    fn a_removed_kimi_harness_plans_as_unknown() {
+        let env = base_env();
+        let dir = tempfile::tempdir().unwrap();
+        for sid in [None, Some("sid-1")] {
+            assert_eq!(
+                plan(&request("kimi", dir.path(), &env, sid)).unwrap_err(),
+                PlanError::UnknownHarness
+            );
+        }
+        assert_eq!(
+            resume_tail("kimi", "sid-1", None).unwrap_err(),
+            PlanError::UnknownHarness
+        );
+    }
+
     #[test]
     fn handoff_plan_rejects_unsupported_harnesses_resume_and_unsafe_sids() {
         let env = base_env();
         let dir = tempfile::tempdir().unwrap();
-        for harness in ["codex", "opencode", "grok", "kimi"] {
+        for harness in ["codex", "opencode", "grok"] {
             assert_eq!(
                 plan(&request(harness, dir.path(), &env, Some("sid-1"))).unwrap_err(),
                 PlanError::HandoffUnsupported,

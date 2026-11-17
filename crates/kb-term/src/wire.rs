@@ -42,20 +42,17 @@ pub enum Harness {
     Opencode,
     /// Grok.
     Grok,
-    /// Kimi.
-    Kimi,
     /// Omp.
     Omp,
 }
 
 impl Harness {
     /// Every harness in wire order; the order is significant and pinned.
-    pub const ALL: [Harness; 6] = [
+    pub const ALL: [Harness; 5] = [
         Harness::Claude,
         Harness::Codex,
         Harness::Opencode,
         Harness::Grok,
-        Harness::Kimi,
         Harness::Omp,
     ];
 
@@ -66,7 +63,6 @@ impl Harness {
             Harness::Codex => "codex",
             Harness::Opencode => "opencode",
             Harness::Grok => "grok",
-            Harness::Kimi => "kimi",
             Harness::Omp => "omp",
         }
     }

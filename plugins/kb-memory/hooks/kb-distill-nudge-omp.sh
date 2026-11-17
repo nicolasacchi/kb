@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # kb-distill-nudge-omp — the Oh My Pi twin of kb-distill-nudge.sh /
-# kb-distill-nudge-codex.sh / kb-distill-nudge-kimi.sh: when the session ran
+# kb-distill-nudge-codex.sh: when the session ran
 # `git commit` but `kb remember` never SUCCEEDED, surface a one-line
 # suggestion to distill the session into durable memory.
 #

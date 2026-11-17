@@ -122,7 +122,7 @@ function hasStringT(value: unknown): value is { t: string } {
 
 type FieldObj = Record<string, unknown>;
 
-const HARNESSES = new Set(['claude', 'codex', 'opencode', 'grok', 'kimi', 'omp']);
+const HARNESSES = new Set(['claude', 'codex', 'opencode', 'grok', 'omp']);
 
 function badField(t: string, key: string, want: string): never {
   throw new FrameError(`bad-frame: ${t}.${key} must be ${want}`);

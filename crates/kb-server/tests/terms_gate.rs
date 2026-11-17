@@ -641,6 +641,8 @@ async fn launch_rejects_unknown_harness_and_bad_cwd() {
     };
     for body in [
         "{\"harness\":\"emacs\",\"cwd\":\"/work/proj\"}".to_string(),
+        // kimi support was removed: a launch naming it is an unknown harness.
+        "{\"harness\":\"kimi\",\"cwd\":\"/work/proj\"}".to_string(),
         "{\"harness\":\"omp\",\"cwd\":\"rel/path\"}".to_string(),
         "{\"harness\":\"omp\",\"cwd\":\"/work/proj\",\"resume_sid\":\"bad\\u0000sid\"}".to_string(),
         "{\"harness\":\"omp\",\"cwd\":\"/work/proj\",\"unknown\":1}".to_string(),
@@ -648,8 +650,8 @@ async fn launch_rejects_unknown_harness_and_bad_cwd() {
         let resp = launch(body.clone()).send().await.unwrap();
         assert_eq!(resp.status().as_u16(), 400, "body {body}");
     }
-    // All six harnesses are accepted.
-    for h in ["claude", "codex", "opencode", "grok", "kimi", "omp"] {
+    // All five harnesses are accepted.
+    for h in ["claude", "codex", "opencode", "grok", "omp"] {
         let resp = launch(format!("{{\"harness\":\"{h}\",\"cwd\":\"/work/proj\"}}"))
             .send()
             .await

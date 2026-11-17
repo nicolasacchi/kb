@@ -209,11 +209,6 @@ fn profiles_golden_plan_per_harness_fresh() {
         ),
         ("codex", vec!["codex", "--no-alt-screen"], shared_env()),
         (
-            "kimi",
-            vec!["kimi"],
-            with_entry(shared_env(), "PI_IMAGE_PROTOCOL", "iterm2".to_string()),
-        ),
-        (
             "grok",
             vec!["grok", "--minimal", "--no-alt-screen"],
             shared_env(),
@@ -260,11 +255,6 @@ fn profiles_golden_plan_per_harness_resume() {
             "codex",
             vec!["codex", "--no-alt-screen", "resume", "sid-1"],
             shared_env(),
-        ),
-        (
-            "kimi",
-            vec!["kimi", "-S", "sid-1"],
-            with_entry(shared_env(), "PI_IMAGE_PROTOCOL", "iterm2".to_string()),
         ),
         (
             "grok",
@@ -408,7 +398,6 @@ fn profiles_experimental_marker() {
         ("omp", false),
         ("claude", false),
         ("codex", false),
-        ("kimi", false),
     ] {
         let plan = profiles::plan(&request(harness, dir.path(), &env)).unwrap();
         assert_eq!(plan.experimental, want, "experimental for {harness}");
@@ -476,9 +465,16 @@ fn profiles_job_ulid_optional() {
 }
 
 #[test]
-fn profiles_harness_set_is_the_pinned_six() {
+fn profiles_harness_set_is_the_pinned_five() {
     assert_eq!(
         profiles::HARNESSES,
-        ["claude", "codex", "opencode", "grok", "kimi", "omp"]
+        ["claude", "codex", "opencode", "grok", "omp"]
+    );
+    // kimi support was removed: planning a launch for it is an unknown harness.
+    let env = base_env();
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(
+        profiles::plan(&request("kimi", dir.path(), &env)).unwrap_err(),
+        profiles::PlanError::UnknownHarness
     );
 }

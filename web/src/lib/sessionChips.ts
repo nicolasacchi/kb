@@ -18,13 +18,13 @@ export const HARNESS_GLYPH: Record<string, string> = {
   codex: "⬢",
   opencode: "⬡",
   grok: "✦",
-  kimi: "☾",
   // OK1 — Oh My Pi.
   omp: "π",
 };
 
 /// Glyph for a harness value. Unknown/absent harnesses (forward-compat with
-/// a harness added after this ships) fall back to a neutral dot rather than
+/// a harness added after this ships, or a legacy `kimi` row — support
+/// removed, label shown verbatim elsewhere) fall back to a neutral dot rather than
 /// guessing — `harness` is `NOT NULL DEFAULT 'claude'` server-side, so
 /// "absent" only happens against a stale/mocked payload.
 export function harnessGlyph(harness: string | null | undefined): string {

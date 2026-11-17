@@ -234,9 +234,7 @@ pub struct LockOwner {
 }
 
 const OWNER_UNKNOWN: &str = "locked — owner unknown";
-const HARNESSES: &[&str] = &[
-    "claude", "codex", "grok", "kimi", "omp", "cursor", "opencode",
-];
+const HARNESSES: &[&str] = &["claude", "codex", "grok", "omp", "cursor", "opencode"];
 
 pub fn parse_lock_owner(reason: Option<&str>) -> LockOwner {
     let Some(raw) = reason.map(str::trim).filter(|s| !s.is_empty()) else {

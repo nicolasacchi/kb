@@ -113,7 +113,7 @@ if hook_inferred_unblock "$harness" && [ -f "$blocked_marker" ]; then
 fi
 
 # OL PRES2 (generalised by PRES4 to every harness `hook_write_tool` names) —
-# a write-tool call (Claude Edit/Write/MultiEdit/NotebookEdit, kimi Edit/Write,
+# a write-tool call (Claude Edit/Write/MultiEdit/NotebookEdit,
 # codex apply_patch, omp/opencode edit/write)
 # is a file-presence beat, not a heartbeat: it bypasses the min-interval
 # gate (and KB_BEAT_HEARTBEAT=0; it runs AFTER the blocked-on-you resolution,

@@ -25,6 +25,7 @@ export const AGENT_AUTHOR_NAMES: readonly string[] = [
   "codex",
   "opencode",
   "grok",
+  // Legacy: kimi support was removed, but its past comments stay agent.
   "kimi",
   "omp",
   "agent",
