@@ -53,6 +53,17 @@ ignore = [
     # rusqlite bound (re-check trigger: run `cargo deny check advisories`
     # after the rusqlite bump, then delete this entry).
     { id = "RUSTSEC-2026-0459", reason = "libsqlite3-sys 0.38.2 WAL page-size mismatch: the defect needs a sibling -wal with a different page size than the database; kb creates its own state DBs itself (WAL mode on, page size from its own creation) inside its state dir, so a foreign-sized WAL would need write access there, which is already full compromise; foreign reads are the opencode live adapter's READ_ONLY open of the operator's own opencode.db, which is in the same-host trust domain, and a -wal can also arrive via `kb restore` of a backup tarball from outside the state dir (reverse of the off-host copy); legit backups carry a VACUUM INTO snapshot with no -wal and a hostile tarball already fully controls restored state, so the limitation is: restore trusted backups only" },
+    # chrono 0.4.45 (RUSTSEC-2026-0543, "chrono is unmaintained", no safe
+    # upgrade; it reached the advisory DB on 2026-11-17). It fires because
+    # kb-core, kb-server, kb-cli, kb-code-server and kb-code-cli depend on
+    # chrono directly (`unmaintained = "workspace"`). arrow 58.4,
+    # datafusion 54 and lance 11 also pull it, and those move only as the
+    # invariant #1 lockstep set. Moving kb's own ~190 files off chrono (to
+    # jiff or time) is a migration unit, not a lock bump. Owner: the
+    # operator. Review by 2027-02-28. Re-check sooner on either trigger:
+    # kb's direct chrono use is migrated (the workspace scope then stops
+    # firing, so delete this entry), or the next arrow/lance set bump.
+    { id = "RUSTSEC-2026-0543", reason = "an unmaintained notice, not a vulnerability: no RUSTSEC vulnerability is open against chrono 0.4.45, and any future one gets its own id, which this entry does not cover, so it still fails CI (vulnerability = deny); chrono stays required transitively by the arrow/datafusion/lance lockstep set (invariant #1) even if kb drops its own use" },
     # (previously empty) RUSTSEC-2026-0194/0195 (quick-xml 0.39 via object_store) and
     # RUSTSEC-2023-0071 (rsa via opendal/reqsign) were ignored until v0.45 N7:
     # `lance` was declared with its default features, which compiled the cloud
