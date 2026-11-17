@@ -312,29 +312,16 @@ fn first_line_sha(f: &mut File) -> Result<String> {
 }
 
 /// The live leaf chain, as indices into `entries` in ascending file order.
-/// Exactly the TRANSLATE walk (see the module doc).
+/// Exactly the TRANSLATE walk (see the module doc); the walk itself lives in
+/// kb-core (`handoff::omp::live_chain_by`) so the handoff reader shares it.
 pub fn live_chain(entries: &[Entry]) -> Vec<usize> {
-    let es: Vec<usize> = (0..entries.len())
-        .filter(|&i| entries[i].kind != Kind::Title)
-        .collect();
-    let Some(&last) = es.last() else {
-        return Vec::new();
-    };
-    let mut cur: Option<&str> = entries[last].id.as_deref();
-    let mut chain: Vec<usize> = Vec::new();
-    for &i in es.iter().rev() {
-        let e = &entries[i];
-        if cur.is_some() && e.id.as_deref() == cur {
-            chain.push(i);
-            cur = e.parent.as_deref();
-        }
-    }
-    chain.reverse();
-    let rb = chain
-        .iter()
-        .rposition(|&i| entries[i].kind == Kind::Reset)
-        .map_or(0, |p| p + 1);
-    chain.split_off(rb)
+    kb_core::sessions::handoff::omp::live_chain_by(
+        entries,
+        |e| e.id.as_deref(),
+        |e| e.parent.as_deref(),
+        |e| e.kind == Kind::Title,
+        |e| e.kind == Kind::Reset,
+    )
 }
 
 #[derive(Clone, Debug)]

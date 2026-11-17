@@ -160,6 +160,8 @@ fn row(artifact_id: &str, sid: &str, started_at: i64) -> SessionRow {
         parent_session_id: None,
         root_session_id: None,
         project_slug: None,
+        continued_from_harness: None,
+        continued_from_session_id: None,
     }
 }
 

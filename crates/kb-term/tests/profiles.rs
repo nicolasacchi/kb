@@ -24,6 +24,7 @@ fn request<'a>(
         harness,
         term_id: "abc123",
         resume_sid: None,
+        handoff_from: None,
         cwd: "/w/x",
         job_ulid: None,
         run_dir,

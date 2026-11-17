@@ -14,7 +14,7 @@ pub const NOT_RESUMABLE_UNSAFE: &str =
 
 /// A plain token: non-empty, at most 128 bytes, starts alphanumeric, and
 /// only alphanumerics or `.` `_` `:` `-` after that.
-fn is_plain_token(s: &str) -> bool {
+pub(crate) fn is_plain_token(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 128
         && s.as_bytes()[0].is_ascii_alphanumeric()

@@ -371,6 +371,16 @@ fn free_text(value: &str) -> bool {
     !value.is_empty() && value.len() <= 512 && !value.chars().any(|c| c.is_control() || c == '\0')
 }
 
+/// A `handoff_from` value: non-empty, ≤ 128 bytes, first char ASCII
+/// alphanumeric, the rest alphanumeric or `.` `_` `:` `-` (a plain
+/// token; the runner and the plan re-validate it).
+fn plain_token(value: &str) -> bool {
+    let mut chars = value.chars();
+    value.len() <= 128
+        && chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '-'))
+}
+
 // ---------------------------------------------------------------- list
 
 pub async fn list(
@@ -409,6 +419,7 @@ pub async fn list(
 struct LaunchBody {
     harness: String,
     resume_sid: Option<String>,
+    handoff_from: Option<String>,
     cwd: Option<String>,
     cols: Option<u16>,
     rows: Option<u16>,
@@ -448,6 +459,20 @@ pub async fn launch(
             return bad_request("cwd must be an absolute path");
         }
     }
+    if let Some(sid) = &parsed.handoff_from {
+        if !plain_token(sid) {
+            return bad_request("invalid handoff_from");
+        }
+        if !matches!(harness, Harness::Claude | Harness::Omp) {
+            return bad_request("handoff targets claude or omp");
+        }
+        if parsed.resume_sid.is_some() {
+            return bad_request("handoff_from excludes resume_sid");
+        }
+        if parsed.cwd.is_none() {
+            return bad_request("handoff_from requires an absolute cwd");
+        }
+    }
     // `cols`/`rows` pass through as `None` when the client omits them,
     // so the runner's own defaults (120x40) apply — the relay must not
     // fabricate its own size. `cwd` defaults to `/` (the runner
@@ -457,6 +482,7 @@ pub async fn launch(
         harness,
         argv: None,
         resume_sid: parsed.resume_sid.clone(),
+        handoff_from: parsed.handoff_from.clone(),
         cwd: parsed.cwd.clone().unwrap_or_else(|| "/".to_string()),
         cols: parsed.cols,
         rows: parsed.rows,

@@ -229,7 +229,7 @@ fn confirm_scrub(yes: bool, json: bool) -> Result<bool> {
 
 /// Resolve the sessions corpus dir to read captures from: `--from` wins, else
 /// `KB_SESSIONS_DIR` (the same env `kb-capture.sh` + `kb import --into` use).
-fn resolve_from(from: Option<PathBuf>) -> Result<PathBuf> {
+pub(crate) fn resolve_from(from: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(p) = from {
         return Ok(expand_tilde(p));
     }
@@ -243,13 +243,13 @@ fn resolve_from(from: Option<PathBuf>) -> Result<PathBuf> {
 }
 
 /// A capture file that belongs to the requested session.
-struct CaptureHit {
-    path: PathBuf,
-    filename: String,
+pub(crate) struct CaptureHit {
+    pub(crate) path: PathBuf,
+    pub(crate) filename: String,
     /// The 16-char `YYYYMMDDTHHMMSSZ` filename stamp (chronological string key).
     ts: String,
     /// `ts` as unix seconds (the manifest's `started_at`).
-    started_at: i64,
+    pub(crate) started_at: i64,
 }
 
 /// The NEWEST capture of `session_id` in `dir` (invariant #11: a session
@@ -258,7 +258,7 @@ struct CaptureHit {
 /// back to the embedded JSONL `sessionId` / `kb-session` meta for legacy
 /// captures whose filename was truncated. "Newest" = the greatest filename
 /// timestamp.
-fn find_newest_capture(dir: &Path, session_id: &str) -> Result<Option<CaptureHit>> {
+pub(crate) fn find_newest_capture(dir: &Path, session_id: &str) -> Result<Option<CaptureHit>> {
     if !dir.exists() {
         bail!("sessions dir {} does not exist", dir.display());
     }
@@ -562,7 +562,7 @@ async fn fetch_bundle_bytes(client: &reqwest::Client, url: &str) -> Result<Vec<u
 
 /// The base dir Claude Code stores transcripts under: `$CLAUDE_CONFIG_DIR/
 /// projects` (when set) else `~/.claude/projects`.
-fn claude_projects_base() -> Result<PathBuf> {
+pub(crate) fn claude_projects_base() -> Result<PathBuf> {
     if let Some(d) = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|v| !v.is_empty()) {
         return Ok(PathBuf::from(d).join("projects"));
     }

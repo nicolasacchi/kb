@@ -12,8 +12,8 @@
 
 use crate::middleware::{error_to_problem_json, Identity};
 use crate::routes::sessions::{
-    check_out, find_session, session_chain_parts, touched_files_for_commit, widen_session_ids,
-    SessionOut,
+    check_out, continued_in, find_session, session_chain_parts, touched_files_for_commit,
+    widen_session_ids, SessionOut,
 };
 use crate::state::KbHandles;
 use axum::{
@@ -1044,6 +1044,8 @@ fn summary_from(
         segment_chain,
         root_session_id: session.root_session_id.clone(),
         parent_session_id: session.parent_session_id.clone(),
+        continued_from: session.continued_from.clone(),
+        continued_in: Vec::new(),
         child_total: total,
         resume: session.resume.clone(),
     }
@@ -1061,7 +1063,11 @@ async fn summary_lane(
     } else {
         Vec::new()
     };
-    summary_from(total, session, segment_chain)
+    let mut lane = summary_from(total, session, segment_chain);
+    if lane.available {
+        lane.continued_in = continued_in(state, session_id).await;
+    }
+    lane
 }
 
 async fn children_lane(state: &Arc<KbHandles>, session: &SessionOut) -> ChildrenLane {

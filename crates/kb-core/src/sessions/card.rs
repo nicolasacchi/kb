@@ -114,6 +114,17 @@ pub struct SessionCard {
     pub terminal: TerminalLane,
 }
 
+/// V0048 — one end of a cross-harness handoff link: the other session's
+/// harness (`"claude"` / `"omp"`) and id. The ONE wire type for
+/// `continued_from` / `continued_in`, shared by the session list/detail
+/// payloads and this card. SURFACED, never scored (invariant #11).
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct SessionLink {
+    pub harness: String,
+    pub session_id: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct SummaryLane {
     pub available: bool,
@@ -133,6 +144,15 @@ pub struct SummaryLane {
     /// V0047 lineage (surfaced, never scored); `None` for top-level rows.
     pub root_session_id: Option<String>,
     pub parent_session_id: Option<String>,
+    /// V0048 handoff lineage (surfaced, never scored): the session this one
+    /// continues, read from the marker on its first real prompt. Absent for
+    /// an ordinary session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub continued_from: Option<SessionLink>,
+    /// V0048 handoff lineage (surfaced, never scored): the newest sessions
+    /// whose `continued_from` is this session (any kb). Absent when none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub continued_in: Vec<SessionLink>,
     /// How many newest-capture rows share this tree root (the same count
     /// the children lane reports as its total).
     pub child_total: u64,
@@ -646,6 +666,18 @@ fn render_section_lines(card: &SessionCard) -> Vec<(String, Vec<String>)> {
         if let Some(parent) = &s.parent_session_id {
             lines.push(sanitize_line(&format!("parent: {parent}")));
         }
+        if let Some(from) = &s.continued_from {
+            lines.push(sanitize_line(&format!(
+                "continued from: {} {}",
+                from.harness, from.session_id
+            )));
+        }
+        for to in &s.continued_in {
+            lines.push(sanitize_line(&format!(
+                "continued in: {} {}",
+                to.harness, to.session_id
+            )));
+        }
         lines.push(sanitize_line(&format!("children: {}", s.child_total)));
         if s.segment_chain.len() >= 2 {
             lines.push(sanitize_line(&format!(
@@ -1085,6 +1117,11 @@ mod tests {
             segment_chain: Vec::new(),
             root_session_id: Some("root-1".to_string()),
             parent_session_id: None,
+            continued_from: Some(SessionLink {
+                harness: "claude".to_string(),
+                session_id: "src-1".to_string(),
+            }),
+            continued_in: Vec::new(),
             child_total: 3,
             resume: "omp -r root-1".to_string(),
         }

@@ -91,6 +91,11 @@ pub mod work;
 /// on-disk tree. SURFACED, never scored (invariant #11).
 pub mod lineage;
 
+/// Cross-harness session handoff (omp ⇄ Claude Code), `kb-handoff/1`: the
+/// neutral conversation model, the LLM-free brief, and the transplant
+/// writers. Pure except directory listing in the `locate_*` helpers.
+pub mod handoff;
+
 pub use projects::{
     project_registry, registry_entry, resolve_project_filter, resolve_registry_project,
     set_project_registry, ProjectDef, ProjectFilter, ResolvedProject,
@@ -336,6 +341,17 @@ pub struct SessionActivity {
     /// record (locked per id like `parent_session_id`; a root equal to
     /// the record's own `sessionId` is ignored). SURFACED, never scored.
     pub root_session_id: Option<String>,
+    /// V0048 — the harness (`"claude"` / `"omp"`) of the session this one
+    /// continues, read from a `kb-handoff` marker on the FIRST real user
+    /// prompt record in file order (not `isMeta`, not a sidechain, not
+    /// wrapper text), whatever its `promptSource` — independent of which
+    /// record wins the `first_user_prompt` preview; a marker in any later
+    /// prompt is ignored. `None` when absent, forged, or naming the
+    /// session itself. SURFACED, never scored.
+    pub continued_from_harness: Option<String>,
+    /// V0048 — the continued session's id, paired with
+    /// `continued_from_harness` (both set or both `None`).
+    pub continued_from_session_id: Option<String>,
     /// OL IDEA3 -- the verification commands the MAIN transcript ran, the
     /// counted edits and the successful pushes, folded by
     /// [`checks::Tracker`] in this same single pass. Persisted (as
@@ -706,6 +722,13 @@ pub(crate) fn segment_link_is_wellformed(session_id: Option<&str>, of: &str, idx
 ///    `role:"user"` record that is not `isMeta`, not a sidechain, and whose
 ///    text doesn't start with a synthetic wrapper (`<command-…>`,
 ///    `<local-command-…>`, `<task-notification>`, `<system-reminder>`, …).
+///
+/// The V0048 `kb-handoff` marker is NOT tied to that ladder: it is read from
+/// the first real prompt candidate in file order (not `isMeta`, not a
+/// sidechain, not wrapper text) whatever its `promptSource` — a handoff
+/// brief launched via `claude -p` is recorded as `sdk`, and a later typed
+/// follow-up must not erase the lineage. A marker in any later record is
+/// ignored.
 pub fn parse_session_activity(jsonl: &str) -> SessionActivity {
     parse_session_activity_full(jsonl).0
 }
@@ -731,6 +754,11 @@ fn parse_session_activity_lines<S: AsRef<str>>(
     // chosen over the fallback after the scan so order can't matter.
     let mut typed_prompt: Option<String> = None;
     let mut fallback_prompt: Option<String> = None;
+    // V0048 — the handoff marker, read (from the FULL text; the preview is
+    // capped and marker-stripped) off the first real prompt candidate in
+    // file order, independent of which record wins `first_user_prompt`.
+    let mut marker_candidate_seen = false;
+    let mut handoff_marker: Option<(handoff::Harness, String)> = None;
     let mut count: u32 = 0;
     let mut skipped_lines: u32 = 0;
     // Sidecar agent id — first non-empty top-level `"agentId"` wins (same
@@ -975,16 +1003,31 @@ fn parse_session_activity_lines<S: AsRef<str>>(
                 .unwrap_or(false);
             let source = v.get("promptSource").and_then(|x| x.as_str());
             if let Some(text) = user_message_text(&v) {
+                // V0048 — the handoff marker is read from the FIRST real
+                // prompt candidate in file order, whatever its
+                // `promptSource` (`claude -p "<brief>"` records `sdk`, and a
+                // later typed follow-up would otherwise win the preview and
+                // drop the lineage). Only that one record is consulted.
+                if !marker_candidate_seen && !is_meta && !is_sidechain && !is_wrapper_text(&text) {
+                    marker_candidate_seen = true;
+                    handoff_marker = handoff::parse_marker(&text);
+                }
                 if source == Some("typed") {
                     if typed_prompt.is_none() {
-                        typed_prompt = Some(truncate_chars(&text, PROMPT_PREVIEW_MAX_CHARS));
+                        typed_prompt = Some(truncate_chars(
+                            &handoff::strip_marker_line(&text),
+                            PROMPT_PREVIEW_MAX_CHARS,
+                        ));
                     }
                 } else if fallback_prompt.is_none()
                     && !is_meta
                     && !is_sidechain
                     && !is_wrapper_text(&text)
                 {
-                    fallback_prompt = Some(truncate_chars(&text, PROMPT_PREVIEW_MAX_CHARS));
+                    fallback_prompt = Some(truncate_chars(
+                        &handoff::strip_marker_line(&text),
+                        PROMPT_PREVIEW_MAX_CHARS,
+                    ));
                 }
                 // V0029/user_turns — the honest "real prompts" count: every
                 // Real-classified, non-sidechain turn, not just the FIRST one
@@ -1119,6 +1162,13 @@ fn parse_session_activity_lines<S: AsRef<str>>(
 
     act.message_count = count;
     act.first_user_prompt = typed_prompt.or(fallback_prompt);
+    // V0048 — a session never continues itself (a copied/echoed marker).
+    if let Some((h, sid)) = handoff_marker {
+        if act.session_id.as_deref() != Some(sid.as_str()) {
+            act.continued_from_harness = Some(h.as_str().to_string());
+            act.continued_from_session_id = Some(sid);
+        }
+    }
     act.cwd = cwd_counts
         .into_iter()
         .max_by_key(|(_, n)| *n)
@@ -4686,6 +4736,89 @@ mod tests {
         );
         let act = parse_session_activity(jsonl);
         assert_eq!(act.first_user_prompt.as_deref(), Some("hello there"));
+    }
+
+    // --- V0048 handoff lineage ---------------------------------------------
+
+    /// One typed user record carrying `text` (JSON-escaped through serde).
+    fn typed_user(text: &str) -> String {
+        format!(
+            "{}\n",
+            serde_json::json!({
+                "type": "user",
+                "promptSource": "typed",
+                "sessionId": "own-session",
+                "message": {"role": "user", "content": text},
+            })
+        )
+    }
+
+    #[test]
+    fn handoff_marker_on_first_prompt_sets_lineage_and_strips_preview() {
+        let jsonl = typed_user(
+            "[kb-handoff from omp session 01a1e4a1-0d74-7548-9455-e37ffe71b0a1]\n\nGoal: finish the port",
+        );
+        let act = parse_session_activity(&jsonl);
+        assert_eq!(act.continued_from_harness.as_deref(), Some("omp"));
+        assert_eq!(
+            act.continued_from_session_id.as_deref(),
+            Some("01a1e4a1-0d74-7548-9455-e37ffe71b0a1")
+        );
+        let preview = act.first_user_prompt.expect("preview");
+        assert!(preview.starts_with("Goal"), "{preview}");
+        assert!(!preview.contains("kb-handoff"), "{preview}");
+    }
+
+    #[test]
+    fn handoff_marker_in_a_later_prompt_sets_nothing() {
+        let jsonl = format!(
+            "{}{}",
+            typed_user("plain first prompt"),
+            typed_user(
+                "[kb-handoff from omp session 01a1e4a1-0d74-7548-9455-e37ffe71b0a1]\n\nlater"
+            )
+        );
+        let act = parse_session_activity(&jsonl);
+        assert_eq!(act.continued_from_harness, None);
+        assert_eq!(act.continued_from_session_id, None);
+        assert_eq!(act.first_user_prompt.as_deref(), Some("plain first prompt"));
+    }
+
+    #[test]
+    fn forged_or_self_referential_handoff_marker_sets_nothing() {
+        let forged = typed_user("[kb-handoff from omp session $(touch /tmp/x)]\n\nGoal");
+        let act = parse_session_activity(&forged);
+        assert_eq!(act.continued_from_harness, None);
+        assert_eq!(act.continued_from_session_id, None);
+
+        let own = typed_user("[kb-handoff from claude session own-session]\n\nGoal");
+        let act = parse_session_activity(&own);
+        assert_eq!(act.continued_from_session_id, None);
+    }
+
+    #[test]
+    fn handoff_marker_on_first_non_typed_prompt_survives_a_typed_follow_up() {
+        let sdk = format!(
+            "{}\n",
+            serde_json::json!({
+                "type": "user",
+                "promptSource": "sdk",
+                "sessionId": "own-session",
+                "message": {
+                    "role": "user",
+                    "content": "[kb-handoff from omp session 01a1e4a1-0d74-7548-9455-e37ffe71b0a1]\n\nGoal: finish the port",
+                },
+            })
+        );
+        let jsonl = format!("{sdk}{}", typed_user("thanks, continue"));
+        let act = parse_session_activity(&jsonl);
+        assert_eq!(act.continued_from_harness.as_deref(), Some("omp"));
+        assert_eq!(
+            act.continued_from_session_id.as_deref(),
+            Some("01a1e4a1-0d74-7548-9455-e37ffe71b0a1")
+        );
+        // Preview rule unchanged: the typed prompt still wins.
+        assert_eq!(act.first_user_prompt.as_deref(), Some("thanks, continue"));
     }
 
     // --- closing_assistant_text (R3) ----------------------------------------

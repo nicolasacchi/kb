@@ -1193,6 +1193,12 @@ pub enum StorageMsg {
         parent_of: Option<String>,
         reply: oneshot::Sender<Result<Vec<String>>>,
     },
+    /// V0048 — the sessions continuing a session by handoff
+    /// (`Db::sessions_continued_in`).
+    SessionsContinuedIn {
+        session_id: String,
+        reply: oneshot::Sender<Result<Vec<(String, String)>>>,
+    },
     /// A3 — resume targets per session id (`Db::sessions_root_of`).
     SessionsRootOf {
         ids: Vec<String>,
@@ -1691,6 +1697,7 @@ fn is_read_lane(msg: &StorageMsg) -> bool {
             | StorageMsg::SessionsChildrenPage { .. }
             | StorageMsg::SessionsChildrenCount { .. }
             | StorageMsg::SessionsRootOf { .. }
+            | StorageMsg::SessionsContinuedIn { .. }
             | StorageMsg::SessionsChildCounts { .. }
             | StorageMsg::SessionsFolders { .. }
             | StorageMsg::SessionsRecallCoverage { .. }
@@ -3576,6 +3583,9 @@ impl StorageActor {
                     self.db
                         .sessions_children_ids(root_of.as_deref(), parent_of.as_deref()),
                 );
+            }
+            StorageMsg::SessionsContinuedIn { session_id, reply } => {
+                let _ = reply.send(self.db.sessions_continued_in(&session_id));
             }
             StorageMsg::SessionsRootOf { ids, reply } => {
                 let _ = reply.send(self.db.sessions_root_of(&ids));
@@ -5697,6 +5707,13 @@ impl StorageHandle {
             reply,
         })
         .await
+    }
+
+    /// V0048 — `(harness, session_id)` of every session continuing
+    /// `session_id` by handoff (see `Db::sessions_continued_in`).
+    pub async fn sessions_continued_in(&self, session_id: String) -> Result<Vec<(String, String)>> {
+        self.send_and_await(|reply| StorageMsg::SessionsContinuedIn { session_id, reply })
+            .await
     }
 
     /// A3 — resume targets per session id (see `Db::sessions_root_of`).

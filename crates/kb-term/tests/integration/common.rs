@@ -169,6 +169,7 @@ pub fn launch_req(argv: Vec<String>, cwd: String) -> Request {
         harness: Harness::Omp,
         argv: Some(argv),
         resume_sid: None,
+        handoff_from: None,
         cwd,
         cols: Some(120),
         rows: Some(40),

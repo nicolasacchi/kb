@@ -230,7 +230,8 @@ const SESSION_ROW_COLS: &str = "artifact_id, session_id, started_at, ended_at,
                             project_key, repo_root, harness, cc_version,
                             last_assistant_text, all_cwds, commit_count, user_turns,
                             active_secs, substance, segment_of, segment_idx, evidence_json,
-                            parent_session_id, root_session_id, project_slug";
+                            parent_session_id, root_session_id, project_slug,
+                            continued_from_harness, continued_from_session_id";
 
 impl Db {
     /// Open (or create) the database at `path` and run all pending migrations.
@@ -4083,10 +4084,11 @@ impl Db {
                  project_key, repo_root, harness, cc_version,
                  last_assistant_text, all_cwds, commit_count, user_turns,
                  active_secs, substance, segment_of, segment_idx, evidence_json,
-                 parent_session_id, root_session_id, project_slug, is_newest)
+                 parent_session_id, root_session_id, project_slug,
+                 continued_from_harness, continued_from_session_id, is_newest)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
                      ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21,
-                     ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, 0)
+                     ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, 0)
              ON CONFLICT(artifact_id) DO UPDATE SET
                 session_id                  = excluded.session_id,
                 started_at                  = excluded.started_at,
@@ -4123,7 +4125,9 @@ impl Db {
                 evidence_json               = excluded.evidence_json,
                 parent_session_id           = COALESCE(excluded.parent_session_id, sessions.parent_session_id),
                 root_session_id             = COALESCE(excluded.root_session_id, sessions.root_session_id),
-                project_slug                = COALESCE(excluded.project_slug, sessions.project_slug)",
+                project_slug                = COALESCE(excluded.project_slug, sessions.project_slug),
+                continued_from_harness      = COALESCE(excluded.continued_from_harness, sessions.continued_from_harness),
+                continued_from_session_id   = COALESCE(excluded.continued_from_session_id, sessions.continued_from_session_id)",
             params![
                 row.artifact_id,
                 row.session_id,
@@ -4162,6 +4166,8 @@ impl Db {
                 row.parent_session_id,
                 row.root_session_id,
                 row.project_slug,
+                row.continued_from_harness,
+                row.continued_from_session_id,
             ],
         )?;
         recompute_is_newest(&tx, &row.session_id)?;
@@ -5427,7 +5433,8 @@ impl Db {
                     project_key, repo_root, harness, cc_version,
                     last_assistant_text, all_cwds, commit_count, user_turns,
                     active_secs, substance, segment_of, segment_idx, evidence_json,
-                    parent_session_id, root_session_id, project_slug
+                    parent_session_id, root_session_id, project_slug,
+                    continued_from_harness, continued_from_session_id
              FROM sessions
              WHERE session_id IN ({placeholders})
              ORDER BY started_at DESC, artifact_id ASC"
@@ -5470,7 +5477,8 @@ impl Db {
                     project_key, repo_root, harness, cc_version,
                     last_assistant_text, all_cwds, commit_count, user_turns,
                     active_secs, substance, segment_of, segment_idx, evidence_json,
-                    parent_session_id, root_session_id, project_slug
+                    parent_session_id, root_session_id, project_slug,
+                    continued_from_harness, continued_from_session_id
              FROM sessions
              WHERE artifact_id IN ({placeholders})"
         );
@@ -6200,7 +6208,8 @@ impl Db {
                     project_key, repo_root, harness, cc_version,
                     last_assistant_text, all_cwds, commit_count, user_turns,
                     active_secs, substance, segment_of, segment_idx, evidence_json,
-                    parent_session_id, root_session_id, project_slug
+                    parent_session_id, root_session_id, project_slug,
+                    continued_from_harness, continued_from_session_id
              FROM sessions
              WHERE session_id = ?1
              ORDER BY started_at DESC, artifact_id ASC
@@ -6433,6 +6442,26 @@ impl Db {
         Ok(rows)
     }
 
+    /// V0048 — the sessions that CONTINUE `session_id` by handoff: every
+    /// newest-capture row whose `continued_from_session_id` equals it, as
+    /// `(harness, session_id)` pairs, newest start first (one pair per
+    /// continuing session id even when several captures or segment parts
+    /// carry the column). SURFACED, never scored.
+    pub fn sessions_continued_in(&self, session_id: &str) -> Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT harness, session_id FROM sessions
+             WHERE is_newest = 1 AND continued_from_session_id = ?1
+             GROUP BY harness, session_id
+             ORDER BY MAX(started_at) DESC, session_id ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![session_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
     /// A3 — for each requested session id, the number of newest-capture
     /// rows that are THAT row's children by the card predicate — the ONE
     /// definition both surfaces use (`GET /api/sessions` `child_count`
@@ -6552,6 +6581,8 @@ impl Db {
             parent_session_id: r.get(34)?,
             root_session_id: r.get(35)?,
             project_slug: r.get(36)?,
+            continued_from_harness: r.get(37)?,
+            continued_from_session_id: r.get(38)?,
         })
     }
 
@@ -7999,6 +8030,14 @@ pub struct SessionRow {
     /// capture's working directory. `None` when the cwd is gone or not a
     /// directory (A3 may leave it NULL in that case).
     pub project_slug: Option<String>,
+    /// V0048 — handoff lineage, SURFACED never scored: the harness
+    /// (`"claude"` / `"omp"`) of the session this one continues, read from
+    /// a `kb-handoff` marker on the first real prompt. `None` = not a
+    /// handoff continuation (and every pre-V0048 capture).
+    pub continued_from_harness: Option<String>,
+    /// V0048 — handoff lineage: the continued session's id, paired with
+    /// `continued_from_harness`.
+    pub continued_from_session_id: Option<String>,
 }
 
 /// V0047 — one `(session_id, parent, root, slug)` backfill item.
@@ -17196,6 +17235,83 @@ mod tests {
         db.sessions_upsert(&r).unwrap();
         let got = db.sessions_get("sid-lin-1").unwrap().unwrap();
         assert_eq!(got.parent_session_id.as_deref(), Some("par2"));
+    }
+
+    #[test]
+    fn sessions_upsert_round_trips_handoff_lineage_and_coalesces() {
+        let mut db = db();
+        let mut r = session_row("cf-1", "sid-cf-1", 1_700_000_000);
+        r.continued_from_harness = Some("omp".to_string());
+        r.continued_from_session_id = Some("src-omp-1".to_string());
+        db.sessions_upsert(&r).unwrap();
+        let got = db.sessions_get("sid-cf-1").unwrap().unwrap();
+        assert_eq!(got.continued_from_harness.as_deref(), Some("omp"));
+        assert_eq!(got.continued_from_session_id.as_deref(), Some("src-omp-1"));
+        // A recapture that finds no marker must not erase lineage.
+        r.continued_from_harness = None;
+        r.continued_from_session_id = None;
+        db.sessions_upsert(&r).unwrap();
+        let got = db.sessions_get("sid-cf-1").unwrap().unwrap();
+        assert_eq!(got.continued_from_harness.as_deref(), Some("omp"));
+        assert_eq!(got.continued_from_session_id.as_deref(), Some("src-omp-1"));
+    }
+
+    #[test]
+    fn sessions_continued_in_lists_newest_continuations_only() {
+        let mut db = db();
+        let cont = |aid: &str, sid: &str, ts: i64, from: &str| {
+            let mut r = session_row(aid, sid, ts);
+            r.harness = "claude".to_string();
+            r.continued_from_harness = Some("omp".to_string());
+            r.continued_from_session_id = Some(from.to_string());
+            r
+        };
+        db.sessions_upsert(&cont("c-old", "cont-a", 100, "src-1"))
+            .unwrap();
+        db.sessions_upsert(&cont("c-new", "cont-b", 200, "src-1"))
+            .unwrap();
+        db.sessions_upsert(&cont("c-other", "cont-c", 300, "src-2"))
+            .unwrap();
+        // An older capture of cont-a (same session id, earlier start) is not newest.
+        db.sessions_upsert(&cont("c-old-cap", "cont-a", 50, "src-1"))
+            .unwrap();
+        db.sessions_upsert(&session_row("plain", "plain-1", 400))
+            .unwrap();
+
+        let got = db.sessions_continued_in("src-1").unwrap();
+        assert_eq!(
+            got,
+            vec![
+                ("claude".to_string(), "cont-b".to_string()),
+                ("claude".to_string(), "cont-a".to_string()),
+            ]
+        );
+        assert!(db.sessions_continued_in("nobody").unwrap().is_empty());
+    }
+
+    #[test]
+    fn v0048_adds_columns_and_index() {
+        let db = db();
+        for col in ["continued_from_harness", "continued_from_session_id"] {
+            let n: i64 = db
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = ?1",
+                    [col],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "column {col} must exist");
+        }
+        let n: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_sessions_continued_from'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1);
     }
 
     #[test]

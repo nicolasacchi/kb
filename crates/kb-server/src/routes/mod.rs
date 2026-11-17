@@ -187,6 +187,7 @@ pub mod saved_queries;
 pub mod schema;
 pub mod search;
 pub mod session_card;
+pub mod session_handoff;
 pub mod sessions;
 pub mod settings;
 pub mod share;
