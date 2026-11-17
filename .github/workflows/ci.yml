@@ -120,6 +120,17 @@ permissions: {}
 # than on the PR path. Every family also saves ONLY on main (`save-if`): a
 # cache written on a PR branch is scoped to that branch, restorable by nobody
 # else, and still counts against the cap — PRs restore main's entry instead.
+# DOCS-ONLY FAST PATH — the compile/test lanes that have no `code-changed.sh`
+# filter (workspace-lint, workspace-test, drift, e2e, embedder-lint,
+# embedder-test, term-e2e) run `scripts/ci/docs-only.sh` first and gate every
+# later STEP on `steps.fast.outputs.run`, never the job, so each one still
+# reports and `ci-gate` / the required checks are unchanged. run=false only on
+# a pull_request whose EVERY changed path is on the script's allowlist of files
+# no job reads (docs/research, docs/bench, docs/guide, release notes,
+# SECURITY/CLA/CONTRIBUTING); push to main, workflow_dispatch, an empty or
+# unresolvable diff and any other path run everything. Not gated: supply-chain
+# (it runs the doc gates), web-unit, hook-omp, term-tap, term-int, spa-image —
+# cheap, or too entangled with always() artifact steps to be worth it.
 # `shell: bash` is GitHub's `bash --noprofile --norc -eo pipefail {0}`; the
 # implicit default (`bash -e {0}`) has NO pipefail, so `cmd | tee log` reports
 # tee's exit status and a failing `cmd` goes green (the e2e vacuous pass,
@@ -145,8 +156,19 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Docs-only fast path (scripts/ci/docs-only.sh)
+        id: fast
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: scripts/ci/docs-only.sh
 
       - name: Free disk space (drop preinstalled SDKs)
+        if: steps.fast.outputs.run == 'true'
         # A hosted runner starts with only ~14 GB free on /, and the
         # lance/datafusion dependency graph plus its test-binary links can
         # eat that (a full disk shows up as a SIGBUS'd linker, not as
@@ -170,6 +192,7 @@ jobs:
           df -h /
 
       - name: Install Rust toolchain
+        if: steps.fast.outputs.run == 'true'
         # Reads the version from rust-toolchain.toml (single source; see
         # .github/actions/setup-rust/action.yml) — no per-job literal to drift.
         uses: ./.github/actions/setup-rust
@@ -177,6 +200,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Cache cargo + target
+        if: steps.fast.outputs.run == 'true'
         uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
           shared-key: workspace
@@ -188,6 +212,7 @@ jobs:
           save-if: 'false'
 
       - name: Install protoc (lancedb transitive dep)
+        if: steps.fast.outputs.run == 'true'
         # BOTH packages: libprotobuf-dev ships the well-known-type includes
         # (google/protobuf/empty.proto, …) that lance-encoding's build
         # imports, while protobuf-compiler provides only the binary —
@@ -197,6 +222,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev
 
       - name: cargo fmt
+        if: steps.fast.outputs.run == 'true'
         run: cargo fmt --all -- --check
 
       # `--exclude kb-embedder` keeps the `local-embedder` feature (and ONNX
@@ -217,14 +243,20 @@ jobs:
       # avoids running its (tiny) test suite twice.
       # Mirrors the justfile's `ci-workspace` + `ci-embedder`/`ci-code` split.
       - name: cargo clippy
+        if: steps.fast.outputs.run == 'true'
         run: cargo clippy --locked --workspace --exclude kb-embedder --exclude kb-code-server --exclude kb-code-cli --exclude kb-lip --all-targets -- -D warnings
 
       - name: Invariant-test coverage (GC-C2, non-blocking)
+        if: steps.fast.outputs.run == 'true'
         # Prints the invariant:N → pinning-test coverage table (see
         # docs/invariant-test-map.md). The script always exits 0 — this is a
         # visibility signal for reviewers/agents, not a merge gate. No
         # untrusted/event input involved: it only greps the checked-out tree.
         run: scripts/check-invariants.sh
+
+      - name: Skipped (documentation-only change)
+        if: steps.fast.outputs.run != 'true'
+        run: scripts/ci/docs-only.sh --skip-message
 
   workspace-test:
     permissions:
@@ -251,8 +283,19 @@ jobs:
       KB_TEST_HTTP_TIMEOUT_SECS: "120"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Docs-only fast path (scripts/ci/docs-only.sh)
+        id: fast
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: scripts/ci/docs-only.sh
 
       - name: Free disk space (drop preinstalled SDKs)
+        if: steps.fast.outputs.run == 'true'
         # Same reclaim as the `workspace-lint` job — see its comment.
         run: |
           for d in /usr/share/dotnet /usr/local/lib/android /opt/ghc \
@@ -264,11 +307,13 @@ jobs:
           df -h /
 
       - name: Install Rust toolchain
+        if: steps.fast.outputs.run == 'true'
         # Reads the version from rust-toolchain.toml (single source; see
         # .github/actions/setup-rust/action.yml) — no per-job literal to drift.
         uses: ./.github/actions/setup-rust
 
       - name: Cache cargo + target
+        if: steps.fast.outputs.run == 'true'
         uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
           shared-key: workspace
@@ -276,6 +321,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install protoc (lancedb transitive dep)
+        if: steps.fast.outputs.run == 'true'
         # BOTH packages: libprotobuf-dev ships the well-known-type includes
         # (google/protobuf/empty.proto, …) that lance-encoding's build
         # imports, while protobuf-compiler provides only the binary —
@@ -285,11 +331,13 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev
 
       - name: Install cargo-nextest
+        if: steps.fast.outputs.run == 'true'
         uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2
         with:
           tool: cargo-nextest
 
       - name: cargo nextest run --profile ci
+        if: steps.fast.outputs.run == 'true'
         # PF-C1 flip (2026-09-04): replaces the serial `cargo test --
         # --test-threads=1` sweep. That serial run existed because the
         # parallel IN-PROCESS harness used to hang on the runner of the day
@@ -303,6 +351,7 @@ jobs:
         run: cargo nextest run --locked --profile ci --workspace --exclude kb-embedder --exclude kb-code-server --exclude kb-code-cli --exclude kb-lip
 
       - name: nextest overrides each match at least one test
+        if: steps.fast.outputs.run == 'true'
         # v0.44 F1 (I3): PF-C1 renamed the binaries and the `lance-heavy`
         # override's filter matched NOTHING for a while -- silently, because a
         # filter that matches nothing is not an error. Asks nextest itself.
@@ -311,16 +360,18 @@ jobs:
       - name: Witness (nextest junit -> floor + zero failures)
         # v0.44 F1 -- decide the lane from nextest's own junit report
         # (.config/nextest.toml [profile.ci.junit]), not from its exit code.
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.fast.outputs.run == 'true' }}
         run: python3 scripts/ci/witness.py nextest-junit target/nextest/ci/junit.xml --lane nextest
 
       - name: cargo test --doc
+        if: steps.fast.outputs.run == 'true'
         # nextest does not run doctests; the serial sweep it replaced did.
         # This keeps the flipped required job a coverage SUPERSET of the
         # old one (near-free when few doctests exist).
         run: cargo test --locked --doc --workspace --exclude kb-embedder --exclude kb-code-server --exclude kb-code-cli --exclude kb-lip
 
       - name: Install just (drift-check recipe)
+        if: steps.fast.outputs.run == 'true'
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
 
       - name: API route-table drift (just api-docs-check)
@@ -334,8 +385,12 @@ jobs:
         # binary in the very same profile, so it costs seconds.
         # `!cancelled()` rather than the implicit `success()`: a red test
         # suite should not also hide the route-table verdict.
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.fast.outputs.run == 'true' }}
         run: just api-docs-check
+
+      - name: Skipped (documentation-only change)
+        if: steps.fast.outputs.run != 'true'
+        run: scripts/ci/docs-only.sh --skip-message
 
   drift:
     permissions:
@@ -367,8 +422,19 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Docs-only fast path (scripts/ci/docs-only.sh)
+        id: fast
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: scripts/ci/docs-only.sh
 
       - name: Free disk space (drop preinstalled SDKs)
+        if: steps.fast.outputs.run == 'true'
         # Same reclaim as the `workspace-lint` job — see its comment.
         run: |
           for d in /usr/share/dotnet /usr/local/lib/android /opt/ghc \
@@ -380,11 +446,13 @@ jobs:
           df -h /
 
       - name: Install Rust toolchain
+        if: steps.fast.outputs.run == 'true'
         # Reads the version from rust-toolchain.toml (single source; see
         # .github/actions/setup-rust/action.yml) — no per-job literal to drift.
         uses: ./.github/actions/setup-rust
 
       - name: Cache cargo + target
+        if: steps.fast.outputs.run == 'true'
         uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
           shared-key: drift
@@ -392,6 +460,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install protoc (lancedb transitive dep)
+        if: steps.fast.outputs.run == 'true'
         # BOTH packages: libprotobuf-dev ships the well-known-type includes
         # (google/protobuf/empty.proto, …) that lance-encoding's build
         # imports, while protobuf-compiler provides only the binary —
@@ -401,10 +470,16 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev
 
       - name: Install just (drift-check recipes)
+        if: steps.fast.outputs.run == 'true'
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
 
       - name: Generated-artifact drift
+        if: steps.fast.outputs.run == 'true'
         run: just types-check
+
+      - name: Skipped (documentation-only change)
+        if: steps.fast.outputs.run != 'true'
+        run: scripts/ci/docs-only.sh --skip-message
 
   code-drift:
     permissions:
@@ -503,7 +578,16 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      - name: Docs-only fast path (scripts/ci/docs-only.sh)
+        id: fast
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: scripts/ci/docs-only.sh
+
       - name: Free disk space (drop preinstalled SDKs)
+        if: steps.fast.outputs.run == 'true'
         # As `workspace-lint`, plus: this suite builds fast-profile binaries +
         # Chromium and spawns several kb-server daemons that each write a
         # fresh lance/sqlite state tree, so disk/IO pressure here also shows
@@ -518,9 +602,11 @@ jobs:
           df -h /
 
       - name: Install Rust toolchain
+        if: steps.fast.outputs.run == 'true'
         uses: ./.github/actions/setup-rust
 
       - name: Cache cargo + target
+        if: steps.fast.outputs.run == 'true'
         uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
           shared-key: e2e-fast
@@ -528,12 +614,14 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install protoc (lancedb transitive dep)
+        if: steps.fast.outputs.run == 'true'
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev
 
       # kb-server links no ONNX Runtime (invariant §23); the e2e suite drives
       # the SPA/iframe + keyword search and does not exercise the embedder
       # subprocess, so no onnxruntime install is needed.
       - name: Build kb-server + kb-cli (fast profile — e2e is a functional smoke)
+        if: steps.fast.outputs.run == 'true'
         # spa-lists-import-cli.spec.ts shells out to the fast-profile `kb`
         # binary (target/fast/kb) for the reading-list import/export
         # round-trip, so the CLI must be built too — mirrors the justfile
@@ -542,17 +630,20 @@ jobs:
         run: cargo build --locked --profile fast -p kb-server -p kb-cli
 
       - name: Setup Node.js
+        if: steps.fast.outputs.run == 'true'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
 
       - name: Build SPA bundle
+        if: steps.fast.outputs.run == 'true'
         working-directory: web
         run: |
           npm ci
           npm run build
 
       - name: Annotator bundle-size guard (≤ 12 KiB)
+        if: steps.fast.outputs.run == 'true'
         # Raised 10 → 12 KiB when the pull-based selection query
         # (`cm:selection-query`/`cm:selection-pull`) and the Gecko-safe relay
         # landed: a protocol the mobile comment path depends on outgrew the
@@ -572,6 +663,7 @@ jobs:
           fi
 
       - name: Annotator bundle declares no globals (classic-script guard)
+        if: steps.fast.outputs.run == 'true'
         # A11.f2: the daemon injects annotate.js as a CLASSIC <script defer>
         # into the artifact's own document, so any top-level function/var/
         # const it declares lands in the page's global scope and can collide
@@ -589,22 +681,26 @@ jobs:
           node ../scripts/ci/check-annotate-bundle.cjs dist/annotate.js
 
       - name: Install Playwright deps
+        if: steps.fast.outputs.run == 'true'
         working-directory: tests/e2e
         run: npm ci
 
       - name: Resolve Playwright version (browser-cache key)
+        if: steps.fast.outputs.run == 'true'
         id: playwright-version
         working-directory: tests/e2e
         run: |
           echo "version=$(node -p "require('./package-lock.json').packages['node_modules/@playwright/test'].version")" >> "$GITHUB_OUTPUT"
 
       - name: Cache Playwright browsers
+        if: steps.fast.outputs.run == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
 
       - name: Install Chromium + Firefox + WebKit
+        if: steps.fast.outputs.run == 'true'
         # --with-deps is load-bearing: a hosted runner does not ship the
         # browsers' system libraries, and without it they install fine and
         # then die at launch with `error while loading shared libraries:
@@ -628,6 +724,7 @@ jobs:
         run: npx playwright install --with-deps chromium firefox webkit
 
       - name: Run Playwright tests
+        if: steps.fast.outputs.run == 'true'
         # V72-C3 — capture to a file (in addition to the live `list` output)
         # so the next step can grep it.
         #
@@ -655,7 +752,7 @@ jobs:
           set -o pipefail; npx playwright test "${args[@]}" 2>&1 | tee playwright-output.log
 
       - name: Upload Playwright goldens
-        if: ${{ always() && inputs.update_snapshots }}
+        if: ${{ (always() && inputs.update_snapshots) && steps.fast.outputs.run == 'true' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e-snapshots
@@ -670,7 +767,7 @@ jobs:
         # Only on a push to main: PRs are not failed for a flake main already
         # carried. Absence of a previous report (first run after this landed,
         # expired artifact) is tolerated and printed, never silent.
-        if: ${{ !cancelled() && github.event_name == 'push' }}
+        if: ${{ (!cancelled() && github.event_name == 'push') && steps.fast.outputs.run == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -686,7 +783,7 @@ jobs:
         # Decides the lane from the REPORT: unexpected == 0 and executed >=
         # the `e2e` floor in ci/test-floors.toml. `!cancelled()` so it also
         # reports the count when the run step above already failed.
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.fast.outputs.run == 'true' }}
         env:
           KB_WITNESS_DIR: ${{ runner.temp }}/witness
         run: |
@@ -697,7 +794,7 @@ jobs:
           python3 scripts/ci/witness.py playwright "$KB_WITNESS_DIR/pw-e2e.json" --lane e2e "${prev[@]}"
 
       - name: Upload witness report
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.fast.outputs.run == 'true' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: witness-e2e
@@ -718,7 +815,7 @@ jobs:
         # hosted-runner-load pattern this budget/retry pair is meant for
         # loses a DIFFERENT spec each run; a repeat name is a real bug, not
         # load — see the PR body).
-        if: always()
+        if: ${{ always() && steps.fast.outputs.run == 'true' }}
         working-directory: tests/e2e
         run: |
           if [ -f playwright-output.log ] && grep -qE '^[[:space:]]*[0-9]+ flaky[[:space:]]*$' playwright-output.log; then
@@ -735,6 +832,10 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      - name: Skipped (documentation-only change)
+        if: steps.fast.outputs.run != 'true'
+        run: scripts/ci/docs-only.sh --skip-message
+
   embedder-lint:
     permissions:
       contents: read
@@ -749,8 +850,19 @@ jobs:
     # No `needs:` — independent feedback; ready jobs share the bounded slots.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Docs-only fast path (scripts/ci/docs-only.sh)
+        id: fast
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: scripts/ci/docs-only.sh
 
       - name: Free disk space (drop preinstalled SDKs)
+        if: steps.fast.outputs.run == 'true'
         # Same reclaim as the `workspace-lint` job — see its comment.
         run: |
           for d in /usr/share/dotnet /usr/local/lib/android /opt/ghc \
@@ -762,11 +874,13 @@ jobs:
           df -h /
 
       - name: Install Rust toolchain
+        if: steps.fast.outputs.run == 'true'
         uses: ./.github/actions/setup-rust
         with:
           components: clippy
 
       - name: Cache cargo + target
+        if: steps.fast.outputs.run == 'true'
         uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
           shared-key: embedder
@@ -778,6 +892,7 @@ jobs:
           save-if: 'false'
 
       - name: Install protoc (lancedb transitive dep)
+        if: steps.fast.outputs.run == 'true'
         # BOTH packages: libprotobuf-dev ships the well-known-type includes
         # (google/protobuf/empty.proto, …) that lance-encoding's build
         # imports, while protobuf-compiler provides only the binary —
@@ -792,9 +907,14 @@ jobs:
       # Docker image ships. (Air-gapped runners: set ORT_LIB_PATH=<dir>.) This is the slow path; the `workspace-*` jobs stay
       # ORT-free and fast.
       - name: cargo clippy (embedder + kb-core/local-embedder)
+        if: steps.fast.outputs.run == 'true'
         run: |
           cargo clippy --locked -p kb-embedder --all-targets -- -D warnings
           cargo clippy --locked -p kb-core --features local-embedder --all-targets -- -D warnings
+
+      - name: Skipped (documentation-only change)
+        if: steps.fast.outputs.run != 'true'
+        run: scripts/ci/docs-only.sh --skip-message
 
   embedder-test:
     permissions:
@@ -810,8 +930,19 @@ jobs:
     # the runner queue, not a test dependency, rations the bounded slots.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Docs-only fast path (scripts/ci/docs-only.sh)
+        id: fast
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: scripts/ci/docs-only.sh
 
       - name: Free disk space (drop preinstalled SDKs)
+        if: steps.fast.outputs.run == 'true'
         # Same reclaim as the `workspace-lint` job — see its comment.
         run: |
           for d in /usr/share/dotnet /usr/local/lib/android /opt/ghc \
@@ -823,11 +954,13 @@ jobs:
           df -h /
 
       - name: Install Rust toolchain
+        if: steps.fast.outputs.run == 'true'
         # Reads the version from rust-toolchain.toml (single source; see
         # .github/actions/setup-rust/action.yml) — no per-job literal to drift.
         uses: ./.github/actions/setup-rust
 
       - name: Cache cargo + target
+        if: steps.fast.outputs.run == 'true'
         uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
           shared-key: embedder
@@ -835,6 +968,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install protoc (lancedb transitive dep)
+        if: steps.fast.outputs.run == 'true'
         # BOTH packages: libprotobuf-dev ships the well-known-type includes
         # (google/protobuf/empty.proto, …) that lance-encoding's build
         # imports, while protobuf-compiler provides only the binary —
@@ -849,9 +983,14 @@ jobs:
       # Docker image ships. (Air-gapped runners: set ORT_LIB_PATH=<dir>.) This is the slow path; the `workspace-*` jobs stay
       # ORT-free and fast.
       - name: cargo test (embedder + kb-core/local-embedder)
+        if: steps.fast.outputs.run == 'true'
         run: |
           cargo test --locked -p kb-embedder --no-fail-fast
           cargo test --locked -p kb-core --features local-embedder --no-fail-fast
+
+      - name: Skipped (documentation-only change)
+        if: steps.fast.outputs.run != 'true'
+        run: scripts/ci/docs-only.sh --skip-message
 
   code-lint:
     permissions:
@@ -1834,7 +1973,16 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      - name: Docs-only fast path (scripts/ci/docs-only.sh)
+        id: fast
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: scripts/ci/docs-only.sh
+
       - name: Free disk space (drop preinstalled SDKs)
+        if: steps.fast.outputs.run == 'true'
         run: |
           for d in /usr/share/dotnet /usr/local/lib/android /opt/ghc \
                    /opt/hostedtoolcache/CodeQL /usr/local/.ghcup \
@@ -1845,9 +1993,11 @@ jobs:
           df -h /
 
       - name: Install Rust toolchain
+        if: steps.fast.outputs.run == 'true'
         uses: ./.github/actions/setup-rust
 
       - name: Cache cargo + target
+        if: steps.fast.outputs.run == 'true'
         uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
           shared-key: term-e2e-fast
@@ -1855,22 +2005,27 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install protoc (lancedb transitive dep)
+        if: steps.fast.outputs.run == 'true'
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev
 
       - name: Build kb-server + kb-termd (fast profile)
+        if: steps.fast.outputs.run == 'true'
         # `-p kb-term` is the package that owns the kb-termd bin. Neither
         # package links ONNX Runtime (invariant #26).
         run: cargo build --locked --profile fast -p kb-server -p kb-term
 
       - name: Setup Bun
+        if: steps.fast.outputs.run == 'true'
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.4.4"
 
       - name: Bun matches the pin
+        if: steps.fast.outputs.run == 'true'
         run: test "$(bun --version)" = "$(cat crates/kb-term/tap/.bun-version)"
 
       - name: Compile the real tap
+        if: steps.fast.outputs.run == 'true'
         run: |
           cd crates/kb-term/tap
           bun install
@@ -1878,11 +2033,13 @@ jobs:
           echo "KB_TAP_BIN=$RUNNER_TEMP/kb-tap" >> "$GITHUB_ENV"
 
       - name: Runner image id (tmux cache key)
+        if: steps.fast.outputs.run == 'true'
         id: img
         run: |
           echo "key=${ImageOS}-${ImageVersion}" >> "$GITHUB_OUTPUT"
 
       - name: Cache the pinned tmux binary
+        if: steps.fast.outputs.run == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/tmux-3.7c
@@ -1891,42 +2048,50 @@ jobs:
           key: tmux-3.7c-${{ hashFiles('scripts/ci/build-tmux.sh') }}-${{ runner.os }}-${{ steps.img.outputs.key }}
 
       - name: Build the pinned tmux (or reuse the cache)
+        if: steps.fast.outputs.run == 'true'
         # Exports KB_TMUX_BIN through GITHUB_ENV.
         run: scripts/ci/build-tmux.sh
 
       - name: Setup Node.js
+        if: steps.fast.outputs.run == 'true'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
 
       - name: Build SPA bundle
+        if: steps.fast.outputs.run == 'true'
         working-directory: web
         run: |
           npm ci
           npm run build
 
       - name: Install Playwright deps
+        if: steps.fast.outputs.run == 'true'
         working-directory: tests/e2e
         run: npm ci
 
       - name: Resolve Playwright version (browser-cache key)
+        if: steps.fast.outputs.run == 'true'
         id: playwright-version
         working-directory: tests/e2e
         run: |
           echo "version=$(node -p "require('./package-lock.json').packages['node_modules/@playwright/test'].version")" >> "$GITHUB_OUTPUT"
 
       - name: Cache Playwright browsers
+        if: steps.fast.outputs.run == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
 
       - name: Install Chromium
+        if: steps.fast.outputs.run == 'true'
         # --with-deps is load-bearing on a hosted runner (see the e2e job).
         working-directory: tests/e2e
         run: npx playwright install --with-deps chromium
 
       - name: Run the terminal stack specs
+        if: steps.fast.outputs.run == 'true'
         env:
           KB_E2E_TERMINAL: "1"
           KB_WITNESS_DIR: ${{ runner.temp }}/witness
@@ -1936,13 +2101,13 @@ jobs:
           set -o pipefail; npx playwright test --project=terminal-stack --project=terminal-stack-dpr2 2>&1 | tee playwright-output.log
 
       - name: Witness (Playwright JSON report -> floor + zero failures)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.fast.outputs.run == 'true' }}
         env:
           KB_WITNESS_DIR: ${{ runner.temp }}/witness
         run: python3 scripts/ci/witness.py playwright "$KB_WITNESS_DIR/pw-term-e2e.json" --lane term-e2e
 
       - name: Upload witness report
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.fast.outputs.run == 'true' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: witness-term-e2e
@@ -1951,7 +2116,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Upload run output
-        if: always()
+        if: ${{ always() && steps.fast.outputs.run == 'true' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: term-e2e-artifacts
@@ -1960,6 +2125,10 @@ jobs:
             tests/e2e/test-results
           retention-days: 14
           if-no-files-found: warn
+
+      - name: Skipped (documentation-only change)
+        if: steps.fast.outputs.run != 'true'
+        run: scripts/ci/docs-only.sh --skip-message
 
   supply-chain:
     permissions:
