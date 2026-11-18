@@ -436,6 +436,38 @@ mod tests {
         assert_eq!(grid.stdout, "132 37\n");
     }
 
+    /// FUTERM: `describe()` itself (not just the parser) over a tmux that
+    /// answers in the real literal-TAB shape with an EMPTY
+    /// `#{pane_dead_status}` field: the grid survives the empty field.
+    #[tokio::test]
+    async fn describe_reads_the_grid_from_tab_separated_pane_facts() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let script = root.path().join("tmux.sh");
+        let body = "#!/bin/sh\n\
+             case \"$*\" in\n\
+             *'#{pane_pid}'*) printf '4242\\t0\\t\\t132\\t37\\t1\\n' ;;\n\
+             *@kb_harness*) echo omp ;;\n\
+             esac\n\
+             exit 0\n";
+        std::fs::write(&script, body).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let cfg = crate::runner::config::RunnerConfig::test_config(
+            root.path().join("run"),
+            script.to_string_lossy().into_owned(),
+            std::path::PathBuf::from("/dev/null"),
+        );
+        let runner =
+            Runner::with_supervisor(cfg, crate::runner::supervisor::fake::FakeSupervisor::new());
+        let entry = describe(&runner, "abcd1234", &runner.sessions_dir()).await;
+        assert!(!entry.stale, "the holder answered");
+        assert_eq!(entry.harness.as_deref(), Some("omp"));
+        assert_eq!(entry.pane_pid, Some(4242));
+        assert!(!entry.pane_dead && entry.exit_code.is_none());
+        assert_eq!((entry.cols, entry.rows), (Some(132), Some(37)));
+        assert!(entry.bracket_paste_flag);
+    }
+
     #[test]
     fn list_item_never_serialises_argv_or_env() {
         let entry = SessionEntry {

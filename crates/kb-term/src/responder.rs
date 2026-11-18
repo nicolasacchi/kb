@@ -300,7 +300,7 @@ impl Responder {
                 let mut reply = b"\x1bP>|".to_vec();
                 reply.extend_from_slice(XTVERSION_NAME.as_bytes());
                 reply.push(b' ');
-                reply.extend_from_slice(env!("CARGO_PKG_VERSION").as_bytes());
+                reply.extend_from_slice(crate::version::own_version().as_bytes());
                 reply.extend_from_slice(b"\x1b\\");
                 self.answer(out, "xtversion", &reply);
             }
@@ -585,9 +585,25 @@ mod tests {
     }
 
     #[test]
+    fn xtversion_carries_the_stamped_version_never_the_workspace_zero() {
+        // Nothing in this test binary stamps the process, so the reply must
+        // carry the unstamped marker, not the bare workspace `0.0.0`.
+        let out = feed_all(ResponderCfg::default(), b"\x1b[>q");
+        let want = format!(
+            "\x1bP>|{XTVERSION_NAME} {}\x1b\\",
+            crate::version::UNSTAMPED_VERSION
+        );
+        assert_eq!(out, want.as_bytes());
+        assert_ne!(
+            out,
+            format!("\x1bP>|{XTVERSION_NAME} 0.0.0\x1b\\").into_bytes()
+        );
+    }
+
+    #[test]
     fn responder_replies_are_pinned_goldens() {
         let dark = ResponderCfg::default();
-        let ver = env!("CARGO_PKG_VERSION");
+        let ver = crate::version::own_version();
         // Single DCS string ESC P > | kb-term <ver> ESC \ : the `|`
         // (0x7C) marks XTVERSION for tmux; the ST terminates the DCS.
         let xt = format!("\x1bP>|{XTVERSION_NAME} {ver}\x1b\\");

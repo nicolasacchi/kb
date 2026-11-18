@@ -219,11 +219,15 @@ type StreamSlots = std::sync::Arc<std::sync::Mutex<std::collections::HashSet<(St
 pub struct StreamSlot {
     slots: StreamSlots,
     key: (String, String),
+    released: std::sync::Arc<tokio::sync::Notify>,
 }
 
 impl Drop for StreamSlot {
     fn drop(&mut self) {
         lock_slots(&self.slots).remove(&self.key);
+        // Signal AFTER the key is gone, so a waiter that wakes sees the
+        // slot free (tests wait on this instead of polling on a timer).
+        self.released.notify_waiters();
     }
 }
 
@@ -252,6 +256,8 @@ pub struct Runner<S: Supervisor> {
     /// the moment a `stream` is admitted until it ends, whether or not
     /// its lazily-opened hidden client exists yet.
     stream_slots: StreamSlots,
+    /// Pulsed each time a [`StreamSlot`] is released.
+    slot_released: std::sync::Arc<tokio::sync::Notify>,
     paste_only: Mutex<HashMap<String, bool>>,
     buffer_seqs: Mutex<HashMap<String, u64>>,
     /// Peer-uid accepted by the runner socket (this process's uid).
@@ -276,6 +282,7 @@ impl Runner<DirectSupervisor> {
             locks: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
             viewers: std::sync::Arc::new(Mutex::new(HashMap::new())),
             stream_slots: StreamSlots::default(),
+            slot_released: std::sync::Arc::default(),
             paste_only: Mutex::new(HashMap::new()),
             buffer_seqs: Mutex::new(HashMap::new()),
             server_uid: unsafe { libc::getuid() },
@@ -295,6 +302,7 @@ impl Runner<SystemdSupervisor> {
             locks: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
             viewers: std::sync::Arc::new(Mutex::new(HashMap::new())),
             stream_slots: StreamSlots::default(),
+            slot_released: std::sync::Arc::default(),
             paste_only: Mutex::new(HashMap::new()),
             buffer_seqs: Mutex::new(HashMap::new()),
             server_uid: unsafe { libc::getuid() },
@@ -316,6 +324,7 @@ impl<S: Supervisor> Runner<S> {
             locks: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
             viewers: std::sync::Arc::new(Mutex::new(HashMap::new())),
             stream_slots: StreamSlots::default(),
+            slot_released: std::sync::Arc::default(),
             paste_only: Mutex::new(HashMap::new()),
             buffer_seqs: Mutex::new(HashMap::new()),
             server_uid: unsafe { libc::getuid() },
@@ -500,6 +509,13 @@ impl<S: Supervisor> Runner<S> {
         self.open_viewer(id, viewer, cols, rows, true).await
     }
 
+    /// The notifier pulsed whenever a stream slot is released (after the slot
+    /// is free). Create the `notified()` future BEFORE checking the
+    /// condition so a release in between is not missed.
+    pub fn slot_released(&self) -> std::sync::Arc<tokio::sync::Notify> {
+        self.slot_released.clone()
+    }
+
     /// Whether session `id` is at the per-session viewer cap
     /// (`max_viewers_per_session`, shared by every kind of viewer).
     /// Streams count from their reserved slot, not from their hidden
@@ -547,6 +563,7 @@ impl<S: Supervisor> Runner<S> {
         Ok(StreamSlot {
             slots: self.stream_slots.clone(),
             key,
+            released: self.slot_released.clone(),
         })
     }
 

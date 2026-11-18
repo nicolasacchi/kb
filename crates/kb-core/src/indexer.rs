@@ -62,8 +62,8 @@ pub const MAX_CHUNKS_PER_DOC: usize = 512;
 pub struct WalkOutcome {
     pub emitted: usize,
     pub seen_paths: HashSet<PathBuf>,
-    /// FXLIVEFS — the EMITTED files whose mtime is younger than
-    /// [`RECENT_FILE_SECS`] at walk time. The live watcher's debouncer folds a
+    /// FXLIVEFS — the EMITTED files whose mtime is inside the
+    /// [`recent_window_for`] window (mtime or ctime) at walk time. The live watcher's debouncer folds a
     /// create+remove pair that lands inside one window into NOTHING, so a file
     /// this walk indexed (the watcher had not yet flushed its own `Create`)
     /// and that is then deleted inside the window never produces a `Deleted`
@@ -72,16 +72,78 @@ pub struct WalkOutcome {
     pub recent_paths: Vec<PathBuf>,
 }
 
-/// FXLIVEFS — a walked file younger than this (by mtime) is "recent": the
-/// watcher's debounce window (400 ms default) may still be holding its
-/// `Create`, so a remove inside that window is invisible to the watcher.
+/// FXLIVEFS — floor of the "recent" window: a walked file younger than this
+/// (by mtime OR ctime, see [`meta_is_recent`]) is "recent": the watcher's
+/// debounce window (400 ms default) may still be holding its `Create`, so a
+/// remove inside that window is invisible to the watcher. The effective window
+/// is [`recent_window_for`] (scales with a longer configured debounce).
 pub const RECENT_FILE_SECS: u64 = 3;
 
-/// FXLIVEFS — how long after a walk the reconciler waits before re-stating the
-/// walk's recent files. It must exceed the debounce window (400 ms default)
-/// so that a file still present at the re-stat has had its `Create` flushed:
-/// from then on any removal reaches the watcher as an ordinary `Remove`.
+/// FXLIVEFS — floor of how long after a walk the reconciler waits before
+/// re-stating the walk's recent files. It must exceed the debounce window
+/// (400 ms default) so that a file still present at the re-stat has had its
+/// `Create` flushed: from then on any removal reaches the watcher as an
+/// ordinary `Remove`. The effective delay is [`recent_recheck_delay_for`].
 pub const RECENT_RECHECK_DELAY: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// FUINDEX — the recent window for a given watcher debounce: twice the
+/// debounce, never below [`RECENT_FILE_SECS`]. (`KB_DEBOUNCE_MS` /
+/// `[indexer] debounce_ms` are configurable, so the 3 s floor alone would be
+/// shorter than the window of a slow-debounce kb.)
+pub fn recent_window_for(debounce: std::time::Duration) -> std::time::Duration {
+    std::time::Duration::from_secs(RECENT_FILE_SECS).max(debounce.saturating_mul(2))
+}
+
+/// FUINDEX — the recheck delay for a given watcher debounce: twice the
+/// debounce, never below [`RECENT_RECHECK_DELAY`].
+pub fn recent_recheck_delay_for(debounce: std::time::Duration) -> std::time::Duration {
+    RECENT_RECHECK_DELAY.max(debounce.saturating_mul(2))
+}
+
+/// FUINDEX — the walk's clock and recent window, bundled so `walk_core` stays
+/// under clippy's argument limit.
+#[derive(Clone, Copy)]
+struct RecentClock {
+    now: SystemTime,
+    window: std::time::Duration,
+}
+
+/// FUINDEX — is the instant `t` inside `window` of `now`? A future instant
+/// counts as recent (clock skew / a copied-in mtime is not evidence of age);
+/// exactly `window` old is NOT recent.
+fn instant_is_recent(now: SystemTime, t: SystemTime, window: std::time::Duration) -> bool {
+    match now.duration_since(t) {
+        Ok(age) => age < window,
+        Err(_) => true,
+    }
+}
+
+/// FUINDEX — the status-change time of `meta`, where the platform has one.
+#[cfg(unix)]
+fn ctime_of(meta: &std::fs::Metadata) -> Option<SystemTime> {
+    use std::os::unix::fs::MetadataExt;
+    let secs = u64::try_from(meta.ctime()).ok()?;
+    let nanos = u32::try_from(meta.ctime_nsec()).ok()?;
+    Some(UNIX_EPOCH + std::time::Duration::new(secs, nanos))
+}
+
+#[cfg(not(unix))]
+fn ctime_of(_meta: &std::fs::Metadata) -> Option<SystemTime> {
+    None
+}
+
+/// FUINDEX — a walked file is "recent" when its mtime OR its ctime is inside
+/// `window`. The ctime half catches a file that appears with an OLD mtime
+/// (`mv`, `cp -p`, `rsync -t`): its mtime says "old", but the rename/creation
+/// bumped the status-change time. An unreadable timestamp is not recent.
+fn meta_is_recent(meta: &std::fs::Metadata, now: SystemTime, window: std::time::Duration) -> bool {
+    let by_mtime = meta
+        .modified()
+        .ok()
+        .is_some_and(|t| instant_is_recent(now, t, window));
+    let by_ctime = ctime_of(meta).is_some_and(|t| instant_is_recent(now, t, window));
+    by_mtime || by_ctime
+}
 
 /// FXLIVEFS — re-stat `paths` (files a walk indexed while they were fresh) and
 /// push a `Deleted` for every one that has vanished since. Pure re-check, no
@@ -100,15 +162,43 @@ pub async fn reverify_recent(sink: &IngestSink, paths: &[PathBuf]) -> usize {
     pushed
 }
 
-/// FXLIVEFS — schedule [`reverify_recent`] after `delay` on a detached task
-/// (the reconcile pass must not block on it). No-op for an empty list.
-fn schedule_recent_recheck(sink: &IngestSink, recent: Vec<PathBuf>, delay: std::time::Duration) {
+/// FUINDEX — what releases the recent-file re-check. Production always uses
+/// [`RecheckTrigger::After`]; tests use [`RecheckTrigger::Notified`] so the
+/// re-check fires exactly when the test says (no race against a timer).
+#[derive(Clone)]
+pub enum RecheckTrigger {
+    After(std::time::Duration),
+    Notified(Arc<tokio::sync::Notify>),
+}
+
+/// FXLIVEFS — schedule [`reverify_recent`] once `trigger` fires, on a detached
+/// task (the reconcile pass must not block on it). `None` for an empty list.
+///
+/// FUINDEX lifecycle: the task is bounded (one trigger, one pass) and is tied
+/// to the indexer's lifetime through the ingest channel: when the receiver is
+/// dropped (daemon shutdown, kb restart/reload) the task ends without
+/// re-checking, so it cannot outlive the kb it belongs to by more than the
+/// instant it takes to notice. Returns the number of deletes it pushed.
+fn schedule_recent_recheck(
+    sink: &IngestSink,
+    recent: Vec<PathBuf>,
+    trigger: RecheckTrigger,
+) -> Option<tokio::task::JoinHandle<usize>> {
     if recent.is_empty() {
-        return;
+        return None;
     }
     let sink = sink.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(delay).await;
+    Some(tokio::spawn(async move {
+        let wait = async {
+            match trigger {
+                RecheckTrigger::After(d) => tokio::time::sleep(d).await,
+                RecheckTrigger::Notified(n) => n.notified().await,
+            }
+        };
+        tokio::select! {
+            _ = wait => {}
+            _ = sink.tx.closed() => return 0,
+        }
         let n = reverify_recent(&sink, &recent).await;
         if n > 0 {
             tracing::info!(
@@ -117,7 +207,8 @@ fn schedule_recent_recheck(sink: &IngestSink, recent: Vec<PathBuf>, delay: std::
                 "reconcile: recently-walked files vanished inside the watcher's debounce window; deleting their rows",
             );
         }
-    });
+        n
+    }))
 }
 
 /// Bound on the per-kb ingest channel (G7). The indexer drains one item at a
@@ -229,6 +320,12 @@ pub struct IngestSink {
     /// once. Defaults to an empty gate; production installs the loaded one
     /// via [`Self::with_gate`].
     gate: crate::exclusions::IngestGate,
+    /// FUINDEX — the watcher debounce window this kb runs with; the
+    /// reconciler derives its recent-file window and re-check delay from it
+    /// ([`recent_window_for`], [`recent_recheck_delay_for`]). Defaults to
+    /// [`crate::watcher::DEFAULT_DEBOUNCE_MS`]; production installs the
+    /// resolved value via [`Self::with_debounce`].
+    debounce: std::time::Duration,
 }
 
 impl IngestSink {
@@ -239,7 +336,19 @@ impl IngestSink {
             kb,
             extensions: crate::extmap::ExtensionMap::default(),
             gate: crate::exclusions::IngestGate::default(),
+            debounce: std::time::Duration::from_millis(crate::watcher::DEFAULT_DEBOUNCE_MS),
         }
+    }
+
+    /// FUINDEX — install the watcher debounce this kb runs with.
+    pub fn with_debounce(mut self, debounce: std::time::Duration) -> Self {
+        self.debounce = debounce;
+        self
+    }
+
+    /// FUINDEX — the watcher debounce window (see [`Self::with_debounce`]).
+    pub fn debounce(&self) -> std::time::Duration {
+        self.debounce
     }
 
     /// X1 — install the resolved per-kb extension map. Builder-style so the
@@ -483,6 +592,12 @@ pub fn walk_emit_modify(
         known_mtimes,
         &extensions,
         &gate,
+        RecentClock {
+            now: SystemTime::now(),
+            window: recent_window_for(std::time::Duration::from_millis(
+                crate::watcher::DEFAULT_DEBOUNCE_MS,
+            )),
+        },
         |p| {
             let mut payload = json!({
                 "kb": kb_name.as_str(),
@@ -511,6 +626,26 @@ pub fn walk_send_work(
     force: bool,
     known_mtimes: Option<&HashMap<PathBuf, i64>>,
 ) -> WalkOutcome {
+    walk_send_work_at(
+        sink,
+        source_root,
+        skip_patterns,
+        force,
+        known_mtimes,
+        SystemTime::now(),
+    )
+}
+
+/// [`walk_send_work`] with the walk's "now" injectable (FUINDEX: lets a test
+/// place a file's age without sleeping or faking a ctime).
+pub(crate) fn walk_send_work_at(
+    sink: &IngestSink,
+    source_root: &Path,
+    skip_patterns: &[String],
+    force: bool,
+    known_mtimes: Option<&HashMap<PathBuf, i64>>,
+    now: SystemTime,
+) -> WalkOutcome {
     // X1/X2 — the sink carries the kb's resolved extension map AND the shared
     // ingest gate; the walk reads both from there (no extra param on the
     // ~half-dozen call sites). `re_embed` stays false: this signature is
@@ -523,6 +658,10 @@ pub fn walk_send_work(
         known_mtimes,
         sink.extensions(),
         sink.gate(),
+        RecentClock {
+            now,
+            window: recent_window_for(sink.debounce()),
+        },
         |p| {
             sink.blocking_send(WatchKind::Modified, p.to_path_buf(), force);
         },
@@ -545,6 +684,10 @@ pub fn walk_send_reindex(
         None,
         sink.extensions(),
         sink.gate(),
+        RecentClock {
+            now: SystemTime::now(),
+            window: recent_window_for(sink.debounce()),
+        },
         |p| {
             sink.blocking_send_with(WatchKind::Modified, p.to_path_buf(), true, re_embed);
         },
@@ -557,6 +700,10 @@ pub fn walk_send_reindex(
 /// (existence — what the reconciler's delete pass diffs against), and invokes
 /// `emit(path)` once per file that should be (re)indexed. `emitted` counts the
 /// `emit` calls; `seen_paths` counts all files on disk.
+// FUINDEX — 8 parameters: the walk gate (extensions + exclusions) and the
+// recent clock are each one cohesive input; a wrapper struct would only move
+// the count.
+#[allow(clippy::too_many_arguments)]
 fn walk_core(
     source_root: &Path,
     skip_patterns: &[String],
@@ -574,13 +721,15 @@ fn walk_core(
     // `seen_paths` (existence must keep being tracked or the delete pass
     // would misread paused as vanished).
     gate: &crate::exclusions::IngestGate,
+    // FXLIVEFS/FUINDEX — the walk's clock and the recent window (see
+    // [`recent_window_for`]); injected so freshness is testable without sleeps.
+    recent: RecentClock,
     mut emit: impl FnMut(&Path),
 ) -> WalkOutcome {
     let paused = gate.paused();
     let mut emitted = 0usize;
     let mut seen_paths: HashSet<PathBuf> = HashSet::new();
     let mut recent_paths: Vec<PathBuf> = Vec::new();
-    let now = SystemTime::now();
     for entry in walkdir::WalkDir::new(source_root)
         .into_iter()
         .filter_map(|e| e.ok())
@@ -648,17 +797,12 @@ fn walk_core(
         }
 
         // FXLIVEFS — remember fresh files (see `WalkOutcome::recent_paths`).
-        // A future mtime counts as fresh; an unreadable one does not.
+        // Fresh = mtime OR ctime inside the window ([`meta_is_recent`]); a
+        // future timestamp counts as fresh; unreadable metadata does not.
         let fresh = entry
             .metadata()
             .ok()
-            .and_then(|m| m.modified().ok())
-            .map(|t| {
-                now.duration_since(t)
-                    .map(|age| age.as_secs() < RECENT_FILE_SECS)
-                    .unwrap_or(true)
-            })
-            .unwrap_or(false);
+            .is_some_and(|m| meta_is_recent(&m, recent.now, recent.window));
         if fresh {
             recent_paths.push(p_buf);
         }
@@ -800,24 +944,26 @@ pub async fn reconcile(
     source_root: PathBuf,
     skip_patterns: Vec<String>,
 ) -> ReconcileSummary {
-    reconcile_with_recheck_delay(
+    let delay = recent_recheck_delay_for(sink.debounce());
+    reconcile_with_recheck(
         sink,
         storage,
         source_root,
         skip_patterns,
-        RECENT_RECHECK_DELAY,
+        RecheckTrigger::After(delay),
     )
     .await
 }
 
-/// [`reconcile`] with the FXLIVEFS recent-file re-check delay injectable
-/// (production always passes [`RECENT_RECHECK_DELAY`]; tests pass a short one).
-pub async fn reconcile_with_recheck_delay(
+/// [`reconcile`] with the FXLIVEFS recent-file re-check trigger injectable
+/// (production always passes `After(recent_recheck_delay_for(debounce))`;
+/// tests pass a `Notified` trigger and fire it deterministically).
+pub async fn reconcile_with_recheck(
     sink: IngestSink,
     storage: StorageHandle,
     source_root: PathBuf,
     skip_patterns: Vec<String>,
-    recheck_delay: std::time::Duration,
+    recheck: RecheckTrigger,
 ) -> ReconcileSummary {
     let started = std::time::Instant::now();
     let kb_name = sink.kb().clone();
@@ -867,7 +1013,7 @@ pub async fn reconcile_with_recheck_delay(
                 seen_paths: HashSet::new(),
                 recent_paths: Vec::new(),
             });
-            schedule_recent_recheck(&sink, walk.recent_paths.clone(), recheck_delay);
+            let _ = schedule_recent_recheck(&sink, walk.recent_paths.clone(), recheck.clone());
             return ReconcileSummary {
                 completed_at: now_unix(),
                 files_walked: walk.seen_paths.len() as u64,
@@ -912,7 +1058,7 @@ pub async fn reconcile_with_recheck_delay(
         seen_paths: HashSet::new(),
         recent_paths: Vec::new(),
     });
-    schedule_recent_recheck(&sink, walk.recent_paths.clone(), recheck_delay);
+    let _ = schedule_recent_recheck(&sink, walk.recent_paths.clone(), recheck);
 
     // R2 — snapshot the live lance doc-id set for the orphan sweep BEFORE the
     // delete loop consumes `docs` (reconcile already holds the full list, so
@@ -4362,42 +4508,160 @@ mod tests {
         );
     }
 
-    /// FXLIVEFS — the walk reports exactly the EMITTED files younger than
-    /// `RECENT_FILE_SECS` as `recent_paths`; an old file is walked and emitted
-    /// but not recent. (The reconciler re-stats the recent ones after the
-    /// watcher's debounce window.)
+    /// FXLIVEFS — the walk reports exactly the EMITTED files inside the recent
+    /// window as `recent_paths`. The walk's clock is injected: at the real
+    /// "now" a just-written file is recent; an hour later it is not (both its
+    /// mtime and its ctime are old by then), though it is still emitted.
     #[tokio::test]
     async fn walk_reports_only_fresh_emitted_files_as_recent() {
         let (bus, _storage, kb, _slug, tmp) = setup().await;
         let src = tmp.path().join("src");
         std::fs::create_dir_all(&src).unwrap();
         let fresh = src.join("fresh.html");
-        let old = src.join("old.html");
         std::fs::write(&fresh, "<html><title>Fresh</title><body>x</body></html>").unwrap();
-        std::fs::write(&old, "<html><title>Old</title><body>y</body></html>").unwrap();
-        let an_hour_ago = SystemTime::now() - Duration::from_secs(3600);
+
+        let (tx, _rx) = mpsc::channel(INGEST_QUEUE_CAPACITY);
+        let sink = IngestSink::new(tx, bus.clone(), kb.clone());
+        let (s1, src1) = (sink.clone(), src.clone());
+        let now_outcome = tokio::task::spawn_blocking(move || {
+            walk_send_work_at(&s1, &src1, &[], false, None, SystemTime::now())
+        })
+        .await
+        .unwrap();
+        assert_eq!(now_outcome.emitted, 1);
+        assert_eq!(now_outcome.recent_paths, vec![fresh.clone()]);
+
+        let (s2, src2) = (sink.clone(), src.clone());
+        let later = tokio::task::spawn_blocking(move || {
+            walk_send_work_at(
+                &s2,
+                &src2,
+                &[],
+                false,
+                None,
+                SystemTime::now() + Duration::from_secs(3600),
+            )
+        })
+        .await
+        .unwrap();
+        assert_eq!(later.emitted, 1, "an old file is still walked and emitted");
+        assert!(later.recent_paths.is_empty(), "but it is not recent");
+
+        // A file the G5 dedup skips (stored mtime == disk mtime) is not emitted
+        // and so is never recent, however fresh.
+        let disk_mtime = std::fs::metadata(&fresh)
+            .unwrap()
+            .modified()
+            .unwrap()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let known: HashMap<PathBuf, i64> = HashMap::from([(fresh.clone(), disk_mtime)]);
+        let (s3, src3) = (sink, src);
+        let skipped = tokio::task::spawn_blocking(move || {
+            walk_send_work_at(&s3, &src3, &[], false, Some(&known), SystemTime::now())
+        })
+        .await
+        .unwrap();
+        assert_eq!(skipped.emitted, 0);
+        assert!(skipped.recent_paths.is_empty());
+    }
+
+    /// FUINDEX — a file that appears with an OLD mtime (`mv`, `cp -p`,
+    /// `rsync -t`) is still recent by its ctime: the rename/creation bumped
+    /// the status-change time even though the mtime says "an hour ago".
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn walk_treats_an_old_mtime_with_a_fresh_ctime_as_recent() {
+        let (bus, _storage, kb, _slug, tmp) = setup().await;
+        let src = tmp.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let moved = src.join("moved.html");
+        std::fs::write(&moved, "<html><title>Moved</title><body>m</body></html>").unwrap();
         std::fs::File::options()
             .write(true)
-            .open(&old)
+            .open(&moved)
             .unwrap()
-            .set_modified(an_hour_ago)
+            .set_modified(SystemTime::now() - Duration::from_secs(3600))
             .unwrap();
+        let meta = std::fs::metadata(&moved).unwrap();
+        let now = SystemTime::now();
+        assert!(
+            !instant_is_recent(now, meta.modified().unwrap(), Duration::from_secs(3)),
+            "precondition: the mtime alone says old"
+        );
+        assert!(meta_is_recent(&meta, now, Duration::from_secs(3)));
+        assert!(
+            !meta_is_recent(
+                &meta,
+                now + Duration::from_secs(3600),
+                Duration::from_secs(3)
+            ),
+            "an hour later both clocks are old"
+        );
 
         let (tx, _rx) = mpsc::channel(INGEST_QUEUE_CAPACITY);
         let sink = IngestSink::new(tx, bus.clone(), kb.clone());
         let src_for_walk = src.clone();
         let outcome = tokio::task::spawn_blocking(move || {
-            walk_send_work(&sink, &src_for_walk, &[], false, None)
+            walk_send_work_at(&sink, &src_for_walk, &[], false, None, SystemTime::now())
         })
         .await
         .unwrap();
-        assert_eq!(outcome.emitted, 2);
-        assert_eq!(outcome.seen_paths.len(), 2);
-        assert_eq!(
-            outcome.recent_paths,
-            vec![fresh],
-            "only the fresh emitted file is recent"
+        assert_eq!(outcome.recent_paths, vec![moved]);
+    }
+
+    /// FUINDEX — freshness boundaries: a future instant is recent, exactly
+    /// the window old is NOT, a hair younger is.
+    #[test]
+    fn instant_is_recent_boundaries() {
+        let now = SystemTime::now();
+        let w = Duration::from_secs(RECENT_FILE_SECS);
+        assert!(instant_is_recent(now, now, w), "zero age");
+        assert!(
+            instant_is_recent(now, now + Duration::from_secs(86_400), w),
+            "a future instant counts as recent"
         );
+        assert!(instant_is_recent(
+            now,
+            now - (w - Duration::from_millis(1)),
+            w
+        ));
+        assert!(
+            !instant_is_recent(now, now - w, w),
+            "exactly RECENT_FILE_SECS old is not recent"
+        );
+        assert!(!instant_is_recent(
+            now,
+            now - w - Duration::from_millis(1),
+            w
+        ));
+    }
+
+    /// FUINDEX — the window and the re-check delay follow the configured
+    /// debounce, with the FXLIVEFS constants as floors.
+    #[test]
+    fn recent_window_and_delay_scale_with_the_debounce() {
+        let default = Duration::from_millis(crate::watcher::DEFAULT_DEBOUNCE_MS);
+        assert_eq!(
+            recent_window_for(default),
+            Duration::from_secs(RECENT_FILE_SECS)
+        );
+        assert_eq!(recent_recheck_delay_for(default), RECENT_RECHECK_DELAY);
+        assert_eq!(
+            recent_window_for(Duration::from_millis(50)),
+            Duration::from_secs(RECENT_FILE_SECS),
+            "a tiny debounce never shrinks the floor"
+        );
+        let slow = Duration::from_secs(10);
+        assert_eq!(recent_window_for(slow), Duration::from_secs(20));
+        assert_eq!(recent_recheck_delay_for(slow), Duration::from_secs(20));
+        assert!(recent_recheck_delay_for(slow) > slow);
+        let (tx, _rx) = mpsc::channel::<WatchWork>(1);
+        let bus = Arc::new(EventBus::default());
+        let sink = IngestSink::new(tx, bus, KbName::new("smoke").unwrap());
+        assert_eq!(sink.debounce(), default, "default debounce on the sink");
+        assert_eq!(sink.with_debounce(slow).debounce(), slow);
     }
 
     /// FXLIVEFS — the ghost-row interleaving, forced without a timer: a file
@@ -4458,7 +4722,9 @@ mod tests {
 
     /// FXLIVEFS — end to end through the reconciler: a reconcile pass indexes a
     /// fresh file, the file is then removed with no watcher event, and the
-    /// pass's own delayed re-check (not the NEXT pass) removes the row.
+    /// pass's own re-check (not the NEXT pass) removes the row. FUINDEX: the
+    /// re-check is released by a `Notify` AFTER the unlink, so there is no
+    /// timer to lose a race against on a loaded runner.
     #[tokio::test]
     async fn reconcile_rechecks_a_fresh_walked_file_that_then_vanishes() {
         let (bus, storage, kb, slug, tmp) = setup().await;
@@ -4472,18 +4738,19 @@ mod tests {
         let probe = src.join("probe.html");
         std::fs::write(&probe, "<html><title>Probe</title><body>p</body></html>").unwrap();
 
-        // The re-check fires 2 s after the walk; indexing a one-file corpus
-        // with no embedder takes milliseconds, so the unlink below lands first.
-        let _ = reconcile_with_recheck_delay(
+        let release = Arc::new(tokio::sync::Notify::new());
+        let _ = reconcile_with_recheck(
             sink,
             storage.clone(),
             src.clone(),
             Vec::new(),
-            Duration::from_secs(2),
+            RecheckTrigger::Notified(release.clone()),
         )
         .await;
         assert!(wait_event_for_path(&mut rx, "artifact.indexed", "probe.html", SEC5).await);
         std::fs::remove_file(&probe).unwrap();
+        // Only now does the re-check run.
+        release.notify_one();
 
         assert!(
             wait_event_for_path(
@@ -4499,6 +4766,135 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         assert!(storage.get_by_source_path(key).await.unwrap().is_none());
+    }
+
+    /// FUINDEX — the `list_reconcile_rows` error fallback (the SECOND
+    /// `schedule_recent_recheck` call site) also schedules the re-check: with
+    /// storage gone the pass full-emits, and a fresh file removed afterwards
+    /// still gets its `Deleted` when the trigger fires.
+    #[tokio::test]
+    async fn reconcile_fallback_path_also_rechecks_fresh_files() {
+        let (bus, storage, kb, _slug, tmp) = setup().await;
+        storage.shutdown().await;
+        let mut failing = false;
+        for _ in 0..100 {
+            if storage.list_reconcile_rows().await.is_err() {
+                failing = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(failing, "precondition: list_reconcile_rows errors");
+
+        let src = tmp.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let probe = src.join("fallback.html");
+        std::fs::write(&probe, "<html><title>F</title><body>f</body></html>").unwrap();
+
+        let (tx, mut rx) = mpsc::channel::<WatchWork>(INGEST_QUEUE_CAPACITY);
+        let sink = IngestSink::new(tx, bus.clone(), kb.clone());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let summary = reconcile_with_recheck(
+            sink,
+            storage.clone(),
+            src.clone(),
+            Vec::new(),
+            RecheckTrigger::Notified(release.clone()),
+        )
+        .await;
+        assert_eq!(summary.deletes_emitted, 0, "fallback skips the delete pass");
+        let first = timeout(SEC5, rx.recv()).await.unwrap().unwrap();
+        assert_eq!(first.kind, WatchKind::Modified, "full-emit fallback");
+
+        std::fs::remove_file(&probe).unwrap();
+        release.notify_one();
+        let second = timeout(SEC5, rx.recv()).await.unwrap().unwrap();
+        assert_eq!(second.kind, WatchKind::Deleted);
+        assert_eq!(
+            second.path,
+            std::fs::canonicalize(&src).unwrap().join("fallback.html")
+        );
+    }
+
+    /// FUINDEX — `reverify_recent` never deletes on an ambiguous stat: a path
+    /// whose `try_exists` is an ERROR (a component is a file, ENOTDIR) pushes
+    /// nothing, while a real NotFound does.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn reverify_recent_never_deletes_on_a_stat_error() {
+        let (bus, _storage, kb, _slug, tmp) = setup().await;
+        let (tx, mut rx) = mpsc::channel::<WatchWork>(INGEST_QUEUE_CAPACITY);
+        let sink = IngestSink::new(tx, bus.clone(), kb.clone());
+        let plain = tmp.path().join("plain.html");
+        std::fs::write(&plain, "x").unwrap();
+        let ambiguous = plain.join("child.html");
+        assert!(
+            ambiguous.try_exists().is_err(),
+            "precondition: stat through a file is an error, not NotFound"
+        );
+        assert_eq!(
+            reverify_recent(&sink, std::slice::from_ref(&ambiguous)).await,
+            0
+        );
+        assert!(rx.try_recv().is_err(), "nothing was pushed");
+
+        let gone = tmp.path().join("gone.html");
+        assert_eq!(reverify_recent(&sink, std::slice::from_ref(&gone)).await, 1);
+        assert_eq!(rx.try_recv().unwrap().kind, WatchKind::Deleted);
+    }
+
+    /// FUINDEX — a file recreated before the re-check keeps its row: the
+    /// re-check sees it present, pushes nothing, and the row survives.
+    #[tokio::test]
+    async fn reverify_recent_leaves_a_recreated_file_indexed() {
+        let (bus, storage, kb, slug, tmp) = setup().await;
+        let gate = crate::exclusions::IngestGate::default();
+        let (tx, _indexer) = spawn_gated_indexer(&bus, &storage, &kb, &slug, &tmp, gate.clone());
+        let sink = IngestSink::new(tx, bus.clone(), kb.clone()).with_gate(gate);
+        let mut rx = bus.subscribe();
+
+        let doc = tmp.path().join("flicker.html");
+        std::fs::write(&doc, "<html><title>Flicker</title><body>1</body></html>").unwrap();
+        sink.send(WatchKind::Created, doc.clone(), false).await;
+        assert!(wait_event_for_path(&mut rx, "artifact.indexed", "flicker.html", SEC5).await);
+
+        std::fs::remove_file(&doc).unwrap();
+        std::fs::write(&doc, "<html><title>Flicker</title><body>2</body></html>").unwrap();
+        assert_eq!(reverify_recent(&sink, std::slice::from_ref(&doc)).await, 0);
+        let key = crate::paths::canonical_abs(&doc)
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            storage.get_by_source_path(key).await.unwrap().is_some(),
+            "the recreated file keeps its row"
+        );
+    }
+
+    /// FUINDEX lifecycle — the detached re-check task ends when the indexer's
+    /// ingest receiver goes away (daemon shutdown / kb reload), without
+    /// waiting for its trigger and without pushing anything. The trigger is a
+    /// `Notify` that is NEVER fired, so only the closed-channel branch can end
+    /// the task.
+    #[tokio::test]
+    async fn recent_recheck_task_ends_when_the_ingest_receiver_is_dropped() {
+        let (bus, _storage, kb, _slug, _tmp) = setup().await;
+        let (tx, rx) = mpsc::channel::<WatchWork>(INGEST_QUEUE_CAPACITY);
+        let sink = IngestSink::new(tx, bus.clone(), kb.clone());
+        let never = Arc::new(tokio::sync::Notify::new());
+        let handle = schedule_recent_recheck(
+            &sink,
+            vec![PathBuf::from("/nonexistent/never-checked.html")],
+            RecheckTrigger::Notified(never),
+        )
+        .expect("a non-empty list schedules a task");
+        assert!(!handle.is_finished(), "waiting on its trigger");
+        drop(rx);
+        let pushed = timeout(SEC5, handle).await.unwrap().unwrap();
+        assert_eq!(pushed, 0, "ended without re-checking");
+        assert!(
+            schedule_recent_recheck(&sink, Vec::new(), RecheckTrigger::After(Duration::ZERO))
+                .is_none()
+        );
     }
 
     #[tokio::test]
