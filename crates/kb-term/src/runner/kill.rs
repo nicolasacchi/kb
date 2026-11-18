@@ -583,7 +583,12 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn kill_keeps_the_files_when_the_probe_times_out() {
         let root = tempfile::tempdir().unwrap();
-        let runner = scripted_runner(root.path(), "exec sleep 30");
+        // Only the liveness probe hangs; every other tmux call fails fast, so
+        // the elapsed virtual time is the probe's alone.
+        let runner = scripted_runner(
+            root.path(),
+            "case \"$*\" in\n*list-sessions*) exec sleep 30 ;;\nesac\nexit 1",
+        );
         let (_, sock, sdir) = leftovers(&runner.cfg.run_dir, "abcd1234");
         let injected = Duration::from_millis(250);
         let start = tokio::time::Instant::now();
