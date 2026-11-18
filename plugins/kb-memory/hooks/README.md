@@ -62,6 +62,9 @@ registering anywhere `kb-memory` is already installed. Design:
   - `slate-cursor-<sid>` — this session's slate read position (a bare
     `head_seq` integer), written by the HYBRID block and advanced by the
     DELTA block.
+  - `slate-push-cursor-<sid>` — the omp/OpenCode push lane's own read
+    position, written only by a `--kinds`-filtered `kb slate delta` with no
+    `--since`. Never read by these hooks.
   - `slate-topic-<sid>` — written CLI-side by `kb slate open --topic <T>`
     ("declares the session topic", §9's CLI table) when a human or agent
     explicitly scopes a session to a topic, so a later `kb slate
@@ -912,9 +915,17 @@ the extension owns only the cadence:
   the session lives (capped at 20 restarts), is killed on
   `session_shutdown`, and is `unref()`-ed so it can never hold a headless
   `omp -p` open.
-- The push shares this session's `~/.cache/kb/slate-cursor-<sid>` with the
-  per-prompt hook lane, so a pushed delta is not repeated at the next
-  prompt.
+- The push is `--kinds`-filtered, so it keeps its OWN cursor,
+  `~/.cache/kb/slate-push-cursor-<sid>`, and never advances the per-prompt
+  hook lane's `slate-cursor-<sid>`: a found/idea/tried post that lands
+  between prompts is still served by the next per-prompt delta even after a
+  push ran (D26: those kinds stay pull-only). The push reads
+  `max(its own cursor, the shared cursor)` as its since, so it does not
+  re-deliver what the pull lane already served. Because the pull lane does
+  not know what the push delivered, a pushed now/warn/hand/ask/answer post
+  can appear once more in the next per-prompt delta; a duplicate is the
+  price of never skipping a post. A filtered delta also reports no
+  served cursor to the daemon (D27: seen is what was served).
 - **Own-ask wake limits (AW).** The wake covers answers and dones on asks
   this session authored, by main-agent `kb_slate_post`. It does NOT fire for
   a late answer after the ask is closed, an abandoned `done`, an answer after

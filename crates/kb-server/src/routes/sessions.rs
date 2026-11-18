@@ -9705,11 +9705,15 @@ pub async fn live_status(
                 .map(|row| {
                     let policy = LivePolicy::default();
                     let last_activity = row.ended_at.max(row.started_at);
-                    // A landed capture is a Stop-triggered digest write —
-                    // the human just regained control (invariant #11's
-                    // multi-capture rule: every Stop fires a capture). This
-                    // is the "holder/state derived from the capture's age"
-                    // the design calls for (§6): Human, aged by
+                    // A landed capture is, by default, a Stop-triggered
+                    // digest write: the human just regained control
+                    // (invariant #11's multi-capture rule: every Stop fires
+                    // a capture). With an opted-in `KB_CAPTURE_LIVE=1` a
+                    // capture can also land MID-turn (PostToolUse /
+                    // PreCompact), so Human is a presumption here, which is
+                    // exactly why this row carries `confidence: "presumed"`.
+                    // It is the "holder/state derived from the capture's
+                    // age" the design calls for (§6): Human, aged by
                     // `derive_state`'s ordinary waiting/cold threshold.
                     let (live_state, confidence) = derive_state(
                         Holder::Human,

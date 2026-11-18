@@ -23,7 +23,9 @@
 //! 3. **The cursor and the topic marker are CLIENT state** (rules matrix
 //!    "Cursor": no read ever writes). `open` writes
 //!    `~/.cache/kb/slate-cursor-<sid>`; `delta` reads it when `--since` is
-//!    absent and advances it; `delta --since N` never touches the file.
+//!    absent and, when UNFILTERED, advances it; `delta --since N` never
+//!    touches the file; a `--kinds`-filtered `delta` never moves the shared
+//!    cursor (it keeps its own `slate-push-cursor-<sid>`, FUSLATE).
 //!    `open --topic T` writes `~/.cache/kb/slate-topic-<sid>`, which every
 //!    POSTING verb then reads as its default topic — a read is never
 //!    silently narrowed by a marker the user forgot about.
@@ -232,6 +234,14 @@ fn cache_dir() -> Option<PathBuf> {
 
 pub(crate) fn cursor_file(dir: &Path, sid: &str) -> PathBuf {
     dir.join(format!("slate-cursor-{sid}"))
+}
+
+/// The cursor of a `--kinds`-FILTERED `delta` (the omp/OpenCode push lane,
+/// FUSLATE). Separate from [`cursor_file`] because a filtered read serves
+/// only a subset: advancing the shared per-prompt cursor to head would skip
+/// the posts of the kinds it left out (D26: found/idea/tried stay pull-only).
+pub(crate) fn push_cursor_file(dir: &Path, sid: &str) -> PathBuf {
+    dir.join(format!("slate-push-cursor-{sid}"))
 }
 
 pub(crate) fn topic_file(dir: &Path, sid: &str) -> PathBuf {
@@ -679,12 +689,18 @@ pub(crate) fn delta_query_pairs(
 }
 
 /// `kb slate delta [--since SEQ] [--limit N] [--kinds a,b] [--json]` — the
-/// per-prompt lane. With no `--since` the cursor file IS the since, and the
-/// cursor advances on success; with an explicit `--since` the file is never
-/// touched (the caller owns its own bookkeeping). `--kinds` (D26, v0.42) is
-/// forwarded verbatim as `?kinds=` — the server narrows both the posts and
-/// the rendered `text`, and an unknown word comes back as its own 400
-/// `bad-kind` (§9's ordinary EXIT_ERROR path, nothing kind-specific here).
+/// per-prompt lane. With no `--since` the cursor file IS the since; an
+/// UNFILTERED delta then advances it to head and reports it served (D27).
+/// An explicit `--since` never touches any file (the caller owns its own
+/// bookkeeping). `--kinds` (D26, v0.42) is forwarded verbatim as `?kinds=`
+/// — the server narrows both the posts and the rendered `text`, and an
+/// unknown word comes back as its own 400 `bad-kind`.
+///
+/// FUSLATE: a `--kinds`-filtered delta serves only a SUBSET, so it must
+/// never move the shared cursor (the per-prompt lane would then skip the
+/// kinds it left out) and must never report `head_seq` as served (D27:
+/// "seen" is what was served). It reads `max(push cursor, shared cursor)`
+/// as its since and advances only its own `slate-push-cursor-<sid>`.
 pub async fn delta(
     ctx: &Ctx,
     since: Option<u64>,
@@ -693,13 +709,26 @@ pub async fn delta(
     kinds: Option<&str>,
 ) -> Result<()> {
     let owns_cursor = since.is_none();
-    let effective = since.or_else(|| ctx.read_cursor());
+    let filtered = kinds.is_some_and(|k| !k.trim().is_empty());
+    let effective = since.or_else(|| {
+        if filtered {
+            ctx.read_push_cursor().max(ctx.read_cursor())
+        } else {
+            ctx.read_cursor()
+        }
+    });
     let q = delta_query_pairs(effective, limit, budget, ctx.session_id.as_deref(), kinds);
     let resp = get(ctx, "/delta", &q).await?;
     if ctx.json {
         println!("{}", serde_json::to_string_pretty(&resp)?);
     } else if let Some(t) = resp.get("text").and_then(Value::as_str) {
         print!("{t}");
+    }
+    if filtered {
+        if owns_cursor {
+            ctx.advance_push_cursor(&resp);
+        }
+        return Ok(());
     }
     if owns_cursor {
         ctx.advance_cursor(&resp);
@@ -715,6 +744,27 @@ impl Ctx {
         let dir = self.cache.as_deref()?;
         let sid = self.session_id.as_deref()?;
         read_marker(&cursor_file(dir, sid))?.trim().parse().ok()
+    }
+
+    /// The push lane's own cursor (see [`push_cursor_file`]).
+    fn read_push_cursor(&self) -> Option<u64> {
+        let dir = self.cache.as_deref()?;
+        let sid = self.session_id.as_deref()?;
+        read_marker(&push_cursor_file(dir, sid))?
+            .trim()
+            .parse()
+            .ok()
+    }
+
+    /// Advance ONLY the push lane's cursor to the response's `head_seq`.
+    fn advance_push_cursor(&self, resp: &Value) {
+        let (Some(dir), Some(sid)) = (self.cache.as_deref(), self.session_id.as_deref()) else {
+            return;
+        };
+        let Some(head) = resp.get("head_seq").and_then(Value::as_u64) else {
+            return;
+        };
+        write_marker(&push_cursor_file(dir, sid), &head.to_string());
     }
 
     /// Advance the cursor to the response's `head_seq`. "Seen" means the
@@ -3153,6 +3203,16 @@ mod tests {
         let dir = Path::new("/c/kb");
         assert_eq!(cursor_file(dir, "s1"), Path::new("/c/kb/slate-cursor-s1"));
         assert_eq!(topic_file(dir, "s1"), Path::new("/c/kb/slate-topic-s1"));
+    }
+
+    #[test]
+    fn push_cursor_is_a_different_file_from_the_shared_cursor() {
+        let dir = Path::new("/c/kb");
+        assert_eq!(
+            push_cursor_file(dir, "s1"),
+            Path::new("/c/kb/slate-push-cursor-s1")
+        );
+        assert_ne!(push_cursor_file(dir, "s1"), cursor_file(dir, "s1"));
     }
 
     #[test]
