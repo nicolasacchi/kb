@@ -290,6 +290,21 @@ else
   bad "a cwd with a space stays one argv slot (got: $spy2)"
 fi
 
+# --- 12. an UNKNOWN KB_HOOK_FMT (e.g. the removed `kimi`) gets the default
+#         JSON envelope — only the exact value `plain` strips it -------------
+write_kb_both
+for fmt in kimi bogus PLAIN; do
+  outf="$(printf '%s' "{\"session_id\":\"sc-fmt-$fmt\",\"cwd\":\"/tmp\",\"prompt\":\"fmt $fmt\"}" \
+    | KB_HOOK_FMT="$fmt" "$RECALL")"
+  ctxf="$(printf '%s' "$outf" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)"
+  evn="$(printf '%s' "$outf" | jq -r '.hookSpecificOutput.hookEventName // empty' 2>/dev/null)"
+  if [ "$evn" = "UserPromptSubmit" ] && [ -n "$ctxf" ]; then
+    ok "KB_HOOK_FMT=$fmt falls through to the JSON envelope"
+  else
+    bad "KB_HOOK_FMT=$fmt falls through to the JSON envelope (got: $outf)"
+  fi
+done
+
 echo
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]
