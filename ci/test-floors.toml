@@ -18,7 +18,7 @@
 executed = 470
 
 [code-e2e]
-executed = 245
+executed = 305
 
 [nextest]
 executed = 5365
@@ -31,9 +31,10 @@ executed = 3570
 
 # kb-code-server + kb-code-cli + kb-lip under nextest (the code-test lane).
 # Seeded from PR #228's first run: 3918 executed (3920 run, 2 then-missing
-# goldens failing), floor a few percent under.
+# goldens failing), floor a few percent under. Raised to the witness-suggested
+# value of main run 44324512951 (4172 executed).
 [code-nextest]
-executed = 3850
+executed = 4165
 
 # kb-term (T2): bun placeholder tests and the tmux 3.7c smoke cases. Later
 # units raise these in the PR that adds tests; never lower without a reason.
