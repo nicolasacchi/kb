@@ -289,6 +289,10 @@ export class GfxFake {
     );
     await page.route("**/api/terms/media/*", async (route) => {
       const sha = new URL(route.request().url()).pathname.split("/").pop() ?? "";
+      if (sha === MEDIA_SENTINEL) {
+        // The settle probe (see settleMedia): answered at once, never counted.
+        return route.fulfill({ status: 204, body: "" });
+      }
       this.mediaRequests.push({ sha, headers: route.request().headers() });
       if (this.mediaDelayMs > 0) await new Promise((r) => setTimeout(r, this.mediaDelayMs));
       const bytes = this.media.get(sha);
@@ -486,6 +490,26 @@ export async function barrier(page: Page, fake: GfxFake, tag: string): Promise<v
     tag,
     { timeout: 10_000 },
   );
+}
+
+/** Sha-shaped path segment the settle probe fetches; the fake answers it without recording it. */
+export const MEDIA_SENTINEL = "0".repeat(64);
+
+/**
+ * Extends `barrier` to the ASYNCHRONOUS media path. The barrier orders only the
+ * frames the page handles synchronously on arrival; the fetch a retransmitted
+ * definition may start is issued later. After the barrier, this fetches a
+ * sentinel media URL through the same route and waits for its answer: any media
+ * request the earlier frames started was issued before the sentinel, so once
+ * the sentinel is answered `fake.mediaRequests` already holds it, and a "no new
+ * fetch" assertion cannot pass early. Two animation frames follow so a fetch
+ * the page defers by a frame is also in.
+ */
+export async function settleMedia(page: Page, fake: GfxFake, tag: string): Promise<void> {
+  await barrier(page, fake, tag);
+  const status = await page.evaluate(async (sha) => (await fetch(`/api/terms/media/${sha}`)).status, MEDIA_SENTINEL);
+  if (status !== 204) throw new Error(`settleMedia: the sentinel probe was answered ${status}, not 204`);
+  await frames(page, 2);
 }
 
 export async function overlayInfo(page: Page) {
