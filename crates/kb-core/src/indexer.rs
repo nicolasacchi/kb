@@ -700,6 +700,10 @@ pub fn walk_send_reindex(
 /// (existence — what the reconciler's delete pass diffs against), and invokes
 /// `emit(path)` once per file that should be (re)indexed. `emitted` counts the
 /// `emit` calls; `seen_paths` counts all files on disk.
+// FUINDEX — 8 parameters: the walk gate (extensions + exclusions) and the
+// recent clock are each one cohesive input; a wrapper struct would only move
+// the count.
+#[allow(clippy::too_many_arguments)]
 fn walk_core(
     source_root: &Path,
     skip_patterns: &[String],
