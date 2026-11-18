@@ -1628,20 +1628,43 @@ async fn a_legacy_kimi_row_stays_readable_and_new_kimi_input_is_refused() {
     let (status, card, _) = get_json(&client, addr, "/api/sessions/legacy-kimi-1/card").await;
     assert_eq!(status, 200, "{card}");
     assert_eq!(card["artifact_id"], "art-kimi");
-    // It is no longer offered as a filter value: an explicit token 400s.
+    // It is no longer offered as a filter value: an explicit token 400s with
+    // the problem body naming the value, and `omp` (control) still serves.
     let (status, v, _) = get_json(&client, addr, "/api/sessions?harness=kimi").await;
     assert_eq!(status, 400, "{v}");
+    assert_eq!(v["type"], "urn:kb:errors:bad-request", "{v}");
+    let detail = v["detail"].as_str().unwrap();
+    assert!(detail.contains("unknown harness filter value"), "{detail}");
+    assert!(detail.contains("kimi"), "{detail}");
+    let (status, v, _) = get_json(&client, addr, "/api/sessions?harness=omp").await;
+    assert_eq!(status, 200, "{v}");
     // A beat claiming kimi is an unknown harness, like any other.
-    let beat = client
-        .post(url(addr, "/api/sessions/beat"))
-        .json(&json!({
-            "session_id": "new-kimi-1",
-            "harness": "kimi",
+    let beat_body = |harness: &str, sid: &str| {
+        json!({
+            "session_id": sid,
+            "harness": harness,
             "event": "prompt",
             "at": "2026-11-17T00:00:00Z",
-        }))
+        })
+    };
+    let beat = client
+        .post(url(addr, "/api/sessions/beat"))
+        .json(&beat_body("kimi", "new-kimi-1"))
         .send()
         .await
         .unwrap();
     assert_eq!(beat.status().as_u16(), 400);
+    let problem: Value = beat.json().await.unwrap();
+    assert_eq!(problem["type"], "urn:kb:errors:bad-request", "{problem}");
+    let detail = problem["detail"].as_str().unwrap();
+    assert!(detail.contains("unknown beat harness"), "{detail}");
+    assert!(detail.contains("kimi"), "{detail}");
+    // Control: the identical beat from `omp` is accepted.
+    let ok = client
+        .post(url(addr, "/api/sessions/beat"))
+        .json(&beat_body("omp", "new-omp-1"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ok.status().as_u16(), 200, "omp control beat");
 }

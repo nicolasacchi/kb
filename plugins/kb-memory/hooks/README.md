@@ -987,6 +987,19 @@ stale entries are gone afterward, a no-op if nothing was fresh. Best
 effort throughout: any failure leaves the ledger untouched and injects
 nothing. Test: `tests/test-grok-distill-pending.sh`.
 
+## Removed: kimi hooks (cleanup note)
+
+kimi support was removed; kb no longer ships or installs any kimi hook. A
+machine that installed the kimi hooks earlier keeps them until you remove
+them by hand: delete kb's entries from the `[[hooks]]` list in the kimi
+config. Older installs wrote no markers, so no uninstaller can find the
+entries for you. `KB_HOOK_FMT=kimi` is now an unknown value and falls through
+to the default JSON envelope (only the exact value `plain` changes the
+output). A leftover `kimi <sid> <epoch>` line in the distill-pending ledger is
+still read and consumed like any other line, labelled `kimi` (field 1 is never
+allowlisted). Tests: `tests/test-recall-scent.sh` (unknown `KB_HOOK_FMT`),
+`tests/test-grok-distill-pending.sh` (legacy ledger line).
+
 ## `Kb-Session` commit trailer (git hook, not a Claude Code hook)
 
 `install-git-trailer.sh` wires a *per-repo* `prepare-commit-msg` hook that
