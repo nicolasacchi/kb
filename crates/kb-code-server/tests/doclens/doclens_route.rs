@@ -458,14 +458,12 @@ async fn wait_for_indexed(base: &str, repo: &str, expected_files: usize) {
     let deadline = Instant::now() + Duration::from_secs(120);
     // What the last poll saw, so a timeout names the daemon state (a
     // transport error vs. a repo row stuck at zero) instead of a bare "never".
-    let mut last = String::from("no response yet");
     loop {
-        match client.get(format!("{base}/api/repos")).send().await {
-            Err(e) => last = format!("request error: {e}"),
+        let last: String = match client.get(format!("{base}/api/repos")).send().await {
+            Err(e) => format!("request error: {e}"),
             Ok(resp) => match resp.json::<Value>().await {
-                Err(e) => last = format!("body error: {e}"),
+                Err(e) => format!("body error: {e}"),
                 Ok(body) => {
-                    last = body.to_string();
                     if let Some(entry) = body["repos"]
                         .as_array()
                         .and_then(|r| r.iter().find(|r| r["name"] == repo))
@@ -474,9 +472,10 @@ async fn wait_for_indexed(base: &str, repo: &str, expected_files: usize) {
                             return;
                         }
                     }
+                    body.to_string()
                 }
             },
-        }
+        };
         assert!(
             Instant::now() < deadline,
             "repo {repo:?} never reached file_count >= {expected_files}; last /api/repos: {last}"
@@ -490,14 +489,12 @@ async fn wait_for_symbols(base: &str, repo: &str, expected: usize) {
     let deadline = Instant::now() + Duration::from_secs(120);
     // What the last poll saw, so a timeout names the daemon state (a
     // transport error vs. a repo row stuck at zero) instead of a bare "never".
-    let mut last = String::from("no response yet");
     loop {
-        match client.get(format!("{base}/api/repos")).send().await {
-            Err(e) => last = format!("request error: {e}"),
+        let last: String = match client.get(format!("{base}/api/repos")).send().await {
+            Err(e) => format!("request error: {e}"),
             Ok(resp) => match resp.json::<Value>().await {
-                Err(e) => last = format!("body error: {e}"),
+                Err(e) => format!("body error: {e}"),
                 Ok(body) => {
-                    last = body.to_string();
                     if let Some(entry) = body["repos"]
                         .as_array()
                         .and_then(|r| r.iter().find(|r| r["name"] == repo))
@@ -506,9 +503,10 @@ async fn wait_for_symbols(base: &str, repo: &str, expected: usize) {
                             return;
                         }
                     }
+                    body.to_string()
                 }
             },
-        }
+        };
         assert!(
             Instant::now() < deadline,
             "repo {repo:?} never reached symbol_count >= {expected}; last /api/repos: {last}"
