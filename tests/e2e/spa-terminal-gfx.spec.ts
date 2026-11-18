@@ -1,9 +1,9 @@
 import { test, expect, type Page } from "@playwright/test";
 import { BASE } from "./helpers";
 import {
-  GfxFake, Scenario, backgroundOf, barrier, basicScenario, bigScenario, boxDownscale, checkPictures,
+  GfxFake, Scenario, backgroundOf, basicScenario, bigScenario, boxDownscale, checkPictures,
   checkerPng, decodePng, forceDom, frames, laplacianEnergy, metrics, openGfxTerminal, overlayInfo,
-  pixel, quadPng, scanAll, scrollToLine, waitPictures,
+  pixel, quadPng, scanAll, scrollToLine, settleMedia, waitPictures,
   type Img, type Metrics, type Truth,
 } from "./spa-terminal-gfx-lib";
 
@@ -291,9 +291,11 @@ for (const [title, dom, edge] of [
     // GfxReset plus an identical retransmit costs the viewer nothing.
     fake.text({ t: "gfxreset", gen: 2 });
     fake.def({ id: ID, png: src, cols: c, rows: r });
-    // The barrier proves the page HANDLED the gfxreset and the retransmit
-    // before the negative checks run; without it they could pass first.
-    await barrier(page, fake, "after-gfxreset");
+    // The barrier proves the page HANDLED the gfxreset and the retransmit, and
+    // the sentinel fetch proves any media request they started has reached the
+    // route (the fetch is asynchronous); without both the negative checks could
+    // pass first.
+    await settleMedia(page, fake, "after-gfxreset");
     await frames(page, 6);
     expect((await overlayInfo(page))?.versions).toEqual(["1", "1"]);
     expect(fake.mediaRequests).toHaveLength(1);

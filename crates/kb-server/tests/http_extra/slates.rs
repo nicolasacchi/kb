@@ -1427,6 +1427,16 @@ async fn the_pure_lints_surface_as_400s_with_their_codes() {
     let (status, v) = post(&client, addr, "orchard", kimi).await;
     assert_eq!(status, 400, "{v}");
     assert_eq!(v["code"], "unknown-harness");
+    let detail = v["detail"].as_str().unwrap_or_default();
+    assert!(detail.contains("unknown harness"), "{v}");
+    assert!(detail.contains("kimi"), "{v}");
+
+    // Control: the identical post from `omp` is accepted.
+    let mut omp = body("idea", "from a live harness", Some("s"));
+    omp["prov"]["harness"] = json!("omp");
+    let (status, v) = post(&client, addr, "orchard", omp).await;
+    assert_eq!(status, 201, "{v}");
+    assert_eq!(v["post"]["prov"]["harness"], "omp");
 
     // …but a HUMAN is not a harness: the board posts `harness: "spa"` and the
     // CLI's `--as you` posts the surface name; both are accepted unvalidated
