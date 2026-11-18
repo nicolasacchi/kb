@@ -63,9 +63,11 @@ import {
   buildMovedIndex,
   classifyFile,
   classifyHunk,
+  nextNoiseMode,
   noiseCensus,
   type MovedIndex,
   type NoiseLabel,
+  type NoiseMode,
 } from "../lib/diffNoise";
 import { EXPAND_STEP, type ExpandRequest } from "../lib/diffContext";
 import {
@@ -1186,6 +1188,13 @@ export default function ReviewDiff() {
     else L.apply({ type: delta === 1 ? "nextFile" : "prevFile" });
   }
 
+  // The noise mode a toggle chord has asked for but the URL has not rendered
+  // back yet; cleared whenever the rendered mode changes (see the effect).
+  const pendingNoise = useRef<NoiseMode | null>(null);
+  useEffect(() => {
+    pendingNoise.current = null;
+  }, [noiseMode]);
+
   useCommandHandlers({
     "diff.hunk-next": gated(() => live.current.apply({ type: "nextHunk" })),
     "diff.hunk-prev": gated(() => live.current.apply({ type: "prevHunk" })),
@@ -1324,9 +1333,14 @@ export default function ReviewDiff() {
       setFolded(new Set());
     }),
     "diff.context-cycle": gated(() => setCtx(nextDiffCtx(ctxDial))),
-    "diff.noise-toggle": gated(() =>
-      setNoiseMode(noiseMode === "collapsed" ? "shown" : "collapsed"),
-    ),
+    "diff.noise-toggle": gated(() => {
+      // Flip the LATEST requested mode: a second chord can arrive before the
+      // first one's URL write has rendered back, and `noiseMode` in this
+      // closure is then stale (the lost second `Space n`).
+      const next = nextNoiseMode(noiseMode, pendingNoise.current);
+      pendingNoise.current = next;
+      setNoiseMode(next);
+    }),
     "diff.map-toggle": gated(() => setMapOpen(!mapParamOpen)),
     // V80-M1 — the tree mode toggle ("Changed (N) | All files").
     "diff.tree-mode-toggle": gated(() =>

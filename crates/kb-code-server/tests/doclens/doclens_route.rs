@@ -456,22 +456,29 @@ async fn boot_at_with_public(
 async fn wait_for_indexed(base: &str, repo: &str, expected_files: usize) {
     let client = reqwest::Client::new();
     let deadline = Instant::now() + Duration::from_secs(120);
+    // What the last poll saw, so a timeout names the daemon state (a
+    // transport error vs. a repo row stuck at zero) instead of a bare "never".
     loop {
-        if let Ok(resp) = client.get(format!("{base}/api/repos")).send().await {
-            if let Ok(body) = resp.json::<Value>().await {
-                if let Some(entry) = body["repos"]
-                    .as_array()
-                    .and_then(|r| r.iter().find(|r| r["name"] == repo))
-                {
-                    if entry["file_count"].as_u64().unwrap_or(0) as usize >= expected_files {
-                        return;
+        let last: String = match client.get(format!("{base}/api/repos")).send().await {
+            Err(e) => format!("request error: {e}"),
+            Ok(resp) => match resp.json::<Value>().await {
+                Err(e) => format!("body error: {e}"),
+                Ok(body) => {
+                    if let Some(entry) = body["repos"]
+                        .as_array()
+                        .and_then(|r| r.iter().find(|r| r["name"] == repo))
+                    {
+                        if entry["file_count"].as_u64().unwrap_or(0) as usize >= expected_files {
+                            return;
+                        }
                     }
+                    body.to_string()
                 }
-            }
-        }
+            },
+        };
         assert!(
             Instant::now() < deadline,
-            "repo {repo:?} never reached file_count >= {expected_files}"
+            "repo {repo:?} never reached file_count >= {expected_files}; last /api/repos: {last}"
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -480,22 +487,29 @@ async fn wait_for_indexed(base: &str, repo: &str, expected_files: usize) {
 async fn wait_for_symbols(base: &str, repo: &str, expected: usize) {
     let client = reqwest::Client::new();
     let deadline = Instant::now() + Duration::from_secs(120);
+    // What the last poll saw, so a timeout names the daemon state (a
+    // transport error vs. a repo row stuck at zero) instead of a bare "never".
     loop {
-        if let Ok(resp) = client.get(format!("{base}/api/repos")).send().await {
-            if let Ok(body) = resp.json::<Value>().await {
-                if let Some(entry) = body["repos"]
-                    .as_array()
-                    .and_then(|r| r.iter().find(|r| r["name"] == repo))
-                {
-                    if entry["symbol_count"].as_u64().unwrap_or(0) as usize >= expected {
-                        return;
+        let last: String = match client.get(format!("{base}/api/repos")).send().await {
+            Err(e) => format!("request error: {e}"),
+            Ok(resp) => match resp.json::<Value>().await {
+                Err(e) => format!("body error: {e}"),
+                Ok(body) => {
+                    if let Some(entry) = body["repos"]
+                        .as_array()
+                        .and_then(|r| r.iter().find(|r| r["name"] == repo))
+                    {
+                        if entry["symbol_count"].as_u64().unwrap_or(0) as usize >= expected {
+                            return;
+                        }
                     }
+                    body.to_string()
                 }
-            }
-        }
+            },
+        };
         assert!(
             Instant::now() < deadline,
-            "repo {repo:?} never reached symbol_count >= {expected}"
+            "repo {repo:?} never reached symbol_count >= {expected}; last /api/repos: {last}"
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }

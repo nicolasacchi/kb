@@ -13,6 +13,7 @@ import {
   noiseCensus,
   noiseCensusText,
   noiseCollapses,
+  nextNoiseMode,
   noiseSummary,
   NOISE_RULES,
   parseNoiseMode,
@@ -268,5 +269,17 @@ describe("the census", () => {
   it("summarises multiple labels in NOISE_RULES order", () => {
     const gen = classifyFile({ path: "Cargo.lock", status: "M", additions: 900, deletions: 0 });
     expect(noiseSummary(gen)).toBe("generated, large");
+  });
+});
+
+describe("nextNoiseMode — a toggle chord flips the LATEST requested mode", () => {
+  it("flips the rendered mode when nothing is pending", () => {
+    expect(nextNoiseMode("shown", null)).toBe("collapsed");
+    expect(nextNoiseMode("collapsed", null)).toBe("shown");
+  });
+  it("flips the pending mode, not the stale rendered one (second fast press)", () => {
+    // First press requested "collapsed"; the render still says "shown".
+    expect(nextNoiseMode("shown", "collapsed")).toBe("shown");
+    expect(nextNoiseMode("collapsed", "shown")).toBe("collapsed");
   });
 });
