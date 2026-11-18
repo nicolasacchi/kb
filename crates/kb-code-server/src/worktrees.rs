@@ -234,7 +234,15 @@ pub struct LockOwner {
 }
 
 const OWNER_UNKNOWN: &str = "locked — owner unknown";
-const HARNESSES: &[&str] = &["claude", "codex", "grok", "omp", "cursor", "opencode"];
+/// Lock-owner names the oracle recognises in a free-text lock reason.
+/// `kimi` is a LEGACY name kept beyond the live harness set: kimi support
+/// was removed, but a worktree lock whose reason already names it must keep
+/// reading as `likely: kimi` (the same carve-out as `AGENT_AUTHOR_NAMES` in
+/// review_timeline.rs) rather than degrade to "owner unknown". The parse is
+/// display-only: no lock is ever released or re-taken from it.
+const HARNESSES: &[&str] = &[
+    "claude", "codex", "grok", "omp", "cursor", "opencode", "kimi",
+];
 
 pub fn parse_lock_owner(reason: Option<&str>) -> LockOwner {
     let Some(raw) = reason.map(str::trim).filter(|s| !s.is_empty()) else {
@@ -1713,6 +1721,23 @@ mod tests {
         let slash = parse_lock_owner(Some("grok/01M28NZNWN65"));
         assert_eq!(slash.trust, "likely");
         assert_eq!(slash.holder.as_deref(), Some("grok"));
+
+        // A lock left by the removed kimi harness stays a readable legacy
+        // owner (holder + slash-form session), not "owner unknown".
+        let legacy = parse_lock_owner(Some("kimi/01M28NZNWN65"));
+        assert_eq!(legacy.trust, "likely");
+        assert_eq!(legacy.holder.as_deref(), Some("kimi"));
+        assert_eq!(legacy.session.as_deref(), Some("01M28NZNWN65"));
+        let legacy_prose = parse_lock_owner(Some("held by kimi, session 77aa11bb"));
+        assert_eq!(legacy_prose.holder.as_deref(), Some("kimi"));
+        assert_eq!(legacy_prose.session.as_deref(), Some("77aa11bb"));
+
+        // A harness name that is NOT recognised never panics and is never
+        // guessed into a holder: bare, it is "owner unknown".
+        let stranger = parse_lock_owner(Some("zed/01M28NZNWN65"));
+        assert_eq!(stranger.display, OWNER_UNKNOWN);
+        assert_eq!(stranger.trust, "unknown");
+        assert!(stranger.holder.is_none() && stranger.session.is_none());
 
         // The parse takes only the reason string — no timestamp argument
         // exists, so holder × silence cannot collapse into one axis.
