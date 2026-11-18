@@ -2397,7 +2397,7 @@ fn decide_unscrubbed_captures(audit: &super::sessions_scrub::DirAudit) -> HookCh
     let table = super::sessions_scrub::render_lane_table(audit);
     // A capped audit must say so: "none hold a secret" over the newest N is
     // not a claim about the corpus.
-    let scope = if audit.skipped > 0 {
+    let mut scope = if audit.skipped > 0 {
         format!(
             "{} newest of {} capture(s) audited ({} older left out; KB_DOCTOR_SCRUB_LIMIT=0 audits all, `kb sessions rescrub` is the exact count)",
             audit.captures, audit.total_captures, audit.skipped
@@ -2405,6 +2405,12 @@ fn decide_unscrubbed_captures(audit: &super::sessions_scrub::DirAudit) -> HookCh
     } else {
         format!("{} capture(s) audited", audit.captures)
     };
+    if audit.oversize > 0 || audit.out_of_time > 0 {
+        scope.push_str(&format!(
+            " [PARTIAL: {} over the per-file size cap and {} not reached before the time budget were NOT audited; KB_DOCTOR_SCRUB_MAX_FILE_MB / KB_DOCTOR_SCRUB_BUDGET_SECS raise or (0) lift the bounds, `kb sessions rescrub` is the exact count]",
+            audit.oversize, audit.out_of_time
+        ));
+    }
     if audit.unscrubbed_captures == 0 {
         return HookCheck::pass(
             "capture-scrub",
@@ -2439,6 +2445,7 @@ fn unscrubbed_captures_check() -> HookCheck {
             decide_unscrubbed_captures(&super::sessions_scrub::scan_dir_limited(
                 Path::new(&v),
                 super::sessions_scrub::audit_limit_from_env(),
+                super::sessions_scrub::AuditBudget::from_env(),
             ))
         }
         _ => HookCheck::skip(
@@ -2722,6 +2729,27 @@ mod tests {
         let c = decide_unscrubbed_captures(&audit);
         assert_eq!(c.status, CheckStatus::Warn);
         assert!(c.detail.contains("500 newest of 1200"), "{}", c.detail);
+    }
+
+    /// FXDOCTOR — a budget-bounded audit never reads as exact.
+    #[test]
+    fn budgeted_audit_says_partial() {
+        use super::super::sessions_scrub::DirAudit;
+        let audit = DirAudit {
+            captures: 3,
+            total_captures: 10,
+            oversize: 5,
+            out_of_time: 2,
+            ..Default::default()
+        };
+        let c = decide_unscrubbed_captures(&audit);
+        assert!(c.detail.contains("PARTIAL"), "{}", c.detail);
+        assert!(
+            c.detail.contains("5 over the per-file size cap"),
+            "{}",
+            c.detail
+        );
+        assert!(c.detail.contains("2 not reached"), "{}", c.detail);
     }
 
     // --- slugify_repo_path ------------------------------------------------
