@@ -319,7 +319,7 @@ async fn a_kinds_filtered_push_never_eats_the_pull_lanes_posts() {
 
     // A found post (an idea: pull-only, like found) then a warn, both from ANOTHER session.
     f.ok(&[
-        "found",
+        "idea",
         "the pool leaks on shutdown",
         "--session-id",
         "sess-a",
