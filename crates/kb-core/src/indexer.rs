@@ -100,6 +100,14 @@ pub fn recent_recheck_delay_for(debounce: std::time::Duration) -> std::time::Dur
     RECENT_RECHECK_DELAY.max(debounce.saturating_mul(2))
 }
 
+/// FUINDEX — the walk's clock and recent window, bundled so `walk_core` stays
+/// under clippy's argument limit.
+#[derive(Clone, Copy)]
+struct RecentClock {
+    now: SystemTime,
+    window: std::time::Duration,
+}
+
 /// FUINDEX — is the instant `t` inside `window` of `now`? A future instant
 /// counts as recent (clock skew / a copied-in mtime is not evidence of age);
 /// exactly `window` old is NOT recent.
@@ -584,10 +592,12 @@ pub fn walk_emit_modify(
         known_mtimes,
         &extensions,
         &gate,
-        SystemTime::now(),
-        recent_window_for(std::time::Duration::from_millis(
-            crate::watcher::DEFAULT_DEBOUNCE_MS,
-        )),
+        RecentClock {
+            now: SystemTime::now(),
+            window: recent_window_for(std::time::Duration::from_millis(
+                crate::watcher::DEFAULT_DEBOUNCE_MS,
+            )),
+        },
         |p| {
             let mut payload = json!({
                 "kb": kb_name.as_str(),
@@ -648,8 +658,10 @@ pub(crate) fn walk_send_work_at(
         known_mtimes,
         sink.extensions(),
         sink.gate(),
-        now,
-        recent_window_for(sink.debounce()),
+        RecentClock {
+            now,
+            window: recent_window_for(sink.debounce()),
+        },
         |p| {
             sink.blocking_send(WatchKind::Modified, p.to_path_buf(), force);
         },
@@ -672,8 +684,10 @@ pub fn walk_send_reindex(
         None,
         sink.extensions(),
         sink.gate(),
-        SystemTime::now(),
-        recent_window_for(sink.debounce()),
+        RecentClock {
+            now: SystemTime::now(),
+            window: recent_window_for(sink.debounce()),
+        },
         |p| {
             sink.blocking_send_with(WatchKind::Modified, p.to_path_buf(), true, re_embed);
         },
@@ -705,8 +719,7 @@ fn walk_core(
     gate: &crate::exclusions::IngestGate,
     // FXLIVEFS/FUINDEX — the walk's clock and the recent window (see
     // [`recent_window_for`]); injected so freshness is testable without sleeps.
-    now: SystemTime,
-    recent_window: std::time::Duration,
+    recent: RecentClock,
     mut emit: impl FnMut(&Path),
 ) -> WalkOutcome {
     let paused = gate.paused();
@@ -785,7 +798,7 @@ fn walk_core(
         let fresh = entry
             .metadata()
             .ok()
-            .is_some_and(|m| meta_is_recent(&m, now, recent_window));
+            .is_some_and(|m| meta_is_recent(&m, recent.now, recent.window));
         if fresh {
             recent_paths.push(p_buf);
         }
