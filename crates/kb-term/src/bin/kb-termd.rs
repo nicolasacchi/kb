@@ -21,8 +21,10 @@ async fn main() {
     // Stamp from compile-time env (the lib must not link kb-buildstamp).
     let version = kb_term::version::stamped_version(option_env!("KB_BUILD_VERSION"));
     kb_term::version::set_own_version(version);
-    let cfg = kb_term::runner::RunnerConfig::from_cli(version);
+    // Tracing first: anything config parsing logs must not be lost.
+    // `--version`/`--help` exit inside `from_cli` and log nothing.
     init_tracing();
+    let cfg = kb_term::runner::RunnerConfig::from_cli(version);
     if let Err(e) = run(cfg).await {
         // Error codes are part of the interface (e.g. `tmux-version`).
         eprintln!("kb-termd: {e}");

@@ -1297,6 +1297,67 @@ async fn term_int_kill_reaps_a_stale_entry_whose_tmux_server_died() {
     );
 }
 
+// 10d. FUTERM: the same stale entry reaped through the operator's CLI path.
+// `kb-term kill <id>` (`attach::run_kill`) dials a real runner.sock; its
+// reply must carry `stale_removed` (exit 0, the "removed stale session"
+// line), the leftovers must be gone, and a second kill is the honest
+// not-found (exit 4).
+#[tokio::test(flavor = "multi_thread")]
+async fn term_int_kb_term_kill_reaps_a_stale_entry_through_the_cli_path() {
+    let Some(tmux_bin) = require_tmux() else {
+        return;
+    };
+    let tr = TestRunner::with_tap(tmux_bin, false, false);
+    boot_runner(&tr).await;
+    let (id, _pane_pid) = tr.launch(vec!["/bin/cat".to_string()]).await;
+    let (_, server_pid) = discovery::pane_and_server_pids(&tr.runner, &id).await;
+    let server_pid = server_pid.expect("the server pid is readable while it lives");
+    let sock = tr.sock(&id);
+    // SAFETY: plain kill(2) on a pid this test just read from tmux itself.
+    let rc = unsafe { libc::kill(server_pid as i32, libc::SIGKILL) };
+    assert_eq!(rc, 0, "SIGKILL the tmux server");
+    assert!(
+        poll_until(
+            Duration::from_secs(10),
+            || async move { pid_gone(server_pid) }
+        )
+        .await,
+        "the tmux server must be gone"
+    );
+    assert!(sock.exists(), "SIGKILL leaves the socket inode behind");
+    // A second runner over the same run dir answers the CLI on runner.sock.
+    let served = std::sync::Arc::new(kb_term::runner::Runner::direct(tr.runner.cfg.clone()));
+    let runner_sock = served.cfg.run_dir.join("runner").join("runner.sock");
+    let listener = kb_term::runner::server::bind_runner_socket(&runner_sock).unwrap();
+    let (stop, rx) = tokio::sync::broadcast::channel::<()>(1);
+    let task = tokio::spawn({
+        let runner_sock = runner_sock.clone();
+        async move {
+            let _ = kb_term::runner::server::serve(served, listener, runner_sock, rx).await;
+        }
+    });
+    let args = || kb_term::attach::KillArgs {
+        id: id.clone(),
+        grace_secs: Some(2),
+        runner_sock: Some(runner_sock.display().to_string()),
+    };
+    let code = tokio::time::timeout(Duration::from_secs(60), kb_term::attach::run_kill(args()))
+        .await
+        .expect("the CLI kill must not hang");
+    assert_eq!(code, 0, "a stale kill through the CLI succeeds");
+    assert!(!sock.exists(), "the stale socket is removed");
+    assert!(
+        !tr.runner.sessions_dir().join(&id).exists(),
+        "the stale session dir is removed"
+    );
+    let code = tokio::time::timeout(Duration::from_secs(60), kb_term::attach::run_kill(args()))
+        .await
+        .expect("the second CLI kill must not hang");
+    assert_eq!(code, 4, "nothing left: an honest not-found");
+    let _ = stop.send(());
+    let _ = tokio::time::timeout(Duration::from_secs(10), task).await;
+}
+
 // ---- T9: responder identity, viewer bridge, paste/enter/keys, grid ----
 
 use base64::Engine;

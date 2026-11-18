@@ -37,11 +37,25 @@ pub fn forced_kill(pane_died: bool, sigkill_ran: bool) -> bool {
     !pane_died || sigkill_ran
 }
 
+/// How long the holder-liveness probe (`list-sessions`) may take before the
+/// kill refuses without removing anything.
+pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Kill one session. The id is validated before any tmux call.
 pub async fn kill_session<S: Supervisor>(
     runner: &Runner<S>,
     id: &str,
     grace_secs: Option<u64>,
+) -> Result<KillOutcome, RunnerError> {
+    kill_session_with_probe_timeout(runner, id, grace_secs, PROBE_TIMEOUT).await
+}
+
+/// [`kill_session`] with an explicit probe timeout (tests inject a short one).
+pub async fn kill_session_with_probe_timeout<S: Supervisor>(
+    runner: &Runner<S>,
+    id: &str,
+    grace_secs: Option<u64>,
+    probe_timeout: Duration,
 ) -> Result<KillOutcome, RunnerError> {
     if !valid_id(id) {
         return Err(RunnerError::InvalidId);
@@ -61,7 +75,10 @@ pub async fn kill_session<S: Supervisor>(
     // error we do not recognise) and a probe that fails to complete (spawn
     // error, timeout) prove nothing about the holder, so nothing is
     // removed and the failure surfaces.
-    let probe = runner.tmux.run(&sock, &["list-sessions"], None).await;
+    let probe = runner
+        .tmux
+        .run(&sock, &["list-sessions"], Some(probe_timeout))
+        .await;
     match probe {
         Ok(o) if o.ok => {}
         Ok(o) if is_no_server_answer(&o.stderr) => {
@@ -84,8 +101,12 @@ pub async fn kill_session<S: Supervisor>(
                 .chars()
                 .take(160)
                 .collect();
+            // The detail stays in the runner's own log: tmux's stderr names
+            // the runner socket path, which the reply (relayed to the
+            // browser side) must not carry.
+            tracing::warn!(id, detail = %first, "holder answered an unexpected error; nothing removed");
             return Err(RunnerError::TmuxFailed(format!(
-                "the holder of {id} answered an unexpected error, nothing removed: {first}"
+                "the holder of {id} answered an unexpected error, nothing removed"
             )));
         }
         Err(e) => {
@@ -544,30 +565,50 @@ mod tests {
         let err = kill_session(&runner, "abcd1234", Some(1))
             .await
             .expect_err("an unrecognised error is a failure, not a stale entry");
+        // A fixed message: tmux's stderr (which names the runner socket
+        // path) stays in the runner's log, never in the reply.
         assert!(
-            matches!(&err, RunnerError::TmuxFailed(m) if m.contains("Permission denied")),
+            matches!(&err, RunnerError::TmuxFailed(m) if m
+                == "the holder of abcd1234 answered an unexpected error, nothing removed"),
             "{err:?}"
         );
         assert!(sock.exists() && sdir.exists(), "nothing was removed");
         assert!(runner.supervisor.calls.lock().unwrap().is_empty());
     }
 
-    /// The timeout branch of the probe: a tmux that hangs (the 5 s default
-    /// timeout fires on the paused clock, so the test spends no real time)
-    /// removes nothing either.
-    #[tokio::test(start_paused = true)]
+    /// The timeout branch of the probe: a tmux that hangs trips the INJECTED
+    /// probe timeout (not the 5 s default), the reply is the exact timeout
+    /// error, and nothing is removed or stopped. Real clock, not a paused
+    /// one: a paused clock auto-advances past the OTHER tmux calls' own 5 s
+    /// timeouts while their real child is still starting, which made the
+    /// elapsed time meaningless. Only `list-sessions` hangs, and the child
+    /// is killed when the timed-out call is dropped.
+    #[tokio::test]
     async fn kill_keeps_the_files_when_the_probe_times_out() {
         let root = tempfile::tempdir().unwrap();
-        let runner = scripted_runner(root.path(), "exec sleep 30");
+        // Only the liveness probe hangs; every other tmux call fails fast, so
+        // the elapsed time is the probe's alone.
+        let runner = scripted_runner(
+            root.path(),
+            "case \"$*\" in\n*list-sessions*) exec sleep 30 ;;\nesac\nexit 1",
+        );
         let (_, sock, sdir) = leftovers(&runner.cfg.run_dir, "abcd1234");
-        let err = kill_session(&runner, "abcd1234", Some(1))
+        let injected = Duration::from_millis(300);
+        let start = std::time::Instant::now();
+        let err = kill_session_with_probe_timeout(&runner, "abcd1234", Some(1), injected)
             .await
             .expect_err("a hung probe is a failure");
+        let spent = start.elapsed();
         assert!(
-            matches!(&err, RunnerError::TmuxFailed(m) if m.contains("timed out")),
+            matches!(&err, RunnerError::TmuxFailed(m) if m == "tmux command timed out"),
             "{err:?}"
         );
+        assert!(
+            spent >= injected && spent < PROBE_TIMEOUT,
+            "the injected timeout, not the 5 s default, bounded the probe: {spent:?}"
+        );
         assert!(sock.exists() && sdir.exists(), "a timeout removes nothing");
+        assert!(runner.supervisor.calls.lock().unwrap().is_empty());
     }
 
     #[test]

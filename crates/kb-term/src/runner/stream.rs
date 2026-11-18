@@ -1505,11 +1505,19 @@ mod tests {
         let err = runner.viewer_open(id, "cli-a", 80, 24).await.unwrap_err();
         assert_eq!(err.code(), "too-many-viewers", "{err}");
         // The first client goes away: the splice ends and frees the slot.
+        // Wait on the release signal (armed before the check, so a release
+        // in between is not missed), never on a poll timer.
+        let released = runner.slot_released();
+        let notified = released.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
         drop(reader);
-        let start = std::time::Instant::now();
         while runner.viewers_full(id).await {
-            assert!(start.elapsed() < DEADLINE, "the slot was never released");
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            tokio::time::timeout(DEADLINE, notified.as_mut())
+                .await
+                .expect("the slot was never released");
+            notified.set(released.notified());
+            notified.as_mut().enable();
         }
         let (third, _third_reader) = open_stream(&sock, id).await;
         assert_eq!(third["status"], "ok", "the slot is free again: {third}");
