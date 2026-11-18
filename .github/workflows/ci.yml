@@ -2157,19 +2157,11 @@ jobs:
         # earlier repair round that "fixed" 12 and broke 1, which is the
         # recurrence this gate ends. A hand-repair fixes the instance.
         #
-        # Measured on the tree this step shipped with, over docs/*.md: 87
-        # anchors, of which 0 DANGLING, 0 PAST-EOF and 45 AMBIGUOUS — 35 of
-        # the 45 in configuration.md, 8 in authoring-artifacts.md, 1 each in
-        # invariant-test-map.md and kb-code.md. AMBIGUOUS is the class that
-        # carries the finding: a bare `config.rs:1414` matches five files in
-        # this tree, so it is in range for at least one of them and a pure
-        # bounds check can never flag it. The number is unverifiable, which
-        # is the defect.
-        #
-        # `--no-ambiguous` reports those 45 without failing: 45 pre-existing
-        # anchors cannot be rewritten in the same commit that adds the gate,
-        # and a step that is red from birth is a step everyone learns to skip.
-        # Drop the flag once they name one file each and the class goes fatal.
+        # Every class is fatal: DANGLING, PAST-EOF, MALFORMED and AMBIGUOUS
+        # all exit 1. AMBIGUOUS (a bare `config.rs:1414` that matches several
+        # files, so a pure bounds check can never flag it) was staged
+        # non-fatal behind a `--no-ambiguous` flag until the 45-anchor debt
+        # was rewritten; the flag no longer exists.
         if: ${{ !cancelled() }}
         run: just doc-anchors
 
