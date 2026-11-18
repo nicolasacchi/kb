@@ -650,6 +650,15 @@ async fn launch_rejects_unknown_harness_and_bad_cwd() {
         let resp = launch(body.clone()).send().await.unwrap();
         assert_eq!(resp.status().as_u16(), 400, "body {body}");
     }
+    // The refusal names the problem, not just the status.
+    let resp = launch("{\"harness\":\"kimi\",\"cwd\":\"/work/proj\"}".to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 400);
+    let problem: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(problem["detail"], "unknown harness", "{problem}");
+    assert_eq!(problem["status"], 400, "{problem}");
     // All five harnesses are accepted.
     for h in ["claude", "codex", "opencode", "grok", "omp"] {
         let resp = launch(format!("{{\"harness\":\"{h}\",\"cwd\":\"/work/proj\"}}"))
