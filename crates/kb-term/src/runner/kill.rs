@@ -577,21 +577,24 @@ mod tests {
     }
 
     /// The timeout branch of the probe: a tmux that hangs trips the INJECTED
-    /// probe timeout (virtual time: the clock advances exactly that far, not
-    /// the 5 s default), the reply is the exact timeout error, and nothing is
-    /// removed or stopped.
-    #[tokio::test(start_paused = true)]
+    /// probe timeout (not the 5 s default), the reply is the exact timeout
+    /// error, and nothing is removed or stopped. Real clock, not a paused
+    /// one: a paused clock auto-advances past the OTHER tmux calls' own 5 s
+    /// timeouts while their real child is still starting, which made the
+    /// elapsed time meaningless. Only `list-sessions` hangs, and the child
+    /// is killed when the timed-out call is dropped.
+    #[tokio::test]
     async fn kill_keeps_the_files_when_the_probe_times_out() {
         let root = tempfile::tempdir().unwrap();
         // Only the liveness probe hangs; every other tmux call fails fast, so
-        // the elapsed virtual time is the probe's alone.
+        // the elapsed time is the probe's alone.
         let runner = scripted_runner(
             root.path(),
             "case \"$*\" in\n*list-sessions*) exec sleep 30 ;;\nesac\nexit 1",
         );
         let (_, sock, sdir) = leftovers(&runner.cfg.run_dir, "abcd1234");
-        let injected = Duration::from_millis(250);
-        let start = tokio::time::Instant::now();
+        let injected = Duration::from_millis(300);
+        let start = std::time::Instant::now();
         let err = kill_session_with_probe_timeout(&runner, "abcd1234", Some(1), injected)
             .await
             .expect_err("a hung probe is a failure");
@@ -602,7 +605,7 @@ mod tests {
         );
         assert!(
             spent >= injected && spent < PROBE_TIMEOUT,
-            "the injected timeout, not the default, bounded the probe: {spent:?}"
+            "the injected timeout, not the 5 s default, bounded the probe: {spent:?}"
         );
         assert!(sock.exists() && sdir.exists(), "a timeout removes nothing");
         assert!(runner.supervisor.calls.lock().unwrap().is_empty());
