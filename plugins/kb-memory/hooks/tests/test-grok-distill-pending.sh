@@ -179,6 +179,30 @@ else
   bad "only-stale ledger left untouched (ledger: $(cat "$STALE_LEDGER"))"
 fi
 
+# --- 7. a LEGACY `kimi <sid> <epoch>` ledger line (written by the removed
+#        kimi adapter on an older install) is READ like any other: field 1 is
+#        never allowlisted, so it surfaces with its own harness label and is
+#        consumed. Pinned so a future allowlist is a deliberate change. ------
+export XDG_CACHE_HOME="$TMPROOT/cache-wake-kimi"
+mkdir -p "$XDG_CACHE_HOME/kb"
+KIMI_LEDGER="$XDG_CACHE_HOME/kb/distill-pending"
+{
+  printf 'kimi legacy-kimi-sid %s\n' "$((now - 3600))"
+  printf 'grok live-grok-sid %s\n' "$((now - 7200))"
+} >"$KIMI_LEDGER"
+out7="$(printf '%s' '{"session_id":"wake-kimi","cwd":"/tmp"}' | "$WAKE")"
+ctx7="$(printf '%s' "$out7" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)"
+case "$ctx7" in
+  *"Pending distill (grok,kimi): 2 session(s)"*"legacy-kimi-sid"*"live-grok-sid"*)
+    ok "a legacy kimi ledger line surfaces under its own label alongside grok" ;;
+  *) bad "a legacy kimi ledger line surfaces under its own label (ctx: $ctx7)" ;;
+esac
+if [ ! -s "$KIMI_LEDGER" ]; then
+  ok "the legacy kimi line is consumed with the rest"
+else
+  bad "the legacy kimi line is consumed with the rest (ledger: $(cat "$KIMI_LEDGER"))"
+fi
+
 echo
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]

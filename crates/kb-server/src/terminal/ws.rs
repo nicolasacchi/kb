@@ -2398,6 +2398,106 @@ mod relay_tests {
         assert_eq!(up.recv().await, Some(StreamItem::Text(HELLO.to_string())));
         assert_eq!(fresh_sent.lock().unwrap().clone(), vec![input]);
     }
+
+    #[tokio::test]
+    async fn a_retried_resume_repeats_the_offset_ahead_notice_once_per_attempt() {
+        // The tap answers a `?from=` ahead of its offset with an
+        // `offset-ahead` notice on EVERY open, before the join defers with
+        // busy. The notice precedes the busy frame so it is forwarded as it
+        // arrives; the retry then re-asks the same `from` and the browser
+        // sees the notice again. Documented (see `JoinRetry`), pinned here:
+        // exactly one notice per attempt, none swallowed, none extra, and the
+        // busy frame itself is never surfaced.
+        let notice = r#"{"t":"error","code":"offset-ahead","msg":"from is ahead"}"#;
+        let attempt = |tail: &str| {
+            mem(vec![
+                StreamItem::Text(notice.to_string()),
+                StreamItem::Text(tail.to_string()),
+            ])
+        };
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let mut up = JoinRetry::new(
+            attempt(BUSY),
+            scripted_reopen(vec![attempt(BUSY), attempt(HELLO)], calls.clone()),
+            fast(4),
+        );
+        let mut seen = Vec::new();
+        while let Some(item) = up.recv().await {
+            seen.push(item);
+        }
+        let text = |s: &str| StreamItem::Text(s.to_string());
+        assert_eq!(
+            seen,
+            vec![text(notice), text(notice), text(notice), text(HELLO)],
+            "one notice per attempt (3 opens), the busy frames swallowed"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "two re-opens");
+    }
+
+    /// A stream that, like the tap holding a join, stays silent for `wait`
+    /// and then answers busy once.
+    struct SilentThenBusy {
+        wait: Duration,
+        spent: bool,
+    }
+
+    impl Upstream for SilentThenBusy {
+        fn recv<'a>(&'a mut self) -> Pin<Box<dyn Future<Output = Option<StreamItem>> + Send + 'a>> {
+            let wait = self.wait;
+            let first = !self.spent;
+            self.spent = true;
+            Box::pin(async move {
+                if first {
+                    tokio::time::sleep(wait).await;
+                    Some(StreamItem::Text(BUSY.to_string()))
+                } else {
+                    None
+                }
+            })
+        }
+        fn send<'a>(
+            &'a mut self,
+            _item: StreamItem,
+        ) -> Pin<Box<dyn Future<Output = Result<(), StreamError>> + Send + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_worst_case_silence_before_a_surfaced_busy_follows_the_constants() {
+        // The tap's own join wait (`DEFAULT_JOIN_WAIT_MS` in the tap's
+        // viewers.ts, 3 s). Every attempt spends all of it, then answers busy.
+        const TAP_JOIN_WAIT: Duration = Duration::from_secs(3);
+        let policy = BusyRetry::default();
+        assert_eq!(policy.attempts, BUSY_JOIN_ATTEMPTS);
+        assert_eq!(policy.backoff, BUSY_RETRY_BACKOFF);
+        // Derived, not hand-copied: one tap wait per attempt plus the
+        // doubling backoff between attempts (150 + 300 + 600 ms).
+        let backoff_total: Duration = (0..policy.attempts - 1)
+            .map(|i| policy.backoff * (1 << i))
+            .sum();
+        let expected = TAP_JOIN_WAIT * policy.attempts + backoff_total;
+        assert!(
+            expected >= Duration::from_secs(13) && expected < Duration::from_secs(14),
+            "the documented bound is about 13 s: {expected:?}"
+        );
+        let silent = || SilentThenBusy {
+            wait: TAP_JOIN_WAIT,
+            spent: false,
+        };
+        let reopen: Reopen<SilentThenBusy> =
+            Box::new(move || Box::pin(async move { Ok(silent()) }));
+        let mut up = JoinRetry::new(silent(), reopen, policy);
+        let start = tokio::time::Instant::now();
+        assert_eq!(up.recv().await, Some(StreamItem::Text(BUSY.to_string())));
+        let silence = tokio::time::Instant::now().duration_since(start);
+        // The paused clock rounds each timer up by under 1 ms per step.
+        assert!(
+            silence >= expected && silence <= expected + Duration::from_millis(10),
+            "first frame the browser sees arrives after {silence:?}, expected {expected:?}"
+        );
+        assert_eq!(up.recv().await, None);
+    }
 }
 
 #[cfg(test)]
