@@ -26,6 +26,18 @@ default `e2e` lane is unchanged.
   cleanup reports a kill that failed or a pane that is still alive.
 * A bring-up that fails part-way tears down what it started and rethrows
   (the setup self-test injects such a failure and looks for survivors).
+  `setupTerminalStack({ injectFailure, ports, keepLogsIn })` takes three
+  self-test options:
+  * `injectFailure` throws at one named point of the bring-up:
+    `"after-root"` (the temp root and its directories exist, nothing is
+    running), `"after-termd"` (kb-termd is up) or `"after-servers"` (every
+    kb-server answered). The thrown error carries the unique root so the
+    caller can look for survivors.
+  * `ports` replaces the three server ports. The self-test runs while the real
+    stack is up, so it uses 4747 (main), 4748 (ttl) and 4749 (off); the lane's
+    own ports are 4737-4739.
+  * `keepLogsIn` is where teardown copies the child logs (default: the CI
+    artifact directory); the self-test checks the `kb-server-<port>.log` files.
 * Ports: 4737 terminal enabled (main), 4738 enabled with a 2 s ticket TTL,
   4739 with no `[terminal]` section (disabled). Never 4000.
 * Teardown kills tmux holders by their own socket, then `pkill -f <root>`, and

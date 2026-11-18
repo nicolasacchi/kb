@@ -352,15 +352,15 @@ fn decode_text_frame_handles_unknown_and_malformed() {
 #[test]
 fn harness_set_is_closed_and_ordered() {
     let names: Vec<&str> = Harness::ALL.iter().map(|h| h.as_str()).collect();
-    assert_eq!(
-        names,
-        vec!["claude", "codex", "opencode", "grok", "kimi", "omp"]
-    );
+    assert_eq!(names, vec!["claude", "codex", "opencode", "grok", "omp"]);
     let r: Result<Harness, _> = serde_json::from_str(r#""glee""#);
     assert!(
         r.is_err(),
-        "a seventh harness name must fail to deserialize"
+        "an unknown harness name must fail to deserialize"
     );
+    // kimi support was removed: it is no longer a wire harness.
+    let k: Result<Harness, _> = serde_json::from_str(r#""kimi""#);
+    assert!(k.is_err(), "kimi must fail to deserialize");
 }
 
 #[test]

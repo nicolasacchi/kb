@@ -693,7 +693,6 @@ mod tests {
         assert_eq!(resume_hint("omp", "sid1", None), "omp -r sid1");
         // `omp` ignores `cwd` (global resume fallback, unlike grok).
         assert_eq!(resume_hint("omp", "sid1", Some("/w/x")), "omp -r sid1");
-        assert_eq!(resume_hint("kimi", "sid1", None), "kimi -S sid1");
         assert_eq!(
             resume_hint("opencode", "sid1", None),
             "opencode --session sid1"

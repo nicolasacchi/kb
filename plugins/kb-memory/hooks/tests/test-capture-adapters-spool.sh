@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test-capture-adapters-spool.sh - v0.45 N4: the codex / opencode / kimi / omp /
+# test-capture-adapters-spool.sh - v0.45 N4: the codex / opencode / omp /
 # grok capture adapters share the claude hook's spool contract. They translate
 # their harness transcript, hand it to `kb sessions capture`, and when that
 # cannot run (kb fails, kb missing) they park the UNSCRUBBED translation in the
@@ -54,10 +54,6 @@ EXPORT="$TMPROOT/oc-export.json"
 cat >"$EXPORT" <<JSON
 {"info":{"id":"ses_oc0001","directory":"/tmp/x","title":"t","time":{"created":1772355600000}},"messages":[{"info":{"role":"user","time":{"created":1772355600000}},"parts":[{"type":"text","text":"my key is $AWS ok"}]},{"info":{"role":"assistant","time":{"created":1772355601000}},"parts":[{"type":"tool","tool":"bash","callID":"c1","state":{"status":"completed","input":{"command":"echo hi"},"output":"token $GH here"}}]}]}
 JSON
-KSDIR="$TMPROOT/kimi-home/sessions/wd_x_deadbeef/session_aaaaaaaa-0000-0000-0000-000000000001/agents/main"
-mkdir -p "$KSDIR"
-sed "s/commit the widget fix please/commit the widget fix please $AWS/; s/wrote \/tmp\/widget.py/token $GH leaked/" \
-  "$SCRIPT_DIR/fixtures/kimi-wire-commit.jsonl" >"$KSDIR/wire.jsonl"
 OMPS="$TMPROOT/omp-session.jsonl"
 {
   title='{"type":"title","v":1,"title":"t"}'
@@ -68,12 +64,11 @@ GSD="$TMPROOT/grok-sd"
 cp -r "$SCRIPT_DIR/fixtures/grok-session" "$GSD"
 sed -i "s/Add a --dry-run flag to the fixture export command./Add a flag; my key is $AWS and $GH/" "$GSD/chat_history.jsonl"
 
-ADAPTERS="codex opencode kimi omp grok"
+ADAPTERS="codex opencode omp grok"
 sid_of() {
   case "$1" in
     codex) echo codex_sess_0001 ;;
     opencode) echo ses_oc0001 ;;
-    kimi) echo session_aaaaaaaa-0000-0000-0000-000000000001 ;;
     omp) echo fx01a034-0000-0000-0000-000000000001 ;;
     grok) echo grok-sd ;;
   esac
@@ -82,7 +77,6 @@ stamp_of() {
   case "$1" in
     codex) echo 20260301T090000Z ;;
     opencode) echo 20260301T090000Z ;;
-    kimi) echo 20260812T135500Z ;;
     omp) echo 20260824T100000Z ;;
     grok) echo 20260101T000000Z ;;
   esac
@@ -94,7 +88,6 @@ run_adapter() {
   case "$a" in
     codex) arg="$ROLLOUT" ;;
     opencode) arg="$EXPORT" ;;
-    kimi) arg="$KSDIR/wire.jsonl" ;;
     omp) arg="$OMPS" ;;
     grok) arg="" ;;
   esac

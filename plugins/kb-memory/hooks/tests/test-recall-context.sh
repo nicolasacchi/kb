@@ -51,7 +51,7 @@ hook() { # <transcript_path or ""> <env assignments...>
   : >"$LOG"
   jq -n --arg s "s-ctx-$n" --arg p "the prompt" --arg t "$tp" \
     '{session_id:$s, cwd:"/tmp", prompt:$p} + (if $t != "" then {transcript_path:$t} else {} end)' \
-    | env KB_HOOK_FMT=kimi "$@" "$RECALL" >/dev/null 2>&1
+    | env KB_HOOK_FMT=plain "$@" "$RECALL" >/dev/null 2>&1
 }
 
 echo "== kb-recall.sh KB_RECALL_CONTEXT =="

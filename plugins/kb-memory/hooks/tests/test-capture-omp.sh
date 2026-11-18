@@ -5,7 +5,7 @@
 # fixtures (tests/fixtures/omp-session-*.jsonl) shaped like live omp v3
 # session files, with a fake `kb` on PATH whose `sessions capture` FAILS —
 # forcing the bash-fallback write path so the test is hermetic (same trick
-# as test-capture-kimi.sh). A title-slot line is prepended at runtime (the
+# as the other capture adapter tests). A title-slot line is prepended at runtime (the
 # fixed-width 256-byte first line omp writes) to prove it is dropped.
 #
 # Runnable standalone:  bash plugins/kb-memory/hooks/tests/test-capture-omp.sh

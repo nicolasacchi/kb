@@ -84,8 +84,7 @@ if [ -n "$sid" ]; then
 fi
 
 # The protocol text lives in memory-protocol.txt next to this script so
-# kb-wake-kimi.sh (the Kimi Code UserPromptSubmit variant) shares one
-# source of truth. $(cat) strips the file's trailing newline — exactly
+# the shared protocol text has one source of truth. $(cat) strips the file's trailing newline — exactly
 # matching the old inline `read -r -d ''` heredoc, so this hook's output
 # stays byte-identical. A missing sidecar (standalone copy) degrades
 # fail-open to no protocol.
@@ -158,11 +157,12 @@ index="$(run_to 5 kb recall '' "${extra[@]}" "${recall_args[@]}" --limit 10 --js
   2>/dev/null)" || index=""
 
 # MI-W0.3 — surface + consume the distill-pending ledger (queued by
-# kb-capture-grok.sh's queue_distill_pending, kb-distill-nudge-kimi.sh,
-# and kb-distill-nudge.sh as `grok|kimi|claude <sid> <epoch>`). A
+# kb-capture-grok.sh's queue_distill_pending and kb-distill-nudge.sh as
+# `grok|claude <sid> <epoch>`; a legacy `kimi <sid> <epoch>` line from the
+# removed kimi adapter still surfaces, since field 1 is never allowlisted). A
 # Stop-time nudge lands in a session that is already over, so the relay
 # lands here, at the next interactive SessionStart. Field 1 is the
-# harness; claude lines are surfaced the same way as grok/kimi (no
+# harness; claude lines are surfaced the same way as grok (no
 # allowlist). The label names
 # the harness(es) of the surfaced entries (ledger field 1). Drop entries older than 14 days, surface
 # up to the 3 newest, then rewrite the ledger to hold only what wasn't

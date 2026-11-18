@@ -59,11 +59,11 @@ export PATH="$TMPROOT/bin:$PATH"
 export XDG_CACHE_HOME="$TMPROOT/cache"
 
 n=0
-hook() { # <extra env assignments...> ; prints the injected block (kimi shape)
+hook() { # <extra env assignments...> ; prints the injected block (plain shape)
   n=$((n + 1))
   : >"$LOG"
   printf '%s' "{\"session_id\":\"s-turn-$n\",\"cwd\":\"/tmp\",\"prompt\":\"q\"}" \
-    | env KB_HOOK_FMT=kimi "$@" "$RECALL" 2>/dev/null
+    | env KB_HOOK_FMT=plain "$@" "$RECALL" 2>/dev/null
 }
 gold="$(cat "$V2")"
 text_json="$(jq -n --arg t "$gold" '{text:$t, recalled:[], })' 2>/dev/null || true)"
@@ -80,8 +80,8 @@ if grep -q '^turn ' "$LOG" && ! grep -qE '^(recall|context) ' "$LOG"; then ok "o
 if grep -q -- '--lanes recall,context' "$LOG"; then ok "turn 1 asks for lanes recall,context"; else bad "turn 1 lanes wrong: $(cat "$LOG")"; fi
 if grep -q -- '--deadline-ms' "$LOG"; then ok "a deadline is passed to the daemon"; else bad "no --deadline-ms"; fi
 n=$((n + 1)); : >"$LOG"
-printf '%s' '{"session_id":"s-turn-repeat","cwd":"/tmp","prompt":"q"}' | KB_HOOK_FMT=kimi KB_TURN=1 TURN_JSON="$text_json" "$RECALL" >/dev/null 2>&1
-printf '%s' '{"session_id":"s-turn-repeat","cwd":"/tmp","prompt":"q2"}' | KB_HOOK_FMT=kimi KB_TURN=1 TURN_JSON="$text_json" "$RECALL" >/dev/null 2>&1
+printf '%s' '{"session_id":"s-turn-repeat","cwd":"/tmp","prompt":"q"}' | KB_HOOK_FMT=plain KB_TURN=1 TURN_JSON="$text_json" "$RECALL" >/dev/null 2>&1
+printf '%s' '{"session_id":"s-turn-repeat","cwd":"/tmp","prompt":"q2"}' | KB_HOOK_FMT=plain KB_TURN=1 TURN_JSON="$text_json" "$RECALL" >/dev/null 2>&1
 if grep -E -- '^turn q2 ' "$LOG" | grep -qE -- '--lanes recall,slate --'; then ok "turn 2+ asks for lanes recall,slate (no context scent)"; else bad "later-turn lanes wrong: $(cat "$LOG")"; fi
 
 # --- 2. a degraded lane is named -----------------------------------------
@@ -152,9 +152,9 @@ cf="$(ls "$XDG_CACHE_HOME"/kb/slate-cursor-s-turn-* 2>/dev/null | tail -1)"
 if [ -n "$cf" ] && [ "$(cat "$cf")" = "7" ]; then ok "the cursor advances to the turn's head_seq"; else bad "cursor not advanced (file: ${cf:-none})"; fi
 # A following prompt of the SAME session sends the cursor as --slate-since.
 : >"$LOG"
-printf '%s' '{"session_id":"s-slate-cursor","cwd":"/tmp","prompt":"q"}' | KB_HOOK_FMT=kimi KB_TURN=1 TURN_JSON="$slate_turn_json" "$RECALL" >/dev/null 2>&1
+printf '%s' '{"session_id":"s-slate-cursor","cwd":"/tmp","prompt":"q"}' | KB_HOOK_FMT=plain KB_TURN=1 TURN_JSON="$slate_turn_json" "$RECALL" >/dev/null 2>&1
 : >"$LOG"
-printf '%s' '{"session_id":"s-slate-cursor","cwd":"/tmp","prompt":"q2"}' | KB_HOOK_FMT=kimi KB_TURN=1 TURN_JSON="$slate_turn_json" "$RECALL" >/dev/null 2>&1
+printf '%s' '{"session_id":"s-slate-cursor","cwd":"/tmp","prompt":"q2"}' | KB_HOOK_FMT=plain KB_TURN=1 TURN_JSON="$slate_turn_json" "$RECALL" >/dev/null 2>&1
 if grep -q -- '--slate-since 7' "$LOG"; then ok "the second prompt sends --slate-since <cursor>"; else bad "no --slate-since: $(cat "$LOG")"; fi
 
 echo

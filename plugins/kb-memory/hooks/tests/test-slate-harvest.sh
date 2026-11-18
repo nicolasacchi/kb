@@ -78,8 +78,8 @@ echo
 # --- 1. normal harvest: ONE summary found per job (no per-finding posts),
 #        no ask for non-blocking questions, findings_error -> done --abandoned
 job1="$TMPROOT/job1"
-mk_job "$job1" "job-abc123" "sess-abc" "kimi" "/tmp/proj"
-jq -n '{ id: "job-abc123", title: "probe X", session_id: "sess-abc", backend: "kimi", cwd: "/tmp/proj",
+mk_job "$job1" "job-abc123" "sess-abc" "omp" "/tmp/proj"
+jq -n '{ id: "job-abc123", title: "probe X", session_id: "sess-abc", backend: "omp", cwd: "/tmp/proj",
          findings_error: "worker never wrote report.json'"'"'s findings array" }' >"$job1/meta.json"
 jq -n '{
   headlines: ["x"],
@@ -98,7 +98,7 @@ unset KB_ARGV_SPY SLATE_OPEN_JSON
 spy1="$(cat "$TMPROOT/spy1.txt" 2>/dev/null)"
 
 case "$spy1" in
-*'slate found job job-abc123 (probe X): 3 findings, 1 questions — X does Y --harness kimi'*'--ref job:job-abc123'*"--ref path:$job1/report.json"*)
+*'slate found job job-abc123 (probe X): 3 findings, 1 questions — X does Y --harness omp'*'--ref job:job-abc123'*"--ref path:$job1/report.json"*)
   ok "ONE summary found per job: counts + deterministic top finding, refs job:<id> + path:report.json" ;;
 *) bad "one summary found per job (got: $spy1)" ;;
 esac
@@ -127,13 +127,13 @@ case "$spy1" in
 *) bad "findings_error -> done --abandoned (got: $spy1)" ;;
 esac
 case "$spy1" in
-*'--harness kimi'*'--session-id sess-abc'*) ok "harness + session-id forwarded from meta.json" ;;
+*'--harness omp'*'--session-id sess-abc'*) ok "harness + session-id forwarded from meta.json" ;;
 *) bad "harness + session-id forwarded from meta.json (got: $spy1)" ;;
 esac
 
 # --- 1b. clean job: plain done (Finished), blocking question -> ask --------
 job1b="$TMPROOT/job1b"
-mk_job "$job1b" "job-abc123" "sess-abc" "kimi" "/tmp/proj"
+mk_job "$job1b" "job-abc123" "sess-abc" "omp" "/tmp/proj"
 jq -n '{findings:[{claim:"A", claim_type:"observed", evidence:[{path:"a.rs"}]}],
         open_questions:[{question:"ship it", blocking:true}, {question:"minor thing", blocking:false}, "loose string"]}' >"$job1b/report.json"
 export KB_ARGV_SPY="$TMPROOT/spy1b.txt"
@@ -160,7 +160,7 @@ esac
 # --- 1c. re-harvest: supersede the earlier summary, never append again; an
 #         identical summary posts nothing --------------------------------
 job1c="$TMPROOT/job1c"
-mk_job "$job1c" "job-abc123" "sess-abc" "kimi" "/tmp/proj"
+mk_job "$job1c" "job-abc123" "sess-abc" "omp" "/tmp/proj"
 jq -n '{findings:[{claim:"A", claim_type:"observed", evidence:[{path:"a.rs"}]},
                   {claim:"B", claim_type:"observed", evidence:[{path:"b.rs"}]}], open_questions:[]}' >"$job1c/report.json"
 PRIOR_DIGEST='{"sections":{"take":[{"seq":7,"kind":"take","refs":[{"raw":"job:job-abc123"}]}],

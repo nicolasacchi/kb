@@ -46,7 +46,6 @@ export const ASK_TO_OPTIONS: readonly string[] = [
   "codex",
   "opencode",
   "grok",
-  "kimi",
   "omp",
 ];
 

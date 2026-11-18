@@ -459,6 +459,35 @@ export async function frames(page: Page, n = 3): Promise<void> {
   }, n);
 }
 
+/**
+ * A processing barrier: once this resolves, every frame the fake sent BEFORE
+ * the call has been handled by the page. It pushes an invisible private OSC
+ * (7777;<tag>) on the live stream and waits for the terminal's own parser to
+ * report it. WebSocket frames are handled in order, so a frame ahead of the
+ * marker has been applied by the time the marker is parsed. The OSC prints
+ * nothing, so the screen, the pictures and their truth are untouched.
+ */
+export async function barrier(page: Page, fake: GfxFake, tag: string): Promise<void> {
+  await page.evaluate(() => {
+    const w = window as unknown as { __kbBarrierSeen?: string[] };
+    if (w.__kbBarrierSeen) return;
+    w.__kbBarrierSeen = [];
+    const host = document.querySelector("[data-kb-term]") as unknown as {
+      __kbTerm: { parser: { registerOscHandler(ident: number, cb: (data: string) => boolean): unknown } };
+    };
+    host.__kbTerm.parser.registerOscHandler(7777, (data) => {
+      w.__kbBarrierSeen!.push(data);
+      return true;
+    });
+  });
+  fake.push(`\x1b]7777;${tag}\x07`);
+  await page.waitForFunction(
+    (t) => ((window as unknown as { __kbBarrierSeen?: string[] }).__kbBarrierSeen ?? []).includes(t),
+    tag,
+    { timeout: 10_000 },
+  );
+}
+
 export async function overlayInfo(page: Page) {
   return page.evaluate(() => {
     const ov = document.querySelector<HTMLElement>(".kbgfx-overlay");

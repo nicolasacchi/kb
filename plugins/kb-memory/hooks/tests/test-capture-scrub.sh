@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # test-capture-scrub.sh — v0.44 F7b + X4, reworked in v0.45 N4: none of the
-# codex/opencode/kimi/omp/grok adapters writes session HTML itself any more.
+# codex/opencode/omp/grok adapters writes session HTML itself any more.
 # Each hands its translated transcript to `kb sessions capture` (the Rust
 # engine, which applies the secrets-only scrub), and when that cannot run it
 # parks the translation in the private spool instead. So: with the REAL kb, no
@@ -68,11 +68,7 @@ check_scrubbed() { # name dir harness
   if grep -q "\"harness\":\"$harness\"" "$f"; then ok "$name: harness $harness survives in adapter-meta"; else bad "$name: harness $harness survives in adapter-meta"; fi
 }
 
-# Fixtures for the three adapters that need an on-disk layout.
-KSDIR="$TMPROOT/kimi-home/sessions/wd_x_deadbeef/session_aaaaaaaa-0000-0000-0000-000000000001/agents/main"
-mkdir -p "$KSDIR"
-sed "s/commit the widget fix please/commit the widget fix please $AWS/; s/wrote \/tmp\/widget.py/token $GH leaked/" \
-  "$SCRIPT_DIR/fixtures/kimi-wire-commit.jsonl" >"$KSDIR/wire.jsonl"
+# Fixtures for the two adapters that need an on-disk layout.
 OMPS="$TMPROOT/omp-session.jsonl"
 {
   title='{"type":"title","v":1,"title":"t"}'
@@ -88,7 +84,6 @@ run_adapter() { # adapter PATH dir [spool]
   case "$1" in
     codex) PATH="$2" KB_SESSIONS_DIR="$3" KB_CAPTURE_SPOOL="$spool" bash "$HOOKS_DIR/kb-capture-codex.sh" "$ROLLOUT" >/dev/null 2>&1 ;;
     opencode) PATH="$2" KB_SESSIONS_DIR="$3" KB_CAPTURE_SPOOL="$spool" bash "$HOOKS_DIR/kb-capture-opencode.sh" "$EXPORT" >/dev/null 2>&1 ;;
-    kimi) PATH="$2" KB_SESSIONS_DIR="$3" KB_CAPTURE_SPOOL="$spool" bash "$HOOKS_DIR/kb-capture-kimi.sh" "$KSDIR/wire.jsonl" >/dev/null 2>&1 ;;
     omp) PATH="$2" KB_SESSIONS_DIR="$3" KB_CAPTURE_SPOOL="$spool" bash "$HOOKS_DIR/kb-capture-omp.sh" "$OMPS" >/dev/null 2>&1 ;;
     grok) PATH="$2" KB_SESSIONS_DIR="$3" KB_CAPTURE_SPOOL="$spool" XDG_CACHE_HOME="$TMPROOT/cache-$1" bash "$HOOKS_DIR/kb-capture-grok.sh" --session-dir "$GSD" --cwd /tmp/x >/dev/null 2>&1 ;;
   esac
@@ -98,7 +93,7 @@ REAL_KB="$(PATH="$REAL_PATH" command -v kb || true)"
 if [ -z "$REAL_KB" ]; then
   bad "adapters: a real kb binary is required (KB_BIN_DIR)"
 else
-  for h in codex opencode kimi omp grok; do
+  for h in codex opencode omp grok; do
     echo "== $h: real kb scrubs, harness survives =="
     D="$TMPROOT/s-$h"; run_adapter "$h" "$REAL_PATH" "$D"; check_scrubbed "$h" "$D" "$h"
     echo "== $h: a failing kb writes nothing to the corpus =="

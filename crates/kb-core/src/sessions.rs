@@ -70,7 +70,7 @@ pub use constants::{
 };
 
 /// LSC-5 (`docs/research/kb-live-sessions-cockpit-2026-08.html` §4) — the
-/// four non-Claude harness adapters (codex/grok/kimi/opencode), each a
+/// three non-Claude harness adapters (codex/grok/opencode), each a
 /// sibling of [`live`]'s Claude Code adapter sharing its shape, plus
 /// [`live_adapters::scan_all`] — the ONE entry point `kb sessions status`
 /// fans out to across every harness. Pull-only / direct-disk, same as
@@ -3992,6 +3992,17 @@ mod tests {
             "{:?}",
             act.research
         );
+    }
+
+    #[test]
+    fn adapter_meta_harness_kimi_is_stored_verbatim() {
+        // NOKIMI r1: a removed/out-of-set harness in adapter-meta is kept
+        // as written (legacy rows stay readable); the HARNESS_DEFAULT
+        // fallback fires only when the value is absent.
+        let jsonl = r#"{"sessionId":"S1","type":"adapter-meta","adapter":"kb-capture-kimi/1","harness":"kimi"}"#;
+        let act = parse_session_activity(jsonl);
+        assert_eq!(act.harness.as_deref(), Some("kimi"));
+        assert_ne!(act.harness.as_deref(), Some(HARNESS_DEFAULT));
     }
 
     #[test]

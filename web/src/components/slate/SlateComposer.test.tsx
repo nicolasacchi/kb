@@ -38,7 +38,7 @@ describe("SlateComposer to select", () => {
   it("offers every addressee", () => {
     render(<SlateComposer open seed={{ kind: "ask" }} topics={[]} onClose={() => {}} onSubmit={vi.fn()} />);
     const opts = Array.from(screen.getByLabelText("To").querySelectorAll("option")).map((o) => o.value);
-    expect(opts).toEqual(["any", "you", "claude", "codex", "opencode", "grok", "kimi", "omp"]);
+    expect(opts).toEqual(["any", "you", "claude", "codex", "opencode", "grok", "omp"]);
   });
 
   it("is absent for other kinds", () => {

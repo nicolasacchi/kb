@@ -1949,6 +1949,45 @@ jobs:
           KB_WITNESS_DIR: ${{ runner.temp }}/witness
         run: python3 scripts/ci/witness.py playwright "$KB_WITNESS_DIR/pw-term-e2e.json" --lane term-e2e
 
+      - name: Pixel-delta summary (green runs too)
+        # The Playwright JSON report already carries every `pixel-delta`
+        # annotation; the full test-results directory is uploaded only on
+        # failure. Print a small summary in the log and ship it with the witness
+        # artifact so the measured margin against PIXEL_TOL is visible on a
+        # green run.
+        if: ${{ !cancelled() }}
+        env:
+          KB_WITNESS_DIR: ${{ runner.temp }}/witness
+        run: |
+          python3 -I - "$KB_WITNESS_DIR/pw-term-e2e.json" "$KB_WITNESS_DIR/pixel-delta-summary.txt" <<'PY'
+          import json, sys
+
+          src, dst = sys.argv[1], sys.argv[2]
+          rows = []
+
+          def walk(node):
+              for spec in node.get("specs", []):
+                  for t in spec.get("tests", []):
+                      for a in t.get("annotations", []):
+                          if a.get("type") == "pixel-delta":
+                              rows.append((t.get("projectName", "?"), spec.get("title", "?"), a.get("description", "")))
+              for child in node.get("suites", []):
+                  walk(child)
+
+          try:
+              with open(src) as f:
+                  walk(json.load(f))
+          except (OSError, ValueError) as e:
+              rows = []
+              print(f"pixel-delta summary: cannot read {src}: {e}")
+          lines = [f"{proj} | {title} | {desc}" for proj, title, desc in rows]
+          lines.append(f"pixel-delta annotations: {len(rows)}")
+          text = "\n".join(lines) + "\n"
+          print(text, end="")
+          with open(dst, "w") as f:
+              f.write(text)
+          PY
+
       - name: Upload witness report
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

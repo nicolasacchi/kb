@@ -235,7 +235,7 @@ systemd_env_line() {
 # runner's PATH, so a missing dir means exit 127 or a silent hook no-op).
 print_env_dropin() {
   dirs=""
-  for bin in kb claude codex opencode grok kimi omp; do
+  for bin in kb claude codex opencode grok omp; do
     p="$(command -v "$bin" 2>/dev/null || true)"
     case "$p" in /*) ;; *) continue ;; esac
     d="$(dirname "$p")"

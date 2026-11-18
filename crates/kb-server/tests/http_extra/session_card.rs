@@ -1596,3 +1596,52 @@ async fn threads_rows_carry_child_count() {
         "threads rows are annotated like list rows: {thread}"
     );
 }
+
+/// NOKIMI — kimi support was removed, but a deployed corpus may still hold a
+/// capture whose stored `sessions.harness` is `kimi`. No migration rewrites
+/// it: the list and the card must still serve it (label verbatim, an honest
+/// not-resumable `resume`, no 4xx), while a NEW claim of that harness is
+/// refused like any unknown one — as a `?harness=` filter and as a beat.
+#[tokio::test]
+async fn a_legacy_kimi_row_stays_readable_and_new_kimi_input_is_refused() {
+    let (_tmp, addr, paths) = boot().await;
+    let client = reqwest::Client::new();
+    {
+        let mut db = open_db(&paths);
+        let mut r = row("art-kimi", "legacy-kimi-1", 1_000);
+        r.harness = "kimi".into();
+        db.sessions_upsert(&r).unwrap();
+    }
+    // The unfiltered list still carries the row, verbatim label, honest resume.
+    let (status, v, _) = get_json(&client, addr, "/api/sessions?limit=100").await;
+    assert_eq!(status, 200, "{v}");
+    let legacy = v["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["session_id"] == "legacy-kimi-1")
+        .expect("the legacy kimi row is listed");
+    assert_eq!(legacy["harness"], "kimi");
+    let resume = legacy["resume"].as_str().unwrap();
+    assert!(resume.contains("not resumable"), "{resume}");
+    // The card reads it too.
+    let (status, card, _) = get_json(&client, addr, "/api/sessions/legacy-kimi-1/card").await;
+    assert_eq!(status, 200, "{card}");
+    assert_eq!(card["artifact_id"], "art-kimi");
+    // It is no longer offered as a filter value: an explicit token 400s.
+    let (status, v, _) = get_json(&client, addr, "/api/sessions?harness=kimi").await;
+    assert_eq!(status, 400, "{v}");
+    // A beat claiming kimi is an unknown harness, like any other.
+    let beat = client
+        .post(url(addr, "/api/sessions/beat"))
+        .json(&json!({
+            "session_id": "new-kimi-1",
+            "harness": "kimi",
+            "event": "prompt",
+            "at": "2026-11-17T00:00:00Z",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(beat.status().as_u16(), 400);
+}

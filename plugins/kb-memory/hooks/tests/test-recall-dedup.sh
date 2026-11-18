@@ -67,7 +67,7 @@ hook() { # <prompt> <sid or ""> <env assignments...>
   : >"$LOG"
   jq -n --arg s "$sid" --arg p "$prompt" \
     '{cwd:"/tmp", prompt:$p} + (if $s != "" then {session_id:$s} else {} end)' \
-    | env KB_HOOK_FMT=kimi "$@" "$RECALL" >"$TMPROOT/out.txt" 2>/dev/null
+    | env KB_HOOK_FMT=plain "$@" "$RECALL" >"$TMPROOT/out.txt" 2>/dev/null
 }
 wake() { # <sid> <source or ""> <env...>
   local sid="$1" src="$2"
@@ -173,7 +173,7 @@ TR="$TMPROOT/transcript.jsonl"
 echo '{}' >"$TR"
 n=$((n + 1)); : >"$LOG"
 jq -n --arg t "$TR" '{session_id:"sid-t", cwd:"/tmp", prompt:"ok", transcript_path:$t}' \
-  | env KB_HOOK_FMT=kimi KB_RECALL_CONTEXT=1 "$RECALL" >/dev/null 2>&1
+  | env KB_HOOK_FMT=plain KB_RECALL_CONTEXT=1 "$RECALL" >/dev/null 2>&1
 recalled && ok "context transcript passed: no skip" || bad "skipped despite context transcript"
 
 # Trivial prompt on turn 1: the scent lane still runs (first prompt of a new session).

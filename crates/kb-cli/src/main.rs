@@ -2517,7 +2517,7 @@ enum SessionsAction {
         #[arg(long)]
         substance: Option<String>,
         /// Csv over the closed harness set
-        /// (claude|codex|opencode|grok|kimi|omp).
+        /// (claude|codex|opencode|grok|omp).
         // Provenance: W5/I
         #[arg(long)]
         harness: Option<String>,
@@ -2647,7 +2647,7 @@ enum SessionsAction {
         #[arg(long)]
         substance: Option<String>,
         /// Csv over the closed harness set
-        /// (claude|codex|opencode|grok|kimi|omp).
+        /// (claude|codex|opencode|grok|omp).
         // Provenance: W5/I
         #[arg(long)]
         harness: Option<String>,
@@ -2771,7 +2771,7 @@ enum SessionsAction {
     /// `--json` output has the same shape either way.
     Status {
         /// Direct-disk snapshot, zero daemon required — LSC-5 fans this out
-        /// across EVERY harness (claude/codex/opencode/grok/kimi), not just
+        /// across EVERY harness (claude/codex/opencode/grok), not just
         /// Claude Code: `kb_core::sessions::live_adapters::scan_all`. Omit
         /// to use the daemon-backed mode instead.
         #[arg(long)]
@@ -2793,7 +2793,7 @@ enum SessionsAction {
         #[arg(long)]
         project: Option<String>,
         /// Restrict to one harness — csv-free, single value, one of
-        /// `kb_core::sessions::HARNESSES` (claude/codex/opencode/grok/kimi/
+        /// `kb_core::sessions::HARNESSES` (claude/codex/opencode/grok/
         /// omp; rejected otherwise).
         #[arg(long)]
         harness: Option<String>,
@@ -4485,7 +4485,7 @@ pub(crate) struct SlateCommon {
     /// (invariant #11).
     #[arg(long = "session-id", global = true)]
     session_id: Option<String>,
-    /// claude | codex | opencode | grok | kimi | omp. Default `$KB_HARNESS`,
+    /// claude | codex | opencode | grok | omp. Default `$KB_HARNESS`,
     /// else the harness of the session env var that supplied the id, else a
     /// flagged `claude` guess; an unknown value is a 400.
     #[arg(long, global = true)]

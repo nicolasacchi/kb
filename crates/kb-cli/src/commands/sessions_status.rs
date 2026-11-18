@@ -19,8 +19,8 @@
 //!
 //! **LSC-5 fans `--local` out across every harness**: the pure
 //! classification work — the Claude Code adapter (`derive_state`,
-//! `classify_claude_transcript`, `scan_claude_projects`) plus its four
-//! siblings (codex/grok/kimi/opencode) and the unified `scan_all` fan-out —
+//! `classify_claude_transcript`, `scan_claude_projects`) plus its three
+//! siblings (codex/grok/opencode) and the unified `scan_all` fan-out —
 //! lives in `kb_core::sessions::{live, live_adapters}`. This module stays
 //! presentation only: root resolution, csv filter parsing, lane
 //! grouping/sorting, and the two renderers (human text / `--json`).
@@ -86,7 +86,7 @@ pub async fn run(
     let policy = LivePolicy::default();
     // LSC-5: fan out across every harness. `claude` is pinned to the
     // already-resolved root (config/`--root`/default ladder, unchanged);
-    // `with_defaults()` fills codex/grok/kimi/opencode with their real
+    // `with_defaults()` fills codex/grok/opencode with their real
     // default locations — never overwriting an explicit override, and
     // there are none to overwrite here since this phase adds no new
     // per-harness root flags.
@@ -105,7 +105,7 @@ pub async fn run(
         limit,
         no_color,
         &format!(
-            "no live sessions found across claude ({}) / codex / opencode / grok / kimi \
+            "no live sessions found across claude ({}) / codex / opencode / grok \
              (touched within {})",
             root_dir.display(),
             fmt_elapsed(MAX_AGE_SECS)
@@ -437,17 +437,17 @@ fn harness_rank(harness: &str) -> usize {
 
 /// One glyph per harness — byte-identical to the SPA's `harnessGlyph`
 /// (`web/src/lib/sessionChips.ts`): claude=◆, codex=⬢, opencode=⬡,
-/// grok=✦, kimi=☾, omp=π, unrecognised=● (that file's own fallback glyph).
+/// grok=✦, omp=π, unrecognised=● (that file's own fallback glyph).
 /// Kept in lock-step by inspection (no shared source between a Rust CLI
-/// and a TS module) — the SPA's own `harnessGlyph` test pins the same six
-/// mappings.
+/// and a TS module) — the SPA's own `harnessGlyph` test pins the same
+/// mappings. A legacy `kimi` row (support removed) renders the fallback glyph
+/// with its label verbatim.
 fn harness_glyph(harness: &str) -> &'static str {
     match harness {
         "claude" => "◆",
         "codex" => "⬢",
         "opencode" => "⬡",
         "grok" => "✦",
-        "kimi" => "☾",
         "omp" => "π",
         _ => "●",
     }
@@ -708,7 +708,7 @@ mod tests {
 
     /// LSC-5: `harness_glyph` must be byte-identical to the SPA's
     /// `harnessGlyph` (`web/src/lib/sessionChips.test.ts`'s pinned
-    /// mapping) — same six harnesses (OK1 added `omp`), same fallback
+    /// mapping) — same five harnesses (OK1 added `omp`), same fallback
     /// glyph.
     #[test]
     fn harness_glyph_matches_the_spa_convention() {
@@ -716,7 +716,8 @@ mod tests {
         assert_eq!(harness_glyph("codex"), "⬢");
         assert_eq!(harness_glyph("opencode"), "⬡");
         assert_eq!(harness_glyph("grok"), "✦");
-        assert_eq!(harness_glyph("kimi"), "☾");
+        // kimi support was removed: a legacy row gets the fallback glyph.
+        assert_eq!(harness_glyph("kimi"), "●");
         assert_eq!(harness_glyph("omp"), "π");
         assert_eq!(harness_glyph("some-future-harness"), "●");
     }
@@ -727,9 +728,8 @@ mod tests {
         assert_eq!(harness_rank("codex"), 1);
         assert_eq!(harness_rank("opencode"), 2);
         assert_eq!(harness_rank("grok"), 3);
-        assert_eq!(harness_rank("kimi"), 4);
-        assert_eq!(harness_rank("KIMI"), 4);
-        assert_eq!(harness_rank("omp"), 5);
+        assert_eq!(harness_rank("omp"), 4);
+        assert_eq!(harness_rank("KIMI"), usize::MAX);
         assert_eq!(harness_rank("bogus"), usize::MAX);
     }
 
@@ -738,7 +738,7 @@ mod tests {
     #[test]
     fn group_lanes_breaks_a_since_secs_tie_by_canonical_harness_order() {
         let mut a = row("a", LiveState::Working, 100, "kb");
-        a.harness = "kimi".to_string();
+        a.harness = "omp".to_string();
         let mut b = row("b", LiveState::Working, 100, "kb");
         b.harness = "claude".to_string();
         let mut c = row("c", LiveState::Working, 100, "kb");

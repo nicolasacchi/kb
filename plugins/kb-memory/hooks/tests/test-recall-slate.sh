@@ -175,21 +175,21 @@ cur4="$(cat "$TMPROOT/cache4/kb/slate-cursor-rc-sid-4" 2>/dev/null)"
 [ "$cur4" = "20" ] && ok "cursor unchanged on malformed delta JSON" \
   || bad "cursor unchanged on malformed delta JSON (got: $cur4)"
 
-# --- 6. kimi bare-stdout branch carries the delta block --------------------
+# --- 6. plain bare-stdout branch carries the delta block --------------------
 export XDG_CACHE_HOME="$TMPROOT/cache5"
 mkdir -p "$TMPROOT/cache5/kb"
 printf '10' >"$TMPROOT/cache5/kb/slate-cursor-rc-sid-5"
-export SLATE_JSON='{"text":"NOW v7  #9  kimi delta line","head_seq":11}'
+export SLATE_JSON='{"text":"NOW v7  #9  plain delta line","head_seq":11}'
 out5="$(printf '%s' "{\"session_id\":\"rc-sid-5\",\"cwd\":\"$CWD\",\"prompt\":[{\"type\":\"text\",\"text\":\"hi\"}]}" \
-  | KB_HOOK_FMT=kimi "$RECALL")"
+  | KB_HOOK_FMT=plain "$RECALL")"
 unset SLATE_JSON
 case "$out5" in
-  *"hookSpecificOutput"*) bad "kimi format must stay bare (got: $out5)" ;;
-  *) ok "kimi format stays bare (no envelope)" ;;
+  *"hookSpecificOutput"*) bad "plain format must stay bare (got: $out5)" ;;
+  *) ok "plain format stays bare (no envelope)" ;;
 esac
 case "$out5" in
-  *"kimi delta line"*) ok "kimi bare-stdout branch carries the slate delta block" ;;
-  *) bad "kimi bare-stdout branch carries the slate delta block (got: $out5)" ;;
+  *"plain delta line"*) ok "plain bare-stdout branch carries the slate delta block" ;;
+  *) bad "plain bare-stdout branch carries the slate delta block (got: $out5)" ;;
 esac
 
 # --- 7. worktree cwd forwarded VERBATIM; --since reads the cursor file -----

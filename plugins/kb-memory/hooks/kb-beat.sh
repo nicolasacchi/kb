@@ -8,7 +8,7 @@
 # One script, all five harnesses. The harness + the ALREADY-MAPPED
 # canonical event name arrive as argv — the mapping from each harness's
 # own hook/event vocabulary lives in the CALLER (hooks.json, codex's
-# ~/.codex/hooks.json, Kimi's config.toml, opencode's plugin `event`
+# ~/.codex/hooks.json, opencode's plugin `event`
 # handler), not here:
 #
 #   kb-beat.sh <harness> <event> [phase]
@@ -190,8 +190,7 @@ case "$harness" in
     [ -n "$session_id" ] || session_id="$(jq_field '.session_id // empty' "$input")"
     ;;
   *)
-    # claude, kimi (README: "stdin payload carries hook_event_name,
-    # session_id, cwd, client_type"), opencode (the plugin normalizes its
+    # claude, opencode (the plugin normalizes its
     # own event shape to this same {session_id, cwd, ...} contract before
     # piping stdin here — see the hooks README's opencode registration
     # note), and grok (best-effort — no live-verified push-hook payload
@@ -287,20 +286,20 @@ fi
 detail_reason=""
 blocked_tool=""
 if [ "$event" = "blocked" ]; then
-  # codex and kimi payloads carry free text that can describe the pending
-  # operation (kimi's `action`, codex's tool_input): never forwarded; their
+  # codex payloads carry free text that can describe the pending
+  # operation (codex's tool_input): never forwarded; the
   # reason is built from the validated tool-name token below.
-  if [ "$harness" = "codex" ] || [ "$harness" = "kimi" ]; then
+  if [ "$harness" = "codex" ]; then
     detail_reason=""
   else
     detail_reason="$(jq_field '.message // .matcher // .action // empty' "$input")"
     # every harness's reason is capped at 120 chars (claude, grok, omp, opencode)
     detail_reason="${detail_reason:0:120}"
   fi
-  # OL PRES4: codex PermissionRequest and kimi PermissionRequest name the tool
+  # OL PRES4: codex PermissionRequest names the tool
   # (`tool_name`; grok's Notification carries none) and no message; the tool is
   # the reason's subject. Only a plain tool-name token is forwarded.
-  if [ "$harness" = "codex" ] || [ "$harness" = "kimi" ]; then
+  if [ "$harness" = "codex" ]; then
     ptool="$(jq_field '(.tool_name // .toolName // empty) | if type == "string" then . else empty end' "$input")"
     if [[ "$ptool" =~ ^[A-Za-z0-9_.:-]{1,128}$ ]]; then
       blocked_tool="$ptool"
@@ -336,7 +335,7 @@ fi
 
 # detail.tool / detail.paths / detail.root / detail.project / detail.worktree — a
 # write-tool beat ONLY (event=tool, tool_name in the harness's write-tool set,
-# kb-hook-lib.sh `hook_write_tool`: claude, kimi, codex, omp, opencode),
+# kb-hook-lib.sh `hook_write_tool`: claude, codex, omp, opencode),
 # opt-out via KB_BEAT_PATHS=0. Paths are normalised lexically (NO git
 # realpath, no filesystem access): a relative path is joined onto cwd, "."
 # and ".." segments are resolved, and anything non-absolute, over 1024

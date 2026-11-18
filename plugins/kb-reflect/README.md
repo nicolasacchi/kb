@@ -29,7 +29,7 @@ plugin), which writes ADD/SUPERSEDE only and never deletes.
 - `kb` on `PATH`.
 - Claude Code — `/kb-reflect` is a Claude Code slash command; this plugin
   has no hooks and registers nothing for other harnesses. (Sessions
-  captured from other harnesses — Codex, opencode, Grok Build, Kimi Code,
+  captured from other harnesses — Codex, opencode, Grok Build,
   omp, via the `kb-memory` plugin's capture adapters — still show up in
   `kb sessions list` and can be reflected on the same way.)
 

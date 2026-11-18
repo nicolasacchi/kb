@@ -1420,6 +1420,14 @@ async fn the_pure_lints_surface_as_400s_with_their_codes() {
     assert_eq!(status, 400, "{v}");
     assert_eq!(v["code"], "unknown-harness");
 
+    // kimi support was removed: a NEW post naming it is refused the same way
+    // (an already-stored kimi post still reads; see the slate digest goldens).
+    let mut kimi = body("idea", "from a removed harness", Some("s"));
+    kimi["prov"]["harness"] = json!("kimi");
+    let (status, v) = post(&client, addr, "orchard", kimi).await;
+    assert_eq!(status, 400, "{v}");
+    assert_eq!(v["code"], "unknown-harness");
+
     // …but a HUMAN is not a harness: the board posts `harness: "spa"` and the
     // CLI's `--as you` posts the surface name; both are accepted unvalidated
     // (rules matrix "`origin`", amended after the first board e2e run).

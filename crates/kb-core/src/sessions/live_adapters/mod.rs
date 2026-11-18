@@ -1,14 +1,14 @@
 //! LSC-5 (`docs/research/kb-live-sessions-cockpit-2026-08.html` §4
-//! "Collection, harness by harness") — the four non-Claude-Code adapters,
+//! "Collection, harness by harness") — the three non-Claude-Code adapters,
 //! each a sibling of [`super::live`]'s Claude Code adapter, plus
 //! [`scan_all`], the ONE unified entry point `kb sessions status` fans out
 //! to.
 //!
-//! Module-per-harness (not one `live_adapters.rs` monolith): the four
+//! Module-per-harness (not one `live_adapters.rs` monolith): the three
 //! on-disk layouts, turn-boundary vocabularies, and traps are all
 //! genuinely different (a rollout file vs. a session directory vs. a
 //! sqlite row), and the existing per-harness CAPTURE adapters
-//! (`plugins/kb-memory/hooks/kb-capture-{codex,grok,kimi,opencode}.sh`)
+//! (`plugins/kb-memory/hooks/kb-capture-{codex,grok,opencode}.sh`)
 //! already established this split for the same reason — mirroring it here
 //! keeps each harness's parsing logic independently reviewable and
 //! independently testable, the same way the bash scripts are.
@@ -27,7 +27,6 @@ use super::live::{self, LivePolicy, LiveSession};
 
 pub mod codex;
 pub mod grok;
-pub mod kimi;
 pub mod opencode;
 
 pub use live::LIVE_SCAN_CAP;
@@ -39,7 +38,7 @@ fn home_dir() -> Option<PathBuf> {
 }
 
 /// Per-harness root overrides for [`scan_all`]. Every field defaults to
-/// `None` (or empty, for [`LiveRoots::kimi`]) — call [`LiveRoots::with_defaults`]
+/// `None` — call [`LiveRoots::with_defaults`]
 /// to fill gaps with each harness's real default location before scanning;
 /// an explicitly-set field is never touched.
 #[derive(Debug, Clone, Default)]
@@ -54,13 +53,6 @@ pub struct LiveRoots {
     pub codex: Option<PathBuf>,
     /// `~/.grok/sessions` by default.
     pub grok: Option<PathBuf>,
-    /// ZERO or more Kimi Code homes — `~/.kimi-code` (the shared,
-    /// interactive home) by default, but `kimiclaude` worker jobs run
-    /// `kimi -p` inside bubblewrap with a PER-JOB `KIMI_CODE_HOME` (design
-    /// §4's Kimi trap), so a caller that also wants worker-job sessions
-    /// appends those homes here rather than this module guessing at job
-    /// directory layout it has no ground truth for.
-    pub kimi: Vec<PathBuf>,
     /// `~/.local/share/opencode/opencode.db` by default. A file path, not
     /// a directory — opencode sessions are database rows (see
     /// `opencode.rs`'s module docs).
@@ -92,9 +84,6 @@ impl LiveRoots {
                 .get_or_insert_with(|| home.join(".codex").join("sessions"));
             self.grok
                 .get_or_insert_with(|| home.join(".grok").join("sessions"));
-            if self.kimi.is_empty() {
-                self.kimi.push(home.join(".kimi-code"));
-            }
             self.opencode.get_or_insert_with(|| {
                 home.join(".local")
                     .join("share")
@@ -110,10 +99,10 @@ impl LiveRoots {
 /// harness (LSC-5's work order). Claude Code's existing
 /// [`live::scan_claude_projects`] is folded in UNCHANGED — same call, same
 /// arguments, same behavior; this function adds nothing to its path, only
-/// runs it alongside four siblings. A harness whose root is `None` (never
+/// runs it alongside three siblings. A harness whose root is `None` (never
 /// defaulted, or explicitly left unset) is silently skipped — not an
 /// error, since "this harness isn't installed on this box" is the common
-/// case for at least one of these four on most boxes.
+/// case for at least one of these three on most boxes.
 pub fn scan_all(
     roots: &LiveRoots,
     now_unix: i64,
@@ -134,9 +123,6 @@ pub fn scan_all(
     }
     if let Some(root) = &roots.grok {
         out.extend(grok::scan_grok(root, now_unix, policy, max_age_secs));
-    }
-    for home in &roots.kimi {
-        out.extend(kimi::scan_kimi(home, now_unix, policy, max_age_secs));
     }
     if let Some(db) = &roots.opencode {
         out.extend(opencode::scan_opencode(db, now_unix, policy, max_age_secs));
@@ -165,7 +151,6 @@ mod tests {
             roots.grok.as_deref(),
             Some(Path::new("/home/testuser/.grok/sessions"))
         );
-        assert_eq!(roots.kimi, vec![PathBuf::from("/home/testuser/.kimi-code")]);
         assert_eq!(
             roots.opencode.as_deref(),
             Some(Path::new(
@@ -179,7 +164,6 @@ mod tests {
         let home = Path::new("/home/testuser");
         let roots = LiveRoots {
             codex: Some(PathBuf::from("/custom/codex/root")),
-            kimi: vec![PathBuf::from("/custom/kimi/job-home")],
             ..Default::default()
         }
         .with_defaults_from(Some(home));
@@ -187,9 +171,6 @@ mod tests {
             roots.codex.as_deref(),
             Some(Path::new("/custom/codex/root"))
         );
-        // kimi is non-empty already — with_defaults_from must not APPEND
-        // the shared-home default on top of an explicit override.
-        assert_eq!(roots.kimi, vec![PathBuf::from("/custom/kimi/job-home")]);
         // Untouched fields still get filled.
         assert_eq!(
             roots.grok.as_deref(),
@@ -203,7 +184,6 @@ mod tests {
         assert!(roots.claude.is_none());
         assert!(roots.codex.is_none());
         assert!(roots.grok.is_none());
-        assert!(roots.kimi.is_empty());
         assert!(roots.opencode.is_none());
     }
 
@@ -281,16 +261,6 @@ mod tests {
         fs::create_dir_all(&gdir).unwrap();
         fs::write(gdir.join("events.jsonl"), b"{\"type\":\"turn_started\"}\n").unwrap();
 
-        // kimi
-        let kimi_home = tmp.path().join("kimi-home");
-        let kdir = kimi_home.join("sessions").join("wd_x").join("session_ksid");
-        fs::create_dir_all(kdir.join("agents").join("main")).unwrap();
-        fs::write(
-            kdir.join("agents").join("main").join("wire.jsonl"),
-            b"{\"type\":\"turn.prompt\"}\n",
-        )
-        .unwrap();
-
         // opencode
         let oc_path = tmp.path().join("opencode.db");
         {
@@ -319,7 +289,6 @@ mod tests {
             claude: Some(claude_root),
             codex: Some(codex_root),
             grok: Some(grok_root),
-            kimi: vec![kimi_home],
             opencode: Some(oc_path),
         };
         let got = scan_all(&roots, now, &policy, 86_400);
@@ -327,10 +296,10 @@ mod tests {
             got.iter().map(|s| s.harness.as_str()).collect();
         assert_eq!(
             harnesses,
-            ["claude", "codex", "grok", "kimi", "opencode"]
+            ["claude", "codex", "grok", "opencode"]
                 .into_iter()
                 .collect()
         );
-        assert_eq!(got.len(), 5);
+        assert_eq!(got.len(), 4);
     }
 }

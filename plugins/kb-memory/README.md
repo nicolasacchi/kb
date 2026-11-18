@@ -7,7 +7,7 @@ Claude Code memory via the kb daemon. Three surfaces:
   re-injection, verbatim `Stop`-hook transcript capture, and a `Stop`-hook
   nudge that suggests `/kb-distill` when a session committed code but kept no
   memory. The same corpus also serves other coding-agent harnesses — Codex,
-  opencode, Grok Build, Kimi Code, and omp (Oh My Pi) — via per-harness
+  opencode, Grok Build, and omp (Oh My Pi) — via per-harness
   capture/nudge adapters and, for omp, a TS extension (`kb-omp.ts`) plus
   `install-omp-hooks.sh`. Full detail, install modes, and the memory protocol
   are in [`hooks/README.md`](hooks/README.md).

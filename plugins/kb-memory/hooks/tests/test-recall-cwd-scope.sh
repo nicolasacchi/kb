@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# test-recall-cwd-scope.sh — project-aware recall: kb-recall.sh, kb-wake.sh,
-# and kb-wake-kimi.sh must pass the payload's `--cwd` to their `kb recall`
+# test-recall-cwd-scope.sh — project-aware recall: kb-recall.sh and kb-wake.sh
+# must pass the payload's `--cwd` to their `kb recall`
 # call and must NEVER pass `--scope all` (the CLI's new "auto" default scope
 # — global corpora + the caller repo's own memory-<slug> corpus — is derived
 # server-side from `--cwd`; hardcoding `--scope all` here would silently
@@ -19,7 +19,6 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HOOKS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 RECALL="$HOOKS_DIR/kb-recall.sh"
 WAKE="$HOOKS_DIR/kb-wake.sh"
-WAKE_KIMI="$HOOKS_DIR/kb-wake-kimi.sh"
 
 TMPROOT="$(mktemp -d "${TMPDIR:-/tmp}/kb-recall-cwd-scope-test.XXXXXX")"
 cleanup() { rm -rf "$TMPROOT"; }
@@ -90,21 +89,6 @@ esac
 case "$spyw" in
   *"--scope"*"all"*) bad "kb-wake.sh must not pass --scope all (got: $spyw)" ;;
   *) ok "kb-wake.sh never passes --scope all" ;;
-esac
-
-# --- 4. kb-wake-kimi.sh forwards --cwd, drops --scope all ------------------
-export XDG_CACHE_HOME="$TMPROOT/cache4"
-export KB_ARGV_SPY="$TMPROOT/argv-wake-kimi.txt"
-printf '%s' '{"session_id":"cs-4","cwd":"/home/user/project/kb","hook_event_name":"UserPromptSubmit"}' \
-  | "$WAKE_KIMI" >/dev/null
-spyk="$(cat "$KB_ARGV_SPY" 2>/dev/null)"
-case "$spyk" in
-  *"--cwd"*"/home/user/project/kb"*) ok "kb-wake-kimi.sh forwards --cwd to kb recall" ;;
-  *) bad "kb-wake-kimi.sh forwards --cwd to kb recall (got: $spyk)" ;;
-esac
-case "$spyk" in
-  *"--scope"*"all"*) bad "kb-wake-kimi.sh must not pass --scope all (got: $spyk)" ;;
-  *) ok "kb-wake-kimi.sh never passes --scope all" ;;
 esac
 
 echo

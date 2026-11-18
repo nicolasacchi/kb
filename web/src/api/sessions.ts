@@ -171,7 +171,7 @@ export async function fetchSessionsPage(
     /// W3.A/S1 — csv over `trivial|routine|substantive`.
     substance?: string;
     /// W5/I — csv over the closed harness set
-    /// (claude|codex|opencode|grok|kimi|omp). OK1: an unknown token 400s.
+    /// (claude|codex|opencode|grok|omp). OK1: an unknown token 400s.
     harness?: string;
     /// A4 — `tree=flat` shows subagent children as their own rows; the
     /// collapsed default (omitted) hides them under their root. Sent only

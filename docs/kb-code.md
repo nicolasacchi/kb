@@ -1796,7 +1796,8 @@ recorded decision, v0.44). `annotate batch`'s `add_reply` ops carry the author o
 the wire too (the op takes an optional `author`; absent stays `you`).
 
 What counts as an agent is one list, `agent-authors.golden.json` (claude, codex,
-opencode, grok, kimi, omp, agent), read by the daemon's timeline/inbox and
+opencode, grok, omp, agent, plus the legacy name kimi kept so its past
+comments still read as agent), read by the daemon's timeline/inbox and
 pinned against the SPA's `isAgentAuthorName` by a test on each side.
 `annotate watch --ignore-agents` (also on `kb-code watch`) skips all of those
 names; `--ignore-author` stays for a single literal name.
