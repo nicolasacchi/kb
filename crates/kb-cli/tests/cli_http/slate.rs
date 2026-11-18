@@ -317,7 +317,7 @@ async fn a_kinds_filtered_push_never_eats_the_pull_lanes_posts() {
     f.ok(&["open", "--hybrid", "--session-id", "sess-c"]);
     assert_eq!(std::fs::read_to_string(&shared).unwrap().trim(), "1");
 
-    // A found post (pull-only) then a warn, both from ANOTHER session.
+    // A found post (an idea: pull-only, like found) then a warn, both from ANOTHER session.
     f.ok(&[
         "found",
         "the pool leaks on shutdown",
@@ -370,7 +370,7 @@ async fn a_kinds_filtered_push_never_eats_the_pull_lanes_posts() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_kinds_filtered_delta_reports_no_served_cursor() {
     let f = boot("fuslate-report").await;
-    f.ok(&["found", "a pull-only note", "--session-id", "sess-a"]);
+    f.ok(&["idea", "a pull-only note", "--session-id", "sess-a"]);
     let served = |f: &Fixture| {
         let url = format!("{}/api/slates", f.url);
         async move {
