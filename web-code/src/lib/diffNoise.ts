@@ -333,6 +333,15 @@ export function parseNoiseMode(raw: string | null): NoiseMode {
   return raw === "collapsed" ? "collapsed" : "shown";
 }
 
+/// The mode a toggle chord moves TO. `pending` is the mode the previous
+/// chord already asked for but whose URL write has not rendered back yet;
+/// when present it, not the render-time `current`, is what the next press
+/// flips. Without it two fast presses both read the stale render value and
+/// both ask for the same target, so the second press is lost.
+export function nextNoiseMode(current: NoiseMode, pending: NoiseMode | null): NoiseMode {
+  return (pending ?? current) === "collapsed" ? "shown" : "collapsed";
+}
+
 /// Would `mode` collapse a hunk carrying `labels`? The ONE place the
 /// collapse decision is made, so "a label is not a filter" is testable in
 /// one assertion rather than trusted across three components.
