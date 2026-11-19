@@ -89,6 +89,27 @@ pub struct Params {
     /// dropped and named in `degraded` (`error_class: timeout`); absent
     /// means no cap.
     pub deadline_ms: Option<u64>,
+    /// SG-Q3 — exclude hits already served to this logical session. Never a
+    /// query parameter of [`Params`] itself (`#[serde(skip)]`): the route
+    /// handlers fill it from `dedup_session=1&session=…[&served_after=…]`.
+    /// `None` is today's behaviour, byte for byte.
+    #[serde(skip)]
+    pub dedup: Option<DedupSpec>,
+}
+
+/// SG-Q3 — "drop what this session already got" request. An EXCLUSION
+/// applied after scoring, never a score term (invariant #10).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DedupSpec {
+    pub session_id: String,
+    /// Unix seconds; served rows older than this do not count (a compact
+    /// resets the epoch). 0 = everything.
+    pub served_after: i64,
+}
+
+/// `dedup_session=1|true` (anything else is off).
+pub(crate) fn flag_on(v: Option<&str>) -> bool {
+    matches!(v.map(str::trim), Some("1") | Some("true"))
 }
 
 fn default_scope() -> String {
@@ -108,6 +129,16 @@ pub struct RecallResponse {
         ts(as = "Option<Vec<crate::routes::context::DegradedLane>>", optional)
     )]
     pub degraded: Vec<crate::routes::context::DegradedLane>,
+    /// SG-Q3 — how many hits `dedup_session=1` removed from the page that
+    /// would otherwise have been served. Absent when zero (every existing
+    /// response stays byte-identical).
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    #[cfg_attr(feature = "ts-export", ts(as = "Option<u32>", optional))]
+    pub dedup_removed: usize,
+}
+
+fn is_zero_usize(n: &usize) -> bool {
+    *n == 0
 }
 
 #[cfg_attr(
@@ -635,13 +666,22 @@ pub(crate) fn embed_fallback_lane(
 pub async fn recall(
     State(state): State<Arc<KbHandles>>,
     Extension(identity): Extension<crate::middleware::Identity>,
-    Query(params): Query<Params>,
+    Query(mut params): Query<Params>,
     Query(served): Query<ServedSessionQuery>,
 ) -> Response<Body> {
     // `session` is not a field of [`Params`]: `routes::context` builds that
     // struct literally, and an in-process compose has no recalling session.
     // Absent / blank `session=` is today's response, degraded included.
     let session = served.session;
+    if flag_on(served.dedup_session.as_deref()) {
+        params.dedup = session
+            .as_deref()
+            .and_then(accept_session_id)
+            .map(|session_id| DedupSpec {
+                session_id,
+                served_after: served.served_after.unwrap_or(0),
+            });
+    }
     match recall_compose(Arc::clone(&state), identity, params).await {
         Ok(out) => {
             if let Some(session_id) = session {
@@ -659,6 +699,12 @@ pub async fn recall(
 pub struct ServedSessionQuery {
     #[serde(default)]
     session: Option<String>,
+    /// SG-Q3 — `1`/`true`: exclude hits already served to `session`.
+    #[serde(default)]
+    dedup_session: Option<String>,
+    /// SG-Q3 — unix seconds; only serves at or after it count.
+    #[serde(default)]
+    served_after: Option<i64>,
 }
 
 /// One hit this serve actually returned, for the recall ledger.
@@ -860,6 +906,7 @@ pub(crate) async fn recall_compose(
             hits: Vec::new(),
             ms: started.elapsed().as_millis() as u64,
             degraded,
+            dedup_removed: 0,
         });
     }
 
@@ -1316,15 +1363,67 @@ pub(crate) async fn recall_compose(
     // `scoring_v2_relevance`/`scoring_v2_stability` independently gate the
     // relevance-normalization + stability factors; both off reproduces the
     // pre-W2 formula bit-for-bit.
-    let scored = rerank_with_policy_scored(
+    // SG-Q3 — the served set is read BEFORE scoring but only ever applied
+    // AFTER it (see below): nothing from the ledger reaches the scorer.
+    let mut dedup_set: Option<std::collections::HashSet<(String, String)>> = None;
+    if let Some(spec) = &params.dedup {
+        match sessions_storage(&state) {
+            None => degraded.push(crate::routes::context::degraded_of(
+                "memory",
+                "recall.dedup",
+                crate::routes::context::QueryErrorClass::Storage,
+            )),
+            Some(storage) => {
+                match storage
+                    .memory_recalls_served_to_session(spec.session_id.clone(), spec.served_after)
+                    .await
+                {
+                    Ok(rows) => dedup_set = Some(rows.into_iter().collect()),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "recall dedup ledger read failed");
+                        degraded.push(crate::routes::context::degraded_of(
+                            "memory",
+                            "recall.dedup",
+                            crate::routes::context::QueryErrorClass::Storage,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    // Known limitation (SG-R1 F6): the scorer collapses hits by id alone, so
+    // when one id collides across two memory corpora only the higher-scoring
+    // copy reaches the exclusion below; if that copy was served, the other
+    // corpus's unserved copy is not offered. Rare (ids hash the
+    // source-relative path); not fixable here without changing the scorer's
+    // inputs, which would alter survivors' decomposition (#10).
+    // With dedup active the scorer must not truncate: the candidate pool
+    // (`per_corpus`, derived from the request's own `limit`) is unchanged,
+    // so every survivor's decomposition equals the no-dedup request's.
+    let scorer_limit = if dedup_set.is_some() {
+        usize::MAX
+    } else {
+        limit
+    };
+    let mut scored = rerank_with_policy_scored(
         all_hits,
         &tombstones,
         now_unix,
-        limit,
+        scorer_limit,
         DecayPolicy::Loose,
         scoring_v2_relevance,
         scoring_v2_stability,
     );
+    let mut dedup_removed = 0usize;
+    if let Some(set) = &dedup_set {
+        dedup_removed = scored
+            .iter()
+            .take(limit)
+            .filter(|s| set.contains(&(s.kb.clone(), s.id.clone())))
+            .count();
+        scored.retain(|s| !set.contains(&(s.kb.clone(), s.id.clone())));
+        scored.truncate(limit);
+    }
     let ms = started.elapsed().as_millis() as u64;
 
     let mut hits: Vec<RecallResult> = scored
@@ -1488,7 +1587,12 @@ pub(crate) async fn recall_compose(
         }
     }
 
-    Ok(RecallResponse { hits, ms, degraded })
+    Ok(RecallResponse {
+        hits,
+        ms,
+        degraded,
+        dedup_removed,
+    })
 }
 
 /// Shared recall-usage fan-out: for every `(hit_kb, ids)` pair, sum

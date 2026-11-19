@@ -261,6 +261,25 @@ enum Cmd {
         /// these; this only renders what's already on the wire.
         #[arg(long)]
         explain: bool,
+        /// path to a live Claude Code transcript; the query becomes
+        /// the prompt plus the last `--turns` turns (composed here, sent as
+        /// the ordinary query). Loopback daemons only — ignored with a
+        /// stderr line otherwise.
+        #[arg(long)]
+        transcript: Option<String>,
+        /// Recent transcript turns to fold into the query (with `--transcript`).
+        #[arg(long, default_value_t = 4)]
+        turns: usize,
+        /// exclude memories already served to this session (the
+        /// session id the hook passes via `KB_RECALL_SESSION`, or the
+        /// current-session marker). Applied after scoring; survivors keep
+        /// their score decomposition.
+        #[arg(long)]
+        dedup_session: bool,
+        /// with `--dedup-session`, only serves at or after this unix
+        /// time count (a compact starts the count over).
+        #[arg(long)]
+        served_after: Option<i64>,
         #[arg(long)]
         daemon: Option<String>,
         #[arg(long)]
@@ -340,6 +359,20 @@ enum Cmd {
         /// seed, as `kb slate open --hybrid`).
         #[arg(long)]
         slate_since: Option<u64>,
+        /// path to a live Claude Code transcript; the prompt sent is
+        /// the prompt plus the last `--turns` turns. Loopback daemons only.
+        #[arg(long)]
+        transcript: Option<String>,
+        /// Recent transcript turns to fold into the prompt (with `--transcript`).
+        #[arg(long, default_value_t = 4)]
+        turns: usize,
+        /// exclude memories already served to `--session` (needs it).
+        #[arg(long)]
+        dedup_session: bool,
+        /// with `--dedup-session`, only serves at or after this unix
+        /// time count (a compact starts the count over).
+        #[arg(long)]
+        served_after: Option<i64>,
         #[arg(long)]
         daemon: Option<String>,
         #[arg(long)]
@@ -4244,6 +4277,14 @@ enum AtlasAction {
 
 #[derive(Subcommand, Debug, Clone)]
 enum BenchAction {
+    /// Memory-recall policy bench. Calls a throwaway daemon's recall route
+    /// for every row of a labelled fixture: the shipped request (hook
+    /// limit, floor on) and a top-50 no-floor pool, each with and without
+    /// context composition; scores the shipped arm from its own request
+    /// and the content / ce arms from the pool with a pinned clock, and
+    /// prints an aggregates-only report. Internal policy validation, not a
+    /// leaderboard.
+    Recall(commands::recall_bench::RecallArgs),
     /// Scaffold a `queries.jsonl` template by sampling N artifacts at
     /// random from a corpus dir. Writes lines with an empty `query`
     /// field and a `relevant` array pre-seeded with the sampled
@@ -4840,11 +4881,21 @@ async fn main() -> Result<()> {
             for_kb,
             no_floor,
             explain,
+            transcript,
+            turns,
+            dedup_session,
+            served_after,
             daemon,
             json,
             timeout,
         } => {
             let bearer = read_bearer();
+            let query = commands::recall_ctx::query_with_context(
+                &query,
+                transcript.as_deref(),
+                turns,
+                daemon.as_deref(),
+            );
             commands::memory::recall_with_timeout(
                 &query,
                 &scope,
@@ -4858,6 +4909,8 @@ async fn main() -> Result<()> {
                 bearer.as_deref(),
                 json,
                 timeout,
+                dedup_session,
+                served_after,
             )
             .await
         }
@@ -4893,10 +4946,20 @@ async fn main() -> Result<()> {
             lanes,
             slate,
             slate_since,
+            transcript,
+            turns,
+            dedup_session,
+            served_after,
             daemon,
             json,
         } => {
             let bearer = read_bearer();
+            let prompt = commands::recall_ctx::query_with_context(
+                &prompt,
+                transcript.as_deref(),
+                turns,
+                daemon.as_deref(),
+            );
             commands::turn::turn(
                 &prompt,
                 cwd.as_deref(),
@@ -4905,6 +4968,8 @@ async fn main() -> Result<()> {
                 lanes.as_deref(),
                 slate.as_deref(),
                 slate_since,
+                dedup_session,
+                served_after,
                 daemon.as_deref(),
                 bearer.as_deref(),
                 json,
@@ -8001,6 +8066,10 @@ async fn main() -> Result<()> {
             }
         }
         Cmd::Bench { action } => match action {
+            BenchAction::Recall(args) => {
+                let bearer = read_bearer();
+                commands::recall_bench::run(args, bearer.as_deref()).await
+            }
             BenchAction::Init {
                 corpus,
                 output,

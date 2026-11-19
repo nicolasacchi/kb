@@ -1,0 +1,11 @@
+{"id":"q-legacy-1","query":"how does the sprocket cache get invalidated","labels":{"a1b2c3d4e5f6":2,"b2c3d4e5f6a1":1},"class":"legacy","language":"en","split":"dev","project":"demo-app"}
+{"id":"q-legacy-2","query":"where do we pin the flux capacitor version","labels":{"c3d4e5f6a1b2":2},"class":"legacy","language":"en","split":"heldout"}
+{"id":"q-real-1","query":"and what about the nightly one","context":[{"role":"human","text":"we are debugging the sprocket cache warmup job"},{"role":"assistant","text":"The warmup job runs at 03:00 and refills the sprocket cache from the gizmo store."}],"labels":{"a1b2c3d4e5f6":2,"d4e5f6a1b2c3":1},"class":"real","language":"en","split":"dev"}
+{"id":"q-real-2","query":"quale versione del condensatore e fissata","context":[{"role":"human","text":"parliamo del condensatore di flusso"}],"labels":{"c3d4e5f6a1b2":2},"class":"real","language":"it","split":"dev"}
+{"id":"q-real-3","query":"perche il gizmo store rifiuta le scritture parallele","labels":{"d4e5f6a1b2c3":2,"a1b2c3d4e5f6":1},"class":"real","language":"it","split":"heldout"}
+{"id":"q-real-4","query":"remind me how the gizmo store handles locks","context":[{"role":"human","text":"I keep hitting lock timeouts"},{"role":"assistant","text":"Lock timeouts in the gizmo store come from a single writer lease."},{"role":"human","text":"remind me how the gizmo store handles locks"}],"labels":{"d4e5f6a1b2c3":2},"class":"real","language":"en","split":"heldout"}
+{"id":"q-null-1","query":"what is a good name for the office plant","labels":{},"class":"null","language":"en","split":"dev"}
+{"id":"q-null-2","query":"traduci questa frase in francese per favore","labels":{"a1b2c3d4e5f6":0},"class":"null","language":"it","split":"heldout"}
+{"id":"q-triv-1","query":"ok","labels":{},"class":"trivial","language":"en","split":"dev"}
+{"id":"q-triv-2","query":"vai","labels":{},"class":"trivial","language":"it","split":"dev"}
+{"id":"q-triv-3","query":"/status","labels":{},"class":"trivial","language":"en","split":"heldout"}
