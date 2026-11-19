@@ -20,7 +20,7 @@
 //! v0.42 (D30) folds in one more check that ISN'T about provenance: session
 //! marker files under `~/.cache/kb` never expire on their own
 //! (`slate-cursor-`/`slate-topic-`, plus `context-scent-`, `beat-heartbeat-`,
-//! and `waked-`). `--hooks` flags any older than 30 days — and `--fix`
+//! `beat-tool-` and `waked-`). `--hooks` flags any older than 30 days — and `--fix`
 //! removes THOSE ONLY. A cursor younger than 30 days, and the slate ledger,
 //! are never removed. Every other check here stays read-only.
 //!
@@ -1299,7 +1299,7 @@ fn slate_marker_gc_check(cache_dir: Option<&Path>, now: i64, removed: Option<usi
     if stale.is_empty() {
         return HookCheck::pass(
             "slate-marker-gc",
-            "no slate-cursor/slate-topic/context-scent/beat-heartbeat/waked marker older than 30d",
+            "no slate-cursor/slate-topic/context-scent/beat-heartbeat/beat-tool/waked marker older than 30d",
         );
     }
     let mut detail = format!(
@@ -1365,19 +1365,27 @@ fn outbox_check(cache_dir: Option<&Path>) -> HookCheck {
             spool.display()
         ));
     }
+    let c = HookCheck::warn("outbox", parts.join("; "));
+    match outbox_fix(pending, spooled) {
+        Some(fix) => c.with_fix(fix),
+        None => c.with_fix("inspect/delete the .rejected files under the outbox dir"),
+    }
+}
+
+/// The `outbox` fix text for `pending` queued writes and `spooled` captures.
+/// A spooled capture is NOT only a manual job: the capture hook drains a spool
+/// too large for its own slice in the background, so the text says so.
+fn outbox_fix(pending: usize, spooled: usize) -> Option<String> {
     let mut fixes = Vec::new();
     if pending > 0 {
         fixes.push("`kb outbox flush`");
     }
     if spooled > 0 {
-        fixes.push("`kb sessions capture --replay-spool`");
+        fixes.push(
+            "`kb sessions capture --replay-spool` (or wait: the next capture drains a large spool in the background)",
+        );
     }
-    let c = HookCheck::warn("outbox", parts.join("; "));
-    if fixes.is_empty() {
-        c.with_fix("inspect/delete the .rejected files under the outbox dir")
-    } else {
-        c.with_fix(fixes.join(" / "))
-    }
+    (!fixes.is_empty()).then(|| fixes.join(" / "))
 }
 
 // ============================================ i) recall-outcome census
@@ -2179,10 +2187,74 @@ fn decide_backup_age(
         .collect()
 }
 
+/// Whether the state dir THIS CLI reads is the one the daemon it reached
+/// uses. Decided from positive evidence only: the daemon's `state_instance`
+/// marker (`GET /api/identity`) against the marker in the local state dir.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum StateOwnership {
+    /// Same marker: the local `<state>/` IS the daemon's.
+    Same,
+    /// The daemon served a marker and the local state dir has a different one
+    /// (or none): the daemon keeps its state somewhere this host cannot see.
+    Elsewhere,
+    /// The daemon predates the marker (or could not persist one): nothing to
+    /// compare, so nothing is claimed either way.
+    NotVerified,
+    /// The daemon could not be asked.
+    Unreachable(String),
+}
+
+fn decide_state_ownership(
+    daemon: &Result<DaemonStamp, String>,
+    local_marker: Option<&str>,
+) -> StateOwnership {
+    match daemon {
+        Err(e) => StateOwnership::Unreachable(e.clone()),
+        Ok(d) => match d.state_instance.as_deref().filter(|m| !m.is_empty()) {
+            None => StateOwnership::NotVerified,
+            Some(theirs) if local_marker == Some(theirs) => StateOwnership::Same,
+            Some(_) => StateOwnership::Elsewhere,
+        },
+    }
+}
+
+/// The single `backup-age` SKIP for a daemon whose state lives elsewhere.
+/// `--strict` never trips on a SKIP.
+fn backup_age_elsewhere_skip(base: &str) -> HookCheck {
+    HookCheck::skip(
+        "backup-age",
+        format!(
+            "the daemon at {base} keeps its state elsewhere (its state-instance marker differs from this host's <state>/), so backup age is not reported from here; check backups where the daemon runs, e.g. `kb doctor --hooks` inside its container"
+        ),
+    )
+}
+
+/// The note that rides beside the local-state findings when the ownership
+/// could not be established (legacy daemon, daemon down).
+fn backup_age_origin_note(ownership: &StateOwnership, base: &str) -> Option<HookCheck> {
+    match ownership {
+        StateOwnership::NotVerified => Some(HookCheck::skip(
+            "backup-age-origin",
+            format!(
+                "the daemon at {base} reports no state-instance marker (an older daemon), so it was not verified that this host's <state>/ is the state it uses"
+            ),
+        )),
+        StateOwnership::Unreachable(e) => Some(HookCheck::skip(
+            "backup-age-origin",
+            format!(
+                "the daemon at {base} is unreachable ({e}): reporting this host's local <state>/, not verified to be the state the daemon uses"
+            ),
+        )),
+        StateOwnership::Same | StateOwnership::Elsewhere => None,
+    }
+}
+
 fn backup_age_checks(
     now: i64,
     config: Option<&PathBuf>,
     configured: Option<&[String]>,
+    daemon: &Result<DaemonStamp, String>,
+    base: &str,
 ) -> Vec<HookCheck> {
     let Some(paths) = resolve_kb_paths() else {
         return vec![HookCheck::skip(
@@ -2190,15 +2262,40 @@ fn backup_age_checks(
             "could not resolve the state dir — not checking <state>/exports/",
         )];
     };
+    let loaded = crate::commands::resolve_config_path(config)
+        .and_then(|p| crate::commands::load_config_or_default(&p));
+    backup_age_report(&paths, now, loaded, configured, daemon, base)
+}
+
+/// The `backup-age` findings for `paths` (the state dir THIS host can read),
+/// given what the daemon at `base` said about its own state dir.
+///
+/// A daemon whose state-instance marker differs from `paths`' own is keeping
+/// its state somewhere else (a container, another host): the local
+/// `<state>/exports` is then a dead leftover, so it is not scanned and one
+/// SKIP says where to look instead. Same marker = byte-identical to the
+/// pre-marker behaviour; a legacy or unreachable daemon keeps reporting the
+/// local state and adds a `backup-age-origin` SKIP saying that was not verified.
+fn backup_age_report(
+    paths: &kb_core::paths::KbPaths,
+    now: i64,
+    loaded: Result<kb_core::config::KbConfig>,
+    configured: Option<&[String]>,
+    daemon: &Result<DaemonStamp, String>,
+    base: &str,
+) -> Vec<HookCheck> {
+    let ownership = decide_state_ownership(daemon, paths.read_state_instance().as_deref());
+    if ownership == StateOwnership::Elsewhere {
+        return vec![backup_age_elsewhere_skip(base)];
+    }
     // A config that cannot be read is NOT "no off-host copy configured": that
     // would silently turn the off-host finding off for the one machine whose
     // config is broken. Say it could not be verified (a SKIP, which `--strict`
     // does not trip on) and run the local-age checks without the off-host half.
-    let loaded = crate::commands::resolve_config_path(config)
-        .and_then(|p| crate::commands::load_config_or_default(&p));
     let (offhost_expected, config_skip) = offhost_expectation(loaded);
-    let mut checks = decide_backup_age(scan_kb_exports(&paths, now, configured), offhost_expected);
+    let mut checks = decide_backup_age(scan_kb_exports(paths, now, configured), offhost_expected);
     checks.extend(config_skip);
+    checks.extend(backup_age_origin_note(&ownership, base));
     checks
 }
 
@@ -2234,6 +2331,11 @@ struct DaemonStamp {
     version: Option<String>,
     #[serde(default)]
     build_sha: Option<String>,
+    /// The daemon's per-state-dir instance marker (`GET /api/identity`
+    /// `state_instance`). Absent (a daemon from before the field) and `null`
+    /// (it could not persist one) both read as "not verified".
+    #[serde(default)]
+    state_instance: Option<String>,
 }
 
 async fn fetch_identity(client: &reqwest::Client, base: &str) -> Result<DaemonStamp> {
@@ -2629,7 +2731,16 @@ pub async fn hooks(
         .as_ref()
         .ok()
         .map(|l| l.iter().map(|k| k.name.clone()).collect());
-    checks.extend(backup_age_checks(now, config, configured.as_deref()));
+    let identity = fetch_identity(&client, &base)
+        .await
+        .map_err(|e| format!("{e:#}"));
+    checks.extend(backup_age_checks(
+        now,
+        config,
+        configured.as_deref(),
+        &identity,
+        &base,
+    ));
 
     // CLI vs daemon build skew (v0.44 F8).
     checks.push(cli_skew_check(&client, &base, &repo_path).await);
@@ -3540,6 +3651,30 @@ mod tests {
         assert_eq!(gc_stale_slate_markers(dir, now), 0);
     }
 
+    /// The `--fix` help is hand-written clap text, so it is pinned to the one
+    /// prefix list the code removes by: every prefix must be named in the doc
+    /// comment of `fix` in main.rs and in docs/cli.md, so a new prefix cannot
+    /// ship with stale help.
+    #[test]
+    fn fix_help_and_docs_name_every_marker_prefix_the_code_removes() {
+        let main_rs = include_str!("../main.rs");
+        let at = main_rs
+            .find("/// Remove the per-session marker files")
+            .expect("the --fix doc comment");
+        let help: String = main_rs[at..]
+            .lines()
+            .take_while(|l| l.trim_start().starts_with("///"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let help = help.replace("/// ", "");
+        let cli_md = include_str!("../../../../docs/cli.md");
+        for prefix in SESSION_MARKER_PREFIXES {
+            let glob = format!("`{prefix}*`");
+            assert!(help.contains(&glob), "--fix help omits {glob}: {help}");
+            assert!(cli_md.contains(&glob), "docs/cli.md omits {glob}");
+        }
+    }
+
     #[test]
     fn outbox_check_counts_queued_writes_rejected_and_spooled_captures() {
         let tmp = tempfile::tempdir().unwrap();
@@ -3556,6 +3691,16 @@ mod tests {
         assert!(c.detail.contains("2 queued"), "{}", c.detail);
         assert!(c.detail.contains("1 refused"), "{}", c.detail);
         assert!(c.fix.as_deref().unwrap().contains("kb outbox flush"));
+        // A spooled capture: the manual command is no longer the only path.
+        let fix = outbox_fix(0, 2).unwrap();
+        assert!(fix.contains("--replay-spool"), "{fix}");
+        assert!(
+            fix.contains("drains a large spool in the background"),
+            "{fix}"
+        );
+        assert!(!fix.contains("outbox flush"), "{fix}");
+        assert_eq!(outbox_fix(1, 0).unwrap(), "`kb outbox flush`");
+        assert!(outbox_fix(0, 0).is_none());
         assert_eq!(outbox_check(None).status, CheckStatus::Skip);
     }
 
@@ -3842,6 +3987,7 @@ mod tests {
         Ok(DaemonStamp {
             version: Some("0.43-193-g9e1ac65".into()),
             build_sha: Some(sha.into()),
+            ..Default::default()
         })
     }
 
@@ -3978,6 +4124,193 @@ mod tests {
         let (expected, skip) = offhost_expectation(Ok(kb_core::config::KbConfig::default()));
         assert!(!expected);
         assert!(skip.is_none());
+    }
+
+    // ---- FUDOCTOR: backup-age must not report a state dir the daemon does
+    // not use. The daemon's `state_instance` marker (GET /api/identity) is
+    // compared with the marker in the state dir this host can read.
+
+    const MARKER_A: &str = "0123456789abcdef0123456789abcdef";
+    const MARKER_B: &str = "fedcba9876543210fedcba9876543210";
+
+    /// A state dir with one kb that has state but NO export: on the unguarded
+    /// path that is `FAIL backup-age:docs` with the `kb backup --all` fix.
+    fn leftover_state(marker: Option<&str>) -> (tempfile::TempDir, kb_core::paths::KbPaths) {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = kb_core::paths::KbPaths::rooted_at(tmp.path(), "d");
+        let dir = paths.state.join("docs");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("index.db"), b"db").unwrap();
+        if let Some(m) = marker {
+            std::fs::write(paths.state_instance_file(), m).unwrap();
+        }
+        (tmp, paths)
+    }
+
+    /// One-shot-per-connection HTTP server answering every request with
+    /// `body` as JSON on a spare loopback port (never the prod daemon's).
+    fn fake_identity_daemon(body: &'static str) -> String {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        assert_ne!(addr.port(), 4000);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut s) = stream else { break };
+                let mut buf = [0u8; 2048];
+                let _ = s.read(&mut buf);
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = s.write_all(resp.as_bytes());
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    async fn report_against(base: &str, paths: &kb_core::paths::KbPaths) -> Vec<HookCheck> {
+        let daemon = fetch_identity(&reqwest::Client::new(), base)
+            .await
+            .map_err(|e| format!("{e:#}"));
+        let cfg = kb_core::config::KbConfig::default();
+        backup_age_report(paths, 1_800_000_000, Ok(cfg), None, &daemon, base)
+    }
+
+    /// A daemon whose marker differs from the local state dir's keeps its
+    /// state elsewhere: ONE `backup-age` SKIP, no per-kb FAIL from leftovers,
+    /// and `--strict` does not trip.
+    #[tokio::test]
+    async fn backup_age_skips_when_the_daemon_keeps_its_state_elsewhere() {
+        let (_t, paths) = leftover_state(Some(MARKER_A));
+        let base = fake_identity_daemon(
+            r#"{"name":"kb","version":"x","build_sha":"abc","state_instance":"fedcba9876543210fedcba9876543210"}"#,
+        );
+        let checks = report_against(&base, &paths).await;
+        assert_eq!(checks.len(), 1, "{checks:?}");
+        assert_eq!(checks[0].id, "backup-age");
+        assert_eq!(checks[0].status, CheckStatus::Skip);
+        assert!(
+            checks[0].detail.contains("keeps its state elsewhere")
+                && checks[0].detail.contains(&base)
+                && checks[0].detail.contains("inside its container"),
+            "{}",
+            checks[0].detail
+        );
+        assert!(!checks.iter().any(|c| c.id.starts_with("backup-age:")));
+        assert_eq!(strict_exit_code(&checks, true), 0);
+    }
+
+    /// A local state dir with NO marker at all (a dead leftover from an old
+    /// host daemon) against a daemon that serves one is also "elsewhere".
+    #[tokio::test]
+    async fn backup_age_skips_when_the_local_state_has_no_marker_but_the_daemon_does() {
+        let (_t, paths) = leftover_state(None);
+        let base = fake_identity_daemon(
+            r#"{"name":"kb","state_instance":"fedcba9876543210fedcba9876543210"}"#,
+        );
+        let checks = report_against(&base, &paths).await;
+        assert_eq!(checks.len(), 1, "{checks:?}");
+        assert_eq!(checks[0].status, CheckStatus::Skip);
+    }
+
+    /// Same marker = the same-host install: the per-kb findings are exactly
+    /// what `decide_backup_age(scan_kb_exports(..))` gives, with no extra row.
+    #[tokio::test]
+    async fn backup_age_reports_the_local_state_when_the_markers_match() {
+        let (_t, paths) = leftover_state(Some(MARKER_A));
+        let base = fake_identity_daemon(
+            r#"{"name":"kb","state_instance":"0123456789abcdef0123456789abcdef"}"#,
+        );
+        let checks = report_against(&base, &paths).await;
+        let expected = decide_backup_age(scan_kb_exports(&paths, 1_800_000_000, None), false);
+        assert_eq!(
+            checks.iter().map(|c| (&c.id, c.status)).collect::<Vec<_>>(),
+            expected
+                .iter()
+                .map(|c| (&c.id, c.status))
+                .collect::<Vec<_>>()
+        );
+        let c = by_id(&checks, "backup-age:docs");
+        assert_eq!(c.status, CheckStatus::Fail);
+        assert_eq!(c.fix.as_deref(), Some("kb backup --all"));
+        assert!(!checks.iter().any(|c| c.id == "backup-age-origin"));
+    }
+
+    /// A daemon from before the marker: not verified, never a false mismatch.
+    /// The local state is still reported, with an explicit note.
+    #[tokio::test]
+    async fn backup_age_grandfathers_a_daemon_without_a_marker() {
+        for body in [
+            r#"{"name":"kb","build_sha":"abc"}"#,
+            r#"{"name":"kb","state_instance":null}"#,
+        ] {
+            let (_t, paths) = leftover_state(Some(MARKER_A));
+            let base = fake_identity_daemon(body);
+            let checks = report_against(&base, &paths).await;
+            assert_eq!(
+                by_id(&checks, "backup-age:docs").status,
+                CheckStatus::Fail,
+                "{body}: {checks:?}"
+            );
+            let n = by_id(&checks, "backup-age-origin");
+            assert_eq!(n.status, CheckStatus::Skip);
+            assert!(n.detail.contains("not verified"), "{}", n.detail);
+        }
+    }
+
+    /// Daemon down: keep reporting the local state and say so in the output.
+    #[tokio::test]
+    async fn backup_age_keeps_the_local_state_and_says_so_when_the_daemon_is_unreachable() {
+        let (_t, paths) = leftover_state(Some(MARKER_A));
+        // A port nothing listens on: bind then drop.
+        let dead = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            format!("http://{}", l.local_addr().unwrap())
+        };
+        let checks = report_against(&dead, &paths).await;
+        assert_eq!(by_id(&checks, "backup-age:docs").status, CheckStatus::Fail);
+        let n = by_id(&checks, "backup-age-origin");
+        assert_eq!(n.status, CheckStatus::Skip);
+        assert!(
+            n.detail.contains("unreachable") && n.detail.contains("local <state>/"),
+            "{}",
+            n.detail
+        );
+    }
+
+    #[test]
+    fn state_ownership_is_decided_from_the_two_markers_only() {
+        let daemon = |m: Option<&str>| -> Result<DaemonStamp, String> {
+            Ok(DaemonStamp {
+                state_instance: m.map(str::to_string),
+                ..Default::default()
+            })
+        };
+        assert_eq!(
+            decide_state_ownership(&daemon(Some(MARKER_A)), Some(MARKER_A)),
+            StateOwnership::Same
+        );
+        assert_eq!(
+            decide_state_ownership(&daemon(Some(MARKER_A)), Some(MARKER_B)),
+            StateOwnership::Elsewhere
+        );
+        assert_eq!(
+            decide_state_ownership(&daemon(Some(MARKER_A)), None),
+            StateOwnership::Elsewhere
+        );
+        assert_eq!(
+            decide_state_ownership(&daemon(None), Some(MARKER_A)),
+            StateOwnership::NotVerified
+        );
+        assert_eq!(
+            decide_state_ownership(&daemon(Some("")), Some(MARKER_A)),
+            StateOwnership::NotVerified
+        );
+        assert!(matches!(
+            decide_state_ownership(&Err("down".into()), Some(MARKER_A)),
+            StateOwnership::Unreachable(_)
+        ));
     }
 
     /// F8 / A13.f11 — the scan covers exactly the kbs the daemon serves (the

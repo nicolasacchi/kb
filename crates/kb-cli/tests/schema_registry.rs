@@ -541,6 +541,7 @@ fn sibling_hello_from_kb_identity_validates() {
         sibling_major: kb_core::sibling::SIBLING_MAJOR,
         schema_epoch: kb_core::storage::sqlite::schema_epoch(),
         terminal_admitted: false,
+        state_instance: Some("0123456789abcdef0123456789abcdef".into()),
     };
     let v = serde_json::to_value(&body).unwrap();
     let dir = tempfile::tempdir().unwrap();

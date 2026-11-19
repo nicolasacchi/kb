@@ -141,6 +141,16 @@ registering anywhere `kb-memory` is already installed. Design:
   pushes each item through the normal scrubbed capture path and deletes it;
   `kb doctor --hooks` (check `outbox`) counts what is waiting. Test:
   `tests/test-capture-spool.sh`.
+  **Large spools drain in the background.** The hook's own replay is a
+  synchronous slice (`KB_SPOOL_SYNC_SECS`, default 10, still inside the hook
+  budget). If that slice times out - a transcript of tens of MB does not land in
+  10 s - the rest is replayed by a detached `kb sessions capture --replay-spool`
+  (`hook_spool_drain_detached` in `kb-hook-lib.sh`): one drainer at a time (the
+  `.drain.lock` directory in the spool holds its pid; a dead or over-age lock is
+  reclaimed), bounded by `KB_SPOOL_DRAIN_SECS` (default 600), with stdin/stdout/
+  stderr closed so the hook never waits on it. The `outbox` doctor check can
+  therefore WARN briefly after a big capture; it clears when the drain lands.
+  Test: `tests/test-capture-spool-drain.sh`.
 - **The codex/opencode/omp/grok adapters spool too (v0.45 N4)** - none of
   them writes session HTML any more. Each translates its harness transcript to
   Claude-shaped JSONL (the first record is an `adapter-meta` line carrying
@@ -1208,6 +1218,50 @@ separate `kb slate` spawn when the turn served the lane (the CLI resolves
 cwd -> repo slug; outside a repo the lane is dropped). A golden test pins that
 KB_TURN=1 and the legacy path inject identical bytes. Test:
 `tests/test-recall-turn.sh`.
+
+## `KB_RECALL_CONTEXT` (SG-Q2)
+
+`KB_RECALL_CONTEXT=1` makes `kb-recall.sh` fold the recent conversation into the
+recall query. When the payload carries `.transcript_path` and that file is
+readable, the hook passes `--transcript <path>` to `kb recall` and, under
+`KB_TURN=1`, to `kb turn`; the CLI reads the last 4 turns (`--turns`), composes
+the query (current prompt first, then prior turns newest first, capped at 1200
+chars) and sends it as the ordinary query. The current prompt always comes
+from `.prompt` (the transcript is written asynchronously and may lag). Opt-in:
+unset, or with a missing file, every call is byte-identical to before. The CLI
+ignores `--transcript` (one stderr line) when the daemon URL is not loopback,
+since transcript text is unscrubbed. Claude Code only; other harnesses stay
+prompt-only. Test: `tests/test-recall-context.sh`.
+
+## Per-session dedup, compact reset, trivial-prompt skip (SG-Q3)
+
+**Dedup (default ON).** With a session id, `kb-recall.sh` passes
+`--dedup-session` to `kb recall` / `kb turn`, so the daemon drops memories it
+already served to this logical session (an exclusion after scoring; survivors
+keep their exact score decomposition). `KB_RECALL_DEDUP=0` turns it off. A
+`kb` binary that rejects the flag as an unknown argument (clap exit code 2 with
+`unexpected argument` on stderr) is retried once without it, so a stale CLI
+loses dedup, never the injection. Any other failure (timeout, exit 1, empty
+output) is NOT retried, so it cannot burn the hook budget; stderr is never
+injected. The session id must match `[A-Za-z0-9._-]+` (not `.`/`..`) to key the
+epoch file; otherwise the epoch feature is skipped (no write, no `--served-after`).
+
+**Compact reset.** After `/compact` (and `/clear`) the earlier injections are
+gone from the model's context. `kb-wake.sh` reads the SessionStart payload's
+`source` field (`startup|resume|clear|compact|fork`) and, for `compact` or
+`clear`, writes the current unix time to `~/.cache/kb/recall-epoch-<sid>`
+(`XDG_CACHE_HOME` honoured). `kb-recall.sh` passes its content as
+`--served-after`, so only serves after the compact count.
+
+**Trivial-prompt skip (default ON).** With no context transcript being passed
+(`KB_RECALL_CONTEXT` off), a prompt whose first token is a slash command (`/name`, no further `/`, so an
+absolute path like `/home/x/foo.rs why…` is NOT one) or that has fewer than two
+word tokens of 3+ unicode letters/digits (a prompt with two or more CJK
+characters is never trivial) skips the RECALL lane only; the
+turn-1 scent and the slate lane behave as before (under `KB_TURN=1` the
+`recall` lane is dropped from `--lanes`). `KB_RECALL_SKIP_TRIVIAL=0` disables
+it. Test: `tests/test-recall-dedup.sh` (the older recall tests export
+`KB_RECALL_SKIP_TRIVIAL=0`: their prompts are deliberately short).
 
 `kb-hook-lib.sh` holds what the hooks used to copy: `run_to <cap> cmd…` (each
 call runs under `min(cap, what is left of KB_HOOK_BUDGET_SECS, default 13)` on

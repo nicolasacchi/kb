@@ -115,9 +115,14 @@ chip. `cold` rows never resume.
 - Only agents earn "resumes on its own". A shell-only (or other-only) row stays
   in WAITING, captioned `1 background shell`, because a shell may never wake
   the session.
-- Claude only today. omp needs nothing: it holds its stop signal until its
-  async jobs deliver, so its rows never show this false wait. The other
-  harnesses were not probed and send nothing.
+- Claude only today. omp sends its end-of-turn event (`session_stop`) only
+  after its async jobs deliver (omp 18.13.3 source, read 2026-11-19; a pending
+  or in-flight job delivery defers the event to the later, fully idle settle,
+  and a job whose delivery was acknowledged or is being waited on does not
+  defer it). `kb-omp.ts` sends `turn_end` only on that event (pinned by
+  `test-omp-beats.sh`). A live omp is not run in CI, and the installed
+  18.22.2 binary was not source-read. The other harnesses were not probed and
+  send nothing.
 - `KB_BEAT_BACKGROUND=0` omits the field.
 
 Known limits:

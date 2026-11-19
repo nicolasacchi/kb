@@ -283,6 +283,14 @@ fn capture_throttle_agrees_with_the_rust_capture_file_name() {
     run_with_real_kb("test-capture-throttle.sh");
 }
 
+/// FUDOCTOR - a spooled capture too large to land inside the Stop hook's own
+/// replay slice drains in a detached, locked, bounded background replay; the
+/// hook itself returns at its slice. Fake `kb` only (the replay is simulated).
+#[test]
+fn a_large_spooled_capture_drains_in_the_background_without_blocking_the_hook() {
+    run("test-capture-spool-drain.sh");
+}
+
 /// v0.45 OC - the omp capture adapter's lifecycle with REAL subprocesses:
 /// per-session exclusion + request coalescing (one conversion at a time, the
 /// newest state published), independent sessions concurrent, SIGTERM and the

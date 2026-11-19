@@ -1397,6 +1397,13 @@ pub enum StorageMsg {
         session_id: String,
         reply: oneshot::Sender<Result<Vec<MemoryRecallRow>>>,
     },
+    /// SG-Q3 — distinct `(memory_kb, memory_id)` pairs already served to one
+    /// logical session since a cutoff. Read lane; an exclusion set only.
+    MemoryRecallsServedToSession {
+        logical_sid: String,
+        since_unix: i64,
+        reply: oneshot::Sender<Result<Vec<(String, String)>>>,
+    },
     /// MI-W1.2/W1.3 — aggregate recall stats (count + last-recalled) for a
     /// batch of memory ids, scoped to THIS kb's `memory_recalls` table.
     /// `memory_kb` narrows to hits recalled from one memory corpus (the
@@ -1729,6 +1736,7 @@ fn is_read_lane(msg: &StorageMsg) -> bool {
             | StorageMsg::MemoryRecallsCountsForIds { .. }
             | StorageMsg::MemoryRecallsWeeklyForIds { .. }
             | StorageMsg::MemoryRecallsForSession { .. }
+            | StorageMsg::MemoryRecallsServedToSession { .. }
             // CT-B2 — the memory-side reverse read.
             | StorageMsg::MemoryRecallsForMemory { .. }
             // CT-F1 — the memory↔commit exact-id read. Its write sibling
@@ -3779,6 +3787,16 @@ impl StorageActor {
                 let _ = reply.send(
                     self.db
                         .memory_recalls_counts_for_ids(memory_kb.as_deref(), &memory_ids),
+                );
+            }
+            StorageMsg::MemoryRecallsServedToSession {
+                logical_sid,
+                since_unix,
+                reply,
+            } => {
+                let _ = reply.send(
+                    self.db
+                        .memory_recalls_served_to_session(&logical_sid, since_unix),
                 );
             }
             StorageMsg::MemoryRecallsForSession { session_id, reply } => {
@@ -6050,6 +6068,20 @@ impl StorageHandle {
             .await
     }
 
+    /// SG-Q3 — pairs already served to one logical session since `since_unix`.
+    pub async fn memory_recalls_served_to_session(
+        &self,
+        logical_sid: String,
+        since_unix: i64,
+    ) -> Result<Vec<(String, String)>> {
+        self.send_and_await(|reply| StorageMsg::MemoryRecallsServedToSession {
+            logical_sid,
+            since_unix,
+            reply,
+        })
+        .await
+    }
+
     /// MI-W1.2/W1.3 — aggregate recall stats for a batch of memory ids
     /// within THIS kb's `memory_recalls` table.
     pub async fn memory_recalls_counts_for_ids(
@@ -7385,6 +7417,11 @@ mod tests {
         }));
         assert!(lane(|reply| StorageMsg::MemoryRecallsForSession {
             session_id: "s".into(),
+            reply
+        }));
+        assert!(lane(|reply| StorageMsg::MemoryRecallsServedToSession {
+            logical_sid: "s".into(),
+            since_unix: 0,
             reply
         }));
         // MI-W4.2a — the per-week histogram sibling read.

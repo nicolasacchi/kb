@@ -76,6 +76,22 @@ kb doctor --hooks [--repo PATH]     v0.38 CT-C6: the provenance-chain
                                     SKIPs `backup-offhost` (the off-host
                                     half was not verified) rather than
                                     silently assuming none is expected.
+                                    `backup-age` reads THIS host's
+                                    `<state>/exports`, so it first checks
+                                    that the daemon it reached uses that
+                                    state dir: the daemon's
+                                    `state_instance` marker on
+                                    /api/identity must equal the marker in
+                                    the local state dir. A different marker
+                                    (a daemon in a container, another
+                                    host) is ONE `backup-age` SKIP naming
+                                    where to look (`kb doctor --hooks`
+                                    where the daemon runs), never a FAIL
+                                    from leftovers. A daemon without the
+                                    marker, or an unreachable one, still
+                                    reports the local state plus a
+                                    `backup-age-origin` SKIP saying it was
+                                    not verified.
                                     Read-only,
                                     PASS/WARN/FAIL/SKIP + a one-line fix per
                                     link (FAIL = a configured invariant is
@@ -100,9 +116,12 @@ kb doctor --hooks [--repo PATH]     v0.38 CT-C6: the provenance-chain
                                     v1 checks Claude Code only (the codex
                                     adapter is unchecked). D30 (v0.42)
                                     adds one more, unrelated to provenance:
-                                    `~/.cache/kb/slate-cursor-*` and
-                                    `slate-topic-*` markers older than 30
-                                    days are flagged, and `--fix` removes
+                                    per-session markers under
+                                    `~/.cache/kb` older than 30 days are
+                                    flagged (`slate-cursor-*`,
+                                    `slate-topic-*`, `context-scent-*`,
+                                    `beat-heartbeat-*`, `beat-tool-*`,
+                                    `waked-*`), and `--fix` removes
                                     THOSE ONLY — every other check here
                                     stays read-only.
 kb slo status [--kb NAME] [--json]  v0.38 CT-F5: corpus-health SLOs — five
@@ -642,6 +661,68 @@ kb synth --out DIR [--docs N] [--seed S]
 kb bench {init,discover,run}        retrieval-quality bake-off: scaffold a
                                     queries.jsonl, discover relevant ids, then
                                     compute Recall@k / MRR / nDCG per (kb × mode)
+kb bench recall --fixture F --daemon URL --clock T [--project SLUG]
+                                    memory-recall POLICY bench (internal policy
+                                    validation, not a leaderboard). For each
+                                    JSONL row (id, query, optional chronological
+                                    `context` [{role human|assistant, text}],
+                                    `labels` {memory id or kb:id -> 0|1|2,
+                                    unlisted = 0}, class legacy|real|null|
+                                    trivial, language tag, split dev|heldout;
+                                    strict, errors name the line) it calls the
+                                    daemon's recall route twice, for the bare
+                                    prompt and for the SG-Q2 composed query:
+                                    the SHIPPED request (what the hook's `kb
+                                    recall` sends: --inject-k limit, floor ON,
+                                    the auto scope params) and the POOL request
+                                    (no_floor, limit 50, same scope params).
+                                    Scope params come from the CLI's own
+                                    auto-scope resolution for --project SLUG
+                                    (or a row's optional `project`; absent =
+                                    no repo); the report header names both
+                                    requests' parameters. --daemon is required
+                                    and is meant to be a THROWAWAY daemon over a
+                                    frozen copy of the memory corpora. Arms:
+                                    `shipped` (the shipped request's own
+                                    order), `shipped-pool` (route order over
+                                    the pool; NOT the deployed policy, kept to
+                                    show drift), then computed locally from the
+                                    pool: `content` (retrieval rank),
+                                    `ce` (cross-encoder logit on title + full
+                                    body, x bounded salience/decay multipliers,
+                                    logit floor; --ce-salience-coef,
+                                    --ce-decay-coef, --ce-floor,
+                                    --reranker-model, --body-chars). --clock
+                                    (unix or RFC 3339) pins the decay clock. ce
+                                    spawns the kb-embedder sidecar (kb links no
+                                    ONNX); a missing binary reports ce as
+                                    skipped, not failed (--skip-ce forces it).
+                                    Per arm and per all/class/language stratum:
+                                    recall@5, MRR (rows with a grade-2 label),
+                                    pool recall@50, injected and off-topic
+                                    injections per prompt (--inject-k, default
+                                    5), false-injection rate on null+trivial
+                                    with a Wilson 95% upper bound, a paired
+                                    win/loss/tie table vs shipped, and rerank
+                                    p50/p95 plus sidecar cold start. --split
+                                    dev|heldout restricts scoring; --sweep
+                                    prints the ce floor operating curve on the
+                                    dev split (--sweep-from/-to/-step,
+                                    --sweep-form). Output: Markdown (--output,
+                                    else stdout) and JSON (--json), AGGREGATES
+                                    BY CONSTRUCTION: the report types hold no
+                                    per-row data (no row id, query, memory id
+                                    or title; strata are class=/lang= only).
+                                    As a sanity net the writer runs a
+                                    verbatim-run check over prompts, context
+                                    turns, memory titles/bodies and memory ids
+                                    and refuses (writing nothing) on a hit; it
+                                    is not a semantic scrubber. The report records the daemon
+                                    build sha, fixture hash, clock, pool cap and
+                                    reranker model. Not implemented (the route
+                                    returns no raw per-arm scores): the
+                                    vector-cosine floor and BM25-and-vector
+                                    agreement arms.
 kb bench run --federated            also score a federated cell per mode (report kb
                                     label `*`): `scope=all`, no `kb=`. `relevant`
                                     entries may be `kb:id` (exact (kb,id) match;
@@ -924,7 +1005,32 @@ kb proposals reject <id> [--kb NAME]
                                     discard the candidate; writes nothing.
 kb recall <query> [--scope auto|all|global|project] [--project NAME]
    [--cwd PATH] [--limit N] [--for-kb NAME] [--no-floor] [--explain]
+   [--transcript PATH] [--turns N] [--dedup-session] [--served-after UNIX]
    [--daemon URL] [--json]
+                                    SG-Q3: --dedup-session drops memories
+                                    already served to this session (the
+                                    session id from KB_RECALL_SESSION or the
+                                    current-session marker), --served-after
+                                    only counts serves at/after that unix
+                                    time (a compact starts over). The
+                                    daemon excludes after scoring; survivors
+                                    keep their score decomposition.
+                                    SG-Q2: --transcript composes the query
+                                    CLIENT-side from the prompt plus the last
+                                    --turns (default 4) turns of a live Claude
+                                    Code transcript (prompt first, prior turns
+                                    newest first, 1200-char cap) and sends it
+                                    as the ordinary query; no server change,
+                                    absent = byte-identical. Loopback daemons
+                                    only: the daemon URL must be http(s) and
+                                    its PARSED host 127.0.0.0/8, ::1 or
+                                    localhost, with no userinfo and no
+                                    backslash; otherwise ignored with one
+                                    stderr line. On a loopback URL the request
+                                    ignores HTTP_PROXY/ALL_PROXY and follows no
+                                    redirect, so the composed query can only
+                                    reach that address (same for `kb turn` and
+                                    `kb bench recall`).
                                     v0.9 M5: recall memories relevant to a
                                     query, ranked across in-scope memory
                                     corpora by recency × salience × decay.
@@ -1011,7 +1117,13 @@ kb changes [--since WHEN] [--project ID|LABEL] [--session SID]
                                     marked read. GET /api/changes.
 kb turn <prompt> [--cwd PATH] [--session SID] [--deadline-ms N]
    [--lanes recall,context,slate] [--slate SLUG] [--slate-since SEQ]
+   [--transcript PATH] [--turns N] [--dedup-session] [--served-after UNIX]
    [--daemon URL] [--json]
+                                    SG-Q3: --dedup-session (needs --session)
+                                    and --served-after, as on `kb recall`.
+                                    SG-Q2: --transcript/--turns fold recent
+                                    transcript turns into the prompt exactly
+                                    as `kb recall` does (loopback only).
                                     v0.44 F6: the per-prompt hook's ONE call
                                     over `GET /api/turn` (recall + turn-1
                                     scent, composed by the daemon under a

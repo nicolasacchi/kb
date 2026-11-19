@@ -251,7 +251,9 @@ why. These are rulings, not backlog.
   hooks. If triggered: a read-only stdio facade in the CLI over the existing
   API, never in-daemon, writes still CLI-only.
 - **No memory-benchmark arms race.** kb competes on inspectability and
-  provenance, not leaderboard scores.
+  provenance, not leaderboard scores. The recall bench (`kb bench recall`) is
+  internal policy validation over a private, labelled fixture, not a
+  leaderboard, and publishes aggregates only.
 - **The two transcript tailers stay separate.** kb's digest pipeline and
   kb-code's loopback-only raw-text lane read the same files deliberately —
   different projections for different masters; a shared cursor would buy disk

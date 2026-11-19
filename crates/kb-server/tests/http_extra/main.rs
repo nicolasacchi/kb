@@ -15,6 +15,7 @@ mod events_filters;
 mod exclusions;
 mod git_binding;
 mod links_suggest;
+mod recall_dedup;
 mod session_card;
 mod since_visit;
 mod slates;
