@@ -3959,6 +3959,7 @@ mod tests {
         Ok(DaemonStamp {
             version: Some("0.43-193-g9e1ac65".into()),
             build_sha: Some(sha.into()),
+            ..Default::default()
         })
     }
 
