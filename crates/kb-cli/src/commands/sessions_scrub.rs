@@ -247,6 +247,10 @@ pub struct DirAudit {
     pub total_captures: usize,
     /// Captures the audit cap left out (oldest by mtime). 0 = exact.
     pub skipped: usize,
+    /// Captures over the per-file byte cap, not read (FXDOCTOR).
+    pub oversize: usize,
+    /// Captures the wall-clock budget ran out before reaching (FXDOCTOR).
+    pub out_of_time: usize,
     pub unscrubbed_captures: usize,
     pub unreadable: usize,
     /// harness → (captures, pending hits per lane).
@@ -283,17 +287,61 @@ fn parse_audit_limit(raw: Option<&str>) -> Option<usize> {
     }
 }
 
+/// Default per-file byte cap for the doctor audit (FXDOCTOR): the scrub
+/// regexes run at well under 1 MB/s, so a multi-MB capture alone stalls the
+/// diagnostic for seconds. Larger files are counted, not read.
+pub const DEFAULT_AUDIT_MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
+/// Default wall-clock budget for the doctor audit (FXDOCTOR).
+pub const DEFAULT_AUDIT_BUDGET_SECS: u64 = 5;
+
+/// Work bound for one audit: per-file bytes and total wall time (`None` =
+/// unbounded for that axis).
+#[derive(Debug, Clone, Copy)]
+pub struct AuditBudget {
+    pub max_file_bytes: Option<u64>,
+    pub time: Option<std::time::Duration>,
+}
+
+impl AuditBudget {
+    #[cfg(test)]
+    pub const UNBOUNDED: AuditBudget = AuditBudget {
+        max_file_bytes: None,
+        time: None,
+    };
+
+    /// `KB_DOCTOR_SCRUB_BUDGET_SECS` (`0` = no time bound) and
+    /// `KB_DOCTOR_SCRUB_MAX_FILE_MB` (`0` = no size bound).
+    pub fn from_env() -> Self {
+        let get = |k: &str| {
+            std::env::var(k)
+                .ok()
+                .and_then(|v| v.trim().parse::<u64>().ok())
+        };
+        let secs = get("KB_DOCTOR_SCRUB_BUDGET_SECS").unwrap_or(DEFAULT_AUDIT_BUDGET_SECS);
+        let max = get("KB_DOCTOR_SCRUB_MAX_FILE_MB")
+            .map(|mb| mb.saturating_mul(1024 * 1024))
+            .unwrap_or(DEFAULT_AUDIT_MAX_FILE_BYTES);
+        AuditBudget {
+            max_file_bytes: (max > 0).then_some(max),
+            time: (secs > 0).then(|| std::time::Duration::from_secs(secs)),
+        }
+    }
+}
+
 /// Full audit (every capture) — tests only; production audits go through
 /// [`scan_dir_limited`] so the cap is always an explicit choice.
 #[cfg(test)]
 pub fn scan_dir(dir: &Path) -> DirAudit {
-    scan_dir_limited(dir, None)
+    scan_dir_limited(dir, None, AuditBudget::UNBOUNDED)
 }
 
 /// Audit at most `limit` captures, newest first by mtime (`None` = all).
 /// `total_captures` always carries the true count on disk and `skipped` how
 /// many the cap left out, so a sampled report can never read as exact.
-pub fn scan_dir_limited(dir: &Path, limit: Option<usize>) -> DirAudit {
+/// `budget` additionally bounds per-file size and total wall time; whatever it
+/// leaves out is counted in `oversize` / `out_of_time`, never dropped silently.
+pub fn scan_dir_limited(dir: &Path, limit: Option<usize>, budget: AuditBudget) -> DirAudit {
+    let started = std::time::Instant::now();
     let mut audit = DirAudit::default();
     let mut files = capture_files(dir);
     audit.total_captures = files.len();
@@ -308,7 +356,21 @@ pub fn scan_dir_limited(dir: &Path, limit: Option<usize>) -> DirAudit {
         audit.skipped = files.len() - n;
         files.truncate(n);
     }
+    let mut over_budget = false;
     for path in files {
+        if !over_budget {
+            over_budget = budget.time.is_some_and(|t| started.elapsed() >= t);
+        }
+        if over_budget {
+            audit.out_of_time += 1;
+            continue;
+        }
+        if let Some(max) = budget.max_file_bytes {
+            if std::fs::metadata(&path).is_ok_and(|m| m.len() > max) {
+                audit.oversize += 1;
+                continue;
+            }
+        }
         let Ok(html) = std::fs::read_to_string(&path) else {
             audit.unreadable += 1;
             continue;
@@ -632,6 +694,42 @@ mod tests {
         );
     }
 
+    /// FXDOCTOR — the byte cap and the time budget bound the work and are
+    /// counted, never silent.
+    #[test]
+    fn scan_dir_budget_skips_oversize_and_stops_on_deadline() {
+        let tmp = tempfile::tempdir().unwrap();
+        let big = "x".repeat(300_000);
+        for i in 0..3 {
+            std::fs::write(
+                tmp.path()
+                    .join(format!("session-2026010{i}T000000Z-a.html")),
+                envelope(&big, &[], &[]),
+            )
+            .unwrap();
+        }
+        let a = scan_dir_limited(
+            tmp.path(),
+            None,
+            AuditBudget {
+                max_file_bytes: Some(100_000),
+                time: None,
+            },
+        );
+        assert_eq!((a.captures, a.oversize, a.out_of_time), (0, 3, 0));
+        let t0 = std::time::Instant::now();
+        let a = scan_dir_limited(
+            tmp.path(),
+            None,
+            AuditBudget {
+                max_file_bytes: None,
+                time: Some(std::time::Duration::ZERO),
+            },
+        );
+        assert!(t0.elapsed() < std::time::Duration::from_secs(1));
+        assert_eq!((a.captures, a.out_of_time), (0, 3));
+    }
+
     /// v0.44 X4 — the capped audit visits the NEWEST captures by mtime and
     /// reports the true total and how many it left out.
     #[test]
@@ -653,7 +751,7 @@ mod tests {
                 .set_modified(t(secs))
                 .unwrap();
         }
-        let capped = scan_dir_limited(tmp.path(), Some(2));
+        let capped = scan_dir_limited(tmp.path(), Some(2), AuditBudget::UNBOUNDED);
         assert_eq!(
             (capped.captures, capped.total_captures, capped.skipped),
             (2, 3, 1)
@@ -662,7 +760,7 @@ mod tests {
             capped.unscrubbed_captures, 0,
             "the dirty OLD file is out of the sample"
         );
-        let full = scan_dir_limited(tmp.path(), None);
+        let full = scan_dir_limited(tmp.path(), None, AuditBudget::UNBOUNDED);
         assert_eq!(
             (full.captures, full.skipped, full.unscrubbed_captures),
             (3, 0, 1)
