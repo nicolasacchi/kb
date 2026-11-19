@@ -271,6 +271,42 @@ test("beat is not called for kind sub", async () => {
   expect(mainInject.filter((l) => l.includes("kb-recall.sh")).length).toBeGreaterThanOrEqual(1);
 });
 
+test("turn_end is sent only on session_stop, never on an earlier per-turn event", async () => {
+  // docs/live-sessions.md leans on this: omp emits session_stop only once its
+  // async jobs have delivered, so a turn_end beat on ANY earlier event would
+  // reintroduce the false "waiting on you" row for background work.
+  await Bun.sleep(600); // let earlier fire-and-forget beats land BEFORE truncating
+  writeFileSync(CALLS, "");
+  const h = makePi();
+  const names = [...h.keys()];
+  // Guard against the loop below silently covering nothing.
+  expect(names).toContain("session_stop");
+  expect(names).toContain("before_agent_start");
+  expect(names).toContain("tool_call");
+  const evt: any = {
+    type: "x",
+    prompt: "x",
+    toolName: "edit",
+    reason: "needs approval",
+    input: { path: "a.rs" },
+    session_file: "",
+  };
+  for (const name of names) {
+    if (name === "session_stop") continue;
+    try {
+      await h.get(name)(evt, mainCtx);
+    } catch {}
+  }
+  const early = await calls();
+  // Positive control: the loop did beat (start/prompt/blocked/...), so a zero
+  // turn_end count is not a vacuous result of nothing running.
+  expect(early.filter((l) => l.includes("kb-beat.sh omp")).length).toBeGreaterThanOrEqual(3);
+  expect(early.filter((l) => l.includes("turn_end")).length).toBe(0);
+  await h.get("session_stop")({ session_file: "" }, mainCtx);
+  const all = await calls();
+  expect(all.filter((l) => l.includes("kb-beat.sh omp turn_end")).length).toBe(1);
+});
+
 test("startPush does not spawn a slate watch for kind sub", async () => {
   writeFileSync(PUSH_CALLS, "");
   const pushMainCtx: any = {
