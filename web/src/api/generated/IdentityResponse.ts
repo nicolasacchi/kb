@@ -70,4 +70,14 @@ schema_epoch: number,
  * hide/disable-with-caption BEFORE a refused attach (same pattern as kb-code's
  * `review_mutations_admitted`). NOT a grant: Origin + intent header + ticket still apply.
  */
-terminal_admitted: boolean, };
+terminal_admitted: boolean, 
+/**
+ * Random per-state-dir instance marker (32 lowercase hex, no paths,
+ * non-secret): the same value the daemon wrote to `<state>/state-instance`
+ * at boot. A CLI compares it with the marker in the state dir IT can read
+ * to learn whether it is looking at the daemon's own state
+ * (`kb doctor --hooks`, `backup-age`). `null` when the daemon could not
+ * persist one (unwritable state dir): "not verified", never a mismatch.
+ * A daemon from before this field omits it entirely.
+ */
+state_instance: string | null, };

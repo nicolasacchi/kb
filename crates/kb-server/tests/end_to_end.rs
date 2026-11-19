@@ -260,6 +260,56 @@ async fn identity_route_returns_daemon_metadata() {
     );
 }
 
+/// FUDOCTOR - `GET /api/identity` serves the per-state-dir instance marker
+/// the daemon wrote at boot, and it is the SAME value as the file in the
+/// state dir (what `kb doctor --hooks` compares).
+#[tokio::test]
+async fn identity_serves_the_state_instance_marker_written_at_boot() {
+    let (_tmp, cfg, paths) = fixture_corpus();
+    assert!(
+        paths.read_state_instance().is_none(),
+        "a fresh state dir has no marker before boot"
+    );
+    let on_disk = paths.clone();
+    let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)
+        .await
+        .expect("serve");
+    let body: serde_json::Value = reqwest::Client::new()
+        .get(url(addr, "/api/identity"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let served = body["state_instance"].as_str().expect("state_instance");
+    assert_eq!(served.len(), 32, "{served}");
+    assert!(served.bytes().all(|b| b.is_ascii_hexdigit()), "{served}");
+    assert_eq!(on_disk.read_state_instance().as_deref(), Some(served));
+}
+
+/// A marker already in the state dir is served verbatim (never re-minted on
+/// a restart), so one state dir keeps one identity across boots.
+#[tokio::test]
+async fn identity_keeps_a_preexisting_state_instance_marker() {
+    let (_tmp, cfg, paths) = fixture_corpus();
+    std::fs::create_dir_all(&paths.state).unwrap();
+    let seeded = "00112233445566778899aabbccddeeff";
+    std::fs::write(paths.state_instance_file(), seeded).unwrap();
+    let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)
+        .await
+        .expect("serve");
+    let body: serde_json::Value = reqwest::Client::new()
+        .get(url(addr, "/api/identity"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(body["state_instance"].as_str(), Some(seeded), "{body}");
+}
+
 /// `/healthz` is PURE liveness and must stay that way: the kb-sibling/1
 /// Hello lives on `/api/identity` alone, so an orchestrator's restart loop
 /// can never be driven by a schema/protocol mismatch.

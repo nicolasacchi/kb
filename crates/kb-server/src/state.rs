@@ -991,6 +991,11 @@ pub struct KbHandles {
     /// compare a requested window's start against this and print a caveat
     /// when it predates it — see `paths::KbPaths::tombstone_era_file`.
     pub tombstone_era_started_unix: i64,
+    /// Per-state-dir instance marker (`KbPaths::ensure_state_instance`),
+    /// served on `GET /api/identity` so `kb doctor --hooks` can tell whether
+    /// the state dir it reads is the one this daemon uses. `None` when the
+    /// state dir is unwritable (served as null = "not verified").
+    pub state_instance: Option<String>,
     /// Daemon-wide LRU of query embeddings, keyed on (model, query).
     /// `/api/search` and `/api/memory/recall` consult it before paying
     /// the ~50–100 ms IPC embed round-trip. See
@@ -1335,6 +1340,7 @@ impl KbHandles {
         // `KB_HOME`. Computed here (before `paths` moves into the struct
         // literal below) same as the embed-cache pre-warm just after.
         let tombstone_era_started_unix = ensure_tombstone_era(&paths);
+        let state_instance = paths.ensure_state_instance();
         // CE — default config_path to the home-local default; `with_config`
         // overrides it with the path the daemon actually resolved (which may
         // be an explicit `--config <file>`).
@@ -1379,6 +1385,7 @@ impl KbHandles {
             shutdown,
             memory_policy: Arc::new(tokio::sync::RwLock::new(policy)),
             tombstone_era_started_unix,
+            state_instance,
             embed_cache: Arc::new(embed_cache),
             touches_cache: Arc::new(crate::touches_cache::TouchesCache::default()),
             replay_cache: Arc::new(crate::replay_cache::ReplayCache::default()),

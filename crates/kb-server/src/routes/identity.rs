@@ -75,6 +75,14 @@ pub struct IdentityResponse {
     /// hide/disable-with-caption BEFORE a refused attach (same pattern as kb-code's
     /// `review_mutations_admitted`). NOT a grant: Origin + intent header + ticket still apply.
     pub terminal_admitted: bool,
+    /// Random per-state-dir instance marker (32 lowercase hex, no paths,
+    /// non-secret): the same value the daemon wrote to `<state>/state-instance`
+    /// at boot. A CLI compares it with the marker in the state dir IT can read
+    /// to learn whether it is looking at the daemon's own state
+    /// (`kb doctor --hooks`, `backup-age`). `null` when the daemon could not
+    /// persist one (unwritable state dir): "not verified", never a mismatch.
+    /// A daemon from before this field omits it entirely.
+    pub state_instance: Option<String>,
 }
 
 /// T13 — whether THIS request's caller may use the terminal surface at all.
@@ -129,6 +137,7 @@ pub async fn get(
         sibling_major: kb_core::sibling::SIBLING_MAJOR,
         schema_epoch: kb_core::storage::sqlite::schema_epoch(),
         terminal_admitted,
+        state_instance: state.state_instance.clone(),
     });
     // `no-store`: the SPA cross-checks this against window.location to
     // detect a mis-wired proxy — a cached response from a different

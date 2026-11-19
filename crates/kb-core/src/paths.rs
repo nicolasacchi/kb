@@ -246,6 +246,57 @@ impl KbPaths {
         self.state.join("tombstone-era.json")
     }
 
+    /// `<state>/state-instance` — a random per-state-dir instance marker
+    /// (32 lowercase hex chars, no paths, not derivable from anything).
+    /// The daemon writes it once at boot ([`KbPaths::ensure_state_instance`])
+    /// and serves it on `GET /api/identity` as `state_instance`, so a CLI
+    /// can tell POSITIVELY whether the state dir it can read is the one the
+    /// daemon it reached is using (`kb doctor --hooks`'s `backup-age`). It is
+    /// `Regenerable`: never packed into a backup, so a restored copy of a
+    /// state dir mints its own marker instead of impersonating the original.
+    pub fn state_instance_file(&self) -> PathBuf {
+        self.state.join("state-instance")
+    }
+
+    /// The marker in `<state>/state-instance`, if present and well-formed
+    /// (exactly 32 lowercase hex digits after trimming whitespace). Never
+    /// creates anything: the CLI side only ever reads.
+    pub fn read_state_instance(&self) -> Option<String> {
+        let raw = std::fs::read_to_string(self.state_instance_file()).ok()?;
+        let id = raw.trim();
+        (id.len() == 32 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')))
+            .then(|| id.to_string())
+    }
+
+    /// Read-or-create the marker (daemon boot, idempotent). A create race
+    /// between two processes is settled by `create_new`: the loser re-reads
+    /// the winner's value. `None` when the state dir is unwritable and no
+    /// valid marker exists: the daemon then serves no marker, which a CLI
+    /// reads as "not verified", never as a mismatch.
+    pub fn ensure_state_instance(&self) -> Option<String> {
+        use std::io::Write;
+        if let Some(id) = self.read_state_instance() {
+            return Some(id);
+        }
+        let mut buf = [0u8; 16];
+        getrandom::fill(&mut buf).ok()?;
+        let id = hex::encode(buf);
+        let path = self.state_instance_file();
+        let _ = std::fs::create_dir_all(&self.state);
+        // A corrupt leftover is replaced (it can never match a daemon's
+        // served value anyway); a valid one was returned above.
+        let _ = std::fs::remove_file(&path);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut f) => f.write_all(id.as_bytes()).ok().map(|()| id),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => self.read_state_instance(),
+            Err(_) => None,
+        }
+    }
+
     /// `<state>/slates/<slug>/` — SL1/D2: the slate store is DAEMON-WIDE
     /// and keyed on the project SLUG, not on a corpus. A project maps to
     /// several kbs and not every project has one, so a per-kb home would
@@ -364,6 +415,12 @@ impl KbPaths {
             member(
                 "query-embed-cache.json",
                 self.embed_cache_file(),
+                Daemon,
+                Regenerable,
+            ),
+            member(
+                "state-instance",
+                self.state_instance_file(),
                 Daemon,
                 Regenerable,
             ),
@@ -547,6 +604,40 @@ impl StateMember {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The instance marker is minted once, is 32 lowercase hex, survives
+    /// re-reads, differs between two state dirs and is never trusted when
+    /// malformed (a corrupt file is replaced, not echoed).
+    #[test]
+    fn state_instance_is_minted_once_well_formed_and_per_state_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = KbPaths::rooted_at(tmp.path(), "a");
+        let b = KbPaths::rooted_at(tmp.path(), "b");
+        assert_eq!(a.read_state_instance(), None, "reading never creates");
+        assert!(!a.state_instance_file().exists());
+
+        let first = a.ensure_state_instance().expect("minted");
+        assert_eq!(first.len(), 32);
+        assert!(first
+            .bytes()
+            .all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f')));
+        assert_eq!(a.ensure_state_instance().as_deref(), Some(first.as_str()));
+        assert_eq!(a.read_state_instance().as_deref(), Some(first.as_str()));
+        assert_ne!(b.ensure_state_instance().unwrap(), first);
+
+        for bad in [
+            "",
+            "short",
+            "ZZZZ456789abcdef0123456789abcdef",
+            "0123456789ABCDEF0123456789ABCDEF",
+        ] {
+            std::fs::write(a.state_instance_file(), bad).unwrap();
+            assert_eq!(a.read_state_instance(), None, "{bad:?} is not a marker");
+            let healed = a.ensure_state_instance().expect("replaced");
+            assert_ne!(healed, bad);
+            assert_eq!(a.read_state_instance().as_deref(), Some(healed.as_str()));
+        }
+    }
 
     #[test]
     fn rooted_at_composes_paths_correctly() {
