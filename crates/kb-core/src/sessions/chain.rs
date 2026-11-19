@@ -138,6 +138,11 @@ pub(crate) struct ChainVerdicts {
 ///   not recovered and "not on the chain" would not mean "rewound" (current
 ///   Claude Code compaction boundaries can do this).
 ///
+/// - the walk ended silently before the first conversation record in file
+///   order (an unresolved `logicalParentUuid`, or a second `parentUuid`-null
+///   root): the earlier history is live but unrecovered. This also declines
+///   to mark a prompt edited at the very first turn of a file.
+///
 /// A uuid that appears on the chain is on it wherever else it is repeated
 /// (re-delivered lines).
 pub(crate) fn chain_verdicts(jsonl: &str) -> Option<ChainVerdicts> {
@@ -169,6 +174,19 @@ pub(crate) fn chain_verdicts(jsonl: &str) -> Option<ChainVerdicts> {
         .iter()
         .filter_map(|&i| str_of(&records[i], "uuid"))
         .collect();
+    // The walk can also end SILENTLY: a record with `parentUuid` null and no
+    // resolvable `logicalParentUuid` (a boundary whose target is not in the
+    // file, or a second root) stops it without a note, and every earlier
+    // record would then read as "off the chain". The walk is only complete
+    // when the first live conversation record in file order is on it.
+    let first_conversation = records.iter().find(|r| {
+        is_conversation_type(r) && !flag(r, "isSidechain") && str_of(r, "uuid").is_some()
+    });
+    if let Some(first) = first_conversation {
+        if !str_of(first, "uuid").is_some_and(|u| on_chain.contains(u)) {
+            return None;
+        }
+    }
     let mut out = ChainVerdicts::default();
     for (i, r) in records.iter().enumerate() {
         if !is_chain_type(r) || flag(r, "isSidechain") {
@@ -285,6 +303,34 @@ mod tests {
         ]);
         let off = off_lines(&d).expect("compaction crossing is trusted");
         assert!(off.is_empty(), "{off:?}");
+    }
+
+    #[test]
+    fn an_unresolved_logical_parent_degrades_to_no_mark() {
+        // The boundary's logicalParentUuid names a record that is not in the
+        // file, so the walk stops at the boundary silently; u1..a4 are live
+        // history, never "rewound".
+        let d = doc(&[
+            rec("user", "u1", None),
+            rec("assistant", "a2", Some("u1")),
+            rec("user", "u3", Some("a2")),
+            rec("assistant", "a4", Some("u3")),
+            r#"{"type":"system","subtype":"compact_boundary","uuid":"cb","parentUuid":null,"logicalParentUuid":"not-in-file"}"#.to_string(),
+            rec("user", "u5", Some("cb")),
+            rec("assistant", "a6", Some("u5")),
+        ]);
+        assert!(chain_verdicts(&d).is_none());
+    }
+
+    #[test]
+    fn a_second_null_parent_root_degrades_to_no_mark() {
+        let d = doc(&[
+            rec("user", "u1", None),
+            rec("assistant", "a2", Some("u1")),
+            rec("user", "u3", None),
+            rec("assistant", "a4", Some("u3")),
+        ]);
+        assert!(chain_verdicts(&d).is_none());
     }
 
     #[test]
