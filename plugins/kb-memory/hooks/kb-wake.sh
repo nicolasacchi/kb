@@ -26,6 +26,29 @@ if [ -n "$sid" ]; then
     || true
 fi
 
+# SG-Q3 — compact/clear reset for per-session recall dedup. Claude Code's
+# SessionStart payload names the trigger in `source` (startup | resume | clear
+# | compact | fork; https://code.claude.com/docs/en/hooks). After a compact
+# (or clear) the earlier injections are gone from the model's context, so
+# kb-recall.sh must stop excluding what was served before this moment: it
+# reads this epoch and passes it as `--served-after`. Best-effort, silent.
+# The sid becomes a path component: only [A-Za-z0-9._-]+ (not "." / "..")
+# is accepted; anything else skips the epoch (kb-recall.sh then sends no
+# --served-after).
+case "$sid" in '' | '.' | '..' | *[!A-Za-z0-9._-]*) epoch_sid_ok=0 ;; *) epoch_sid_ok=1 ;; esac
+if [ "$epoch_sid_ok" = "1" ]; then
+  wake_source="$(printf '%s' "$input" | jq -r '.source // empty' 2>/dev/null)"
+  case "$wake_source" in
+    compact | clear)
+      epoch_dir="${XDG_CACHE_HOME:-$HOME/.cache}/kb"
+      mkdir -p "$epoch_dir" 2>/dev/null \
+        && printf '%s\n' "$(date +%s)" > "$epoch_dir/recall-epoch-$sid.tmp" 2>/dev/null \
+        && mv "$epoch_dir/recall-epoch-$sid.tmp" "$epoch_dir/recall-epoch-$sid" 2>/dev/null \
+        || true
+      ;;
+  esac
+fi
+
 # The caller's working directory, with the harness's own `$PWD` as the
 # fallback. Read ONCE up here because two consumers need it: the W0.3
 # repo-keyed marker just below, and the project-aware recall call further

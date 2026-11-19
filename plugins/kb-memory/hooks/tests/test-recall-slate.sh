@@ -20,6 +20,9 @@
 #
 # Runnable standalone:  bash plugins/kb-memory/hooks/tests/test-recall-slate.sh
 set -u
+# SG-Q3: these cases test rendering/lanes, not the trivial-prompt skip (their
+# prompts are deliberately short); test-recall-dedup.sh covers the skip.
+export KB_RECALL_SKIP_TRIVIAL=0
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HOOKS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"

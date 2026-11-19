@@ -43,6 +43,18 @@ async fn boot_named(
     files: &[(&str, String)],
     slo: Option<SloSection>,
 ) -> (tempfile::TempDir, std::net::SocketAddr) {
+    boot_with_memory(kb, memory_scope, files, slo, Default::default()).await
+}
+
+/// [`boot_named`] with an explicit `[memory]` section (SG-Q3's dedup tests
+/// pin `scoring_v2_relevance` both ways).
+pub(crate) async fn boot_with_memory(
+    kb: &str,
+    memory_scope: Option<&str>,
+    files: &[(&str, String)],
+    slo: Option<SloSection>,
+    memory: kb_core::config::MemorySection,
+) -> (tempfile::TempDir, std::net::SocketAddr) {
     let tmp = tempfile::tempdir().unwrap();
     let source = tmp.path().join("corpus");
     std::fs::create_dir_all(&source).unwrap();
@@ -103,7 +115,7 @@ async fn boot_named(
         retention: Default::default(),
         backup: Default::default(),
         identity: Default::default(),
-        memory: Default::default(),
+        memory,
         kb: kb_map,
         projects: Default::default(),
         sessions: Default::default(),
@@ -117,11 +129,11 @@ async fn boot_named(
     (tmp, addr)
 }
 
-fn url(addr: std::net::SocketAddr, path: &str) -> String {
+pub(crate) fn url(addr: std::net::SocketAddr, path: &str) -> String {
     format!("http://{addr}{path}")
 }
 
-async fn get_json(
+pub(crate) async fn get_json(
     client: &reqwest::Client,
     addr: std::net::SocketAddr,
     path: &str,

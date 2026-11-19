@@ -479,6 +479,7 @@ pub async fn recall(
 ) -> Result<()> {
     recall_with_timeout(
         query, scope, project, cwd, limit, for_kb, no_floor, explain, daemon, bearer, json, None,
+        false, None,
     )
     .await
 }
@@ -501,6 +502,8 @@ pub async fn recall_with_timeout(
     bearer: Option<&str>,
     json: bool,
     timeout_secs: Option<u64>,
+    dedup_session: bool,
+    served_after: Option<i64>,
 ) -> Result<()> {
     let res = recall_inner(
         query,
@@ -513,6 +516,8 @@ pub async fn recall_with_timeout(
         daemon,
         bearer,
         timeout_secs,
+        dedup_session,
+        served_after,
     )
     .await;
     match res {
@@ -791,43 +796,29 @@ async fn fetch_kbs_with_client(
     Ok(kbs)
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn recall_inner(
-    query: &str,
+/// The wire `(scope, project, visible_to)` triple `kb recall` sends, with the
+/// ux-01 `GET /api/kbs` confirmation of a derived project. ONE function for
+/// `recall_inner` and `kb bench recall`, so the bench's "shipped" request is
+/// built by the very code the hook's `kb recall` runs. `slug` is the repo
+/// basename (already derived; `None` = not in a repo).
+pub(crate) async fn confirmed_recall_wire(
+    url: &str,
+    bearer: Option<&str>,
     scope: &str,
     project: Option<&str>,
-    cwd: Option<&str>,
-    limit: usize,
-    for_kb: Option<&str>,
-    no_floor: bool,
-    daemon: Option<&str>,
-    bearer: Option<&str>,
-    timeout_secs: Option<u64>,
-) -> Result<(String, serde_json::Value)> {
-    let url = require_daemon(daemon, bearer).await?;
-    // Shell git ONLY when the caller actually asked for `auto` — every
-    // other scope value must stay byte-identical to before B1, including
-    // never paying for a git invocation it doesn't need.
-    let slug = if scope == "auto" {
-        let s = match cwd {
-            Some(c) => current_repo_slug_in(&std::path::PathBuf::from(c)),
-            None => current_repo_slug(),
-        };
-        (!s.is_empty()).then_some(s)
-    } else {
-        None
-    };
+    slug: Option<&str>,
+) -> (String, Option<String>, Option<String>) {
     let (wire_scope, mut wire_project, mut wire_visible_to) =
-        resolve_recall_wire(scope, project.map(str::to_string), slug.clone());
+        resolve_recall_wire(scope, project.map(str::to_string), slug.map(str::to_string));
     // ux-01 — a derived project filter is sent only after GET /api/kbs
     // confirms the name (or a project_slugs alias) exists. A miss drops
     // both project and visible_to: fail open to unfiltered recall, one
     // stderr line, never a filter that matches nothing. An explicit
     // --project is the caller's name and is not checked here.
     if scope == "auto" && project.is_none() {
-        if let Some(s) = slug.as_deref() {
+        if let Some(s) = slug {
             if wire_project.is_some() {
-                match fetch_kbs(&url, bearer).await {
+                match fetch_kbs(url, bearer).await {
                     Ok(kbs) => {
                         let local = local_project_slug_aliases();
                         let alias = aliased_corpus_name(s, &kbs, &local);
@@ -853,6 +844,39 @@ async fn recall_inner(
             }
         }
     }
+    (wire_scope, wire_project, wire_visible_to)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn recall_inner(
+    query: &str,
+    scope: &str,
+    project: Option<&str>,
+    cwd: Option<&str>,
+    limit: usize,
+    for_kb: Option<&str>,
+    no_floor: bool,
+    daemon: Option<&str>,
+    bearer: Option<&str>,
+    timeout_secs: Option<u64>,
+    dedup_session: bool,
+    served_after: Option<i64>,
+) -> Result<(String, serde_json::Value)> {
+    let url = require_daemon(daemon, bearer).await?;
+    // Shell git ONLY when the caller actually asked for `auto` — every
+    // other scope value must stay byte-identical to before B1, including
+    // never paying for a git invocation it doesn't need.
+    let slug = if scope == "auto" {
+        let s = match cwd {
+            Some(c) => current_repo_slug_in(&std::path::PathBuf::from(c)),
+            None => current_repo_slug(),
+        };
+        (!s.is_empty()).then_some(s)
+    } else {
+        None
+    };
+    let (wire_scope, wire_project, wire_visible_to) =
+        confirmed_recall_wire(&url, bearer, scope, project, slug.as_deref()).await;
     let mut q = format!(
         "{url}/api/memory/recall?q={}&scope={}&limit={limit}",
         http::encode_path_segment(query),
@@ -881,6 +905,9 @@ async fn recall_inner(
     // no `session=` param. An old daemon ignores the param; a missing
     // session must not become `session=`.
     append_recall_session(&mut q, recall_session_id().as_deref());
+    // SG-Q3: opt-in exclusion of hits already served to this session. Absent
+    // flags leave the URL byte-identical.
+    append_recall_dedup(&mut q, dedup_session, served_after);
     // Recall embeds the query (a large model like bge-large is ~1024-dim and
     // costly on a busy CPU) then fans out FTS + vector queries across every
     // in-scope memory corpus, so a cold/loaded recall can run ~10-20s. The
@@ -888,7 +915,7 @@ async fn recall_inner(
     // while still bounding a genuinely-stuck daemon. `--timeout` (when the
     // caller passes one) replaces that cap; a hit fails soft.
     let secs = timeout_secs.unwrap_or(30);
-    let client = http::client_with_timeout_and_bearer(secs, bearer)?;
+    let client = http::client_for_daemon(secs, bearer, &url)?;
     let resp = match client.get(&q).send().await {
         Ok(r) => r,
         Err(e) if e.is_timeout() => {
@@ -917,6 +944,18 @@ fn append_recall_session(q: &mut String, session: Option<&str>) {
     };
     q.push_str("&session=");
     q.push_str(&http::encode_path_segment(sid));
+}
+
+/// SG-Q3: append `&dedup_session=1` / `&served_after=<unix>` (opt-in).
+/// `served_after` only rides along with `dedup_session`.
+fn append_recall_dedup(q: &mut String, dedup_session: bool, served_after: Option<i64>) {
+    if !dedup_session {
+        return;
+    }
+    q.push_str("&dedup_session=1");
+    if let Some(t) = served_after {
+        q.push_str(&format!("&served_after={t}"));
+    }
 }
 
 /// Session id for `session=` on `GET /api/memory/recall`.
@@ -2668,6 +2707,29 @@ mod tests {
         append_recall_session(&mut q, Some(""));
         append_recall_session(&mut q, Some("  "));
         assert_eq!(q, before);
+    }
+
+    #[test]
+    fn append_recall_dedup_is_opt_in_and_byte_identical_when_off() {
+        let base = "u?q=x";
+        // off: byte-identical, whatever served_after says.
+        for after in [None, Some(5)] {
+            let mut q = base.to_string();
+            append_recall_dedup(&mut q, false, after);
+            assert_eq!(q, base, "off must not touch the URL");
+        }
+        // on, no served_after: exactly one pair, no served_after.
+        let mut q = base.to_string();
+        append_recall_dedup(&mut q, true, None);
+        assert_eq!(q, "u?q=x&dedup_session=1");
+        assert_eq!(q.matches("dedup_session=").count(), 1);
+        assert!(!q.contains("served_after"));
+        // on + served_after: one dedup pair, one served_after pair.
+        let mut q = base.to_string();
+        append_recall_dedup(&mut q, true, Some(1700000000));
+        assert_eq!(q, "u?q=x&dedup_session=1&served_after=1700000000");
+        assert_eq!(q.matches("dedup_session=").count(), 1);
+        assert_eq!(q.matches("served_after=").count(), 1);
     }
 
     #[test]

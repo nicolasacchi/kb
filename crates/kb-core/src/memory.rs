@@ -1763,6 +1763,30 @@ mod tests {
         }
     }
 
+    /// SG-R1 F6 — PINS current behaviour (not a desired contract): the
+    /// scorer collapses a cross-corpus id collision to ONE hit (the
+    /// higher-scoring copy), keyed on id alone. SG-Q3's exclusion keys on
+    /// `(kb, id)` and runs after scoring, so it cannot resurrect the other
+    /// corpus's copy; see `routes::memory` docs.
+    #[test]
+    fn scorer_collapses_cross_corpus_id_collision_to_one_hit() {
+        let hits = vec![
+            hit("kb-a", "aaaaaaaaaaaa", 0),
+            hit("kb-b", "aaaaaaaaaaaa", 1),
+        ];
+        let out = rerank_with_policy_scored(
+            hits,
+            &HashSet::new(),
+            0,
+            usize::MAX,
+            DecayPolicy::Loose,
+            false,
+            false,
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].kb, "kb-a");
+    }
+
     #[test]
     fn decay_policy_drop_threshold_matches_design() {
         assert_eq!(DecayPolicy::Strict.drop_threshold(), 0.20);

@@ -107,6 +107,8 @@ pub async fn turn(
     lanes: Option<&str>,
     slate: Option<&str>,
     slate_since: Option<u64>,
+    dedup_session: bool,
+    served_after: Option<i64>,
     daemon: Option<&str>,
     bearer: Option<&str>,
     json: bool,
@@ -122,7 +124,7 @@ pub async fn turn(
     };
     let (project, visible_to) = turn_scope(&slug, &local_project_slug_aliases());
     let secs = deadline.div_ceil(1000) + HTTP_MARGIN_SECS;
-    let client = http::client_with_timeout_and_bearer(secs, bearer)?;
+    let client = http::client_for_daemon(secs, bearer, &base)?;
     let deadline_str = deadline.to_string();
     let mut req = client
         .get(format!("{base}/api/turn"))
@@ -132,6 +134,13 @@ pub async fn turn(
     }
     if let Some(s) = session {
         req = req.query(&[("session", s)]);
+    }
+    // SG-Q3: opt-in; absent flags leave the request byte-identical.
+    if dedup_session {
+        req = req.query(&[("dedup_session", "1")]);
+        if let Some(t) = served_after {
+            req = req.query(&[("served_after", t.to_string().as_str())]);
+        }
     }
     // `--lanes ...slate` without `--slate` names this repo's slate (the same
     // cwd -> main-checkout-basename slug `kb slate` uses) - what lets the hook
