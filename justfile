@@ -85,6 +85,7 @@ ci-selfcheck:
     python3 scripts/check-posture-swallow.py --self-test
     python3 scripts/check-posture-swallow.py
     scripts/ci/code-changed-selftest.sh
+    scripts/ci/docs-only-selftest.sh
     scripts/ci/public-gate-selftest.sh
     scripts/ci/wire-gates-selftest.sh
     scripts/ci/no-cloud-stack-selftest.sh
