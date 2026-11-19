@@ -8,7 +8,10 @@
 //! `last-prompt.leafUuid` when it resolves, else the last main-thread record —
 //! and across a `compact_boundary` through its `logicalParentUuid`, so the
 //! pre-compaction turns are recovered too (a [`Summary`] then says how many
-//! turns it stands for). kb's omp captures carry no uuids at all; those are
+//! turns it stands for). Current auto-compactions name the preserved
+//! segment's tail, written AFTER the boundary, as that target; the walk then
+//! continues from the last chain record written before the boundary (see
+//! `chain::live_order`). kb's omp captures carry no uuids at all; those are
 //! read in file order.
 //!
 //! Writer: every rule here exists because `claude -r` (2.1.x) or the API
@@ -1022,6 +1025,57 @@ mod tests {
             .cloned()
             .collect();
         check(&without);
+    }
+
+    #[test]
+    fn raw_transcript_keeps_pre_compaction_turns_when_the_tail_follows_the_boundary() {
+        let sid = "11111111-2222-4333-8444-555555555555";
+        let msg = |role: &str, text: &str| json!({"role": role, "content": text});
+        let lines = vec![
+            json!({"type": "user", "uuid": "u1", "parentUuid": null, "sessionId": sid,
+                   "message": msg("user", "first prompt")}),
+            json!({"type": "assistant", "uuid": "a1", "parentUuid": "u1", "sessionId": sid,
+                   "message": {"id": "m1", "role": "assistant", "content": [{"type": "text", "text": "one"}]}}),
+            json!({"type": "user", "uuid": "u2", "parentUuid": "a1", "sessionId": sid,
+                   "message": msg("user", "second prompt")}),
+            json!({"type": "assistant", "uuid": "a2", "parentUuid": "u2", "sessionId": sid,
+                   "message": {"id": "m2", "role": "assistant", "content": [{"type": "text", "text": "two"}]}}),
+            json!({"type": "system", "subtype": "compact_boundary", "uuid": "b1",
+                   "parentUuid": null, "logicalParentUuid": "t1", "sessionId": sid,
+                   "compactMetadata": {"trigger": "auto",
+                       "preservedSegment": {"headUuid": "u2", "anchorUuid": "s1", "tailUuid": "t1"},
+                       "preservedMessages": {"uuids": ["u2", "a2", "t1"], "allUuids": ["u2", "a2", "t1"], "anchorUuid": "s1"}}}),
+            json!({"type": "attachment", "uuid": "att1", "parentUuid": "b1", "sessionId": sid}),
+            json!({"type": "user", "uuid": "s1", "parentUuid": "att1", "sessionId": sid,
+                   "isCompactSummary": true,
+                   "message": msg("user", "This session is being continued.\n\nSummary: did things")}),
+            json!({"type": "attachment", "uuid": "t1", "parentUuid": "s1", "sessionId": sid}),
+            json!({"type": "user", "uuid": "u3", "parentUuid": "t1", "sessionId": sid,
+                   "message": msg("user", "continue")}),
+            json!({"type": "assistant", "uuid": "a3", "parentUuid": "u3", "sessionId": sid,
+                   "message": {"id": "m3", "role": "assistant", "content": [{"type": "text", "text": "done"}]}}),
+        ];
+        let conv = read_claude_jsonl(&jsonl(&lines), SourceKind::Raw, Some("/x/s.jsonl")).unwrap();
+        assert!(
+            !conv.notes.iter().any(|n| n.contains("cycle")),
+            "{:?}",
+            conv.notes
+        );
+        let texts: Vec<String> = conv.turns.iter().map(text_of).collect();
+        assert_eq!(
+            texts,
+            vec![
+                "first prompt",
+                "one",
+                "second prompt",
+                "two",
+                "continue",
+                "done"
+            ]
+        );
+        let summary = conv.summary.as_ref().unwrap();
+        assert_eq!(summary.origin, SummaryOrigin::ClaudeCompact);
+        assert_eq!(summary.covers, 4);
     }
 
     #[test]

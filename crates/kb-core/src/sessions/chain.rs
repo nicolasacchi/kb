@@ -38,6 +38,13 @@ pub(crate) fn is_conversation_type(v: &Value) -> bool {
 /// With uuids on user/assistant records: the parentUuid chain from the leaf,
 /// continued across `compact_boundary` through `logicalParentUuid`. Without
 /// them (kb's omp captures): every record in file order.
+///
+/// Compaction: a boundary's `logicalParentUuid` is followed as-is when it names
+/// a record written before the boundary (every normal boundary). Current
+/// auto-compactions instead name the preserved segment's tail, written AFTER
+/// the boundary and chained back to it; there the walk continues from the last
+/// chain record written before the boundary. A boundary with nothing before it
+/// ends the walk, and the callers' first-record check then declines to trust it.
 pub(crate) fn live_order(records: &[Value], notes: &mut Vec<String>) -> Vec<usize> {
     let chained = records
         .iter()
@@ -92,7 +99,20 @@ pub(crate) fn live_order(records: &[Value], notes: &mut Vec<String>) -> Vec<usiz
             }
             // A compact boundary starts a new chain; its logicalParentUuid is
             // the pre-compaction leaf.
-            None => str_of(r, "logicalParentUuid").and_then(|u| by_uuid.get(u).copied()),
+            None => {
+                let target = str_of(r, "logicalParentUuid").and_then(|u| by_uuid.get(u).copied());
+                match target {
+                    // Current Claude Code auto-compactions name as the target
+                    // (the preserved segment's tail) a record written AFTER the
+                    // boundary whose own parentUuid chain leads back to it.
+                    // Following it would loop; the pre-compaction history is
+                    // what precedes the boundary in the file.
+                    Some(t) if t > cur && reaches(records, &by_uuid, t, cur) => {
+                        pre_boundary_leaf(records, cur)
+                    }
+                    other => other,
+                }
+            }
         };
         match next {
             Some(n) => cur = n,
@@ -101,6 +121,34 @@ pub(crate) fn live_order(records: &[Value], notes: &mut Vec<String>) -> Vec<usiz
     }
     order.reverse();
     order
+}
+
+/// True when the `parentUuid` chain walked back from `from` reaches `target`.
+/// Bounded by a visited set; a missing parent or a cycle answers false.
+fn reaches(records: &[Value], by_uuid: &HashMap<&str, usize>, from: usize, target: usize) -> bool {
+    let mut cur = from;
+    let mut seen: HashSet<usize> = HashSet::new();
+    while seen.insert(cur) {
+        if cur == target {
+            return true;
+        }
+        match str_of(&records[cur], "parentUuid").and_then(|p| by_uuid.get(p).copied()) {
+            Some(n) => cur = n,
+            None => return false,
+        }
+    }
+    false
+}
+
+/// The pre-compaction leaf of the boundary at `boundary`: the last
+/// non-sidechain chain record written before it. On every normal boundary this
+/// IS its `logicalParentUuid` target; it is only consulted when that target
+/// sits after the boundary, so a boundary with nothing before it yields `None`
+/// and the walk ends (never a guessed chain).
+fn pre_boundary_leaf(records: &[Value], boundary: usize) -> Option<usize> {
+    records[..boundary]
+        .iter()
+        .rposition(|r| is_chain_type(r) && !flag(r, "isSidechain") && str_of(r, "uuid").is_some())
 }
 
 /// Where one chain record sits relative to the live conversation.
@@ -135,8 +183,8 @@ pub(crate) struct ChainVerdicts {
 /// - the transcript carries no uuids (omp captures, hand-built fixtures);
 /// - no leaf resolves;
 /// - [`live_order`] noted a cycle or a missing parent, so earlier records were
-///   not recovered and "not on the chain" would not mean "rewound" (current
-///   Claude Code compaction boundaries can do this).
+///   not recovered and "not on the chain" would not mean "rewound" (a boundary
+///   whose target is not in the file, or a hand-edited chain).
 ///
 /// - the walk ended silently before the first conversation record in file
 ///   order (an unresolved `logicalParentUuid`, or a second `parentUuid`-null
@@ -331,6 +379,136 @@ mod tests {
             rec("assistant", "a4", Some("u3")),
         ]);
         assert!(chain_verdicts(&d).is_none());
+    }
+
+    // --- FUHANDOFF: the preserved-segment tail is written AFTER the boundary ---
+
+    /// A current auto-compaction, shaped like the real thing: the boundary's
+    /// `logicalParentUuid` is the preserved segment's tail, an attachment
+    /// written after the boundary whose parentUuid chain runs
+    /// boundary -> 3 attachments -> the compact summary -> tail.
+    fn anomalous_block(n: u32) -> Vec<String> {
+        let att = |k: u32, parent: String| {
+            format!(r#"{{"type":"attachment","uuid":"att{n}{k}","parentUuid":"{parent}"}}"#)
+        };
+        vec![
+            format!(
+                r#"{{"type":"system","subtype":"compact_boundary","uuid":"b{n}","parentUuid":null,"logicalParentUuid":"t{n}","compactMetadata":{{"trigger":"auto","preservedSegment":{{"headUuid":"u1","anchorUuid":"s{n}","tailUuid":"t{n}"}},"preservedMessages":{{"uuids":["u1"],"allUuids":["u1"],"anchorUuid":"s{n}"}}}}}}"#
+            ),
+            att(1, format!("b{n}")),
+            att(2, format!("att{n}1")),
+            att(3, format!("att{n}2")),
+            format!(
+                r#"{{"type":"user","uuid":"s{n}","parentUuid":"att{n}3","isCompactSummary":true,"message":{{"role":"user","content":"summary"}}}}"#
+            ),
+            format!(r#"{{"type":"attachment","uuid":"t{n}","parentUuid":"s{n}"}}"#),
+        ]
+    }
+
+    fn live_ids(d: &str) -> (Vec<String>, Vec<String>) {
+        let records: Vec<Value> = d
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        let mut notes = Vec::new();
+        let order = live_order(&records, &mut notes);
+        let ids = order
+            .into_iter()
+            .map(|i| str_of(&records[i], "uuid").unwrap_or("").to_string())
+            .collect();
+        (ids, notes)
+    }
+
+    fn strs(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_boundary_whose_target_is_written_after_it_continues_from_the_pre_boundary_leaf() {
+        let mut lines = vec![
+            rec("user", "u1", None),
+            rec("assistant", "a1", Some("u1")),
+            rec("user", "u2-old", Some("a1")),
+            rec("assistant", "a2-old", Some("u2-old")),
+            rec("user", "u2", Some("a1")),
+            rec("assistant", "a2", Some("u2")),
+            // A sidechain record written last before the boundary is never the leaf.
+            r#"{"type":"assistant","uuid":"sc","parentUuid":"a2","isSidechain":true,"message":{"role":"assistant","content":"x"}}"#.to_string(),
+        ];
+        lines.extend(anomalous_block(1));
+        lines.push(rec("user", "u3", Some("t1")));
+        lines.push(rec("assistant", "a3", Some("u3")));
+        let d = doc(&lines);
+        let (ids, notes) = live_ids(&d);
+        assert!(notes.is_empty(), "{notes:?}");
+        assert_eq!(
+            ids,
+            strs(&[
+                "u1", "a1", "u2", "a2", "b1", "att11", "att12", "att13", "s1", "t1", "u3", "a3"
+            ])
+        );
+        // The rewound branch before the boundary is marked; the live turns
+        // before and after it are not.
+        let mut off = off_lines(&d).expect("the walk is now trusted");
+        off.sort();
+        assert_eq!(off, vec![2, 3]);
+    }
+
+    #[test]
+    fn a_normal_and_an_anomalous_boundary_in_one_file_both_cross() {
+        let mut lines = vec![
+            rec("user", "u1", None),
+            rec("assistant", "a1", Some("u1")),
+            r#"{"type":"system","subtype":"compact_boundary","uuid":"cbA","parentUuid":null,"logicalParentUuid":"a1"}"#.to_string(),
+            rec("user", "uA", Some("cbA")),
+            rec("assistant", "aA", Some("uA")),
+        ];
+        lines.extend(anomalous_block(2));
+        lines.push(rec("user", "u9", Some("t2")));
+        lines.push(rec("assistant", "a9", Some("u9")));
+        let d = doc(&lines);
+        let (ids, notes) = live_ids(&d);
+        assert!(notes.is_empty(), "{notes:?}");
+        assert_eq!(
+            ids,
+            strs(&[
+                "u1", "a1", "cbA", "uA", "aA", "b2", "att21", "att22", "att23", "s2", "t2", "u9",
+                "a9"
+            ])
+        );
+        assert!(off_lines(&d).expect("trusted").is_empty());
+    }
+
+    #[test]
+    fn a_boundary_with_nothing_before_it_ends_the_walk_without_a_cycle_note() {
+        let mut lines = anomalous_block(1);
+        lines.push(rec("user", "u3", Some("t1")));
+        lines.push(rec("assistant", "a3", Some("u3")));
+        let (ids, notes) = live_ids(&doc(&lines));
+        assert!(notes.is_empty(), "{notes:?}");
+        assert_eq!(
+            ids,
+            strs(&["b1", "att11", "att12", "att13", "s1", "t1", "u3", "a3"])
+        );
+    }
+
+    #[test]
+    fn a_target_after_the_boundary_that_does_not_chain_back_to_it_is_left_alone() {
+        // `z` is written after the boundary but its parent chain never reaches
+        // it, so this is not the preserved-segment shape: the walk follows the
+        // named target exactly as before and pulls in nothing from before the
+        // boundary.
+        let d = doc(&[
+            rec("user", "u1", None),
+            rec("assistant", "a1", Some("u1")),
+            r#"{"type":"system","subtype":"compact_boundary","uuid":"cb","parentUuid":null,"logicalParentUuid":"z"}"#.to_string(),
+            rec("user", "u2", Some("cb")),
+            rec("user", "z", None),
+            rec("assistant", "a2", Some("u2")),
+        ]);
+        let (ids, _) = live_ids(&d);
+        assert!(!ids.contains(&"u1".to_string()), "{ids:?}");
+        assert!(!ids.contains(&"a1".to_string()), "{ids:?}");
     }
 
     #[test]
