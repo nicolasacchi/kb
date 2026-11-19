@@ -76,6 +76,22 @@ kb doctor --hooks [--repo PATH]     v0.38 CT-C6: the provenance-chain
                                     SKIPs `backup-offhost` (the off-host
                                     half was not verified) rather than
                                     silently assuming none is expected.
+                                    `backup-age` reads THIS host's
+                                    `<state>/exports`, so it first checks
+                                    that the daemon it reached uses that
+                                    state dir: the daemon's
+                                    `state_instance` marker on
+                                    /api/identity must equal the marker in
+                                    the local state dir. A different marker
+                                    (a daemon in a container, another
+                                    host) is ONE `backup-age` SKIP naming
+                                    where to look (`kb doctor --hooks`
+                                    where the daemon runs), never a FAIL
+                                    from leftovers. A daemon without the
+                                    marker, or an unreachable one, still
+                                    reports the local state plus a
+                                    `backup-age-origin` SKIP saying it was
+                                    not verified.
                                     Read-only,
                                     PASS/WARN/FAIL/SKIP + a one-line fix per
                                     link (FAIL = a configured invariant is
@@ -100,9 +116,12 @@ kb doctor --hooks [--repo PATH]     v0.38 CT-C6: the provenance-chain
                                     v1 checks Claude Code only (the codex
                                     adapter is unchecked). D30 (v0.42)
                                     adds one more, unrelated to provenance:
-                                    `~/.cache/kb/slate-cursor-*` and
-                                    `slate-topic-*` markers older than 30
-                                    days are flagged, and `--fix` removes
+                                    per-session markers under
+                                    `~/.cache/kb` older than 30 days are
+                                    flagged (`slate-cursor-*`,
+                                    `slate-topic-*`, `context-scent-*`,
+                                    `beat-heartbeat-*`, `beat-tool-*`,
+                                    `waked-*`), and `--fix` removes
                                     THOSE ONLY — every other check here
                                     stays read-only.
 kb slo status [--kb NAME] [--json]  v0.38 CT-F5: corpus-health SLOs — five

@@ -38,8 +38,18 @@ GET  /api/identity                          daemon name + version + kbs, plus
                                             gate's caller class admits it) —
                                             computed per request, never a
                                             grant (Origin + intent header +
-                                            single-use ticket still apply). A
-                                            sibling daemon
+                                            single-use ticket still apply).
+                                            `state_instance` is a random,
+                                            non-secret marker (32 hex, no
+                                            paths) the daemon writes into its
+                                            own state dir at boot; `null`
+                                            when it could not persist one, and
+                                            absent on an older daemon. `kb
+                                            doctor --hooks` compares it with
+                                            the marker in the state dir the
+                                            CLI can read to tell whether
+                                            `backup-age` is looking at the
+                                            daemon's own state. A sibling daemon
                                             handshakes here before its first
                                             call and fails closed on a mismatch;
                                             /healthz stays pure liveness.

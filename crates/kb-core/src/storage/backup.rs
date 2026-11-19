@@ -1400,6 +1400,10 @@ mod tests {
         write(paths.tombstone_era_file(), b"{\"era\":1}");
         // Not persistent: must never be packed.
         write(paths.embed_cache_file(), b"cache");
+        write(
+            paths.state_instance_file(),
+            b"0123456789abcdef0123456789abcdef",
+        );
         write(paths.daemon_pid_file(), b"1234");
         (paths, kb)
     }
@@ -1432,7 +1436,7 @@ mod tests {
                 "{want} missing from the tarball: {listing:?}"
             );
         }
-        for never in ["query-embed-cache.json", "kb-daemon.pid"] {
+        for never in ["query-embed-cache.json", "kb-daemon.pid", "state-instance"] {
             assert!(
                 !listing.iter().any(|l| l.contains(never)),
                 "{never} is regenerable/runtime and must not be packed: {listing:?}"
