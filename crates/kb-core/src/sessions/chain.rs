@@ -117,6 +117,15 @@ pub(crate) enum Verdict {
     Unknown,
 }
 
+/// The verdicts [`chain_verdicts`] reached, two ways: by line (for the turns
+/// whose `raw_lines` name their records) and by record uuid (a human turn
+/// carries no `raw_lines`, but its id IS its record's uuid).
+#[derive(Debug, Default)]
+pub(crate) struct ChainVerdicts {
+    pub(crate) by_line: HashMap<u32, Verdict>,
+    pub(crate) by_uuid: HashMap<String, Verdict>,
+}
+
 /// A [`Verdict`] for every chain record, keyed by decoded-transcript line
 /// index (0-based, `str::lines()` numbering - the same numbering as
 /// `Turn::raw_lines`). Lines that are not chain records (snapshots, modes,
@@ -131,7 +140,7 @@ pub(crate) enum Verdict {
 ///
 /// A uuid that appears on the chain is on it wherever else it is repeated
 /// (re-delivered lines).
-pub(crate) fn chain_verdicts(jsonl: &str) -> Option<HashMap<u32, Verdict>> {
+pub(crate) fn chain_verdicts(jsonl: &str) -> Option<ChainVerdicts> {
     let mut records: Vec<Value> = Vec::new();
     let mut line_of: Vec<u32> = Vec::new();
     for (idx, line) in jsonl.lines().enumerate() {
@@ -160,7 +169,7 @@ pub(crate) fn chain_verdicts(jsonl: &str) -> Option<HashMap<u32, Verdict>> {
         .iter()
         .filter_map(|&i| str_of(&records[i], "uuid"))
         .collect();
-    let mut out = HashMap::new();
+    let mut out = ChainVerdicts::default();
     for (i, r) in records.iter().enumerate() {
         if !is_chain_type(r) || flag(r, "isSidechain") {
             continue;
@@ -173,7 +182,8 @@ pub(crate) fn chain_verdicts(jsonl: &str) -> Option<HashMap<u32, Verdict>> {
         } else {
             Verdict::Unknown
         };
-        out.insert(line_of[i], v);
+        out.by_line.insert(line_of[i], v);
+        out.by_uuid.entry(u.to_string()).or_insert(v);
     }
     Some(out)
 }
@@ -192,6 +202,7 @@ mod tests {
     fn off_lines(d: &str) -> Option<Vec<u32>> {
         Some(
             chain_verdicts(d)?
+                .by_line
                 .into_iter()
                 .filter(|(_, v)| *v == Verdict::Off)
                 .map(|(l, _)| l)

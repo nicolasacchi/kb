@@ -2462,14 +2462,23 @@ pub fn rewound_turn_ids(jsonl: &str, turns: &[Turn]) -> Vec<String> {
     let Some(verdicts) = super::chain::chain_verdicts(jsonl) else {
         return Vec::new();
     };
-    // Only chain records decide a turn: a snapshot or mode line folded into
-    // the same turn says nothing about the branch.
+    // A human turn carries no `raw_lines`, but its id is derived from its
+    // record's uuid; assistant turns also fold further records, named by
+    // `raw_lines`. Only chain records decide a turn: a snapshot or mode line
+    // folded into the same turn says nothing about the branch.
+    let by_id: HashMap<String, Verdict> = verdicts
+        .by_uuid
+        .iter()
+        .map(|(u, v)| (turn_id_from_uuid(u), *v))
+        .collect();
     turns
         .iter()
         .filter(|t| !t.sidechain)
         .filter(|t| {
+            let own = by_id.get(&t.id).copied();
+            let folded = t.raw_lines.iter().filter_map(|l| verdicts.by_line.get(l));
             let mut any = false;
-            for v in t.raw_lines.iter().filter_map(|l| verdicts.get(l)) {
+            for v in own.iter().chain(folded) {
                 any = true;
                 if *v != Verdict::Off {
                     return false;
