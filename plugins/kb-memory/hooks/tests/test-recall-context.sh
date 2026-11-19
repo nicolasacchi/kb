@@ -39,6 +39,8 @@ EOF2
 chmod +x "$TMPROOT/bin/kb"
 export PATH="$TMPROOT/bin:$PATH"
 export XDG_CACHE_HOME="$TMPROOT/cache"
+# An operator who has opted in exports these; each case sets its own.
+unset KB_RECALL_CONTEXT KB_TURN
 
 TR="$TMPROOT/transcript.jsonl"
 echo '{}' >"$TR"
