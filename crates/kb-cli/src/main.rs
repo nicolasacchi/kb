@@ -705,8 +705,9 @@ enum Cmd {
         /// human-readable PASS/WARN/SKIP report.
         #[arg(long)]
         json: bool,
-        /// Remove `~/.cache/kb/slate-cursor-*` and
-        /// `slate-topic-*` markers older than 30 days. Scoped to that ONE
+        /// Remove the per-session marker files under `~/.cache/kb` older
+        /// than 30 days: `slate-cursor-*`, `slate-topic-*`, `context-scent-*`,
+        /// `beat-heartbeat-*`, `beat-tool-*` and `waked-*`. Scoped to that ONE
         /// check; every other `--hooks` check stays read-only.
         // Provenance: D30 (v0.42)
         #[arg(long)]
