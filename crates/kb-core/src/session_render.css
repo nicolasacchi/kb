@@ -1271,3 +1271,15 @@ body[data-hide-debug="1"] .ses-debug { display: none; }
   /* Bands are already visible — drop the colored fill so they print clean. */
   .ses-plan-band { background: none; }
 }
+
+.ses-turn--rewound {
+  opacity: 0.7;
+  border-style: dashed;
+}
+
+.ses-turn__rewound {
+  margin: 0 0 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-mute);
+}

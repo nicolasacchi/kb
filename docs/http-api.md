@@ -1238,6 +1238,29 @@ GET  /api/sessions/{session_id}/view        W2/R1 — the `session-view/1`
                                             session); `kb sessions recover
                                             <id> --chain` concatenates the
                                             parts' `/raw` bodies in order.
+                                            Rewound branches: a Claude Code prompt that was
+                                            rewound or edited stays in the transcript on a
+                                            branch the conversation left. The response
+                                            carries `rewound_turns: [turn id, …]` (additive,
+                                            windowed like `turns`, absent when empty) naming
+                                            turns that sit entirely on such a branch; the
+                                            HTML reader and `kb sessions read` caption them
+                                            "rewound - not in the final conversation" and
+                                            still render them in full. Derived per read from
+                                            the same `parentUuid` walk the handoff uses, never
+                                            stored, ranked or filtered on; the digest, chunks
+                                            and the `code` evidence lane still include those
+                                            turns (follow-up). No mark when the chain cannot
+                                            be trusted (no uuids, a cycle, a missing parent),
+                                            and none for records written after the resumed
+                                            leaf. The live `/live` lane never marks (a later
+                                            rewind can flip an earlier turn; the capture
+                                            wins). Measured 2026-11-19 over the sessions
+                                            corpus (257 Claude Code sessions with a clean
+                                            chain walk, 4001 real prompts, newest capture
+                                            per session): 72 prompts (1.8%) in 24 sessions
+                                            (9.3%) sat on an abandoned branch before the
+                                            leaf, over the 1% / 5% marking thresholds.
 GET  /api/sessions/{session_id}/raw         W2/R1 — the decoded JSONL
      [?scrub=…]                              transcript, `text/plain`, byte-
                                             identical to what `claude -r`

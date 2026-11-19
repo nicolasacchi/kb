@@ -13,7 +13,7 @@ export type SessionViewResponse = {
 /**
  * Always `session-view/1` — a consumer may refuse a shape it doesn't know.
  */
-grammar: string, session_id: string, kb: string, artifact_id: string, header?: ViewHeader, turns?: Array<Turn>, side_lanes?: Array<SideLane>, outline?: Array<OutlineRow>, tasks?: Array<TaskBoardRow>, subagents?: Array<SubagentSummary>, minimap?: Array<MinimapPoint>, stats?: ViewStats, 
+grammar: string, session_id: string, kb: string, artifact_id: string, header?: ViewHeader, turns?: Array<Turn>, side_lanes?: Array<SideLane>, rewound_turns?: Array<string>, outline?: Array<OutlineRow>, tasks?: Array<TaskBoardRow>, subagents?: Array<SubagentSummary>, minimap?: Array<MinimapPoint>, stats?: ViewStats, 
 /**
  * PF-R1 — how many turns the FULL capture has, independent of
  * whatever `?turns=` this response actually windowed to (mirrors

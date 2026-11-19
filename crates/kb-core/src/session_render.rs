@@ -509,6 +509,8 @@ fn render_flow(sv: &SessionView) -> String {
         }
     }
 
+    let rewound: std::collections::HashSet<&str> = sv.rewound.iter().map(String::as_str).collect();
+
     let mut out = String::new();
     let mut open_lane: Option<usize> = None;
     let mut last_ts: Option<&str> = None;
@@ -547,7 +549,7 @@ fn render_flow(sv: &SessionView) -> String {
             last_ts = t.ts.as_deref();
         }
 
-        out.push_str(&render_turn(t));
+        out.push_str(&render_turn(t, rewound.contains(t.id.as_str())));
     }
     if open_lane.is_some() {
         out.push_str("</div></details>\n");
@@ -571,7 +573,7 @@ fn time_gap_label(prev_iso: &str, curr_iso: &str) -> Option<String> {
 /// Ghost elimination already happened in the engine (every `Turn` here has
 /// ≥1 item) — nothing to filter here. Empty-thinking fragments collapse to a
 /// header glyph (`◆×n`) instead of a per-block accordion (hygiene bundle).
-fn render_turn(t: &Turn) -> String {
+fn render_turn(t: &Turn, rewound: bool) -> String {
     let role_label = match t.role {
         Role::Human => "you",
         Role::Assistant => "assistant",
@@ -581,6 +583,15 @@ fn render_turn(t: &Turn) -> String {
         Role::Assistant => "ses-turn--assistant",
     };
     let side_class = if t.sidechain { " ses-turn--side" } else { "" };
+    // FUBRANCH - the engine's mark, rendered verbatim: a turn on a branch the
+    // conversation left (a rewound or edited prompt). Plain words, no
+    // interpretation of our own; the turn itself still renders in full.
+    let rewound_class = if rewound { " ses-turn--rewound" } else { "" };
+    let rewound_note = if rewound {
+        r#"<p class="ses-turn__rewound">rewound - not in the final conversation</p>"#
+    } else {
+        ""
+    };
 
     let empty_thinking = t
         .items
@@ -645,7 +656,7 @@ fn render_turn(t: &Turn) -> String {
     let debug = render_debug_details(t);
 
     format!(
-        r#"<article class="ses-turn {role_class}{side_class}" id="{}" data-turn="{}" style="--ses-turn-est: {est}px"><header class="ses-turn__head"><span class="ses-turn__role">{role_label}</span>{ts_html}{comment_btn}{glyph}{debug}</header><div class="ses-turn__body">{body}</div></article>"#,
+        r#"<article class="ses-turn {role_class}{side_class}{rewound_class}" id="{}" data-turn="{}" style="--ses-turn-est: {est}px"><header class="ses-turn__head"><span class="ses-turn__role">{role_label}</span>{ts_html}{comment_btn}{glyph}{debug}</header>{rewound_note}<div class="ses-turn__body">{body}</div></article>"#,
         esc(&t.id),
         t.ordinal,
     )

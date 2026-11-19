@@ -27175,3 +27175,120 @@ async fn enter_returns_409_term_blocked_when_the_bound_session_is_blocked() {
         Some("unbound")
     );
 }
+
+/// FUBRANCH — `rewound_turns` on `GET /api/sessions/{id}/view`: a rewound
+/// Claude Code branch names its abandoned turns, the field follows the
+/// `?turns=` window and the `?fields=` gate, and a linear transcript omits it.
+// invariant:11 rewound_turns through the real view route
+#[tokio::test]
+async fn view_route_rewound_turns_follow_window_fields_and_linearity() {
+    let uu = |n: u32| format!("{n:08x}-0000-4000-8000-000000000000");
+    let tid = |n: u32| format!("t-{n:08x}0000");
+    let user = |sid: &str, n: u32, parent: Option<u32>| {
+        let p = parent.map_or("null".to_string(), |p| format!("\"{}\"", uu(p)));
+        format!(
+            r#"{{"sessionId":"{sid}","type":"user","uuid":"{}","parentUuid":{p},"timestamp":"2026-05-27T08:00:{:02}Z","message":{{"role":"user","content":"prompt {n}"}}}}"#,
+            uu(n),
+            n
+        )
+    };
+    let asst = |sid: &str, n: u32, parent: u32| {
+        format!(
+            r#"{{"sessionId":"{sid}","type":"assistant","uuid":"{}","parentUuid":"{}","timestamp":"2026-05-27T08:00:{:02}Z","message":{{"role":"assistant","content":[{{"type":"text","text":"answer {n}"}}]}}}}"#,
+            uu(n),
+            uu(parent),
+            n
+        )
+    };
+    // Turns 3 and 4 are the branch the conversation left.
+    let rewound = [
+        user("rw-e2e", 1, None),
+        asst("rw-e2e", 2, 1),
+        user("rw-e2e", 3, Some(2)),
+        asst("rw-e2e", 4, 3),
+        user("rw-e2e", 5, Some(2)),
+        asst("rw-e2e", 6, 5),
+    ]
+    .join("\n");
+    let linear = [
+        user("lin-e2e", 1, None),
+        asst("lin-e2e", 2, 1),
+        user("lin-e2e", 3, Some(2)),
+        asst("lin-e2e", 4, 3),
+    ]
+    .join("\n");
+    let global = vec![
+        (
+            "session-20260601T100000Z-rw-e2e.html",
+            session_transcript_html("rw-e2e", "20260601T100000Z", &rewound),
+        ),
+        (
+            "session-20260601T110000Z-lin-e2e.html",
+            session_transcript_html("lin-e2e", "20260601T110000Z", &linear),
+        ),
+    ];
+    let (_tmp, addr) = boot_memory_corpora(&global, &[]).await;
+    let client = reqwest::Client::new();
+    let get = |path: String| {
+        let client = client.clone();
+        async move {
+            let resp = client.get(url(addr, &path)).send().await.unwrap();
+            let status = resp.status();
+            let json = resp.json::<serde_json::Value>().await.unwrap_or_default();
+            (status, json)
+        }
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let (_, all) = get("/api/sessions?limit=50".into()).await;
+        if all["sessions"].as_array().is_some_and(|a| a.len() == 2) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for the sessions: {all}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    let (_, full) = get("/api/sessions/rw-e2e/view?turns=all".into()).await;
+    assert_eq!(
+        full["rewound_turns"],
+        serde_json::json!([tid(3), tid(4)]),
+        "{full}"
+    );
+    // Every named id is a turn of this very response.
+    let turn_ids: Vec<&str> = full["turns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["id"].as_str().unwrap())
+        .collect();
+    for id in full["rewound_turns"].as_array().unwrap() {
+        assert!(turn_ids.contains(&id.as_str().unwrap()), "{full}");
+    }
+
+    // A window that excludes both rewound turns (the last turn only).
+    let (_, tail) = get("/api/sessions/rw-e2e/view?turns=1".into()).await;
+    assert!(tail.get("rewound_turns").is_none(), "{tail}");
+    // A window that keeps only one of them trims the other.
+    let ord3 = full["turns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == tid(3))
+        .unwrap()["ordinal"]
+        .as_u64()
+        .unwrap();
+    let (_, one) = get(format!("/api/sessions/rw-e2e/view?turns={ord3}..{ord3}")).await;
+    assert_eq!(one["rewound_turns"], serde_json::json!([tid(3)]), "{one}");
+
+    // `?fields=` without turns drops the field.
+    let (_, outline) = get("/api/sessions/rw-e2e/view?fields=outline&turns=all".into()).await;
+    assert!(outline.get("rewound_turns").is_none(), "{outline}");
+    assert!(outline.get("turns").is_none(), "{outline}");
+
+    // A linear transcript never carries it.
+    let (_, lin) = get("/api/sessions/lin-e2e/view?turns=all".into()).await;
+    assert!(lin.get("rewound_turns").is_none(), "{lin}");
+}

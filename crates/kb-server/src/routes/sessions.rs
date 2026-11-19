@@ -7866,6 +7866,12 @@ pub struct SessionViewResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-export", ts(optional))]
     pub side_lanes: Option<Vec<kb_core::sessions::view::SideLane>>,
+    // FUBRANCH: ids of turns on a branch the conversation left (a rewound or
+    // edited Claude Code prompt), windowed like `turns`. Absent when nothing
+    // was rewound or the parentUuid chain cannot be trusted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub rewound_turns: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-export", ts(optional))]
     pub outline: Option<Vec<kb_core::sessions::view::OutlineRow>>,
@@ -8027,6 +8033,16 @@ pub async fn view(
         side_lanes: fields
             .turns
             .then(|| window_side_lanes(&view.side_lanes, &kept_turn_ids)),
+        rewound_turns: fields
+            .turns
+            .then(|| {
+                view.rewound
+                    .iter()
+                    .filter(|id| kept_turn_ids.contains(id.as_str()))
+                    .cloned()
+                    .collect::<Vec<String>>()
+            })
+            .filter(|v| !v.is_empty()),
         outline: fields.outline.then(|| view.outline.clone()),
         tasks: fields.tasks.then(|| view.tasks_final.clone()),
         subagents: fields.subagents.then(|| view.subagents.clone()),

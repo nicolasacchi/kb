@@ -105,6 +105,10 @@ pub mod lineage;
 /// writers. Pure except directory listing in the `locate_*` helpers.
 pub mod handoff;
 
+/// The Claude Code `parentUuid` chain walk, shared by the handoff reader and
+/// the session-view engine's rewound-branch caption (FUBRANCH).
+pub(crate) mod chain;
+
 pub use projects::{
     project_registry, registry_entry, resolve_project_filter, resolve_registry_project,
     set_project_registry, ProjectDef, ProjectFilter, ResolvedProject,

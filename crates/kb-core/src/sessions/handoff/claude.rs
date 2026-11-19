@@ -30,6 +30,10 @@ use chrono::DateTime;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
+#[cfg(test)]
+use crate::sessions::chain::is_conversation_type;
+use crate::sessions::chain::{flag, live_order, str_of, type_of};
+
 use super::ir::{Block, Conversation, Harness, Role, SourceKind, Summary, SummaryOrigin, Turn};
 use super::tools::{
     flattened_call_text, flattened_result_text, plan_tool_call, safe_tool_id, ToolPlan,
@@ -147,27 +151,6 @@ pub fn locate_claude_session(roots: &[PathBuf], id_prefix: &str) -> io::Result<V
 // ---------------------------------------------------------------------------
 // Reader
 // ---------------------------------------------------------------------------
-
-fn str_of<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
-    v.get(key).and_then(Value::as_str)
-}
-
-fn flag(v: &Value, key: &str) -> bool {
-    v.get(key).and_then(Value::as_bool).unwrap_or(false)
-}
-
-fn type_of(v: &Value) -> &str {
-    str_of(v, "type").unwrap_or("")
-}
-
-/// Records that can sit on the parentUuid chain.
-fn is_chain_type(v: &Value) -> bool {
-    matches!(type_of(v), "user" | "assistant" | "system" | "attachment")
-}
-
-fn is_conversation_type(v: &Value) -> bool {
-    matches!(type_of(v), "user" | "assistant")
-}
 
 /// The record's `timestamp` when it is a real ISO-8601 string (kb captures
 /// write `"unknown"` when omp had none).
@@ -388,76 +371,6 @@ pub fn read_claude_jsonl(
         turns,
         notes,
     })
-}
-
-/// Indices of `records` in chronological order of the live conversation.
-///
-/// With uuids on user/assistant records: the parentUuid chain from the leaf,
-/// continued across `compact_boundary` through `logicalParentUuid`. Without
-/// them (kb's omp captures): every record in file order.
-fn live_order(records: &[Value], notes: &mut Vec<String>) -> Vec<usize> {
-    let chained = records
-        .iter()
-        .any(|r| is_conversation_type(r) && str_of(r, "uuid").is_some());
-    if !chained {
-        return (0..records.len())
-            .filter(|&i| is_conversation_type(&records[i]))
-            .collect();
-    }
-
-    let by_uuid: HashMap<&str, usize> = records
-        .iter()
-        .enumerate()
-        .filter(|(_, r)| is_chain_type(r))
-        .filter_map(|(i, r)| str_of(r, "uuid").map(|u| (u, i)))
-        .collect();
-    let leaf = records
-        .iter()
-        .rev()
-        .filter(|r| type_of(r) == "last-prompt")
-        .filter_map(|r| str_of(r, "leafUuid"))
-        .find_map(|u| by_uuid.get(u).copied())
-        .or_else(|| {
-            records.iter().rposition(|r| {
-                is_chain_type(r) && !flag(r, "isSidechain") && str_of(r, "uuid").is_some()
-            })
-        });
-    let Some(mut cur) = leaf else {
-        return Vec::new();
-    };
-
-    let mut order = Vec::new();
-    let mut seen: HashSet<usize> = HashSet::new();
-    loop {
-        if !seen.insert(cur) {
-            notes.push("parentUuid cycle; recovered chain cut short".to_string());
-            break;
-        }
-        order.push(cur);
-        let r = &records[cur];
-        let next = match str_of(r, "parentUuid") {
-            Some(p) => {
-                let n = by_uuid.get(p).copied();
-                if n.is_none() {
-                    notes.push(
-                        "parentUuid chain broken (parent record missing); earlier records not \
-                         recovered"
-                            .to_string(),
-                    );
-                }
-                n
-            }
-            // A compact boundary starts a new chain; its logicalParentUuid is
-            // the pre-compaction leaf.
-            None => str_of(r, "logicalParentUuid").and_then(|u| by_uuid.get(u).copied()),
-        };
-        match next {
-            Some(n) => cur = n,
-            None => break,
-        }
-    }
-    order.reverse();
-    order
 }
 
 /// Text of a message `content`: a string, or the text blocks joined with a
