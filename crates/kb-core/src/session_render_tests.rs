@@ -744,3 +744,50 @@ fn image_item_is_not_hidden_by_hide_system() {
         "ses-img is not a chip"
     );
 }
+
+// ─── FUBRANCH: rewound Claude Code branches ──────────────────────────────
+
+fn chain_rec(ty: &str, n: u32, parent: Option<u32>, body: &str) -> String {
+    let uuid = |n: u32| format!("{n:08x}-0000-4000-8000-000000000000");
+    let p = parent.map_or("null".to_string(), |p| format!("\"{}\"", uuid(p)));
+    let content = if ty == "user" {
+        format!("\"{body}\"")
+    } else {
+        format!(r#"[{{"type":"text","text":"{body}"}}]"#)
+    };
+    format!(
+        r#"{{"type":"{ty}","uuid":"{}","parentUuid":{p},"timestamp":"2026-05-27T08:00:{n:02}Z","message":{{"role":"{ty}","content":{content}}}}}"#,
+        uuid(n)
+    )
+}
+
+#[test]
+fn a_rewound_turn_carries_the_caption_and_the_live_turns_do_not() {
+    let jsonl = [
+        chain_rec("user", 1, None, "first prompt"),
+        chain_rec("assistant", 2, Some(1), "first answer"),
+        chain_rec("user", 3, Some(2), "prompt that was later edited"),
+        chain_rec("assistant", 4, Some(3), "abandoned answer"),
+        chain_rec("user", 5, Some(2), "the edited prompt"),
+        chain_rec("assistant", 6, Some(5), "live answer"),
+    ]
+    .join("\n");
+    let html = render(&jsonl);
+    // Exactly the two abandoned turns, each rendered in full AND captioned.
+    assert_eq!(
+        html.matches(r#"<p class="ses-turn__rewound">rewound - not in the final conversation</p>"#)
+            .count(),
+        2,
+        "{html}"
+    );
+    assert_eq!(html.matches(" ses-turn--rewound\"").count(), 2);
+    assert!(html.contains("prompt that was later edited"));
+    assert!(html.contains("abandoned answer"));
+    // A linear transcript renders no caption at all.
+    let linear = [
+        chain_rec("user", 1, None, "a"),
+        chain_rec("assistant", 2, Some(1), "b"),
+    ]
+    .join("\n");
+    assert!(!render(&linear).contains(r#"<p class="ses-turn__rewound">"#));
+}

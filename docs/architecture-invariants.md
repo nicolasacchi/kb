@@ -1287,7 +1287,7 @@ transcript itself"), `kb sessions read`
 (`crates/kb-cli/src/commands/session_read.rs`), and
 `GET /api/sessions/{sid}/view` (`routes/sessions.rs`). `TailBlocks`
 (commits/subagents, already extracted from the envelope's tail blocks) is a
-caller-supplied input, never re-parsed by the engine. `ViewCarry` +
+caller-supplied input, never re-parsed by the engine. *FUBRANCH (2026-11-19):* a rewound Claude Code prompt stays in the JSONL on a `parentUuid` branch; `SessionView::rewound` (wire `rewound_turns`) names those turns from the ONE shared chain walker (`sessions/chain.rs`, also the handoff's): derived per read, whole-record, never stored or ranked, no mark on an untrusted chain (cycle, missing parent, no uuids) or after the resumed leaf, and never on the live append path (the equivalence golden covers a rewind fixture); the digest/evidence-lane exclusion is a recorded follow-up. `ViewCarry` +
 `view_append`/`view_finish`/`view_bootstrap` are the SAME engine's
 incremental constructor — `session_view(jsonl, …)` is defined as
 `view_finish(view_append(ViewCarry::default(), jsonl))`, golden-pinned as an

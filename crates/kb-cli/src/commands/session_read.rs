@@ -665,7 +665,28 @@ pub fn render_view(v: &serde_json::Value, opts: &ReadOpts) -> String {
     out.push('\n');
 
     let empty: Vec<serde_json::Value> = Vec::new();
-    let turns = v["turns"].as_array().unwrap_or(&empty);
+    // FUBRANCH: the wire's `rewound_turns` ids, rendered verbatim as a
+    // per-turn `branch: "rewound"` mark that `render_turn` captions. The CLI
+    // adds no interpretation of its own; absent field = no mark.
+    let marked: Vec<serde_json::Value>;
+    let turns: &Vec<serde_json::Value> =
+        match (v["turns"].as_array(), v["rewound_turns"].as_array()) {
+            (Some(ts), Some(ids)) if !ids.is_empty() => {
+                marked = ts
+                    .iter()
+                    .map(|t| {
+                        let mut t = t.clone();
+                        if ids.iter().any(|i| i == &t["id"]) {
+                            t["branch"] = serde_json::json!("rewound");
+                        }
+                        t
+                    })
+                    .collect();
+                &marked
+            }
+            (Some(ts), _) => ts,
+            _ => &empty,
+        };
     let harness = v["header"]["harness"].as_str().unwrap_or("claude");
     let rule = "─".repeat(opts.width.min(120));
 
@@ -961,6 +982,9 @@ fn render_turn(t: &serde_json::Value, harness: &str) -> String {
     };
 
     let mut out = format!("{n:>4} {who:<7}{ts}  {headline}\n");
+    if t["branch"].as_str() == Some("rewound") {
+        out.push_str("      [rewound - not in the final conversation]\n");
+    }
     for it in rest {
         if let Some(line) = render_item(it) {
             out.push_str("      ");
@@ -1171,6 +1195,7 @@ mod tests {
             "header": view.header,
             "turns": view.turns,
             "side_lanes": view.side_lanes,
+            "rewound_turns": view.rewound,
             "outline": view.outline,
             "tasks": view.tasks_final,
             "subagents": view.subagents,
@@ -1288,6 +1313,57 @@ mod tests {
         let wire = view_wire_for_fixture("tiny-noop");
         let out = render_view(&wire, &opts());
         assert!(!out.contains("not shown"), "{out}");
+    }
+
+    #[test]
+    fn a_rewound_turn_is_captioned_and_a_linear_wire_is_untouched() {
+        let uu = |n: u32| format!("{n:08x}-0000-4000-8000-000000000000");
+        let rec = |ty: &str, n: u32, p: Option<u32>, body: &str| {
+            let parent = p.map_or("null".to_string(), |p| format!("\"{}\"", uu(p)));
+            let content = if ty == "user" {
+                format!("\"{body}\"")
+            } else {
+                format!(r#"[{{"type":"text","text":"{body}"}}]"#)
+            };
+            format!(
+                r#"{{"type":"{ty}","uuid":"{}","parentUuid":{parent},"timestamp":"2026-05-27T08:00:{n:02}Z","message":{{"role":"{ty}","content":{content}}}}}"#,
+                uu(n)
+            )
+        };
+        let jsonl = [
+            rec("user", 1, None, "first"),
+            rec("assistant", 2, Some(1), "answer"),
+            rec("user", 3, Some(2), "edited later"),
+            rec("assistant", 4, Some(3), "abandoned"),
+            rec("user", 5, Some(2), "the edit"),
+            rec("assistant", 6, Some(5), "live"),
+        ]
+        .join("\n");
+        let view = session_view(&jsonl, &TailBlocks::default(), &ViewOptions::default());
+        let wire = serde_json::json!({
+            "grammar": view.grammar,
+            "session_id": "0123456789abcdef",
+            "kb": "test-kb",
+            "artifact_id": "testartifact",
+            "header": view.header,
+            "turns": view.turns,
+            "rewound_turns": view.rewound,
+            "turns_total": view.turns.len(),
+            "turns_returned": view.turns.len(),
+        });
+        let mut o = opts();
+        o.full = true;
+        let text = render_view(&wire, &o);
+        assert_eq!(
+            text.matches("[rewound - not in the final conversation]")
+                .count(),
+            2,
+            "{text}"
+        );
+        // Without the wire field nothing is captioned.
+        let mut plain = wire.clone();
+        plain.as_object_mut().unwrap().remove("rewound_turns");
+        assert!(!render_view(&plain, &o).contains("rewound"));
     }
 
     #[test]

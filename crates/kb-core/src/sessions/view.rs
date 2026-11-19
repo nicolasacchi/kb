@@ -200,6 +200,18 @@ pub struct SessionView {
     /// list stays the single addressable source, so `?turn=`/outline/minimap
     /// never have to know about lanes).
     pub side_lanes: Vec<SideLane>,
+    /// FUBRANCH — ids of turns the live conversation LEFT BEHIND (a rewound
+    /// or edited Claude Code prompt and everything below it; the same
+    /// `parentUuid` chain the handoff reader walks, one shared walker in
+    /// `sessions::chain`). DERIVED per read from the whole document, never
+    /// stored, never a rank/sort/filter term, never an input to the digest,
+    /// chunks, excerpt or the `code` evidence lane. Empty when nothing was
+    /// rewound OR the chain cannot be trusted (no uuids, a cycle, a missing
+    /// parent): the honest answer is no mark, never a wrong one. The live
+    /// lane's append path never marks (a later rewind can flip an earlier
+    /// turn, so a streaming turn has no final status); the capture wins.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub rewound: Vec<String>,
     pub outline: Vec<OutlineRow>,
     pub tasks_final: Vec<TaskBoardRow>,
     pub subagents: Vec<SubagentSummary>,
@@ -2348,6 +2360,7 @@ pub fn session_view(jsonl: &str, tail: &TailBlocks, _opts: &ViewOptions) -> Sess
     turns.sort_by_key(|t| t.ordinal);
 
     let side_lanes = build_side_lanes(&turns);
+    let rewound = rewound_turn_ids(jsonl, &turns);
     let outline = build_outline(&turns);
     let minimap = build_minimap(&turns);
     let tasks_final = carry
@@ -2428,12 +2441,44 @@ pub fn session_view(jsonl: &str, tail: &TailBlocks, _opts: &ViewOptions) -> Sess
         header,
         turns,
         side_lanes,
+        rewound,
         outline,
         tasks_final,
         subagents,
         minimap,
         stats,
     }
+}
+
+/// FUBRANCH — the ids of turns that sit entirely on a branch the live
+/// conversation left (see [`SessionView::rewound`]). A whole-record pass over
+/// the document that `session_view` runs AFTER the turn stream is built, so
+/// the `view_append`/`view_full` equivalence over the turn stream is untouched
+/// by construction. A turn is marked only when every chain record folded into
+/// it is off the live chain; a mixed turn, a sidechain turn and a turn with no
+/// chain record stay unmarked.
+pub fn rewound_turn_ids(jsonl: &str, turns: &[Turn]) -> Vec<String> {
+    use super::chain::Verdict;
+    let Some(verdicts) = super::chain::chain_verdicts(jsonl) else {
+        return Vec::new();
+    };
+    // Only chain records decide a turn: a snapshot or mode line folded into
+    // the same turn says nothing about the branch.
+    turns
+        .iter()
+        .filter(|t| !t.sidechain)
+        .filter(|t| {
+            let mut any = false;
+            for v in t.raw_lines.iter().filter_map(|l| verdicts.get(l)) {
+                any = true;
+                if *v != Verdict::Off {
+                    return false;
+                }
+            }
+            any
+        })
+        .map(|t| t.id.clone())
+        .collect()
 }
 
 /// Recover a turn's full (untruncated) leading Prose text by id — used for
@@ -4873,6 +4918,138 @@ mod tests {
                 );
             }
         }
+    }
+
+    // --- FUBRANCH: rewound Claude Code branches ------------------------------
+
+    fn uu(n: u32) -> String {
+        format!("{n:08x}-0000-4000-8000-000000000000")
+    }
+
+    fn tid(n: u32) -> String {
+        turn_id_from_uuid(&uu(n))
+    }
+
+    fn user_rec(n: u32, parent: Option<u32>, text: &str) -> String {
+        let p = parent.map_or("null".to_string(), |p| format!("\"{}\"", uu(p)));
+        format!(
+            r#"{{"type":"user","uuid":"{}","parentUuid":{p},"timestamp":"2026-05-27T08:00:{:02}Z","message":{{"role":"user","content":"{text}"}}}}"#,
+            uu(n),
+            n % 60
+        )
+    }
+
+    fn asst_rec(n: u32, parent: u32, text: &str) -> String {
+        format!(
+            r#"{{"type":"assistant","uuid":"{}","parentUuid":"{}","timestamp":"2026-05-27T08:00:{:02}Z","message":{{"role":"assistant","content":[{{"type":"text","text":"{text}"}}]}}}}"#,
+            uu(n),
+            uu(parent),
+            n % 60
+        )
+    }
+
+    /// The user edited prompt 3 (became 5): turns 3 and 4 are the abandoned
+    /// branch, 1/2/5/6 are the live conversation.
+    fn rewind_fixture() -> String {
+        [
+            user_rec(1, None, "first prompt"),
+            asst_rec(2, 1, "first answer"),
+            user_rec(3, Some(2), "prompt that was later edited"),
+            asst_rec(4, 3, "answer on the abandoned branch"),
+            user_rec(5, Some(2), "the edited prompt"),
+            asst_rec(6, 5, "answer on the live branch"),
+        ]
+        .join("\n")
+    }
+
+    #[test]
+    fn a_rewound_prompt_and_its_answer_are_marked_and_the_live_turns_are_not() {
+        let jsonl = rewind_fixture();
+        let v = session_view(&jsonl, &TailBlocks::default(), &ViewOptions::default());
+        assert_eq!(v.rewound, vec![tid(3), tid(4)]);
+        for live in [1, 2, 5, 6] {
+            assert!(!v.rewound.contains(&tid(live)), "turn {live} is live");
+        }
+        // A linear transcript carries no mark and serialises byte-identically
+        // to before (the field is skipped when empty).
+        let linear = [user_rec(1, None, "a"), asst_rec(2, 1, "b")].join("\n");
+        let lv = session_view(&linear, &TailBlocks::default(), &ViewOptions::default());
+        assert!(lv.rewound.is_empty());
+        assert!(serde_json::to_value(&lv).unwrap().get("rewound").is_none());
+        assert!(serde_json::to_value(&v).unwrap().get("rewound").is_some());
+    }
+
+    #[test]
+    fn a_compaction_crossing_marks_nothing_that_is_still_live() {
+        let jsonl = [
+            user_rec(1, None, "before the compaction"),
+            asst_rec(2, 1, "answer"),
+            format!(
+                r#"{{"type":"system","subtype":"compact_boundary","uuid":"{}","parentUuid":null,"logicalParentUuid":"{}"}}"#,
+                uu(3),
+                uu(2)
+            ),
+            user_rec(4, Some(3), "after the compaction"),
+            asst_rec(5, 4, "answer"),
+        ]
+        .join("\n");
+        let v = session_view(&jsonl, &TailBlocks::default(), &ViewOptions::default());
+        assert!(v.rewound.is_empty(), "{:?}", v.rewound);
+    }
+
+    #[test]
+    fn a_chain_cycle_degrades_to_no_mark_rather_than_a_wrong_mark() {
+        // 1 and 2 point at each other, and a rewound-looking sibling exists.
+        let jsonl = [
+            user_rec(1, Some(2), "cycle a"),
+            user_rec(3, None, "unrelated root"),
+            asst_rec(2, 1, "cycle b"),
+        ]
+        .join("\n");
+        let v = session_view(&jsonl, &TailBlocks::default(), &ViewOptions::default());
+        assert!(v.rewound.is_empty(), "{:?}", v.rewound);
+    }
+
+    #[test]
+    fn records_written_after_the_named_leaf_are_not_marked_rewound() {
+        let jsonl = [
+            user_rec(1, None, "a"),
+            asst_rec(2, 1, "b"),
+            format!(r#"{{"type":"last-prompt","leafUuid":"{}"}}"#, uu(2)),
+            user_rec(3, Some(2), "written after the leaf was recorded"),
+            asst_rec(4, 3, "c"),
+        ]
+        .join("\n");
+        let v = session_view(&jsonl, &TailBlocks::default(), &ViewOptions::default());
+        assert!(v.rewound.is_empty(), "{:?}", v.rewound);
+    }
+
+    /// The live-follow contract with a rewind in the stream: the TURN stream is
+    /// identical whatever the chunking (marks are not part of it), and the
+    /// whole-record pass answers identically over the append-built turns and
+    /// the full view, so a rewind arriving LATE (flipping earlier turns) cannot
+    /// make the two paths disagree.
+    #[test]
+    fn equivalence_golden_holds_with_a_rewind_in_the_stream() {
+        let jsonl = rewind_fixture();
+        let full = session_view(&jsonl, &TailBlocks::default(), &ViewOptions::default());
+        let full_fp: Vec<_> = full.turns.iter().map(fingerprint).collect();
+        assert_eq!(full.rewound, vec![tid(3), tid(4)]);
+        for chunk_size in [1usize, 2, 3, 10_000] {
+            let inc = fold_incremental(&jsonl, chunk_size);
+            let inc_fp: Vec<_> = inc.iter().map(fingerprint).collect();
+            assert_eq!(full_fp, inc_fp, "chunk_size={chunk_size}");
+            assert_eq!(
+                rewound_turn_ids(&jsonl, &inc),
+                full.rewound,
+                "chunk_size={chunk_size}: marks must not depend on chunking"
+            );
+        }
+        // Before the rewind arrives, the abandoned turns are live (a prefix
+        // is a complete conversation of its own) and unmarked.
+        let prefix: String = jsonl.lines().take(4).collect::<Vec<_>>().join("\n");
+        let pv = session_view(&prefix, &TailBlocks::default(), &ViewOptions::default());
+        assert!(pv.rewound.is_empty());
     }
 
     #[test]
