@@ -1228,6 +1228,29 @@ GET  /api/sessions/{session_id}/view        W2/R1 — the `session-view/1`
                                             session); `kb sessions recover
                                             <id> --chain` concatenates the
                                             parts' `/raw` bodies in order.
+                                            Known limits: a Claude Code
+                                            prompt that was rewound or edited
+                                            stays in the transcript on a
+                                            branch the conversation left, and
+                                            the view renders that branch
+                                            inline like any other turn (no
+                                            `parentUuid` walk, no mark).
+                                            Measured 2026-11-19 over one
+                                            host's local Claude Code
+                                            transcripts (23 sessions, 1235
+                                            real prompts): 0 of 268 prompts
+                                            and 0 of 19 sessions had an
+                                            off-chain prompt where the chain
+                                            walk completed; with the 4
+                                            compacted sessions (967 prompts)
+                                            recovered by a tolerant walk, 1 of
+                                            1235 prompts (0.08%) and 1 of 23
+                                            sessions (4.3%). Both are under
+                                            the 1% / 5% thresholds for
+                                            marking, so no caption ships; the
+                                            sample is small, re-measure on a
+                                            larger corpus before relying on
+                                            it.
 GET  /api/sessions/{session_id}/raw         W2/R1 — the decoded JSONL
      [?scrub=…]                              transcript, `text/plain`, byte-
                                             identical to what `claude -r`
