@@ -31,6 +31,8 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::sessions::chain::{flag, live_order, str_of, type_of};
+#[cfg(test)]
+use crate::sessions::chain::is_conversation_type;
 
 use super::ir::{Block, Conversation, Harness, Role, SourceKind, Summary, SummaryOrigin, Turn};
 use super::tools::{
