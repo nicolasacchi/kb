@@ -4994,6 +4994,62 @@ impl Db {
         Ok(rows)
     }
 
+    /// SG-Q3 — the distinct `(memory_kb, memory_id)` pairs already served to
+    /// ONE logical session (`COALESCE(segment_of, session_id) = logical_sid`)
+    /// at or after `since_unix`.
+    ///
+    /// A NULL `recalled_at` only occurs on CAPTURE rows (the enclosing Turn
+    /// carried no `ts`; V0035); live-serve rows always carry `served_at`.
+    /// With `since_unix <= 0` every row counts, NULL included (unchanged).
+    /// With `since_unix > 0` a NULL row is judged by its owning capture's
+    /// `sessions.ended_at` (joined on `artifact_id`), and when no such
+    /// session row exists it is treated as BEFORE the cutoff (not served),
+    /// so a /compact or /clear reset is never defeated by timestamp-less
+    /// rows. `ended_at` can overestimate a turn's time (it is the capture's
+    /// last activity), so a capture spanning the cutoff keeps its NULL rows
+    /// as served. (A capture row with no sessions row never matches the
+    /// newest-capture predicate at all.)
+    ///
+    /// Two row classes, each through the EXISTING predicates (no re-derived
+    /// coverage rule): capture rows of the newest capture of any session in
+    /// the chain ([`newest_capture_pred`]), and live-serve rows stamped with
+    /// the chain's raw id that [`served_uncovered_pred`] keeps visible.
+    /// Surfaced-never-scored (#10): the caller uses this only as an
+    /// exclusion set, after scoring.
+    pub fn memory_recalls_served_to_session(
+        &self,
+        logical_sid: &str,
+        since_unix: i64,
+    ) -> Result<Vec<(String, String)>> {
+        let chain = "SELECT sg.session_id FROM sessions sg \
+                     WHERE sg.is_newest = 1 \
+                       AND (sg.session_id = ?1 OR sg.segment_of = ?1)";
+        let sql = format!(
+            "SELECT DISTINCT memory_kb, memory_id FROM memory_recalls \
+             WHERE (?2 <= 0 \
+                    OR COALESCE(recalled_at, \
+                         (SELECT sx.ended_at FROM sessions sx \
+                          WHERE sx.artifact_id = memory_recalls.artifact_id \
+                          LIMIT 1)) >= ?2) \
+               AND ( (artifact_id NOT LIKE 'served-%' \
+                      AND session_id IN ({chain}) AND {cap}) \
+                  OR (session_id IN (SELECT ?1 UNION \
+                                     SELECT sp.session_id FROM sessions sp \
+                                     WHERE sp.segment_of = ?1) \
+                      AND {served}) ) \
+             ORDER BY memory_kb, memory_id",
+            cap = newest_capture_pred("artifact_id", "memory_recalls.session_id"),
+            served = served_uncovered_pred("memory_recalls"),
+        );
+        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let rows = stmt
+            .query_map(params![logical_sid, since_unix], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
     /// Shared row-mapper for the 8-column `memory_recalls` SELECT shape
     /// `memory_recalls_for_session` uses (same `used` INTEGER→bool
     /// convention as `via_subagent`/`truncated` elsewhere in this file).
@@ -13664,6 +13720,161 @@ mod tests {
             "started_at DESC picks the newest capture regardless of write order"
         );
         assert_eq!(rows[0].memory_id, "bbbbbbbbbbbb");
+    }
+
+    fn served(kb: &str, id: &str, pos: u32, at: i64) -> ServedRecallRow {
+        ServedRecallRow {
+            memory_kb: kb.into(),
+            memory_id: id.into(),
+            pos,
+            title: "t".into(),
+            injected_chars: 1,
+            served_at: at,
+        }
+    }
+
+    /// SG-Q3 — a serve row alone counts; other sessions do not; the T cutoff
+    /// applies; an id collision across two memory kbs stays two pairs.
+    #[test]
+    fn served_to_session_serve_only_cutoff_other_session_and_kb_collision() {
+        let mut db = db();
+        db.memory_recalls_append(
+            "sid-a",
+            &[
+                served("notes", "aaaaaaaaaaaa", 1, 1_000),
+                served("main", "aaaaaaaaaaaa", 2, 1_000),
+            ],
+        )
+        .unwrap();
+        db.memory_recalls_append("sid-a", &[served("notes", "oldoldoldold", 1, 100)])
+            .unwrap();
+        db.memory_recalls_append("sid-b", &[served("notes", "bbbbbbbbbbbb", 1, 1_000)])
+            .unwrap();
+        let got = db.memory_recalls_served_to_session("sid-a", 500).unwrap();
+        assert_eq!(
+            got,
+            vec![
+                ("main".to_string(), "aaaaaaaaaaaa".to_string()),
+                ("notes".to_string(), "aaaaaaaaaaaa".to_string())
+            ]
+        );
+        let all = db.memory_recalls_served_to_session("sid-a", 0).unwrap();
+        assert_eq!(all.len(), 3);
+        assert!(db
+            .memory_recalls_served_to_session("sid-none", 0)
+            .unwrap()
+            .is_empty());
+    }
+
+    /// SG-Q3 — NULL `recalled_at` capture rows: all count at since=0; with a
+    /// cutoff they are judged by the owning session's `ended_at`.
+    #[test]
+    fn served_to_session_null_recalled_at_judged_by_capture_time() {
+        let mut db = db();
+        db.sessions_upsert(&session_row("cap-old", "sid-a", 1_000))
+            .unwrap(); // ended_at 1_600
+        db.memory_recalls_replace(
+            "cap-old",
+            &[memory_recall_row(
+                "notes",
+                "beforebefore",
+                "sid-a",
+                "t-0",
+                None,
+                "cap-old",
+            )],
+        )
+        .unwrap();
+        let got = db.memory_recalls_served_to_session("sid-a", 0).unwrap();
+        assert_eq!(got.len(), 1);
+        // cutoff after the capture ended: not served
+        assert!(db
+            .memory_recalls_served_to_session("sid-a", 2_000)
+            .unwrap()
+            .is_empty());
+        // cutoff before the capture ended: served
+        assert_eq!(
+            db.memory_recalls_served_to_session("sid-a", 1_500)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    /// SG-Q3 — a capture row counts, and a serve it covers is not a second
+    /// pair (distinct), while a stale capture's rows do not count.
+    #[test]
+    fn served_to_session_capture_covered_and_stale_capture() {
+        let mut db = db();
+        db.sessions_upsert(&session_row("cap-old", "sid-a", 1_700_000_000))
+            .unwrap();
+        db.memory_recalls_replace(
+            "cap-old",
+            &[memory_recall_row(
+                "notes",
+                "staleaaaaaaa",
+                "sid-a",
+                "t-0",
+                Some(1_700_000_010),
+                "cap-old",
+            )],
+        )
+        .unwrap();
+        db.sessions_upsert(&session_row("cap-new", "sid-a", 1_700_000_100))
+            .unwrap();
+        db.memory_recalls_replace(
+            "cap-new",
+            &[memory_recall_row(
+                "notes",
+                "aaaaaaaaaaaa",
+                "sid-a",
+                "t-1",
+                Some(1_700_000_120),
+                "cap-new",
+            )],
+        )
+        .unwrap();
+        db.memory_recalls_append(
+            "sid-a",
+            &[served("notes", "aaaaaaaaaaaa", 1, 1_700_000_121)],
+        )
+        .unwrap();
+        let got = db.memory_recalls_served_to_session("sid-a", 0).unwrap();
+        assert_eq!(got, vec![("notes".to_string(), "aaaaaaaaaaaa".to_string())]);
+    }
+
+    /// SG-Q3 — a segment chain: serves stamped with the raw id and capture
+    /// rows of a part (`segment_of = raw`) both count for the logical id.
+    #[test]
+    fn served_to_session_spans_segment_chain() {
+        let mut db = db();
+        let mut part = session_row("cap-p1", "sid-a-p01", 1_700_000_100);
+        part.segment_of = Some("sid-a".into());
+        db.sessions_upsert(&part).unwrap();
+        db.memory_recalls_replace(
+            "cap-p1",
+            &[memory_recall_row(
+                "notes",
+                "partaaaaaaaa",
+                "sid-a-p01",
+                "t-1",
+                Some(1_700_000_120),
+                "cap-p1",
+            )],
+        )
+        .unwrap();
+        db.memory_recalls_append(
+            "sid-a",
+            &[served("notes", "rawaaaaaaaaa", 1, 1_700_000_050)],
+        )
+        .unwrap();
+        let got = db.memory_recalls_served_to_session("sid-a", 0).unwrap();
+        let ids: Vec<&str> = got.iter().map(|(_, i)| i.as_str()).collect();
+        assert_eq!(ids, vec!["partaaaaaaaa", "rawaaaaaaaaa"]);
+        assert!(db
+            .memory_recalls_served_to_session("sid-other", 0)
+            .unwrap()
+            .is_empty());
     }
 
     /// MI-W1.1 (revised) — `sessions_delete` cascades to `memory_recalls`,

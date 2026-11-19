@@ -45,6 +45,8 @@ pub mod push;
 pub mod queries;
 pub mod read;
 pub mod reading;
+pub mod recall_bench;
+pub mod recall_ctx;
 pub mod refs;
 pub mod reindex;
 pub mod related;

@@ -1128,7 +1128,8 @@ remember`/`recall`), which it pushes every turn. Load-bearing constraints:
   **Staleness is a query-time SURFACED signal (age + `stale` flag), never used
   to drop a hit** (#27: episodes are immutable evidence, discounted not
   deleted). Both advertised once at SessionStart (`kb-wake.sh`), never
-  per-turn-injected.
+  per-turn-injected. (The POINTER amendment at the end of this entry narrows
+  that to episodic SUBSTANCE and sanctions one bounded pointer lane.)
 - **Insights are more child tables, deterministically parsed (R4/R5).**
   `session_research` (V0020) records kb/web searches, subagents, skills, plan
   spans — extracted from the SAME `tool_use` loop, "detected not ground truth"
@@ -1739,6 +1740,59 @@ term-to-session map derived from beats only; beat wire stays `v:1`
 (additive, unknown keys already ignored). That `term` field is planned
 (T13). Terminal bytes and pictures are unscrubbable, so they never
 leave this tier.
+
+*POINTER amendment (2026-11-16, operator ruling; the lane is planned, not
+built).* "Never auto-injected" is narrowed from episodic EXISTENCE to
+episodic SUBSTANCE. The per-prompt recall hook may inject POINTERS to past
+sessions. Content still reaches an agent's context only through the pull
+verbs (`kb why`, `kb recollect`, `kb context`), and pulling stays the
+agent's decision. Why the rule moved: the pull surface is out-competed, not
+undiscovered (12 real `kb why`/`kb recollect` invocations across 4,793
+transcripts, docs/research/episodic-pull-adoption-telemetry-2026-07.html),
+and the turn-1 counts scent (CT-D1) reports the size of the search pool, so
+it reads the same for every prompt. The two reasons for the original rule
+(context rot, and sessions reinforcing themselves once injected as
+guidance) still hold, so every condition below is load-bearing:
+
+- **Closed field set.** A pointer is: sanitized title, date, project,
+  session id, commit count. Never a digest excerpt, the `closed:` line,
+  `last_assistant_text`, a first prompt, or any transcript or sidecar text.
+- **One sanitizer.** A title derives from transcript text and has been
+  observed carrying a previous recall block and harness wrapper tags. Every
+  title passes ONE sanitizer (control tags and hook-injected blocks
+  stripped, one line, length-capped) before it can be injected; a pointer
+  that fed a prior injection back in would be the self-reinforcement loop
+  by another route.
+- **Eligibility.** A session with no title of its own (the title is its
+  first prompt, or harness worker boilerplate) cannot be pointed at. Also
+  excluded: `trivial` substance, the current logical session
+  (`COALESCE(segment_of, session_id)`) and every other capture of it, and
+  any capture that is not the newest.
+- **An absolute relevance floor is a precondition.** The lane exists only
+  while a score that is comparable ACROSS queries can say "nothing
+  relevant". The rank-derived `recollect_score` is not such a score (a
+  nonsense query outscores a real one). No floor means the lane is off; it
+  never degrades to a top-N.
+- **Bounds.** At most two pointers per turn, and each session is pointed
+  at at most once per recalling session.
+- **Framing.** Pointers render as unverified data with the command that
+  opens them, never as guidance.
+- **One home.** The pointer lines REPLACE the turn-1 counts scent; they are
+  not added beside it.
+- **Selection is relevance over the R1 digest only.** Success, errors,
+  evidence and staleness stay SURFACED and never select or order a pointer,
+  exactly as in `recollect`.
+- **R0 is unchanged.** Sessions-category rows stay out of default search
+  and out of memory recall. The pointer lane is its own lane: a pointer is
+  never a row of the memory recall result, never enters
+  `kb_core::memory`'s scoring, and writes no `memory_recalls` row.
+
+When the lane lands it brings two negative tests that do not exist today:
+one that fails if any field outside the closed set reaches an injected
+block, and one that fails if an unsanitized title does. Revisit this
+amendment once auto-distilled candidate memories are in use: if useful
+episodes reliably become memories, the pointer lane may no longer earn its
+place.
 
 ### 12. Meta edits rewrite the SOURCE
 
