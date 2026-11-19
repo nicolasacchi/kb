@@ -5006,6 +5006,73 @@ mod tests {
         assert!(v.rewound.is_empty(), "{:?}", v.rewound);
     }
 
+    /// A current auto-compaction: the boundary's `logicalParentUuid` is the
+    /// preserved segment's tail, written AFTER the boundary and chained back
+    /// to it through the attachments and the compact summary.
+    fn anomalous_compaction_fixture() -> String {
+        let att = |n: u32, parent: u32| {
+            format!(
+                r#"{{"type":"attachment","uuid":"{}","parentUuid":"{}"}}"#,
+                uu(n),
+                uu(parent)
+            )
+        };
+        [
+            user_rec(1, None, "first prompt"),
+            asst_rec(2, 1, "first answer"),
+            user_rec(3, Some(2), "prompt that was later edited"),
+            asst_rec(4, 3, "answer on the abandoned branch"),
+            user_rec(5, Some(2), "the edited prompt"),
+            asst_rec(6, 5, "answer on the live branch"),
+            format!(
+                r#"{{"type":"system","subtype":"compact_boundary","uuid":"{}","parentUuid":null,"logicalParentUuid":"{}","compactMetadata":{{"trigger":"auto","preservedSegment":{{"tailUuid":"{}"}}}}}}"#,
+                uu(7),
+                uu(12),
+                uu(12)
+            ),
+            att(8, 7),
+            att(9, 8),
+            att(10, 9),
+            format!(
+                r#"{{"type":"user","uuid":"{}","parentUuid":"{}","isCompactSummary":true,"message":{{"role":"user","content":"summary"}}}}"#,
+                uu(11),
+                uu(10)
+            ),
+            att(12, 11),
+            user_rec(13, Some(12), "after the compaction"),
+            asst_rec(14, 13, "answer after"),
+        ]
+        .join("\n")
+    }
+
+    #[test]
+    fn a_rewind_before_a_current_compaction_is_marked_and_live_turns_are_not() {
+        let jsonl = anomalous_compaction_fixture();
+        let v = session_view(&jsonl, &TailBlocks::default(), &ViewOptions::default());
+        assert_eq!(v.rewound, vec![tid(3), tid(4)]);
+        for live in [1, 2, 5, 6, 13, 14] {
+            assert!(!v.rewound.contains(&tid(live)), "turn {live} is live");
+        }
+    }
+
+    #[test]
+    fn equivalence_golden_holds_across_a_current_compaction() {
+        let jsonl = anomalous_compaction_fixture();
+        let full = session_view(&jsonl, &TailBlocks::default(), &ViewOptions::default());
+        let full_fp: Vec<_> = full.turns.iter().map(fingerprint).collect();
+        assert_eq!(full.rewound, vec![tid(3), tid(4)]);
+        for chunk_size in [1usize, 3, 10_000] {
+            let inc = fold_incremental(&jsonl, chunk_size);
+            let inc_fp: Vec<_> = inc.iter().map(fingerprint).collect();
+            assert_eq!(full_fp, inc_fp, "chunk_size={chunk_size}");
+            assert_eq!(
+                rewound_turn_ids(&jsonl, &inc),
+                full.rewound,
+                "chunk_size={chunk_size}"
+            );
+        }
+    }
+
     #[test]
     fn a_chain_cycle_degrades_to_no_mark_rather_than_a_wrong_mark() {
         // 1 and 2 point at each other, and a rewound-looking sibling exists.
