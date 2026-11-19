@@ -216,10 +216,18 @@ pin, take, bodies and refs stay desktop-only.
 Two client-side markers, both keyed on the session id, both files under
 `~/.cache/kb/`:
 
-- `slate-cursor-<sid>` — written by `open` (every mode) and by `delta`
-  when `--since` is absent; an explicit `--since` never touches it. No
-  READ ever writes server-side; this is purely the client's own
-  bookkeeping.
+- `slate-cursor-<sid>` — written by `open` (every mode) and by an
+  UNFILTERED `delta` when `--since` is absent; an explicit `--since` never
+  touches it, and neither does a `--kinds`-filtered `delta`. No READ ever
+  writes server-side; this is purely the client's own bookkeeping.
+- `slate-push-cursor-<sid>` — the cursor of a `--kinds`-filtered `delta`
+  with no `--since` (the omp/OpenCode push). A filtered delta serves only a
+  subset, so advancing the shared cursor to head would make the per-prompt
+  lane skip the kinds it left out (D26: found/idea/tried stay pull-only);
+  it reads `max(push cursor, shared cursor)` as its since and writes only
+  this file. It also reports no cursor to the daemon, because D27's
+  "served" means what was actually served. A pushed post can therefore be
+  shown once more by the next per-prompt delta: a duplicate, never a loss.
 - `slate-topic-<sid>` — written by `open --topic T`; every posting verb
   reads it as a default topic unless `--topic` is given explicitly.
 

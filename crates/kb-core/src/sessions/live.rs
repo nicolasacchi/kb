@@ -64,14 +64,11 @@ pub enum Holder {
     Ended,
 }
 
-/// The six lanes [`derive_state`] can return. `PresumedEnded` is reserved
-/// for L2 (the daemon's in-memory beat-lease registry: no beat AND no
-/// landed capture for a long window) — nothing in this pure function, which
-/// only ever sees `Holder::Ended` as a fact fed to it, can derive it yet.
-/// LSC-2's `POST /sessions/beat` intake reuses `derive_state` verbatim
-/// (does not re-derive state logic), so this variant stays unreachable from
-/// the registry too in this phase — see `kb-server/src/live_registry.rs`'s
-/// module docs.
+/// The six lanes [`derive_state`] can return. `PresumedEnded` is reached by
+/// an agent-held session that has been silent for `abandon_after_secs`
+/// (`Holder::Agent`, no beat for that long: the process likely died without
+/// writing a close). A `Holder::Human` session never reaches it (it goes
+/// `Waiting` then `Cold`), and `Holder::Ended` is `Finished`.
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

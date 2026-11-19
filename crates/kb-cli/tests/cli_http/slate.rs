@@ -304,6 +304,92 @@ async fn cursor_is_seeded_by_open_advanced_by_delta_and_untouched_by_explicit_si
     assert_eq!(std::fs::read_to_string(&marker).unwrap().trim(), "2");
 }
 
+/// FUSLATE: the omp push runs `delta --kinds now,warn,hand,ask,answer` with
+/// no `--since`. It must not move the shared cursor past a found/idea post
+/// it filtered out (the next per-prompt, unfiltered delta must still serve
+/// it), and it must not report the head as served (D27).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_kinds_filtered_push_never_eats_the_pull_lanes_posts() {
+    let f = boot("fuslate").await;
+    f.ok(&["now", "first", "--session-id", "sess-a"]);
+    let shared = f.cache.join("kb/slate-cursor-sess-c");
+    let push = f.cache.join("kb/slate-push-cursor-sess-c");
+    f.ok(&["open", "--hybrid", "--session-id", "sess-c"]);
+    assert_eq!(std::fs::read_to_string(&shared).unwrap().trim(), "1");
+
+    // A found post (an idea: pull-only, like found) then a warn, both from ANOTHER session.
+    f.ok(&[
+        "idea",
+        "the pool leaks on shutdown",
+        "--session-id",
+        "sess-a",
+    ]);
+    f.ok(&["warn", "do not touch the lock", "--session-id", "sess-a"]);
+
+    // The push, exactly as kb-omp builds it (no --since).
+    let kinds = "now,warn,hand,ask,answer";
+    let v = f.ok_json(&[
+        "delta",
+        "--harness",
+        "omp",
+        "--budget",
+        "1500",
+        "--session-id",
+        "sess-c",
+        "--kinds",
+        kinds,
+    ]);
+    let text = v["text"].as_str().unwrap();
+    assert!(text.contains("do not touch the lock"), "{text}");
+    assert!(!text.contains("the pool leaks"), "{text}");
+    assert_eq!(
+        std::fs::read_to_string(&shared).unwrap().trim(),
+        "1",
+        "a filtered delta must not advance the shared cursor"
+    );
+    assert_eq!(std::fs::read_to_string(&push).unwrap().trim(), "3");
+
+    // The push lane's own cursor makes a second push serve nothing new.
+    let again = f.ok_json(&["delta", "--session-id", "sess-c", "--kinds", kinds]);
+    assert!(
+        !again["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("do not touch"),
+        "{again}"
+    );
+
+    // The per-prompt (unfiltered) delta still serves the found post.
+    let pull = f.ok(&["delta", "--session-id", "sess-c"]);
+    assert!(pull.contains("the pool leaks on shutdown"), "{pull}");
+    assert_eq!(std::fs::read_to_string(&shared).unwrap().trim(), "3");
+}
+
+/// FUSLATE / D27: a session whose only read is a kinds-filtered delta has
+/// not been SERVED the head, so no cursor is reported for it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_kinds_filtered_delta_reports_no_served_cursor() {
+    let f = boot("fuslate-report").await;
+    f.ok(&["idea", "a pull-only note", "--session-id", "sess-a"]);
+    let served = |f: &Fixture| {
+        let url = format!("{}/api/slates", f.url);
+        async move {
+            let v: Value = reqwest::get(url).await.unwrap().json().await.unwrap();
+            v.as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["slug"] == "fuslate-report")
+                .map(|r| r["sessions_served"].as_u64().unwrap())
+                .unwrap_or(0)
+        }
+    };
+    let before = served(&f).await;
+    f.ok(&["delta", "--session-id", "sess-p", "--kinds", "now,warn"]);
+    assert_eq!(served(&f).await, before, "filtered delta must not report");
+    f.ok(&["delta", "--session-id", "sess-p"]);
+    assert_eq!(served(&f).await, before + 1, "an unfiltered delta reports");
+}
+
 /// `open --topic T` DECLARES the session topic; later posting verbs pick
 /// it up, and a read is never silently narrowed by it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -2326,7 +2326,12 @@ async fn bring_up_kb(
     // pause/resume route + exclusion ops flip it live via `ctx.ingest.gate()`).
     let ingest = kb_core::indexer::IngestSink::new(ingest_tx, bus.clone(), kb_name.clone())
         .with_extensions(ext_map.clone())
-        .with_gate(gate.clone());
+        .with_gate(gate.clone())
+        // FUINDEX — the reconciler's recent-file window + re-check delay
+        // scale with the configured watcher debounce.
+        .with_debounce(Duration::from_millis(
+            indexer_section.resolved_debounce_ms(),
+        ));
 
     let kb_for_indexer = kb_name.clone();
     let slug_for_indexer = source_slug.clone();

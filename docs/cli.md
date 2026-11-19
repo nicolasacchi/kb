@@ -1156,7 +1156,10 @@ kb slate show #n | delta [--since SEQ] [--limit N] [--kinds a,b]
                                     changed since your cursor (the
                                     per-prompt hook lane; the cursor lives
                                     at ~/.cache/kb/slate-cursor-<sid> and
-                                    only `open`/`delta` write it — `--kinds`,
+                                    only `open`/an unfiltered `delta` write
+                                    it; a `--kinds` delta keeps its own
+                                    slate-push-cursor-<sid> and reports no
+                                    cursor — `--kinds`,
                                     D26, is a csv over the twelve kind words
                                     forwarded verbatim as `?kinds=`, an
                                     unknown word is the server's 400
