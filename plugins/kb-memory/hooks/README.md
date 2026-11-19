@@ -141,6 +141,16 @@ registering anywhere `kb-memory` is already installed. Design:
   pushes each item through the normal scrubbed capture path and deletes it;
   `kb doctor --hooks` (check `outbox`) counts what is waiting. Test:
   `tests/test-capture-spool.sh`.
+  **Large spools drain in the background.** The hook's own replay is a
+  synchronous slice (`KB_SPOOL_SYNC_SECS`, default 10, still inside the hook
+  budget). If that slice times out - a transcript of tens of MB does not land in
+  10 s - the rest is replayed by a detached `kb sessions capture --replay-spool`
+  (`hook_spool_drain_detached` in `kb-hook-lib.sh`): one drainer at a time (the
+  `.drain.lock` directory in the spool holds its pid; a dead or over-age lock is
+  reclaimed), bounded by `KB_SPOOL_DRAIN_SECS` (default 600), with stdin/stdout/
+  stderr closed so the hook never waits on it. The `outbox` doctor check can
+  therefore WARN briefly after a big capture; it clears when the drain lands.
+  Test: `tests/test-capture-spool-drain.sh`.
 - **The codex/opencode/omp/grok adapters spool too (v0.45 N4)** - none of
   them writes session HTML any more. Each translates its harness transcript to
   Claude-shaped JSONL (the first record is an `adapter-meta` line carrying

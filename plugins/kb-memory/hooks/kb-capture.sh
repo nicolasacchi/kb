@@ -16,7 +16,9 @@
 # capture parks the raw transcript in a private spool OUTSIDE every corpus
 # (`kb-hook-lib.sh` hook_spool_put: dir 0700, files 0600, never indexed); the
 # next successful capture — or `kb sessions capture --replay-spool` — pushes
-# it through the scrubbed path and deletes it.
+# it through the scrubbed path and deletes it. A spool too large to land in the
+# hook's own replay slice drains in a detached, locked, bounded background
+# replay (`hook_spool_replay` in the lib), never blocking the hook.
 #
 # Deadlines: every `kb` call is bounded by the shared hook deadline
 # (kb-hook-lib.sh). `KB_CAPTURE_BUDGET_SECS` (default 25) sits below the 30s
@@ -31,6 +33,7 @@
   hook_spool_put() { return 1; }
   hook_spool_pending() { return 1; }
   hook_spool_drop() { :; }
+  hook_spool_replay() { :; }
   hook_deadline_init() { :; }
 }
 KB_HOOK_BUDGET_SECS="${KB_CAPTURE_BUDGET_SECS:-25}"
@@ -59,7 +62,7 @@ if command -v kb >/dev/null 2>&1; then
     hook_spool_drop "$raw_sid"
     # A prior failure may have left spooled transcripts: land them now.
     if hook_spool_pending; then
-      run_to 10 kb sessions capture --replay-spool --out "$KB_SESSIONS_DIR" >/dev/null 2>&1 || true
+      hook_spool_replay
     fi
     exit 0
   fi

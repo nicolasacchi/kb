@@ -261,6 +261,67 @@ hook_spool_drop() {
   fi
 }
 
+# hook_spool_drain_detached
+# Replay the whole spool in a DETACHED background process, so a spool too big to
+# land inside the hook's own budget (a transcript of tens of MB) still drains
+# without the Stop hook waiting for it. The caller returns at once.
+#   * one drainer at a time: `<spool>/.drain.lock` is a directory made with
+#     mkdir (atomic); it holds the drainer's pid. A lock whose pid is dead, or
+#     which is older than the runtime bound plus slack, is reclaimed;
+#   * bounded: the replay runs under `timeout $KB_SPOOL_DRAIN_SECS` (default
+#     600); without timeout(1) it runs unbounded (kb's replay terminates);
+#   * never fails the hook: every error path is a silent return 0, and the
+#     drainer has stdin/stdout/stderr closed so no harness pipe stays open.
+# Needs KB_SESSIONS_DIR and `kb` on PATH.
+hook_spool_drain_detached() {
+  local dir lock pid secs stale_min
+  dir="$(hook_spool_dir)" || return 0
+  [ -d "$dir" ] || return 0
+  secs="${KB_SPOOL_DRAIN_SECS:-600}"
+  case "$secs" in "" | *[!0-9]*) secs=600 ;; esac
+  lock="$dir/.drain.lock"
+  stale_min=$((secs / 60 + 2))
+  if [ -d "$lock" ]; then
+    pid="$(cat "$lock/pid" 2>/dev/null)"
+    if [ -n "$pid" ]; then
+      if kill -0 "$pid" 2>/dev/null && [ -z "$(find "$lock" -maxdepth 0 -mmin "+$stale_min" 2>/dev/null)" ]; then
+        return 0 # a live drainer already owns the spool
+      fi
+    elif [ -z "$(find "$lock" -maxdepth 0 -mmin "+$stale_min" 2>/dev/null)" ]; then
+      return 0 # a drainer is between mkdir and writing its pid
+    fi
+    rm -rf "$lock"
+  fi
+  (umask 077; mkdir "$lock") 2>/dev/null || return 0 # lost the race to another hook
+  (
+    exec </dev/null >/dev/null 2>&1
+    trap 'rm -rf "$lock"' EXIT
+    trap 'exit 143' TERM HUP INT
+    if command -v timeout >/dev/null 2>&1; then
+      timeout "$secs" kb sessions capture --replay-spool --out "$KB_SESSIONS_DIR"
+    else
+      kb sessions capture --replay-spool --out "$KB_SESSIONS_DIR"
+    fi
+  ) </dev/null >/dev/null 2>&1 &
+  printf '%s' "$!" >"$lock/pid" 2>/dev/null
+  disown 2>/dev/null || true
+  return 0
+}
+
+# hook_spool_replay
+# Land every pending spool item after a successful capture. A first,
+# synchronous attempt (`KB_SPOOL_SYNC_SECS`, default 10, still bounded by the
+# hook budget) keeps the common case - small items - landing before the hook
+# exits. If that attempt TIMES OUT (rc 124: a large item, or no budget left),
+# the rest drains in the background (hook_spool_drain_detached) instead of
+# staying spooled until an operator runs `--replay-spool` by hand.
+hook_spool_replay() {
+  local rc=0
+  run_to "${KB_SPOOL_SYNC_SECS:-10}" kb sessions capture --replay-spool --out "$KB_SESSIONS_DIR" >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 124 ] && hook_spool_drain_detached
+  return 0
+}
+
 # hook_spool_put_sidecars <raw-session-id> <subagents-dir>
 # Park an adapter's translated subagent sidecars (agent-*.jsonl) next to its
 # spooled main transcript, at <spool>/<raw-session-id>/subagents/ - exactly
@@ -434,7 +495,7 @@ hook_adapter_land() {
         # The spooled snapshot of THIS session is now older than what landed.
         hook_spool_drop "$sid"
         if hook_spool_pending; then
-          run_to 10 kb sessions capture --replay-spool --out "$KB_SESSIONS_DIR" >/dev/null 2>&1 || true
+          hook_spool_replay
         fi
         return 0
       fi
