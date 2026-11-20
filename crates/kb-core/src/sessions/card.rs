@@ -20,6 +20,13 @@ pub const SESSION_CARD_SCHEMA: &str = "kb-session-card/1";
 /// `not_committed` considers at most this many of a session's resolved
 /// `kind="commit"` commits (newest first by `seq`).
 pub const NOT_COMMITTED_COMMIT_CAP: usize = 20;
+/// The reason every capture-backed lane of a live-only card carries.
+pub const CAPTURE_PENDING_REASON: &str = "no capture yet";
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 /// The renderer's line budget: `render_text` never emits a longer line.
 pub const CARD_TEXT_LINE_MAX_CHARS: usize = 80;
 
@@ -91,10 +98,23 @@ pub struct SessionCard {
     /// Always `"kb-session-card/1"` ([`SESSION_CARD_SCHEMA`]).
     pub schema: String,
     pub session_id: String,
-    /// The kb of the session's newest capture.
+    /// The kb of the session's newest capture. Empty on a live-only card
+    /// (`capture_pending`): no capture, so no kb.
     pub kb: String,
-    /// The newest capture's artifact id (`SessionOut.artifact_id`).
+    /// The newest capture's artifact id (`SessionOut.artifact_id`). Empty on
+    /// a live-only card.
     pub artifact_id: String,
+    /// FUWEBOPEN — `true` ONLY on a live-only card: a session the live
+    /// registry knows from hook beats but that has no capture row yet (the
+    /// first capture lands at the end of the first turn). Every
+    /// capture-backed lane is then `available: false` with the reason
+    /// [`CAPTURE_PENDING_REASON`]; `summary` is built from the registry row,
+    /// and `terminal` comes from the same registry-derived path as ever.
+    /// Skip-serialised when `false`, so every capture-backed card stays
+    /// byte-identical to the pre-FUWEBOPEN wire. Surfaced, never scored,
+    /// never persisted.
+    #[serde(skip_serializing_if = "is_false")]
+    pub capture_pending: bool,
     /// The daemon-rendered plain text (see [`render_text`]).
     pub text: String,
     pub summary: SummaryLane,
@@ -935,6 +955,9 @@ impl OutcomeLane {
 pub fn render_text(card: &SessionCard) -> String {
     let mut out = String::new();
     let sections = render_section_lines(card);
+    if card.capture_pending {
+        return render_pending_text(card, &sections);
+    }
 
     // Section lines are sanitized once, at construction (see
     // `render_section_lines`); `push` never re-sanitizes them — the
@@ -1039,7 +1062,13 @@ pub fn render_text(card: &SessionCard) -> String {
             )));
         }
     }
-    let t = &card.terminal;
+    push(terminal_line(&card.terminal));
+    out
+}
+
+/// The one `terminal:` line, shared by the capture-backed and the
+/// live-only renderers.
+fn terminal_line(t: &TerminalLane) -> String {
     if t.available {
         let state = match t.state {
             Some(LiveState::Working) => "working",
@@ -1050,17 +1079,40 @@ pub fn render_text(card: &SessionCard) -> String {
             Some(LiveState::PresumedEnded) => "presumed_ended",
             None => "unknown",
         };
-        push(sanitize_line(&format!(
+        sanitize_line(&format!(
             "terminal: {} ({})",
             t.term_id.as_deref().unwrap_or("—"),
             state
-        )));
+        ))
     } else {
-        push(sanitize_line(&format!(
+        sanitize_line(&format!(
             "terminal: unavailable ({})",
             t.reason.as_deref().unwrap_or("unreadable")
-        )));
+        ))
     }
+}
+
+/// FUWEBOPEN — the text of a live-only card: what the registry knows, and
+/// one honest line saying the capture has not landed. No capture-backed
+/// lane is printed as a fact (and none as an `unavailable` list either:
+/// they are all the same single cause).
+fn render_pending_text(card: &SessionCard, sections: &[(String, Vec<String>)]) -> String {
+    let s = &card.summary;
+    let mut lines = vec![
+        sanitize_line(&format!("session {}", card.session_id)),
+        sanitize_line(&format!("{} ({})", s.display_name, s.harness)),
+        sanitize_line("capture: pending (the transcript lands at the end of the first turn)"),
+        sanitize_line(&format!("resume: {}", s.resume)),
+    ];
+    if let Some(slug) = &s.project_slug {
+        lines.push(sanitize_line(&format!("project: {slug}")));
+    }
+    if let Some(live) = section_of(sections, "live") {
+        lines.extend(live);
+    }
+    lines.push(terminal_line(&card.terminal));
+    let mut out = lines.join("\n");
+    out.push('\n');
     out
 }
 
@@ -1085,6 +1137,7 @@ mod tests {
             session_id: "sess-1".to_string(),
             kb: "smoke".to_string(),
             artifact_id: "a000000000001".to_string(),
+            capture_pending: false,
             text: String::new(),
             summary: SummaryLane::default(),
             outcome: OutcomeLane::unavailable("x"),
@@ -1305,5 +1358,78 @@ mod tests {
         );
         // The cap constant is the one the server loop uses.
         assert_eq!(NOT_COMMITTED_COMMIT_CAP, 20);
+    }
+
+    fn pending_card() -> SessionCard {
+        let mut c = empty_card();
+        c.kb = String::new();
+        c.artifact_id = String::new();
+        c.capture_pending = true;
+        c.summary = SummaryLane {
+            available: true,
+            display_name: "demo".to_string(),
+            harness: "claude".to_string(),
+            project_slug: Some("demo".to_string()),
+            resume: "claude -r sess-1".to_string(),
+            ..Default::default()
+        };
+        c.outcome = OutcomeLane::unavailable(CAPTURE_PENDING_REASON);
+        c.files = FilesLane::unavailable(CAPTURE_PENDING_REASON);
+        c.live = LiveLane {
+            available: true,
+            state: Some(LiveState::Waiting),
+            holder: Some(Holder::Human),
+            confidence: Some(Confidence::Observed),
+            since_secs: Some(5),
+            ..Default::default()
+        };
+        c.terminal = TerminalLane {
+            available: true,
+            reason: None,
+            term_id: Some("abc123".to_string()),
+            harness: Some("claude".to_string()),
+            state: Some(LiveState::Waiting),
+            blocked: Some(false),
+            admitted: true,
+            via: None,
+        };
+        c
+    }
+
+    #[test]
+    fn capture_pending_is_skip_serialised_when_false_and_present_when_true() {
+        let v = serde_json::to_value(empty_card()).unwrap();
+        assert!(
+            v.get("capture_pending").is_none(),
+            "a capture-backed card must stay byte-identical"
+        );
+        let v = serde_json::to_value(pending_card()).unwrap();
+        assert_eq!(v["capture_pending"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn pending_text_says_no_capture_yet_and_prints_no_empty_lane_as_a_fact() {
+        let mut card = pending_card();
+        card.text = render_text(&card);
+        let t = &card.text;
+        assert!(t.contains("capture: pending"), "{t}");
+        assert!(t.contains("terminal: abc123 (waiting)"), "{t}");
+        assert!(t.contains("live: "), "{t}");
+        for banned in [
+            "files:",
+            "outcome:",
+            "decisions:",
+            "commits:",
+            "children:",
+            "started:",
+        ] {
+            assert!(
+                !t.contains(banned),
+                "{banned} leaked into pending text: {t}"
+            );
+        }
+        assert!(t
+            .lines()
+            .all(|l| l.chars().count() <= CARD_TEXT_LINE_MAX_CHARS));
     }
 }
