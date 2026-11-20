@@ -418,20 +418,28 @@ async function pictureChecks(page: Page, api: Api, c: Ctx, dpr: number, placemen
   const shot = decodePng(await img.screenshot());
   const near = (a: Rgb | null, b: Rgb | null, tol: number): boolean =>
     !!a && !!b && a.every((v, i) => Math.abs(v - b[i]) <= tol);
+  // The picture is `object-fit: contain` inside its cell box: scaled to fit and
+  // centred, letterboxed when the viewer's real cell aspect is not the tap's
+  // 9x18. FUTERMFIT fits the font from the LOADED webfont (taller cells than the
+  // fallback face the old fit measured), so a source pixel is mapped through the
+  // drawn rectangle rather than assuming the box and the picture share an aspect.
+  const scale = Math.min(shot.w / src.w, shot.h / src.h);
+  const offX = (shot.w - src.w * scale) / 2;
+  const offY = (shot.h - src.h * scale) / 2;
   const bad: string[] = [];
   let worst = 0;
   const y = 50;
   for (const x of [30, 130, 210]) {
     if (x >= src.w || y >= src.h) continue;
     const want = pixel(src, x, y);
-    const got = pixel(shot, (x / src.w) * shot.w, (y / src.h) * shot.h);
+    const got = pixel(shot, offX + x * scale, offY + y * scale);
     expect(Math.max(...(want ?? [0])), "reference pixel is not black").toBeGreaterThan(100);
     if (!near(got, want, PIXEL_TOL)) bad.push(`(${x},${y}) got ${JSON.stringify(got)} want ${JSON.stringify(want)}`);
     if (got && want) worst = Math.max(worst, ...want.map((v, i) => Math.abs(v - got[i])));
   }
   test.info().annotations.push({ type: "pixel-delta", description: `worst per-channel delta on the centre row, DPR ${dpr}: ${worst} (tolerance ${PIXEL_TOL})` });
   expect(bad, "drawn pixels that differ from the served PNG").toEqual([]);
-  const g = [0.25, 0.5, 0.75].map((f) => pixel(shot, 0.5 * shot.w, f * shot.h)?.[1] ?? -1);
+  const g = [0.25, 0.5, 0.75].map((f) => pixel(shot, 0.5 * shot.w, offY + f * src.h * scale)?.[1] ?? -1);
   expect(g[0], `green rises down the picture: ${g.join(",")}`).toBeGreaterThanOrEqual(0);
   expect(g[1]).toBeGreaterThan(g[0] + 20);
   expect(g[2]).toBeGreaterThan(g[1] + 20);
