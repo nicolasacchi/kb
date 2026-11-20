@@ -3,24 +3,23 @@
 // blocked), key bar, composer, and the explicit "Fit to phone".
 //
 // ONE grid per session: watching, the composer and the soft keyboard never
-// resize the pty. Only the Fit button calls take-size, and it asks first when
-// another viewer owns the grid ("omp rebuilds in every viewer").
+// resize the pty. Only the Fit button calls take-size (the shared helper in
+// `../takeGrid.ts`: the web outranks a local attach, so it asks only for an
+// owner of any other class), and Release gives the grid back.
 
 import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useConfirm } from "../../components/ConfirmProvider";
-import { toast } from "../../lib/toast";
 import type { TermRow } from "../../api/terms";
 import { useLiveSessions } from "../../hooks/useLiveSessions";
 import { ChoiceBar } from "./ChoiceBar";
 import { Composer } from "./Composer";
-import { DriveError, takeSize, type Drive } from "./driveApi";
+import type { Drive } from "./driveApi";
+import { ownerClass } from "../gridOwner";
+import { releaseGrid, takeGrid, type GridCtx } from "../takeGrid";
 import { fitDims, type PhoneMeasure } from "./fitPhone";
 import { KeyBar } from "./KeyBar";
 import "./drive.css";
-
-/** The relay's grid-owner name for a grid the phone took (`routes/terms.rs`: `"kb-term"`). */
-const PHONE_OWNER = "kb-term";
 
 export interface DriveDockProps {
   termId: string;
@@ -49,31 +48,38 @@ export function DriveDock(props: DriveDockProps) {
   const blocked = liveRow?.blocked === true;
   const owner = row?.grid_owner ?? null;
 
+  const grid = useMemo<GridCtx>(
+    () => ({
+      drive,
+      owner,
+      say: setCaption,
+      refresh: () => void queryClient.invalidateQueries({ queryKey: ["terms"] }),
+    }),
+    [drive, owner, queryClient],
+  );
+
+  // The shared take helper owns the ruling (no confirm for a free, web or
+  // local-attach owner; one for any other class) and says every outcome.
   const fit = async (): Promise<void> => {
     const dims = fitDims(measure());
     if (dims === null) {
       setCaption("Cannot measure the screen yet.");
       return;
     }
-    if (owner !== null && owner !== PHONE_OWNER) {
-      const ok = await confirm({
-        title: "Fit the terminal to this phone?",
-        body: "Resizing rebuilds the screen for every viewer.",
-        confirmLabel: "Fit to phone",
-      });
-      if (!ok) return;
-    }
     setFitting(true);
     setCaption(null);
     try {
-      const grid = await takeSize(drive, dims.cols, dims.rows);
-      setCaption(`Grid set to ${grid.cols}x${grid.rows}.`);
-      onTyped?.();
-      void queryClient.invalidateQueries({ queryKey: ["terms"] });
-    } catch (e) {
-      // A 409 `grid-owned` is the runner's own sentence: shown verbatim.
-      if (e instanceof DriveError && e.status === 409) setCaption(e.detail);
-      else toast.err(e instanceof DriveError ? e.detail : "Could not reach the terminal");
+      if (await takeGrid(grid, dims, { title: "Fit the terminal to this phone?", confirmLabel: "Fit to phone" })) onTyped?.();
+    } finally {
+      setFitting(false);
+    }
+  };
+
+  const release = async (): Promise<void> => {
+    setFitting(true);
+    setCaption(null);
+    try {
+      await releaseGrid(grid);
     } finally {
       setFitting(false);
     }
@@ -93,10 +99,23 @@ export function DriveDock(props: DriveDockProps) {
         >
           Fit to phone
         </button>
-        {owner === PHONE_OWNER ? (
-          <span className="kb-drive__chip" data-testid="kb-drive-grid-chip">
-            Grid: phone
-          </span>
+        {ownerClass(owner) === "web" ? (
+          <>
+            <button
+              type="button"
+              className="kb-drive__key kb-drive__key--wide"
+              data-testid="kb-drive-release"
+              disabled={fitting}
+              onPointerDown={(e) => e.preventDefault()}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => void release()}
+            >
+              Release grid
+            </button>
+            <span className="kb-drive__chip" data-testid="kb-drive-grid-chip">
+              Grid: phone
+            </span>
+          </>
         ) : null}
       </div>
       <ChoiceBar drive={drive} onTyped={onTyped} />

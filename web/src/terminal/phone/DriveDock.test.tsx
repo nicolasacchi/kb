@@ -92,6 +92,30 @@ describe("DriveDock: Fit to phone", () => {
     expect(rig.calls).toHaveLength(1);
   });
 
+  it("owner local:9 — no confirm (the web outranks a local attach), take-size posted, and it says so", async () => {
+    rig.reply(200, { cols: 54, rows: 23, owner: "kb-term" });
+    dock(row({ grid_owner: "local:9" }));
+    await fit();
+    expect(confirmMock).not.toHaveBeenCalled();
+    expect(rig.urls()).toEqual(["/api/terms/abcd1234/take-size"]);
+    expect(byId(m!.host, "kb-drive-caption").textContent).toBe(
+      "Took the grid from the local attach; it now watches (54x23).",
+    );
+  });
+
+  it("Release is shown only for owner kb-term, next to Fit, and posts release-size with an empty body", async () => {
+    dock(row({ grid_owner: "local:9" }));
+    expect(maybeById(m!.host, "kb-drive-release")).toBeNull();
+    m!.unmount();
+    dock(row({ grid_owner: "kb-term" }));
+    click(byId(m!.host, "kb-drive-release"));
+    await settle(10);
+    expect(rig.urls()).toEqual(["/api/terms/abcd1234/release-size"]);
+    expect(rig.calls[0].json).toEqual({});
+    expect(byId(m!.host, "kb-drive-caption").textContent).toBe("Released the grid.");
+    expect(confirmMock).not.toHaveBeenCalled();
+  });
+
   it("shows no chip when nobody owns the grid", () => {
     dock(row());
     expect(maybeById(m!.host, "kb-drive-grid-chip")).toBeNull();
