@@ -212,6 +212,8 @@ export class TapServer {
   private readonly pendingJoins = new Set<Promise<unknown>>();
   private readonly ground = new GroundTracker();
   private twinOffset = 0;
+  /** Queued twin resizes not yet applied (see setGrid). */
+  private twinResizePending = 0;
   private twinTail: Promise<void> = Promise.resolve();
   private lastFeedAt = 0;
   private server: Server | null = null;
@@ -461,12 +463,33 @@ export class TapServer {
       lineCount: (which: 'normal' | 'alt') => twin.lineCount(which),
     };
   }
-  /** Apply a grid change (audit F6): resize the twin and stamp a resize
-   * marker at the current head; later profiles carry the new grid. */
+  /** Apply a grid change (audit F6): the profile carries the new grid from
+   * now on, the twin is resized IN ORDER with the bytes already queued for
+   * it (never while earlier writes are still unparsed), and a `resize`
+   * marker is stamped at the current head so every live viewer resizes at
+   * exactly this point of the stream. A joiner waits for the queued twin
+   * resize (`twinResizePending`), so its seed and its profile always agree.
+   * A repeat of the current grid is a no-op (tmux may announce one resize
+   * more than once). */
   setGrid(cols: number, rows: number): void {
+    if (cols === this.cols && rows === this.rows) return;
     this.cols = cols;
     this.rows = rows;
-    this.twin?.resize(cols, rows);
+    const twin = this.twin;
+    if (twin !== null) {
+      this.twinResizePending++;
+      this.twinTail = this.twinTail
+        .then(() => {
+          twin.resize(cols, rows);
+        })
+        .catch(() => {
+          // Same latch as a failed feed: joins take the busy path.
+          this.twinBroken = true;
+        })
+        .then(() => {
+          this.twinResizePending--;
+        });
+    }
     this.recordMarker((seq, offset) => encodeServerFrame({ t: 'resize', seq, offset, cols, rows }));
   }
 
@@ -479,7 +502,7 @@ export class TapServer {
     const X = this.ring.head;
     // Never seed past what the twin parsed: setting sentOffset to head while
     // twinOffset lags would lose the (twinOffset, head] gap (audit F3).
-    if (this.twinOffset !== X || this.twinBroken) throw new Error('join beyond twin offset');
+    if (this.twinOffset !== X || this.twinBroken || this.twinResizePending > 0) throw new Error('join beyond twin offset');
     const scrollback = viewer.profile === 'phone' ? 20000 : 50000;
     const seed = this.makeSeed(this.twin, scrollback, X);
     viewer.sentOffset = X;
@@ -538,14 +561,14 @@ export class TapServer {
       // off, ground (not mid-escape), no stripper-held bytes, plus the
       // silence preference. twinOffset is the parsed-byte counter (the
       // QuiescentJoinGate's equivalent: ground advances with twin writes).
-      const quiescent = !this.withholder.syncOn && this.twinOffset === this.ring.head && this.ground.atGround() && this.getStripPending() === 0 && this.now() - this.lastFeedAt >= this.quiesceMs;
+      const quiescent = !this.withholder.syncOn && this.twinOffset === this.ring.head && this.twinResizePending === 0 && this.ground.atGround() && this.getStripPending() === 0 && this.now() - this.lastFeedAt >= this.quiesceMs;
       if (quiescent) break;
       if (this.now() >= deadline) {
         // Degraded join is only sound when the twin is caught up: joining
         // otherwise would set sentOffset past twinOffset and lose the gap
         // (and a broken twin can never catch up). Those cases take the busy
         // path (error + close) instead of degrading into data loss.
-        if (this.withholder.syncOn || this.twinOffset !== this.ring.head || this.twinBroken) {
+        if (this.withholder.syncOn || this.twinOffset !== this.ring.head || this.twinResizePending > 0 || this.twinBroken) {
           this.writeText(viewer.connection, viewer.id, encodeServerFrame({ t: 'error', code: 'busy', msg: 'join deferred: frame in progress' }));
           this.closeViewer(viewer);
           // A dropped join is terminal: end the connection once no viewer

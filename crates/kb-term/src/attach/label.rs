@@ -20,6 +20,17 @@
 //! through unrewritten — the cap is a memory safety valve, not label
 //! logic; `label_hold_cap_flushes_placeholder_row_raw` pins it).
 //! All state survives chunk boundaries.
+//!
+//! The bytes BEFORE the first trigger of a row are not picture
+//! evidence and are never dropped: they pass through verbatim (cursor
+//! moves, erases, attributes), except that underline-colour (`58`)
+//! parameters are scrubbed, because a placeholder row sets one and the
+//! label that replaces the row must not leave it behind. A stream
+//! with no placeholder is therefore byte-identical through the
+//! rewriter. (Until FUATTACH this prefix was reduced to its visible
+//! text, which deleted every cursor move that preceded a truecolor
+//! SGR on the same line, and so garbled a main-screen differential
+//! renderer such as Claude Code's.)
 
 use std::collections::HashMap;
 
@@ -179,6 +190,104 @@ fn strip_escapes(bytes: &[u8]) -> String {
                 }
             }
         }
+    }
+    out
+}
+
+/// The `[start, end)` byte range of the complete CSI sequence that begins
+/// at `at` (`ESC [`), or `None` when it is unterminated in `bytes`.
+fn csi_end(bytes: &[u8], at: usize) -> Option<usize> {
+    let mut j = at + 2;
+    while j < bytes.len() && (0x30..=0x3F).contains(&bytes[j]) {
+        j += 1;
+    }
+    while j < bytes.len() && (0x20..=0x2F).contains(&bytes[j]) {
+        j += 1;
+    }
+    if j < bytes.len() && (0x40..=0x7E).contains(&bytes[j]) {
+        Some(j + 1)
+    } else {
+        None
+    }
+}
+
+/// `params` (an SGR parameter string) with every underline-colour (`58`)
+/// setting removed: the colon form (`58:2::r:g:b`) is one token, the
+/// semicolon forms (`58;2;r;g;b` and `58;5;n`) take their arguments with
+/// them. Arguments of `38`/`48` are skipped unexamined, so a colour
+/// component that happens to be 58 is never mistaken for the setting.
+/// `None` when nothing was removed.
+fn without_underline_colour(params: &[u8]) -> Option<Vec<u8>> {
+    let toks: Vec<&[u8]> = params.split(|b| *b == b';').collect();
+    let mut kept: Vec<&[u8]> = Vec::with_capacity(toks.len());
+    let mut removed = false;
+    let mut i = 0;
+    while i < toks.len() {
+        let t = toks[i];
+        if t == b"38" || t == b"48" {
+            let n = colour_arg_count(toks.get(i + 1).copied());
+            let end = (i + 1 + n).min(toks.len());
+            kept.extend_from_slice(&toks[i..end]);
+            i += 1 + n;
+        } else if t == b"58" {
+            removed = true;
+            i += 1 + colour_arg_count(toks.get(i + 1).copied());
+        } else if t.starts_with(b"58:") {
+            removed = true;
+            i += 1;
+        } else {
+            kept.push(t);
+            i += 1;
+        }
+    }
+    if !removed {
+        return None;
+    }
+    Some(kept.join(&b';'))
+}
+
+/// How many tokens follow a `38`/`48`/`58` selector: the mode token plus
+/// its components (`2` takes three, `5` takes one).
+fn colour_arg_count(mode: Option<&[u8]>) -> usize {
+    match mode {
+        Some(b"2") => 4,
+        Some(b"5") => 2,
+        _ => 1,
+    }
+}
+
+/// `bytes` verbatim except that underline-colour SGR parameters are
+/// removed (an SGR left with no parameter at all is dropped whole: an
+/// empty SGR means "reset").
+fn scrub_underline_colour(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0x1B && bytes.get(i + 1) == Some(&b'[') {
+            if let Some(end) = csi_end(bytes, i) {
+                let seq = &bytes[i..end];
+                let params = &seq[2..seq.len() - 1];
+                if seq[seq.len() - 1] == b'm' && params.iter().all(|b| is_sgr_param_byte(*b)) {
+                    match without_underline_colour(params) {
+                        Some(kept) if kept.is_empty() => {}
+                        Some(kept) => {
+                            out.extend_from_slice(b"\x1b[");
+                            out.extend_from_slice(&kept);
+                            out.push(b'm');
+                        }
+                        None => {
+                            out.extend_from_slice(seq);
+                        }
+                    }
+                } else {
+                    out.extend_from_slice(seq);
+                }
+                i = end;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
     }
     out
 }
@@ -451,14 +560,14 @@ impl LabelRewriter {
             let lf = rest.iter().position(|&b| b == b'\n');
             let seg_end = lf.unwrap_or(rest.len());
             if let Some(i) = earliest_trigger(&rest[..seg_end]) {
-                // Bytes before the trigger are part of this held row:
-                // their visible text is emitted directly (the row's own
-                // visible prefix is computed from the held row alone),
-                // but raw escape sequences must never leak — a `\x1b[58`
-                // SGR sitting right before the picture trigger would
-                // otherwise escape into the output (spec: zero ESC[58).
-                let pre = strip_escapes(&rest[..i]);
-                out.extend_from_slice(pre.as_bytes());
+                // Bytes before the trigger are not picture evidence: they
+                // go out verbatim (a cursor move or erase that precedes a
+                // truecolor SGR on the same line is screen state, not
+                // decoration), minus underline-colour parameters, which a
+                // placeholder row sets and the label must not leave behind
+                // (spec: zero ESC[58).
+                let pre = scrub_underline_colour(&rest[..i]);
+                out.extend_from_slice(&pre);
                 self.holding = true;
                 if let Some(p) = lf {
                     let seg = &rest[i..=p];
@@ -994,5 +1103,278 @@ mod tests {
             1,
             "ED3 count preserved"
         );
+    }
+
+    // --- FUATTACH: a picture-free stream must cross the rewriter intact ----
+
+    /// A minimal screen model: just enough of a terminal to compare what
+    /// a main-screen differential renderer leaves on screen (printable
+    /// text, CR/LF with scroll, CUU/CUD/CUF/CUB, CHA, CUP, EL, ED;
+    /// attributes and private modes ignored). Test-only: the crate has no
+    /// terminal emulator dependency.
+    struct Screen {
+        cols: usize,
+        rows: usize,
+        grid: Vec<Vec<char>>,
+        r: usize,
+        c: usize,
+    }
+
+    impl Screen {
+        fn new(cols: usize, rows: usize) -> Self {
+            Self {
+                cols,
+                rows,
+                grid: vec![vec![' '; cols]; rows],
+                r: 0,
+                c: 0,
+            }
+        }
+
+        fn feed(&mut self, bytes: &[u8]) {
+            let text = String::from_utf8_lossy(bytes).into_owned();
+            let chars: Vec<char> = text.chars().collect();
+            let mut i = 0;
+            while i < chars.len() {
+                match chars[i] {
+                    '\x1b' if chars.get(i + 1) == Some(&'[') => {
+                        let mut j = i + 2;
+                        let mut params = String::new();
+                        while j < chars.len() && ('\x30'..='\x3f').contains(&chars[j]) {
+                            params.push(chars[j]);
+                            j += 1;
+                        }
+                        let fin = chars.get(j).copied().unwrap_or('m');
+                        self.csi(&params, fin);
+                        i = j + 1;
+                    }
+                    '\x1b' => i += 2,
+                    '\r' => {
+                        self.c = 0;
+                        i += 1;
+                    }
+                    '\n' => {
+                        self.linefeed();
+                        i += 1;
+                    }
+                    ch => {
+                        if self.c < self.cols {
+                            self.grid[self.r][self.c] = ch;
+                            self.c += 1;
+                        }
+                        i += 1;
+                    }
+                }
+            }
+        }
+
+        fn linefeed(&mut self) {
+            if self.r + 1 == self.rows {
+                self.grid.remove(0);
+                self.grid.push(vec![' '; self.cols]);
+            } else {
+                self.r += 1;
+            }
+        }
+
+        fn csi(&mut self, params: &str, fin: char) {
+            let nums: Vec<usize> = params
+                .split(';')
+                .map(|p| p.parse::<usize>().unwrap_or(0))
+                .collect();
+            let n = nums.first().copied().unwrap_or(0).max(1);
+            match fin {
+                'A' => self.r = self.r.saturating_sub(n),
+                'B' => self.r = (self.r + n).min(self.rows - 1),
+                'C' => self.c = (self.c + n).min(self.cols - 1),
+                'D' => self.c = self.c.saturating_sub(n),
+                'G' => self.c = (n - 1).min(self.cols - 1),
+                'H' | 'f' => {
+                    self.r = (n - 1).min(self.rows - 1);
+                    self.c = (nums.get(1).copied().unwrap_or(0).max(1) - 1).min(self.cols - 1);
+                }
+                'K' => {
+                    let (from, to) = match nums.first().copied().unwrap_or(0) {
+                        1 => (0, self.c + 1),
+                        2 => (0, self.cols),
+                        _ => (self.c, self.cols),
+                    };
+                    for cell in &mut self.grid[self.r][from..to.min(self.cols)] {
+                        *cell = ' ';
+                    }
+                }
+                'J' if nums.first().copied().unwrap_or(0) == 2 => {
+                    self.grid = vec![vec![' '; self.cols]; self.rows];
+                }
+                _ => {}
+            }
+        }
+
+        fn lines(&self) -> Vec<String> {
+            self.grid
+                .iter()
+                .map(|row| row.iter().collect::<String>().trim_end().to_string())
+                .collect()
+        }
+    }
+
+    /// A synthetic main-screen redraw shaped like a truecolor differential
+    /// renderer's frame: a synchronized-output frame that returns to the
+    /// top of a six-row region with CR + CUU, then rewrites every row with
+    /// EL + a truecolor SGR + text + CR CR LF (the pane's `onlcr` output).
+    /// Every cursor move in it sits on the same line as, and BEFORE, a
+    /// `38;2`.
+    fn differential_frame(spinner: &str, counter: u32) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(b"\x1b[?2026h\r\x1b[6A");
+        let rows: [String; 6] = [
+            format!("{spinner} working {counter}"),
+            String::new(),
+            "-".repeat(30),
+            "> prompt".to_string(),
+            "-".repeat(30),
+            format!("status | tokens {counter}"),
+        ];
+        for text in &rows {
+            v.extend_from_slice(b"\x1b[2K\x1b[38;2;215;119;87m");
+            v.extend_from_slice(text.as_bytes());
+            v.extend_from_slice(b"\x1b[39m\r\r\n");
+        }
+        v.extend_from_slice(b"\x1b[?2026l");
+        v
+    }
+
+    fn differential_stream() -> Vec<u8> {
+        // Park the cursor below where the region will sit, then run a
+        // series of in-place redraws.
+        let mut v = Vec::new();
+        for _ in 0..7 {
+            v.extend_from_slice(b"\r\n");
+        }
+        for (k, spinner) in ["*", "+", "x", "o", "#"].iter().enumerate() {
+            v.extend_from_slice(&differential_frame(spinner, k as u32 + 1));
+        }
+        v
+    }
+
+    #[test]
+    fn label_picture_free_truecolor_redraws_pass_through_byte_identical() {
+        // The stream has `38;2` on every row but no placeholder: the
+        // rewriter must be the identity function on it, whole and cut at
+        // every byte (chunking is irrelevant).
+        let input = differential_stream();
+        let mut rw = LabelRewriter::new(201, true);
+        assert_eq!(feed_all(&mut rw, &input), input, "one chunk");
+        for cut in 1..input.len() {
+            let mut rw = LabelRewriter::new(201, true);
+            let mut out = Vec::new();
+            rw.feed(&input[..cut], &mut out);
+            rw.feed(&input[cut..], &mut out);
+            assert_eq!(out, input, "2-cut at byte {cut}");
+        }
+    }
+
+    #[test]
+    fn label_screen_after_truecolor_redraws_equals_the_raw_screen() {
+        // The screen oracle: what the outer terminal ends up showing
+        // equals what the pane shows. A dropped CUU stacks every frame
+        // on new lines and repeats the rules.
+        let input = differential_stream();
+        let mut raw = Screen::new(40, 10);
+        raw.feed(&input);
+        let mut rw = LabelRewriter::new(40, true);
+        let mut mirrored = Screen::new(40, 10);
+        mirrored.feed(&feed_all(&mut rw, &input));
+        assert_eq!(mirrored.lines(), raw.lines());
+        let shown = mirrored.lines();
+        assert_eq!(
+            shown.iter().filter(|l| l.starts_with("----")).count(),
+            2,
+            "the two rules are drawn once, not once per frame: {shown:?}"
+        );
+        assert_eq!(
+            shown.iter().filter(|l| l.contains("working")).count(),
+            1,
+            "one spinner row, updated in place: {shown:?}"
+        );
+        assert!(
+            shown.iter().any(|l| l == "# working 5"),
+            "the last frame is on screen: {shown:?}"
+        );
+        assert!(
+            shown.iter().any(|l| l == "status | tokens 5"),
+            "the status row is intact: {shown:?}"
+        );
+    }
+
+    #[test]
+    fn label_cursor_forward_runs_before_a_truecolor_sgr_survive() {
+        // `CHA`/`CUF` before an SGR position the cell the text lands in.
+        let input = b"\x1b[3G\x1b[38;2;1;2;3mab\x1b[39m\x1b[2C\x1b[38;5;196mcd\x1b[39m\r\n";
+        let mut rw = LabelRewriter::new(40, true);
+        let out = feed_all(&mut rw, input);
+        assert_eq!(out, input.to_vec());
+        let mut screen = Screen::new(40, 3);
+        screen.feed(&out);
+        assert_eq!(screen.lines()[0], "  ab  cd");
+    }
+
+    #[test]
+    fn label_scrubs_underline_colour_parameters_only() {
+        // The colon form disappears, every other escape and byte stays.
+        assert_eq!(
+            scrub_underline_colour(b"\x1b[3G\x1b[58:2::1:2:3m\x1b[1mhi"),
+            b"\x1b[3G\x1b[1mhi".to_vec()
+        );
+        // Semicolon forms take their arguments with them; the rest of a
+        // combined SGR is kept.
+        assert_eq!(
+            scrub_underline_colour(b"\x1b[4;58;2;1;2;3;1m"),
+            b"\x1b[4;1m".to_vec()
+        );
+        assert_eq!(
+            scrub_underline_colour(b"\x1b[58;5;9;3m"),
+            b"\x1b[3m".to_vec()
+        );
+        // An SGR with nothing left is dropped (an empty SGR would reset).
+        assert_eq!(scrub_underline_colour(b"\x1b[58:2::1:2:3mx"), b"x".to_vec());
+        // A colour component of 58 is not an underline colour, and a bare
+        // reset is left alone.
+        let keep = b"\x1b[48;2;58;58;58m\x1b[48;5;58m\x1b[m\x1b[38:2::58:58:58m";
+        assert_eq!(scrub_underline_colour(keep), keep.to_vec());
+        // An unterminated sequence passes through untouched.
+        assert_eq!(
+            scrub_underline_colour(b"ab\x1b[58:2"),
+            b"ab\x1b[58:2".to_vec()
+        );
+    }
+
+    #[test]
+    fn label_placeholder_row_keeps_the_cursor_moves_before_the_picture() {
+        let mut rw = LabelRewriter::new(60, true);
+        rw.add_image(0x010203, 10, 10);
+        let mut input = Vec::new();
+        input.extend_from_slice(b"\x1b[7G\x1b[58:2::9:9:9m");
+        input.extend_from_slice(&picture_row((1, 2, 3), 0, 3, b"\r\n"));
+        let out = feed_all(&mut rw, &input);
+        assert!(
+            out.starts_with(b"\x1b[7G\x1b[2K"),
+            "the cursor move before the picture is kept, the 58 SGR is not"
+        );
+        assert_eq!(count_occurrences(&out, b"[image 10x10, on web]"), 1);
+        assert!(!out.windows(4).any(|w| w == b"\x1b[58"), "zero ESC[58");
+        // A cut anywhere keeps the row count (the label is one row).
+        for cut in 1..input.len() {
+            let mut rw2 = LabelRewriter::new(60, true);
+            rw2.add_image(0x010203, 10, 10);
+            let mut out2 = Vec::new();
+            rw2.feed(&input[..cut], &mut out2);
+            rw2.feed(&input[cut..], &mut out2);
+            assert_eq!(
+                out2.iter().filter(|&&b| b == b'\n').count(),
+                1,
+                "2-cut at byte {cut}"
+            );
+        }
     }
 }
