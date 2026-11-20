@@ -8,7 +8,7 @@
 // is serial and last. All content is synthetic (numbered lines, generated
 // PNGs); no real harness, session, image or credential is involved.
 
-import { test, expect, type Page, type TestInfo } from "@playwright/test";
+import { test, expect, devices, type Page, type TestInfo } from "@playwright/test";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,7 +19,7 @@ import {
   beat, bindSession, collectPageErrors, decodeStream, holderDir, idleHarness, keepBound,
   firstTextAt, killLaunched, kittyHarness, launch, listTerms, mintTicket, newSid, numberedHarness, openPanel,
   openPanelWhen, panelAttrs, rawUpgrade, readExpected, readMark, recordSockets, repoRoot, root, scratch,
-  sha256, tmuxBin, touch, waitDone, waitFile, waitPhase,
+  runnerRpc, sha256, tmuxBin, touch, waitDone, waitFile, waitPhase, wideHarness,
   type Harness, type Launched, type Sock,
 } from "./terminal-stack/stack";
 import { checkNumbered, describeNumbered, frameTracker, scanForQueries } from "./terminal-stack/oracle";
@@ -600,6 +600,179 @@ test("a resume needs no term reset", async ({ page, request }) => {
   expect(decodeStream(conns[n].rx).texts.some((t) => t.t === "seed"), "a resume is not answered with a seed").toBe(false);
   const after = await panelAttrs(page);
   expect(after.resets, "term.reset count unchanged across a resume").toBe(before.resets);
+});
+
+// ===================================== FUTERMOWN: the grid follows the web
+
+/** The live xterm's size, through the `__kbTerm` test seam. */
+async function termSize(page: Page): Promise<{ cols: number; rows: number } | null> {
+  return page.evaluate(() => {
+    const host = document.querySelector("[data-kb-term]") as unknown as { __kbTerm?: { cols: number; rows: number } } | null;
+    const t = host?.__kbTerm;
+    return t ? { cols: t.cols, rows: t.rows } : null;
+  });
+}
+
+/**
+ * Where the wide line stands in the NORMAL buffer, row by row (no re-joining of
+ * wrapped rows): `ok` = one row holds it whole and the next row is not a
+ * continuation; `wrapped` = it is split over rows; `missing` = not drawn yet.
+ */
+async function wideLine(page: Page, width: number): Promise<"ok" | "wrapped" | "missing"> {
+  return page.evaluate((w) => {
+    const host = document.querySelector("[data-kb-term]") as unknown as {
+      __kbTerm?: { buffer: { normal: { length: number; getLine(y: number): { isWrapped: boolean; translateToString(trim: boolean): string } | undefined } } };
+    } | null;
+    const buf = host?.__kbTerm?.buffer.normal;
+    if (!buf) return "missing" as const;
+    const whole = `W${"-".repeat(w - 2)}Z`;
+    let sawStart = false;
+    for (let i = 0; i < buf.length; i += 1) {
+      const t = buf.getLine(i)?.translateToString(true) ?? "";
+      if (t === whole) return buf.getLine(i + 1)?.isWrapped ? ("wrapped" as const) : ("ok" as const);
+      if (t.startsWith("W--")) sawStart = true;
+    }
+    return sawStart ? ("wrapped" as const) : ("missing" as const);
+  }, width);
+}
+
+const takeViaWeb = (api: Api, id: string, cols: number, rows: number) =>
+  api.json<{ cols: number; rows: number; owner: string | null }>("POST", `/api/terms/${id}/take-size`, { data: { cols, rows } });
+
+test("FUTERMOWN: a grid change is seen by the OPEN panel without a reconnect, and a 201-column line drawn after it is intact", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const gate = join(scratch("gate"), "go");
+  const c = await prepare(page, request, wideHarness(gate, 201), { cols: 120, rows: 40 });
+  await openPanel(page, c.sid);
+  expect(await termSize(page)).toEqual({ cols: 120, rows: 40 });
+  const socketsBefore = c.socks.length;
+  const r = await takeViaWeb(c.api, c.term.id, 201, 48);
+  expect(r.status, JSON.stringify(r.body)).toBe(200);
+  await expect.poll(() => termSize(page), { timeout: 30_000 }).toEqual({ cols: 201, rows: 48 });
+  await expect(page.locator('[data-testid="kb-term-grid"]')).toContainText("201x48");
+  touch(gate);
+  await expect.poll(() => wideLine(page, 201), { timeout: 60_000 }).toBe("ok");
+  expect(c.socks.length, "the panel did not reconnect").toBe(socketsBefore);
+  expect(c.errs).toEqual([]);
+});
+
+test("FUTERMOWN: a viewer opened AFTER the grid change starts at the new grid and sees the wide line intact", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const gate = join(scratch("gate"), "go");
+  const c = await prepare(page, request, wideHarness(gate, 201), { cols: 120, rows: 40 });
+  const r = await takeViaWeb(c.api, c.term.id, 201, 48);
+  expect(r.status, JSON.stringify(r.body)).toBe(200);
+  touch(gate);
+  await waitFile(join(c.h.out, "printed"), 60_000);
+  await openPanel(page, c.sid);
+  expect(await termSize(page), "the profile carries the taken grid").toEqual({ cols: 201, rows: 48 });
+  await expect(page.locator('[data-testid="kb-term-grid"]')).toContainText("201x48");
+  await expect.poll(() => wideLine(page, 201), { timeout: 60_000 }).toBe("ok");
+});
+
+test("FUTERMOWN: a viewer that was away for a grid change resumes into it (the marker replays in order) with the wide line intact", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const conns = await proxySockets(page);
+  const gate = join(scratch("gate"), "go");
+  const c = await prepare(page, request, wideHarness(gate, 201), { cols: 120, rows: 40 });
+  await openPanel(page, c.sid);
+  // Hold the reconnect at its ticket mint: the viewer is away while the grid
+  // changes and the wide line is drawn, then rejoins with its OLD offset.
+  let releaseTickets!: () => void;
+  const held = new Promise<void>((r) => {
+    releaseTickets = r;
+  });
+  let heldMints = 0;
+  await page.route(/\/api\/terms\/[^/]+\/ticket/, async (route) => {
+    heldMints += 1;
+    await held;
+    await route.continue();
+  });
+  const n = conns.length;
+  cut(conns[n - 1]);
+  await expect.poll(() => heldMints, { timeout: 30_000 }).toBeGreaterThan(0);
+  const r = await takeViaWeb(c.api, c.term.id, 201, 48);
+  expect(r.status, JSON.stringify(r.body)).toBe(200);
+  touch(gate);
+  await waitFile(join(c.h.out, "printed"), 60_000);
+  releaseTickets();
+  await expect.poll(() => conns.length, { timeout: 30_000 }).toBeGreaterThan(n);
+  await waitPhase(page, "live");
+  const re = conns[n];
+  expect(fromOf(re), "the reconnect carries the pre-change offset").not.toBeNull();
+  expect(decodeStream(re.rx).texts.some((t) => t.t === "seed"), "a resume is not answered with a seed").toBe(false);
+  await expect.poll(() => termSize(page), { timeout: 30_000 }).toEqual({ cols: 201, rows: 48 });
+  await expect.poll(() => wideLine(page, 201), { timeout: 60_000 }).toBe("ok");
+});
+
+test("FUTERMOWN: the web take-size succeeds over a local attach owner; a local take never beats the web; release hands the grid back", async ({ request }) => {
+  const api = new Api(request);
+  const t = await launch(api, idleHarness(), { cols: 120, rows: 40 });
+  // Play a local attach (and a stale one: nobody is behind local:9).
+  const seed = await runnerRpc("take_size", { id: t.id, cols: 120, rows: 40, owner: "local:9", force: false });
+  expect(seed.status, JSON.stringify(seed)).toBe("ok");
+  const before = await api.json<{ owner: string | null }>("GET", `/api/terms/${t.id}/grid`);
+  expect(before.body.owner).toBe("local:9");
+  // The web outranks it, without force and without a 409.
+  const took = await takeViaWeb(api, t.id, 90, 30);
+  expect(took.status, JSON.stringify(took.body)).toBe(200);
+  expect(took.body).toMatchObject({ cols: 90, rows: 30, owner: "kb-term" });
+  // A local take is refused even forced, naming the web; nothing moved.
+  for (const force of [false, true]) {
+    const refused = await runnerRpc("take_size", { id: t.id, cols: 120, rows: 40, owner: "local:9", force });
+    expect(refused.status).toBe("err");
+    expect(refused.code).toBe("grid-owned");
+    expect(refused.message ?? "").toContain("web panel");
+  }
+  const mid = await api.json<{ cols: number; rows: number; owner: string | null }>("GET", `/api/terms/${t.id}/grid`);
+  expect(mid.body).toMatchObject({ cols: 90, rows: 30, owner: "kb-term" });
+  // Between web viewers the latest explicit take wins.
+  const again = await takeViaWeb(api, t.id, 100, 32);
+  expect(again.status).toBe(200);
+  // Release clears only the web owner; then a local take succeeds again.
+  const rel = await api.json("POST", `/api/terms/${t.id}/release-size`, { data: {} });
+  expect(rel.status).toBe(200);
+  const after = await api.json<{ owner: string | null }>("GET", `/api/terms/${t.id}/grid`);
+  expect(after.body.owner).toBeNull();
+  const local = await runnerRpc("take_size", { id: t.id, cols: 120, rows: 40, owner: "local:9", force: false });
+  expect(local.status, JSON.stringify(local)).toBe("ok");
+});
+
+test("FUTERMOWN: a phone (Pixel 7, touch) takes the grid from a local attach with 'Fit to phone', no 409", async ({ browser, request }) => {
+  test.setTimeout(240_000);
+  const { defaultBrowserType: _ignored, ...pixel } = devices["Pixel 7"];
+  const ctx = await browser.newContext({ ...pixel });
+  try {
+    const page = await ctx.newPage();
+    const api = new Api(request);
+    const term = await launch(api, idleHarness(), { cols: 120, rows: 40 });
+    const sid = newSid();
+    await bindSession(api, sid, term);
+    const seed = await runnerRpc("take_size", { id: term.id, cols: 120, rows: 40, owner: "local:9", force: false });
+    expect(seed.status, JSON.stringify(seed)).toBe("ok");
+    await page.goto(`${MAIN}/sessions/${sid}`);
+    const open = page.locator('[data-testid="kb-term-open"]');
+    if (!(await open.isVisible())) await page.locator('[data-testid="session-sec-terminal"] > summary').click();
+    await expect(open).toBeVisible({ timeout: 30_000 });
+    await open.click();
+    const vp = page.locator("[data-kb-term-viewport]");
+    await expect(vp).toBeVisible({ timeout: 30_000 });
+    await expect(vp).toHaveAttribute("data-kb-term-phase", "live", { timeout: 45_000 });
+    const fit = page.locator('[data-testid="kb-drive-fit"]');
+    await expect(fit).toBeVisible({ timeout: 30_000 });
+    const responded = page.waitForResponse((r) => /\/take-size$/.test(r.url()) && r.request().method() === "POST");
+    await fit.click();
+    // Another device owning the grid may still ask first (that rule belongs to the SPA): accept it.
+    const go = page.locator(".confirm__go");
+    await go.waitFor({ state: "visible", timeout: 3_000 }).then(() => go.click(), () => undefined);
+    const resp = await responded;
+    expect(resp.status(), "no 409 against a local owner").toBe(200);
+    const asked = resp.request().postDataJSON() as { cols: number; rows: number };
+    const g = await api.json<{ cols: number; rows: number; owner: string | null }>("GET", `/api/terms/${term.id}/grid`);
+    expect(g.body).toMatchObject({ cols: asked.cols, rows: asked.rows, owner: "kb-term" });
+  } finally {
+    await ctx.close();
+  }
 });
 
 test("aged-out offset forces a full join", async ({ page, request }) => {

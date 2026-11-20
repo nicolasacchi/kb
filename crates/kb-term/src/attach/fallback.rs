@@ -1,6 +1,8 @@
 //! Grid-owned fallback: when take-size is refused (`grid-owned`), the
 //! mirror keeps going as a watch (output-only) and the first keypress
-//! takes the size back.
+//! takes the size back, unless the web panel owns the grid: the web
+//! outranks a local attach, so a keypress then prints a short rate-limited
+//! notice and takes nothing until the web releases the grid.
 //!
 //! There is no `exec tmux` here (an exec'd tmux would own stdin and
 //! could not implement "any key takes the size back"); kb-term.conf's
@@ -23,11 +25,33 @@ pub fn is_local_mirror_owner(owner: &str) -> bool {
     owner.starts_with(LOCAL_OWNER_PREFIX)
 }
 
-/// The banner printed when take-size is refused. The owner decides
-/// whether another local attach holds the grid (the default policy: a
-/// second non-`--watch` local attach hits this) or another device.
+/// Whether `owner` is the web panel's relay owner.
+#[must_use]
+pub fn is_web_owner(owner: &str) -> bool {
+    crate::runner::grid::is_web_owner(owner)
+}
+
+/// The owner named in a `grid-owned` runner message
+/// (`grid is owned by <owner>[ (...)]`): the first token after the prefix.
+#[must_use]
+pub fn owner_from_message(message: &str) -> String {
+    message
+        .strip_prefix("grid is owned by ")
+        .unwrap_or(message)
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_string()
+}
+
+/// The banner printed when take-size is refused or the grid is lost. The
+/// owner decides whether the web panel, another local attach or another
+/// device holds the grid.
 #[must_use]
 pub fn grid_banner(owner: &str) -> String {
+    if is_web_owner(owner) {
+        return "grid owned by the web panel; watching (release it there, or detach with Ctrl-] .) — scrollback may be incomplete: the pane size differs from the session grid".to_string();
+    }
     let who = if is_local_mirror_owner(owner) {
         "another kb-term attach"
     } else {
@@ -36,6 +60,32 @@ pub fn grid_banner(owner: &str) -> String {
     format!(
         "grid owned by {who}; watching (any key takes the size back) — scrollback may be incomplete: the pane size differs from the session grid"
     )
+}
+
+/// The one-line notice a keypress prints while the web owns the grid.
+pub const WEB_OWNER_NOTICE: &str =
+    "the web panel owns the grid; release it there, or detach with Ctrl-] .";
+
+/// Minimum gap between two [`WEB_OWNER_NOTICE`] lines.
+pub const NOTICE_GAP: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Rate limiter for the web-owner notice (at most one per [`NOTICE_GAP`]).
+#[derive(Debug, Default)]
+pub struct NoticeGate {
+    last: Option<std::time::Instant>,
+}
+
+impl NoticeGate {
+    /// Whether a notice may print at `now` (records it when it may).
+    pub fn allow(&mut self, now: std::time::Instant) -> bool {
+        match self.last {
+            Some(prev) if now.saturating_duration_since(prev) < NOTICE_GAP => false,
+            _ => {
+                self.last = Some(now);
+                true
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -70,5 +120,30 @@ mod tests {
         assert!(is_local_mirror_owner("local:1"));
         assert!(!is_local_mirror_owner("relay:1"));
         assert_eq!(local_owner(42), "local:42");
+    }
+
+    #[test]
+    fn web_owner_banner_notice_and_rate_limit() {
+        let web = grid_banner("kb-term");
+        assert!(
+            web.starts_with("grid owned by the web panel; watching"),
+            "{web}"
+        );
+        assert!(web.contains("release it there"), "{web}");
+        assert!(web.contains("scrollback may be incomplete"), "{web}");
+        assert!(!web.contains("any key takes the size back"), "{web}");
+        // The runner's refusal message parses down to the bare owner.
+        assert_eq!(
+            owner_from_message("grid is owned by kb-term (the web panel; release it there)"),
+            "kb-term"
+        );
+        assert_eq!(owner_from_message("grid is owned by local:7"), "local:7");
+        // One notice per 10 s.
+        let t0 = std::time::Instant::now();
+        let mut gate = NoticeGate::default();
+        assert!(gate.allow(t0));
+        assert!(!gate.allow(t0 + std::time::Duration::from_secs(9)));
+        assert!(gate.allow(t0 + std::time::Duration::from_secs(10)));
+        assert!(!gate.allow(t0 + std::time::Duration::from_secs(11)));
     }
 }

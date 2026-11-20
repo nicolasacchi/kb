@@ -844,3 +844,40 @@ test('seam_sync_grid_adopts_the_size_tmux_reports_after_a_restart', async () => 
     rmSync(runDir, { recursive: true, force: true });
   }
 });
+
+test('seam_a_grid_change_on_an_idle_pane_reaches_a_caught_up_live_viewer_without_any_output', async () => {
+  const runDir = mkdtempSync(join(tmpdir(), 'kbt-grid-'));
+  const fake = new FakeSpawn();
+  const stack = createTapStack({
+    session: 'grididle01',
+    runDir,
+    harness: 'claude',
+    cols: 80,
+    rows: 24,
+    epoch: 'a'.repeat(32),
+    spawn: fake.fn,
+    quiesceMs: 0,
+    joinWaitMs: 2000,
+  });
+  const starting = stack.start();
+  fake.stdout.push('%begin 1000 0 0\n%end 1000 0 0\n');
+  fake.stdout.push('%begin 1000 1 0\n%end 1000 1 0\n');
+  await starting;
+
+  try {
+    const cap = capture();
+    const sock = await openViewer(stack.server.sockPath, cap);
+    await waitUntil(() => cap.texts.some((t) => t.includes('"t":"seed"')), 'seed');
+    // tmux announces a take-size and NOTHING else: the pane prints no byte.
+    fake.stdout.push('%layout-change @0 a9fd,201x48,0,0,0 a9fd,201x48,0,0,0 *\n');
+    await waitUntil(() => cap.texts.some((t) => t.includes('"t":"resize"')), 'resize marker with no output');
+    const resize = JSON.parse(cap.texts.find((t) => t.includes('"t":"resize"'))!) as Record<string, unknown>;
+    expect(resize['cols']).toBe(201);
+    expect(resize['rows']).toBe(48);
+    expect(stack.server.head).toBe(0);
+    sock.destroy();
+  } finally {
+    stack.stop();
+    rmSync(runDir, { recursive: true, force: true });
+  }
+});
