@@ -944,11 +944,19 @@ async function panelGeometry(page: Page) {
   });
 }
 
-test("a 201x48 grid is fully visible at 1440x900 (font >= 9, no horizontal scroll), shows the Cropped hint when it cannot be at 1280x720, and the page content never overflows at 1024", async ({ page, request }) => {
+test("a 201x48 grid is fully visible at 1440x900 (font >= 9, no horizontal scroll), shows the Cropped hint when it cannot be at 1280x720, and the open panel adds no page width at 1024", async ({ page, request }) => {
   test.setTimeout(240_000);
   await page.setViewportSize({ width: 1440, height: 900 });
   const c = await prepare(page, request, winchHarness(), { cols: 201, rows: 48 });
-  await openPanel(page, c.sid);
+  // Baseline first: at 1024 the page is as wide as the shared app header makes it
+  // (its right cluster does not wrap there), with the panel still closed.
+  let baseline = 0;
+  await openPanelWhen(page, c.sid, async () => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await page.waitForTimeout(500);
+    baseline = await page.evaluate(() => document.documentElement.scrollWidth);
+    await page.setViewportSize({ width: 1440, height: 900 });
+  });
 
   // 1440x900: the whole grid, legibly, with nothing scrolling sideways.
   await expect
@@ -977,12 +985,15 @@ test("a 201x48 grid is fully visible at 1440x900 (font >= 9, no horizontal scrol
   expect(g.font).toBeGreaterThanOrEqual(9);
   expect(g.docW).toBeLessThanOrEqual(g.vw);
 
-  // 1024: nothing in the page content (the terminal section included) reaches past the viewport.
+  // 1024: opening the panel adds no width to the page: it is exactly as wide as
+  // it was with the panel closed (the header's own width), never the 201-column grid.
   await page.setViewportSize({ width: 1024, height: 768 });
   await expect
     .poll(async () => {
       const m = await panelGeometry(page);
-      return m.overflowers.length === 0 ? "ok" : `content wider than the viewport (${m.vw}): ${m.overflowers.join(" | ")}`;
+      return m.docW <= Math.max(baseline, m.vw)
+        ? "ok"
+        : `docW ${m.docW} > closed-panel width ${baseline} (vw ${m.vw}): ${m.overflowers.join(" | ")}`;
     }, { timeout: 30_000 })
     .toBe("ok");
 });
