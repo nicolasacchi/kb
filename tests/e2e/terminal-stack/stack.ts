@@ -170,7 +170,8 @@ export function kittyHarness(
 }
 
 /**
- * A pane that waits for `gate`, then prints ONE line of exactly `width`
+ * A pane that prints `WIDE-READY` (so the stream has bytes and a viewer holds a
+ * resume offset), waits for `gate`, then prints ONE line of exactly `width`
  * characters (`W`, dashes, `Z`: both ends are visible and distinguishable), a
  * `WIDE-DONE` line, and writes `<out>/printed`. Used to prove a wide line
  * drawn AFTER a grid change reaches the viewer intact (last column present,
@@ -181,7 +182,7 @@ export function wideHarness(gate: string, width: number): Harness {
   const line = `W${"-".repeat(width - 2)}Z`;
   return {
     out,
-    shell: `until [ -e ${quote(gate)} ]; do sleep 0.1; done\nprintf '%s\\n' ${quote(line)}\nprintf 'WIDE-DONE\\n'\n: > ${quote(join(out, "printed"))}\nexec sleep 3600\n`,
+    shell: `printf 'WIDE-READY\\n'\nuntil [ -e ${quote(gate)} ]; do sleep 0.1; done\nprintf '%s\\n' ${quote(line)}\nprintf 'WIDE-DONE\\n'\n: > ${quote(join(out, "printed"))}\nexec sleep 3600\n`,
   };
 }
 
