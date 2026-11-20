@@ -25,6 +25,7 @@ import { useIdentity } from "../hooks/useArtifactHost";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "@kb/ui/icons";
 import { useCloseRequest } from "@kb/ui/useCloseRequest";
+import { NewTerminalPanel } from "../components/NewTerminalPanel";
 import { ViewBar, type Cluster, type Control } from "@kb/ui/ViewBar";
 import {
   fetchResearchRollup,
@@ -572,6 +573,11 @@ export default function SessionsRoute() {
             </button>
           )}
         </div>
+        {/* FUWEBLAUNCH — start a kb-term session (admitted callers only). */}
+        <NewTerminalPanel
+          admitted={identity?.terminal_admitted === true}
+          sessionCwds={rows.slice(0, 50).map((r) => r.cwd)}
+        />
         {/* OL R4 — ONE control row: View · Filters · Find, then the funnel as
             a single muted line. The View buttons are toggles (not a segment)
             so each keeps its own data-testid. */}
