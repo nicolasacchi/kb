@@ -105,8 +105,12 @@ async function openDesktop(page: Page, sid: string): Promise<void> {
 
 async function openPhoneView(page: Page, sid: string): Promise<void> {
   await page.goto(`${MAIN}/sessions/${sid}`);
-  const sum = page.locator('[data-testid="session-sec-terminal"] > summary');
-  if (await sum.count()) await sum.click().catch(() => {});
+  await page.locator('[data-testid="kb-term-open"]').waitFor({ state: "attached", timeout: 30_000 });
+  await page.evaluate(() => {
+    document.querySelectorAll("details").forEach((d) => {
+      if (d.querySelector('[data-testid="kb-term-open"]')) d.open = true;
+    });
+  });
   const open = page.locator('[data-testid="kb-term-open"]');
   await expect(open).toBeVisible({ timeout: 30_000 });
   await open.click();
