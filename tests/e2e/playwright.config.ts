@@ -17,7 +17,7 @@ const isCI = !!process.env.CI;
 // projects (KB_E2E_TERMINAL=1, real tmux + tap + kb-termd; see
 // terminal-stack/README.md). Every default project ignores it.
 const TERMINAL_STACK = process.env.KB_E2E_TERMINAL === "1";
-const STACK_SPEC = /spa-terminal-stack\.spec\.ts/;
+const STACK_SPEC = /(spa-terminal-stack|zz-termux-shots)\.spec\.ts/;
 
 // T17 - the phone terminal spec runs on the phone projects only.
 const PHONE_SPEC = /spa-terminal-phone\.spec\.ts/;
