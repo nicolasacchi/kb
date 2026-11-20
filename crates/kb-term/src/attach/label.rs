@@ -1203,10 +1203,8 @@ mod tests {
                         *cell = ' ';
                     }
                 }
-                'J' => {
-                    if nums.first().copied().unwrap_or(0) == 2 {
-                        self.grid = vec![vec![' '; self.cols]; self.rows];
-                    }
+                'J' if nums.first().copied().unwrap_or(0) == 2 => {
+                    self.grid = vec![vec![' '; self.cols]; self.rows];
                 }
                 _ => {}
             }
