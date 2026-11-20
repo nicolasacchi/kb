@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import LiveSessionsNowBand from "./LiveSessionsNowBand";
 import type { LiveStatusRow } from "../api/sessions";
 
@@ -20,6 +22,11 @@ function row(overrides: Partial<LiveStatusRow> & Pick<LiveStatusRow, "session_id
     blocked: false,
     ...overrides,
   };
+}
+
+// FUWEBOPEN — the row title is a router Link, so every render sits in a router.
+function render(ui: ReactElement) {
+  return rtlRender(<MemoryRouter>{ui}</MemoryRouter>);
 }
 
 afterEach(() => {
@@ -421,5 +428,70 @@ describe("LiveSessionsNowBand — AH7 resuming lane", () => {
     render(<LiveSessionsNowBand rows={[waitingRow("a")]} now={NOW_MS} />);
     expect(screen.queryByTestId("now-lane-resuming")).toBeNull();
     expect(screen.queryByTestId("now-row-background")).toBeNull();
+  });
+});
+
+// FUWEBOPEN — a live session is reachable before its first capture lands.
+describe("LiveSessionsNowBand — links to the session page", () => {
+  function Landing() {
+    const loc = useLocation();
+    return (
+      <div data-testid="landing">
+        {loc.pathname}|{loc.hash}|{(loc.state as { from?: string } | null)?.from ?? ""}
+      </div>
+    );
+  }
+
+  function renderRouted(rows: LiveStatusRow[], terminalAdmitted?: boolean) {
+    return rtlRender(
+      <MemoryRouter initialEntries={["/sessions?x=1"]}>
+        <Routes>
+          <Route
+            path="/sessions"
+            element={
+              <LiveSessionsNowBand rows={rows} now={NOW_MS} terminalAdmitted={terminalAdmitted} />
+            }
+          />
+          <Route path="/sessions/:sid" element={<Landing />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+  }
+
+  it("every row title links to /sessions/<sid> carrying state.from", () => {
+    renderRouted([row({ session_id: "s1", project: "demo" })]);
+    const link = screen.getByTestId("now-row-open");
+    expect(link.textContent).toBe("demo");
+    expect(link.getAttribute("href")).toBe("/sessions/s1");
+    fireEvent.click(link);
+    expect(screen.getByTestId("landing").textContent).toBe("/sessions/s1||/sessions?x=1");
+  });
+
+  it("copy-resume stays the row's single action button", () => {
+    renderRouted([row({ session_id: "a", term: "abc123" })], true);
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+    expect(screen.getByTestId("now-row-resume-copy")).toBeTruthy();
+  });
+
+  it("shows Open terminal only when the row carries term AND the tier is admitted", () => {
+    const withTerm = row({ session_id: "t1", term: "abc123" });
+    const without = row({ session_id: "t2" });
+    renderRouted([withTerm, without], true);
+    const links = screen.getAllByTestId("now-row-open-terminal");
+    expect(links).toHaveLength(1);
+    expect(links[0].getAttribute("href")).toBe("/sessions/t1#sec-terminal");
+    cleanup();
+    renderRouted([withTerm, without], false);
+    expect(screen.queryByTestId("now-row-open-terminal")).toBeNull();
+    cleanup();
+    renderRouted([withTerm, without]);
+    expect(screen.queryByTestId("now-row-open-terminal")).toBeNull();
+  });
+
+  it("Open terminal navigates to the page's #sec-terminal and mounts no panel here", () => {
+    renderRouted([row({ session_id: "t1", term: "abc123" })], true);
+    expect(screen.queryByTestId("kb-terminal-slot")).toBeNull();
+    fireEvent.click(screen.getByTestId("now-row-open-terminal"));
+    expect(screen.getByTestId("landing").textContent).toBe("/sessions/t1|#sec-terminal|/sessions?x=1");
   });
 });

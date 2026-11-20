@@ -215,3 +215,41 @@ async fn kb_sessions_card_no_daemon_is_a_clear_error() {
         .failure()
         .stderr(predicates::str::contains("daemon not reachable"));
 }
+
+/// FUWEBOPEN — a session the registry knows from a beat but with no
+/// capture yet is a live-only card: the CLI prints the daemon's text
+/// verbatim, which says "capture: pending" and prints no capture-backed
+/// lane as a fact; `--json` carries the marker.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kb_sessions_card_renders_a_live_only_card_honestly() {
+    let fx = boot().await;
+    let resp = reqwest::Client::new()
+        .post(format!("{}/api/sessions/beat", fx.url))
+        .json(&serde_json::json!({
+            "v": 1,
+            "session_id": "live-cli-1",
+            "harness": "claude",
+            "event": "start",
+            "at": chrono::Utc::now().to_rfc3339(),
+            "cwd": "/work/alpha",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+
+    let stdout = fx.ok(&["card", "live-cli-1"]);
+    assert!(stdout.contains("capture: pending"), "{stdout}");
+    assert!(stdout.contains("session live-cli-1"), "{stdout}");
+    assert!(!stdout.contains("/work/alpha"), "{stdout}");
+    for fact in ["files:", "outcome:", "commits:", "decisions:", "started:"] {
+        assert!(
+            !stdout.contains(fact),
+            "{fact} printed as a fact on a live-only card: {stdout}"
+        );
+    }
+    let json_stdout = fx.ok(&["card", "live-cli-1", "--json"]);
+    let as_json: Value = serde_json::from_str(&json_stdout).expect("json stdout");
+    assert_eq!(as_json["capture_pending"], true);
+    assert_eq!(as_json["text"], stdout.as_str());
+}

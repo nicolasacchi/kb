@@ -1056,7 +1056,12 @@ rows resolved through `sessions_root_of`). The CLI prints the daemon's
 slate-digest precedent). The `terminal` lane is the constant
 `{available: false, reason: "no terminal runner"}` until the kb-term
 track fills it without changing the shape; the card gives agents and the
-CLI no attach or type surface. Pinned by
+CLI no attach or type surface. *FUWEBOPEN (2026-11):* a sid with no capture row
+but a live-registry row answers a LIVE-ONLY card (`capture_pending: true`,
+skip-serialised when false so capture-backed cards stay byte-identical;
+registry-derived summary/live/terminal under live-status's forced scrub floor,
+every capture-backed lane `available: false` / `no capture yet`, nothing
+persisted); a sid neither knows still 404s. Pinned by
 `kb-server/tests/http_extra/session_card.rs` (newest-capture scoping,
 byte-identical repeat reads, per-lane degradation, no transcript body,
 parent/child non-summing, 120-child paging, single-slate reads, tree

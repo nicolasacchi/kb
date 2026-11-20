@@ -148,6 +148,10 @@ export interface TapStack {
   start(): Promise<void>;
   /** Apply a grid change: twin resize + resize marker (audit F6). */
   setGrid(cols: number, rows: number): void;
+  /** Ask tmux for the window's current size and apply it. A tap started
+   * after a take-size (a restart) otherwise keeps the launch grid until the
+   * next resize. Best effort: a failed query changes nothing. */
+  syncGrid(): Promise<void>;
   stop(): void;
 }
 
@@ -241,6 +245,10 @@ export function createTapStack(opts: TapStackOpts): TapStack {
     });
   };
   control.onPause((pane) => reseed(pane));
+  // The runner's take-size is a tmux `resize-window`; tmux announces it with
+  // `%layout-change`, in order with the pane's %output. The twin, the
+  // profile and every live viewer follow it here.
+  control.onLayout((grid) => server.setGrid(grid.cols, grid.rows));
   control.onExit((reason) => {
     server.recordMarker((seq, offset) => encodeServerFrame({ t: 'exit', seq, code: null, offset }));
     if (exitNeedsReseed(reason)) reseed(lastPane);
@@ -254,6 +262,14 @@ export function createTapStack(opts: TapStackOpts): TapStack {
     gfx,
     setGrid(cols: number, rows: number): void {
       server.setGrid(cols, rows);
+    },
+    async syncGrid(): Promise<void> {
+      try {
+        const grid = await control.queryGrid();
+        if (grid !== null) server.setGrid(grid.cols, grid.rows);
+      } catch {
+        // Best effort: the layout notifications still follow.
+      }
     },
     async start(): Promise<void> {
       await server.listen();
@@ -313,6 +329,7 @@ if (args.version === true) {
     epoch: randomUUID().replaceAll('-', ''),
   });
   await stack.start();
+  await stack.syncGrid();
   const shutdown = () => {
     stack.stop();
     process.exit(0);

@@ -769,7 +769,7 @@ kb sessions read <id> [--json] [--live] [--follow]
                                     [--full|--tail N] [--turn A..B] [--grep PAT]
                                     Interpreted terminal transcript reader (header + turns + footer). --live/--follow poll the daemon (W7)
 kb sessions card <id> [--json] [--daemon URL]
-                                    A3 — the daemon-rendered session card (`kb-session-card/1`). Prints the daemon's `text` verbatim; the CLI NEVER renders card lanes of its own (the slate-digest precedent). `--json` prints the whole card object. No daemon → a clear error; a missing session → the not-found error other `kb sessions` verbs use
+                                    A3 — the daemon-rendered session card (`kb-session-card/1`). Prints the daemon's `text` verbatim; the CLI NEVER renders card lanes of its own (the slate-digest precedent). `--json` prints the whole card object. No daemon → a clear error; a missing session → the not-found error other `kb sessions` verbs use. A session heard only from live beats (no capture yet) prints a short live-only card whose `text` says `capture: pending`, never empty lanes as facts (`--json` carries `capture_pending: true`)
 kb sessions status [--local] [--json] [--no-color]
                                     [--state S,…] [--project P] [--harness H]
                                     [--limit N] [--root DIR] [--daemon URL]

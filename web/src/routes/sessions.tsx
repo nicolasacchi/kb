@@ -21,6 +21,7 @@ import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { useBodyScrollLock } from "../hooks/useBodyScrollLock";
 import { useNowTick } from "../hooks/useNowTick";
+import { useIdentity } from "../hooks/useArtifactHost";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "@kb/ui/icons";
 import { useCloseRequest } from "@kb/ui/useCloseRequest";
@@ -198,6 +199,9 @@ export default function SessionsRoute() {
   }, [location.hash, liveRows]);
   // Shared wall clock for presence age labels (one tick / 30s, not per-row).
   const now = useNowTick(30_000);
+  // FUWEBOPEN — gates the Now band's "Open terminal" link (the shared
+  // once-per-session `/api/identity` read; no second request).
+  const identity = useIdentity();
   const listPresenceSummary = useMemo(
     () => presenceSummary(rows, now, presenceSet),
     [rows, presenceSet, now],
@@ -700,7 +704,11 @@ export default function SessionsRoute() {
                 day-buckets below. Independent of `rows`/`loading` (a live
                 signal, not a page over history) — it renders nothing on its
                 own when the fleet is quiet, per design §7. */}
-            <LiveSessionsNowBand rows={liveRows} now={now} />
+            <LiveSessionsNowBand
+              rows={liveRows}
+              now={now}
+              terminalAdmitted={identity?.terminal_admitted === true}
+            />
             {loading && <div className="kb-ses__empty">loading…</div>}
             {!loading && !error && rows.length === 0 && (
               <EmptyState

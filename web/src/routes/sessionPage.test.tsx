@@ -784,3 +784,168 @@ describe("SessionPage", () => {
     expect(codeLaneUrls[0]).not.toContain("parent-0001");
   });
 });
+
+// FUWEBOPEN — a session known only to the live registry (no capture yet).
+function liveOnlyCard(overrides: Record<string, unknown> = {}) {
+  const none = { available: false, reason: "no capture yet" };
+  return {
+    schema: "kb-session-card/1",
+    session_id: SID,
+    kb: "",
+    artifact_id: "",
+    capture_pending: true,
+    text: "session text",
+    summary: {
+      available: true,
+      display_name: "demo",
+      harness: "claude",
+      project_slug: "demo",
+      active_secs: 0,
+      started_at: 0,
+      ended_at: 0,
+      segment_chain: [],
+      child_total: 0,
+      resume: `claude -r ${SID}`,
+    },
+    outcome: { ...none, verdict: "not_extracted", checks: [], not_committed: null },
+    files: { ...none, files: [], total: 0, read: 0, edited: 0, wrote: 0 },
+    decisions: { ...none, decisions: [], total: 0 },
+    commits: { ...none, commits: [], total: 0 },
+    research: none,
+    comments: none,
+    readings: none,
+    memory: none,
+    live: { available: true, state: "waiting", holder: "human", since_secs: 12, blocked: false },
+    slate: none,
+    children: { ...none, total: 0, items: [] },
+    terminal: {
+      available: true,
+      admitted: true,
+      term_id: "abc123",
+      harness: "claude",
+      state: "waiting",
+    },
+    ...overrides,
+  };
+}
+
+function renderLiveOnly(entry = `/sessions/${SID}`) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const utils = render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter initialEntries={[entry]}>
+        <Routes>
+          <Route path="/sessions/:sid" element={<SessionPage />} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  return { qc, ...utils };
+}
+
+describe("SessionPage — live-only card (FUWEBOPEN)", () => {
+  it("renders the header, the pending caption, the Terminal and Resume sections, and nothing capture-backed", async () => {
+    const f = mockFetch({ card: liveOnlyCard() });
+    vi.stubGlobal("fetch", f);
+    const { container, qc } = renderLiveOnly();
+    await waitFor(() => expect(screen.getByTestId("session-capture-pending")).toBeTruthy());
+    expect(screen.getByTestId("session-live-state").textContent).toContain("waiting");
+    expect(screen.getByTestId("session-sec-terminal")).toBeTruthy();
+    expect(screen.getByTestId("kb-terminal-slot")).toBeTruthy();
+    const ids = [...container.querySelectorAll('[data-testid^="session-sec-"]')].map((el) =>
+      el.getAttribute("data-testid"),
+    );
+    expect(ids).toEqual(["session-sec-terminal", "session-sec-resume"]);
+    // Once the card says live-only the detail bundle (which would only 404
+    // for a session with no capture) is held off: a bridge invalidation of
+    // the ["session"] prefix (session.state / slate.updated) refetches
+    // nothing. (The very first paint may still fire it in parallel with the
+    // card, as for every session, before the card has said what it is.)
+    f.mockClear();
+    await qc.invalidateQueries({ queryKey: ["session"] });
+    const urls = f.mock.calls.map((c) => String(c[0]));
+    expect(urls.some((u) => u.endsWith(`/api/sessions/${SID}`))).toBe(false);
+  });
+
+  it("a live-only card with no terminal shows no Terminal section", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        card: liveOnlyCard({
+          terminal: { available: false, reason: "not running in kb-term", admitted: true },
+        }),
+      }),
+    );
+    renderLiveOnly();
+    await waitFor(() => expect(screen.getByTestId("session-capture-pending")).toBeTruthy());
+    expect(screen.queryByTestId("session-sec-terminal")).toBeNull();
+  });
+
+  it("leaves the live-only view by itself when the card query is invalidated and a capture exists", async () => {
+    let current: unknown = liveOnlyCard();
+    const inner = mockFetch({ card: null });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown) => {
+        if (String(url).endsWith("/card")) {
+          return {
+            ok: true,
+            status: 200,
+            statusText: "OK",
+            json: async () => current,
+          } as Response;
+        }
+        return inner(url);
+      }),
+    );
+    const { qc } = renderLiveOnly();
+    await waitFor(() => expect(screen.getByTestId("session-capture-pending")).toBeTruthy());
+    expect(screen.queryByTestId("session-sec-outcome")).toBeNull();
+    // The first capture lands; the bridge's session.captured handler
+    // invalidates exactly this key (pinned in queryClient.test.ts).
+    current = fullCard();
+    await qc.invalidateQueries({ queryKey: ["sessions", "card", SID] });
+    await waitFor(() => expect(screen.getByTestId("session-sec-outcome")).toBeTruthy());
+    expect(screen.queryByTestId("session-capture-pending")).toBeNull();
+  });
+
+  describe("#sec-terminal", () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    function mobile() {
+      vi.stubGlobal("matchMedia", (q: string) => ({
+        matches: true,
+        media: q,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+      }));
+    }
+
+    it("opens the Terminal section on mobile (sections otherwise collapsed) and scrolls to it", async () => {
+      mobile();
+      const scroll = vi.fn();
+      Element.prototype.scrollIntoView = scroll;
+      vi.stubGlobal("fetch", mockFetch({ card: liveOnlyCard() }));
+      renderLiveOnly(`/sessions/${SID}#sec-terminal`);
+      const sec = await screen.findByTestId("session-sec-terminal");
+      expect((sec as HTMLDetailsElement).open).toBe(true);
+      // The resume section (not the target) stays collapsed on mobile.
+      expect((screen.getByTestId("session-sec-resume") as HTMLDetailsElement).open).toBe(false);
+      await waitFor(() => expect(scroll).toHaveBeenCalled());
+    });
+
+    it("also opens it on the full page, and stays closed without the hash on mobile", async () => {
+      mobile();
+      vi.stubGlobal("fetch", mockFetch({ card: fullCard({ terminal: { available: true, admitted: true, term_id: "abc123" } }) }));
+      renderLiveOnly(`/sessions/${SID}#sec-terminal`);
+      const sec = await screen.findByTestId("session-sec-terminal");
+      expect((sec as HTMLDetailsElement).open).toBe(true);
+      cleanup();
+      renderLiveOnly(`/sessions/${SID}`);
+      const closed = await screen.findByTestId("session-sec-terminal");
+      expect((closed as HTMLDetailsElement).open).toBe(false);
+    });
+  });
+});

@@ -1,10 +1,11 @@
 # kb-term — a live terminal in kb
 
-kb-term is kb's operator-intent terminal tier: from the SPA's session page
-(desktop or phone) the operator can launch, watch, type into and kill an agent
-session (claude, codex, opencode, grok or omp; kimi support was removed) that runs on the kb host,
-and from a local shell the operator can mirror the same session into a native
-terminal. It is built for one machine in a controlled environment, it is off
+kb-term is kb's operator-intent terminal tier: the operator starts an agent
+session (claude, codex, opencode, grok or omp; kimi support was removed) on the
+kb host with `kb-term new` (or the session page's Handoff panel, the only
+launch control the SPA has), then watches and types into it from the SPA's
+session page (desktop or phone) and kills it from there or from a local shell,
+where `kb-term attach` mirrors the same session into a native terminal. It is built for one machine in a controlled environment, it is off
 by default, and it is deliberately not a general remote shell. This page is the
 reference for how it works, what it protects, how to install it, and where it
 is known to be imperfect. The step-by-step install guide is
@@ -348,6 +349,20 @@ to 20..=500 columns and 5..=200 rows.
   running as a watch inside the mirror; the first keypress takes the size back.
   (It does not `exec tmux`: the empty key tables mean tmux's own attach could
   not implement "any key takes the size back".)
+- **The tap follows the grid.** A take-size is a tmux `resize-window`, and tmux
+  announces every window resize with a `%layout-change` notification, in order
+  with the pane's output. The tap resizes its headless twin at that point of the
+  stream (after the bytes already queued for it, never while earlier writes are
+  unparsed), stamps a `resize` marker at the current offset so every live viewer
+  resizes at the same point, and reports the new size in later `profile` frames;
+  a joiner waits for a pending twin resize, so its seed and its profile agree. A
+  repeat of the current size does nothing. At start the tap also asks tmux for
+  the window's current size, so a tap restarted after a take-size does not keep
+  the launch grid. Before the FUATTACH fix nothing resized the twin: `profile`,
+  the web panel's header and terminal, and the seed of every viewer that joined
+  after a take-size kept the launch grid (120x40) while the pane was larger, so
+  a wider stream was drawn at the wrong width (rules wrapped onto a second row,
+  rows doubled).
 - **Why a single grid:** zellij moves a scrolled row into its scrollback only
   when the scroll region is the whole pane, so a local mirror's scrollback is
   complete only while the local pane equals the grid.
@@ -425,6 +440,28 @@ Known limit: the binding code's own header notes that a sub-agent that beats
 longer lets subagents beat or take the process identity, so the known source is
 closed for omp; other harnesses were not checked. An agent that sets no blocked
 beat (for example a prompt that does not raise one) shows no choice bar.
+
+## Open it on the web
+
+1. Start a session on the kb host: `kb-term new <harness> --cwd <dir>` (add
+   `--no-attach` to leave it running unattended), or launch one from a
+   session's Handoff panel in the SPA.
+2. The harness's first beat makes the session known to the daemon at once, so
+   it appears in the Now band on `/sessions` (it needs no transcript first).
+   Its row title links to the session page; when `[terminal]` is admitted for
+   you and the session is bound to a terminal, the row also carries an "Open
+   terminal" link to the page's Terminal section.
+3. The session page shows a live-only card until the first capture exists:
+   the header and live state, a caption saying the transcript lands at the end
+   of the session's first turn, the Terminal section and the resume command.
+   The terminal panel itself still mounts only after the explicit "Open
+   terminal" click on that page.
+4. When the first capture lands, the same page becomes the full card (files,
+   commits, outcome and the rest) without a reload.
+
+A session the daemon has never heard a beat from, and that has no capture, is
+still a 404: the live-only card is derived per request from the in-memory live
+registry and persists nothing.
 
 ## Security model
 
@@ -629,6 +666,27 @@ codes: 0 normal, 2 usage, 3 runner unreachable (the `kb-termd` user unit may not
 be running), 4 session not found. The mirror reconnects with exponential
 backoff (100 ms to 5 s). Pictures are dim one-row labels; see
 [Grid policy](#grid-policy) for how it takes and gives back the grid.
+
+**Main-screen differential renderers (Claude Code).** A harness that redraws in
+place with relative cursor moves (CR, CUU, CHA, CUF, EL) and a colour SGR on
+nearly every line writes `ESC[4A` and similar moves right BEFORE the colour
+SGR of the line it is about to rewrite. The label rewriter holds a row from its
+first 256-colour or truecolor foreground SGR (picture evidence), and until the
+FUATTACH fix it reduced everything before that SGR on the same line to its
+visible text. That deleted the cursor moves, so every in-place redraw landed on
+a new line: spinner frames and counters stacked vertically, the input box's
+rules repeated, and status lines came out as fragments. The tap's live stream
+was correct (this garble existed only in what `attach` wrote; the stale grid
+described under [Grid policy](#grid-policy) is a second, independent defect). The
+bytes before a row's first trigger now pass through verbatim, with only the
+underline-colour (`58`) parameters removed, so a stream that contains no
+placeholder is byte-identical through the rewriter.
+
+Claude Code positions words with cursor-forward and column moves instead of
+writing spaces (its own output, in the pane too, and in the seed that the tap
+serializes), so those cells are blank in the outer terminal. Copying such a line
+out of some terminals yields no spaces between the words. That is how the
+program draws, not a mirror defect, and it remains a limit.
 
 For zellij over mosh: mosh keeps no scrollback and carries no images, so local
 scrollback is the zellij pane's `scroll_buffer_size` (default 10 000 lines). A
