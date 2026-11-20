@@ -2,16 +2,20 @@
 // terminal panel over the real stack. Asserts only that the panel mounted.
 // Shots land in tests/e2e/test-results/termux-shots/ (uploaded by the term-e2e job).
 import { test, expect, devices, type Page, type BrowserContext } from "@playwright/test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Api, MAIN, bindSession, killLaunched, launch, newSid, repoRoot, scratch, waitFile, type Harness } from "./terminal-stack/stack";
 
+const OUT_DIR = (): string => { mkdirSync(OUT, { recursive: true }); return OUT; };
 const OUT = join(repoRoot(), "tests", "e2e", "test-results", "termux-shots");
 
 const GEN = `
 import os, sys, time
-cols, rows = os.get_terminal_size(1)
 out = sys.argv[1]
+while not os.path.exists(os.path.join(out, "go")):
+    time.sleep(0.1)
+time.sleep(0.5)
+cols, rows = os.get_terminal_size(1)
 E = "\\x1b"
 w = sys.stdout.write
 # scrollback: a few hundred lines, some longer than the grid
@@ -39,7 +43,8 @@ at(rows - 3, "\\u2502" + (" > Try \\"fix lint errors\\"" + " " * inner)[:inner] 
 at(rows - 2, "\\u2570" + "\\u2500" * inner + "\\u256f")
 last = f" ? for shortcuts   {cols}x{rows}   ctx 42%   opus   main*"
 w(f"{E}[{rows};1H{E}[7m" + (last + " " * cols)[:cols] + f"{E}[0m")
-open(os.path.join(out, "ready"), "w").write("1")
+sys.stdout.flush()
+open(os.path.join(out, "ready"), "w").write(f"{cols}x{rows}")
 time.sleep(3600)
 `;
 
@@ -65,7 +70,13 @@ async function setup(request: import("@playwright/test").APIRequestContext, grid
   const term = await launch(api, h, grid);
   const sid = newSid();
   await bindSession(api, sid, term);
+  const ts = await api.json("POST", `/api/terms/${term.id}/take-size`, { data: grid });
+  writeFileSync(join(OUT_DIR(), `setup_${grid.cols}x${grid.rows}_${sid}.txt`), `take-size ${ts.status} ${JSON.stringify(ts.body)}\n`);
+  await new Promise((r) => setTimeout(r, 1000));
+  writeFileSync(join(h.out, "go"), "1");
   await waitFile(join(h.out, "ready"), 60_000);
+  const g2 = await api.json("GET", `/api/terms/${term.id}/grid`);
+  writeFileSync(join(OUT_DIR(), `setup_${grid.cols}x${grid.rows}_${sid}.txt`), `take-size ${ts.status} ${JSON.stringify(ts.body)}\ngrid ${JSON.stringify(g2.body).slice(0, 300)}\npane saw ${readFileSync(join(h.out, "ready"), "utf8")}\n`);
   return { sid };
 }
 
