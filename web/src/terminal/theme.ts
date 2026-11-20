@@ -12,7 +12,7 @@ const token = (css: TokenSource, name: string): string => css.getPropertyValue(n
 
 export function readTheme(profileTheme: unknown, css: TokenSource = getComputedStyle(document.documentElement)): ITheme {
   const out: ITheme = {};
-  const set = (key: keyof ITheme, value: string): void => {
+  const set = (key: Exclude<keyof ITheme, "extendedAnsi">, value: string): void => {
     if (value) out[key] = value;
   };
   // The terminal background IS the panel background (`--bg-panel-2`), so the
