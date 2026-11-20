@@ -282,7 +282,10 @@ export default function SessionPage() {
   // the row+detail pair — the card summary is not a SessionRow, so the
   // page fetches the existing detail hook for it.
   // A live-only card (FUWEBOPEN) has no capture, so the detail bundle would
-  // only 404: hold the query off until the first capture lands.
+  // only 404: once the card says so, hold the query off until the first
+  // capture lands (the bridge's session.captured handler then invalidates
+  // both keys). Not gated on the card's arrival, so the common page keeps
+  // fetching card and detail in parallel.
   const { detail, loading: detailLoading } = useSessionDetail(
     card?.capture_pending ? null : (sid ?? null),
   );

@@ -847,7 +847,7 @@ describe("SessionPage — live-only card (FUWEBOPEN)", () => {
   it("renders the header, the pending caption, the Terminal and Resume sections, and nothing capture-backed", async () => {
     const f = mockFetch({ card: liveOnlyCard() });
     vi.stubGlobal("fetch", f);
-    const { container } = renderLiveOnly();
+    const { container, qc } = renderLiveOnly();
     await waitFor(() => expect(screen.getByTestId("session-capture-pending")).toBeTruthy());
     expect(screen.getByTestId("session-live-state").textContent).toContain("waiting");
     expect(screen.getByTestId("session-sec-terminal")).toBeTruthy();
@@ -856,7 +856,13 @@ describe("SessionPage — live-only card (FUWEBOPEN)", () => {
       el.getAttribute("data-testid"),
     );
     expect(ids).toEqual(["session-sec-terminal", "session-sec-resume"]);
-    // The detail bundle would only 404 for a session with no capture: not requested.
+    // Once the card says live-only the detail bundle (which would only 404
+    // for a session with no capture) is held off: a bridge invalidation of
+    // the ["session"] prefix (session.state / slate.updated) refetches
+    // nothing. (The very first paint may still fire it in parallel with the
+    // card, as for every session, before the card has said what it is.)
+    f.mockClear();
+    await qc.invalidateQueries({ queryKey: ["session"] });
     const urls = f.mock.calls.map((c) => String(c[0]));
     expect(urls.some((u) => u.endsWith(`/api/sessions/${SID}`))).toBe(false);
   });
