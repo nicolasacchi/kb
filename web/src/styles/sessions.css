@@ -181,7 +181,7 @@
 }
 .kb-now__row-term {
   font: 500 11px/1.3 var(--font-sans, system-ui);
-  color: var(--accent, #8a7fff);
+  color: var(--accent);
   white-space: nowrap;
 }
 .kb-now__row-line2 {
