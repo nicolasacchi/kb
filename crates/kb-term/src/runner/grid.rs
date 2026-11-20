@@ -54,11 +54,41 @@ pub struct GridState {
     pub owner: Option<String>,
 }
 
-/// The take decision (pure): `force` overrides a foreign owner.
+/// The grid owner string the web relay (`/api/terms/{id}/take-size`,
+/// `release-size`) uses. Every web viewer shares it, so between web
+/// viewers the latest explicit take wins.
+pub const WEB_OWNER: &str = "kb-term";
+
+/// Whether `owner` is the web relay owner.
+#[must_use]
+pub fn is_web_owner(owner: &str) -> bool {
+    owner == WEB_OWNER
+}
+
+/// Whether `owner` is a local `kb-term attach` mirror (`local:<pid>`).
+#[must_use]
+pub fn is_local_owner(owner: &str) -> bool {
+    owner.starts_with("local:")
+}
+
+/// The take decision (pure): the ONE precedence function.
+///
+/// - No current owner, or the same owner retaking: allowed.
+/// - The web owner takes over a local mirror owner WITHOUT force (the
+///   web outranks a local attach; the operator ruling of 2026-11-20).
+///   This also frees a stale `local:<pid>` left behind by a dead attach.
+/// - A local mirror can NEVER take over the web owner, force or not:
+///   refused `grid-owned` with a message naming the web panel.
+/// - Any other owner pair keeps the old rule: `force` overrides.
 pub fn decide_take(current: &Option<String>, owner: &str, force: bool) -> Result<(), RunnerError> {
     match current {
         None => Ok(()),
-        Some(cur) if cur == owner || force => Ok(()),
+        Some(cur) if cur == owner => Ok(()),
+        Some(cur) if is_web_owner(owner) && is_local_owner(cur) => Ok(()),
+        Some(cur) if is_local_owner(owner) && is_web_owner(cur) => Err(RunnerError::GridOwned(
+            format!("grid is owned by {cur} (the web panel; release it there)"),
+        )),
+        Some(_) if force => Ok(()),
         Some(cur) => Err(RunnerError::GridOwned(format!("grid is owned by {cur}"))),
     }
 }
@@ -291,6 +321,111 @@ mod tests {
             .iter()
             .filter(|(_, a)| a.first().map(String::as_str) == Some("resize-window"))
             .count()
+    }
+
+    #[test]
+    fn precedence_table_covers_every_owner_class_and_force() {
+        let web = Some(WEB_OWNER.to_string());
+        let local = Some("local:41".to_string());
+        let other = Some("relay-7".to_string());
+        // (current, taker, force, allowed)
+        let table: Vec<(Option<String>, &str, bool, bool)> = vec![
+            (None, WEB_OWNER, false, true),
+            (None, "local:9", false, true),
+            (None, "relay-7", false, true),
+            // Web over a local mirror: no force needed.
+            (local.clone(), WEB_OWNER, false, true),
+            (local.clone(), WEB_OWNER, true, true),
+            // A local mirror never takes the web owner, even forced.
+            (web.clone(), "local:9", false, false),
+            (web.clone(), "local:9", true, false),
+            // Web retake (latest explicit Fit wins between web viewers).
+            (web.clone(), WEB_OWNER, false, true),
+            (web.clone(), WEB_OWNER, true, true),
+            // A local mirror retaking itself, or another local with force.
+            (local.clone(), "local:41", false, true),
+            (local.clone(), "local:9", false, false),
+            (local.clone(), "local:9", true, true),
+            // Other owner classes keep the old behaviour.
+            (other.clone(), WEB_OWNER, false, false),
+            (other.clone(), WEB_OWNER, true, true),
+            (other.clone(), "local:9", false, false),
+            (other.clone(), "local:9", true, true),
+            (web.clone(), "relay-7", false, false),
+            (web.clone(), "relay-7", true, true),
+            (local.clone(), "relay-7", false, false),
+            (local.clone(), "relay-7", true, true),
+        ];
+        for (cur, taker, force, allowed) in table {
+            let got = decide_take(&cur, taker, force);
+            assert_eq!(
+                got.is_ok(),
+                allowed,
+                "current {cur:?} taker {taker} force {force}"
+            );
+            if let Err(e) = got {
+                assert_eq!(e.code(), "grid-owned");
+            }
+        }
+        // The refusal of a local mirror against the web names the web.
+        let msg = decide_take(&web, "local:9", true).unwrap_err().message();
+        assert!(msg.contains("web panel"), "names the web: {msg}");
+        assert!(msg.starts_with("grid is owned by kb-term"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn web_takes_a_local_owner_and_a_local_never_retakes_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = RunnerConfig::test_config(
+            dir.path().join("run"),
+            "/bin/true".to_string(),
+            dir.path().join("conf"),
+        );
+        let runner: Runner<DirectSupervisor> = Runner::direct(cfg);
+        let fake = FakeTmux::new();
+        let id = "abcd1234";
+        let sock = runner.holder_socket(id);
+        // A (possibly dead) local attach owns the grid.
+        take_size(&runner, &fake, id, 120, 40, "local:9", false)
+            .await
+            .unwrap();
+        // The web takes it without force.
+        let state = take_size(&runner, &fake, id, 201, 48, WEB_OWNER, false)
+            .await
+            .unwrap();
+        assert_eq!((state.cols, state.rows), (201, 48));
+        assert_eq!(read_owner(&fake, &sock).await, Some(WEB_OWNER.to_string()));
+        // A local mirror, even forced, is refused and nothing resizes.
+        let before = size_calls(&fake);
+        for force in [false, true] {
+            let err = take_size(&runner, &fake, id, 120, 40, "local:9", force)
+                .await
+                .unwrap_err();
+            assert_eq!(err.code(), "grid-owned");
+            assert!(err.message().contains("web panel"), "{}", err.message());
+        }
+        assert_eq!(size_calls(&fake), before, "refused takes never resize");
+        assert_eq!(
+            grid_state(&fake, &sock).await.unwrap(),
+            GridState {
+                cols: 201,
+                rows: 48,
+                owner: Some(WEB_OWNER.to_string())
+            }
+        );
+        // Release only clears a matching owner: a local release is refused.
+        let err = release_size(&runner, &fake, id, "local:9")
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "grid-owned");
+        assert_eq!(read_owner(&fake, &sock).await, Some(WEB_OWNER.to_string()));
+        release_size(&runner, &fake, id, WEB_OWNER).await.unwrap();
+        assert_eq!(read_owner(&fake, &sock).await, None);
+        // Owner none: the local mirror takes the grid again (no force).
+        take_size(&runner, &fake, id, 120, 40, "local:9", false)
+            .await
+            .unwrap();
+        assert_eq!(read_owner(&fake, &sock).await, Some("local:9".to_string()));
     }
 
     #[tokio::test]

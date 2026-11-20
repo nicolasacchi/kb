@@ -340,22 +340,52 @@ to 20..=500 columns and 5..=200 rows.
 
 - **`kb-term attach`** takes the grid on attach and again on each window-size
   change (debounced); `--watch` never takes it and reads no stdin.
-- **The phone** takes it only through the explicit "Fit to phone" action, which
-  asks for confirmation first when another device owns the grid. Watching, the
-  composer and the soft keyboard never move it.
+- **The phone** takes it only through the explicit "Fit to phone" action. A
+  take that finds a local attach as owner needs no force and is never refused.
+  Watching, the composer and the soft keyboard never move it.
 - Taking the grid makes omp rebuild its transcript (ED2, ED3 and a full reprint
   inside one `?2026` frame) in every viewer.
-- **When another device owns the grid**, `take-size` is refused with `grid-owned`
-  (HTTP 409 over the relay). A local attach then prints a banner and keeps
-  running as a watch inside the mirror; the first keypress takes the size back.
-  (It does not `exec tmux`: the empty key tables mean tmux's own attach could
-  not implement "any key takes the size back".)
+- **Precedence: the web outranks a local attach** (operator ruling, 2026-11-20).
+  One pure function in the runner decides every take:
+  - no owner, or the same owner retaking: allowed;
+  - the web owner (`kb-term`, shared by every web client) takes over a local
+    attach owner (`local:<pid>`) **without force**: the "web panel" is the
+    place where the operator sizes the session;
+  - a local attach can **never** take the grid from the web, even forced: the
+    take is refused `grid-owned` with a message naming the web panel;
+  - between web viewers the owner string is the same, so the latest explicit
+    Fit wins; a passive resize never takes the grid;
+  - any other owner pair keeps the old rule: refused `grid-owned` unless forced
+    (HTTP 409 over the relay).
+- **A stale local owner no longer blocks the web.** A crashed or killed attach
+  leaves `local:<pid>` in the owner option; the web takes over it like any
+  other local owner. A local attach started later takes the grid only when the
+  owner is none or a local one.
+- **The local attach does not fight the web.** An attach refused with
+  `grid-owned` prints a banner and keeps running as a watch inside the mirror
+  (it does not `exec tmux`: the empty key tables mean tmux's own attach could
+  not implement "any key takes the size back"). Under a **local or other**
+  owner the first keypress takes the size back, as before. Under the **web**
+  owner a keypress takes nothing and forwards nothing: the attach prints one
+  short line (at most once per 10 s) saying the web panel owns the grid and
+  that the operator can release it there or detach with Ctrl-], and keeps
+  watching. When the web releases the grid (`release-size`, owner none) the
+  next keypress takes it and the attach resumes as usual.
+- **An attach that loses the grid** notices it: a `resize` marker whose size
+  differs from the size it last took makes it ask the runner who owns the grid.
+  If the owner is now someone else it drops into the same watch with the banner
+  (never retaking on its own, so no resize loop) and the session keeps running.
+  The ruling also allows the web to detach the local attach; that is **not
+  built**, because watching behind a banner already satisfies the ruling.
+- **Release.** `release-size` clears the owner only when it matches the web
+  owner; a local owner is not cleared by it.
 - **The tap follows the grid.** A take-size is a tmux `resize-window`, and tmux
   announces every window resize with a `%layout-change` notification, in order
   with the pane's output. The tap resizes its headless twin at that point of the
   stream (after the bytes already queued for it, never while earlier writes are
   unparsed), stamps a `resize` marker at the current offset so every live viewer
-  resizes at the same point, and reports the new size in later `profile` frames;
+  resizes at the same point (a caught-up live viewer gets the marker at once, even when the
+  pane prints nothing afterwards; an idle pane used to hold it until its next byte), and reports the new size in later `profile` frames;
   a joiner waits for a pending twin resize, so its seed and its profile agree. A
   repeat of the current size does nothing. At start the tap also asks tmux for
   the window's current size, so a tap restarted after a take-size does not keep
@@ -830,9 +860,11 @@ minimal `PATH` and no `KB_SESSIONS_DIR`. Put both in a user-unit drop-in (see
   sequences are unverified (the cgroup kill is the backstop). Claude's
   classic-renderer reprint behaviour is not characterised.
 - **Binding.** See [Binding a terminal to a session](#binding-a-terminal-to-a-session).
-- **Multi-viewer grid contention** (two devices taking the grid in turn) is
-  covered by the refusal and fallback behaviour only; sustained contention is not
-  characterised.
+- **Multi-viewer grid contention.** Every web client shares the one owner
+  `kb-term`, so two browsers cannot be told apart: the latest explicit Fit wins
+  and the other keeps a grid it did not choose until it fits again. Two local
+  attaches still contend as before (refusal and fallback). Sustained contention
+  is not characterised.
 - **No local verification.** Every claim on this page that says "verified" rests
   on a GitHub-hosted CI lane named in the next section.
 

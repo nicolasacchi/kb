@@ -491,6 +491,12 @@ export class TapServer {
         });
     }
     this.recordMarker((seq, offset) => encodeServerFrame({ t: 'resize', seq, offset, cols, rows }));
+    // A marker only queues; a caught-up live viewer is serviced on the next
+    // byte or drain. A grid change on an idle pane brings no byte, so the
+    // marker would sit in `pending` and the open panel would keep the old
+    // size. Service every live viewer now (a viewer that is behind keeps its
+    // order: its marker waits for its own offset).
+    for (const viewer of this.viewers.values()) this.serviceViewer(viewer);
   }
 
 
