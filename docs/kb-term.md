@@ -383,7 +383,8 @@ to 20..=500 columns and 5..=200 rows.
   with the pane's output. The tap resizes its headless twin at that point of the
   stream (after the bytes already queued for it, never while earlier writes are
   unparsed), stamps a `resize` marker at the current offset so every live viewer
-  resizes at the same point, and reports the new size in later `profile` frames;
+  resizes at the same point (a caught-up live viewer gets the marker at once, even when the
+  pane prints nothing afterwards; an idle pane used to hold it until its next byte), and reports the new size in later `profile` frames;
   a joiner waits for a pending twin resize, so its seed and its profile agree. A
   repeat of the current size does nothing. At start the tap also asks tmux for
   the window's current size, so a tap restarted after a take-size does not keep
