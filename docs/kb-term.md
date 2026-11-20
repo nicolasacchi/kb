@@ -581,6 +581,26 @@ be running), 4 session not found. The mirror reconnects with exponential
 backoff (100 ms to 5 s). Pictures are dim one-row labels; see
 [Grid policy](#grid-policy) for how it takes and gives back the grid.
 
+**Main-screen differential renderers (Claude Code).** A harness that redraws in
+place with relative cursor moves (CR, CUU, CHA, CUF, EL) and a colour SGR on
+nearly every line writes `ESC[4A` and similar moves right BEFORE the colour
+SGR of the line it is about to rewrite. The label rewriter holds a row from its
+first 256-colour or truecolor foreground SGR (picture evidence), and until the
+FUATTACH fix it reduced everything before that SGR on the same line to its
+visible text. That deleted the cursor moves, so every in-place redraw landed on
+a new line: spinner frames and counters stacked vertically, the input box's
+rules repeated, and status lines came out as fragments. The tap's own stream
+was correct throughout (the garble existed only in what `attach` wrote). The
+bytes before a row's first trigger now pass through verbatim, with only the
+underline-colour (`58`) parameters removed, so a stream that contains no
+placeholder is byte-identical through the rewriter.
+
+Claude Code positions words with cursor-forward and column moves instead of
+writing spaces (its own output, in the pane too, and in the seed that the tap
+serializes), so those cells are blank in the outer terminal. Copying such a line
+out of some terminals yields no spaces between the words. That is how the
+program draws, not a mirror defect, and it remains a limit.
+
 For zellij over mosh: mosh keeps no scrollback and carries no images, so local
 scrollback is the zellij pane's `scroll_buffer_size` (default 10 000 lines). A
 long mirrored session wants a larger value in the user's own zellij config (50 000
@@ -658,6 +678,15 @@ minimal `PATH` and no `KB_SESSIONS_DIR`. Put both in a user-unit drop-in (see
   post-Unicode-11 emoji. Links and extended underline styles present at join
   time are lost for rows already in the buffer; new output renders them
   normally.
+- **The tap's twin keeps the grid it was launched with.** Nothing resizes the
+  tap's headless twin when a client takes the grid, so the `profile` frame keeps
+  reporting the launch size and a viewer that joins AFTER a take-size gets a
+  seed built at the wrong size: full-width rules wrap onto a second row and rows
+  appear doubled (seen on a Claude Code session taken from 120x40 to 160x30).
+  The first `attach` of a fresh session is not affected, because it joins before
+  it takes the grid, and live bytes are the pane's own output, so they are right.
+  A re-attach after a size change, or a browser opened later, is affected. Not
+  fixed yet.
 - **Query stripping is best effort.** A query padded past a hold-back cap passes
   verbatim; the anchor's responder is the backstop.
 - **Pictures** are lost while the tap is down until the program redraws; a same-id
