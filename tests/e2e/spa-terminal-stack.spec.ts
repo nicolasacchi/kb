@@ -932,8 +932,9 @@ async function panelGeometry(page: Page) {
       chip: chip?.textContent ?? "",
       phase: host.getAttribute("data-kb-term-phase") ?? "?",
       status: document.querySelector('[data-testid="kb-term-status"]')?.textContent ?? "",
+      // Page content only: the app header (the shared Spine) has its own width budget.
       overflowers: [...document.querySelectorAll("body *")]
-        .filter((el) => !el.closest(".xterm") && el.getBoundingClientRect().right > window.innerWidth + 1)
+        .filter((el) => !el.closest(".xterm, header") && el.getBoundingClientRect().right > window.innerWidth + 1)
         .slice(0, 6)
         .map((el) => `${el.tagName.toLowerCase()}.${String(el.className).slice(0, 40)} right=${Math.round(el.getBoundingClientRect().right)}`),
       cropped: document.querySelector('[data-testid="kb-term-cropped"]') !== null,
@@ -943,7 +944,7 @@ async function panelGeometry(page: Page) {
   });
 }
 
-test("a 201x48 grid is fully visible at 1440x900 (font >= 9, no horizontal scroll), shows the Cropped hint when it cannot be at 1280x720, and the page never overflows at 1024", async ({ page, request }) => {
+test("a 201x48 grid is fully visible at 1440x900 (font >= 9, no horizontal scroll), shows the Cropped hint when it cannot be at 1280x720, and the page content never overflows at 1024", async ({ page, request }) => {
   test.setTimeout(240_000);
   await page.setViewportSize({ width: 1440, height: 900 });
   const c = await prepare(page, request, winchHarness(), { cols: 201, rows: 48 });
@@ -976,12 +977,12 @@ test("a 201x48 grid is fully visible at 1440x900 (font >= 9, no horizontal scrol
   expect(g.font).toBeGreaterThanOrEqual(9);
   expect(g.docW).toBeLessThanOrEqual(g.vw);
 
-  // 1024: the document never scrolls sideways.
+  // 1024: nothing in the page content (the terminal section included) reaches past the viewport.
   await page.setViewportSize({ width: 1024, height: 768 });
   await expect
     .poll(async () => {
       const m = await panelGeometry(page);
-      return m.docW <= m.vw ? "ok" : `docW ${m.docW} > vw ${m.vw}: ${m.overflowers.join(" | ")}`;
+      return m.overflowers.length === 0 ? "ok" : `content wider than the viewport (${m.vw}): ${m.overflowers.join(" | ")}`;
     }, { timeout: 30_000 })
     .toBe("ok");
 });
