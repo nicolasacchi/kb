@@ -21,7 +21,7 @@ executed = 470
 executed = 305
 
 [nextest]
-executed = 5665
+executed = 5680
 
 [web-vitest]
 executed = 2530
@@ -57,4 +57,4 @@ executed = 30
 # fully green run. FXTESTS: 30 executed on the green run -> 30 - 30%5 - 5 = 25
 # (the witness formula; the run was too close to the floor to print it).
 [term-e2e]
-executed = 25
+executed = 30
