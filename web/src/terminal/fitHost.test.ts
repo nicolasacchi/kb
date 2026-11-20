@@ -1,0 +1,60 @@
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { fitHostNow } from "./fitHost";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+function hostWith(width: number, height: number, screen?: { w: number; h: number }): HTMLElement {
+  const host = document.createElement("div");
+  Object.defineProperty(host, "clientWidth", { value: width, configurable: true });
+  Object.defineProperty(host, "clientHeight", { value: height, configurable: true });
+  if (screen) {
+    const el = document.createElement("div");
+    el.className = "xterm-screen";
+    Object.defineProperty(el, "scrollWidth", { get: () => screen.w, configurable: true });
+    Object.defineProperty(el, "scrollHeight", { get: () => screen.h, configurable: true });
+    host.appendChild(el);
+  }
+  return host;
+}
+
+// A 0.6 x 1.32 cell, as the probe would measure it.
+const probe = () =>
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({ width: 1200, height: 132 } as DOMRect);
+
+describe("fitHostNow", () => {
+  it("never fits while the host has no width (a closed <details>), and leaves the font alone", () => {
+    const term = { options: { fontSize: 14, fontFamily: "monospace" } };
+    expect(fitHostNow(term, hostWith(0, 600), { cols: 201, rows: 48 }, { min: 9, max: 20 })).toBeNull();
+    expect(term.options.fontSize).toBe(14);
+  });
+
+  it("applies the font from the probed cell and reports an uncropped fit", () => {
+    probe();
+    const term = { options: { fontSize: 14, fontFamily: "monospace" } };
+    const r = fitHostNow(term, hostWith(1400, 800, { w: 1300, h: 700 }), { cols: 201, rows: 48 }, { min: 9, max: 20 });
+    expect(term.options.fontSize).toBe(11);
+    expect(r).toEqual({ fontSize: 11, cropped: { x: false, y: false } });
+  });
+
+  it("steps down while the rendered screen still overflows, then reports the crop and scrolls", () => {
+    probe();
+    const term = { options: { fontSize: 14, fontFamily: "monospace" } };
+    const host = hostWith(800, 800, { w: 1500, h: 700 });
+    const r = fitHostNow(term, host, { cols: 201, rows: 48 }, { min: 9, max: 20 });
+    expect(term.options.fontSize).toBe(9);
+    expect(r?.cropped).toEqual({ x: true, y: false });
+    expect(host.style.overflow).toBe("auto");
+  });
+
+  it("an uncropped fit clears the scroll", () => {
+    probe();
+    const term = { options: { fontSize: 14, fontFamily: "monospace" } };
+    const host = hostWith(1400, 800, { w: 1300, h: 700 });
+    host.style.overflow = "auto";
+    fitHostNow(term, host, { cols: 201, rows: 48 }, { min: 9, max: 20 });
+    expect(host.style.overflow).toBe("");
+  });
+});
