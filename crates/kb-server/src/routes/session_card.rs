@@ -1371,10 +1371,107 @@ async fn compute_not_committed(
 // Handlers
 // ---------------------------------------------------------------------------
 
+/// Longest `title` a live-only card carries: the same re-cap the
+/// live-status forced scrub floor applies to `last_line`.
+const LIVE_ONLY_TITLE_MAX_CHARS: usize = kb_core::sessions::OUTCOME_WIRE_MAX_CHARS;
+
+/// FUWEBOPEN — the card of a session that has NO capture row yet but HAS a
+/// live-registry row (written by a hook beat). `None` when the registry does
+/// not know the sid either (the route then 404s).
+///
+/// Posture: derived per request from in-memory state, persisted nowhere
+/// (invariant #11, LSC amendment). It exposes no more than `live-status`
+/// does and under the same forced scrub floor: the cwd is reduced to its
+/// basename (`project_slug`; the full path never appears), `resume` is the
+/// cwd-less form, and `last_line`, `model`, `host`, `pid`, `last_tool` are
+/// not carried at all. The `terminal` lane is the ONE [`terminal_lane`]
+/// path. Every capture-backed lane is `available: false` with
+/// [`CAPTURE_PENDING_REASON`].
+fn live_only_card(
+    state: &Arc<KbHandles>,
+    peer: Option<std::net::IpAddr>,
+    source: crate::middleware::IdentitySource,
+    session_id: &str,
+) -> Option<SessionCard> {
+    let now_unix = chrono::Utc::now().timestamp();
+    // `snapshot` drops its guard before returning (invariant #15).
+    let (row, live_state, confidence) = state
+        .live_registry
+        .snapshot(now_unix)
+        .into_iter()
+        .find(|(r, _, _)| r.session_id == session_id)?;
+    let project =
+        crate::routes::sessions::derive_project(row.cwd.as_deref()).filter(|p| !p.is_empty());
+    let title = row
+        .title
+        .as_deref()
+        .map(|t| kb_core::sessions::truncate_chars_ellipsis(t, LIVE_ONLY_TITLE_MAX_CHARS))
+        .filter(|t| !t.trim().is_empty());
+    let display_name = title
+        .clone()
+        .or_else(|| project.clone())
+        .unwrap_or_else(|| row.session_id.clone());
+    let summary = SummaryLane {
+        available: true,
+        reason: None,
+        title,
+        display_name,
+        harness: row.harness.clone(),
+        project_slug: project,
+        // No capture: nothing is known of substance, duration or lineage.
+        substance: None,
+        active_secs: 0,
+        started_at: 0,
+        ended_at: 0,
+        segment_chain: Vec::new(),
+        root_session_id: None,
+        parent_session_id: None,
+        continued_from: None,
+        continued_in: Vec::new(),
+        child_total: 0,
+        resume: kb_core::sessions::resume_command(&row.harness, &row.session_id, None),
+    };
+    let live = LiveLane {
+        available: true,
+        reason: None,
+        state: Some(live_state),
+        holder: Some(row.holder),
+        confidence: Some(confidence),
+        since_secs: Some((now_unix - row.last_activity_unix).max(0)),
+        blocked: Some(row.blocked),
+    };
+    let terminal = terminal_lane(state, peer, source, session_id, None);
+    let mut card = SessionCard {
+        schema: SESSION_CARD_SCHEMA.to_string(),
+        session_id: session_id.to_string(),
+        kb: String::new(),
+        artifact_id: String::new(),
+        capture_pending: true,
+        text: String::new(),
+        summary,
+        outcome: OutcomeLane::unavailable(CAPTURE_PENDING_REASON),
+        files: FilesLane::unavailable(CAPTURE_PENDING_REASON),
+        decisions: DecisionsLane::unavailable(CAPTURE_PENDING_REASON),
+        commits: CommitsLane::unavailable(CAPTURE_PENDING_REASON),
+        research: ResearchLane::unavailable(CAPTURE_PENDING_REASON),
+        comments: CommentsLane::unavailable(CAPTURE_PENDING_REASON),
+        readings: ReadingsLane::unavailable(CAPTURE_PENDING_REASON),
+        memory: MemoryLane::unavailable(CAPTURE_PENDING_REASON),
+        live,
+        slate: SlateLane::unavailable(CAPTURE_PENDING_REASON),
+        children: ChildrenLane::unavailable(CAPTURE_PENDING_REASON),
+        terminal,
+    };
+    card.text = render_text(&card);
+    Some(card)
+}
+
 /// `GET /api/sessions/{session_id}/card` — one daemon-rendered
 /// `kb-session-card/1` for the newest capture of a session. Lanes run
 /// concurrently as their own futures; each degrades independently
-/// (drop-on-error). 404 when no kb holds the session row.
+/// (drop-on-error). A session with no capture row but a live-registry row
+/// answers a live-only card (`capture_pending: true`, see
+/// [`live_only_card`]); 404 when neither knows the sid.
 pub async fn card(
     State(state): State<Arc<KbHandles>>,
     Extension(identity): Extension<Identity>,
@@ -1383,7 +1480,15 @@ pub async fn card(
     Path(session_id): Path<String>,
 ) -> Response {
     let Some(session) = find_session(&state, &session_id).await else {
-        return error_to_problem_json(&kb_core::Error::NotFound(format!("session {session_id}")));
+        // FUWEBOPEN — no capture row: a session the live registry knows from
+        // a hook beat still gets a (live-only) card; a sid known to neither
+        // stays a 404.
+        return match live_only_card(&state, Some(peer.ip()), identity.source, &session_id) {
+            Some(card) => Json(card).into_response(),
+            None => {
+                error_to_problem_json(&kb_core::Error::NotFound(format!("session {session_id}")))
+            }
+        };
     };
     let session_id = session.session_id.clone();
     // The widened memory read-id set (`get`'s rule).
@@ -1443,6 +1548,7 @@ pub async fn card(
         session_id: session_id.clone(),
         kb: session.kb.clone(),
         artifact_id: session.artifact_id.clone(),
+        capture_pending: false,
         text: String::new(),
         summary,
         outcome,

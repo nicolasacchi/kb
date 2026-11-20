@@ -174,12 +174,24 @@ describe("SSE → TanStack invalidation bridge (invariant #23)", () => {
   // handler here.
   it("session.captured rides the memories gate AND refreshes the timeline lanes", () => {
     emit("session.captured", { kb: "demo" });
-    expect(keys()).toEqual([["memories"], ["timeline", "demo"], ["changes"]]);
+    expect(keys()).toEqual([
+      ["memories"],
+      ["timeline", "demo"],
+      ["sessions", "card"],
+      ["session"],
+      ["changes"],
+    ]);
   });
 
   it("session.captured without a kb invalidates the whole timeline prefix", () => {
     emit("session.captured", {});
-    expect(keys()).toEqual([["memories"], ["timeline"], ["changes"]]);
+    expect(keys()).toEqual([
+      ["memories"],
+      ["timeline"],
+      ["sessions", "card"],
+      ["session"],
+      ["changes"],
+    ]);
   });
 
   // artifact.removed is dual-purpose: a docs-churn signal (row leaves the
@@ -316,6 +328,26 @@ describe("SSE → TanStack invalidation bridge (invariant #23)", () => {
         k.every((seg, i) => seg === cardKey[i]),
     );
     expect(hit).toBe(true);
+  });
+
+  // FUWEBOPEN — the live-only card's exit: the first capture of a session
+  // (session.captured carries its id) invalidates exactly that session's
+  // card and detail keys, so the page flips to the full card unprompted.
+  it("session.captured with a session_id invalidates that session's card and detail", () => {
+    emit("session.captured", { kb: "demo", session_id: "s1" });
+    expect(keys()).toContainEqual(["sessions", "card", "s1"]);
+    expect(keys()).toContainEqual(["session", "s1"]);
+    expect(keys()).not.toContainEqual(["sessions", "card"]);
+  });
+
+  it("real cache: a seeded live-only card is invalidated by session.captured", () => {
+    spy.mockRestore();
+    queryClient.setQueryData(["sessions", "card", "s1"], { capture_pending: true });
+    queryClient.setQueryData(["sessions", "card", "other"], { capture_pending: true });
+    emit("session.captured", { kb: "demo", session_id: "s1" });
+    expect(queryClient.getQueryState(["sessions", "card", "s1"])?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(["sessions", "card", "other"])?.isInvalidated).toBe(false);
+    queryClient.removeQueries({ queryKey: ["sessions", "card"] });
   });
 
   it("a cached session card is invalidated by slate.updated", () => {

@@ -73,6 +73,18 @@ truly live. `kb sessions status --local` bypasses all of this: it reads
 each harness's own files directly, regardless of whether any beat hook
 is wired.
 
+### Opening a live session from the Now band
+
+Every Now band row's title links to the session's page (`/sessions/<id>`), and
+the page works before the session's first capture exists: a session the daemon
+knows only from beats answers a live-only card (`capture_pending`), shown as
+the header, the live state, a note that the transcript lands at the end of the
+first turn, and the resume command. A row bound to a kb-term terminal also
+carries an "Open terminal" link, shown only when the terminal tier is admitted
+for you, that lands on the page's Terminal section (opened and scrolled to). The
+page turns into the full card by itself once the first capture lands. See
+[kb-term.md](kb-term.md#open-it-on-the-web).
+
 ### `last:` — what the session last started
 
 A quiet agent-held row can name the last tool it started: `stalled? · last:

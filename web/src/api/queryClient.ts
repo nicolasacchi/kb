@@ -177,11 +177,15 @@ export const queryClient = new QueryClient({
 //                                   ["sessions"] prefix, so useSessions' own
 //                                   session.captured/session.deleted
 //                                   invalidation already reaches it — plus
-//                                   two explicit kinds below (session.state
+//                                   explicit kinds below (session.state
 //                                   beside the LSC-4 entry, and slate.updated
 //                                   for the card's slate lane): a live-state
 //                                   flip or a slate append changes card content
-//                                   without a capture landing. Over-invalidation
+//                                   without a capture landing. FUWEBOPEN adds
+//                                   session.captured by name (scoped to the
+//                                   captured sid): a live-only card
+//                                   (`capture_pending`) becomes the full card
+//                                   when the first capture lands. Over-invalidation
 //                                   is accepted: only a mounted card refetches.
 //   ["sessions", "card", sid, "children"] A4 — the card's paged children
 //                                   (`GET /api/sessions/{sid}/children`,
@@ -690,6 +694,20 @@ export function startSseInvalidationBridge(): () => void {
   on("session.captured", (p) => {
     const kb = kbOf(p);
     invalidate(kb ? ["timeline", kb] : ["timeline"]);
+    // FUWEBOPEN — a mounted session page must see its capture land without
+    // a reload: a live-only card (`capture_pending`, no capture row yet) is
+    // answered a full card on the next read. The card key rides the
+    // ["sessions"] prefix, but that prefix is invalidated only by
+    // `useSessions`' own subscription (mounted on the /sessions list, not on
+    // the session page), so the page's own query is named here, scoped to
+    // the captured session when the payload carries its id (prefix-wide
+    // otherwise). The singular ["session", sid] detail bundle is held off
+    // while the card is live-only and enabled by the full card, so it is
+    // refetched here for a sid it already holds. Only a mounted entry
+    // refetches; this adds no SSE path.
+    const sid = typeof p.session_id === "string" && p.session_id ? p.session_id : null;
+    invalidate(sid ? ["sessions", "card", sid] : ["sessions", "card"]);
+    invalidate(sid ? ["session", sid] : ["session"]);
   });
   // SL4 — kb-slate/1. `slate.updated {slug, seq, kind, id, topic, re, hide,
   // pin}` fires ONCE PER APPEND (routes/slates.rs emits it inside the

@@ -212,6 +212,13 @@ export type SessionCard = {
   session_id: string,
   kb: string,
   artifact_id: string,
+  /// FUWEBOPEN — present (true) ONLY on a live-only card: the live registry
+  /// knows the session from hook beats but no capture row exists yet (the
+  /// first capture lands at the end of the first turn). `kb`/`artifact_id`
+  /// are then empty strings and every capture-backed lane is
+  /// `available: false`. OMITTED when false (a missing key means "capture
+  /// backed").
+  capture_pending?: boolean,
   text: string,
   summary: SummaryLane,
   outcome: OutcomeLane,

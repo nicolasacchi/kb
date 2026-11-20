@@ -6,7 +6,7 @@
 // `<details>` — open on desktop (viewport wider than useIsMobile's 860px
 // MOBILE_MAX_WIDTH), collapsed on mobile.
 
-import { Suspense, lazy, useMemo, type ReactNode } from "react";
+import { Suspense, lazy, useEffect, useMemo, type ReactNode } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { StateCard } from "@kb/ui/StateCard";
@@ -17,6 +17,7 @@ import { useSessionCard } from "../hooks/useSessionCard";
 import { useSessionDetail } from "../hooks/useSessions";
 import {
   fetchSessionChildren,
+  type SessionCard,
   type ChildRow,
   type ChildrenLane,
   type ChildrenResponse,
@@ -183,6 +184,94 @@ export function ChildrenSection({
   );
 }
 
+/// FUWEBOPEN — the page of a session the live registry knows but that has no
+/// capture yet (`card.capture_pending`). Header + live state, one caption
+/// saying when the rest arrives, the Terminal section (the same `<details
+/// id="sec-terminal">` as the full page, so `#sec-terminal` lands here too)
+/// and the resume command. Every capture-backed section is omitted: they
+/// would only say "no capture yet". Nothing here polls: the page leaves this
+/// view by itself when the card query is invalidated (the bridge's
+/// `session.captured` / `session.state` handlers) and answers a full card.
+function LiveOnlyPage({
+  sid,
+  card,
+  from,
+  open,
+  terminalOpen,
+}: {
+  sid: string;
+  card: SessionCard;
+  from: string | undefined;
+  open: boolean;
+  /// `open`, or forced open by a `#sec-terminal` landing.
+  terminalOpen: boolean;
+}) {
+  const sum = card.summary;
+  const live = card.live;
+  return (
+    <main className="kb-sp" data-testid="session-page">
+      <header className="kb-sp__head">
+        <p className="kb-sp__back">
+          <Link
+            to={from ?? `/sessions?focus=${encodeURIComponent(sid)}`}
+            data-testid="session-back"
+          >
+            <Icon.ArrowLeft aria-hidden="true" /> back
+          </Link>
+        </p>
+        <h1 className="kb-sp__title">{sum.display_name}</h1>
+        <p className="kb-sp__sub">
+          <code>{sid}</code>
+          {sum.project_slug ? ` · ${sum.project_slug}` : ""}
+        </p>
+        <p className="kb-sp__chips">
+          <span className="kb-sp__chip">
+            {harnessGlyph(sum.harness)} {sum.harness}
+          </span>
+          {live.available && live.state && (
+            <span className="kb-sp__chip" data-testid="session-live-state">
+              {live.state}
+              {live.blocked ? " · needs you" : ""}
+              {live.since_secs != null
+                ? ` · ${formatActiveDuration(live.since_secs)} ago`
+                : ""}
+            </span>
+          )}
+        </p>
+        <p className="kb-sp__caption" data-testid="session-capture-pending">
+          No transcript yet. This session was heard from live; its transcript,
+          files, commits and the rest land at the end of its first turn, and
+          this page fills in by itself.
+        </p>
+      </header>
+
+      {shouldRenderTerminal(card.terminal) && (
+        <details
+          id="sec-terminal"
+          data-testid="session-sec-terminal"
+          open={terminalOpen}
+          className="kb-sp__sec"
+        >
+          <summary className="kb-sp__sum">Terminal</summary>
+          <div className="kb-sp__body">
+            <TerminalSlot
+              sid={sid}
+              termId={card.terminal.term_id}
+              harness={sum.harness}
+              state={card.terminal.state}
+              lane={card.terminal}
+            />
+          </div>
+        </details>
+      )}
+
+      <Section name="resume" title="Resume" open={open}>
+        <ResumeCommand sessionId={sid} resume={sum.resume} />
+      </Section>
+    </main>
+  );
+}
+
 export default function SessionPage() {
   const { sid } = useParams<{ sid: string }>();
   const location = useLocation();
@@ -192,7 +281,23 @@ export default function SessionPage() {
   // The outcome section reuses the inspector's ChecksSection, which needs
   // the row+detail pair — the card summary is not a SessionRow, so the
   // page fetches the existing detail hook for it.
-  const { detail, loading: detailLoading } = useSessionDetail(sid ?? null);
+  // A live-only card (FUWEBOPEN) has no capture, so the detail bundle would
+  // only 404: once the card says so, hold the query off until the first
+  // capture lands (the bridge's session.captured handler then invalidates
+  // both keys). Not gated on the card's arrival, so the common page keeps
+  // fetching card and detail in parallel.
+  const { detail, loading: detailLoading } = useSessionDetail(
+    card?.capture_pending ? null : (sid ?? null),
+  );
+  // FUWEBOPEN — landing on `#sec-terminal` (the Now band's "Open terminal"
+  // link) must open that section and scroll to it, also on mobile where
+  // sections start collapsed.
+  const wantsTerminal = location.hash === "#sec-terminal";
+  const terminalShown = !!card && shouldRenderTerminal(card.terminal);
+  useEffect(() => {
+    if (!wantsTerminal || !terminalShown) return;
+    document.getElementById("sec-terminal")?.scrollIntoView?.({ block: "start" });
+  }, [wantsTerminal, terminalShown]);
 
   if (!sid) {
     return (
@@ -214,6 +319,18 @@ export default function SessionPage() {
         kind="degraded"
         title="Could not load session"
         reason={error ?? `session ${sid} not found`}
+      />
+    );
+  }
+
+  if (card.capture_pending) {
+    return (
+      <LiveOnlyPage
+        sid={sid}
+        card={card}
+        from={(location.state as { from?: string } | null)?.from}
+        open={!isMobile}
+        terminalOpen={!isMobile || wantsTerminal}
       />
     );
   }
@@ -302,7 +419,7 @@ export default function SessionPage() {
         <details
           id="sec-terminal"
           data-testid="session-sec-terminal"
-          open={open}
+          open={open || wantsTerminal}
           className="kb-sp__sec"
         >
           <summary className="kb-sp__sum">Terminal</summary>

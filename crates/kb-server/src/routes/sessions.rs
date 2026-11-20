@@ -9003,7 +9003,7 @@ fn parse_beat_at(at: &str) -> Option<i64> {
 /// `folder` derivation (the same "readable project name" convention used
 /// throughout `/api/sessions/*`), so a beat-derived row's `project` field
 /// reads identically to a captured session's.
-fn derive_project(cwd: Option<&str>) -> Option<String> {
+pub(crate) fn derive_project(cwd: Option<&str>) -> Option<String> {
     cwd.map(|c| {
         c.trim_end_matches('/')
             .rsplit('/')
