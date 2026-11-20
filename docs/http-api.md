@@ -1070,7 +1070,38 @@ GET  /api/sessions/{session_id}/card        A3 — the ONE read model
                                             `kb sessions card <id>`
                                             (`--json` = this wire
                                             verbatim). 404 when no kb
-                                            holds the session.
+                                            holds the session AND the
+                                            live registry does not know
+                                            it either. FUWEBOPEN: a sid
+                                            with NO capture row but a
+                                            live-registry row (a hook
+                                            beat; first capture lands at
+                                            the end of the first turn)
+                                            answers 200 with a LIVE-ONLY
+                                            card: `capture_pending:
+                                            true` (the one additive key,
+                                            omitted when false so every
+                                            capture-backed card is
+                                            byte-identical), `kb` and
+                                            `artifact_id` empty,
+                                            `summary` from the registry
+                                            row (harness, project =
+                                            cwd basename, cwd-less
+                                            `resume`), `live` and
+                                            `terminal` from the same
+                                            registry paths as ever, and
+                                            every capture-backed lane
+                                            `available: false, reason:
+                                            "no capture yet"`. Exposes
+                                            no more than `live-status`
+                                            under its forced scrub
+                                            floor (no cwd path, no
+                                            `last_line`, no `model`);
+                                            derived per request,
+                                            persisted nowhere. CLI:
+                                            `kb sessions card` prints
+                                            the daemon `text`, which
+                                            says "capture: pending".
 GET  /api/sessions/{session_id}/children    A3 — paged children of one
      [?after=&limit=N]                       session, oldest first by
                                             `(started_at, session_id)`.
