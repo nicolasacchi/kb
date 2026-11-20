@@ -5,8 +5,9 @@
 //   * lane `available: false` (or unadmitted) → nothing.
 //   * `available: true` with a term → "Terminal" header with the state
 //     chip + "Open terminal"; clicking mounts `<TerminalPanel>`
-//     (lazily, via `React.lazy`) and "Close terminal" unmounts it
-//     (disconnect only, never kill).
+//     (lazily, via `React.lazy`). The panel's own Close (`onClose`)
+//     unmounts it (disconnect only, never kill) and brings the button
+//     back: the slot has no second Close.
 //   * a child (subagent) session whose lane resolves to the ROOT's
 //     term (`via: "root"`) shows a link to the session and no panel.
 // The slot imports nothing from the terminal engine packages; the only
@@ -54,15 +55,22 @@ export function TerminalSlot(props: TerminalSlotProps): ReactElement | null {
   if (!termId) return null;
   const harness = lane.harness ?? props.harness;
   return (
-    <div data-testid="kb-terminal-slot">
-      <span data-testid="kb-term-slot-state">{lane.state ?? ""}</span>
-      <button
-        type="button"
-        data-testid="kb-term-open"
-        onClick={() => setOpen((v) => !v)}
-      >
-        {open ? "Close terminal" : "Open terminal"}
-      </button>
+    <div className="kb-term-slot" data-testid="kb-terminal-slot">
+      {open ? null : (
+        <div className="kb-term-slot__head">
+          <span className="kb-term-slot__state" data-testid="kb-term-slot-state">
+            {lane.state ?? ""}
+          </span>
+          <button
+            type="button"
+            className="kb-term__btn kb-term-slot__open"
+            data-testid="kb-term-open"
+            onClick={() => setOpen(true)}
+          >
+            Open terminal
+          </button>
+        </div>
+      )}
       {open ? (
         <Suspense
           fallback={

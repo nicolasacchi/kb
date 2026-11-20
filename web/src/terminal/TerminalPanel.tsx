@@ -9,9 +9,12 @@
 // `GET /api/terms/{id}/ws?ticket=&from=`.
 //
 // Reply guards (`replyGuards.ts`) ensure no terminal query is ever
-// answered by the browser. The panel never sends a resize; `sizechanged`
-// only updates the header caption. No `focus()` on mount (click
-// focuses), no Escape binding, no global key handler.
+// answered by the browser. FUTERMFIT: the panel fits the whole grid by font
+// size (both axes, `fitHost.ts`) and only ever sends a grid change from the
+// explicit "Fit to window" / "Release grid" clicks (`GridControls.tsx`); a
+// window resize, opening the panel and focusing it refit the FONT only.
+// `sizechanged` updates the chip and the caption. No `focus()` on mount
+// (click focuses), no Escape binding, no global key handler.
 //
 // T17 — on a phone (`useIsMobile()`) the SAME terminal, socket and
 // reconnect state render through `PhoneTerminal` inside a `Sheet`. The
@@ -23,10 +26,10 @@
 // cap and the persisted phone font; it stays that way if the viewport
 // later grows (no mid-session addon load).
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Sheet, type Detent } from "@kb/ui/Sheet";
 import { useIsMobile } from "../hooks/useIsMobile";
-import { Terminal, type IFunctionIdentifier, type ITheme } from "@xterm/xterm";
+import { Terminal, type IFunctionIdentifier } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { ImageAddon } from "@xterm/addon-image";
 import { WebglAddon } from "@xterm/addon-webgl";
@@ -35,7 +38,15 @@ import { TermSession, type SessionState } from "./session";
 import { mintTicket } from "../api/terms";
 import { installReplyGuards } from "./replyGuards";
 import { profileMatchesBundle } from "./pins";
-import { computeFontSize } from "./fit";
+import { FIT_MAX_INLINE, FIT_MIN_INLINE, type FitResult } from "./fit";
+import { fitHostNow } from "./fitHost";
+import { measureCellRatio } from "./cellProbe";
+import { fontGate, TERM_FONT_FAMILY } from "./fonts";
+import { readTheme } from "./theme";
+import { GridControls } from "./GridControls";
+import { chipText } from "./gridOwner";
+import type { WindowMeasure } from "./fitWindow";
+import { THEME_APPLIED_EVENT } from "@kb/ui/themes/apply";
 import { attachGfx, type GfxHandle, type OpenPicture } from "./gfx";
 import { Lightbox } from "./Lightbox";
 import { countHits, findNext, type FindHit } from "./find";
@@ -57,29 +68,6 @@ const TRANSIENT_MS = 2_000;
 /** e2e seam: `container.__kbTerm` exposes the live instance (no window global). */
 type TermSeam = HTMLElement & { __kbTerm?: Terminal };
 
-function readTheme(profile: ProfileFrame): ITheme | undefined {
-  const theme = profile.theme;
-  if (theme !== null && typeof theme === "object") {
-    // Only string color slots are honored; unknown keys are dropped.
-    const slots = theme as Record<string, unknown>;
-    const out: ITheme = {};
-    if (typeof slots.background === "string") out.background = slots.background;
-    if (typeof slots.foreground === "string") out.foreground = slots.foreground;
-    if (typeof slots.cursor === "string") out.cursor = slots.cursor;
-    return out;
-  }
-  // No palette in the Profile: fall back to the app's own tokens.
-  const css = getComputedStyle(document.documentElement);
-  const background = css.getPropertyValue("--bg-panel-2").trim();
-  const foreground = css.getPropertyValue("--ink").trim();
-  const cursor = css.getPropertyValue("--accent").trim();
-  const fallback: ITheme = {};
-  if (background) fallback.background = background;
-  if (foreground) fallback.foreground = foreground;
-  if (cursor) fallback.cursor = cursor;
-  return fallback;
-}
-
 /** xterm 6 parser params are `(number | number[])[]` (nested arrays are
  *  sub-parameters); the reply-guard seam works on a flat `number[]`. */
 function flattenParams(params: (number | number[])[]): number[] {
@@ -89,26 +77,6 @@ function flattenParams(params: (number | number[])[]): number[] {
     else out.push(p);
   }
   return out;
-}
-
-/** Fit by fontSize only (never transform/zoom): ≤4 iterations on the screen width. */
-function fitNow(term: Terminal, host: HTMLElement, cols: number): void {
-  const screen = host.querySelector(".xterm-screen");
-  const canvas = document.createElement("canvas");
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  const family = term.options.fontFamily || "monospace";
-  ctx.font = `100px ${family}`;
-  const ratio = ctx.measureText("W").width / 100;
-  let fontSize = computeFontSize(host.clientWidth, cols, ratio);
-  host.style.overflowX = "";
-  for (let i = 0; i < 4; i += 1) {
-    term.options.fontSize = fontSize;
-    if (!screen || screen.scrollWidth <= host.clientWidth) return;
-    if (fontSize <= 10) break;
-    fontSize = Math.max(10, fontSize - 1);
-  }
-  if (screen && screen.scrollWidth > host.clientWidth) host.style.overflowX = "auto";
 }
 
 export function TerminalPanel(props: TerminalPanelProps) {
@@ -139,6 +107,11 @@ export function TerminalPanel(props: TerminalPanelProps) {
     blockedReason: null,
   });
   const [grid, setGrid] = useState<{ cols: number; rows: number } | null>(null);
+  // FUTERMFIT — the last fit (font and crop, for the chip and the hint), the
+  // in-panel status line, and the profile palette the theme re-read starts from.
+  const [fit, setFit] = useState<FitResult | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+  const profileThemeRef = useRef<unknown>(null);
   const gridRef = useRef<{ cols: number; rows: number } | null>(null);
   const [scrollback, setScrollback] = useState(0);
   const [widthActive, setWidthActive] = useState(false);
@@ -155,6 +128,26 @@ export function TerminalPanel(props: TerminalPanelProps) {
   const { terms } = useTerms();
   const termRow = terms.find((t) => t.id === props.termId);
   const rowState = termRow?.state ?? null;
+  const gridOwner = termRow?.grid_owner ?? null;
+
+  // Fit the live terminal into the desktop host (font only; never a take-size).
+  const fitDesktop = (term: Terminal, host: HTMLElement): void => {
+    const g = gridRef.current;
+    if (!g) return;
+    const r = fitHostNow(term, host, g, { min: FIT_MIN_INLINE, max: FIT_MAX_INLINE });
+    if (!r) return;
+    setFit((prev) =>
+      prev && prev.fontSize === r.fontSize && prev.cropped.x === r.cropped.x && prev.cropped.y === r.cropped.y ? prev : r,
+    );
+  };
+  const say = useCallback((message: string): void => setStatus(message), []);
+  const measureWindow = useCallback((): WindowMeasure | null => {
+    const host = hostRef.current;
+    const term = termRef.current;
+    if (!host || !term || !(host.clientWidth > 0)) return null;
+    const r = measureCellRatio(document, term.options.fontFamily || "monospace");
+    return { width: host.clientWidth, height: host.clientHeight, cellW: r.cellW, cellH: r.cellH };
+  }, []);
 
   useEffect(() => {
     let dead = false;
@@ -189,16 +182,19 @@ export function TerminalPanel(props: TerminalPanelProps) {
         allowProposedApi: true,
         convertEol: false,
         cursorBlink: false,
-        // Initial size only; fitNow clamps from the token-derived width.
+        // Initial size only; `fitDesktop` picks the real one from the host.
         fontSize: phone
           ? readFont()
           : Math.max(
-              10,
+              FIT_MIN_INLINE,
               parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--fs-md")) || 14,
             ),
-        fontFamily: "JetBrains Mono, monospace",
-        theme: readTheme(profile),
+        fontFamily: TERM_FONT_FAMILY,
+        theme: readTheme(profile.theme),
       });
+      profileThemeRef.current = profile.theme;
+      // The host paints the terminal's own background (no second black).
+      host.style.background = term.options.theme?.background ?? "";
       attachTerm(term, host);
       term.loadAddon(new UnicodeGraphemesAddon());
       const key = term.unicode.versions.find((k) => /grapheme/i.test(k));
@@ -286,12 +282,12 @@ export function TerminalPanel(props: TerminalPanelProps) {
       });
       // Phone: the font is the persisted step (PhoneTerminal owns it); the
       // grid is never fitted (the session grid pans instead).
-      if (!phone) fitNow(term, host, profile.cols);
       createdPhoneRef.current = phone;
       termRef.current = term;
       setTermInst(term);
       gridRef.current = { cols: profile.cols, rows: profile.rows };
       setGrid(gridRef.current);
+      if (!phone) fitDesktop(term, host);
       setScrollback(scrollbackFor(profile, phone));
       setWidthActive(true);
       return true;
@@ -319,7 +315,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
         setGrid(gridRef.current);
         // Phone: the grid is never fitted (the session grid pans instead).
         const host = isMobileRef.current ? null : hostRef.current;
-        if (host) fitNow(term, host, cols);
+        if (host) fitDesktop(term, host);
       },
     };
 
@@ -401,7 +397,24 @@ export function TerminalPanel(props: TerminalPanelProps) {
       },
     });
     sessionRef.current = session;
-    session.start();
+    // FUTERMFIT: the first `new Terminal` must measure the real webfont, so the
+    // stream opens after the (bounded) font gate. A face that arrives after
+    // the bound re-assigns the family (a changed value makes xterm re-measure)
+    // and refits.
+    const gate = fontGate(typeof document !== "undefined" ? document.fonts : undefined);
+    void gate.ready.then((inTime) => {
+      if (dead) return;
+      session.start();
+      if (inTime) return;
+      void gate.done.then(() => {
+        const term = termRef.current;
+        if (dead || !term) return;
+        term.options.fontFamily = `${TERM_FONT_FAMILY}, monospace`;
+        term.clearTextureAtlas();
+        const host = isMobileRef.current ? null : hostRef.current;
+        if (host) fitDesktop(term, host);
+      });
+    });
 
     // T17: a returning network (`online`, a bfcache `pageshow`, the tab
     // turning visible) skips a pending reconnect backoff once.
@@ -433,22 +446,40 @@ export function TerminalPanel(props: TerminalPanelProps) {
     const onHostClick = (): void => term.focus();
     host.addEventListener("click", onHostClick);
     let fitTimer: number | null = null;
-    const refit = (): void => {
-      if (gridRef.current) fitNow(term, host, gridRef.current.cols);
-    };
+    const refit = (): void => fitDesktop(term, host);
     refit();
     const observer = new ResizeObserver(() => {
       if (fitTimer !== null) window.clearTimeout(fitTimer);
       fitTimer = window.setTimeout(refit, 100);
     });
     observer.observe(host);
+    // A closed <details> hands the host zero width; opening it refits.
+    const details = host.closest("details");
+    details?.addEventListener("toggle", refit);
     return () => {
       observer.disconnect();
+      details?.removeEventListener("toggle", refit);
       if (fitTimer !== null) window.clearTimeout(fitTimer);
       host.removeEventListener("click", onHostClick);
       (host as TermSeam).__kbTerm = undefined;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [termInst, isMobile]);
+
+  // The tokens the theme reads are per-theme: re-read when the SPA theme changes.
+  useEffect(() => {
+    const term = termInst;
+    if (!term) return;
+    const onTheme = (): void => {
+      term.options.theme = readTheme(profileThemeRef.current);
+      const host = isMobileRef.current ? phoneHostRef.current : hostRef.current;
+      const bg = term.options.theme.background ?? "";
+      if (host) host.style.background = bg;
+      gfxRef.current?.setTheme(bg);
+    };
+    window.addEventListener(THEME_APPLIED_EVENT, onTheme);
+    return () => window.removeEventListener(THEME_APPLIED_EVENT, onTheme);
+  }, [termInst]);
 
   const closePanel = (): void => {
     if (props.onClose) {
@@ -534,7 +565,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
   }
 
   return (
-    <div className="kb-term" data-testid="kb-terminal">
+    <div className={`kb-term${state.phase === "live" ? "" : " kb-term--idle"}`} data-testid="kb-terminal">
       <div className="kb-term__bar">
         <span className="kb-term__harness" data-testid="kb-term-harness">
           {props.harness}
@@ -546,12 +577,30 @@ export function TerminalPanel(props: TerminalPanelProps) {
         ) : null}
         {grid ? (
           <span className="kb-term__grid" data-testid="kb-term-grid">
-            {grid.cols}x{grid.rows}
+            {chipText(grid, gridOwner)}
+          </span>
+        ) : null}
+        {fit ? (
+          <span className="kb-term__grid" data-testid="kb-term-font">
+            font {fit.fontSize}px
+          </span>
+        ) : null}
+        {fit && (fit.cropped.x || fit.cropped.y) ? (
+          <span className="kb-term__hint" data-testid="kb-term-cropped" title="The grid is larger than the panel at the smallest font: scroll the panel">
+            Cropped
           </span>
         ) : null}
         <span className="kb-term__caption" data-testid="kb-term-caption">
           {transient ?? state.caption}
         </span>
+        <GridControls
+          termId={props.termId}
+          harness={props.harness}
+          viewer={viewer}
+          owner={gridOwner}
+          measureWindow={measureWindow}
+          say={say}
+        />
         <button
           type="button"
           className="kb-term__btn"
@@ -568,6 +617,9 @@ export function TerminalPanel(props: TerminalPanelProps) {
         >
           Close
         </button>
+      </div>
+      <div className="kb-term__status" role="status" aria-live="polite" data-testid="kb-term-status">
+        {status}
       </div>
       {findOpen ? (
         <div className="kb-term__findbar">

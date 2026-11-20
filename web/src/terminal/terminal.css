@@ -3,8 +3,13 @@
  * literals in this file). */
 
 .kb-term {
+  position: relative;
   display: flex;
   flex-direction: column;
+  /* A flex child must be allowed to shrink below its content, all the way
+   * down, or a 201-column grid widens the page instead of scrolling. */
+  min-width: 0;
+  max-width: 100%;
   gap: var(--pad-2);
   background: var(--bg-panel-2);
   border: 1px solid var(--rule);
@@ -42,6 +47,37 @@
   color: var(--ink-mute);
   flex: 1;
   min-width: var(--pad-4);
+  overflow-wrap: anywhere;
+}
+
+/* The grid chip ("201x48 · web"), the font readout and the Cropped hint. A
+ * panel that is not live (connecting, reconnecting, ended) dims the readouts
+ * and the view: what they show is not current. */
+.kb-term--idle .kb-term__grid {
+  opacity: 0.5;
+}
+
+.kb-term__hint {
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-pill);
+  padding: var(--pad-1);
+  color: var(--warn);
+}
+
+/* In-panel status line (aria-live): the outcome of Fit / Release, inside the
+ * panel so it survives full screen. Empty, it stays a live region but takes
+ * no room. */
+.kb-term__status {
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+  overflow-wrap: anywhere;
+}
+
+.kb-term__status:empty {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
 }
 
 .kb-term__btn {
@@ -79,10 +115,19 @@
 }
 
 .kb-term__view {
-  /* No fixed height: xterm sizes .xterm-screen to rows x cell height
-   * and the host must follow it, or the screen paints over whatever
-   * follows the panel. */
+  /* The host is a bounded box: the font is fitted so the whole grid shows
+   * inside it (both axes); below the font floor the cropped axis scrolls
+   * (the fit sets overflow then). Its background is the terminal's own
+   * (the panel also sets it inline from the active theme), so the two never
+   * show different blacks. */
   min-height: var(--pad-4);
+  height: min(80dvh, 60rem);
+  min-width: 0;
   max-width: 100%;
-  background: var(--bg);
+  overflow: hidden;
+  background: var(--bg-panel-2);
+}
+
+.kb-term--idle .kb-term__view {
+  opacity: 0.7;
 }
