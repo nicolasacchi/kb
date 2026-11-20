@@ -576,6 +576,43 @@
   flex: none;
 }
 
+/* FUWEBLAUNCH — "New terminal" (components/NewTerminalPanel.tsx) and the
+ * inline launched terminal. Mobile sizing lives in mobile.css (860px block). */
+.kb-ses__newterm {
+  padding: 0 16px;
+  margin: var(--pad-2) 0;
+}
+.kb-ses__newterm .kb-ses__resume-copy {
+  float: none;
+}
+.kb-ses__newterm-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+  margin-top: var(--pad-2);
+  max-width: 640px;
+}
+.kb-ses__newterm-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
+}
+.kb-ses__newterm-field select,
+.kb-ses__newterm-field input {
+  font: inherit;
+  color: var(--ink);
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  min-width: 0;
+}
+.kb-ses__launched {
+  margin: var(--pad-2) 0;
+}
+
 /* Cross-harness handoff panel (components/HandoffPanel.tsx) — reuses the
  * resume-command row + copy button; only the stacking/meta lines are new. */
 .kb-ses__handoff {
