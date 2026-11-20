@@ -496,6 +496,8 @@ test.describe("FUTERMFIT phone grid ownership @phone", () => {
     });
     expect(m.docW).toBeLessThanOrEqual(m.vw);
     expect(m.dockScroll).toBeLessThanOrEqual(m.dockClient);
+  });
+});
 
 // FUWEBLAUNCH — the two launch controls on a phone: "New terminal" on
 // /sessions and "Resume in a kb terminal" on the session page. The daemon's
