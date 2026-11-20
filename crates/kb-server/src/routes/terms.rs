@@ -903,7 +903,9 @@ pub async fn take_size(
         cols: parsed.cols,
         rows: parsed.rows,
         owner: "kb-term".to_string(),
-        // Never stomp a foreign owner: surface grid-owned (409).
+        // Not forced: the runner's precedence (`grid::decide_take`) lets the
+        // web owner take over a local attach WITHOUT force, while a foreign
+        // non-local owner still surfaces grid-owned (409).
         force: false,
     };
     match call(&state, &req).await {

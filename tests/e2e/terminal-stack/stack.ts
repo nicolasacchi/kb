@@ -169,6 +169,22 @@ export function kittyHarness(
   };
 }
 
+/**
+ * A pane that waits for `gate`, then prints ONE line of exactly `width`
+ * characters (`W`, dashes, `Z`: both ends are visible and distinguishable), a
+ * `WIDE-DONE` line, and writes `<out>/printed`. Used to prove a wide line
+ * drawn AFTER a grid change reaches the viewer intact (last column present,
+ * no wrap).
+ */
+export function wideHarness(gate: string, width: number): Harness {
+  const out = scratch("wide");
+  const line = `W${"-".repeat(width - 2)}Z`;
+  return {
+    out,
+    shell: `until [ -e ${quote(gate)} ]; do sleep 0.1; done\nprintf '%s\\n' ${quote(line)}\nprintf 'WIDE-DONE\\n'\n: > ${quote(join(out, "printed"))}\nexec sleep 3600\n`,
+  };
+}
+
 export const idleHarness = (): Harness => ({ out: scratch("idle"), shell: "exec sleep 3600\n" });
 
 const launched: Launched[] = [];
@@ -607,4 +623,48 @@ export async function mintTicket(api: Api, id: string): Promise<{ ticket: string
   });
   expect(status, "ticket mint").toBe(200);
   return body;
+}
+
+// -------------------------------------------------------- runner RPC
+
+export interface RunnerReply {
+  status: string;
+  code?: string;
+  message?: string;
+  data?: { cols?: number; rows?: number; owner?: string | null };
+}
+
+/**
+ * One request over the runner's own socket (`{"v":1,"op":...}` lines), the way
+ * `kb-term attach` talks to it. The harness uses it to play a local attach:
+ * seed a `local:<pid>` grid owner, or attempt a forced local take.
+ */
+export function runnerRpc(op: string, fields: Record<string, unknown>): Promise<RunnerReply> {
+  const sock = env("KB_E2E_RUNNER_SOCK");
+  return new Promise((resolve, reject) => {
+    const c = net.connect(sock);
+    let buf = "";
+    const timer = setTimeout(() => {
+      c.destroy();
+      reject(new Error(`runner rpc ${op}: no reply in 10 s`));
+    }, 10_000);
+    c.on("connect", () => c.write(`${JSON.stringify({ v: 1, op, ...fields })}\n`));
+    c.on("data", (d) => {
+      buf += d.toString("utf8");
+      const i = buf.indexOf("\n");
+      if (i >= 0) {
+        clearTimeout(timer);
+        c.end();
+        try {
+          resolve(JSON.parse(buf.slice(0, i)) as RunnerReply);
+        } catch (e) {
+          reject(e);
+        }
+      }
+    });
+    c.on("error", (e) => {
+      clearTimeout(timer);
+      reject(e);
+    });
+  });
 }

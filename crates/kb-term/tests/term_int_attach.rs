@@ -231,6 +231,10 @@ struct RunnerLog {
     ever_opened: std::collections::HashSet<String>,
     /// Every request op seen, in order (for failure diagnostics).
     ops: Vec<String>,
+    /// Stateful grid owner mode: `take_size` runs the runner's REAL
+    /// precedence function against `owner`, and `grid` reports it.
+    stateful: bool,
+    owner: Option<String>,
 }
 
 struct FakeRunner {
@@ -322,6 +326,22 @@ impl FakeRunner {
         }
     }
 
+    /// Switch to stateful grid ownership with `owner` as the current owner.
+    fn with_owner(self, owner: Option<&str>) -> FakeRunner {
+        {
+            let mut l = self.log.lock().unwrap();
+            l.stateful = true;
+            l.owner = owner.map(str::to_string);
+        }
+        self
+    }
+    /// Set the owner as the web (or its release) would.
+    fn set_owner(&self, owner: Option<&str>) {
+        self.log.lock().unwrap().owner = owner.map(str::to_string);
+    }
+    fn current_owner(&self) -> Option<String> {
+        self.log.lock().unwrap().owner.clone()
+    }
     fn recorded_takes(&self) -> Vec<(u16, u16, String, bool)> {
         self.log.lock().unwrap().takes.clone()
     }
@@ -397,7 +417,20 @@ fn handle_runner_conn(
                     .to_string();
                 let force = req.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
                 let mut f = take_failures.lock().unwrap();
-                if *f > 0 {
+                let stateful = log.lock().unwrap().stateful;
+                if stateful {
+                    let mut l = log.lock().unwrap();
+                    match kb_term::runner::grid::decide_take(&l.owner, &owner, force) {
+                        Ok(()) => {
+                            l.owner = Some(owner.clone());
+                            l.takes.push((cols, rows, owner.clone(), force));
+                            serde_json::json!({"status": "ok", "data": {"cols": cols, "rows": rows, "owner": owner}})
+                        }
+                        Err(e) => {
+                            serde_json::json!({"status": "err", "code": e.code(), "message": e.message()})
+                        }
+                    }
+                } else if *f > 0 {
                     *f -= 1;
                     serde_json::json!({"status": "err", "code": "grid-owned", "message": "grid is owned by local:999"})
                 } else {
@@ -407,6 +440,14 @@ fn handle_runner_conn(
                         .takes
                         .push((cols, rows, owner.clone(), force));
                     serde_json::json!({"status": "ok", "data": {"cols": cols, "rows": rows, "owner": owner}})
+                }
+            }
+            "grid" => {
+                let l = log.lock().unwrap();
+                if l.stateful {
+                    serde_json::json!({"status": "ok", "data": {"cols": 201, "rows": 48, "owner": l.owner}})
+                } else {
+                    serde_json::json!({"status": "err", "code": "bad-request", "message": "unknown op"})
                 }
             }
             "viewer_open" => {
@@ -493,6 +534,9 @@ struct TapScript {
     /// Append a trigger-bearing line with no trailing LF before Exit
     /// (the held-tail flush pin).
     tail_trigger_no_lf: bool,
+    /// During the Exit hold, send one `resize` marker (cols, rows) this
+    /// many ms after the hold starts (the tap following a grid change).
+    resize_marker: Option<(u64, u16, u16)>,
 }
 
 struct FakeTap {
@@ -744,11 +788,30 @@ fn handle_tap_conn(
     // key while the stream is still flowing): keep reading any
     // control envelopes (the typed notification) during the hold.
     if script.exit_delay_ms > 0 {
-        let deadline = Instant::now() + Duration::from_millis(script.exit_delay_ms);
+        let hold_start = Instant::now();
+        let deadline = hold_start + Duration::from_millis(script.exit_delay_ms);
+        let mut marker_sent = false;
         stream
             .set_read_timeout(Some(Duration::from_millis(100)))
             .ok();
         while Instant::now() < deadline {
+            if let Some((after_ms, cols, rows)) = script.resize_marker {
+                if !marker_sent && hold_start.elapsed() >= Duration::from_millis(after_ms) {
+                    marker_sent = true;
+                    let _ = write(
+                        &[text_env(
+                            &viewer,
+                            &ServerFrame::Resize {
+                                seq: 7,
+                                offset: live_bytes.len() as u64,
+                                cols,
+                                rows,
+                            },
+                        )],
+                        &mut stream,
+                    );
+                }
+            }
             let n = match stream.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => n,
@@ -1089,6 +1152,25 @@ fn setup_rig(take_failures: usize, script: TapScript) -> Rig {
     }
 }
 
+fn setup_rig_owned(owner: Option<&str>, script: TapScript) -> Rig {
+    let dir = TempDir::new();
+    assert_eq!(script.session, "abcd1234");
+    std::fs::create_dir_all(dir.file("s/abcd1234")).expect("mkdir session dir");
+    let runner = FakeRunner::start(&dir, session_list(), 0).with_owner(owner);
+    let tap = FakeTap::start(&dir, script);
+    let sock_str = runner.sock.to_string_lossy().into_owned();
+    Rig {
+        _dir: dir,
+        runner,
+        tap,
+        sock_str,
+    }
+}
+
+fn count_of(out: &[u8], needle: &str) -> usize {
+    String::from_utf8_lossy(out).matches(needle).count()
+}
+
 fn t4_script() -> TapScript {
     TapScript {
         cols: 201,
@@ -1102,6 +1184,7 @@ fn t4_script() -> TapScript {
         chunk: 65_536,
         exit_delay_ms: 0,
         tail_trigger_no_lf: false,
+        resize_marker: None,
     }
 }
 
@@ -1294,6 +1377,154 @@ fn attach_watch_sends_no_takesize_and_reads_no_stdin() {
     assert!(rig.runner.recorded_keys().is_empty(), "watch sends no keys");
     let report = model(&out, 3300);
     assert!(report.last_is_1_to_n);
+}
+
+#[test]
+fn attach_under_a_web_owner_never_takes_the_grid_until_the_web_releases() {
+    if !term_int_gate() {
+        return;
+    }
+    let mut script = t4_script();
+    script.exit_delay_ms = 7_000;
+    let rig = setup_rig_owned(Some("kb-term"), script);
+    std::thread::sleep(Duration::from_millis(100));
+    let mut proc = spawn_bin(
+        &["attach", "abcd1234", "--runner-sock", &rig.sock_str],
+        201,
+        48,
+    );
+    std::thread::sleep(Duration::from_millis(1_500));
+    // Two keys inside the 10 s window: both refused, ONE notice.
+    proc.1.write_all(b"k").expect("first key");
+    std::thread::sleep(Duration::from_millis(300));
+    proc.1.write_all(b"k").expect("second key");
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(
+        rig.runner.recorded_takes().is_empty(),
+        "a key under a web owner takes nothing: {:?}",
+        rig.runner.recorded_takes()
+    );
+    assert!(
+        rig.runner.recorded_keys().is_empty(),
+        "a key under a web owner forwards nothing"
+    );
+    assert_eq!(
+        rig.runner.current_owner().as_deref(),
+        Some("kb-term"),
+        "the web still owns the grid"
+    );
+    // The web releases: the next key takes the grid and the attach types.
+    rig.runner.set_owner(None);
+    proc.1.write_all(b"k").expect("take key");
+    std::thread::sleep(Duration::from_millis(1_200));
+    let takes = rig.runner.recorded_takes();
+    assert!(!takes.is_empty(), "the key after release takes the grid");
+    assert!(takes[0].2.starts_with("local:"), "taken by the attach");
+    assert!(takes[0].3, "the fallback take key is a forced take");
+    proc.1.write_all(b"T").expect("typed key");
+    let (code, out) = proc.0.wait_for_exit(Duration::from_secs(30));
+    assert_eq!(code, Some(0));
+    assert!(
+        count_of(&out, "grid owned by the web panel; watching") == 1,
+        "the web-owner banner prints once"
+    );
+    assert_eq!(
+        count_of(&out, "the web panel owns the grid; release it there"),
+        1,
+        "rate limited: one notice for two refused keys"
+    );
+    assert!(
+        !rig.runner.recorded_keys().is_empty(),
+        "after the take the attach forwards keys again"
+    );
+    assert_eq!(
+        rig.runner
+            .recorded_keys()
+            .iter()
+            .filter(|k| k.as_slice() == b"k")
+            .count(),
+        0,
+        "the refused and the take keys were never forwarded"
+    );
+}
+
+#[test]
+fn an_owning_attach_that_loses_the_grid_watches_and_never_retakes() {
+    if !term_int_gate() {
+        return;
+    }
+    let mut script = t4_script();
+    script.exit_delay_ms = 6_000;
+    script.resize_marker = Some((1_500, 120, 40));
+    let rig = setup_rig_owned(None, script);
+    std::thread::sleep(Duration::from_millis(100));
+    let mut proc = spawn_bin(
+        &["attach", "abcd1234", "--runner-sock", &rig.sock_str],
+        201,
+        48,
+    );
+    std::thread::sleep(Duration::from_millis(800));
+    assert_eq!(
+        rig.runner.recorded_takes().len(),
+        1,
+        "the attach took the grid"
+    );
+    // The web takes the grid (no force); the tap then streams the marker.
+    rig.runner.set_owner(Some("kb-term"));
+    std::thread::sleep(Duration::from_millis(3_000));
+    proc.1.write_all(b"k").expect("key after the loss");
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(
+        rig.runner.recorded_takes().len(),
+        1,
+        "the attach never retakes the grid on its own or on a key"
+    );
+    assert!(
+        rig.runner.recorded_keys().is_empty(),
+        "no key reaches the session while the web owns the grid"
+    );
+    let (code, out) = proc.0.wait_for_exit(Duration::from_secs(30));
+    assert_eq!(code, Some(0), "the session is never killed or detached");
+    assert_eq!(
+        count_of(&out, "grid owned by the web panel; watching"),
+        1,
+        "losing the grid prints the web banner"
+    );
+    assert!(
+        count_of(&out, "scrollback may be incomplete") >= 1,
+        "banner keeps the scrollback clause"
+    );
+}
+
+#[test]
+fn a_grid_marker_while_the_attach_still_owns_the_grid_changes_nothing() {
+    if !term_int_gate() {
+        return;
+    }
+    let mut script = t4_script();
+    script.exit_delay_ms = 4_000;
+    script.resize_marker = Some((800, 120, 40));
+    let rig = setup_rig_owned(None, script);
+    std::thread::sleep(Duration::from_millis(100));
+    let mut proc = spawn_bin(
+        &["attach", "abcd1234", "--runner-sock", &rig.sock_str],
+        201,
+        48,
+    );
+    std::thread::sleep(Duration::from_millis(2_500));
+    proc.1.write_all(b"T").expect("typed key");
+    let (code, out) = proc.0.wait_for_exit(Duration::from_secs(30));
+    assert_eq!(code, Some(0));
+    assert_eq!(count_of(&out, "grid owned by"), 0, "no fallback banner");
+    assert!(
+        !rig.runner.recorded_keys().is_empty(),
+        "the attach still forwards keys"
+    );
+    assert_eq!(
+        rig.runner.recorded_takes().len(),
+        1,
+        "one take, no winch loop"
+    );
 }
 
 #[test]

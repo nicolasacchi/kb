@@ -143,6 +143,9 @@ struct StreamState {
     seed_remaining: Option<u64>,
     /// The seed's offset `X` (the live continuation offset).
     seed_x: Option<u64>,
+    /// The size of the newest `resize`/`sizechanged` marker not yet looked
+    /// at by the pump (an owning attach checks it against its last take).
+    size_marker: Option<(u16, u16)>,
 }
 
 impl StreamState {
@@ -434,10 +437,7 @@ async fn run_one_join(
         match runner_takesize(&mut ctx.runner, &args_id, ctx.local_size, &viewer).await {
             Ok(()) => {}
             Err(RunnerClientError::Code { code, message }) if code == "grid-owned" => {
-                let owner = message
-                    .strip_prefix("grid is owned by ")
-                    .unwrap_or(&message)
-                    .to_string();
+                let owner = fallback::owner_from_message(&message);
                 eprintln!("{}", fallback::grid_banner(&owner));
                 grid_owned = Some(owner);
             }
@@ -458,6 +458,7 @@ async fn run_one_join(
     // A pending bare Esc becomes a key once idle for 20 ms.
     let mut esc_deadline: Option<tokio::time::Instant> = None;
     let mut sink: Vec<u8> = Vec::new();
+    let mut notice_gate = fallback::NoticeGate::default();
     loop {
         tokio::select! {
             result = conn.read_next_envelope() => {
@@ -472,6 +473,18 @@ async fn run_one_join(
                         }
                         if !sink.is_empty() && write_out(&sink).await.is_err() {
                             return SessionResult::Detached;
+                        }
+                        // A grid marker that differs from the size this attach
+                        // last took: ask who owns the grid now. If someone else
+                        // does (the web outranks a local attach), fall back to
+                        // watching behind a banner; never retake it here.
+                        if let Some(marker) = state.size_marker.take() {
+                            if !ctx.is_watch() && grid_owned.is_none() && marker != last_taken {
+                                if let Some(owner) = lost_grid_owner(ctx).await {
+                                    eprintln!("{}", fallback::grid_banner(&owner));
+                                    grid_owned = Some(owner);
+                                }
+                            }
                         }
                     }
                     Ok(None) => return SessionResult::Error("tap closed"),
@@ -496,18 +509,13 @@ async fn run_one_join(
                         if grid_owned.is_some() {
                             // Fallback take key: NOT forwarded; force the
                             // size back and restart the attach.
-                            let size = RawGuard::size(0).unwrap_or(ctx.local_size);
-                            let args_id = ctx.args.id.clone();
-                            let viewer = ctx.viewer.clone();
-                            match ctx.runner.call(&Request::TakeSize {
-                                id: args_id,
-                                cols: size.0,
-                                rows: size.1,
-                                owner: viewer,
-                                force: true,
-                            }).await {
-                                Ok(_) => return SessionResult::GridOwned(grid_owned.unwrap_or_default()),
-                                Err(_) => return SessionResult::Detached,
+                            let owner = grid_owned.clone().unwrap_or_default();
+                            match fallback_take_key(ctx, &owner, &mut notice_gate).await {
+                                FallbackKey::Taken => return SessionResult::GridOwned(owner),
+                                // The web owns the grid: the key is dropped,
+                                // nothing is taken, the attach keeps watching.
+                                FallbackKey::Held(now_owner) => grid_owned = Some(now_owner),
+                                FallbackKey::Failed => return SessionResult::Detached,
                             }
                         } else if let Err(e) =
                             send_keys(&mut ctx.runner, &ctx.args.id, &ctx.viewer, &bytes).await
@@ -531,7 +539,18 @@ async fn run_one_join(
                     ctx.local_size = size;
                     let args_id = ctx.args.id.clone();
                     let viewer = ctx.viewer.clone();
-                    let _ = runner_takesize(&mut ctx.runner, &args_id, size, &viewer).await;
+                    // A refused window-size take means someone else (the web)
+                    // took the grid meanwhile: watch behind the banner instead
+                    // of fighting or failing silently.
+                    if let Err(RunnerClientError::Code { code, message }) =
+                        runner_takesize(&mut ctx.runner, &args_id, size, &viewer).await
+                    {
+                        if code == "grid-owned" {
+                            let owner = fallback::owner_from_message(&message);
+                            eprintln!("{}", fallback::grid_banner(&owner));
+                            grid_owned = Some(owner);
+                        }
+                    }
                 }
             }
             _ = async { match sig_int.as_mut() { Some(s) => s.recv().await, None => std::future::pending::<Option<()>>().await } } => {
@@ -553,18 +572,13 @@ async fn run_one_join(
                 if filter.pending_is_bare_esc() {
                     if let Some(bytes) = filter.take_expired_esc(Duration::from_millis(20)) {
                         if grid_owned.is_some() {
-                            let size = RawGuard::size(0).unwrap_or(ctx.local_size);
-                            let args_id = ctx.args.id.clone();
-                            let viewer = ctx.viewer.clone();
-                            match ctx.runner.call(&Request::TakeSize {
-                                id: args_id,
-                                cols: size.0,
-                                rows: size.1,
-                                owner: viewer,
-                                force: true,
-                            }).await {
-                                Ok(_) => return SessionResult::GridOwned(grid_owned.unwrap_or_default()),
-                                Err(_) => return SessionResult::Detached,
+                            let owner = grid_owned.clone().unwrap_or_default();
+                            match fallback_take_key(ctx, &owner, &mut notice_gate).await {
+                                FallbackKey::Taken => return SessionResult::GridOwned(owner),
+                                // The web owns the grid: the key is dropped,
+                                // nothing is taken, the attach keeps watching.
+                                FallbackKey::Held(now_owner) => grid_owned = Some(now_owner),
+                                FallbackKey::Failed => return SessionResult::Detached,
                             }
                         } else if let Err(e) =
                             send_keys(&mut ctx.runner, &ctx.args.id, &ctx.viewer, &bytes).await
@@ -581,6 +595,92 @@ async fn run_one_join(
                 }
             }
         }
+    }
+}
+
+/// What a keypress in the grid-owned fallback did.
+enum FallbackKey {
+    /// The grid was taken back: restart the join.
+    Taken,
+    /// Someone the attach must not fight (the web) owns the grid: the key
+    /// was dropped; keep watching. Carries the current owner.
+    Held(String),
+    /// The runner call failed: detach.
+    Failed,
+}
+
+/// The fallback's take key. Asks the runner who owns the grid FIRST: a web
+/// owner is never taken from (one rate-limited notice, nothing forwarded);
+/// with the web gone (owner none) or another local owner, the key takes the
+/// size back exactly as before. The runner enforces the same precedence, so
+/// a race with a web take is refused there with `grid-owned`.
+async fn fallback_take_key(
+    ctx: &mut AttachContext,
+    remembered_owner: &str,
+    gate: &mut fallback::NoticeGate,
+) -> FallbackKey {
+    let id = ctx.args.id.clone();
+    let mut owner = remembered_owner.to_string();
+    if let Ok(data) = ctx.runner.call(&Request::Grid { id: id.clone() }).await {
+        owner = data
+            .get("owner")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+    }
+    if fallback::is_web_owner(&owner) {
+        notify_web_owner(gate);
+        return FallbackKey::Held(owner);
+    }
+    let size = RawGuard::size(0).unwrap_or(ctx.local_size);
+    match ctx
+        .runner
+        .call(&Request::TakeSize {
+            id,
+            cols: size.0,
+            rows: size.1,
+            owner: ctx.viewer.clone(),
+            force: true,
+        })
+        .await
+    {
+        Ok(_) => {
+            ctx.local_size = size;
+            FallbackKey::Taken
+        }
+        Err(RunnerClientError::Code { code, message }) if code == "grid-owned" => {
+            let now_owner = fallback::owner_from_message(&message);
+            if fallback::is_web_owner(&now_owner) {
+                notify_web_owner(gate);
+            }
+            FallbackKey::Held(now_owner)
+        }
+        Err(_) => FallbackKey::Failed,
+    }
+}
+
+fn notify_web_owner(gate: &mut fallback::NoticeGate) {
+    if gate.allow(std::time::Instant::now()) {
+        eprint!("{}\r\n", fallback::WEB_OWNER_NOTICE);
+    }
+}
+
+/// An owning attach saw a grid marker for a size it did not take:
+/// returns the new owner when the grid is now someone else's, `None` when
+/// this attach still owns it (or the runner could not say).
+async fn lost_grid_owner(ctx: &mut AttachContext) -> Option<String> {
+    let data = ctx
+        .runner
+        .call(&Request::Grid {
+            id: ctx.args.id.clone(),
+        })
+        .await
+        .ok()?;
+    let owner = data.get("owner").and_then(|v| v.as_str())?;
+    if owner == ctx.viewer {
+        None
+    } else {
+        Some(owner.to_string())
     }
 }
 
@@ -778,13 +878,19 @@ fn apply_server_frame(
             sink.extend_from_slice(b"\x1b[3J");
             EnvelopeOutcome::Continue
         }
-        ServerFrame::Resize { seq, cols, .. } => {
+        ServerFrame::Resize {
+            seq, cols, rows, ..
+        } => {
             bump_mseq(state, seq);
+            state.size_marker = Some((cols, rows));
             rewriter.set_cols(cols);
             EnvelopeOutcome::Continue
         }
-        ServerFrame::Sizechanged { seq, cols, .. } => {
+        ServerFrame::Sizechanged {
+            seq, cols, rows, ..
+        } => {
             bump_mseq(state, seq);
+            state.size_marker = Some((cols, rows));
             rewriter.set_cols(cols);
             EnvelopeOutcome::Continue
         }
@@ -1402,6 +1508,7 @@ mod tests {
             mseq: Some(2),
             seed_remaining: None,
             seed_x: Some(x),
+            size_marker: None,
         }
     }
 

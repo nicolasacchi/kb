@@ -1745,8 +1745,11 @@ POST   /api/terms/{id}/kill                 Kill the terminal. A
 POST   /api/terms/{id}/take-size            Body `{cols,rows,viewer?}`. Takes
                                             (or reports) the grid.
                                             Sent with `force: false`:
-                                            a foreign grid owner
-                                            surfaces `grid-owned`
+                                            a local attach owner
+                                            (`local:<pid>`) is taken
+                                            over (the web outranks
+                                            it); any other foreign
+                                            owner surfaces `grid-owned`
                                             (409) instead of being
                                             stomped.
 GET    /api/terms/{id}/read                 Relay the runner read.
