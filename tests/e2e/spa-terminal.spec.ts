@@ -369,7 +369,7 @@ test.describe("T14 — desktop terminal panel", () => {
     await openTerminal(page);
     // The grid caption flips to the new profile's cols x rows, and the
     // full rejoin increments resets on the second socket.
-    await expect(page.locator('[data-testid="kb-term-grid"]')).toHaveText("80x24", {
+    await expect(page.locator('[data-testid="kb-term-grid"]')).toHaveText(/^80x24 · /, {
       timeout: 30_000,
     });
     await expect
@@ -414,7 +414,7 @@ test.describe("T14 — desktop terminal panel", () => {
       midResize: { cols: 80, rows: 24 },
     });
     await openTerminal(page);
-    await expect(page.locator('[data-testid="kb-term-grid"]')).toHaveText("80x24", {
+    await expect(page.locator('[data-testid="kb-term-grid"]')).toHaveText(/^80x24 · /, {
       timeout: 30_000,
     });
     await expect

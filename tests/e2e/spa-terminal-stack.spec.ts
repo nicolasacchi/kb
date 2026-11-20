@@ -889,6 +889,117 @@ test.describe("T25 gate matrix on the real server", () => {
   });
 });
 
+// ================================================ FUTERMFIT: fit, owner chip, Fit to window, Release
+
+/** What the desktop panel shows right now: the terminal's grid and font, the host's box and the rendered screen. */
+async function panelGeometry(page: Page) {
+  return page.evaluate(() => {
+    const host = document.querySelector("[data-kb-term]") as unknown as HTMLElement & {
+      __kbTerm: { cols: number; rows: number; options: { fontSize: number } };
+    };
+    const screen = host.querySelector(".xterm-screen") as HTMLElement;
+    const chip = document.querySelector('[data-testid="kb-term-grid"]');
+    return {
+      cols: host.__kbTerm.cols,
+      rows: host.__kbTerm.rows,
+      font: host.__kbTerm.options.fontSize,
+      hostW: host.clientWidth,
+      hostH: host.clientHeight,
+      hostScrollW: host.scrollWidth,
+      screenW: screen.scrollWidth,
+      screenH: screen.scrollHeight,
+      chip: chip?.textContent ?? "",
+      cropped: document.querySelector('[data-testid="kb-term-cropped"]') !== null,
+      docW: document.documentElement.scrollWidth,
+      vw: window.innerWidth,
+    };
+  });
+}
+
+test("a 201x48 grid is fully visible at 1440x900 (font >= 9, no horizontal scroll), shows the Cropped hint when it cannot be at 1280x720, and the page never overflows at 1024", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const c = await prepare(page, request, idleHarness(), { cols: 201, rows: 48 });
+  await openPanel(page, c.sid);
+
+  // 1440x900: the whole grid, legibly, with nothing scrolling sideways.
+  await expect
+    .poll(async () => {
+      const g = await panelGeometry(page);
+      return g.font >= 9 && g.screenW <= g.hostW && g.screenH <= g.hostH;
+    }, { timeout: 30_000 })
+    .toBe(true);
+  let g = await panelGeometry(page);
+  expect(`${g.cols}x${g.rows}`).toBe("201x48");
+  expect(g.hostScrollW, "no horizontal scroll inside the host").toBeLessThanOrEqual(g.hostW);
+  expect(g.cropped, "no Cropped hint when everything fits").toBe(false);
+  expect(g.docW, "no page-level horizontal overflow").toBeLessThanOrEqual(g.vw);
+  expect(g.hostW, "the panel breaks out of the 860px reading column").toBeGreaterThan(900);
+  expect(g.chip).toMatch(/^201x48 · /);
+
+  // 1280x720: either everything still fits, or the hint says it is cropped and the host scrolls.
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await expect
+    .poll(async () => {
+      const m = await panelGeometry(page);
+      return m.cropped || (m.screenW <= m.hostW && m.screenH <= m.hostH);
+    }, { timeout: 30_000 })
+    .toBe(true);
+  g = await panelGeometry(page);
+  expect(g.font).toBeGreaterThanOrEqual(9);
+  expect(g.docW).toBeLessThanOrEqual(g.vw);
+
+  // 1024: the document never scrolls sideways.
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await expect
+    .poll(async () => {
+      const m = await panelGeometry(page);
+      return m.docW <= m.vw;
+    }, { timeout: 30_000 })
+    .toBe(true);
+});
+
+test("Fit to window takes the grid, the chip then equals the measured cols x rows and names the web; Release frees it", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const c = await prepare(page, request, idleHarness(), { cols: 120, rows: 40 });
+  await openPanel(page, c.sid);
+  const ownerOf = async (): Promise<string | null> => {
+    const { body } = await c.api.json<{ terms: Array<{ id: string; grid_owner?: string | null }> }>("GET", "/api/terms");
+    return body.terms.find((t) => t.id === c.term.id)?.grid_owner ?? null;
+  };
+
+  // Opening the panel never takes the grid.
+  await page.waitForTimeout(1000);
+  expect(await ownerOf()).not.toBe("kb-term");
+  expect(`${(await panelGeometry(page)).cols}x${(await panelGeometry(page)).rows}`).toBe("120x40");
+
+  await page.locator('[data-testid="kb-term-fit"]').click();
+  await expect
+    .poll(async () => {
+      const g = await panelGeometry(page);
+      return `${g.cols}x${g.rows}` !== "120x40";
+    }, { timeout: 30_000 })
+    .toBe(true);
+  await expect.poll(ownerOf, { timeout: 15_000 }).toBe("kb-term");
+  // The chip equals the terminal's measured grid, and the web owns it.
+  await expect
+    .poll(async () => {
+      const g = await panelGeometry(page);
+      return g.chip === `${g.cols}x${g.rows} · web`;
+    }, { timeout: 15_000 })
+    .toBe(true);
+  const fitted = await panelGeometry(page);
+  expect(fitted.cols).toBeGreaterThanOrEqual(20);
+  expect(fitted.rows).toBeGreaterThanOrEqual(5);
+  await expect(page.locator('[data-testid="kb-term-status"]')).toContainText("Grid set to");
+
+  await page.locator('[data-testid="kb-term-release"]').click();
+  await expect.poll(ownerOf, { timeout: 15_000 }).toBeNull();
+  await expect(page.locator('[data-testid="kb-term-grid"]')).toHaveText(/ · free$/, { timeout: 15_000 });
+  await expect(page.locator('[data-testid="kb-term-release"]')).toHaveCount(0);
+});
+
 // ================================================ restart (Spec 10)
 
 /** Record the close code the BROWSER's own WebSocket objects see (the browser leg, past the proxy). */
