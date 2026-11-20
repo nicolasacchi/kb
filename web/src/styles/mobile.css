@@ -536,7 +536,7 @@ body.kb-immersive .kb-folio-colophon {
   .kb-ses__newterm-field select,
   .kb-ses__newterm-field input {
     min-height: 44px;
-    font-size: 16px;
+    font-size: 16px; /* kb-literal: 16px stops iOS zooming a focused input */
     width: 100%;
     box-sizing: border-box;
   }
