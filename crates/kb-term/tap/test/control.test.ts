@@ -1,7 +1,7 @@
 // Control-mode client tests (T5 tests 6-8). Unit level: a fake spawn whose
 // stdout is pushed by hand, so no tmux runs.
 import { test, expect } from 'bun:test';
-import { Control, ControlError, THEME_BG, THEME_FG, attachArgv, colourReportCommands, continueCommand, exitNeedsReseed, pauseCommand, type SpawnedProcess } from '../src/control.ts';
+import { Control, ControlError, THEME_BG, THEME_FG, attachArgv, colourReportCommands, continueCommand, exitNeedsReseed, parseGridReply, parseLayoutChange, pauseCommand, type SpawnedProcess } from '../src/control.ts';
 import { PAUSE_AFTER_SECS } from '../src/control.ts';
 
 class FakeStdout implements AsyncIterable<Uint8Array> {
@@ -365,4 +365,51 @@ test('attach_argv_rejects_empty_and_nul_arguments', () => {
   expect(() => attachArgv('/t', '', 's1')).toThrow('invalid socketPath');
   expect(() => attachArgv('/t', '/s', '')).toThrow('invalid sessionName');
   expect(() => attachArgv('/t', '/s\0x', 's1')).toThrow('invalid socketPath');
+});
+
+// ---------------------------------------------------------------------------
+// FUATTACH: the window size reaches the tap (take-size = tmux resize-window)
+// ---------------------------------------------------------------------------
+
+test('parse_layout_change_reads_the_visible_layout_size_and_rejects_the_rest', () => {
+  // A single pane: layout and visible layout agree.
+  expect(parseLayoutChange('%layout-change @0 a9fd,160x30,0,0,0 a9fd,160x30,0,0,0 *')).toEqual({ cols: 160, rows: 30 });
+  // The visible layout (zoomed window) wins over the full layout.
+  expect(parseLayoutChange('%layout-change @1 aaaa,100x40,0,0,0 bbbb,80x20,0,0,0 *')).toEqual({ cols: 80, rows: 20 });
+  // A split layout still starts with the window size.
+  expect(parseLayoutChange('%layout-change @1 aaaa,200x50,0,0{100x50,0,0,0,99x50,101,0,1} aaaa,200x50,0,0{100x50,0,0,0,99x50,101,0,1}')).toEqual({ cols: 200, rows: 50 });
+  // An older tmux names only one layout.
+  expect(parseLayoutChange('%layout-change @0 a9fd,160x30,0,0,0')).toEqual({ cols: 160, rows: 30 });
+  // Anything else, and anything out of bounds, is not a size.
+  expect(parseLayoutChange('%output %0 hello')).toBeNull();
+  expect(parseLayoutChange('%layout-change @0 nonsense')).toBeNull();
+  expect(parseLayoutChange('%layout-change @0 a9fd,0x30,0,0,0 a9fd,0x30,0,0,0')).toBeNull();
+  expect(parseLayoutChange('%layout-change @0 a9fd,1001x30,0,0,0 a9fd,1001x30,0,0,0')).toBeNull();
+  expect(parseLayoutChange('')).toBeNull();
+});
+
+test('parse_grid_reply_reads_a_display_message_size_line', () => {
+  expect(parseGridReply('201 48')).toEqual({ cols: 201, rows: 48 });
+  expect(parseGridReply(' 80 24 ')).toEqual({ cols: 80, rows: 24 });
+  expect(parseGridReply('0 24')).toBeNull();
+  expect(parseGridReply('80x24')).toBeNull();
+  expect(parseGridReply('')).toBeNull();
+});
+
+test('a_layout_change_notification_reaches_on_layout_and_query_grid_reads_the_size', async () => {
+  const fake = new FakeSpawn();
+  const c = await start(fake);
+  const seen: Array<{ cols: number; rows: number }> = [];
+  c.onLayout((g) => seen.push(g));
+  // Interleaved with pane output, like tmux sends it.
+  fake.stdout.push(enc('%output %0 hi\n%layout-change @0 a9fd,160x30,0,0,0 a9fd,160x30,0,0,0 *\n%layout-change @0 zz\n'));
+  await waitFor(() => seen.length > 0);
+  await new Promise<void>((r) => setImmediate(r));
+  expect(seen).toEqual([{ cols: 160, rows: 30 }]);
+
+  const q = c.queryGrid();
+  expect(fake.writes[fake.writes.length - 1]).toBe("display-message -p '#{window_width} #{window_height}'\n");
+  fake.stdout.push(enc('%begin 1001 2 1\n201 48\n%end 1001 2 1\n'));
+  expect(await q).toEqual({ cols: 201, rows: 48 });
+  c.stop();
 });

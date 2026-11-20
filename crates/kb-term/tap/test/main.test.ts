@@ -717,3 +717,130 @@ test('compiled_binary_reports_the_define_d_version', () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ----------------------------------------------------- FUATTACH: grid follows take-size
+interface RowReader {
+  buffer: { active: { getLine(i: number): { translateToString(trim: boolean): string } | undefined } };
+}
+/** `octal` for payloads with CR/LF: real tmux escapes every byte below 0x20. */
+const octalCtl = (pane: string, data: string): string =>
+  `%output ${pane} ${data
+    .replaceAll('\\', '\\134')
+    .replaceAll('\x1b', '\\033')
+    .replaceAll('\r', '\\015')
+    .replaceAll('\n', '\\012')}\n`;
+const row = (twin: Twin, i: number): string | undefined => (twin.term as unknown as RowReader).buffer.active.getLine(i)?.translateToString(true);
+
+test('seam_take_size_resizes_the_twin_marks_live_viewers_and_seeds_late_joiners_at_the_new_grid', async () => {
+  const runDir = mkdtempSync(join(tmpdir(), 'kbt-grid-'));
+  const fake = new FakeSpawn();
+  const stack = createTapStack({
+    session: 'gridsize1',
+    runDir,
+    harness: 'claude',
+    cols: 80,
+    rows: 24,
+    epoch: 'a'.repeat(32),
+    spawn: fake.fn,
+    quiesceMs: 0,
+    joinWaitMs: 2000,
+  });
+  const starting = stack.start();
+  fake.stdout.push('%begin 1000 0 0\n%end 1000 0 0\n');
+  fake.stdout.push('%begin 1000 1 0\n%end 1000 1 0\n');
+  await starting;
+
+  try {
+    // A live viewer on the launch grid.
+    const first = capture();
+    const s1 = await openViewer(stack.server.sockPath, first);
+    await waitUntil(() => first.texts.some((t) => t.includes('"t":"seed"')), 'first seed');
+    const firstProfile = JSON.parse(first.texts.find((t) => t.includes('"t":"profile"'))!) as Record<string, unknown>;
+    expect(firstProfile['cols']).toBe(80);
+    expect(firstProfile['rows']).toBe(24);
+
+    // A client takes the grid: tmux announces the new window size, then the
+    // program redraws for it (a 150-cell line, and a write to row 30).
+    const wide = 'x'.repeat(150);
+    const layout = '%layout-change @0 a9fd,160x30,0,0,0 a9fd,160x30,0,0,0 *\n';
+    fake.stdout.push(layout + octalCtl('%0', `${wide}\r\n\x1b[30;1Hbottom`));
+    await waitUntil(() => first.texts.some((t) => t.includes('"t":"resize"')), 'resize marker');
+    const resize = JSON.parse(first.texts.find((t) => t.includes('"t":"resize"'))!) as Record<string, unknown>;
+    expect(resize['cols']).toBe(160);
+    expect(resize['rows']).toBe(30);
+    // The marker sits BEFORE the redraw bytes in the stream.
+    expect(resize['offset']).toBe(0);
+    await waitUntil(() => stack.server.head > 0, 'redraw bytes');
+
+    // tmux announcing the same size again changes nothing.
+    fake.stdout.push(layout);
+    await Bun.sleep(50);
+    expect(first.texts.filter((t) => t.includes('"t":"resize"')).length).toBe(1);
+
+    // A second viewer joins late: its profile and its seed are at the new grid.
+    s1.destroy();
+    await waitUntil(() => stack.server.viewerCount === 0, 'first viewer gone');
+    const second = capture();
+    const s2 = await openViewer(stack.server.sockPath, second);
+    await waitUntil(() => second.texts.some((t) => t.includes('"t":"seed"')) && second.binaries.length > 0, 'late seed');
+    const profile = JSON.parse(second.texts.find((t) => t.includes('"t":"profile"'))!) as Record<string, unknown>;
+    expect(profile['cols']).toBe(160);
+    expect(profile['rows']).toBe(30);
+    // The twin itself is at the new size and parsed the redraw there: the
+    // 150-cell line is ONE row and row 30 exists.
+    expect(stack.twin.cols).toBe(160);
+    expect(stack.twin.rows).toBe(30);
+    expect(row(stack.twin, 0)).toBe(wide);
+    expect(row(stack.twin, 29)).toBe('bottom');
+    // Replaying the late joiner's seed into a terminal of the session's size
+    // reproduces the screen.
+    const replica = makeTwin(160, 30);
+    await replica.feed(concat(second.binaries));
+    expect(row(replica, 0)).toBe(wide);
+    expect(row(replica, 29)).toBe('bottom');
+    replica.dispose();
+    s2.destroy();
+  } finally {
+    stack.stop();
+    rmSync(runDir, { recursive: true, force: true });
+  }
+});
+
+test('seam_sync_grid_adopts_the_size_tmux_reports_after_a_restart', async () => {
+  const runDir = mkdtempSync(join(tmpdir(), 'kbt-grid-'));
+  const fake = new FakeSpawn();
+  const stack = createTapStack({
+    session: 'gridsync01',
+    runDir,
+    harness: 'claude',
+    cols: 80,
+    rows: 24,
+    epoch: 'a'.repeat(32),
+    spawn: fake.fn,
+    quiesceMs: 0,
+    joinWaitMs: 2000,
+  });
+  const starting = stack.start();
+  fake.stdout.push('%begin 1000 0 0\n%end 1000 0 0\n');
+  fake.stdout.push('%begin 1000 1 0\n%end 1000 1 0\n');
+  await starting;
+
+  try {
+    const sync = stack.syncGrid();
+    expect(fake.writes[fake.writes.length - 1]).toBe("display-message -p '#{window_width} #{window_height}'\n");
+    fake.stdout.push('%begin 1000 2 1\n100 30\n%end 1000 2 1\n');
+    await sync;
+    await waitUntil(() => stack.twin.cols === 100, 'twin resized');
+    expect(stack.twin.rows).toBe(30);
+    const cap = capture();
+    const socket = await openViewer(stack.server.sockPath, cap);
+    await waitUntil(() => cap.texts.some((t) => t.includes('"t":"profile"')), 'profile');
+    const profile = JSON.parse(cap.texts.find((t) => t.includes('"t":"profile"'))!) as Record<string, unknown>;
+    expect(profile['cols']).toBe(100);
+    expect(profile['rows']).toBe(30);
+    socket.destroy();
+  } finally {
+    stack.stop();
+    rmSync(runDir, { recursive: true, force: true });
+  }
+});
