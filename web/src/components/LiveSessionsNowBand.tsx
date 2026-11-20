@@ -17,8 +17,18 @@
 // `kb_core::sessions::resume_command`, the one per-harness table the CLI,
 // live-status and the sessions inspector share (AH3). The SPA never builds it,
 // and a non-loopback reader gets it without `--cwd`.
+//
+// FUWEBOPEN — the row TITLE is a link to the session page (`/sessions/<sid>`,
+// carrying `state.from` like the list inspector's "open page" link), so a
+// live session is reachable before its first capture lands. A row that
+// carries `term`, for a caller the terminal tier is admitted for
+// (`terminalAdmitted`, from `GET /api/identity`), also gets an "Open
+// terminal" link to the page's `#sec-terminal` section. Links only: no
+// terminal panel is mounted on this list (T14: the panel mounts after an
+// explicit click on the session page).
 
 import { useState } from "react";
+import { Link, useLocation } from "react-router-dom";
 import { Icon } from "@kb/ui/icons";
 import { relativeAge } from "../lib/time";
 import { harnessGlyph } from "../lib/sessionChips";
@@ -43,9 +53,13 @@ import {
 export default function LiveSessionsNowBand({
   rows,
   now,
+  terminalAdmitted = false,
 }: {
   rows: LiveStatusRow[];
   now: number;
+  /// `terminal_admitted` from `GET /api/identity`; gates the "Open
+  /// terminal" link (a row's `term` alone grants nothing).
+  terminalAdmitted?: boolean;
 }) {
   const lanes = bucketLiveSessions(rows);
   const empty =
@@ -73,7 +87,13 @@ export default function LiveSessionsNowBand({
           </div>
           <ol className="kb-now__rows">
             {lanes.blocked.map((r) => (
-              <LiveRow key={r.session_id} row={r} now={now} kind="blocked" />
+              <LiveRow
+                key={r.session_id}
+                row={r}
+                now={now}
+                kind="blocked"
+                terminalAdmitted={terminalAdmitted}
+              />
             ))}
           </ol>
         </section>
@@ -86,7 +106,13 @@ export default function LiveSessionsNowBand({
           </h3>
           <ol className="kb-now__rows">
             {lanes.inProgress.map((r) => (
-              <LiveRow key={r.session_id} row={r} now={now} kind="progress" />
+              <LiveRow
+                key={r.session_id}
+                row={r}
+                now={now}
+                kind="progress"
+                terminalAdmitted={terminalAdmitted}
+              />
             ))}
           </ol>
         </section>
@@ -106,7 +132,13 @@ export default function LiveSessionsNowBand({
           </div>
           <ol className="kb-now__rows">
             {lanes.waiting.map((r) => (
-              <LiveRow key={r.session_id} row={r} now={now} kind="waiting" />
+              <LiveRow
+                key={r.session_id}
+                row={r}
+                now={now}
+                kind="waiting"
+                terminalAdmitted={terminalAdmitted}
+              />
             ))}
           </ol>
         </section>
@@ -126,7 +158,13 @@ export default function LiveSessionsNowBand({
           </div>
           <ol className="kb-now__rows">
             {lanes.resuming.map((r) => (
-              <LiveRow key={r.session_id} row={r} now={now} kind="resuming" />
+              <LiveRow
+                key={r.session_id}
+                row={r}
+                now={now}
+                kind="resuming"
+                terminalAdmitted={terminalAdmitted}
+              />
             ))}
           </ol>
         </section>
@@ -145,7 +183,13 @@ export default function LiveSessionsNowBand({
           )}
           <ol className="kb-now__rows">
             {lanes.finished.map((r) => (
-              <LiveRow key={r.session_id} row={r} now={now} kind="finished" />
+              <LiveRow
+                key={r.session_id}
+                row={r}
+                now={now}
+                kind="finished"
+                terminalAdmitted={terminalAdmitted}
+              />
             ))}
           </ol>
         </section>
@@ -158,11 +202,16 @@ function LiveRow({
   row,
   now,
   kind,
+  terminalAdmitted,
 }: {
   row: LiveStatusRow;
   now: number;
   kind: "blocked" | "progress" | "waiting" | "resuming" | "finished";
+  terminalAdmitted: boolean;
 }) {
+  const location = useLocation();
+  const pageTo = `/sessions/${encodeURIComponent(row.session_id)}`;
+  const from = location.pathname + location.search;
   const honesty = liveHonestyKind(row);
   // Primary identifier: project (the thing the operator actually scans
   // for) when known, else title/cwd/id as honest fallbacks. Secondary line
@@ -192,7 +241,14 @@ function LiveRow({
           <span className="kb-now__row-time" title="time in this state">
             {elapsed}
           </span>
-          <span className="kb-now__row-project">{primary}</span>
+          <Link
+            to={pageTo}
+            state={{ from }}
+            className="kb-now__row-project kb-now__row-link"
+            data-testid="now-row-open"
+          >
+            {primary}
+          </Link>
           {kind === "progress" && isStalled(row) && (
             <span
               className="kb-now__row-doubt"
@@ -237,6 +293,16 @@ function LiveRow({
             >
               {background}
             </span>
+          )}
+          {row.term && terminalAdmitted && (
+            <Link
+              to={`${pageTo}#sec-terminal`}
+              state={{ from }}
+              className="kb-now__row-term"
+              data-testid="now-row-open-terminal"
+            >
+              Open terminal
+            </Link>
           )}
           {honesty && (
             <span
