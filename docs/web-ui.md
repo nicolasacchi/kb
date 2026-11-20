@@ -473,7 +473,11 @@ It is attribution, never a read receipt, and it is never a rank term.
 
 A terminal view for the operator's own sessions (off unless `[terminal]
 enabled`) is a separate, SPA-only surface; see architecture-invariants
-#11, KT amendment.
+#11, KT amendment. For a caller the tier admits, `/sessions` carries a **New
+terminal** control under the page head (harness, working directory, Launch)
+and a session page's Resume section carries **Resume in a kb terminal**; both
+open the terminal inline. The how and the limits are in
+[kb-term.md](kb-term.md#start-or-resume-from-the-web).
 
 ## Stale-anchors dashboard
 

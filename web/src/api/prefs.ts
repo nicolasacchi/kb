@@ -78,6 +78,11 @@ export type Prefs = {
   // styling, a captured-pages corpus wants the house voice. Absent / false =
   // off. Browser-local like `lastKb`, OUT of the patchSettings allow-list.
   readingDefault?: Record<string, boolean>;
+  // FUWEBLAUNCH — the "New terminal" launcher's memory: the last harness
+  // chosen and the last few working directories typed. Browser-local like
+  // `lastKb`, OUT of the patchSettings allow-list; nothing daemon-side.
+  lastTermHarness?: string;
+  recentTermCwds?: string[];
 };
 
 const PREFS_KEY = "kb:prefs";
@@ -339,4 +344,35 @@ export function patchSettingsDebounced(prefs: Prefs) {
       // copy is convenience-only in v0.1.
     });
   }, PATCH_DEBOUNCE_MS);
+}
+
+// FUWEBLAUNCH — "New terminal" memory. Both loaders coerce: a hand-edited or
+// older blob degrades to "no memory" (the launcher's own default applies),
+// never to a value the launcher would send to the server unchecked.
+export const RECENT_TERM_CWDS_MAX = 5;
+
+export function loadLastTermHarness(): string | null {
+  const h = loadPrefs().lastTermHarness;
+  return typeof h === "string" && h !== "" ? h : null;
+}
+
+export function saveLastTermHarness(harness: string) {
+  const cur = loadPrefs();
+  if (cur.lastTermHarness === harness) return;
+  savePrefs({ ...cur, lastTermHarness: harness });
+}
+
+export function loadRecentTermCwds(): string[] {
+  const v = loadPrefs().recentTermCwds;
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((x): x is string => typeof x === "string" && x !== "")
+    .slice(0, RECENT_TERM_CWDS_MAX);
+}
+
+/// Newest first, deduplicated, capped at `RECENT_TERM_CWDS_MAX`.
+export function saveRecentTermCwd(cwd: string) {
+  const cur = loadPrefs();
+  const rest = loadRecentTermCwds().filter((c) => c !== cwd);
+  savePrefs({ ...cur, recentTermCwds: [cwd, ...rest].slice(0, RECENT_TERM_CWDS_MAX) });
 }

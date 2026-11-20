@@ -2,8 +2,9 @@
 
 kb-term is kb's operator-intent terminal tier: the operator starts an agent
 session (claude, codex, opencode, grok or omp; kimi support was removed) on the
-kb host with `kb-term new` (or the session page's Handoff panel, the only
-launch control the SPA has), then watches and types into it from the SPA's
+kb host with `kb-term new` (or from the SPA: the New terminal control on
+`/sessions`, the session page's Resume in a kb terminal and its Handoff
+panel), then watches and types into it from the SPA's
 session page (desktop or phone) and kills it from there or from a local shell,
 where `kb-term attach` mirrors the same session into a native terminal. It is built for one machine in a controlled environment, it is off
 by default, and it is deliberately not a general remote shell. This page is the
@@ -430,8 +431,8 @@ beat (for example a prompt that does not raise one) shows no choice bar.
 ## Open it on the web
 
 1. Start a session on the kb host: `kb-term new <harness> --cwd <dir>` (add
-   `--no-attach` to leave it running unattended), or launch one from a
-   session's Handoff panel in the SPA.
+   `--no-attach` to leave it running unattended), or launch one from the SPA
+   (see [Start or resume from the web](#start-or-resume-from-the-web)).
 2. The harness's first beat makes the session known to the daemon at once, so
    it appears in the Now band on `/sessions` (it needs no transcript first).
    Its row title links to the session page; when `[terminal]` is admitted for
@@ -448,6 +449,38 @@ beat (for example a prompt that does not raise one) shows no choice bar.
 A session the daemon has never heard a beat from, and that has no capture, is
 still a 404: the live-only card is derived per request from the in-memory live
 registry and persists nothing.
+
+## Start or resume from the web
+
+For a caller the terminal tier admits (`terminal_admitted` on
+`GET /api/identity`; with the tier off there is no control at all):
+
+- **New terminal** sits under the page head on `/sessions`. Pick a harness
+  (claude, codex, omp, opencode, grok; the last two are experimental) and type
+  an absolute working directory on the daemon's host. The directory is checked
+  in the browser the way the server checks it (absolute, at most 512 bytes, no
+  control character) and a path that fails sends no request. The harness and
+  the last few directories are remembered in the browser only. Suggestions come
+  from the sessions the page already lists and from those remembered
+  directories; there is no directory-browsing route.
+- **Resume in a kb terminal** is in a session page's Resume section, beside the
+  copyable resume command and the Handoff panel. It appears only when the
+  session's working directory is known, its harness is one of the five above and
+  it has no live bound terminal. It launches the harness's own resume for that
+  session (`resume_sid` is the session id; a bare continue is never sent).
+
+Both send nothing until the click, then open the terminal inline at once. A
+harness in a directory it has never trusted shows its trust prompt before any
+hook runs, so the new session may stay unbound until you answer that prompt in
+the terminal itself. While it is unbound the panel says the session appears in
+the list once the harness starts. The page re-reads the existing terminals list
+every two seconds until a session id appears, the pane ends or two minutes have
+passed (it then stops polling and says so); there is no extra event stream. When
+the row carries a session id the panel shows a link to that session's Terminal
+section. The link is never followed for you, and a harness may resume into a
+different session id than the one you resumed; the link names whichever id the
+row carries. A refused or failed launch (400, 404, 5xx) and a pane that ended
+(with its exit code) are shown as they are.
 
 ## Security model
 

@@ -168,6 +168,7 @@ function mockFetch(opts: {
   cardStatus?: number;
   childrenPage?: (url: string) => unknown;
   withCode?: boolean;
+  detail?: unknown;
 }) {
   return vi.fn(async (url: unknown) => {
     const u = String(url);
@@ -199,7 +200,7 @@ function mockFetch(opts: {
         ok: true,
         status: 200,
         statusText: "OK",
-        json: async () => DETAIL,
+        json: async () => opts.detail ?? DETAIL,
       } as Response;
     }
     if (u.includes("/api/kbs")) {
@@ -947,5 +948,67 @@ describe("SessionPage — live-only card (FUWEBOPEN)", () => {
       const closed = await screen.findByTestId("session-sec-terminal");
       expect((closed as HTMLDetailsElement).open).toBe(false);
     });
+  });
+});
+
+// FUWEBLAUNCH — the Resume section's "Resume in a kb terminal" wiring: the
+// page feeds the component the card's terminal lane and the detail's cwd.
+describe("SessionPage resume in a kb terminal", () => {
+  const withCwd = { ...(DETAIL as object), cwd: "/srv/w" };
+  const admitted = (extra: Record<string, unknown> = {}) => ({
+    available: false,
+    reason: "no live terminal",
+    admitted: true,
+    ...extra,
+  });
+
+  it("offers the button for an admitted caller, a known cwd and no live terminal", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({ card: fullCard({ terminal: admitted() }), detail: withCwd }),
+    );
+    renderPage();
+    expect(await screen.findByTestId("session-resume-term-go")).toBeTruthy();
+  });
+
+  it("hides it when the tier is disabled for the caller", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        card: fullCard({ terminal: { available: false, reason: "terminal disabled", admitted: false } }),
+        detail: withCwd,
+      }),
+    );
+    renderPage();
+    await screen.findByTestId("session-sec-resume");
+    // Let the detail query (the cwd source) settle before the negative check.
+    await new Promise((r) => setTimeout(r, 80));
+    expect(screen.queryByTestId("session-resume-term-go")).toBeNull();
+  });
+
+  it("hides it when the session already has a live bound terminal", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        card: fullCard({
+          terminal: { available: true, admitted: true, term_id: "t1", harness: "claude" },
+        }),
+        detail: withCwd,
+      }),
+    );
+    renderPage();
+    await screen.findByTestId("session-sec-resume");
+    // Let the detail query (the cwd source) settle before the negative check.
+    await new Promise((r) => setTimeout(r, 80));
+    expect(screen.queryByTestId("session-resume-term-go")).toBeNull();
+  });
+
+  it("hides it when the session has no recorded cwd", async () => {
+    vi.stubGlobal("fetch", mockFetch({ card: fullCard({ terminal: admitted() }) }));
+    renderPage();
+    await screen.findByTestId("session-sec-resume");
+    // Let the detail query (the cwd source) settle before the negative check.
+    await new Promise((r) => setTimeout(r, 80));
+    expect(screen.queryByTestId("session-resume-term-go")).toBeNull();
   });
 });

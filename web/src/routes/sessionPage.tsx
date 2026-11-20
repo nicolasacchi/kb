@@ -26,6 +26,7 @@ import { TerminalSlot, shouldRenderTerminal } from "../components/TerminalSlot";
 import { CodeLaneSection } from "../components/sessions/CodeLaneSection";
 import { ChecksSection, CommitsSection, ResumeCommand } from "./sessions";
 import { HandoffPanel } from "../components/HandoffPanel";
+import { ResumeInTerminal } from "../components/ResumeInTerminal";
 import { sessionDisplayName } from "../lib/sessionDisplayName";
 import {
   formatActiveDuration,
@@ -732,6 +733,14 @@ export default function SessionPage() {
           harness={sum.harness}
           terminalAdmitted={card.terminal.admitted && card.terminal.reason !== "terminal disabled"}
           cwd={detail?.cwd}
+        />
+        <ResumeInTerminal
+          key={`resume-term:${sid}`}
+          sessionId={sid}
+          harness={sum.harness}
+          cwd={detail?.cwd}
+          terminalAdmitted={card.terminal.admitted && card.terminal.reason !== "terminal disabled"}
+          hasLiveTerminal={card.terminal.available}
         />
       </Section>
     </main>

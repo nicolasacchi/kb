@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { BASE, installCloseWatcherStub } from "./helpers";
 import { installFakeTerminal, SID } from "./fixtures/fake-tap.mjs";
+import { fixtureCard, TERM_ID } from "./fixtures/fake-tap.mjs";
 
 // T17 — the phone terminal view. Runs ONLY on the three phone projects
 // (chromium-pixel7, chromium-iphone15, webkit-iphone15; see
@@ -449,5 +450,123 @@ test.describe("T17 phone terminal: host and lifecycle @phone", () => {
     expect(stats.tickets).toBe(1);
     expect(await page.locator(VP).getAttribute("data-kb-term-resets")).toBe("1");
     expect(await num(page, "len")).toBeGreaterThanOrEqual(1500);
+  });
+});
+
+// FUWEBLAUNCH — the two launch controls on a phone: "New terminal" on
+// /sessions and "Resume in a kb terminal" on the session page. The daemon's
+// launch route and identity are mocked (the harness daemon has the terminal
+// tier off); the stream is the same synthetic fake relay as above.
+test.describe("FUWEBLAUNCH phone launch controls @phone", () => {
+  type Post = Record<string, unknown>;
+
+  async function admitAndMockLaunch(page: Page): Promise<Post[]> {
+    await page.route("**/api/identity", async (route) => {
+      const res = await route.fetch();
+      const j = (await res.json()) as Record<string, unknown>;
+      await route.fulfill({ response: res, json: { ...j, terminal_admitted: true } });
+    });
+    const posted: Post[] = [];
+    // Registered after installFakeTerminal's own /api/terms route, so it is
+    // consulted first; everything but the POST falls through to the fake list.
+    await page.route("**/api/terms", (route) => {
+      if (route.request().method() === "POST") {
+        posted.push(JSON.parse(route.request().postData() ?? "{}") as Post);
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ id: TERM_ID }),
+        });
+      }
+      return route.fallback();
+    });
+    return posted;
+  }
+
+  async function noHorizontalScroll(page: Page): Promise<void> {
+    const over = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    expect(over).toBeLessThanOrEqual(1);
+  }
+
+  test("New terminal: form fits the phone, a bad path sends nothing, a good one launches and links the session", async ({
+    page,
+  }) => {
+    await installFakeTerminal(page, {});
+    const posted = await admitAndMockLaunch(page);
+    await page.goto(`${BASE}/sessions`);
+    const open = page.locator('[data-testid="new-terminal-open"]');
+    await expect(open).toBeVisible({ timeout: 20_000 });
+    expect((await open.boundingBox())!.height).toBeGreaterThanOrEqual(43);
+    await open.click();
+    await expect(page.locator('[data-testid="new-terminal-form"]')).toBeVisible();
+    await noHorizontalScroll(page);
+    const vw = page.viewportSize()!.width;
+    const field = (await page.locator('[data-testid="new-terminal-cwd"]').boundingBox())!;
+    expect(field.x + field.width).toBeLessThanOrEqual(vw + 1);
+    expect(field.height).toBeGreaterThanOrEqual(43);
+
+    await page.locator('[data-testid="new-terminal-cwd"]').fill("relative/dir");
+    await page.locator('[data-testid="new-terminal-launch"]').click();
+    await expect(page.locator('[data-testid="new-terminal-invalid"]')).toBeVisible();
+    expect(posted).toEqual([]);
+
+    await page.locator('[data-testid="new-terminal-harness"]').selectOption("codex");
+    await page.locator('[data-testid="new-terminal-cwd"]').fill("/synthetic");
+    await page.locator('[data-testid="new-terminal-launch"]').click();
+    await expect.poll(() => posted.length).toBe(1);
+    expect(posted[0]).toEqual({ harness: "codex", cwd: "/synthetic" });
+    await expect(page.locator(VP)).toBeVisible({ timeout: 30_000 });
+    // The fake terms list already carries the bound session id.
+    const link = page.locator('[data-testid="launched-terminal-bound"] a');
+    await expect(link).toHaveAttribute("href", `/sessions/${SID}#sec-terminal`, { timeout: 15_000 });
+    await noHorizontalScroll(page);
+  });
+
+  test("Resume in a kb terminal: launches with resume_sid and shows the panel", async ({ page }) => {
+    await installFakeTerminal(page, {});
+    const posted = await admitAndMockLaunch(page);
+    const card: Record<string, unknown> = fixtureCard();
+    card.terminal = { available: false, reason: "no live terminal", admitted: true };
+    await page.route("**/api/sessions/*/card", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(card) }),
+    );
+    await page.route(`**/api/sessions/${SID}`, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: "d1",
+          kb: "mem",
+          artifact_id: "a1",
+          session_id: SID,
+          started_at: 1760000000,
+          ended_at: 1760000010,
+          duration_ms: 10000,
+          message_count: 1,
+          memory_count: 0,
+          source_relative: "t.html",
+          display_name: "Synthetic T14 session",
+          harness: "omp",
+          cwd: "/synthetic",
+          checks: [],
+          unnamed_edits: [],
+          unnamed_edits_total: 0,
+          memory_ids: [],
+        }),
+      }),
+    );
+    await page.goto(`${BASE}/sessions/${SID}`);
+    // Under the 860 px breakpoint the sections start collapsed.
+    await page.locator('[data-testid="session-sec-resume"] > summary').click();
+    const go = page.locator('[data-testid="session-resume-term-go"]');
+    await expect(go).toBeVisible({ timeout: 20_000 });
+    expect((await go.boundingBox())!.height).toBeGreaterThanOrEqual(43);
+    await go.click();
+    await expect.poll(() => posted.length).toBe(1);
+    expect(posted[0]).toEqual({ harness: "omp", cwd: "/synthetic", resume_sid: SID });
+    await expect(page.locator(VP)).toBeVisible({ timeout: 30_000 });
+    await noHorizontalScroll(page);
   });
 });
