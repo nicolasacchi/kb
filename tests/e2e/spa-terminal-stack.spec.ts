@@ -378,8 +378,10 @@ const PIXEL_TOL = 3;
 
 async function pictureChecks(page: Page, api: Api, c: Ctx, dpr: number, placements = 1): Promise<{ sha: string }> {
   expect(await page.evaluate(() => window.devicePixelRatio)).toBe(dpr);
-  // Let the view box grow with its content so the whole picture can be probed.
-  await page.addStyleTag({ content: ".kb-term__view{height:auto !important;overflow:visible !important;}" });
+  // The host is a bounded box (FUTERMFIT: its font is fitted to that box, so a
+  // content-sized height would feed back into the fit); only lift the clipping
+  // so nothing hides a probe.
+  await page.addStyleTag({ content: ".kb-term__view{overflow:visible !important;}" });
   await expect(page.locator(".xterm-screen .kbgfx-overlay")).toHaveCount(1, { timeout: 30_000 });
   await expect(page.locator(".kbgfx-overlay .kbgfx-img")).toHaveCount(placements, { timeout: 30_000 });
   await page.waitForFunction(
@@ -917,6 +919,12 @@ async function panelGeometry(page: Page) {
       screenW: screen.scrollWidth,
       screenH: screen.scrollHeight,
       chip: chip?.textContent ?? "",
+      phase: host.getAttribute("data-kb-term-phase") ?? "?",
+      status: document.querySelector('[data-testid="kb-term-status"]')?.textContent ?? "",
+      overflowers: [...document.querySelectorAll("body *")]
+        .filter((el) => !el.closest(".xterm") && el.getBoundingClientRect().right > window.innerWidth + 1)
+        .slice(0, 6)
+        .map((el) => `${el.tagName.toLowerCase()}.${String(el.className).slice(0, 40)} right=${Math.round(el.getBoundingClientRect().right)}`),
       cropped: document.querySelector('[data-testid="kb-term-cropped"]') !== null,
       docW: document.documentElement.scrollWidth,
       vw: window.innerWidth,
@@ -962,9 +970,9 @@ test("a 201x48 grid is fully visible at 1440x900 (font >= 9, no horizontal scrol
   await expect
     .poll(async () => {
       const m = await panelGeometry(page);
-      return m.docW <= m.vw;
+      return m.docW <= m.vw ? "ok" : `docW ${m.docW} > vw ${m.vw}: ${m.overflowers.join(" | ")}`;
     }, { timeout: 30_000 })
-    .toBe(true);
+    .toBe("ok");
 });
 
 test("Fit to window takes the grid, the chip then equals the measured cols x rows and names the web; Release frees it", async ({ page, request }) => {
@@ -983,20 +991,24 @@ test("Fit to window takes the grid, the chip then equals the measured cols x row
   expect(`${(await panelGeometry(page)).cols}x${(await panelGeometry(page)).rows}`).toBe("120x40");
 
   await page.locator('[data-testid="kb-term-fit"]').click();
-  await expect
-    .poll(async () => {
-      const g = await panelGeometry(page);
-      return `${g.cols}x${g.rows}` !== "120x40";
-    }, { timeout: 30_000 })
-    .toBe(true);
+  // The runner took the grid for the web (read straight from the API) ...
   await expect.poll(ownerOf, { timeout: 15_000 }).toBe("kb-term");
-  // The chip equals the terminal's measured grid, and the web owns it.
+  // ... the stream followed it ...
   await expect
     .poll(async () => {
       const g = await panelGeometry(page);
-      return g.chip === `${g.cols}x${g.rows} · web`;
+      return g.cols === 120 && g.rows === 40
+        ? `still 120x40: chip="${g.chip}" phase=${g.phase} status="${g.status}"`
+        : "moved";
+    }, { timeout: 30_000 })
+    .toBe("moved");
+  // ... and the chip equals the terminal's measured grid and names the web.
+  await expect
+    .poll(async () => {
+      const g = await panelGeometry(page);
+      return g.chip === `${g.cols}x${g.rows} · web` ? "ok" : `chip="${g.chip}" term=${g.cols}x${g.rows}`;
     }, { timeout: 15_000 })
-    .toBe(true);
+    .toBe("ok");
   const fitted = await panelGeometry(page);
   expect(fitted.cols).toBeGreaterThanOrEqual(20);
   expect(fitted.rows).toBeGreaterThanOrEqual(5);
