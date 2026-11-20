@@ -1,10 +1,11 @@
 # kb-term — a live terminal in kb
 
-kb-term is kb's operator-intent terminal tier: from the SPA's session page
-(desktop or phone) the operator can launch, watch, type into and kill an agent
-session (claude, codex, opencode, grok or omp; kimi support was removed) that runs on the kb host,
-and from a local shell the operator can mirror the same session into a native
-terminal. It is built for one machine in a controlled environment, it is off
+kb-term is kb's operator-intent terminal tier: the operator starts an agent
+session (claude, codex, opencode, grok or omp; kimi support was removed) on the
+kb host with `kb-term new` (or the session page's Handoff panel, the only
+launch control the SPA has), then watches and types into it from the SPA's
+session page (desktop or phone) and kills it from there or from a local shell,
+where `kb-term attach` mirrors the same session into a native terminal. It is built for one machine in a controlled environment, it is off
 by default, and it is deliberately not a general remote shell. This page is the
 reference for how it works, what it protects, how to install it, and where it
 is known to be imperfect. The step-by-step install guide is
@@ -425,6 +426,28 @@ Known limit: the binding code's own header notes that a sub-agent that beats
 longer lets subagents beat or take the process identity, so the known source is
 closed for omp; other harnesses were not checked. An agent that sets no blocked
 beat (for example a prompt that does not raise one) shows no choice bar.
+
+## Open it on the web
+
+1. Start a session on the kb host: `kb-term new <harness> --cwd <dir>` (add
+   `--no-attach` to leave it running unattended), or launch one from a
+   session's Handoff panel in the SPA.
+2. The harness's first beat makes the session known to the daemon at once, so
+   it appears in the Now band on `/sessions` (it needs no transcript first).
+   Its row title links to the session page; when `[terminal]` is admitted for
+   you and the session is bound to a terminal, the row also carries an "Open
+   terminal" link to the page's Terminal section.
+3. The session page shows a live-only card until the first capture exists:
+   the header and live state, a caption saying the transcript lands at the end
+   of the session's first turn, the Terminal section and the resume command.
+   The terminal panel itself still mounts only after the explicit "Open
+   terminal" click on that page.
+4. When the first capture lands, the same page becomes the full card (files,
+   commits, outcome and the rest) without a reload.
+
+A session the daemon has never heard a beat from, and that has no capture, is
+still a 404: the live-only card is derived per request from the in-memory live
+registry and persists nothing.
 
 ## Security model
 

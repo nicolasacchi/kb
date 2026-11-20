@@ -1668,3 +1668,175 @@ async fn a_legacy_kimi_row_stays_readable_and_new_kimi_input_is_refused() {
         .unwrap();
     assert_eq!(ok.status().as_u16(), 200, "omp control beat");
 }
+
+// ===== FUWEBOPEN: the live-only card ==========================================
+
+async fn post_beat(client: &reqwest::Client, addr: std::net::SocketAddr, body: Value) {
+    let resp = client
+        .post(url(addr, "/api/sessions/beat"))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200, "beat: {:?}", resp.text().await);
+}
+
+fn beat(sid: &str, event: &str) -> serde_json::Map<String, Value> {
+    let mut m = serde_json::Map::new();
+    m.insert("v".into(), json!(1));
+    m.insert("session_id".into(), json!(sid));
+    m.insert("harness".into(), json!("claude"));
+    m.insert("event".into(), json!(event));
+    m.insert("at".into(), json!(chrono::Utc::now().to_rfc3339()));
+    m
+}
+
+/// A beat-only session bound to a kb-term terminal answers 200 with a
+/// live-only card: the marker is set, the terminal lane is the registry
+/// lane, every capture-backed lane says "no capture yet", and the scrub
+/// floor holds (no absolute cwd, no last_line anywhere on the wire).
+#[tokio::test]
+async fn a_beat_only_bound_session_gets_a_live_only_card() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("list".to_string(), runner_list_reply(&["abc123"]));
+    let fake_dir = tempfile::tempdir().unwrap();
+    let fake = spawn_fake_runner(fake_dir.path(), replies);
+    let (_tmp, addr, _paths) = boot_terminal(fake.socket.clone()).await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(url(addr, "/api/terms"))
+        .header("Origin", origin_header(addr))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let mut b = beat("live-only-1", "start");
+    b.insert("term".into(), json!("abc123"));
+    b.insert("pid".into(), json!(4242));
+    b.insert("cwd".into(), json!("/work/private/deep/projname"));
+    b.insert("last_line".into(), json!("PRIVATE-LAST-LINE-TEXT"));
+    b.insert("model".into(), json!("model-x"));
+    post_beat(&client, addr, Value::Object(b)).await;
+
+    let (status, card, body) = get_json(&client, addr, "/api/sessions/live-only-1/card").await;
+    assert_eq!(status, 200, "{card}");
+    assert_eq!(card["schema"], "kb-session-card/1");
+    assert_eq!(card["capture_pending"], true, "{card}");
+    assert_eq!(card["session_id"], "live-only-1");
+    assert_eq!(card["kb"], "");
+    assert_eq!(card["artifact_id"], "");
+    // Summary from the registry row.
+    assert_eq!(card["summary"]["available"], true);
+    assert_eq!(card["summary"]["harness"], "claude");
+    assert_eq!(card["summary"]["project_slug"], "projname");
+    assert_eq!(card["summary"]["resume"], "claude -r live-only-1");
+    // Live lane from the registry.
+    assert_eq!(card["live"]["available"], true, "{card}");
+    assert_eq!(card["live"]["state"], "working", "{card}");
+    // The ONE terminal_lane path.
+    assert_eq!(card["terminal"]["available"], true, "{card}");
+    assert_eq!(card["terminal"]["term_id"], "abc123", "{card}");
+    assert_eq!(card["terminal"]["admitted"], true, "{card}");
+    // Every capture-backed lane is empty with the one reason.
+    for lane in [
+        "outcome",
+        "files",
+        "decisions",
+        "commits",
+        "research",
+        "comments",
+        "readings",
+        "memory",
+        "slate",
+        "children",
+    ] {
+        assert_eq!(card[lane]["available"], false, "{lane}: {card}");
+        assert_eq!(card[lane]["reason"], "no capture yet", "{lane}: {card}");
+    }
+    // The scrub floor: never more than live-status. No absolute cwd, no
+    // last_line, no model anywhere on the wire (text included).
+    for leak in ["/work/private", "PRIVATE-LAST-LINE-TEXT", "model-x"] {
+        assert!(!body.contains(leak), "{leak} leaked into the card: {body}");
+    }
+    let text = card["text"].as_str().unwrap();
+    assert!(text.contains("capture: pending"), "{text}");
+    assert!(text.contains("terminal: abc123"), "{text}");
+}
+
+/// A beat-only session with no terminal gets a live-only card whose
+/// terminal lane honestly says it is not running in kb-term.
+#[tokio::test]
+async fn a_beat_only_unbound_session_gets_a_live_only_card_without_a_terminal() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("list".to_string(), runner_list_reply(&[]));
+    let fake_dir = tempfile::tempdir().unwrap();
+    let fake = spawn_fake_runner(fake_dir.path(), replies);
+    let (_tmp, addr, _paths) = boot_terminal(fake.socket.clone()).await;
+    let client = reqwest::Client::new();
+    post_beat(&client, addr, Value::Object(beat("live-only-2", "start"))).await;
+    let (status, card, _) = get_json(&client, addr, "/api/sessions/live-only-2/card").await;
+    assert_eq!(status, 200, "{card}");
+    assert_eq!(card["capture_pending"], true, "{card}");
+    assert_eq!(card["terminal"]["available"], false, "{card}");
+    assert_eq!(
+        card["terminal"]["reason"], "not running in kb-term",
+        "{card}"
+    );
+}
+
+/// A sid known to neither the capture rows nor the live registry is a 404.
+#[tokio::test]
+async fn a_sid_known_to_neither_rows_nor_registry_is_a_404() {
+    let (_tmp, addr, _paths) = boot().await;
+    let client = reqwest::Client::new();
+    post_beat(&client, addr, Value::Object(beat("someone-else", "start"))).await;
+    let (status, _, _) = get_json(&client, addr, "/api/sessions/nobody/card").await;
+    assert_eq!(status, 404);
+}
+
+/// A capture-backed card is byte-identical to the pre-FUWEBOPEN wire: no
+/// `capture_pending` key, even when the registry ALSO knows the sid, and a
+/// live-only card becomes that full card the moment the capture row lands.
+#[tokio::test]
+async fn a_capture_backed_card_has_no_marker_and_wins_over_the_registry() {
+    let (_tmp, addr, paths) = boot().await;
+    let client = reqwest::Client::new();
+    post_beat(&client, addr, Value::Object(beat("cap-live-1", "start"))).await;
+    let (status, pending, _) = get_json(&client, addr, "/api/sessions/cap-live-1/card").await;
+    assert_eq!(status, 200);
+    assert_eq!(pending["capture_pending"], true);
+    {
+        let mut db = open_db(&paths);
+        db.sessions_upsert(&row("art-cap", "cap-live-1", 1_000))
+            .unwrap();
+        seed_file(&mut db, "art-cap", "cap-live-1", 2);
+    }
+    let (status, card, body) = get_json(&client, addr, "/api/sessions/cap-live-1/card").await;
+    assert_eq!(status, 200, "{card}");
+    assert!(
+        !body.contains("capture_pending"),
+        "a capture-backed card must not carry the marker: {body}"
+    );
+    assert_eq!(card["artifact_id"], "art-cap");
+    assert_eq!(card["files"]["total"], 2);
+    assert_eq!(card["live"]["available"], true);
+}
+
+/// The live-only card persists nothing: reading it twice leaves the
+/// capture-backed session list without the sid.
+#[tokio::test]
+async fn reading_a_live_only_card_writes_no_session_row() {
+    let (_tmp, addr, _paths) = boot().await;
+    let client = reqwest::Client::new();
+    post_beat(&client, addr, Value::Object(beat("no-persist-1", "start"))).await;
+    for _ in 0..2 {
+        let (status, _, _) = get_json(&client, addr, "/api/sessions/no-persist-1/card").await;
+        assert_eq!(status, 200);
+    }
+    let (status, list, _) = get_json(&client, addr, "/api/sessions").await;
+    assert_eq!(status, 200);
+    assert!(
+        !list.to_string().contains("no-persist-1"),
+        "no capture-backed row may appear: {list}"
+    );
+}
