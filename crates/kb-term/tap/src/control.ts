@@ -130,6 +130,45 @@ export type OutputHandler = (pane: string, bytes: Uint8Array, ageMs?: number) =>
 export type PaneHandler = (pane: string) => void;
 export type ExitHandler = (reason: string) => void;
 
+/** A window grid size in cells. */
+export interface GridSize {
+  cols: number;
+  rows: number;
+}
+export type LayoutHandler = (grid: GridSize) => void;
+
+/** Largest grid dimension the tap accepts (the same bound as its own
+ * `--cols`/`--rows` arguments). */
+const MAX_GRID_DIM = 1000;
+
+function gridFrom(cols: number, rows: number): GridSize | null {
+  if (!Number.isSafeInteger(cols) || !Number.isSafeInteger(rows)) return null;
+  if (cols < 1 || cols > MAX_GRID_DIM || rows < 1 || rows > MAX_GRID_DIM) return null;
+  return { cols, rows };
+}
+
+/** The window size named by a `%layout-change` notification line, or null
+ * for any other line or a malformed one. The visible layout (4th token) wins
+ * over the full layout (3rd) so a zoomed window reports what is shown; both
+ * start `<checksum>,<cols>x<rows>,`. */
+export function parseLayoutChange(line: string): GridSize | null {
+  if (!line.startsWith('%layout-change ')) return null;
+  const tokens = line.split(' ');
+  const layout = tokens[3] ?? tokens[2];
+  if (layout === undefined) return null;
+  const m = /^[0-9a-f]+,(\d{1,4})x(\d{1,4})(?:,|$)/.exec(layout);
+  if (m === null) return null;
+  return gridFrom(Number(m[1]), Number(m[2]));
+}
+
+/** The grid size in a `display-message -p '#{window_width} #{window_height}'`
+ * reply line, or null. */
+export function parseGridReply(line: string): GridSize | null {
+  const m = /^(\d{1,4}) (\d{1,4})$/.exec(line.trim());
+  if (m === null) return null;
+  return gridFrom(Number(m[1]), Number(m[2]));
+}
+
 interface Pending {
   replies: string[];
   resolve: (lines: string[]) => void;
@@ -169,6 +208,7 @@ export class Control {
   private readonly pauseHandlers: PaneHandler[] = [];
   private readonly continueHandlers: PaneHandler[] = [];
   private readonly exitHandlers: ExitHandler[] = [];
+  private readonly layoutHandlers: LayoutHandler[] = [];
   private started = false;
   private held = false;
   private resumeWait: (() => void) | null = null;
@@ -194,6 +234,18 @@ export class Control {
   }
   onExit(cb: ExitHandler): void {
     this.exitHandlers.push(cb);
+  }
+  /** Called with the new window size on every `%layout-change`. */
+  onLayout(cb: LayoutHandler): void {
+    this.layoutHandlers.push(cb);
+  }
+
+  /** Ask tmux for the current window size (one `display-message`; no
+   * client string reaches the command line). Null when the reply is not a
+   * size. */
+  async queryGrid(): Promise<GridSize | null> {
+    const lines = await this.cmd("display-message -p '#{window_width} #{window_height}'");
+    return parseGridReply(lines[0] ?? '');
   }
 
   /** Spawn the control attach and write `refresh-client -f pause-after=20`
@@ -383,6 +435,11 @@ export class Control {
       case 'exit':
         for (const h of this.exitHandlers) h(ev.reason);
         return;
+      case 'other': {
+        const grid = parseLayoutChange(ev.line);
+        if (grid !== null) for (const h of this.layoutHandlers) h(grid);
+        return;
+      }
       case 'begin': {
         const pend = this.pending.shift();
         this.currentNum = ev.num;
