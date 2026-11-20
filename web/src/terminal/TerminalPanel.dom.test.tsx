@@ -343,6 +343,37 @@ describe("chip and controls", () => {
     expect(text("kb-term-status")).toBe("Released the grid.");
   });
 
+  it("when the list cannot say who owns the grid, the runner's answer to our own take names the web, and Release frees it", async () => {
+    rows = [];
+    await mountPanel();
+    await profile();
+    expect(text("kb-term-grid")).toBe("201x48 · free");
+    expect(q("kb-term-release")).toBeNull();
+    rig.reply(200, { cols: 166, rows: 43, owner: "kb-term" });
+    act(() => q("kb-term-fit")!.click());
+    await settle(10);
+    expect(text("kb-term-grid")).toBe("201x48 · web");
+    expect(q("kb-term-release")).not.toBeNull();
+    act(() => q("kb-term-release")!.click());
+    await settle(10);
+    expect(text("kb-term-grid")).toBe("201x48 · free");
+    expect(q("kb-term-release")).toBeNull();
+  });
+
+  it("a change of the list row's owner retires the hint (a local attach that took the grid after us shows)", async () => {
+    rows = [{ id: "abcd1234", state: "working", grid_owner: null }];
+    await mountPanel();
+    await profile();
+    rig.reply(200, { cols: 166, rows: 43, owner: "kb-term" });
+    act(() => q("kb-term-fit")!.click());
+    await settle(10);
+    expect(text("kb-term-grid")).toBe("201x48 · web");
+    rows = [{ id: "abcd1234", state: "working", grid_owner: "local:9" }];
+    act(() => root!.render(<QueryClientProvider client={new QueryClient()}><TerminalPanel termId="abcd1234" sid="s1" harness="omp" mode="watch" /></QueryClientProvider>));
+    await settle(2);
+    expect(text("kb-term-grid")).toBe("201x48 · local attach");
+  });
+
   it("has exactly one Close (the panel's own)", async () => {
     await mountPanel();
     expect(host!.querySelectorAll('[data-testid="kb-term-close"]')).toHaveLength(1);

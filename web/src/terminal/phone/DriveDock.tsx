@@ -32,10 +32,17 @@ export interface DriveDockProps {
   measure: () => PhoneMeasure | null;
   /** The operator typed (the client half of the OSC 52 typing clock). */
   onTyped?: () => void;
+  /**
+   * The owner the runner last named in a take/release answer, when it is newer than
+   * the list row (`{owner: null}` = released). Absent: the row's `grid_owner` rules.
+   */
+  ownerHint?: { owner: string | null } | null;
+  /** Report the runner's answer to a take/release up to the panel that owns the hint. */
+  onOwner?: (owner: string | null) => void;
 }
 
 export function DriveDock(props: DriveDockProps) {
-  const { termId, harness, viewer, row, measure, onTyped } = props;
+  const { termId, harness, viewer, row, measure, onTyped, ownerHint, onOwner } = props;
   const confirm = useConfirm();
   const queryClient = useQueryClient();
   const { rows: live } = useLiveSessions();
@@ -46,16 +53,17 @@ export function DriveDock(props: DriveDockProps) {
   const liveRow = live.find((r) => r.term === termId);
   const bound = (row?.session_id ?? null) !== null || liveRow !== undefined;
   const blocked = liveRow?.blocked === true;
-  const owner = row?.grid_owner ?? null;
+  const owner = ownerHint ? ownerHint.owner : (row?.grid_owner ?? null);
 
   const grid = useMemo<GridCtx>(
     () => ({
       drive,
       owner,
       say: setCaption,
+      owned: onOwner,
       refresh: () => void queryClient.invalidateQueries({ queryKey: ["terms"] }),
     }),
-    [drive, owner, queryClient],
+    [drive, owner, onOwner, queryClient],
   );
 
   // The shared take helper owns the ruling (no confirm for a free, web or

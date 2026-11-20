@@ -9,7 +9,7 @@
 
 import { toast } from "../lib/toast";
 import { DriveError, releaseSize, takeSize, type Drive } from "./phone/driveApi";
-import { ownerClass } from "./gridOwner";
+import { WEB_OWNER, ownerClass } from "./gridOwner";
 
 export interface GridCtx {
   drive: Drive;
@@ -19,6 +19,12 @@ export interface GridCtx {
   say(message: string): void;
   /** The row changed: refresh the `["terms"]` list. */
   refresh(): void;
+  /**
+   * The runner's own answer to a take/release is authoritative for who owns the
+   * grid now (`kb-term`, or nobody), independent of the `["terms"]` list. Optional:
+   * a caller that has no owner display need not supply it.
+   */
+  owned?(owner: string | null): void;
 }
 
 export interface ConfirmCopy {
@@ -55,6 +61,7 @@ export async function takeGrid(
     // The runner's answer is authoritative (it may clamp); ours is the fallback.
     const size = `${grid.cols ?? dims.cols}x${grid.rows ?? dims.rows}`;
     ctx.say(cls === "local" ? `Took the grid from the local attach; it now watches (${size}).` : `Grid set to ${size}.`);
+    ctx.owned?.(grid.owner ?? WEB_OWNER);
     ctx.refresh();
     return true;
   } catch (e) {
@@ -70,6 +77,7 @@ export async function releaseGrid(ctx: GridCtx): Promise<boolean> {
   try {
     await releaseSize(ctx.drive);
     ctx.say("Released the grid.");
+    ctx.owned?.(null);
     ctx.refresh();
     return true;
   } catch (e) {

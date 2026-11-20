@@ -549,6 +549,9 @@ the page.
   `font Npx` and the "Cropped" hint. It never says "this window": the relay is
   shared by every web client and cannot tell windows apart. The chip is dimmed
   while the panel is not live.
+  The owner comes from the terminal list row; the runner's own answer to this
+  panel's take or release names the owner immediately, and any later change of
+  the row's owner replaces that answer.
 - **Theme.** Colors come from the Profile palette when it names one and from the
   app's tokens otherwise; selection, inactive selection and the cursor accent
   always come from tokens, and the theme is re-read when the SPA theme changes.

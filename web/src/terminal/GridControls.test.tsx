@@ -25,6 +25,7 @@ beforeEach(() => {
   confirmMock.mockResolvedValue(true);
   toastErr.mockReset();
   said.length = 0;
+  owners.length = 0;
   qc = new QueryClient();
 });
 
@@ -37,6 +38,8 @@ afterEach(() => {
 // 0.6 x 1.3 cell: 1400 / 8.4 = 166 cols, 800 / 18.2 = 43 rows at the 14px reference.
 const MEASURE = { width: 1400, height: 800, cellW: 0.6, cellH: 1.3 };
 
+const owners: Array<string | null> = [];
+
 function controls(owner: string | null, measure: () => typeof MEASURE | null = () => MEASURE) {
   m = mount(
     <QueryClientProvider client={qc}>
@@ -47,6 +50,7 @@ function controls(owner: string | null, measure: () => typeof MEASURE | null = (
         owner={owner}
         measureWindow={measure}
         say={(s) => said.push(s)}
+        onOwner={(o) => owners.push(o)}
       />
     </QueryClientProvider>,
   );
@@ -117,6 +121,20 @@ describe("Fit to window", () => {
     expect(toastErr).toHaveBeenCalledWith("Could not reach the terminal");
   });
 
+  it("reports the runner's named owner after a take (the list may be unavailable), and none after a refusal", async () => {
+    rig.reply(200, { cols: 166, rows: 43, owner: "kb-term" });
+    controls(null);
+    await fit();
+    expect(owners).toEqual(["kb-term"]);
+    m!.unmount();
+    m = null;
+    owners.length = 0;
+    rig.reply(409, { type: "urn:kb:errors:terminal-conflict", detail: "grid is owned by desk-1" });
+    controls(null);
+    await fit();
+    expect(owners).toEqual([]);
+  });
+
   it("refreshes the terms list after a take", async () => {
     const spy = vi.spyOn(qc, "invalidateQueries");
     controls(null);
@@ -157,6 +175,7 @@ describe("Release grid", () => {
     expect(rig.urls()).toEqual(["/api/terms/abcd1234/release-size"]);
     expect(rig.calls[0].json).toEqual({});
     expect(said).toEqual(["Released the grid."]);
+    expect(owners).toEqual([null]);
     expect(confirmMock).not.toHaveBeenCalled();
   });
 

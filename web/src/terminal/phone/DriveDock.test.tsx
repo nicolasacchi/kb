@@ -41,11 +41,15 @@ const row = (over: Partial<TermRow> = {}): TermRow =>
     ...over,
   }) as TermRow;
 
-function dock(r: TermRow | undefined, measure: () => PhoneMeasure | null = () => MEASURE) {
+function dock(
+  r: TermRow | undefined,
+  measure: () => PhoneMeasure | null = () => MEASURE,
+  extra: { ownerHint?: { owner: string | null } | null; onOwner?: (o: string | null) => void } = {},
+) {
   const qc = new QueryClient();
   m = mount(
     <QueryClientProvider client={qc}>
-      <DriveDock termId="abcd1234" harness="omp" viewer="ws-abc1234567" row={r} measure={measure} />
+      <DriveDock termId="abcd1234" harness="omp" viewer="ws-abc1234567" row={r} measure={measure} {...extra} />
     </QueryClientProvider>,
   );
 }
@@ -114,6 +118,17 @@ describe("DriveDock: Fit to phone", () => {
     expect(rig.calls[0].json).toEqual({});
     expect(byId(m!.host, "kb-drive-caption").textContent).toBe("Released the grid.");
     expect(confirmMock).not.toHaveBeenCalled();
+  });
+
+  it("the runner's named owner outranks a list that cannot say (no row): Release shows, and a take reports it", async () => {
+    dock(undefined, () => MEASURE, { ownerHint: { owner: "kb-term" } });
+    expect(maybeById(m!.host, "kb-drive-release")).not.toBeNull();
+    m!.unmount();
+    const seen: Array<string | null> = [];
+    rig.reply(200, { cols: 54, rows: 23, owner: "kb-term" });
+    dock(row(), () => MEASURE, { onOwner: (o) => seen.push(o) });
+    await fit();
+    expect(seen).toEqual(["kb-term"]);
   });
 
   it("shows no chip when nobody owns the grid", () => {

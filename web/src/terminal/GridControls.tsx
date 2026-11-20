@@ -21,11 +21,13 @@ export interface GridControlsProps {
   /** The host's box at the loaded font; null while it cannot be measured. */
   measureWindow: () => WindowMeasure | null;
   say: (message: string) => void;
+  /** The runner's answer to a take (`kb-term`) or a release (null): the owner now. */
+  onOwner?: (owner: string | null) => void;
   onTook?: () => void;
 }
 
 export function GridControls(props: GridControlsProps) {
-  const { termId, harness, viewer, owner, measureWindow, say, onTook } = props;
+  const { termId, harness, viewer, owner, measureWindow, say, onOwner, onTook } = props;
   const confirm = useConfirm();
   const queryClient = useQueryClient();
   const [busy, setBusy] = useState(false);
@@ -34,9 +36,10 @@ export function GridControls(props: GridControlsProps) {
       drive: { termId, harness, viewer, confirm } as Drive,
       owner,
       say,
+      owned: onOwner,
       refresh: () => void queryClient.invalidateQueries({ queryKey: ["terms"] }),
     }),
-    [termId, harness, viewer, confirm, owner, say, queryClient],
+    [termId, harness, viewer, confirm, owner, say, onOwner, queryClient],
   );
 
   const fit = async (): Promise<void> => {

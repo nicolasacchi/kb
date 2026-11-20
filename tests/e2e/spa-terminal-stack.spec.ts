@@ -901,6 +901,17 @@ test.describe("T25 gate matrix on the real server", () => {
 
 // ================================================ FUTERMFIT: fit, owner chip, Fit to window, Release
 
+/**
+ * A pane that repaints: it prints a dot every second and a mark on SIGWINCH, as
+ * a real harness redraws when the grid changes. (A silent pane never flushes the
+ * tap's queued resize marker to a live viewer until its next output, so the
+ * fit cases below use a pane that speaks.)
+ */
+const winchHarness = (): Harness => ({
+  out: scratch("winch"),
+  shell: `trap 'printf w' WINCH\nwhile :; do printf .; sleep 1 & wait $!; done\n`,
+});
+
 /** What the desktop panel shows right now: the terminal's grid and font, the host's box and the rendered screen. */
 async function panelGeometry(page: Page) {
   return page.evaluate(() => {
@@ -935,7 +946,7 @@ async function panelGeometry(page: Page) {
 test("a 201x48 grid is fully visible at 1440x900 (font >= 9, no horizontal scroll), shows the Cropped hint when it cannot be at 1280x720, and the page never overflows at 1024", async ({ page, request }) => {
   test.setTimeout(240_000);
   await page.setViewportSize({ width: 1440, height: 900 });
-  const c = await prepare(page, request, idleHarness(), { cols: 201, rows: 48 });
+  const c = await prepare(page, request, winchHarness(), { cols: 201, rows: 48 });
   await openPanel(page, c.sid);
 
   // 1440x900: the whole grid, legibly, with nothing scrolling sideways.
@@ -978,7 +989,7 @@ test("a 201x48 grid is fully visible at 1440x900 (font >= 9, no horizontal scrol
 test("Fit to window takes the grid, the chip then equals the measured cols x rows and names the web; Release frees it", async ({ page, request }) => {
   test.setTimeout(240_000);
   await page.setViewportSize({ width: 1440, height: 900 });
-  const c = await prepare(page, request, idleHarness(), { cols: 120, rows: 40 });
+  const c = await prepare(page, request, winchHarness(), { cols: 120, rows: 40 });
   await openPanel(page, c.sid);
   const ownerOf = async (): Promise<string | null> => {
     const { body } = await c.api.json<{ terms: Array<{ id: string; grid_owner?: string | null }> }>("GET", "/api/terms");

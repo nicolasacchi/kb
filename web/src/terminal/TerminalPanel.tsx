@@ -128,7 +128,14 @@ export function TerminalPanel(props: TerminalPanelProps) {
   const { terms } = useTerms();
   const termRow = terms.find((t) => t.id === props.termId);
   const rowState = termRow?.state ?? null;
-  const gridOwner = termRow?.grid_owner ?? null;
+  const listOwner = termRow?.grid_owner ?? null;
+  // The runner's answer to our own take/release names the owner NOW; the list
+  // row is the source otherwise, and any change of the row's owner retires the
+  // hint (a local attach that took the grid after us must show).
+  const [ownerHint, setOwnerHint] = useState<{ owner: string | null } | null>(null);
+  useEffect(() => setOwnerHint(null), [listOwner]);
+  const gridOwner = ownerHint ? ownerHint.owner : listOwner;
+  const onOwner = useCallback((owner: string | null): void => setOwnerHint({ owner }), []);
 
   // Fit the live terminal into the desktop host (font only; never a take-size).
   const fitDesktop = (term: Terminal, host: HTMLElement): void => {
@@ -556,6 +563,8 @@ export function TerminalPanel(props: TerminalPanelProps) {
               onTyped={() => {
                 lastTypedRef.current = Date.now();
               }}
+              ownerHint={ownerHint}
+              onOwner={onOwner}
             />
           )}
         />
@@ -600,6 +609,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
           owner={gridOwner}
           measureWindow={measureWindow}
           say={say}
+          onOwner={onOwner}
         />
         <button
           type="button"
