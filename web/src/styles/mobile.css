@@ -528,7 +528,7 @@ body.kb-immersive .kb-folio-colophon {
   }
 
   /* FUWEBLAUNCH — New terminal / Resume in a kb terminal: full-width form
-   * fields and 44px touch targets (MB5). 16px text keeps iOS from zooming
+   * fields and 44px touch targets (MB5). the 17px type step (at least 16px) keeps iOS from zooming
    * the page when the directory input takes focus. */
   .kb-ses__newterm {
     padding: 0 var(--pad-3);
@@ -536,7 +536,7 @@ body.kb-immersive .kb-folio-colophon {
   .kb-ses__newterm-field select,
   .kb-ses__newterm-field input {
     min-height: 44px;
-    font-size: 16px; /* kb-literal: 16px stops iOS zooming a focused input */
+    font-size: var(--fs-xl);
     width: 100%;
     box-sizing: border-box;
   }
