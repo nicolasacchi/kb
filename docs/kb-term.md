@@ -623,6 +623,43 @@ the page.
 - **Theme.** Colors come from the Profile palette when it names one and from the
   app's tokens otherwise; selection, inactive selection and the cursor accent
   always come from tokens, and the theme is re-read when the SPA theme changes.
+- **Full screen.** The bar's "Full screen" button (and "Exit full screen" in
+  its place while on) makes the panel fill the screen; the bar stays as a slim
+  header with the state, chip, Fit, Release, Find and Exit, and the status line
+  stays inside the panel, so outcomes remain visible. Two paths, one rule set:
+  - **Native** only where Esc can stay with the terminal: a browser with the
+    Keyboard Lock API (Chromium) gets element fullscreen with navigation UI
+    hidden, then `navigator.keyboard.lock(["Escape"])` (best effort). A short Esc
+    reaches the agent (Claude's "esc to interrupt" keeps working); holding Esc
+    exits natively.
+  - **Maximised overlay** everywhere else (Firefox, desktop Safari, a missing
+    API, a refused request): the panel is fixed to the whole dynamic viewport,
+    above the page, with safe-area padding. The overlay binds no Escape key and
+    uses no platform close request, so Esc always reaches the agent; the exit is
+    the visible button.
+  - The state is derived, never stored: the panel is full screen when it is the
+    document's fullscreen element or carries the overlay class. An exit that the
+    browser makes (holding Esc, a gesture) clears it.
+  - Entering focuses the terminal and refits the font (8 to 28 px; both axes). Full
+    screen **never takes the grid**: it sends no `take-size` and no resize. A grid
+    larger than the screen shows the "Cropped" hint, and Fit to window is the
+    explicit way to change the grid.
+  - Closing the panel, unmounting it or switching terminal exits native
+    fullscreen, releases the keyboard lock and drops the overlay class, so a
+    reload or a navigation leaves no stuck state.
+- **Who is typing.** A chip says "typing" while the terminal has keyboard focus
+  (the view also gets an accent ring) and "click to type" otherwise, with xterm's
+  inactive cursor style. Nothing focuses the terminal on mount; a click does.
+- **Copy and paste.** Ctrl/Cmd+C copies the selection only when there is one;
+  with no selection the key is still ^C. Ctrl/Cmd+Shift+C always copies and
+  Ctrl/Cmd+Shift+V is the browser's paste.
+- **Links.** `http://` and `https://` text is a link: wrapped rows are joined,
+  trailing punctuation and an unbalanced closing bracket are trimmed, and
+  Ctrl/Cmd-click opens it in a new tab with `noopener,noreferrer`. A double-width
+  character before a link on the same row shifts its highlighted range.
+- **Scrollback.** "Jump to latest" appears while the view is scrolled up. Find
+  restarts from the top when the query changes, Enter steps through the hits, and
+  closing Find returns the keyboard to the terminal.
 
 ## Phone
 
@@ -656,6 +693,14 @@ The phone view has three parts.
   - Guards for Claude: every `Left` and every message that is exactly `/bg` asks
     for confirmation first. This is a misfire guard, not a security boundary.
   - The keyboard opening or closing never resizes the pty. Back closes the panel.
+  - **Full screen on a phone.** The sheet's full detent is the whole dynamic
+    viewport (`100dvh`, with the notch and home-indicator insets kept clear), and its
+    title is merged into the terminal bar. A "Full screen" button in the bar
+    appears only where the browser offers element fullscreen (Android Chrome); it
+    fullscreens the terminal so the browser's own bars go away, and the first
+    Back leaves it. Where it is not offered (iPhone Safari) there is no button:
+    the `100dvh` sheet is the most the browser allows. There is no overlay
+    fallback and no Escape lock on a phone.
   - **Image upload** accepts `image/png`, `image/jpeg`, `image/gif` or
     `image/webp` up to 8 MiB, stores the file in the session's own 0700 upload
     directory and pastes its absolute path.
@@ -854,6 +899,11 @@ minimal `PATH` and no `KB_SESSIONS_DIR`. Put both in a user-unit drop-in (see
 - **Long sessions.** Reprint cost with `display.collapseCompacted: false` grows
   with the transcript; not measured at long-session sizes.
 - **Phone:** see [Phone](#phone). Real devices are not verified.
+- **Full screen.** CI drives the overlay path (Keyboard Lock removed) and a
+  best-effort native path in Chromium. **Not verified:** a real Esc key (short
+  press reaches the agent, hold exits) in native fullscreen, desktop Firefox and
+  Safari, Android Back leaving fullscreen first, and any real phone. The
+  Keyboard Lock call is best effort and its outcome is not observable in CI.
 - **WebGL.** The pixel probes run on a software GL implementation in CI; real GPU
   output is not verified. At a device pixel ratio above 1, CI needs a real
   `--force-device-scale-factor` rather than Playwright's emulated factor.
