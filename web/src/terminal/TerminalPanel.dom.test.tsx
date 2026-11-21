@@ -784,7 +784,7 @@ describe("W4: a copy ends the selection", () => {
     term.selection = "picked text";
     expect(term.keyHandler!(keyEv({ ctrlKey: true }))).toBe(false);
     expect(writeText).toHaveBeenCalledTimes(1);
-    expect(term.hasSelection()).toBe(false);
+    expect(term.selection).toBe("");
     const second = keyEv({ ctrlKey: true });
     expect(term.keyHandler!(second)).toBe(true);
     expect(second.preventDefault).not.toHaveBeenCalled();
@@ -797,7 +797,7 @@ describe("W4: a copy ends the selection", () => {
     const term = await profile();
     term.selection = "abc";
     term.keyHandler!(keyEv({ ctrlKey: true, shiftKey: true, key: "C" }));
-    expect(term.hasSelection()).toBe(false);
+    expect(term.selection).toBe("");
   });
 });
 
