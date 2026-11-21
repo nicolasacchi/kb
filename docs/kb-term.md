@@ -784,9 +784,14 @@ The phone view has three parts.
     in the same invocation instead of pasting. The old sequence spawned four tmux
     processes (flag, load, paste, delete), which cost 0.7-1.3 s on a loaded host.
     What remains on a Send is the 400 ms quiet guard and one round trip.
-  - The key bar sends key **names** from a closed vocabulary; Ctrl-C must be
-    held (600 ms); a held `/` opens the harness's slash menu, whose entries are
+  - The key bar sends key **names** from a closed vocabulary (it includes
+    Backspace); Ctrl-C and Ctrl-D must be held (600 ms); a held `/` opens the harness's slash menu, whose entries are
     pasted and never entered.
+  - Quick replies: a chip row above the composer of up to six short messages kept
+    in the browser (no server state), editable with Edit. A tap goes through the same
+    send plan as Send, so a reply that begins with `/` or `@` is pasted and not sent,
+    and a blocked session gets a paste with no Enter. The composer draft is kept per
+    terminal in the browser for a day and cleared by a successful send.
   - The choice bar appears only while a bound session is blocked on the operator,
     which is known from beats alone.
   - Guards for Claude: every `Left` and every message that is exactly `/bg` asks
