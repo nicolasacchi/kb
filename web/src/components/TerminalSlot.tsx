@@ -6,7 +6,7 @@
 //   * `available: true` with a term → "Terminal" header with the state
 //     chip + "Open terminal"; clicking mounts `<TerminalPanel>`
 //     (lazily, via `React.lazy`). The panel's own Close (`onClose`)
-//     unmounts it (disconnect only, never kill) and brings the button
+//     unmounts it (disconnect only; End is the separate, confirmed kill) and brings the button
 //     back: the slot has no second Close.
 //   * a child (subagent) session whose lane resolves to the ROOT's
 //     term (`via: "root"`) shows a link to the session and no panel.
@@ -18,6 +18,8 @@ import { Suspense, lazy, useState, type ReactElement } from "react";
 import { Link } from "react-router-dom";
 import { StateCard } from "@kb/ui/StateCard";
 import type { TerminalLane } from "../api/sessions";
+import { useIsMobile } from "../hooks/useIsMobile";
+import { TerminalControls } from "./TermList";
 
 export type TerminalSlotProps = {
   sid: string;
@@ -36,6 +38,7 @@ const TerminalPanel = lazy(() => import("../terminal/TerminalPanel.lazy"));
 
 export function TerminalSlot(props: TerminalSlotProps): ReactElement | null {
   const [open, setOpen] = useState(false);
+  const isMobile = useIsMobile();
   const { lane } = props;
   const termId = props.termId ?? lane.term_id;
   if (!lane.available || !lane.admitted) return null;
@@ -54,6 +57,14 @@ export function TerminalSlot(props: TerminalSlotProps): ReactElement | null {
   }
   if (!termId) return null;
   const harness = lane.harness ?? props.harness;
+  // FUTERMLIST — the End action, once: above the panel on a desktop, in the
+  // sheet's title area on a phone. Close stays the panel's own plain detach.
+  const controls = (
+    <TerminalControls
+      target={{ termId, harness }}
+      className={isMobile ? "kb-term-phone__btn" : undefined}
+    />
+  );
   return (
     <div className="kb-term-slot" data-testid="kb-terminal-slot">
       {open ? null : (
@@ -71,6 +82,11 @@ export function TerminalSlot(props: TerminalSlotProps): ReactElement | null {
           </button>
         </div>
       )}
+      {open && !isMobile ? (
+        <div className="kb-term-slot__ctl" data-testid="kb-term-slot-ctl">
+          {controls}
+        </div>
+      ) : null}
       {open ? (
         <Suspense
           fallback={
@@ -82,6 +98,7 @@ export function TerminalSlot(props: TerminalSlotProps): ReactElement | null {
             sid={props.sid}
             harness={harness}
             onClose={() => setOpen(false)}
+            headerExtra={isMobile ? controls : undefined}
           />
         </Suspense>
       ) : null}

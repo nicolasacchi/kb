@@ -176,6 +176,17 @@
   white-space: nowrap;
 }
 
+/* FUTERMLIST — the End button and the terminal switcher: their own row, so the
+ * title bar keeps its width on a 360 px phone. */
+.kb-term-phone__extra {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-2);
+  padding: var(--pad-1) var(--pad-2);
+  min-width: 0;
+  border-bottom: var(--pad-1) solid var(--rule);
+}
+
 .kb-term-phone__sub {
   display: flex;
   align-items: baseline;
