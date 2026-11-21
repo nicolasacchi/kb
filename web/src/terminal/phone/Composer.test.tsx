@@ -4,7 +4,7 @@
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "../../lib/toast";
-import { Composer } from "./Composer";
+import { Composer, DRAFT_DEBOUNCE_MS } from "./Composer";
 import { UPLOAD_MAX_BYTES, type Drive } from "./driveApi";
 import { CAPTION } from "./planSend";
 import {
@@ -295,6 +295,44 @@ describe("FUKEYBAR PHONE-8: the draft survives an unmount", () => {
     vi.spyOn(Date, "now").mockReturnValue(now + 25 * 3600 * 1000);
     m = mount(<Host drive={mkDrive()} />);
     expect(ta().value).toBe("");
+  });
+});
+
+describe("FUKEYBAR r1 M1: the draft write is debounced", () => {
+  const ta = (): HTMLTextAreaElement => byId(m!.host, "kb-drive-input") as HTMLTextAreaElement;
+
+  beforeEach(() => {
+    localStorage.clear();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("several keystrokes write storage once, after the debounce", () => {
+    m = mount(<Host drive={mkDrive()} />);
+    const set = vi.spyOn(Storage.prototype, "setItem");
+    for (const t of ["h", "he", "hel", "hell", "hello"]) typeInto(ta(), t);
+    expect(set).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(DRAFT_DEBOUNCE_MS + 10);
+    expect(set).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem("kb.term.draft.abcd1234")).toContain("hello");
+  });
+
+  it("unmounting right after typing still persists the draft", () => {
+    m = mount(<Host drive={mkDrive()} />);
+    typeInto(ta(), "quick close");
+    m.unmount();
+    expect(localStorage.getItem("kb.term.draft.abcd1234")).toContain("quick close");
+  });
+
+  it("an emptied draft removes the key at once, not after the debounce", () => {
+    m = mount(<Host drive={mkDrive()} />);
+    typeInto(ta(), "x");
+    vi.advanceTimersByTime(DRAFT_DEBOUNCE_MS + 10);
+    expect(localStorage.getItem("kb.term.draft.abcd1234")).not.toBeNull();
+    typeInto(ta(), "");
+    expect(localStorage.getItem("kb.term.draft.abcd1234")).toBeNull();
   });
 });
 

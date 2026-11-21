@@ -25,6 +25,8 @@ import { QuickReplies } from "./QuickReplies";
 
 /** A draft is kept per terminal for a day (client UI state, never terminal bytes). */
 export const DRAFT_TTL_MS = 24 * 3600 * 1000;
+/** Quiet time before a typed draft is written to storage. */
+export const DRAFT_DEBOUNCE_MS = 300;
 const draftKey = (termId: string): string => `kb.term.draft.${termId}`;
 
 export function loadDraft(termId: string): string {
@@ -83,9 +85,43 @@ export function Composer(props: ComposerProps) {
   const [chip, setChip] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
+  // The draft write is debounced (a keystroke must not hit localStorage), is
+  // flushed on unmount / pagehide / hidden so a close or reload keeps the text,
+  // and an emptied draft removes the key at once. `saved` is what storage holds,
+  // so an untouched restored draft is never re-stamped (its TTL stays honest).
+  const latest = useRef({ termId: drive.termId, text });
+  const saved = useRef(text);
   useEffect(() => {
-    saveDraft(drive.termId, text);
+    latest.current = { termId: drive.termId, text };
+    if (text === "") {
+      saveDraft(drive.termId, "");
+      saved.current = "";
+      return;
+    }
+    const t = setTimeout(() => {
+      saveDraft(drive.termId, text);
+      saved.current = text;
+    }, DRAFT_DEBOUNCE_MS);
+    return () => clearTimeout(t);
   }, [drive.termId, text]);
+  useEffect(() => {
+    const flush = (): void => {
+      const { termId, text: cur } = latest.current;
+      if (cur === saved.current) return;
+      saveDraft(termId, cur);
+      saved.current = cur;
+    };
+    const onVis = (): void => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", onVis);
+      flush();
+    };
+  }, []);
 
   // `override` is a quick reply: the same plan and calls, but the draft is left alone.
   const send = async (override?: string): Promise<void> => {
