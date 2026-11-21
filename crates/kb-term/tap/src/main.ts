@@ -137,7 +137,12 @@ export interface TapStackOpts {
   /** Test seam: join timing forwarded to TapServer. */
   quiesceMs?: number;
   joinWaitMs?: number;
+  /** Test seam: pause between `syncGrid` retries (default 200 ms). */
+  gridRetryMs?: number;
 }
+
+/** How many times `syncGrid` asks tmux for the window size before giving up. */
+export const SYNC_GRID_ATTEMPTS = 5;
 
 export interface TapStack {
   server: TapServer;
@@ -150,7 +155,9 @@ export interface TapStack {
   setGrid(cols: number, rows: number): void;
   /** Ask tmux for the window's current size and apply it. A tap started
    * after a take-size (a restart) otherwise keeps the launch grid until the
-   * next resize. Best effort: a failed query changes nothing. */
+   * next resize. Best effort: a null or failed reply is retried a bounded
+   * number of times (SYNC_GRID_ATTEMPTS), then one stderr line names the
+   * session; it never throws. */
   syncGrid(): Promise<void>;
   stop(): void;
 }
@@ -264,12 +271,20 @@ export function createTapStack(opts: TapStackOpts): TapStack {
       server.setGrid(cols, rows);
     },
     async syncGrid(): Promise<void> {
-      try {
-        const grid = await control.queryGrid();
-        if (grid !== null) server.setGrid(grid.cols, grid.rows);
-      } catch {
-        // Best effort: the layout notifications still follow.
+      const waitMs = opts.gridRetryMs ?? 200;
+      for (let attempt = 0; attempt < SYNC_GRID_ATTEMPTS; attempt++) {
+        if (attempt > 0 && waitMs > 0) await new Promise<void>((r) => setTimeout(r, waitMs));
+        try {
+          const grid = await control.queryGrid();
+          if (grid !== null) {
+            server.setGrid(grid.cols, grid.rows);
+            return;
+          }
+        } catch {
+          // Retry: the layout notifications still follow either way.
+        }
       }
+      console.error(`kb-tap ${opts.session}: could not read the window size after ${SYNC_GRID_ATTEMPTS} attempts; keeping ${opts.cols}x${opts.rows} until a layout change`);
     },
     async start(): Promise<void> {
       await server.listen();

@@ -13,7 +13,8 @@
 //    first client, whose colours are zeroed; orchestrator addition);
 //  * command correlation: each command line written gets one
 //    `%begin <time> <num> <flags>` ... `%end|%error <time> <num> <flags>`
-//    block; lines in the block are raw replies (split on \n only, by the
+//    block (only flags-bit-1 blocks answer our commands; others are
+//    skipped); lines in the block are raw replies (split on \n only, by the
 //    decoder); `cmd` rejects with the %error text; `write` sends several
 //    commands in ONE stdin write and returns their promises (reseed needs
 //    the A/capture/B batch to be written atomically);
@@ -252,8 +253,9 @@ export class Control {
    * immediately. Control mode emits `%begin`/`%end` only for client-issued
    * commands, NOT for the attach itself, so there is no attach ack to wait
    * for: start() resolves when the pause-after Pending resolves (its own
-   * `%end`; if tmux does emit an attach block it is consumed positionally by
-   * that Pending, which resolves start() no later). Resolves once the
+   * `%end`). tmux does emit a flags-0 block for the attach (observed on
+   * 3.7c); dispatch ignores every block without the client flag, so it can
+   * never be paired with a Pending. Resolves once the
    * pause-after block has closed, or throws after a 10s deadline. */
   async start(): Promise<void> {
     const spawn = this.deps.spawn ?? defaultSpawn;
@@ -441,8 +443,14 @@ export class Control {
         return;
       }
       case 'begin': {
-        const pend = this.pending.shift();
+        // Flags bit 1 is set only on a block answering a command THIS client
+        // wrote. tmux also opens flag-0 blocks (the attach itself); one of
+        // those must never be paired with a queued Pending, or every later
+        // reply lands on the wrong command. A stray block is tracked as the
+        // open block (its lines are dropped) without touching the queue.
         this.currentNum = ev.num;
+        if ((Number.parseInt(ev.flags, 10) & 1) === 0) return;
+        const pend = this.pending.shift();
         if (pend) this.byNum.set(ev.num, pend);
         return;
       }

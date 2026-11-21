@@ -680,6 +680,20 @@ test("FUTERMOWN: a viewer opened AFTER the grid change starts at the new grid an
   await expect.poll(() => wideLine(page, 201), { timeout: 60_000 }).toBe("ok");
 });
 
+test("FULAUNCHGRID: a terminal launched directly at 201x48 reaches a viewer opened at once at 201x48, and a 201-column line is intact", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const gate = join(scratch("gate"), "go");
+  // No take-size: the launch grid itself must reach the web (the tap learns it
+  // with its attach-time query), whatever the tap's own default is.
+  const c = await prepare(page, request, wideHarness(gate, 201), { cols: 201, rows: 48 });
+  await openPanel(page, c.sid);
+  await expect.poll(() => termSize(page), { timeout: 30_000 }).toEqual({ cols: 201, rows: 48 });
+  await expect(page.locator('[data-testid="kb-term-grid"]')).toContainText("201x48");
+  touch(gate);
+  await expect.poll(() => wideLine(page, 201), { timeout: 60_000 }).toBe("ok");
+  expect(c.errs).toEqual([]);
+});
+
 test("FUTERMOWN: a viewer that was away for a grid change resumes into it (the marker replays in order) with the wide line intact", async ({ page, request }) => {
   test.setTimeout(240_000);
   const conns = await proxySockets(page);
