@@ -158,11 +158,38 @@ describe("the list rows", () => {
     expect(posts()).toEqual([]);
   });
 
-  it("an open id that is not listed yet still mounts, with the launch hint as harness", async () => {
+  it("an id equal to the just-launched id and not yet listed still mounts, with its harness", async () => {
     rows = [];
-    mount({ openId: "zz9", hintHarness: "codex" });
+    mount({ openId: "zz9", launched: { id: "zz9", harness: "codex" } });
     const p = await screen.findByTestId("mock-panel");
     expect(p.getAttribute("data-harness")).toBe("codex");
+  });
+
+  it("an id that is not listed and not just launched is not mounted: caption + close", async () => {
+    rows = [row({ id: "t-a" })];
+    const onCloseOpen = vi.fn();
+    mount({ openId: "t-zzz", onCloseOpen });
+    await screen.findByTestId("term-not-found");
+    expect(screen.queryByTestId("mock-panel")).toBeNull();
+    expect(onCloseOpen).toHaveBeenCalled();
+  });
+
+  it("a launch hint for another id does not admit the open id", async () => {
+    rows = [row({ id: "t-a" })];
+    mount({ openId: "t-zzz", launched: { id: "t-other", harness: "codex" } });
+    await screen.findByTestId("term-not-found");
+    expect(screen.queryByTestId("mock-panel")).toBeNull();
+  });
+
+  it("after End removes the row, the sheet is not remounted for a ghost id", async () => {
+    rows = [row({ id: "t1" })];
+    confirmMock.mockResolvedValue(true);
+    mount({ openId: "t1", launched: { id: "t1", harness: "claude" } });
+    await screen.findByTestId("term-row");
+    rows = [];
+    fireEvent.click(screen.getAllByTestId("kb-term-end")[0]);
+    await screen.findByTestId("term-not-found");
+    expect(screen.queryByTestId("mock-panel")).toBeNull();
   });
 });
 

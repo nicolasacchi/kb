@@ -9,7 +9,7 @@
 //   so a reload, a share and Back land on the open sheet.
 // * End/Remove, the End button and the phone switcher live in `TermControls`.
 
-import { useCallback, type ReactElement } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import type { TermRow } from "../api/terms";
@@ -45,21 +45,37 @@ export function TermList({
   openId,
   onOpen,
   onCloseOpen,
-  hintHarness,
+  launched,
 }: {
   /// The `?term=` id the page has open (null = none).
   openId: string | null;
   onOpen: (termId: string) => void;
   onCloseOpen: () => void;
-  /// The harness of a just-launched term whose row is not listed yet.
-  hintHarness?: string;
+  /// A just-launched term whose row may not be listed yet. Honoured only for
+  /// its own id and only until that id has been seen listed once.
+  launched?: { id: string; harness: string };
 }): ReactElement | null {
   const qc = useQueryClient();
   const { terms, isLoading } = useTerms();
   const refresh = useCallback(() => void qc.invalidateQueries({ queryKey: ["terms"] }), [qc]);
   const openRow = openId ? terms.find((t) => t.id === openId) : undefined;
+  // Ids seen in the list: a launch hint stops counting once its row has been
+  // listed (so an End that removes the row never remounts a ghost sheet).
+  const seen = useRef<Set<string>>(new Set());
+  if (openRow) seen.current.add(openRow.id);
+  const hint = launched && launched.id === openId ? launched : undefined;
+  const mountable =
+    openId !== null && (openRow !== undefined || (hint !== undefined && !seen.current.has(openId)));
+  const unknownOpen = openId !== null && !isLoading && !mountable;
+  const [missing, setMissing] = useState<string | null>(null);
+  useEffect(() => {
+    if (unknownOpen && openId !== null) {
+      setMissing(openId);
+      onCloseOpen();
+    } else if (openId !== null) setMissing(null);
+  }, [unknownOpen, openId, onCloseOpen]);
   if (isLoading && openId === null) return null;
-  if (terms.length === 0 && openId === null) return null;
+  if (terms.length === 0 && openId === null && missing === null) return null;
   return (
     <section className="kb-ses__terms" data-testid="term-list" aria-label="Terminals">
       {terms.length > 0 && (
@@ -118,11 +134,16 @@ export function TermList({
           </ul>
         </>
       )}
-      {openId !== null && (
+      {missing !== null && (
+        <p className="kb-ses__terms-missing" role="status" data-testid="term-not-found">
+          Terminal not found. It may have ended.
+        </p>
+      )}
+      {mountable && openId !== null && (
         <LaunchedTerminal
           key={openId}
           termId={openId}
-          harness={openRow?.harness ?? hintHarness ?? "terminal"}
+          harness={openRow?.harness ?? hint?.harness ?? "terminal"}
           cwd={openRow?.cwd}
           onClose={onCloseOpen}
           onSwitch={onOpen}

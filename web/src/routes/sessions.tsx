@@ -135,7 +135,7 @@ export default function SessionsRoute() {
   // a share and Back land on it. Opening pushes an entry (Back closes it);
   // closing replaces it so Back never re-opens a closed sheet.
   const openTermId = openTermParam(params.get("term"));
-  const [launchedHarness, setLaunchedHarness] = useState<string | undefined>(undefined);
+  const [launched, setLaunched] = useState<{ id: string; harness: string } | undefined>(undefined);
   const qc = useQueryClient();
   const openTerm = (id: string) => setParams((p) => withTermParam(p, id), { replace: false });
   const closeTerm = () => setParams((p) => withTermParam(p, null), { replace: true });
@@ -587,7 +587,7 @@ export default function SessionsRoute() {
           admitted={identity?.terminal_admitted === true}
           sessionCwds={rows.slice(0, 50).map((r) => r.cwd)}
           onLaunched={(id, harness) => {
-            setLaunchedHarness(harness);
+            setLaunched({ id, harness });
             void qc.invalidateQueries({ queryKey: ["terms"] });
             openTerm(id);
           }}
@@ -597,7 +597,7 @@ export default function SessionsRoute() {
             openId={openTermId}
             onOpen={openTerm}
             onCloseOpen={closeTerm}
-            hintHarness={launchedHarness}
+            launched={launched}
           />
         )}
         {/* OL R4 — ONE control row: View · Filters · Find, then the funnel as
