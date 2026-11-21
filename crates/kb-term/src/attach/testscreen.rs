@@ -102,9 +102,8 @@ impl Screen {
                 self.cells = vec![vec![' '; self.cols]; self.rows];
             }
             'K' => {
-                for x in self.cx..self.cols {
-                    self.cells[self.cy][x] = ' ';
-                }
+                let (cy, cx) = (self.cy, self.cx);
+                self.cells[cy][cx..].fill(' ');
             }
             // DECSTBM homes the cursor.
             'r' if !params.starts_with('?') => {

@@ -515,7 +515,7 @@ async fn run_one_join_inner(
     // mirror's cursor: that would overwrite mirrored rows).
     let preset = ctx.preset.take();
     if let Some(Preset::Watching(owner)) = &preset {
-        status.set(Some(fallback::grid_status(Some(owner))));
+        status.set(Some(fallback::grid_status(Some(owner.as_str()))));
         grid_owned = Some(owner.clone());
     }
     if !ctx.is_watch() && preset.is_none() {
@@ -525,7 +525,7 @@ async fn run_one_join_inner(
             Ok(()) => {}
             Err(RunnerClientError::Code { code, message }) if code == "grid-owned" => {
                 let owner = fallback::owner_from_message(&message);
-                status.set(Some(fallback::grid_status(Some(&owner))));
+                status.set(Some(fallback::grid_status(Some(owner.as_str()))));
                 grid_owned = Some(owner);
             }
             Err(e) => {
@@ -565,7 +565,11 @@ async fn run_one_join_inner(
                             // The stream's bytes, then (when the stream stopped
                             // at ground) the status line again: the stream may
                             // have scrolled or overwritten the last row.
-                            let repaint = status.after_write(&sink, outer_size(ctx));
+                            let repaint = status.after_write(
+                                &sink,
+                                outer_size(ctx),
+                                state.grid.map(|g| g.1),
+                            );
                             sink.extend_from_slice(&repaint);
                             if write_out(&sink).await.is_err() {
                                 return SessionResult::Detached;
@@ -627,7 +631,7 @@ async fn run_one_join_inner(
                                 // The web owns the grid: the key is dropped,
                                 // nothing is taken, the attach keeps watching.
                                 FallbackKey::Held(now_owner) => {
-                                    status.set(Some(fallback::grid_status(Some(&now_owner))));
+                                    status.set(Some(fallback::grid_status(Some(now_owner.as_str()))));
                                     if write_out(&status.paint_now(outer_size(ctx))).await.is_err() {
                                         return SessionResult::Detached;
                                     }
@@ -665,7 +669,7 @@ async fn run_one_join_inner(
                     {
                         if code == "grid-owned" {
                             let owner = fallback::owner_from_message(&message);
-                            status.set(Some(fallback::grid_status(Some(&owner))));
+                            status.set(Some(fallback::grid_status(Some(owner.as_str()))));
                             if write_out(&status.paint_now(outer_size(ctx))).await.is_err() {
                                 return SessionResult::Detached;
                             }
@@ -679,11 +683,11 @@ async fn run_one_join_inner(
                 // changes; a change of owner repaints the status line.
                 if let Some(cur) = current_owner(ctx).await.filter(|c| c.as_deref() != Some(ctx.viewer.as_str())) {
                     let text = fallback::grid_status(cur.as_deref());
-                    if status.text() != Some(text.as_str()) {
-                        status.set(Some(text));
-                        if write_out(&status.paint_now(outer_size(ctx))).await.is_err() {
-                            return SessionResult::Detached;
-                        }
+                    // Always repaint: a screen erase split across two writes
+                    // is the one case after_write cannot see.
+                    status.set(Some(text));
+                    if write_out(&status.paint_now(outer_size(ctx))).await.is_err() {
+                        return SessionResult::Detached;
                     }
                 }
             }
@@ -712,7 +716,7 @@ async fn run_one_join_inner(
                                 // The web owns the grid: the key is dropped,
                                 // nothing is taken, the attach keeps watching.
                                 FallbackKey::Held(now_owner) => {
-                                    status.set(Some(fallback::grid_status(Some(&now_owner))));
+                                    status.set(Some(fallback::grid_status(Some(now_owner.as_str()))));
                                     if write_out(&status.paint_now(outer_size(ctx))).await.is_err() {
                                         return SessionResult::Detached;
                                     }

@@ -374,10 +374,14 @@ to 20..=500 columns and 5..=200 rows.
   at its cursor. The attach paints one reverse-video row on the outer
   terminal's LAST row: save cursor, move to the last row, the text fitted to
   the width, erase to the end of the row, restore cursor (no line feed is ever
-  emitted). It is repainted after every stream write that ends between escape
-  sequences, erased when the attach exits or re-joins, and says what the next
-  key does: "web panel owns the grid", watching, detach with Ctrl-] . while the
-  web owns it; "press any key to take the grid back (that key is not sent)"
+  emitted). It is repainted when it changes, every two seconds, and after a
+  stream write that ends between escape sequences and can have touched the row
+  (the session's grid is at least as tall as the outer terminal, or the write
+  erases the whole screen); it is erased when the attach exits or re-joins. The
+  cursor save uses the terminal's single DECSC slot, which a harness that saves
+  the cursor in one write and restores it in a later one shares, so the paint
+  is kept to those moments. It says what the next key does: "web panel owns
+  the grid", watching, detach with Ctrl-] . while the web owns it; "press any key to take the grid back (that key is not sent)"
   once the web released it (the attach asks the runner who owns the grid every
   two seconds while it watches); "another kb-term attach / another device owns
   the grid" with "any key takes it back (that key is not sent)" otherwise. A

@@ -132,6 +132,26 @@ pub fn paint_bytes(text: &str, cols: u16, rows: u16) -> Vec<u8> {
     out
 }
 
+/// Whether `bytes` contain a sequence that erases the whole visible screen
+/// (a join's clear, a harness rebuild, a full reset, a screen switch). A
+/// sequence split across two writes is not seen; the periodic owner poll
+/// repaints the notice anyway.
+#[must_use]
+pub fn clears_screen(bytes: &[u8]) -> bool {
+    const PATTERNS: [&[u8]; 7] = [
+        b"\x1b[2J",
+        b"\x1b[J",
+        b"\x1b[0J",
+        b"\x1bc",
+        b"\x1b[?1049",
+        b"\x1b[?1047",
+        b"\x1b[?47",
+    ];
+    PATTERNS
+        .iter()
+        .any(|p| bytes.windows(p.len()).any(|w| w == *p))
+}
+
 /// The bytes that erase the notice row again (same save/restore bracket,
 /// default attributes, no reverse video).
 #[must_use]
@@ -165,11 +185,29 @@ impl StatusLine {
     }
 
     /// Account for stream bytes that were just written and return the
-    /// repaint to append (empty when no notice is set or the stream stopped
-    /// inside a sequence; the next write that ends at ground repaints).
-    pub fn after_write(&mut self, written: &[u8], size: (u16, u16)) -> Vec<u8> {
+    /// repaint to append. Empty when no notice is set, when the stream
+    /// stopped inside a sequence (the next write that ends at ground may
+    /// repaint), or when the write cannot have touched the notice row.
+    ///
+    /// The write can touch the last row when the session's grid is at least
+    /// as tall as the outer terminal (`grid_rows`; unknown counts as tall
+    /// enough), or when it erases the whole screen ([`clears_screen`]).
+    /// Repainting only then keeps the paint's DECSC/DECRC pair, which uses
+    /// the terminal's single save slot, away from streams that save the
+    /// cursor in one write and restore it in a later one.
+    pub fn after_write(
+        &mut self,
+        written: &[u8],
+        size: (u16, u16),
+        grid_rows: Option<u16>,
+    ) -> Vec<u8> {
         self.ground.feed(written);
-        self.paint_now(size)
+        let overlaps = grid_rows.is_none_or(|g| g >= size.1);
+        if overlaps || clears_screen(written) {
+            self.paint_now(size)
+        } else {
+            Vec::new()
+        }
     }
 
     /// The paint for the current notice at `size`, when it is safe.
