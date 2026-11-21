@@ -21,6 +21,7 @@ import {
   encodeBinaryFrame,
   encodeBinaryInput,
   encodeInput,
+  encodePing,
   KNOWN_CLIENT_KEYS,
   KNOWN_SERVER_KEYS,
   MAX_OFFSET,
@@ -155,3 +156,23 @@ describe("client text frames (goldens)", () => {
     expect(encodeBinaryInput(new Uint8Array([26]))).not.toContain('"0":');
   });
 });
+
+describe("FUTERMLIVE pong / ping frames", () => {
+  it("parses {t:'pong'} into the typed union and pins its key set", () => {
+    expect(parseTextFrame('{"t":"pong"}')).toEqual({ t: "pong" });
+    expect(KNOWN_SERVER_KEYS.pong).toEqual(["t"]);
+  });
+
+  it("hello may carry the pong capability bit", () => {
+    expect(KNOWN_SERVER_KEYS.hello).toContain("pong");
+    const f = parseTextFrame(
+      '{"t":"hello","proto":"kb-term/1","session":"s","epoch":"e","harness":"omp","bound_sid":null,"pong":true}',
+    );
+    expect(f).toMatchObject({ t: "hello", pong: true });
+  });
+
+  it("encodePing is the cframe_ping golden byte-for-byte", () => {
+    expect(encodePing()).toBe(readGolden("cframe_ping.json").trim());
+  });
+});
+

@@ -1204,6 +1204,11 @@ mod relay_tests {
                 match out.recv().await {
                     Some(Message::Close(Some(frame))) if frame.code == CLOSE_SLOW_CONSUMER => {
                         saw_1013 = true;
+                        assert_eq!(
+                            frame.reason.as_str(),
+                            "slow consumer",
+                            "the 1013 close names its cause"
+                        );
                     }
                     Some(_) => {}
                     None => break,
@@ -1371,6 +1376,11 @@ mod relay_tests {
                 Ok(Some(Message::Close(Some(frame)))) => {
                     if frame.code == CLOSE_IDLE {
                         saw_1001 = true;
+                        assert_eq!(
+                            frame.reason.as_str(),
+                            "idle",
+                            "the 1001 close names its cause"
+                        );
                     }
                 }
                 Ok(Some(_)) => {}
@@ -1614,6 +1624,11 @@ mod relay_tests {
         match tokio::time::timeout(Duration::from_secs(5), out.recv()).await {
             Ok(Some(Message::Close(Some(frame)))) => {
                 assert_eq!(frame.code, CLOSE_RESTART, "shutdown arm preempts");
+                assert_eq!(
+                    frame.reason.as_str(),
+                    "service restart",
+                    "the 1012 close names its cause"
+                );
             }
             other => panic!("shutdown must close 1012, got {other:?}"),
         }

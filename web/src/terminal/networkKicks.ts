@@ -14,9 +14,17 @@ export interface KickDocument {
 }
 
 /** Bind the triggers; the returned disposer removes every listener. */
-export function bindNetworkKicks(win: KickWindow, doc: KickDocument, kick: () => void): () => void {
+export function bindNetworkKicks(
+  win: KickWindow,
+  doc: KickDocument,
+  kick: () => void,
+  /** Optional: told on every visibility change BEFORE the kick (FUTERMLIVE hidden release). */
+  onHidden?: (hidden: boolean) => void,
+): () => void {
   const onVisible = (): void => {
-    if (doc.visibilityState === "visible") kick();
+    const visible = doc.visibilityState === "visible";
+    onHidden?.(!visible);
+    if (visible) kick();
   };
   win.addEventListener("online", kick);
   win.addEventListener("pageshow", kick);

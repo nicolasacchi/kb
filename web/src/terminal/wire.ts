@@ -72,6 +72,8 @@ export interface HelloFrame {
   t: "hello"; proto: string; session: string; epoch: string; harness: string; bound_sid: string | null;
   /** The viewer id this socket joined the tap under (T18). Absent from an older tap. */
   viewer?: string;
+  /** The tap answers a client `ping` with `{t:"pong"}` (FUTERMLIVE). Absent from an older tap. */
+  pong?: boolean;
 }
 export interface ProfileFrame {
   t: "profile"; xterm: string; serialize: string; width: string; image: string;
@@ -89,11 +91,12 @@ export interface GfxresetFrame { t: "gfxreset"; seq: number; gen: number; offset
 export interface ExitFrame { t: "exit"; seq: number; code: number | null; offset: number }
 export interface ClipboardFrame { t: "clipboard"; offset: number; data_b64: string }
 export interface ErrorFrame { t: "error"; code: string; msg: string }
+export interface PongFrame { t: "pong" }
 export interface UnknownFrame { t: "unknown"; raw: string }
 
 export type ServerTextFrame =
   | HelloFrame | ProfileFrame | ImageDefFrame | SeedFrame | ResizeFrame
-  | SizechangedFrame | GfxresetFrame | ExitFrame | ClipboardFrame | ErrorFrame | UnknownFrame;
+  | SizechangedFrame | GfxresetFrame | ExitFrame | ClipboardFrame | ErrorFrame | PongFrame | UnknownFrame;
 
 /**
  * Parse one server→client text frame. Malformed JSON or a missing string
@@ -127,6 +130,7 @@ export function parseTextFrame(raw: string): ServerTextFrame {
     case "exit": return obj as unknown as ExitFrame;
     case "clipboard": return obj as unknown as ClipboardFrame;
     case "error": return obj as unknown as ErrorFrame;
+    case "pong": return obj as unknown as PongFrame;
     default: return { t: "unknown", raw };
   }
 }
@@ -138,7 +142,7 @@ export function parseTextFrame(raw: string): ServerTextFrame {
 // table is extended alongside the TS type.
 
 export const KNOWN_SERVER_KEYS: Record<string, readonly string[]> = {
-  hello: ["t", "proto", "session", "epoch", "harness", "bound_sid", "viewer"],
+  hello: ["t", "proto", "session", "epoch", "harness", "bound_sid", "viewer", "pong"],
   profile: ["t", "xterm", "serialize", "width", "image", "cols", "rows", "scrollback", "scroll_on_erase_in_display", "cell_px_w", "cell_px_h", "theme"],
   imagedef: ["t", "seq", "id", "gen", "sha256", "mime", "w", "h", "cols", "rows", "offset"],
   seed: ["t", "offset", "len"],
@@ -148,6 +152,7 @@ export const KNOWN_SERVER_KEYS: Record<string, readonly string[]> = {
   exit: ["t", "seq", "code", "offset"],
   clipboard: ["t", "offset", "data_b64"],
   error: ["t", "code", "msg"],
+  pong: ["t"],
 };
 
 export const KNOWN_CLIENT_KEYS: Record<string, readonly string[]> = {
@@ -177,4 +182,9 @@ export function encodeInput(data: string): string {
 export function encodeBinaryInput(data: Uint8Array): string {
   const text = new TextDecoder("utf-8").decode(data);
   return encodeInput(text);
+}
+
+/** Encode the liveness probe: `{"t":"ping"}` (the cframe_ping golden). */
+export function encodePing(): string {
+  return JSON.stringify({ t: "ping" });
 }
