@@ -348,7 +348,7 @@ describe("FUKEYBAR FEATURES-3: quick replies go through planSend", () => {
       /^kb-drive-reply-\d+$/.test(e.dataset.testid ?? ""),
     );
 
-  it("a plain reply pastes then presses Enter once, and leaves the draft alone", async () => {
+  it("a plain reply is one paste request carrying enter, and leaves the draft alone", async () => {
     m = mount(<Host drive={mkDrive()} />);
     typeInto(byId(m.host, "kb-drive-input") as HTMLTextAreaElement, "my draft");
     const first = chips()[0];
@@ -356,8 +356,9 @@ describe("FUKEYBAR FEATURES-3: quick replies go through planSend", () => {
     expect(label.length).toBeGreaterThan(0);
     click(first);
     await settle();
-    expect(rig.urls()).toEqual(["/api/terms/abcd1234/paste", "/api/terms/abcd1234/enter"]);
+    expect(rig.urls()).toEqual(["/api/terms/abcd1234/paste"]);
     expect(rig.calls[0].json?.text).toBe(label);
+    expect(rig.calls[0].json?.enter).toBe(true);
     expect((byId(m.host, "kb-drive-input") as HTMLTextAreaElement).value).toBe("my draft");
   });
 
