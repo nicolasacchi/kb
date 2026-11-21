@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  killTerm,
   launchTerm,
   listTerms,
   mintTicket,
@@ -193,5 +194,25 @@ describe("terms API", () => {
     );
     await mintTicket("a/b c?d");
     expect(calls[0].url).toBe(`/api/terms/${encodeURIComponent("a/b c?d")}/ticket`);
+  });
+
+  it("killTerm POSTs /api/terms/{id}/kill with the intent header, no body, no token (FUTERMLIST)", async () => {
+    const calls = mockFetch(() => jsonResponse(200, { exit_code: null }));
+    await expect(killTerm("abc123")).resolves.toBeUndefined();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("/api/terms/abc123/kill");
+    expect(calls[0].init?.method).toBe("POST");
+    expect(header(calls[0].init, TERMINAL_INTENT_HEADER)).toBe(TERMINAL_INTENT_VALUE);
+    expect(header(calls[0].init, "Authorization")).toBeUndefined();
+    expect(header(calls[0].init, "X-Kb-Token")).toBeUndefined();
+    expect(calls[0].init?.body ?? null).toBeNull();
+  });
+
+  it("killTerm encodes the id and throws TermsApiError on a non-2xx", async () => {
+    const calls = mockFetch(() =>
+      jsonResponse(404, { type: "urn:kb:errors:terminal-not-found", title: "Not Found", detail: "gone" }),
+    );
+    await expect(killTerm("a/b")).rejects.toMatchObject({ name: "TermsApiError", status: 404 });
+    expect(calls[0].url).toBe("/api/terms/a%2Fb/kill");
   });
 });
