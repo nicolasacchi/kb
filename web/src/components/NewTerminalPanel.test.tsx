@@ -114,6 +114,22 @@ describe("gating", () => {
   });
 });
 
+describe("form buttons (FUTERMPOLISH W7)", () => {
+  it("Launch is the primary button and Cancel the secondary one, both ordinary buttons (not pill links)", () => {
+    mount();
+    open();
+    const go = screen.getByTestId("new-terminal-launch");
+    const cancel = screen.getByTestId("new-terminal-cancel");
+    expect(go.className).toContain("kb-ses__newterm-btn--primary");
+    expect(cancel.className).toContain("kb-ses__newterm-btn");
+    expect(cancel.className).not.toContain("--primary");
+    expect(go.className).not.toContain("kb-ses__resume-copy");
+    expect(cancel.className).not.toContain("kb-ses__resume-copy");
+    expect(go.getAttribute("type")).toBe("submit");
+    expect(cancel.getAttribute("type")).toBe("button");
+  });
+});
+
 describe("cwd validation", () => {
   it.each([
     ["a relative path", "project/sub"],

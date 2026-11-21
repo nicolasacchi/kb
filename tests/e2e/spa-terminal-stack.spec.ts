@@ -1431,6 +1431,229 @@ async function pinTerminalCard(page: Page): Promise<void> {
   });
 }
 
+// ============================================ FUTERMPOLISH: true state, inside the window
+
+/** The grid as the reader sees it right now: chip, fitted font, Cropped, and the rendered boxes. */
+async function polishState(page: Page) {
+  return page.evaluate(() => {
+    const host = document.querySelector("[data-kb-term]") as unknown as HTMLElement & {
+      __kbTerm: { cols: number; rows: number; options: { fontSize: number } };
+    };
+    const screen = host.querySelector(".xterm-screen") as HTMLElement;
+    const panel = document.querySelector('[data-testid="kb-terminal"]') as HTMLElement;
+    const sr = screen.getBoundingClientRect();
+    const pr = panel.getBoundingClientRect();
+    const vr = host.getBoundingClientRect();
+    return {
+      cols: host.__kbTerm.cols,
+      rows: host.__kbTerm.rows,
+      font: host.__kbTerm.options.fontSize,
+      chip: document.querySelector('[data-testid="kb-term-grid"]')?.textContent ?? "",
+      cropped: document.querySelector('[data-testid="kb-term-cropped"]') !== null,
+      screenBottom: Math.round(sr.bottom),
+      screenW: Math.round(sr.width),
+      screenH: Math.round(sr.height),
+      panelTop: Math.round(pr.top),
+      panelBottom: Math.round(pr.bottom),
+      viewBottom: Math.round(vr.bottom),
+      viewW: host.clientWidth,
+      viewH: host.clientHeight,
+      innerHeight: window.innerHeight,
+    };
+  });
+}
+
+/** The state once the font has stopped moving (two reads 700 ms apart agree). */
+async function settledState(page: Page) {
+  let prev = JSON.stringify(await polishState(page));
+  for (let i = 0; i < 20; i += 1) {
+    await page.waitForTimeout(700);
+    const now = JSON.stringify(await polishState(page));
+    if (now === prev) return JSON.parse(now) as Awaited<ReturnType<typeof polishState>>;
+    prev = now;
+  }
+  return JSON.parse(prev) as Awaited<ReturnType<typeof polishState>>;
+}
+
+test("FUTERMPOLISH W1: a grid change another client made reaches the owner chip of the OPEN panel (no remount, no focus)", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const c = await prepare(page, request, winchHarness(), { cols: 120, rows: 40 });
+  await openPanel(page, c.sid);
+  await expect(page.locator('[data-testid="kb-term-grid"]')).toHaveText("120x40 · free", { timeout: 15_000 });
+  const sockets = c.socks.length;
+  const took = await takeViaWeb(c.api, c.term.id, 100, 30);
+  expect(took.status, JSON.stringify(took.body)).toBe(200);
+  // The size follows by the stream; the owner by the debounced refetch it triggers.
+  await expect(page.locator('[data-testid="kb-term-grid"]')).toHaveText("100x30 · web", { timeout: 20_000 });
+  expect(c.socks.length, "no reconnect").toBe(sockets);
+});
+
+for (const vp of [
+  { width: 1280, height: 720 },
+  { width: 1440, height: 900 },
+]) {
+  test(`FUTERMPOLISH W2: the panel opened from the session page stays inside the window at ${vp.width}x${vp.height}, and Fit to window fills only what is visible`, async ({ page, request }) => {
+    test.setTimeout(240_000);
+    await page.setViewportSize(vp);
+    const c = await prepare(page, request, winchHarness(), { cols: 120, rows: 40 });
+    await openPanel(page, c.sid);
+    await expect
+      .poll(async () => {
+        const g = await polishState(page);
+        return g.panelBottom <= g.innerHeight && g.screenBottom <= g.innerHeight && g.panelTop >= 0
+          ? "ok"
+          : `panel ${g.panelTop}..${g.panelBottom} screenBottom ${g.screenBottom} innerHeight ${g.innerHeight}`;
+      }, { timeout: 20_000 })
+      .toBe("ok");
+    await page.locator('[data-testid="kb-term-fit"]').click();
+    await expect
+      .poll(async () => {
+        const { body } = await c.api.json<{ terms: Array<{ id: string; grid_owner?: string | null }> }>("GET", "/api/terms");
+        return body.terms.find((t) => t.id === c.term.id)?.grid_owner ?? null;
+      }, { timeout: 15_000 })
+      .toBe("kb-term");
+    // The Fit may have been clicked after the reader scrolled away: it brings the panel back first.
+    await expect
+      .poll(async () => {
+        const g = await settledState(page);
+        return g.panelBottom <= g.innerHeight && g.screenBottom <= g.innerHeight && `${g.cols}x${g.rows}` !== "120x40"
+          ? "ok"
+          : `panelBottom ${g.panelBottom} screenBottom ${g.screenBottom} innerHeight ${g.innerHeight} grid ${g.cols}x${g.rows}`;
+      }, { timeout: 40_000 })
+      .toBe("ok");
+    // the last grid row is on screen: the screen's bottom is inside the window
+    const g = await settledState(page);
+    expect(g.screenBottom).toBeLessThanOrEqual(g.innerHeight);
+    expect(g.screenH, "Fit filled the view that can be seen").toBeGreaterThan(g.viewH * 0.6);
+  });
+
+  test(`FUTERMPOLISH W2: the /sessions New terminal launch stays inside the window at ${vp.width}x${vp.height}`, async ({ page, request }) => {
+    test.setTimeout(240_000);
+    await page.setViewportSize(vp);
+    const c = await prepare(page, request, winchHarness(), { cols: 120, rows: 40 });
+    // The terminal tier is on in this stack, but admit explicitly and answer the launch with the
+    // pane this test already started (the launch route itself is covered elsewhere).
+    await page.route("**/api/identity", async (route) => {
+      const res = await route.fetch();
+      const j = (await res.json()) as Record<string, unknown>;
+      await route.fulfill({ response: res, json: { ...j, terminal_admitted: true } });
+    });
+    await page.route("**/api/terms", (route) => {
+      if (route.request().method() === "POST") {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ id: c.term.id }) });
+      }
+      return route.fallback();
+    });
+    await page.goto(`${MAIN}/sessions`);
+    await page.locator('[data-testid="new-terminal-open"]').click();
+    await page.locator('[data-testid="new-terminal-cwd"]').fill("/synthetic");
+    await page.locator('[data-testid="new-terminal-launch"]').click();
+    await expect(page.locator("[data-kb-term]")).toBeVisible({ timeout: 30_000 });
+    await waitPhase(page, "live");
+    await expect
+      .poll(async () => {
+        const g = await polishState(page);
+        return g.panelBottom <= g.innerHeight && g.screenBottom <= g.innerHeight && g.panelTop >= 0
+          ? "ok"
+          : `panel ${g.panelTop}..${g.panelBottom} screenBottom ${g.screenBottom} innerHeight ${g.innerHeight}`;
+      }, { timeout: 20_000 })
+      .toBe("ok");
+    await page.locator('[data-testid="kb-term-fit"]').click();
+    await expect
+      .poll(async () => {
+        const g = await settledState(page);
+        return g.panelBottom <= g.innerHeight && g.screenBottom <= g.innerHeight && `${g.cols}x${g.rows}` !== "120x40"
+          ? "ok"
+          : `panelBottom ${g.panelBottom} screenBottom ${g.screenBottom} innerHeight ${g.innerHeight} grid ${g.cols}x${g.rows}`;
+      }, { timeout: 40_000 })
+      .toBe("ok");
+  });
+}
+
+test("FUTERMPOLISH W3: after a window resize and grid changes the font and Cropped equal a fresh load of the same page and grid", async ({ page, request }) => {
+  test.setTimeout(360_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const c = await prepare(page, request, winchHarness(), { cols: 120, rows: 40 });
+  const t201 = await takeViaWeb(c.api, c.term.id, 201, 48);
+  expect(t201.status, JSON.stringify(t201.body)).toBe(200);
+  await openPanel(page, c.sid);
+  await expect.poll(async () => `${(await polishState(page)).cols}x${(await polishState(page)).rows}`, { timeout: 30_000 }).toBe("201x48");
+  await settledState(page);
+  // The window shrinks: font and Cropped follow the 201x48 grid in the smaller box.
+  await page.setViewportSize({ width: 1280, height: 720 });
+  const small = await settledState(page);
+  expect(small.font).toBeGreaterThanOrEqual(9);
+
+  /** What a second, fresh page shows for the same grid in the same window. */
+  const fresh = async () => {
+    const other = await page.context().newPage();
+    try {
+      await other.setViewportSize({ width: 1280, height: 720 });
+      await openPanel(other, c.sid);
+      return await settledState(other);
+    } finally {
+      await other.close();
+    }
+  };
+
+  for (const [cols, rows] of [
+    [80, 24],
+    [120, 40],
+  ] as const) {
+    const r = await takeViaWeb(c.api, c.term.id, cols, rows);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    await expect.poll(async () => `${(await polishState(page)).cols}x${(await polishState(page)).rows}`, { timeout: 30_000 }).toBe(`${cols}x${rows}`);
+    const got = await settledState(page);
+    const want = await fresh();
+    expect({ grid: `${got.cols}x${got.rows}`, font: got.font, cropped: got.cropped }).toEqual({
+      grid: `${want.cols}x${want.rows}`,
+      font: want.font,
+      cropped: want.cropped,
+    });
+    // Cropped is true only when the floor font cannot hold the grid
+    if (got.cropped) expect(got.font).toBeLessThanOrEqual(9);
+    // the whole grid is inside the host unless it is cropped
+    if (!got.cropped) {
+      expect(got.screenW).toBeLessThanOrEqual(got.viewW);
+      expect(got.screenH).toBeLessThanOrEqual(got.viewH);
+    }
+  }
+});
+
+test("FUTERMPOLISH W5: in full screen the focus ring and the scrollbar belong to the grid, not to the empty host", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "keyboard", { value: undefined, configurable: true });
+  });
+  await page.setViewportSize({ width: 1280, height: 720 });
+  const c = await prepare(page, request, winchHarness(), { cols: 120, rows: 40 });
+  await openPanel(page, c.sid);
+  await page.locator('[data-testid="kb-term-fullscreen"]').click();
+  await expect.poll(async () => (await fullState(page)).overlay).toBe(true);
+  await page.locator("[data-kb-term]").click();
+  await expect(page.locator('[data-testid="kb-term-input"]')).toHaveText("typing");
+  const m = await settledState(page).then(() =>
+    page.evaluate(() => {
+      const host = document.querySelector("[data-kb-term]") as HTMLElement;
+      const xterm = host.querySelector(".xterm") as HTMLElement;
+      const screen = host.querySelector(".xterm-screen") as HTMLElement;
+      const xr = xterm.getBoundingClientRect();
+      const sr = screen.getBoundingClientRect();
+      return {
+        xtermRight: Math.round(xr.right),
+        screenRight: Math.round(sr.right),
+        ringOnGrid: getComputedStyle(xterm).outlineStyle,
+        ringOnHost: getComputedStyle(host).outlineStyle,
+      };
+    }),
+  );
+  expect(m.ringOnGrid, "the focus ring is drawn on the grid's box").not.toBe("none");
+  expect(m.ringOnHost, "not around the whole host").toBe("none");
+  // The xterm element (which owns the scrollbar) ends where the screen ends, far from the host's edge.
+  expect(Math.abs(m.xtermRight - m.screenRight)).toBeLessThanOrEqual(2);
+});
+
 test.describe.serial("T25 in-process restart", () => {
   test("kb restart closes 1012 within 3 s (proxy and browser), holder survives, the panel resumes with from= and the epoch, scrollback intact", async ({ page, request }) => {
     test.setTimeout(300_000);

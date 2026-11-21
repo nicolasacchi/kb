@@ -508,7 +508,8 @@ test.describe("FUTERMFIT phone grid ownership @phone", () => {
     expect(Math.abs(m.top)).toBeLessThanOrEqual(2);
     expect(m.sheetTitleW).toBeLessThanOrEqual(1);
     expect(m.sheetTitleH).toBeLessThanOrEqual(1);
-    expect(m.barTitle).toBe("Terminal");
+    // FUTERMPOLISH: the title row names the harness (the fake relay's is omp).
+    expect(m.barTitle).toBe("omp");
     expect(m.barTitleW).toBeGreaterThan(8);
     await expect(page.locator('[data-testid="kb-term-phone-fullscreen"]')).toHaveCount(m.fsAvailable ? 1 : 0);
     // the bar still works: Read and back, a font step
@@ -533,6 +534,84 @@ test.describe("FUTERMFIT phone grid ownership @phone", () => {
     });
     expect(m.docW).toBeLessThanOrEqual(m.vw);
     expect(m.dockScroll).toBeLessThanOrEqual(m.dockClient);
+  });
+});
+
+// FUTERMPOLISH — the phone sheet reads cleanly: title, grid chip, button row, key
+// row, crop hint and full screen.
+test.describe("FUTERMPOLISH phone sheet @phone", () => {
+  test("W6a: the title row shows the harness name and the state caption, neither truncated", async ({ page }) => {
+    await openPhone(page, { total: 300, seedLines: 300, drive: true, gridOwner: "kb-term" });
+    const m = await page.evaluate(() => {
+      const t = document.querySelector('[data-testid="kb-term-phone-title"]') as HTMLElement;
+      const c = document.querySelector('[data-testid="kb-term-caption"]') as HTMLElement;
+      return {
+        title: t.textContent,
+        titleCut: t.scrollWidth > t.clientWidth + 1,
+        caption: c.textContent,
+        captionCut: c.scrollWidth > c.clientWidth + 1,
+      };
+    });
+    expect(m.title).toBe("omp");
+    expect(m.titleCut).toBe(false);
+    expect(m.caption).toBe("live");
+    expect(m.captionCut).toBe(false);
+  });
+
+  test("W6b: the grid chip names the real grid and its owner, with the desktop chip's words", async ({ page }) => {
+    await openPhone(page, { total: 300, seedLines: 300, drive: true, gridOwner: "kb-term" });
+    await expect(page.locator('[data-testid="kb-drive-grid-chip"]')).toHaveText("120x40 · web");
+    await expect(page.locator('[data-testid="kb-drive-grid-chip"]')).not.toContainText("phone");
+  });
+
+  test("W6c: every button of the title bar is one line, the same height", async ({ page }) => {
+    await openPhone(page, { total: 300, seedLines: 300, drive: true, gridOwner: "kb-term" });
+    const heights = await page.evaluate(() =>
+      [...document.querySelectorAll(".kb-term-phone__bar button")].map((b) => ({
+        id: (b as HTMLElement).dataset.testid ?? "",
+        h: Math.round(b.getBoundingClientRect().height),
+      })),
+    );
+    expect(heights.length).toBeGreaterThanOrEqual(4);
+    const min = Math.min(...heights.map((x) => x.h));
+    for (const x of heights) expect(x.h, `${x.id}: ${JSON.stringify(heights)}`).toBeLessThanOrEqual(min + 1);
+  });
+
+  test("W6d: the key row says it scrolls, and its last key is reachable whole", async ({ page }) => {
+    await openPhone(page, { total: 300, seedLines: 300, drive: true, gridOwner: "kb-term" });
+    const keys = page.locator('[data-testid="kb-drive-keys"]');
+    const scrolls = await keys.evaluate((el) => el.scrollWidth > el.clientWidth + 1);
+    if (!scrolls) return; // everything fits this phone: nothing to signal
+    await expect(keys).toHaveAttribute("data-more", "right");
+    await keys.evaluate((el) => {
+      el.scrollLeft = el.scrollWidth;
+    });
+    await expect(keys).not.toHaveAttribute("data-more", "right");
+    const cut = await page.evaluate(() => {
+      const row = document.querySelector('[data-testid="kb-drive-keys"]') as HTMLElement;
+      const last = row.lastElementChild as HTMLElement;
+      return Math.round(last.getBoundingClientRect().right - row.getBoundingClientRect().right);
+    });
+    expect(cut).toBeLessThanOrEqual(1);
+  });
+
+  test("W6e: in Watch, a grid wider than the screen carries the Cropped hint with the way out", async ({ page }) => {
+    await openPhone(page, { total: 300, seedLines: 300, drive: true, gridOwner: "kb-term" });
+    const hint = page.locator('[data-testid="kb-term-phone-cropped"]');
+    await expect(hint).toBeVisible();
+    await expect(hint).toContainText("Cropped");
+    await expect(hint).toContainText("Fit to phone");
+  });
+
+  test("W6f: full screen folds the grid-controls row away; the keys and the composer stay (where the browser has full screen)", async ({ page }) => {
+    await openPhone(page, { total: 300, seedLines: 300, drive: true, gridOwner: "kb-term" });
+    const btn = page.locator('[data-testid="kb-term-phone-fullscreen"]');
+    if ((await btn.count()) === 0) return; // iPhone Safari has no element full screen
+    await expect(page.locator('[data-testid="kb-drive-fit"]')).toBeVisible();
+    await btn.click();
+    await expect(page.locator('[data-testid="kb-drive-fit"]')).toHaveCount(0, { timeout: 10_000 });
+    await expect(page.locator('[data-testid="kb-drive-keybar"]')).toBeVisible();
+    await expect(page.locator('[data-testid="kb-drive-composer"], [data-testid="kb-drive-input"]').first()).toBeVisible();
   });
 });
 

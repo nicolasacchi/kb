@@ -44,7 +44,12 @@ const row = (over: Partial<TermRow> = {}): TermRow =>
 function dock(
   r: TermRow | undefined,
   measure: () => PhoneMeasure | null = () => MEASURE,
-  extra: { ownerHint?: { owner: string | null } | null; onOwner?: (o: string | null) => void } = {},
+  extra: {
+    ownerHint?: { owner: string | null } | null;
+    onOwner?: (o: string | null) => void;
+    grid?: { cols: number; rows: number } | null;
+    compact?: boolean;
+  } = {},
 ) {
   const qc = new QueryClient();
   m = mount(
@@ -88,9 +93,9 @@ describe("DriveDock: Fit to phone", () => {
     expect(byId(m!.host, "kb-drive-caption").textContent).toBe("grid is owned by desk-1");
   });
 
-  it("does not ask when the phone already owns the grid, and shows the read-only chip", async () => {
-    dock(row({ grid_owner: "kb-term" }));
-    expect(byId(m!.host, "kb-drive-grid-chip").textContent).toBe("Grid: phone");
+  it("does not ask when the web already owns the grid, and the chip names the REAL grid and owner", async () => {
+    dock(row({ grid_owner: "kb-term", cols: 120, rows: 40 }), () => MEASURE, { grid: { cols: 120, rows: 40 } });
+    expect(byId(m!.host, "kb-drive-grid-chip").textContent).toBe("120x40 · web");
     await fit();
     expect(confirmMock).not.toHaveBeenCalled();
     expect(rig.calls).toHaveLength(1);
@@ -131,9 +136,32 @@ describe("DriveDock: Fit to phone", () => {
     expect(seen).toEqual(["kb-term"]);
   });
 
-  it("shows no chip when nobody owns the grid", () => {
+  it("W6b: the chip is the desktop chip's words (one helper): free, a local attach, and no suffix while the row is behind the live grid", () => {
+    dock(row({ cols: 120, rows: 40 }), () => MEASURE, { grid: { cols: 120, rows: 40 } });
+    expect(byId(m!.host, "kb-drive-grid-chip").textContent).toBe("120x40 · free");
+    m!.unmount();
+    dock(row({ grid_owner: "local:9", cols: 120, rows: 40 }), () => MEASURE, { grid: { cols: 120, rows: 40 } });
+    expect(byId(m!.host, "kb-drive-grid-chip").textContent).toBe("120x40 · local attach");
+    m!.unmount();
+    // Another viewer took 54x23; the list row still describes 120x40.
+    dock(row({ grid_owner: null, cols: 120, rows: 40 }), () => MEASURE, { grid: { cols: 54, rows: 23 } });
+    expect(byId(m!.host, "kb-drive-grid-chip").textContent).toBe("54x23");
+  });
+
+  it("no chip before the live grid is known", () => {
     dock(row());
     expect(maybeById(m!.host, "kb-drive-grid-chip")).toBeNull();
+  });
+
+  it("W6f: in full screen the grid-controls row folds away; keys and composer stay", () => {
+    dock(row({ grid_owner: "kb-term", cols: 120, rows: 40 }), () => MEASURE, { grid: { cols: 120, rows: 40 }, compact: true });
+    expect(maybeById(m!.host, "kb-drive-fit")).toBeNull();
+    expect(maybeById(m!.host, "kb-drive-release")).toBeNull();
+    expect(maybeById(m!.host, "kb-drive-grid-chip")).toBeNull();
+    expect(maybeById(m!.host, "kb-drive-keybar")).not.toBeNull();
+    m!.unmount();
+    dock(row(), () => MEASURE, { compact: false });
+    expect(maybeById(m!.host, "kb-drive-fit")).not.toBeNull();
   });
 
   it("sends nothing when the screen cannot be measured", async () => {

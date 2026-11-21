@@ -76,9 +76,12 @@ function fakeTerm(opened: boolean): Fake {
   return { term: term as unknown as PhoneTerm, calls, textarea };
 }
 
+let extraProps: Record<string, unknown> = {};
+
 function Harness(props: { term: PhoneTerm | null; hostRef: { current: HTMLDivElement | null } }) {
   const [mode, setMode] = useState<PhoneMode>("watch");
   return createElement(PhoneTerminal, {
+    ...extraProps,
     term: props.term,
     profile: { cols: 120, rows: 30 },
     hostRef: props.hostRef,
@@ -99,6 +102,7 @@ function mount(term: PhoneTerm | null) {
 }
 
 afterEach(() => {
+  extraProps = {};
   act(() => root?.unmount());
   host?.remove();
   root = host = null;
@@ -310,7 +314,9 @@ describe("PhoneTerminal", () => {
       mount(fakeTerm(true).term);
       const btn = q('[data-testid="kb-term-phone-fullscreen"]');
       expect(btn).not.toBeNull();
-      expect(btn.textContent).toBe("Full screen");
+      // A short label (it wrapped on a narrow phone); the name stays in full for assistive tech.
+      expect(btn.textContent).toBe("Full");
+      expect(btn.getAttribute("aria-label")).toBe("Full screen");
     });
 
     it("fullscreens the terminal root (not the page) when tapped", () => {
@@ -326,5 +332,89 @@ describe("PhoneTerminal", () => {
   it("carries ONE visible title: the bar's (the Sheet's is name-only)", () => {
     mount(fakeTerm(true).term);
     expect(q(".kb-term-phone__title").textContent).toBe("Terminal");
+  });
+
+  describe("FUTERMPOLISH sheet polish", () => {
+    it("W6a: the title row names the harness; the state caption is on its own row, not squeezed by the buttons", () => {
+      extraProps = { harness: "claude" };
+      mount(fakeTerm(true).term);
+      expect(q('[data-testid="kb-term-phone-title"]').textContent).toBe("claude");
+      const caption = q('[data-testid="kb-term-caption"]');
+      expect(caption.textContent).toBe("live");
+      expect(caption.closest(".kb-term-phone__bar")).toBeNull();
+      expect(caption.closest(".kb-term-phone__sub")).not.toBeNull();
+    });
+
+    it("W6a: the title falls back to Terminal without a harness", () => {
+      mount(fakeTerm(true).term);
+      expect(q(".kb-term-phone__title").textContent).toBe("Terminal");
+    });
+
+    describe("W6e: a grid wider than the screen says so in Watch", () => {
+      const sizes = { viewport: 867, wrap: 360 };
+      const protoSW = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollWidth");
+      const protoCW = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+      const set = (): void => {
+        Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
+          configurable: true,
+          get(this: HTMLElement) {
+            return this.hasAttribute("data-kb-term-viewport") ? sizes.viewport : 0;
+          },
+        });
+        Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+          configurable: true,
+          get(this: HTMLElement) {
+            return this.classList.contains("kb-term-phone__wrap") ? sizes.wrap : 0;
+          },
+        });
+      };
+      afterEach(() => {
+        if (protoSW) Object.defineProperty(HTMLElement.prototype, "scrollWidth", protoSW);
+        else delete (HTMLElement.prototype as unknown as Record<string, unknown>).scrollWidth;
+        if (protoCW) Object.defineProperty(HTMLElement.prototype, "clientWidth", protoCW);
+        else delete (HTMLElement.prototype as unknown as Record<string, unknown>).clientWidth;
+      });
+
+      it("shows the Cropped hint with the way out (pan, or Fit to phone) while the grid is wider than the wrapper", () => {
+        sizes.viewport = 867;
+        sizes.wrap = 360;
+        set();
+        mount(fakeTerm(true).term);
+        const hint = q('[data-testid="kb-term-phone-cropped"]');
+        expect(hint).not.toBeNull();
+        expect(hint.textContent).toContain("Cropped");
+        expect(hint.textContent).toContain("Fit to phone");
+      });
+
+      it("shows no hint when the whole grid fits the screen", () => {
+        sizes.viewport = 360;
+        sizes.wrap = 360;
+        set();
+        mount(fakeTerm(true).term);
+        expect(q('[data-testid="kb-term-phone-cropped"]')).toBeNull();
+      });
+
+      it("shows no hint in Read (the text reflows)", () => {
+        sizes.viewport = 867;
+        sizes.wrap = 360;
+        set();
+        mount(fakeTerm(true).term);
+        click('[data-testid="kb-term-phone-mode"]');
+        expect(q('[data-testid="kb-term-phone-cropped"]')).toBeNull();
+      });
+    });
+
+    it("W6f: the drive slot is told whether the sheet is in full screen (it folds its controls row then)", () => {
+      const seen: boolean[] = [];
+      extraProps = {
+        renderDrive: (api: { fullscreen: boolean }) => {
+          seen.push(api.fullscreen);
+          return null;
+        },
+      };
+      mount(fakeTerm(true).term);
+      expect(seen.length).toBeGreaterThan(0);
+      expect(seen.every((v) => v === false)).toBe(true);
+    });
   });
 });

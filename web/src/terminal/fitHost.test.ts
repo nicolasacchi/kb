@@ -91,3 +91,26 @@ describe("fitHostNow in a host as tall as its content", () => {
     expect(term.options.fontSize).toBeLessThan(20);
   });
 });
+
+describe("fitHostNow: a new situation is planned from scratch (FUTERMPOLISH W3)", () => {
+  it("fresh: a larger font that still fits is NOT kept over the plan (a grid that grew needs the smaller font)", () => {
+    probe();
+    const term = { options: { fontSize: 18, fontFamily: "monospace" } };
+    // The screen painted so far fits the host, so the no-ratchet guard would keep 18.
+    const host = hostWith(1230, 576, { w: 800, h: 400 });
+    const kept = fitHostNow({ options: { ...term.options } }, host, { cols: 201, rows: 48 }, { min: 9, max: 20 });
+    expect(kept?.fontSize).toBe(18);
+    const fresh = fitHostNow(term, host, { cols: 201, rows: 48 }, { min: 9, max: 20, fresh: true });
+    expect(fresh?.fontSize).toBe(9);
+    expect(term.options.fontSize).toBe(9);
+  });
+
+  it("the font returned is the font applied, also when the step-down loop runs out of passes", () => {
+    probe();
+    const term = { options: { fontSize: 20, fontFamily: "monospace" } };
+    // A screen that never fits: the loop steps down at most four times, and the result is applied.
+    const host = hostWith(1230, 576, { w: 99999, h: 99999 });
+    const r = fitHostNow(term, host, { cols: 80, rows: 24 }, { min: 9, max: 20, fresh: true });
+    expect(term.options.fontSize).toBe(r?.fontSize);
+  });
+});

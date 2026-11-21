@@ -29,6 +29,10 @@ describe("useTerms query options", () => {
     expect(src).not.toContain("refetchInterval");
   });
 
+  it("refetches when the tab is visible again (FUTERMPOLISH W1), still without polling", () => {
+    expect(src).toContain("refetchOnWindowFocus: true");
+  });
+
   it("queries through listTerms", () => {
     expect(src).toContain("listTerms(signal)");
   });
