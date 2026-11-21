@@ -48,7 +48,7 @@ export interface KeyBarKey {
   aria: string;
 }
 
-/** The key bar, left to right (Spec 3). Ctrl-C is a hold, `/` also opens the slash menu on a hold. */
+/** The key bar, left to right (Spec 3). Ctrl-C and Ctrl-D are holds, `/` also opens the slash menu on a hold. */
 export const KEYBAR_KEYS: readonly KeyBarKey[] = [
   { name: "Esc", label: "Esc", aria: "Escape" },
   { name: "Tab", label: "Tab", aria: "Tab" },
@@ -58,7 +58,9 @@ export const KEYBAR_KEYS: readonly KeyBarKey[] = [
   { name: "Left", label: "←", aria: "Left" },
   { name: "Right", label: "→", aria: "Right" },
   { name: "Enter", label: "Enter", aria: "Enter" },
+  { name: "BSpace", label: "⌫", aria: "Backspace" },
   { name: "C-c", label: "Ctrl-C", aria: "Control C (hold to send)" },
+  { name: "C-d", label: "Ctrl-D", aria: "Control D (hold to send)" },
   { name: "C-u", label: "Ctrl-U", aria: "Control U" },
   { name: "Slash", label: "/", aria: "Slash (hold for commands)" },
 ];
