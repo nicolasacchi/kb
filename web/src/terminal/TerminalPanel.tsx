@@ -466,7 +466,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
             if (data instanceof ArrayBuffer) handlers.onMessageBinary(new Uint8Array(data));
             else handlers.onMessageText(String(data));
           };
-          ws.onclose = (ev: CloseEvent) => handlers.onClose(ev.code);
+          ws.onclose = (ev: CloseEvent) => handlers.onClose(ev.code, ev.reason);
           ws.onerror = () => {
             // Errors surface as onclose; nothing additional to do.
           };
@@ -553,7 +553,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
 
     // T17: a returning network (`online`, a bfcache `pageshow`, the tab
     // turning visible) skips a pending reconnect backoff once.
-    const unbindKicks = bindNetworkKicks(window, document, () => session.kick());
+    const unbindKicks = bindNetworkKicks(window, document, () => session.kick(), (hidden) => session.setHidden(hidden));
 
     return () => {
       dead = true;

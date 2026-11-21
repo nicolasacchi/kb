@@ -36,15 +36,24 @@
 //     the socket with 1000, cancels timers, and mints no further
 //     tickets.
 //   * Liveness is the FIRST_FRAME_WATCHDOG_MS no-frame watchdog between
-//     socket open and the first frame of that connection (hello counts). There is
-//     no steady-state client timer: T12's relay pings the browser at
-//     the WS layer every 25 s (browsers answer Pong automatically),
-//     so `onclose` is the steady-state signal.
+//     socket open and the first frame of that connection (hello counts). In
+//     steady state there is no polling timer: T12's relay pings the browser at
+//     the WS layer every 25 s (browsers answer Pong automatically), so
+//     `onclose` is the usual signal. That only covers the browser leg, so a
+//     kick (visible / online / pageshow) after > 8 s of silence sends one
+//     app-level `ping` to a tap that advertised `pong` on hello and rejoins by
+//     resume if nothing arrives in 2.5 s (FUTERMLIVE).
+//   * A tab hidden for 3 min releases its socket (close 1000, phase
+//     "sleeping", no caption churn); the next kick rejoins by resume.
+//   * Mint failures: an edge-auth lapse (401, a redirect, an untyped 403)
+//     settles in "expired" until a kick; fetch TypeError = "offline" (retried);
+//     a 404 terminal-not-found after the session was live is "ended".
 
 import {
   decodeBinaryFrame,
   encodeBinaryInput,
   encodeInput,
+  encodePing,
   parseTextFrame,
   WireProtocolError,
   type ImageDefFrame,
@@ -53,7 +62,16 @@ import {
 } from "./wire";
 import { TermsApiError, wsUrl } from "../api/terms";
 
-export type Phase = "connecting" | "live" | "reconnecting" | "ended" | "blocked";
+export type Phase =
+  | "connecting"
+  | "live"
+  | "reconnecting"
+  | "ended"
+  | "blocked"
+  // FUTERMLIVE: the socket was released after ~3 min hidden (quiet; rejoins by resume on show).
+  | "sleeping"
+  // FUTERMLIVE: the edge-auth session lapsed; no timers run until a kick re-mints.
+  | "expired";
 
 export interface SessionState {
   phase: Phase;
@@ -76,7 +94,8 @@ export interface SessionSocket {
 export interface SocketHandlers {
   onMessageBinary(frame: Uint8Array): void;
   onMessageText(text: string): void;
-  onClose(code: number): void;
+  /** `reason` is the close frame's reason string (may be empty). */
+  onClose(code: number, reason?: string): void;
 }
 
 export interface SessionEffects {
@@ -132,6 +151,14 @@ const FIRST_FRAME_WATCHDOG_MS = 6000;
 const LIVE_BEFORE_RESET_MS = 5000;
 const BASE_BACKOFF_MS = 250;
 const MAX_BACKOFF_MS = 10_000;
+/** FUTERMLIVE: silence longer than this makes a visibility/online kick probe a live socket. */
+const PROBE_AFTER_SILENCE_MS = 8000;
+/** FUTERMLIVE: no frame this long after a ping means the socket is half-open. */
+const PROBE_TIMEOUT_MS = 2500;
+/** FUTERMLIVE: a tab hidden this long releases its socket (frees a viewer slot). */
+const HIDDEN_RELEASE_MS = 180_000;
+/** FUTERMLIVE: consecutive closes before any frame arrived that earn the "cannot reach" caption. */
+const PRE_HELLO_FAILS_CAPTION = 3;
 
 /**
  * Reconnect delay for the given attempt: `min(10 s, 250 ms * 2^attempt)`
@@ -158,6 +185,16 @@ export class TermSession {
   private attempt = 0;
   private exitCode: number | null = null;
   private blockedReason: string | null = null;
+  /** The tap advertised the pong capability on this connection's hello. */
+  private pongCapable = false;
+  private lastHeardAt = 0;
+  /** True once any frame arrived on the current socket generation. */
+  private heardThisSocket = false;
+  private preHelloFails = 0;
+  /** Why the current reconnect is happening, shown in the caption ("slow link"). */
+  private reconnectReason: string | null = null;
+  private everLive = false;
+  private endedGone = false;
 
   private socket: SessionSocket | null = null;
   private socketGen = 0;
@@ -167,6 +204,8 @@ export class TermSession {
   private watchdog: unknown = null;
   private liveResetTimer: unknown = null;
   private reconnectTimer: unknown = null;
+  private probeTimer: unknown = null;
+  private hiddenTimer: unknown = null;
 
   // Seed bookkeeping: the seed payload chunks all carry seed.offset.
   private seeding = false;
@@ -187,10 +226,14 @@ export class TermSession {
   getState(): SessionState {
     let caption: string;
     if (this.phase === "blocked") caption = `blocked: ${this.blockedReason ?? "unknown"}`;
-    else if (this.phase === "ended") caption = this.exitCode === null ? "exited" : `exited (code ${this.exitCode})`;
+    else if (this.phase === "ended") {
+      caption = this.endedGone ? "ended" : this.exitCode === null ? "exited" : `exited (code ${this.exitCode})`;
+    } else if (this.phase === "expired") caption = "session expired, reload";
     else if (this.phase === "reconnecting") {
       const nextMs = Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * 2 ** this.attempt);
       caption = `reconnecting in ${Math.max(1, Math.ceil(nextMs / 1000))}s`;
+      if (this.preHelloFails >= PRE_HELLO_FAILS_CAPTION) caption = `cannot reach terminal, retrying (${caption})`;
+      else if (this.reconnectReason !== null) caption += ` (${this.reconnectReason})`;
     } else caption = this.phase;
     return {
       phase: this.phase,
@@ -219,16 +262,96 @@ export class TermSession {
    * flapping trigger cannot reset the backoff.
    */
   kick(): void {
-    if (this.disposed || this.isSettled() || this.reconnectTimer === null) return;
+    if (this.disposed || this.isSettled()) return;
+    if (this.phase === "sleeping" || this.phase === "expired") {
+      // Wake: one mint, a resume join from the applied offset (connect() computes it).
+      this.phase = "connecting";
+      this.emit();
+      void this.connect();
+      return;
+    }
+    if (this.reconnectTimer === null) {
+      this.probe();
+      return;
+    }
     this.fx.clearTimer(this.reconnectTimer);
     this.reconnectTimer = null;
     this.attempt += 1;
     void this.connect();
   }
 
+  /**
+   * FUTERMLIVE: a live socket that has been silent longer than
+   * PROBE_AFTER_SILENCE_MS gets one `ping`; the tap answers `pong` (only a tap
+   * that advertised the capability on hello is probed, so a legacy tap is
+   * never reconnect-looped). No frame of any kind within PROBE_TIMEOUT_MS
+   * means the socket is half-open: close it and rejoin by resume from
+   * `applied` (attempt 0, no re-seed, no grid change).
+   */
+  private probe(): void {
+    if (this.phase !== "live" || this.socket === null || !this.pongCapable) return;
+    if (this.probeTimer !== null) return;
+    if (this.fx.now() - this.lastHeardAt <= PROBE_AFTER_SILENCE_MS) return;
+    const gen = this.socketGen;
+    try {
+      this.socket.send(encodePing());
+    } catch {
+      // A throwing send is a dead socket: fall through to the timeout path.
+    }
+    this.probeTimer = this.fx.setTimer(() => {
+      this.probeTimer = null;
+      if (this.disposed || gen !== this.socketGen || this.phase !== "live") return;
+      this.closeForRejoin();
+      this.attempt = 0;
+      this.reconnectReason = null;
+      this.phase = "reconnecting";
+      this.emit();
+      void this.connect();
+    }, PROBE_TIMEOUT_MS);
+  }
+
+  /**
+   * FUTERMLIVE: the tab hid / showed. Hidden for HIDDEN_RELEASE_MS releases the
+   * socket quietly (close 1000, phase "sleeping", no reconnect caption); the
+   * next kick rejoins by resume. A short hide only arms and clears a timer.
+   */
+  setHidden(hidden: boolean): void {
+    if (this.disposed) return;
+    if (this.hiddenTimer !== null) {
+      this.fx.clearTimer(this.hiddenTimer);
+      this.hiddenTimer = null;
+    }
+    if (!hidden) return;
+    this.hiddenTimer = this.fx.setTimer(() => {
+      this.hiddenTimer = null;
+      this.release();
+    }, HIDDEN_RELEASE_MS);
+  }
+
+  private release(): void {
+    if (this.disposed || this.isSettled() || this.phase === "sleeping" || this.phase === "expired") return;
+    this.socketGen += 1;
+    this.clearAllTimers();
+    if (this.mintAbort) {
+      this.mintAbort.abort();
+      this.mintAbort = null;
+    }
+    const s = this.socket;
+    this.socket = null;
+    this.seeding = false;
+    this.phase = "sleeping";
+    this.reconnectReason = null;
+    this.emit();
+    if (s) s.close(1000);
+  }
+
   /** Unmount: close 1000, cancel timers, mint no further tickets. */
   dispose(): void {
     this.disposed = true;
+    if (this.hiddenTimer !== null) {
+      this.fx.clearTimer(this.hiddenTimer);
+      this.hiddenTimer = null;
+    }
     // Bump the generation so in-flight frames on the old socket are
     // ignored by the gen-guarded handlers after dispose.
     this.socketGen += 1;
@@ -261,6 +384,8 @@ export class TermSession {
   rejoinFull(): void {
     if (this.disposed || this.isSettled()) return;
     this.applied = 0;
+    // Asleep or expired: the full join happens at the wake (applied is already 0).
+    if (this.phase === "sleeping" || this.phase === "expired") return;
     this.clearAllTimers();
     // Bump the generation so the old socket's close handler is ignored
     // (it must not schedule a competing reconnect after rejoin).
@@ -285,25 +410,31 @@ export class TermSession {
       ticket = result.ticket;
     } catch (e) {
       this.mintAbort = null;
-      if (this.disposed) return;
+      if (this.disposed || this.isInert()) return;
       if (e instanceof TermsApiError) {
+        // The edge auth lapsed (a login redirect, a 401, or a 403 that is not
+        // kb's own problem+json): settle quietly until a kick re-mints.
+        if (e.status === 401 || (e.status === 403 && e.type === null)) return this.expire();
         if (e.status === 404) {
           // A bodiless 404 is the disabled gate; a problem+json
           // `terminal-not-found` means the terminal itself is gone.
-          return this.block(
-            e.type !== null && e.type.endsWith("terminal-not-found")
-              ? "terminal not found"
-              : "terminal disabled",
-          );
+          if (e.type !== null && e.type.endsWith("terminal-not-found")) {
+            // Gone after it was live: it ended while we were away. Keep the
+            // transcript for reading; "blocked" is for disabled / not permitted.
+            return this.everLive ? this.endGone() : this.block("terminal not found");
+          }
+          return this.block("terminal disabled");
         }
         if (e.status === 403) return this.block("not permitted");
       }
-      // Any other failure (incl. 429 ticket-table-full) is retryable.
+      // Any other failure (incl. 429 ticket-table-full) is retryable. A
+      // TypeError from fetch is the browser being offline.
+      this.reconnectReason = e instanceof TypeError ? "offline" : null;
       this.scheduleReconnect();
       return;
     }
     this.mintAbort = null;
-    if (this.disposed || this.isSettled()) return;
+    if (this.disposed || this.isInert()) return;
     const url = wsUrl(
       this.termId,
       ticket,
@@ -315,6 +446,9 @@ export class TermSession {
     // A seed cut short by the previous socket must not swallow this
     // connection's data frames as seed payload.
     this.seeding = false;
+    this.heardThisSocket = false;
+    this.pongCapable = false;
+    this.clearProbe();
     const socket = this.fx.openSocket(url, {
       onMessageBinary: (frame) => {
         if (gen === this.socketGen) this.onBinary(frame);
@@ -322,8 +456,8 @@ export class TermSession {
       onMessageText: (text) => {
         if (gen === this.socketGen) this.onText(text);
       },
-      onClose: (code) => {
-        if (gen === this.socketGen) this.onClose(code);
+      onClose: (code, reason) => {
+        if (gen === this.socketGen) this.onClose(code, reason ?? "");
       },
     });
     this.socket = socket;
@@ -332,7 +466,7 @@ export class TermSession {
   }
 
   private scheduleReconnect(): void {
-    if (this.disposed || this.isSettled()) return;
+    if (this.disposed || this.isInert()) return;
     this.phase = "reconnecting";
     this.clearWatchdog();
     this.clearLiveReset();
@@ -352,6 +486,34 @@ export class TermSession {
     return this.phase === "ended" || this.phase === "blocked";
   }
 
+  /** Settled, or released/expired: nothing may schedule a connect on its own. */
+  private isInert(): boolean {
+    return this.isSettled() || this.phase === "sleeping" || this.phase === "expired";
+  }
+
+  /** The edge session lapsed: stop, no timers, wait for a kick. */
+  private expire(): void {
+    this.phase = "expired";
+    this.socketGen += 1;
+    this.clearAllTimers();
+    const s = this.socket;
+    this.socket = null;
+    if (s) s.close(1000);
+    this.emit();
+  }
+
+  /** The terminal ended while we were away (mint 404 after live): keep the transcript. */
+  private endGone(): void {
+    this.phase = "ended";
+    this.endedGone = true;
+    this.socketGen += 1;
+    this.clearAllTimers();
+    const s = this.socket;
+    this.socket = null;
+    if (s) s.close(1000);
+    this.emit();
+  }
+
   /** Terminal-side block (pin/width mismatch): stop permanently, no retry. */
   block(reason: string): void {
     this.phase = "blocked";
@@ -368,13 +530,28 @@ export class TermSession {
     this.emit();
   }
 
-  private onClose(_code: number): void {
+  private onClose(code: number, reason: string): void {
     this.socket = null;
-    if (this.disposed || this.isSettled()) return;
+    if (this.disposed || this.isInert()) return;
     // 1012 (server restart) and every other unexpected close take the
     // same bounded backoff. The socket-generated watchdog going off
     // closes through here too (see armWatchdog).
+    this.noteClose(code, reason);
     this.scheduleReconnect();
+  }
+
+  /**
+   * Record why the socket went away: the relay's distinct close reasons
+   * (idle / slow consumer / service restart) name the caption, and a close
+   * before ANY frame arrived (a refused upgrade shows up as a bare 1006) counts
+   * toward the "cannot reach terminal" caption.
+   */
+  private noteClose(code: number, reason: string): void {
+    this.reconnectReason = reason === "idle" || code === 1001 ? "idle"
+      : reason === "slow consumer" || code === 1013 ? "slow link"
+      : reason === "service restart" || code === 1012 ? "service restarting"
+      : null;
+    this.preHelloFails = this.heardThisSocket ? 0 : this.preHelloFails + 1;
   }
 
   /** Close the live socket for a gap/protocol full rejoin. */
@@ -396,6 +573,8 @@ export class TermSession {
       if (this.isSettled()) return;
       // No first frame within the watchdog budget of open: treat as a
       // dead connection and rejoin (resume from `applied` when known).
+      this.preHelloFails += 1;
+      this.reconnectReason = null;
       this.closeForRejoin();
       this.scheduleReconnect();
     }, FIRST_FRAME_WATCHDOG_MS);
@@ -415,7 +594,22 @@ export class TermSession {
     }
   }
 
+  private clearProbe(): void {
+    if (this.probeTimer !== null) {
+      this.fx.clearTimer(this.probeTimer);
+      this.probeTimer = null;
+    }
+  }
+
+  /** Every frame on the current socket proves it alive: note it, cancel an open probe. */
+  private heard(): void {
+    this.lastHeardAt = this.fx.now();
+    this.heardThisSocket = true;
+    this.clearProbe();
+  }
+
   private clearAllTimers(): void {
+    this.clearProbe();
     this.clearWatchdog();
     this.clearLiveReset();
     if (this.reconnectTimer !== null) {
@@ -428,6 +622,8 @@ export class TermSession {
     this.clearWatchdog();
     const wasLive = this.phase === "live";
     this.phase = "live";
+    this.everLive = true;
+    this.reconnectReason = null;
     if (wasLive) {
       // Already live on this generation: keep the original 5s timer.
       // Re-arming on every frame would postpone the attempt reset
@@ -484,6 +680,7 @@ export class TermSession {
 
   private onBinary(frame: Uint8Array): void {
     if (this.disposed || this.isSettled()) return;
+    this.heard();
     let decoded: { offset: number; payload: Uint8Array };
     try {
       decoded = decodeBinaryFrame(frame);
@@ -538,6 +735,7 @@ export class TermSession {
 
   private onText(text: string): void {
     if (this.disposed || this.isSettled()) return;
+    this.heard();
     let frame: ServerTextFrame;
     try {
       frame = parseTextFrame(text);
@@ -555,6 +753,8 @@ export class TermSession {
           this.mseq = 0;
         }
         this.epoch = frame.epoch;
+        this.pongCapable = frame.pong === true;
+        this.preHelloFails = 0;
         this.cb.onViewer?.(typeof frame.viewer === "string" ? frame.viewer : null);
         // The tap marks the viewer live before writing hello, and a
         // resume of an idle terminal is answered with hello alone.
@@ -625,6 +825,9 @@ export class TermSession {
         this.cb.onClipboard?.(frame.data_b64);
         break;
       case "error":
+        break;
+      case "pong":
+        // heard() already cancelled the probe; nothing else to do.
         break;
       case "exit": {
         // Remaining data up to `offset` is already queued ahead of this
