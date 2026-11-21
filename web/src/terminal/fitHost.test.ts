@@ -13,8 +13,8 @@ function hostWith(width: number, height: number, screen?: { w: number; h: number
   if (screen) {
     const el = document.createElement("div");
     el.className = "xterm-screen";
-    Object.defineProperty(el, "scrollWidth", { get: () => screen.w, configurable: true });
-    Object.defineProperty(el, "scrollHeight", { get: () => screen.h, configurable: true });
+    Object.defineProperty(el, "offsetWidth", { get: () => screen.w, configurable: true });
+    Object.defineProperty(el, "offsetHeight", { get: () => screen.h, configurable: true });
     host.appendChild(el);
   }
   return host;
@@ -67,8 +67,8 @@ describe("fitHostNow in a host as tall as its content", () => {
     const screen = document.createElement("div");
     screen.className = "xterm-screen";
     const height = () => rows * Math.floor((term.options.fontSize ?? 14) * 1.32);
-    Object.defineProperty(screen, "scrollWidth", { get: () => 400, configurable: true });
-    Object.defineProperty(screen, "scrollHeight", { get: height, configurable: true });
+    Object.defineProperty(screen, "offsetWidth", { get: () => 400, configurable: true });
+    Object.defineProperty(screen, "offsetHeight", { get: height, configurable: true });
     Object.defineProperty(host, "clientWidth", { value: 1400, configurable: true });
     Object.defineProperty(host, "clientHeight", { get: height, configurable: true });
     host.appendChild(screen);
@@ -112,5 +112,30 @@ describe("fitHostNow: a new situation is planned from scratch (FUTERMPOLISH W3)"
     const host = hostWith(1230, 576, { w: 99999, h: 99999 });
     const r = fitHostNow(term, host, { cols: 80, rows: 24 }, { min: 9, max: 20, fresh: true });
     expect(term.options.fontSize).toBe(r?.fontSize);
+  });
+});
+
+describe("fitHostNow: a stray child of the screen never decides the fit (FUTERMFONT)", () => {
+  // xterm parks its helper textarea inside `.xterm-screen` at the old cursor
+  // row; the screen's scroll extent then reaches below its own box.
+  function withStrayTextarea(screenW: number, screenH: number, strayBottom: number): HTMLElement {
+    const host = hostWith(1230, 548, { w: screenW, h: screenH });
+    const screen = host.querySelector(".xterm-screen") as HTMLElement;
+    Object.defineProperty(screen, "scrollWidth", { get: () => screenW, configurable: true });
+    Object.defineProperty(screen, "scrollHeight", { get: () => Math.max(screenH, strayBottom), configurable: true });
+    Object.defineProperty(host, "scrollHeight", { get: () => Math.max(548, strayBottom), configurable: true });
+    return host;
+  }
+
+  it("a screen that fits is not Cropped and equals the fresh compute, however far the textarea sits below it", () => {
+    probe();
+    const grid = { cols: 80, rows: 24 };
+    const clean = { options: { fontSize: 9, fontFamily: "monospace" } };
+    const want = fitHostNow(clean, withStrayTextarea(560, 408, 0), grid, { min: 9, max: 20, fresh: true });
+    const term = { options: { fontSize: 9, fontFamily: "monospace" } };
+    const got = fitHostNow(term, withStrayTextarea(560, 408, 576), grid, { min: 9, max: 20, fresh: true });
+    expect(got).toEqual(want);
+    expect(got?.cropped).toEqual({ x: false, y: false });
+    expect(got?.fontSize).toBeGreaterThan(9);
   });
 });
