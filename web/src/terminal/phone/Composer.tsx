@@ -9,7 +9,7 @@
 // Focusing, typing and the soft keyboard opening or closing never resize the
 // pty (nothing here calls take-size or resize).
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Icon } from "@kb/ui/icons";
 import { toast } from "../../lib/toast";
 import {
@@ -21,6 +21,37 @@ import {
   type Drive,
 } from "./driveApi";
 import { CAPTION, planSend } from "./planSend";
+import { QuickReplies } from "./QuickReplies";
+
+/** A draft is kept per terminal for a day (client UI state, never terminal bytes). */
+export const DRAFT_TTL_MS = 24 * 3600 * 1000;
+/** Quiet time before a typed draft is written to storage. */
+export const DRAFT_DEBOUNCE_MS = 300;
+const draftKey = (termId: string): string => `kb.term.draft.${termId}`;
+
+export function loadDraft(termId: string): string {
+  try {
+    const raw = localStorage.getItem(draftKey(termId));
+    if (raw === null) return "";
+    const v = JSON.parse(raw) as { t?: unknown; at?: unknown };
+    if (typeof v.t !== "string" || typeof v.at !== "number" || Date.now() - v.at > DRAFT_TTL_MS) {
+      localStorage.removeItem(draftKey(termId));
+      return "";
+    }
+    return v.t;
+  } catch {
+    return "";
+  }
+}
+
+export function saveDraft(termId: string, text: string): void {
+  try {
+    if (text === "") localStorage.removeItem(draftKey(termId));
+    else localStorage.setItem(draftKey(termId), JSON.stringify({ t: text, at: Date.now() }));
+  } catch {
+    // storage full or blocked: the draft just does not survive
+  }
+}
 
 export interface ComposerProps {
   drive: Drive;
@@ -49,13 +80,53 @@ export function imageChip(sha256: string, mime: string): string {
 
 export function Composer(props: ComposerProps) {
   const { drive, bracketPaste, blocked, bound, caption, onCaption, onTyped } = props;
-  const [text, setText] = useState("");
+  const [text, setText] = useState(() => loadDraft(drive.termId));
   const [busy, setBusy] = useState(false);
   const [chip, setChip] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
-  const send = async (): Promise<void> => {
-    const plan = planSend(text, { harness: drive.harness, bracketPaste, blocked });
+  // The draft write is debounced (a keystroke must not hit localStorage), is
+  // flushed on unmount / pagehide / hidden so a close or reload keeps the text,
+  // and an emptied draft removes the key at once. `saved` is what storage holds,
+  // so an untouched restored draft is never re-stamped (its TTL stays honest).
+  const latest = useRef({ termId: drive.termId, text });
+  const saved = useRef(text);
+  useEffect(() => {
+    latest.current = { termId: drive.termId, text };
+    if (text === "") {
+      saveDraft(drive.termId, "");
+      saved.current = "";
+      return;
+    }
+    const t = setTimeout(() => {
+      saveDraft(drive.termId, text);
+      saved.current = text;
+    }, DRAFT_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [drive.termId, text]);
+  useEffect(() => {
+    const flush = (): void => {
+      const { termId, text: cur } = latest.current;
+      if (cur === saved.current) return;
+      saveDraft(termId, cur);
+      saved.current = cur;
+    };
+    const onVis = (): void => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", onVis);
+      flush();
+    };
+  }, []);
+
+  // `override` is a quick reply: the same plan and calls, but the draft is left alone.
+  const send = async (override?: string): Promise<void> => {
+    const body = override ?? text;
+    const plan = planSend(body, { harness: drive.harness, bracketPaste, blocked });
     if (plan.kind === "empty") return;
     if (plan.kind === "refuse") {
       onCaption(CAPTION.refuse);
@@ -69,7 +140,7 @@ export function Composer(props: ComposerProps) {
       const enter = plan.kind === "paste-enter" && bound;
       const r = await sendText(drive, plan.text, { enter });
       if (r.kind === "declined") return;
-      setText("");
+      if (override === undefined) setText("");
       onTyped?.();
       if (r.kind === "pasted-not-sent") {
         // The text IS in the pane: clear it, say so, and offer no resend.
@@ -135,6 +206,7 @@ export function Composer(props: ComposerProps) {
         void send();
       }}
     >
+      <QuickReplies onSend={(t) => void send(t)} disabled={busy} />
       <textarea
         className="kb-drive__input"
         data-testid="kb-drive-input"
