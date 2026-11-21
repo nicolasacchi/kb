@@ -32,6 +32,9 @@ export type SheetProps = {
    *  closes. Forwarded to `useCloseRequest` so the platform close request
    *  that Esc raises is cancelled too. */
   ignoreEscape?: (e: KeyboardEvent) => boolean;
+  /** Keep the title as the dialog's accessible name but do not paint it (the
+   *  content carries its own header). */
+  titleHidden?: boolean;
 };
 
 function toPx(v: string): number {
@@ -59,6 +62,7 @@ export function Sheet({
   asSheet = true,
   id,
   ignoreEscape,
+  titleHidden = false,
 }: SheetProps) {
   const rid = useId();
   const titleId = `${id ?? "kb-sheet"}-title-${rid}`;
@@ -197,7 +201,7 @@ export function Sheet({
           onPointerUp={endDrag}
           onPointerCancel={endDrag}
         />
-        <h2 id={titleId} className="kb-sheet__title">
+        <h2 id={titleId} className={titleHidden ? "kb-sheet__title kb-sheet__title--sr" : "kb-sheet__title"}>
           {title}
         </h2>
         <div className="kb-sheet__body">{children}</div>

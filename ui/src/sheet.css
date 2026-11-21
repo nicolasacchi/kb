@@ -63,6 +63,17 @@
   font-weight: 600;
 }
 
+/* Name only: a content header already carries the title (the terminal's phone bar). */
+.kb-sheet__title--sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .kb-sheet__body {
   flex: 1 1 auto;
   min-height: 0;

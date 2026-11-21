@@ -238,4 +238,18 @@ describe("Sheet", () => {
     );
     expect(html).toContain("data-kb-sheet");
   });
+
+  it("titleHidden keeps the title as the accessible name but marks it name-only", () => {
+    mount({ title: "Named", titleHidden: true });
+    const sheet = document.querySelector("[data-kb-sheet]")!;
+    const h = sheet.querySelector("h2")!;
+    expect(h.className).toContain("kb-sheet__title--sr");
+    expect(sheet.getAttribute("aria-labelledby")).toBe(h.id);
+    expect(h.textContent).toBe("Named");
+  });
+
+  it("an untouched title is still painted (no --sr class)", () => {
+    mount();
+    expect(document.querySelector("[data-kb-sheet] h2")!.className).not.toContain("--sr");
+  });
 });
