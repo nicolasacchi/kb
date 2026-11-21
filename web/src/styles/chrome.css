@@ -395,6 +395,49 @@
   outline-offset: -1px;
 }
 
+/* FUSPINE - at tablet widths the doors collapse to their icons (the label
+ * stays in the accessibility tree and as the link's title), the search
+ * launcher drops its key hint and ellipsizes, and the identity chip is
+ * narrower, so the 44px bar fits the window with the Now chip showing. */
+@media (min-width: 861px) and (max-width: 1200px) {
+  .kb-door {
+    padding: 0 var(--pad-2);
+  }
+  .kb-door__label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .kb-search-mini .kbd {
+    display: none;
+  }
+  .kb-search-mini__placeholder {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .kb-identity {
+    max-width: 6em;
+  }
+}
+/* The blocked chip's long text ("N blocked · M waiting") collapses to its
+ * icon below 1000px; the danger colour, the title and the aria-label keep it
+ * distinct and named. */
+@media (min-width: 861px) and (max-width: 1000px) {
+  .kb-waiting__text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
 /* OL-L2 — the labelled sub-nav row at the top of a door's family pages. */
 .kb-sectiontabs {
   display: flex;

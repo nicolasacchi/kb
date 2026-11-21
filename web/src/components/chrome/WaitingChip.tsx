@@ -45,7 +45,7 @@ export default function WaitingChip() {
         aria-label={label}
       >
         <Icon.Terminal aria-hidden />
-        <span>{text}</span>
+        <span className="kb-waiting__text">{text}</span>
       </Link>
     );
   }

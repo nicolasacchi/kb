@@ -295,6 +295,20 @@ pins `react` / `react-dom` to its own `node_modules` (tsconfig `paths`,
 beside the source as `*.test.ts(x)`; both apps' `vitest.config.ts` include
 `../ui/src/**`, so each file is tested once per app. See `ui/README.md`.
 
+### The Spine at 861-1280 px (FUSPINE)
+
+The Spine is one 44px row at every width, and between the mobile breakpoint
+(860px) and 1280px it must fit its window: the bar's right edge stays inside the
+viewport and the page never scrolls sideways. The search slot is the flexible
+one (floor 6rem, ellipsized) and the scope crumbs ellipsize (floor 4rem). Each
+app then collapses labels to icons rather than dropping an action: at 1200px
+and below kb's doors and kb-code's doors and trail label go icon-only (the
+label stays in the accessibility tree and as the link's `title`), and kb's
+blocked chip keeps only its icon at 1000px and below. Nothing wraps to a second
+row (`ui/chrome-budget.json` still holds). The Playwright specs
+`tests/e2e/zzz-spine-fit.spec.ts` and `web-code/e2e/spine-fit.spec.ts` measure
+the bar at 1024, 900, 1100 and 1280px.
+
 ### Shared tokens and the type ramp
 
 `ui/src/tokens.css` is the one home of the type ramp, spacing steps, radii, the
