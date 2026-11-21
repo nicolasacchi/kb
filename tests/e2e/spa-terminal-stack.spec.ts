@@ -1144,7 +1144,8 @@ test("a 201x48 grid is fully visible at 1440x900 (font >= 9, no horizontal scrol
   expect(g.cropped, "no Cropped hint when everything fits").toBe(false);
   expect(g.docW, "no page-level horizontal overflow").toBeLessThanOrEqual(g.vw);
   expect(g.hostW, "the panel breaks out of the 860px reading column").toBeGreaterThan(900);
-  expect(g.chip).toMatch(/^201x48 · /);
+  // the owner suffix appears once the list row is known; never a guessed "free"
+  expect(g.chip).toMatch(/^201x48( · (?!free).+)?$/);
 
   // 1280x720: either everything still fits, or the hint says it is cropped and the host scrolls.
   await page.setViewportSize({ width: 1280, height: 720 });
