@@ -22,15 +22,16 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   delete (window as unknown as { CloseWatcher?: unknown }).CloseWatcher;
 });
 
 describe("useSheetHistory", () => {
   it("opening pushes one entry that keeps the router state; Back closes the sheet and the page stays", async () => {
     const onClose = vi.fn();
-    const before = window.history.length;
+    const push = vi.spyOn(window.history, "pushState");
     render(<Probe active onClose={onClose} />);
-    expect(window.history.length).toBe(before + 1);
+    expect(push).toHaveBeenCalledTimes(1);
     expect(sheetKey()).toBeTruthy();
     expect((window.history.state as { idx: number }).idx).toBe(4);
     await act(async () => {
@@ -44,9 +45,10 @@ describe("useSheetHistory", () => {
 
   it("closing from the sheet's own button pops the entry and never calls onClose", async () => {
     const onClose = vi.fn();
-    const before = window.history.length;
+    const push = vi.spyOn(window.history, "pushState");
     const r = render(<Probe active onClose={onClose} />);
-    expect(window.history.length).toBe(before + 1);
+    expect(push).toHaveBeenCalledTimes(1);
+    expect(sheetKey()).toBeTruthy();
     await act(async () => {
       r.rerender(<Probe active={false} onClose={onClose} />);
       await tick();
@@ -78,7 +80,7 @@ describe("useSheetHistory", () => {
   });
 
   it("StrictMode's effect replay keeps exactly one entry", async () => {
-    const before = window.history.length;
+    const push = vi.spyOn(window.history, "pushState");
     render(
       <StrictMode>
         <Probe active onClose={() => {}} />
@@ -87,7 +89,7 @@ describe("useSheetHistory", () => {
     await act(async () => {
       await tick();
     });
-    expect(window.history.length).toBe(before + 1);
+    expect(push).toHaveBeenCalledTimes(1);
     expect(sheetKey()).toBeTruthy();
   });
 

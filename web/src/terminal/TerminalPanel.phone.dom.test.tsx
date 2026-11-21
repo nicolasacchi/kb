@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock("../hooks/useIsMobile", () => ({ useIsMobile: () => true }));
+vi.mock("../hooks/useIsMobile", () => ({ useIsMobile: () => true, usePhonePanel: () => true }));
 vi.mock("@xterm/xterm", () => ({ Terminal: class {} }));
 vi.mock("@xterm/addon-image", () => ({ ImageAddon: class {} }));
 vi.mock("@xterm/addon-webgl", () => ({ WebglAddon: class {} }));
