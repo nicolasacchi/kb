@@ -186,6 +186,8 @@ async fn dispatch_inner<S: Supervisor>(
                     "no viewer `{viewer}` for {id}"
                 )));
             }
+            // A local attach that no longer owns the grid never types.
+            crate::runner::grid::check_input(runner, id, viewer).await?;
             let bytes = decode_keys_input(input)?;
             let pump = runner
                 .viewer_pump(id, viewer)
@@ -212,6 +214,7 @@ async fn dispatch_inner<S: Supervisor>(
                     "no viewer `{viewer}` for {id}"
                 )));
             }
+            crate::runner::grid::check_input(runner, id, viewer).await?;
             let outcome = crate::runner::paste::paste_text(runner, &runner.tmux, id, text).await?;
             runner.set_paste_only(id, outcome.paste_only).await;
             Ok(serde_json::to_value(&PasteData {
@@ -241,6 +244,7 @@ async fn dispatch_inner<S: Supervisor>(
                     "no viewer `{viewer}` for {id}"
                 )));
             }
+            crate::runner::grid::check_input(runner, id, viewer).await?;
             let last_paste_only = runner.paste_only(id).await;
             crate::runner::enter::enter_gate(*blocked, *from_composer, last_paste_only)?;
             let quiet = crate::runner::enter::AnchorQuiet { runner };
