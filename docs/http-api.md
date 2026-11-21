@@ -1909,7 +1909,11 @@ GET    /api/terms/{id}/ws                    SPA-only terminal byte
                                             `imagedef`, `seed`,
                                             `resize`, `sizechanged`,
                                             `gfxreset`, `exit`,
-                                            `clipboard`, `error`.
+                                            `clipboard`, `error`, `pong`
+                                            (the tap's reply to a client
+                                            `ping`, to that viewer only;
+                                            `hello` may carry `pong: true`
+                                            as the capability bit).
                                             Client to server (unknown
                                             fields rejected):
                                             `resumefrom`, `takesize`,
@@ -1941,12 +1945,14 @@ GET    /api/terms/{id}/ws                    SPA-only terminal byte
                                             rather than silently dropping
                                             keys.
                                             It closes 1012 on daemon
-                                            restart, 1013 for a slow
-                                            consumer, 1011 when the
+                                            restart (reason `service
+                                            restart`), 1013 for a slow
+                                            consumer (`slow consumer`),
+                                            1011 when the
                                             upstream ends (1000 after
                                             an `exit` frame), and 1001
                                             after 75 s of browser
-                                            silence.
+                                            silence (reason `idle`).
                                             SSE (low rate, never per
                                             data frame): `term.created`
                                             `{id, harness, cols, rows}`

@@ -46,8 +46,8 @@ class FakeSocket implements SessionSocket {
   pushText(frame: unknown): void {
     this.handlers.onMessageText(typeof frame === "string" ? frame : JSON.stringify(frame));
   }
-  closeFromServer(code: number): void {
-    this.handlers.onClose(code);
+  closeFromServer(code: number, reason = ""): void {
+    this.handlers.onClose(code, reason);
   }
 }
 
@@ -75,6 +75,7 @@ function setup(opts: { random?: () => number; callbacks?: Partial<SessionCallbac
   const mintedTickets: string[] = [];
   let mintError: unknown = null;
   const transients: string[] = [];
+  const clock = { t: 1_000_000 };
   const effects: SessionEffects = {
     openSocket: (url, handlers) => {
       urls.push(url);
@@ -88,7 +89,7 @@ function setup(opts: { random?: () => number; callbacks?: Partial<SessionCallbac
       mintedTickets.push(`tick-${ticketSeq}`);
       return { ticket: `tick-${ticketSeq}` };
     },
-    now: () => 1_000_000,
+    now: () => clock.t,
     setTimer: (fn, ms) => {
       const t: FakeTimer = { id: nextTimer, fn, ms, cleared: false, fired: false };
       nextTimer += 1;
@@ -124,6 +125,9 @@ function setup(opts: { random?: () => number; callbacks?: Partial<SessionCallbac
       mintError = e;
     },
     pendingTimer, fire,
+    advance: (ms: number): void => {
+      clock.t += ms;
+    },
   };
 }
 
@@ -832,5 +836,295 @@ describe("nextDelay (T17)", () => {
     await flush();
     expect(ended.sockets.length).toBe(sockets);
     expect(ended.mintedTickets.length).toBe(tickets);
+  });
+});
+
+// FUTERMLIVE — liveness probe, hidden release, refusal captions.
+
+/** Like goLive, but the tap advertises the pong capability on hello. */
+async function goLivePong(h: ReturnType<typeof setup>): Promise<FakeSocket> {
+  h.session.start();
+  await flush();
+  const s = h.sockets[h.sockets.length - 1];
+  s.pushText({ t: "hello", proto: "kb-term/1", session: "s1", epoch: "E1", harness: "omp", bound_sid: null, pong: true });
+  s.pushText(PROFILE);
+  s.pushText({ t: "seed", offset: 105, len: 5 });
+  s.pushBinary(105, "hello");
+  await flush();
+  return s;
+}
+
+const PING = '{"t":"ping"}';
+
+describe("FUTERMLIVE liveness probe", () => {
+  it("a quiet live session probed by a kick, with no pong, reconnects and resumes from applied", async () => {
+    const h = setup();
+    const s = await goLivePong(h);
+    h.advance(12_000);
+    h.session.kick();
+    expect(s.sent).toEqual([PING]);
+    h.fire(2500);
+    await flush();
+    expect(s.closeCodes).toEqual([1000]);
+    expect(h.mintedTickets).toEqual(["tick-1", "tick-2"]);
+    const q = new URL(h.urls[1]).searchParams;
+    expect(q.get("from")).toBe("105");
+    expect(q.get("epoch")).toBe("E1");
+    expect(h.session.getState().attempt).toBe(0);
+    // A resume, never a re-seed: no reset was queued by the probe.
+    expect(h.calls.filter((c) => c[0] === "reset")).toHaveLength(1);
+  });
+
+  it("NEGATIVE CONTROL (passes on main): a pong inside the window leaves socket and attempt alone", async () => {
+    const h = setup();
+    const s = await goLivePong(h);
+    h.advance(12_000);
+    h.session.kick();
+    s.pushText({ t: "pong" });
+    expect(h.pendingTimer(2500)).toBeUndefined();
+    await flush();
+    expect(h.sockets).toHaveLength(1);
+    expect(h.mintedTickets).toEqual(["tick-1"]);
+    expect(s.closeCodes).toEqual([]);
+    expect(h.session.getState().attempt).toBe(0);
+    expect(h.session.getState().phase).toBe("live");
+  });
+
+  it("a tap without the pong capability is never probed and never reconnect-looped", async () => {
+    const h = setup();
+    const s = await goLive(h);
+    h.advance(60_000);
+    h.session.kick();
+    await flush();
+    expect(s.sent).toEqual([]);
+    expect(h.pendingTimer(2500)).toBeUndefined();
+    expect(h.sockets).toHaveLength(1);
+  });
+
+  it("a session heard from within 8 s is not probed", async () => {
+    const h = setup();
+    const s = await goLivePong(h);
+    h.advance(5000);
+    h.session.kick();
+    expect(s.sent).toEqual([]);
+    expect(h.pendingTimer(2500)).toBeUndefined();
+  });
+
+  it("any frame (not only a pong) inside the window cancels the probe", async () => {
+    const h = setup();
+    const s = await goLivePong(h);
+    h.advance(12_000);
+    h.session.kick();
+    s.pushBinary(105, "x");
+    expect(h.pendingTimer(2500)).toBeUndefined();
+  });
+
+  it("a probe in flight is not doubled by a second kick", async () => {
+    const h = setup();
+    const s = await goLivePong(h);
+    h.advance(12_000);
+    h.session.kick();
+    h.session.kick();
+    expect(s.sent).toEqual([PING]);
+  });
+});
+
+describe("FUTERMLIVE hidden release", () => {
+  it("hidden for 3 minutes closes quietly (1000, no reconnecting caption, no timers)", async () => {
+    const h = setup();
+    const s = await goLivePong(h);
+    h.session.setHidden(true);
+    h.fire(180_000);
+    expect(s.closeCodes).toEqual([1000]);
+    const st = h.session.getState();
+    expect(st.phase).toBe("sleeping");
+    expect(st.caption).not.toContain("reconnecting");
+    s.closeFromServer(1000);
+    await flush();
+    expect(h.timers.filter((t) => !t.cleared && !t.fired)).toEqual([]);
+    expect(h.mintedTickets).toEqual(["tick-1"]);
+  });
+
+  it("visible again reopens with exactly one mint and a resume join, no resize, no take-size", async () => {
+    const h = setup();
+    const s = await goLivePong(h);
+    const resizes = h.calls.filter((c) => c[0] === "resize").length;
+    h.session.setHidden(true);
+    h.fire(180_000);
+    s.closeFromServer(1000);
+    h.session.setHidden(false);
+    h.session.kick();
+    await flush();
+    h.session.kick();
+    await flush();
+    expect(h.mintedTickets).toEqual(["tick-1", "tick-2"]);
+    const q = new URL(h.urls[1]).searchParams;
+    expect(q.get("from")).toBe("105");
+    expect(q.get("epoch")).toBe("E1");
+    const s2 = h.sockets[1];
+    expect(s2.sent.some((m) => m.includes("takesize"))).toBe(false);
+    expect(h.calls.filter((c) => c[0] === "resize")).toHaveLength(resizes);
+    s2.pushText({ t: "hello", proto: "kb-term/1", session: "s1", epoch: "E1", harness: "omp", bound_sid: null, pong: true });
+    expect(h.session.getState().phase).toBe("live");
+  });
+
+  it("a short hide does nothing", async () => {
+    const h = setup();
+    const s = await goLivePong(h);
+    h.session.setHidden(true);
+    expect(h.pendingTimer(180_000)).toBeDefined();
+    h.session.setHidden(false);
+    expect(h.pendingTimer(180_000)).toBeUndefined();
+    expect(s.closeCodes).toEqual([]);
+    expect(h.session.getState().phase).toBe("live");
+  });
+
+  it("online/pageshow kick while still hidden after the release does not re-mint (M1)", async () => {
+    const h = setup();
+    const s = await goLivePong(h);
+    h.session.setHidden(true);
+    h.fire(180_000);
+    s.closeFromServer(1000);
+    await flush();
+    h.session.kick();
+    await flush();
+    expect(h.mintedTickets).toEqual(["tick-1"]);
+    expect(h.session.getState().phase).toBe("sleeping");
+    h.session.setHidden(false);
+    h.session.kick();
+    await flush();
+    expect(h.mintedTickets).toEqual(["tick-1", "tick-2"]);
+    expect(new URL(h.urls[1]).searchParams.get("from")).toBe("105");
+  });
+
+  it("a rejoinFull while sleeping waits for the wake and then joins FULL", async () => {
+    const h = setup();
+    await goLivePong(h);
+    h.session.setHidden(true);
+    h.fire(180_000);
+    h.session.rejoinFull();
+    await flush();
+    expect(h.mintedTickets).toEqual(["tick-1"]);
+    h.session.setHidden(false);
+    h.session.kick();
+    await flush();
+    expect(new URL(h.urls[1]).searchParams.has("from")).toBe(false);
+  });
+});
+
+describe("FUTERMLIVE refusal captions", () => {
+  it("repeated pre-hello closes show 'cannot reach terminal, retrying'", async () => {
+    const h = setup();
+    h.session.start();
+    await flush();
+    for (let i = 0; i < 3; i += 1) {
+      h.sockets[h.sockets.length - 1].closeFromServer(1006);
+      expect(h.session.getState().phase).toBe("reconnecting");
+      if (i < 2) expect(h.session.getState().caption).not.toContain("cannot reach terminal");
+      const t = h.timers.find((x) => !x.cleared && !x.fired);
+      t!.fired = true;
+      t!.fn();
+      await flush();
+    }
+    h.sockets[h.sockets.length - 1].closeFromServer(1006);
+    expect(h.session.getState().caption).toContain("cannot reach terminal, retrying");
+  });
+
+  it("a hello clears the pre-hello failure count", async () => {
+    const h = setup();
+    h.session.start();
+    await flush();
+    for (let i = 0; i < 2; i += 1) {
+      h.sockets[h.sockets.length - 1].closeFromServer(1006);
+      const t = h.timers.find((x) => !x.cleared && !x.fired);
+      t!.fired = true;
+      t!.fn();
+      await flush();
+    }
+    const s = h.sockets[h.sockets.length - 1];
+    s.pushText({ t: "hello", proto: "kb-term/1", session: "s1", epoch: "E1", harness: "omp", bound_sid: null });
+    s.closeFromServer(1006);
+    expect(h.session.getState().caption).not.toContain("cannot reach terminal");
+  });
+
+  it("names the close reason in the reconnect caption (idle, slow link, restart)", async () => {
+    const cases: Array<[number, string, string]> = [
+      [1001, "idle", "idle"],
+      [1013, "slow consumer", "slow link"],
+      [1012, "service restart", "service restarting"],
+    ];
+    for (const [code, reason, shown] of cases) {
+      const h = setup();
+      const s = await goLive(h);
+      s.closeFromServer(code, reason);
+      const caption = h.session.getState().caption;
+      expect(caption, reason).toMatch(/^reconnecting in \d+s/);
+      expect(caption, reason).toContain(shown);
+    }
+  });
+
+  it("an unexplained close keeps the plain caption", async () => {
+    const h = setup();
+    const s = await goLive(h);
+    s.closeFromServer(1006);
+    expect(h.session.getState().caption).toBe("reconnecting in 1s");
+  });
+
+  it("an auth-expired mint becomes 'session expired, reload' with no timers until kicked", async () => {
+    const h = setup();
+    h.setMintError(new TermsApiError(401, "urn:kb:errors:auth-expired", "expired"));
+    h.session.start();
+    await flush();
+    expect(h.session.getState().phase).toBe("expired");
+    expect(h.session.getState().caption).toBe("session expired, reload");
+    expect(h.timers.filter((t) => !t.cleared && !t.fired)).toEqual([]);
+    h.setMintError(null);
+    h.session.kick();
+    await flush();
+    expect(h.mintedTickets).toEqual(["tick-1"]);
+    expect(h.sockets).toHaveLength(1);
+  });
+
+  it("a plain 401 and an untyped (edge, HTML) 403 are session-expired; kb's typed 403 stays blocked", async () => {
+    const a = setup();
+    a.setMintError(new TermsApiError(401, null, "401"));
+    a.session.start();
+    await flush();
+    expect(a.session.getState().phase).toBe("expired");
+    const b = setup();
+    b.setMintError(new TermsApiError(403, null, "403 Forbidden"));
+    b.session.start();
+    await flush();
+    expect(b.session.getState().phase).toBe("expired");
+    const c = setup();
+    c.setMintError(new TermsApiError(403, "urn:kb:errors:terminal-intent-required", "Forbidden"));
+    c.session.start();
+    await flush();
+    expect(c.session.getState().phase).toBe("blocked");
+  });
+
+  it("an offline mint failure is captioned 'offline' and retried", async () => {
+    const h = setup();
+    h.setMintError(new TypeError("Failed to fetch"));
+    h.session.start();
+    await flush();
+    const st = h.session.getState();
+    expect(st.phase).toBe("reconnecting");
+    expect(st.caption).toContain("offline");
+    expect(h.timers.some((t) => !t.cleared && !t.fired)).toBe(true);
+  });
+
+  it("a mint 404 terminal-not-found after the session was live ends it and keeps the transcript", async () => {
+    const h = setup();
+    const s = await goLive(h);
+    const resets = h.calls.filter((c) => c[0] === "reset").length;
+    s.closeFromServer(1006);
+    h.setMintError(new TermsApiError(404, "urn:kb:errors:terminal-not-found", "Not Found"));
+    h.fire(250);
+    await flush();
+    expect(h.session.getState().phase).toBe("ended");
+    expect(h.session.getState().caption).toBe("ended");
+    expect(h.timers.filter((t) => !t.cleared && !t.fired)).toEqual([]);
+    expect(h.calls.filter((c) => c[0] === "reset")).toHaveLength(resets);
   });
 });
