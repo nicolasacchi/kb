@@ -649,6 +649,12 @@ the page.
     (at most four), so the last result is read from a settled screen and a screen
     that was still the old grid can no longer shrink the font or leave a stale
     "Cropped".
+  - **The grid is measured by its box.** The fit compares the rendered screen's
+    own box with the host, never its scroll extent: xterm keeps its helper
+    textarea inside the screen at the last synced cursor row, so after another
+    client shrinks the grid with the cursor on the last row the extent reaches
+    below the smaller screen. The screen is also clipped to its box in CSS, so
+    that textarea cannot widen the host's scroll area either.
   - **In view.** Opening the panel (Open terminal, a New terminal launch, Resume)
     scrolls its bar to just under the app bar, once per mount, and Fit to window
     does the same (instantly) right before it measures, so the grid it fills is the
