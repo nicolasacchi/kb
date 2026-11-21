@@ -17,9 +17,9 @@ vi.mock("../terminal/TerminalPanel.lazy", () => {
     __esModule: true,
     default: (props: { onClose?: () => void; onBell?: () => void }) => (
       <div data-testid="mock-panel">
-        <button type="button" data-testid="mock-panel-bell" onClick={() => props.onBell?.()}>
+        <div data-testid="mock-panel-bell" onClick={() => props.onBell?.()}>
           Bell
-        </button>
+        </div>
         <button type="button" data-testid="mock-panel-close" onClick={() => props.onClose?.()}>
           Close
         </button>
