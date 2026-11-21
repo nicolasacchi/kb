@@ -6,10 +6,14 @@ import {
   FLING_IDLE_MS,
   FLING_V,
   FONT_STEPS,
+  TAP_MAX_MS,
+  TAP_MAX_PX,
   LOCK_PX,
   STOP_V,
   TAU_MS,
   accumulateLines,
+  cellAt,
+  isStillTap,
   lockAxis,
   momentumStep,
   nearestFontStep,
@@ -161,5 +165,26 @@ describe("stepFont", () => {
     expect(stepFont(24, 1)).toBe(24);
     expect(stepFont(8, -1)).toBe(8);
     expect(stepFont(14, 1)).toBe(16);
+  });
+});
+
+describe("FUPHONELINKS tap and cell hit-test", () => {
+  it("a tap is under 10 px of travel and under 550 ms", () => {
+    expect(isStillTap(0, 0, 100)).toBe(true);
+    expect(isStillTap(6, 7, 549)).toBe(true);
+    expect(isStillTap(7, 8, 100)).toBe(false);
+    expect(isStillTap(0, 0, 550)).toBe(false);
+    expect(TAP_MAX_PX).toBe(10);
+    expect(TAP_MAX_MS).toBe(550);
+  });
+
+  it("cellAt maps a point to a 1-based column and a 0-based screen row, null outside", () => {
+    const rect = { left: -100, top: 50, width: 1200, height: 300 };
+    // 120 cols x 30 rows: cells of 10 x 10 px; the screen is panned 100 px left.
+    expect(cellAt(105, 55, rect, 120, 30)).toEqual({ x: 21, row: 0 });
+    expect(cellAt(-100, 349, rect, 120, 30)).toEqual({ x: 1, row: 29 });
+    expect(cellAt(-101, 60, rect, 120, 30)).toBeNull();
+    expect(cellAt(0, 350, rect, 120, 30)).toBeNull();
+    expect(cellAt(0, 60, { ...rect, width: 0 }, 120, 30)).toBeNull();
   });
 });

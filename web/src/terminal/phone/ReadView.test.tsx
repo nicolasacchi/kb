@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ReadView } from "./ReadView";
 import type { ReadBuffer } from "./readText";
+import { setPressedLine } from "./pressedLine";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -91,5 +92,91 @@ describe("ReadView", () => {
       (host!.querySelector('[data-testid="kb-term-read-refresh"]') as HTMLElement).click();
     });
     expect(writes).toEqual([900]);
+  });
+});
+
+describe("FUPHONELINKS ReadView links, copy and centring", () => {
+  it("renders an http(s) url as an anchor that opens in a new tab without opener or referrer", () => {
+    mount(() => buffer(["visit https://a.dev/x. now", "ftp://nope javascript:alert(1)"]));
+    const a = host!.querySelectorAll("a");
+    expect(a).toHaveLength(1);
+    expect(a[0]!.getAttribute("href")).toBe("https://a.dev/x");
+    expect(a[0]!.textContent).toBe("https://a.dev/x");
+    expect(a[0]!.getAttribute("target")).toBe("_blank");
+    expect(a[0]!.getAttribute("rel")).toBe("noopener noreferrer");
+    // The selectable text is unchanged by the linkification.
+    expect(text()).toBe("visit https://a.dev/x. now\nftp://nope javascript:alert(1)\n");
+  });
+
+  it("Copy all writes the text with wrapped rows joined, and says so", async () => {
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const rows: Array<[string, boolean]> = [
+      ["see https://exam", false],
+      ["ple.com/p", true],
+      ["next", false],
+    ];
+    mount(() => ({
+      length: rows.length,
+      getLine: (y) => {
+        const r = rows[y];
+        return r ? { isWrapped: r[1], translateToString: () => r[0] } : undefined;
+      },
+    }));
+    await act(async () => {
+      (host!.querySelector('[data-testid="kb-term-read-copy"]') as HTMLElement).click();
+    });
+    expect(writeText).toHaveBeenCalledWith("see https://example.com/p\nnext");
+    expect(host!.querySelector('[data-testid="kb-term-read-copy"]')!.textContent).toBe("Copied");
+  });
+
+  describe("centred on the pressed row", () => {
+    const stores = new WeakMap<object, number>();
+    afterEach(() => {
+      for (const k of ["scrollHeight", "clientHeight", "scrollTop"]) {
+        delete (HTMLElement.prototype as unknown as Record<string, unknown>)[k];
+      }
+      setPressedLine(null);
+    });
+    function layout(): void {
+      Object.defineProperty(HTMLElement.prototype, "scrollHeight", { configurable: true, get: () => 2000 });
+      Object.defineProperty(HTMLElement.prototype, "clientHeight", { configurable: true, get: () => 200 });
+      Object.defineProperty(HTMLElement.prototype, "scrollTop", {
+        configurable: true,
+        get(this: object) {
+          return stores.get(this) ?? 0;
+        },
+        set(this: object, v: number) {
+          stores.set(this, v);
+        },
+      });
+    }
+    const hundred = () => Array.from({ length: 100 }, (_, i) => `row ${i}`);
+
+    it("a long press on row 50 places row 50 at the vertical centre", () => {
+      layout();
+      setPressedLine(50);
+      mount(() => buffer(hundred()));
+      const scroller = host!.querySelector("[data-kb-term-read-scroll]") as HTMLElement;
+      expect(scroller.scrollTop).toBe(50 * 20 + 10 - 100);
+    });
+
+    it("without a pressed row it starts at the newest line, and Refresh returns to the newest line", () => {
+      layout();
+      mount(() => buffer(hundred()));
+      const scroller = host!.querySelector("[data-kb-term-read-scroll]") as HTMLElement;
+      expect(scroller.scrollTop).toBe(2000);
+    });
+
+    it("the pressed row is used once: Refresh goes to the bottom", () => {
+      layout();
+      setPressedLine(50);
+      mount(() => buffer(hundred()));
+      act(() => {
+        (host!.querySelector('[data-testid="kb-term-read-refresh"]') as HTMLElement).click();
+      });
+      const scroller = host!.querySelector("[data-kb-term-read-scroll]") as HTMLElement;
+      expect(scroller.scrollTop).toBe(2000);
+    });
   });
 });
