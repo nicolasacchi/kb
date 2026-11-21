@@ -533,10 +533,15 @@ row carries. A refused or failed launch (400, 404, 5xx) and a pane that ended
 - **The gate runs in the handler**, not in middleware, because a WebSocket
   upgrade is a GET that the origin allowlist does not police and the loopback
   bypass would admit every agent on the machine. In order: enabled; id shape
-  (`^[a-z0-9]{1,32}$`); exact `Origin` (an absent Origin fails closed; only the
-  configured parent origin or an origin whose scheme and host equal the request's
-  are accepted; artifact-subdomain origins never are, even on GETs); the
-  `X-Kb-Intent: terminal` header on every POST; then the caller class.
+  (`^[a-z0-9]{1,32}$`); exact `Origin` (on a POST and the WebSocket upgrade an absent Origin
+  fails closed; only the configured parent origin or an origin whose scheme and
+  host equal the request's are accepted; artifact-subdomain origins never are,
+  even on GETs); the `X-Kb-Intent: terminal` header on every POST; then the
+  caller class. Every GET (list, read, history, grid, media) takes one shared
+  rule instead, because a same-origin `fetch()` GET sends no `Origin`: the
+  intent header is required, an `Origin` must be exact when present, a present
+  `Sec-Fetch-Site` must be `same-origin` or `none`, and token callers are
+  refused.
 - **Loopback does not bypass.** Admission by the bearer gate is necessary, never
   sufficient.
 - **Token callers are refused by default.** `[terminal] refuse_token_callers`

@@ -1,7 +1,9 @@
 //! SPA-only terminal REST relays (`/api/terms/*`, T11).
 //!
-//! Every handler calls [`gate`](crate::terminal::gate::gate) first
-//! (enabled → Origin → intent → caller class); the runner is reached
+//! Every mutation calls [`gate`](crate::terminal::gate::gate) first
+//! (enabled → Origin → intent → caller class) and every GET calls
+//! [`gate_read`](crate::terminal::gate::gate_read) (the one GET gate);
+//! the runner is reached
 //! per request over a unix socket with the per-request client in
 //! [`runner_client`](crate::terminal::runner_client). kb-server holds
 //! NO terminal state except the ticket table.
@@ -30,9 +32,10 @@ use serde::{Deserialize, Serialize};
 use crate::middleware::Identity;
 use crate::state::KbHandles;
 use crate::terminal::gate::{
-    gate, Problem, ERR_TERMINAL_BAD_REPLY, ERR_TERMINAL_BAD_REQUEST, ERR_TERMINAL_CONFLICT,
-    ERR_TERMINAL_NOT_FOUND, ERR_TERMINAL_PAYLOAD_TOO_LARGE, ERR_TERMINAL_REFUSED,
-    ERR_TERMINAL_RUNNER_UNAVAILABLE, ERR_TERMINAL_TICKET_FULL, ERR_TERMINAL_TICKET_UNAVAILABLE,
+    gate, gate_read, Problem, ERR_TERMINAL_BAD_REPLY, ERR_TERMINAL_BAD_REQUEST,
+    ERR_TERMINAL_CONFLICT, ERR_TERMINAL_NOT_FOUND, ERR_TERMINAL_PAYLOAD_TOO_LARGE,
+    ERR_TERMINAL_REFUSED, ERR_TERMINAL_RUNNER_UNAVAILABLE, ERR_TERMINAL_TICKET_FULL,
+    ERR_TERMINAL_TICKET_UNAVAILABLE,
 };
 use crate::terminal::keys_allow::{
     is_named_key, is_valid_viewer_id, ERR_TERMINAL_BAD_KEY, MAX_KEYS_PER_REQUEST,
@@ -388,7 +391,7 @@ pub async fn list(
     Extension(identity): Extension<Identity>,
     headers: axum::http::HeaderMap,
 ) -> Response<Body> {
-    if let Err(e) = gate(&state, &headers, &identity, false).await {
+    if let Err(e) = gate_read(&state, &headers, &identity).await {
         return e;
     }
     match call(&state, &RunnerRequest::List {}).await {
@@ -435,7 +438,7 @@ pub async fn launch(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Response<Body> {
-    if let Err(e) = gate(&state, &headers, &identity, true).await {
+    if let Err(e) = gate(&state, &headers, &identity).await {
         return e;
     }
     if body.len() > MAX_BODY_BYTES {
@@ -547,7 +550,7 @@ pub async fn ticket(
     Path(id): Path<String>,
     body: axum::body::Bytes,
 ) -> Response<Body> {
-    if let Err(e) = gate(&state, &headers, &identity, true).await {
+    if let Err(e) = gate(&state, &headers, &identity).await {
         return e;
     }
     if !check_id(&id) {
@@ -631,7 +634,7 @@ pub async fn paste(
     Path(id): Path<String>,
     body: axum::body::Bytes,
 ) -> Response<Body> {
-    if let Err(e) = gate(&state, &headers, &identity, true).await {
+    if let Err(e) = gate(&state, &headers, &identity).await {
         return e;
     }
     if !check_id(&id) {
@@ -683,7 +686,7 @@ pub async fn enter(
     Path(id): Path<String>,
     body: axum::body::Bytes,
 ) -> Response<Body> {
-    if let Err(e) = gate(&state, &headers, &identity, true).await {
+    if let Err(e) = gate(&state, &headers, &identity).await {
         return e;
     }
     if !check_id(&id) {
@@ -759,7 +762,7 @@ pub async fn keys(
     Path(id): Path<String>,
     body: axum::body::Bytes,
 ) -> Response<Body> {
-    if let Err(e) = gate(&state, &headers, &identity, true).await {
+    if let Err(e) = gate(&state, &headers, &identity).await {
         return e;
     }
     if !check_id(&id) {
@@ -816,7 +819,7 @@ pub async fn kill(
     Path(id): Path<String>,
     body: axum::body::Bytes,
 ) -> Response<Body> {
-    if let Err(e) = gate(&state, &headers, &identity, true).await {
+    if let Err(e) = gate(&state, &headers, &identity).await {
         return e;
     }
     if !check_id(&id) {
@@ -881,7 +884,7 @@ pub async fn take_size(
     Path(id): Path<String>,
     body: axum::body::Bytes,
 ) -> Response<Body> {
-    if let Err(e) = gate(&state, &headers, &identity, true).await {
+    if let Err(e) = gate(&state, &headers, &identity).await {
         return e;
     }
     if !check_id(&id) {
@@ -925,7 +928,7 @@ pub async fn read(
     headers: axum::http::HeaderMap,
     Path(id): Path<String>,
 ) -> Response<Body> {
-    if let Err(e) = gate(&state, &headers, &identity, false).await {
+    if let Err(e) = gate_read(&state, &headers, &identity).await {
         return e;
     }
     if !check_id(&id) {
@@ -943,7 +946,7 @@ pub async fn history(
     headers: axum::http::HeaderMap,
     Path(id): Path<String>,
 ) -> Response<Body> {
-    if let Err(e) = gate(&state, &headers, &identity, false).await {
+    if let Err(e) = gate_read(&state, &headers, &identity).await {
         return e;
     }
     if !check_id(&id) {
@@ -967,7 +970,7 @@ pub async fn grid(
     headers: axum::http::HeaderMap,
     Path(id): Path<String>,
 ) -> Response<Body> {
-    if let Err(e) = gate(&state, &headers, &identity, false).await {
+    if let Err(e) = gate_read(&state, &headers, &identity).await {
         return e;
     }
     if !check_id(&id) {
@@ -986,7 +989,7 @@ pub async fn release_size(
     Path(id): Path<String>,
     body: axum::body::Bytes,
 ) -> Response<Body> {
-    if let Err(e) = gate(&state, &headers, &identity, true).await {
+    if let Err(e) = gate(&state, &headers, &identity).await {
         return e;
     }
     if !check_id(&id) {
@@ -1024,7 +1027,7 @@ pub async fn resize(
     Path(id): Path<String>,
     body: axum::body::Bytes,
 ) -> Response<Body> {
-    if let Err(e) = gate(&state, &headers, &identity, true).await {
+    if let Err(e) = gate(&state, &headers, &identity).await {
         return e;
     }
     if !check_id(&id) {
@@ -1055,7 +1058,7 @@ pub async fn viewer_close(
     Path(id): Path<String>,
     body: axum::body::Bytes,
 ) -> Response<Body> {
-    if let Err(e) = gate(&state, &headers, &identity, true).await {
+    if let Err(e) = gate(&state, &headers, &identity).await {
         return e;
     }
     if !check_id(&id) {

@@ -6,9 +6,10 @@
 //! it asks the runner (`media` op over the unix socket) and relays the
 //! bytes, so no path is ever built from the request here.
 //!
-//! **The gate is a GET variant.** A same-origin `fetch()` GET carries no
-//! `Origin` header, so the REST gate's "absent Origin fails closed"
-//! rule cannot apply unchanged. This route instead requires, in order:
+//! **The gate is the shared GET gate** (`gate::gate_read`, one home for
+//! every terminal GET). A same-origin `fetch()` GET carries no `Origin`
+//! header, so the mutation gate's "absent Origin fails closed" rule
+//! cannot apply. A GET instead requires, in order:
 //! the tier enabled (else a bodiless 404), `X-Kb-Intent: terminal` (the
 //! SPA's `fetch` sets it; an `<img src>` or a cross-site form cannot),
 //! an `Origin` that is exact when present, `Sec-Fetch-Site` of
@@ -36,18 +37,14 @@ use axum::Extension;
 use crate::middleware::Identity;
 use crate::state::KbHandles;
 use crate::terminal::gate::{
-    caller_class_admitted, check_origin, disabled, terminal_intent, GateRefusal, Problem,
-    ERR_TERMINAL_BAD_REPLY, ERR_TERMINAL_BAD_REQUEST, ERR_TERMINAL_NOT_FOUND,
-    ERR_TERMINAL_ORIGIN_REFUSED, ERR_TERMINAL_PAYLOAD_TOO_LARGE, ERR_TERMINAL_RUNNER_UNAVAILABLE,
+    gate_read, Problem, ERR_TERMINAL_BAD_REPLY, ERR_TERMINAL_BAD_REQUEST, ERR_TERMINAL_NOT_FOUND,
+    ERR_TERMINAL_PAYLOAD_TOO_LARGE, ERR_TERMINAL_RUNNER_UNAVAILABLE,
 };
 use crate::terminal::runner_client::{MediaReply, RunnerError, UnixRunner};
 
 /// `urn:kb:errors:unsupported-media` — stored bytes whose magic is not
 /// a served picture type.
 pub(crate) const ERR_UNSUPPORTED_MEDIA: &str = "urn:kb:errors:unsupported-media";
-
-/// `Sec-Fetch-Site` header name (a forbidden header: scripts cannot set it).
-const SEC_FETCH_SITE: &str = "sec-fetch-site";
 
 /// True iff `s` is exactly 64 lowercase hex characters.
 pub(crate) fn is_valid_sha256(s: &str) -> bool {
@@ -68,49 +65,6 @@ pub(crate) fn sniff_image(bytes: &[u8]) -> Option<&'static str> {
     } else {
         None
     }
-}
-
-/// The media GET gate (see the module docs). `Ok` means the handler
-/// may proceed to the runner.
-async fn gate_media(
-    state: &KbHandles,
-    headers: &HeaderMap,
-    identity: &Identity,
-) -> Result<(), Response<Body>> {
-    let terminal = state.config.read().await.terminal.clone();
-    if !terminal.enabled() {
-        return Err(disabled());
-    }
-    if !terminal_intent(headers) {
-        return Err(Problem::response(
-            GateRefusal::Intent.urn(),
-            StatusCode::FORBIDDEN,
-            "Forbidden",
-            "terminal media requires `X-Kb-Intent: terminal`".to_string(),
-        ));
-    }
-    // Absent Origin is the normal same-origin GET; a present one must be
-    // exact (never the artifact-suffix arm, never `KB_DEV_ORIGIN_ANY`).
-    if headers.contains_key(header::ORIGIN) {
-        check_origin(headers, &state.origin).map_err(Problem::refusal)?;
-    }
-    if let Some(site) = headers.get(SEC_FETCH_SITE) {
-        let ok = site
-            .to_str()
-            .is_ok_and(|v| v == "same-origin" || v == "none");
-        if !ok {
-            return Err(Problem::response(
-                ERR_TERMINAL_ORIGIN_REFUSED,
-                StatusCode::FORBIDDEN,
-                "Forbidden",
-                "terminal media is same-origin only".to_string(),
-            ));
-        }
-    }
-    if !caller_class_admitted(identity.source, terminal.refuse_token_callers()) {
-        return Err(Problem::refusal(GateRefusal::Token));
-    }
-    Ok(())
 }
 
 fn problem(urn: &'static str, status: StatusCode, detail: impl Into<String>) -> Response<Body> {
@@ -225,7 +179,7 @@ pub async fn serve(
     headers: HeaderMap,
     Path(sha256): Path<String>,
 ) -> Response<Body> {
-    if let Err(e) = gate_media(&state, &headers, &identity).await {
+    if let Err(e) = gate_read(&state, &headers, &identity).await {
         return e;
     }
     // The hash is the only request value that goes anywhere; it is
