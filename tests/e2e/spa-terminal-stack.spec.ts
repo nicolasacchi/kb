@@ -1179,12 +1179,18 @@ test("a 201x48 grid is fully visible at 1440x900 (font >= 9, no horizontal scrol
   });
 
   // 1440x900: the whole grid, legibly, with nothing scrolling sideways.
+  // The panel is built from the tap's first profile (its default 120x40) and
+  // follows the launched 201x48 when the resize frame arrives, so the poll waits
+  // for THAT grid, then for it to be fitted: a 120x40 grid fits too.
   await expect
     .poll(async () => {
-      const g = await panelGeometry(page);
-      return g.font >= 9 && g.screenW <= g.hostW && g.screenH <= g.hostH;
+      const m = await panelGeometry(page);
+      const fitted = m.font >= 9 && m.screenW <= m.hostW && m.screenH <= m.hostH;
+      return fitted && `${m.cols}x${m.rows}` === "201x48"
+        ? "ok"
+        : `grid ${m.cols}x${m.rows} font ${m.font} screen ${m.screenW}x${m.screenH} host ${m.hostW}x${m.hostH} phase ${m.phase} chip "${m.chip}"`;
     }, { timeout: 30_000 })
-    .toBe(true);
+    .toBe("ok");
   let g = await panelGeometry(page);
   expect(`${g.cols}x${g.rows}`).toBe("201x48");
   expect(g.hostScrollW, "no horizontal scroll inside the host").toBeLessThanOrEqual(g.hostW);

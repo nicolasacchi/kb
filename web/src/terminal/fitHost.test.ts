@@ -33,7 +33,7 @@ describe("fitHostNow", () => {
 
   it("applies the font from the probed cell and reports an uncropped fit", () => {
     probe();
-    const term = { options: { fontSize: 14, fontFamily: "monospace" } };
+    const term = { options: { fontSize: 10, fontFamily: "monospace" } };
     const r = fitHostNow(term, hostWith(1400, 800, { w: 1300, h: 700 }), { cols: 201, rows: 48 }, { min: 9, max: 20 });
     expect(term.options.fontSize).toBe(11);
     expect(r).toEqual({ fontSize: 11, cropped: { x: false, y: false } });
@@ -56,5 +56,38 @@ describe("fitHostNow", () => {
     host.style.overflow = "auto";
     fitHostNow(term, host, { cols: 201, rows: 48 }, { min: 9, max: 20 });
     expect(host.style.overflow).toBe("");
+  });
+});
+
+describe("fitHostNow in a host as tall as its content", () => {
+  // The painted cell height is the probed one rounded DOWN to a whole pixel, and
+  // the host has no height of its own: it is exactly as tall as the screen.
+  function contentSized(term: { options: { fontSize?: number } }, rows: number) {
+    const host = document.createElement("div");
+    const screen = document.createElement("div");
+    screen.className = "xterm-screen";
+    const height = () => rows * Math.floor((term.options.fontSize ?? 14) * 1.32);
+    Object.defineProperty(screen, "scrollWidth", { get: () => 400, configurable: true });
+    Object.defineProperty(screen, "scrollHeight", { get: height, configurable: true });
+    Object.defineProperty(host, "clientWidth", { value: 1400, configurable: true });
+    Object.defineProperty(host, "clientHeight", { get: height, configurable: true });
+    host.appendChild(screen);
+    return host;
+  }
+
+  it("a font that already fits is kept: repeated refits do not ratchet it down to the floor", () => {
+    probe();
+    const term = { options: { fontSize: 14, fontFamily: "monospace" } };
+    const host = contentSized(term, 24);
+    for (let i = 0; i < 8; i += 1) fitHostNow(term, host, { cols: 80, rows: 24 }, { min: 9, max: 20 });
+    expect(term.options.fontSize).toBe(14);
+  });
+
+  it("a font that does not fit is still shrunk to the plan", () => {
+    probe();
+    const term = { options: { fontSize: 20, fontFamily: "monospace" } };
+    const host = hostWith(1400, 400, { w: 1000, h: 700 });
+    fitHostNow(term, host, { cols: 80, rows: 24 }, { min: 9, max: 20 });
+    expect(term.options.fontSize).toBeLessThan(20);
   });
 });

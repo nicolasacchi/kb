@@ -44,6 +44,24 @@ export function fitHostNow(
     max: opts.max,
   });
   let fontSize = planned.fontSize;
+  // A font at which the rendered screen already fits is never shrunk to a plan
+  // that is only an estimate: the cell height the browser paints is rounded down
+  // to whole device pixels, so in a host that is as tall as its content (no
+  // bounded height) every refit would plan one step smaller than the font that
+  // just fitted, and the font would ratchet to the floor, moving every picture
+  // and cell under the reader. Growing to a larger plan still happens.
+  const current = term.options.fontSize;
+  if (
+    screen &&
+    typeof current === "number" &&
+    current > planned.fontSize &&
+    current >= opts.min &&
+    current <= opts.max &&
+    screen.scrollWidth <= host.clientWidth &&
+    screen.scrollHeight <= host.clientHeight + 1
+  ) {
+    fontSize = current;
+  }
   for (let i = 0; i < 4; i += 1) {
     term.options.fontSize = fontSize;
     if (!screen) break;
