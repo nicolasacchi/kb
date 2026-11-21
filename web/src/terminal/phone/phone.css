@@ -195,3 +195,11 @@
   color: var(--warn);
   white-space: nowrap;
 }
+
+/* A phone held in landscape (FUPHONEMODE): the dock keeps the key bar and the
+ * composer; the grid-controls row folds away so the grid keeps its height. */
+@media (pointer: coarse) and (orientation: landscape) and (max-height: 599px) {
+  .kb-drive__head {
+    display: none;
+  }
+}

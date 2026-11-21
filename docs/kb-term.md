@@ -767,7 +767,11 @@ the page.
 
 ## Phone
 
-The phone view has three parts.
+The phone view has three parts. The panel shows it when the viewport is at most
+860 px wide, or when the pointer is coarse and the viewport is under 600 px high (a
+phone held in landscape); a touch tablet in landscape, and any fine-pointer window,
+keep the desktop panel. In that landscape case the grid-controls row of the dock
+folds away and the key bar and composer stay.
 
 - **Watch:** the terminal at the session grid, default font 12 px (steps 8 to 24),
   with a pointer-event scroller (xterm.js 6.0.0 has no touch scrolling),
@@ -801,7 +805,10 @@ The phone view has three parts.
     which is known from beats alone.
   - Guards for Claude: every `Left` and every message that is exactly `/bg` asks
     for confirmation first. This is a misfire guard, not a security boundary.
-  - The keyboard opening or closing never resizes the pty. Back closes the panel.
+  - The keyboard opening or closing never resizes the pty. Back closes the panel: through the platform close request where the browser has
+    one, and where it has none (Safari on iOS) the open sheet owns one history
+    entry, so Back pops that entry and closes the sheet while the page stays. This
+    is unverified on a real device.
   - **The sheet bar.** The title row is the harness name and the buttons (Read or
     Watch, A-, A+, Full, Close); the state caption and, in Watch, a "Cropped: pan, or
     Fit to phone" hint (the same label as the desktop's) are on a line of their own
