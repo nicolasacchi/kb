@@ -13,6 +13,8 @@ pub mod fallback;
 pub mod graphics;
 pub mod label;
 mod tables;
+#[cfg(test)]
+mod testscreen;
 pub mod tty;
 pub mod width;
 
@@ -1658,6 +1660,46 @@ mod tests {
             &mut sink,
         );
         assert_eq!(sink, b"\x1b[3J");
+    }
+
+    #[test]
+    fn a_join_paint_erases_what_it_paints_over() {
+        use super::testscreen::Screen;
+        let mut scr = Screen::new(80, 10);
+        // What the outer terminal showed before the join: the shell line
+        // that started the attach, then two old, longer mirror rows.
+        scr.feed(b"$ kb-term attach abc12345 --runner-sock /tmp/some/long/path/runner.sock\r\n");
+        scr.feed(b"an old mirrored row that is much longer than the new one\r\n");
+        scr.feed(b"second old row with a long tail xxxxxxxxxxxxxxxxxxxxxxxx\r\n");
+        // The join: a Seed frame, then the (shorter) seed bytes.
+        let mut rw = LabelRewriter::new(80, true);
+        let mut state = StreamState::default();
+        let mut banner = true;
+        let mut sink: Vec<u8> = Vec::new();
+        apply_server_frame(
+            hello("00000001"),
+            &fctx(),
+            &mut rw,
+            &mut state,
+            &mut banner,
+            &mut sink,
+        );
+        apply_server_frame(
+            ServerFrame::Seed { offset: 0, len: 17 },
+            &fctx(),
+            &mut rw,
+            &mut state,
+            &mut banner,
+            &mut sink,
+        );
+        write_rewritten(&mut rw, b"short\r\nrow two\r\n$ ", &mut sink);
+        scr.feed(&sink);
+        assert_eq!(scr.row(0), "short", "no tail of the old shell line");
+        assert_eq!(scr.row(1), "row two", "no tail of the old mirror row");
+        assert_eq!(scr.row(2), "$");
+        for i in 3..10 {
+            assert_eq!(scr.row(i), "", "row {i} is erased");
+        }
     }
 
     #[test]
