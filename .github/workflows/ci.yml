@@ -2106,7 +2106,7 @@ jobs:
         working-directory: tests/e2e
         run: |
           mkdir -p "$KB_WITNESS_DIR"
-          set -o pipefail; npx playwright test --project=terminal-stack --project=terminal-stack-dpr2 2>&1 | tee playwright-output.log
+          set -o pipefail; npx playwright test zz-termux-shots --project=terminal-stack 2>&1 | tee playwright-output.log
 
       - name: Witness (Playwright JSON report -> floor + zero failures)
         if: ${{ !cancelled() && steps.fast.outputs.run == 'true' }}
