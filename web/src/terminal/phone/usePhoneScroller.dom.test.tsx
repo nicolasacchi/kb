@@ -128,6 +128,18 @@ describe("FUPHONELINKS tap to open", () => {
     expect(q('[data-testid="kb-term-link-confirm"]')).toBeNull();
   });
 
+  it("a pointercancel on a url (a browser-cancelled gesture) opens nothing and shows no confirm", () => {
+    const f = fakeTerm();
+    mount(f.term);
+    ptr("pointerdown", 1, px(7), py(0));
+    clock += 80;
+    ptr("pointercancel", 1, px(7), py(0));
+    expect(open).not.toHaveBeenCalled();
+    expect(q('[data-testid="kb-term-link-confirm"]')).toBeNull();
+    tap(35, 2);
+    expect(open).not.toHaveBeenCalled();
+  });
+
   it("a tap beside the url, on plain text or on an empty row opens nothing", () => {
     mount(fakeTerm().term);
     tap(2, 0);

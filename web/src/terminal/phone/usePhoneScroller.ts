@@ -314,6 +314,8 @@ export function usePhoneScroller(args: PhoneScrollerArgs): void {
       if (drag && ptrs.size === 0) {
         const d = drag;
         drag = null;
+        // A browser-cancelled gesture is not a tap and never flings.
+        if (e.type === "pointercancel") return;
         if (!d.noTap && d.axis === null && isStillTap(e.clientX - d.x0, e.clientY - d.y0, performance.now() - d.t0)) {
           tapAt(e.clientX, e.clientY);
           return;

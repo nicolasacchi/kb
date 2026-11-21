@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ReadView } from "./ReadView";
 import type { ReadBuffer } from "./readText";
+import { toast } from "../../lib/toast";
 import { setPressedLine } from "./pressedLine";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -128,6 +129,38 @@ describe("FUPHONELINKS ReadView links, copy and centring", () => {
     });
     expect(writeText).toHaveBeenCalledWith("see https://example.com/p\nnext");
     expect(host!.querySelector('[data-testid="kb-term-read-copy"]')!.textContent).toBe("Copied");
+  });
+
+  describe("Copy all failures are shown, never reported as Copied", () => {
+    const click = async () => {
+      await act(async () => {
+        (host!.querySelector('[data-testid="kb-term-read-copy"]') as HTMLElement).click();
+      });
+    };
+    const label = () => host!.querySelector('[data-testid="kb-term-read-copy"]')!.textContent;
+
+    it("a rejected writeText toasts an error and the button stays Copy all", async () => {
+      const writeText = vi.fn(async () => {
+        throw new Error("denied");
+      });
+      Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+      const err = vi.spyOn(toast, "err").mockImplementation(() => 0);
+      mount(() => buffer(["abc"]));
+      await click();
+      expect(err).toHaveBeenCalledTimes(1);
+      expect(label()).toBe("Copy all");
+      err.mockRestore();
+    });
+
+    it("no clipboard at all (insecure context) toasts an error too", async () => {
+      Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+      const err = vi.spyOn(toast, "err").mockImplementation(() => 0);
+      mount(() => buffer(["abc"]));
+      await click();
+      expect(err).toHaveBeenCalledTimes(1);
+      expect(label()).toBe("Copy all");
+      err.mockRestore();
+    });
   });
 
   describe("centred on the pressed row", () => {

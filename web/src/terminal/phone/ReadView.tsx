@@ -4,7 +4,7 @@
 // "Refresh"; it never follows the stream by itself.
 
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { writeClipboardText } from "../clipboard";
+import { toast } from "../../lib/toast";
 import {
   bufferToCopyText,
   centerScrollTop,
@@ -122,10 +122,19 @@ export function ReadView({ read, fontSize, cols, onWatch }: ReadViewProps) {
   }, [snap]);
 
   const copyAll = (): void => {
-    void writeClipboardText(snap.copy).then(() => {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    });
+    // A user action: a failed write is shown (#32), never reported as Copied.
+    const write = navigator.clipboard?.writeText(snap.copy);
+    if (!write) {
+      toast.err("Copy failed: clipboard unavailable");
+      return;
+    }
+    void write.then(
+      () => {
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1500);
+      },
+      () => toast.err("Copy failed: clipboard refused the write"),
+    );
   };
 
   return (

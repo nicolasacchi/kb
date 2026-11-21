@@ -730,7 +730,9 @@ the page.
   On a phone a still tap (under 10 px and under 550 ms, not a pan, a pinch or a
   long press, and not the touch that stops a coasting fling) on a URL in Watch
   opens it and is never sent to the terminal. A URL wrapped across rows is shown
-  whole in an inline Open / Cancel row first.
+  whole in an inline Open / Cancel row first. A browser-cancelled touch is never a
+  tap. OSC 8 labelled links are not tappable on the phone (the scroller owns the
+  gesture); use the Read view for those.
 - **Scrollback.** "Jump to latest" appears while the view is scrolled up. Find
   restarts from the top when the query changes, Enter steps through the hits, and
   closing Find returns the keyboard to the terminal.
