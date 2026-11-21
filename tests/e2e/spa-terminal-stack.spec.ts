@@ -1157,6 +1157,29 @@ const bottomCursorHarness = (): Harness => ({
   shell: `trap 'printf w' WINCH\ni=0\nwhile [ $i -lt 120 ]; do echo "synthetic line $i"; i=$((i+1)); done\nprintf '$ '\nwhile :; do printf .; sleep 1 & wait $!; done\n`,
 });
 
+/**
+ * FUTERMFONT: samples (every animation frame) whether xterm's helper textarea ever
+ * lies below the bottom of `.xterm-screen`, the exact trigger of the stray scroll
+ * extent. The geometry is the same with or without the CSS clip, so the flag proves
+ * the fixture reaches the trigger rather than passing on a page that never did.
+ */
+async function armTextareaProbe(page: Page) {
+  await page.evaluate(() => {
+    const w = window as unknown as { __kbTaBelow: number };
+    w.__kbTaBelow = 0;
+    const tick = () => {
+      const screen = document.querySelector("[data-kb-term] .xterm-screen");
+      const ta = screen?.querySelector(".xterm-helper-textarea");
+      if (screen && ta) {
+        const below = ta.getBoundingClientRect().bottom - screen.getBoundingClientRect().bottom;
+        if (below > w.__kbTaBelow) w.__kbTaBelow = below;
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+}
+
 /** What the desktop panel shows right now: the terminal's grid and font, the host's box and the rendered screen. */
 async function panelGeometry(page: Page) {
   return page.evaluate(() => {
@@ -1659,10 +1682,14 @@ for (const [cols, rows] of [
     await openPanel(page, c.sid);
     await expect.poll(async () => `${(await polishState(page)).cols}x${(await polishState(page)).rows}`, { timeout: 30_000 }).toBe("201x48");
     await settledState(page);
+    await armTextareaProbe(page);
     // Another client (the API, not this panel's Fit) takes the smaller grid.
     const r = await takeViaWeb(c.api, c.term.id, cols, rows);
     expect(r.status, JSON.stringify(r.body)).toBe(200);
     await expect.poll(async () => `${(await polishState(page)).cols}x${(await polishState(page)).rows}`, { timeout: 30_000 }).toBe(`${cols}x${rows}`);
+    // Precondition: the trigger happened (the helper textarea sat below the shrunken screen).
+    const below = await page.evaluate(() => (window as unknown as { __kbTaBelow: number }).__kbTaBelow);
+    expect(below, "fixture reached the trigger: helper textarea below the shrunken screen").toBeGreaterThan(1);
     const got = await settledState(page);
     const other = await page.context().newPage();
     let want: Awaited<ReturnType<typeof settledState>>;
