@@ -10,7 +10,7 @@
 //!
 //! T12's WebSocket handler calls [`check_origin`] directly for the
 //! upgrade (which also needs the ticket consumer); the REST handlers
-//! call [`gate`] first.
+//! call [`gate`] (mutations) or [`gate_read`] (every GET) first.
 
 use axum::body::Body;
 use axum::http::{header, HeaderMap, StatusCode};
@@ -141,7 +141,7 @@ impl GateRefusal {
     pub(crate) fn detail(self) -> &'static str {
         match self {
             GateRefusal::Origin => "terminal routes require an exact parent or same-host Origin",
-            GateRefusal::Intent => "terminal POSTs require `X-Kb-Intent: terminal`",
+            GateRefusal::Intent => "terminal routes require `X-Kb-Intent: terminal`",
             GateRefusal::Token => "token-authenticated callers are refused on terminal routes",
         }
     }
@@ -230,16 +230,16 @@ impl IntoResponse for Problem {
     }
 }
 
-/// The gate every terminal handler calls first, in this order:
-/// enabled → Origin → intent (POST only) → caller class. Returns the
-/// refusal response on the first failure; `Ok` means the handler may
-/// proceed. The enabled check runs BEFORE anything else so a disabled
-/// daemon leaks nothing.
+/// The gate every terminal MUTATION calls first, in this order:
+/// enabled → Origin → intent → caller class. Returns the refusal
+/// response on the first failure; `Ok` means the handler may proceed.
+/// The enabled check runs BEFORE anything else so a disabled daemon
+/// leaks nothing. Every GET under `/api/terms` (list, read, history,
+/// grid, media) uses [`gate_read`] instead.
 pub(crate) async fn gate(
     state: &KbHandles,
     headers: &HeaderMap,
     identity: &Identity,
-    mutating: bool,
 ) -> Result<(), Response<Body>> {
     // 1. Enabled. A bodiless 404, deliberately unlike
     //    `dispatch::api_not_found` (problem+json) — the terminal tier
@@ -252,12 +252,13 @@ pub(crate) async fn gate(
     // 2. Origin. T12's WS handler calls `check_origin` for the
     //    upgrade; REST shares it here. It does NOT call
     //    `origin_allowed`, so the artifact-suffix arm and
-    //    `KB_DEV_ORIGIN_ANY` stay closed.
+    //    `KB_DEV_ORIGIN_ANY` stay closed. An absent Origin fails
+    //    closed: a browser sends Origin on every POST, so absence
+    //    means a non-browser caller.
     check_origin(headers, &state.origin).map_err(Problem::refusal)?;
 
-    // 3. Intent, POST only. GET routes (list/read/history) need the
-    //    Origin but no intent header.
-    if mutating && !terminal_intent(headers) {
+    // 3. Intent.
+    if !terminal_intent(headers) {
         return Err(Problem::refusal(GateRefusal::Intent));
     }
 
@@ -265,6 +266,57 @@ pub(crate) async fn gate(
     //    trusted-hop identity header (`Loopback`/`Header`); scripts
     //    and agents carry bearer or registry tokens. Shared with the
     //    `terminal_admitted` probes via [`caller_class_admitted`].
+    if !caller_class_admitted(identity.source, terminal.refuse_token_callers()) {
+        return Err(Problem::refusal(GateRefusal::Token));
+    }
+    Ok(())
+}
+
+/// `Sec-Fetch-Site` header name (a forbidden header: scripts cannot set it).
+const SEC_FETCH_SITE: &str = "sec-fetch-site";
+
+/// The ONE gate for every terminal GET (list, read, history, grid and the
+/// media route). A same-origin `fetch()` GET carries no `Origin` header
+/// (Fetch spec: Origin rides CORS-mode and non-GET/HEAD requests only), so
+/// the mutation gate's "absent Origin fails closed" cannot apply. In order:
+///
+/// 1. the tier enabled, else a bodiless 404;
+/// 2. `X-Kb-Intent: terminal` REQUIRED. A cross-site page cannot set it
+///    without a CORS preflight, and the only CORS layer is GET-only for
+///    simple requests, so a foreign page, an `<img src>` and a form cannot
+///    send it;
+/// 3. an `Origin` that is exact when present ([`check_origin`]; never the
+///    artifact-suffix arm, never `KB_DEV_ORIGIN_ANY`);
+/// 4. `Sec-Fetch-Site` of `same-origin` or `none` when present (the
+///    browser sets it; scripts cannot);
+/// 5. a non-token caller class.
+///
+/// The loopback bypass does not apply. This loosens nothing for
+/// mutations: every POST still uses [`gate`] and the WebSocket upgrade
+/// still demands an exact Origin plus a ticket.
+pub(crate) async fn gate_read(
+    state: &KbHandles,
+    headers: &HeaderMap,
+    identity: &Identity,
+) -> Result<(), Response<Body>> {
+    let terminal = state.config.read().await.terminal.clone();
+    if !terminal.enabled() {
+        return Err(disabled());
+    }
+    if !terminal_intent(headers) {
+        return Err(Problem::refusal(GateRefusal::Intent));
+    }
+    if headers.contains_key(header::ORIGIN) {
+        check_origin(headers, &state.origin).map_err(Problem::refusal)?;
+    }
+    if let Some(site) = headers.get(SEC_FETCH_SITE) {
+        let ok = site
+            .to_str()
+            .is_ok_and(|v| v == "same-origin" || v == "none");
+        if !ok {
+            return Err(Problem::refusal(GateRefusal::Origin));
+        }
+    }
     if !caller_class_admitted(identity.source, terminal.refuse_token_callers()) {
         return Err(Problem::refusal(GateRefusal::Token));
     }

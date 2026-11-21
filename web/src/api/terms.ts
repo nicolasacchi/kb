@@ -24,9 +24,9 @@ import { currentDaemonBase } from "./base";
 import type { LiveState } from "./generated/LiveState";
 
 /**
- * The intent-header pair the terminal gate requires on every POST
- * (`crates/kb-server/src/terminal/gate.rs`: `TERMINAL_INTENT_HEADER`
- * and the `terminal_intent()` value check). The literals are pinned by
+ * The intent-header pair the terminal gate requires on every POST and
+ * every GET (`crates/kb-server/src/terminal/gate.rs`:
+ * `TERMINAL_INTENT_HEADER` and the `terminal_intent()` value check). The literals are pinned by
  * `terms.test.ts`; change them together with the server file.
  */
 export const TERMINAL_INTENT_HEADER = "X-Kb-Intent";
@@ -164,10 +164,15 @@ export async function launchTerm(body: LaunchBody, signal?: AbortSignal): Promis
   return (await res.json()) as LaunchResult;
 }
 
-/** List all terminals (`{terms: [...]}` envelope unwrapped). */
+/**
+ * List all terminals (`{terms: [...]}` envelope unwrapped). A same-origin
+ * GET carries no `Origin`, so the GET gate (`terminal/gate.rs`
+ * `gate_read`) admits it on the intent header alone: without it the
+ * list is refused 403 and no row ever reaches the panel.
+ */
 export async function listTerms(signal?: AbortSignal): Promise<TermRow[]> {
   const res = await fetch(`${currentDaemonBase()}/api/terms`, {
-    headers: { Accept: "application/json" },
+    headers: { Accept: "application/json", [TERMINAL_INTENT_HEADER]: TERMINAL_INTENT_VALUE },
     signal,
   });
   if (!res.ok) throw await termsError(res);
