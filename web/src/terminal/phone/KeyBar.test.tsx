@@ -72,6 +72,43 @@ describe("KeyBar", () => {
     for (const c of rig.calls) expect(c.json?.viewer).toBe("ws-abc1234567");
   });
 
+  it("FUKEYBAR: Backspace sends the name BSpace on pointerdown and never takes focus", async () => {
+    const ta = document.createElement("textarea");
+    document.body.appendChild(ta);
+    ta.focus();
+    bar(mkDrive());
+    const b = byId(m!.host, "kb-drive-key-BSpace");
+    expect(b.tabIndex).toBe(-1);
+    expect(press(b, "mousedown").defaultPrevented).toBe(true);
+    press(b);
+    await settle();
+    expect(rig.urls()).toEqual(["/api/terms/abcd1234/keys"]);
+    expect(keyBody(0)).toEqual(["BSpace"]);
+    expect(document.activeElement).toBe(ta);
+    ta.remove();
+  });
+
+  it("FUKEYBAR: Ctrl-D is a hold (a tap says so and sends nothing; 600 ms sends one C-d)", async () => {
+    vi.useFakeTimers();
+    const { onCaption } = bar(mkDrive());
+    const d = (): HTMLElement => byId(m!.host, "kb-drive-key-C-d");
+    press(d(), "pointerdown");
+    press(d(), "pointerup");
+    await act(async () => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(rig.calls).toHaveLength(0);
+    expect(onCaption).toHaveBeenLastCalledWith(CAPTION.holdCtrlD);
+    press(d(), "pointerdown");
+    await act(async () => {
+      vi.advanceTimersByTime(600);
+    });
+    await settle();
+    press(d(), "pointerup");
+    expect(rig.calls).toHaveLength(1);
+    expect(keyBody(0)).toEqual(["C-d"]);
+  });
+
   it("the Enter button is the enter op (not a key), and a 409 shows its reason as the caption", async () => {
     rig.reply(409, { type: "urn:kb:errors:terminal-conflict", detail: "output never went quiet" });
     const { onCaption } = bar(mkDrive());
