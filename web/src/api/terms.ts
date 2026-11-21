@@ -102,6 +102,8 @@ async function termsError(res: Response): Promise<TermsApiError> {
  * token callers when `refuse_token_callers` is on). Non-2xx throws
  * `TermsApiError`; 404 = terminal disabled or session gone, no retry.
  */
+export const AUTH_EXPIRED_TYPE = "urn:kb:errors:auth-expired";
+
 export async function mintTicket(termId: string, signal?: AbortSignal): Promise<TicketResult> {
   const res = await fetch(`${currentDaemonBase()}/api/terms/${encodeURIComponent(termId)}/ticket`, {
     method: "POST",
@@ -112,7 +114,13 @@ export async function mintTicket(termId: string, signal?: AbortSignal): Promise<
     },
     body: "{}",
     signal,
+    // Never follow an edge-auth (login) redirect: it would surface as an opaque
+    // cross-origin TypeError, indistinguishable from being offline.
+    redirect: "manual",
   });
+  if (res.type === "opaqueredirect") {
+    throw new TermsApiError(401, AUTH_EXPIRED_TYPE, "session expired (redirected to sign in)");
+  }
   if (!res.ok) throw await termsError(res);
   return (await res.json()) as TicketResult;
 }

@@ -168,6 +168,22 @@ describe("terms API", () => {
     expect((err as TermsApiError).status).toBe(404);
   });
 
+  it("mintTicket never follows a redirect: an edge-auth login redirect is an auth-expired error", async () => {
+    const calls = mockFetch(() => ({ type: "opaqueredirect", ok: false, status: 0, statusText: "" }) as unknown as Response);
+    const err = await mintTicket("abc123").catch((e) => e);
+    expect(calls[0].init?.redirect).toBe("manual");
+    expect(err).toBeInstanceOf(TermsApiError);
+    expect((err as TermsApiError).status).toBe(401);
+    expect((err as TermsApiError).type).toBe("urn:kb:errors:auth-expired");
+  });
+
+  it("mintTicket keeps a 401 as status 401", async () => {
+    mockFetch(() => new Response("<html>login</html>", { status: 401 }));
+    const err = await mintTicket("abc123").catch((e) => e);
+    expect(err).toBeInstanceOf(TermsApiError);
+    expect((err as TermsApiError).status).toBe(401);
+  });
+
   it("400 problem+json parses type into TermsApiError.type", async () => {
     mockFetch(() =>
       jsonResponse(400, {

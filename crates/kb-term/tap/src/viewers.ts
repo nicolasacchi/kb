@@ -533,7 +533,7 @@ export class TapServer {
     const imagedefs = [...this.defsByKey.values()].map((def) =>
       encodeServerFrame({ t: 'imagedef', seq: 0, id: def.id, gen: def.gen, sha256: def.sha256, mime: def.mime, w: def.w, h: def.h, cols: def.cols, rows: def.rows, offset: X }),
     );
-    this.writeText(conn, viewer.id, encodeServerFrame({ t: 'hello', proto: 'kb-term/1', session: this.session, epoch: this.epoch, harness: this.harness, bound_sid: this.boundSid, viewer: viewer.id }));
+    this.writeText(conn, viewer.id, encodeServerFrame({ t: 'hello', proto: 'kb-term/1', session: this.session, epoch: this.epoch, harness: this.harness, bound_sid: this.boundSid, viewer: viewer.id, pong: true }));
     this.writeText(conn, viewer.id, encodeServerFrame(profile));
     for (const frame of imagedefs) this.writeText(conn, viewer.id, frame);
     this.writeText(conn, viewer.id, encodeServerFrame({ t: 'seed', offset: X, len: seed.length }));
@@ -630,7 +630,7 @@ export class TapServer {
     viewer.pending = this.ring.markersAfter(mseq).map((m) => ({ offset: m.offset, frame: m.frame }));
     viewer.pendingBytes = viewer.pending.reduce((n, p) => n + p.frame.length, 0);
     viewer.state = 'live';
-    this.writeText(viewer.connection, viewer.id, encodeServerFrame({ t: 'hello', proto: 'kb-term/1', session: this.session, epoch: this.epoch, harness: this.harness, bound_sid: this.boundSid, viewer: viewer.id }));
+    this.writeText(viewer.connection, viewer.id, encodeServerFrame({ t: 'hello', proto: 'kb-term/1', session: this.session, epoch: this.epoch, harness: this.harness, bound_sid: this.boundSid, viewer: viewer.id, pong: true }));
     this.serviceViewer(viewer);
   }
 
@@ -782,7 +782,15 @@ export class TapServer {
       this.handleResume(viewer, validOffset(f.offset, 'offset'), validOffset(f.mseq, 'mseq'), validEpoch(f.epoch));
       return;
     }
-    // ping and any other C->S text frame: accepted, no reply.
+    if (f.t === 'ping') {
+      // Liveness probe (FUTERMLIVE): answer THIS viewer only, once it is live (a
+      // joining viewer is mid-handshake and must not see a stray frame ahead of
+      // its hello). A pong rides the same envelope path as every text frame.
+      const viewer = this.viewers.get(id);
+      if (viewer !== undefined && viewer.state === 'live') this.writeText(viewer.connection, viewer.id, encodeServerFrame({ t: 'pong' }));
+      return;
+    }
+    // Any other C->S text frame: accepted, no reply.
   }
 
   private handleControl(conn: Connection, msg: ControlMessage): void {
