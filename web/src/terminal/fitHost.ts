@@ -14,6 +14,13 @@ export interface FitTerm {
 export interface HostFitOptions {
   min: number;
   max: number;
+  /**
+   * The grid or the box changed since the last fit: plan from scratch. The
+   * no-ratchet guard below applies only to a REFIT of the same grid in the same
+   * box, never to a new situation (a kept font from an older grid would block
+   * growth after the grid shrank).
+   */
+  fresh?: boolean;
   /** Test seam: the document that owns the probe. */
   doc?: Document;
 }
@@ -52,6 +59,7 @@ export function fitHostNow(
   // and cell under the reader. Growing to a larger plan still happens.
   const current = term.options.fontSize;
   if (
+    !opts.fresh &&
     screen &&
     typeof current === "number" &&
     current > planned.fontSize &&
@@ -69,6 +77,8 @@ export function fitHostNow(
     if (fits || fontSize <= opts.min) break;
     fontSize = Math.max(opts.min, fontSize - 1);
   }
+  // The loop ends after a decrement it never applied: what is returned is what is set.
+  term.options.fontSize = fontSize;
   const cropped = screen
     ? { x: screen.scrollWidth > host.clientWidth, y: screen.scrollHeight > host.clientHeight }
     : planned.cropped;

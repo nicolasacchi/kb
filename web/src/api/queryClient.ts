@@ -164,7 +164,12 @@ export const queryClient = new QueryClient({
 //                                   invalidation on
 //                                   `term.created|term.ended|term.state`,
 //                                   which fire only on a lifecycle/state
-//                                   CHANGE (low rate, #24). Terminal BYTES
+//                                   CHANGE (low rate, #24), one refetch when
+//                                   the tab is visible again
+//                                   (refetchOnWindowFocus, only if older
+//                                   than staleTime) and one debounced
+//                                   invalidation per grid-change frame an
+//                                   open panel sees. Terminal BYTES
 //                                   never enter TanStack: the per-panel
 //                                   WebSocket is outside the SharedWorker
 //                                   (#24 carve-out).

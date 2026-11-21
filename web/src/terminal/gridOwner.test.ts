@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chipText, ownerClass, ownerLabel } from "./gridOwner";
+import { chipText, ownerClass, ownerLabel, trustedOwner } from "./gridOwner";
 
 describe("grid owner words", () => {
   it("classifies every owner class", () => {
@@ -21,5 +21,23 @@ describe("grid owner words", () => {
     expect(chipText(g, "desk-1")).toBe("201x48 · desk-1");
     expect(chipText(g, undefined)).toBe("201x48");
     for (const o of ["kb-term", "local:9", null, "desk-1"]) expect(ownerLabel(o)).not.toMatch(/window/i);
+  });
+});
+
+describe("trustedOwner (FUTERMPOLISH W1)", () => {
+  const grid = { cols: 120, rows: 40 };
+  it("no row: unknown", () => {
+    expect(trustedOwner(undefined, grid)).toBeUndefined();
+  });
+  it("a row of the live size vouches for its owner, free included", () => {
+    expect(trustedOwner({ cols: 120, rows: 40, grid_owner: "local:7" }, grid)).toBe("local:7");
+    expect(trustedOwner({ cols: 120, rows: 40, grid_owner: null }, grid)).toBeNull();
+  });
+  it("a row of another size is a stale snapshot: unknown, never free", () => {
+    expect(trustedOwner({ cols: 201, rows: 48, grid_owner: null }, grid)).toBeUndefined();
+    expect(trustedOwner({ cols: 120, rows: 41, grid_owner: "kb-term" }, grid)).toBeUndefined();
+  });
+  it("before the first profile there is no live grid to contradict the row", () => {
+    expect(trustedOwner({ cols: 201, rows: 48, grid_owner: "kb-term" }, null)).toBe("kb-term");
   });
 });

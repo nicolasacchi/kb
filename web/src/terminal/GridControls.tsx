@@ -21,13 +21,15 @@ export interface GridControlsProps {
   /** The host's box at the loaded font; null while it cannot be measured. */
   measureWindow: () => WindowMeasure | null;
   say: (message: string) => void;
+  /** Runs right before the window is measured (the panel scrolls itself into view). */
+  onBeforeFit?: () => void;
   /** The runner's answer to a take (`kb-term`) or a release (null): the owner now. */
   onOwner?: (owner: string | null) => void;
   onTook?: () => void;
 }
 
 export function GridControls(props: GridControlsProps) {
-  const { termId, harness, viewer, owner, measureWindow, say, onOwner, onTook } = props;
+  const { termId, harness, viewer, owner, measureWindow, say, onOwner, onTook, onBeforeFit } = props;
   const confirm = useConfirm();
   const queryClient = useQueryClient();
   const [busy, setBusy] = useState(false);
@@ -43,6 +45,7 @@ export function GridControls(props: GridControlsProps) {
   );
 
   const fit = async (): Promise<void> => {
+    onBeforeFit?.();
     const dims = fitWindowDims(measureWindow());
     if (dims === null) {
       say("Cannot measure the window yet.");

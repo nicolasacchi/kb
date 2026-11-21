@@ -34,6 +34,12 @@
   display: none;
 }
 
+/* FUTERMPOLISH — more keys past the edge: fade it (the fade goes once the end is reached). */
+.kb-drive__keys[data-more="right"] {
+  -webkit-mask-image: linear-gradient(to right, var(--ink) calc(100% - var(--pad-4)), transparent);
+  mask-image: linear-gradient(to right, var(--ink) calc(100% - var(--pad-4)), transparent);
+}
+
 .kb-drive__keybar {
   position: relative;
 }

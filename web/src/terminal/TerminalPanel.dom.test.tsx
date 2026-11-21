@@ -67,6 +67,9 @@ vi.mock("@xterm/xterm", () => ({
     hasSelection(): boolean {
       return this.selection !== "";
     }
+    clearSelection(): void {
+      this.selection = "";
+    }
     getSelection(): string {
       return this.selection;
     }
@@ -106,7 +109,10 @@ vi.mock("@xterm/xterm", () => ({
       this.onDataCb = cb;
     }
     onBinary(): void {}
-    resize(): void {}
+    resize(cols: number, rows: number): void {
+      this.cols = cols;
+      this.rows = rows;
+    }
     reset(): void {}
     write(_d: unknown, done?: () => void): void {
       done?.();
@@ -145,6 +151,7 @@ vi.mock("./gfx", () => ({
 
 interface SessionOpts {
   callbacks: { onProfile(p: unknown): void; onViewer(v: string): void; onState(s: unknown): void };
+  sink: { resize(cols: number, rows: number): void };
 }
 let lastSession: SessionOpts | null = null;
 const sessionStart = vi.fn();
@@ -210,7 +217,7 @@ beforeEach(() => {
   box = { w: 1400, h: 800 };
   probe.cellW = 0.6;
   probe.cellH = 1.32;
-  rows = [{ id: "abcd1234", state: "working", grid_owner: null }];
+  rows = [{ id: "abcd1234", state: "working", cols: 201, rows: 48, grid_owner: null }];
   readThemeMock.mockReset();
   readThemeMock.mockReturnValue({ background: "#111111" });
   roCallbacks = [];
@@ -355,7 +362,7 @@ describe("chip and controls", () => {
       ["desk-1", "201x48 · desk-1"],
       [null, "201x48 · free"],
     ] as const) {
-      rows = [{ id: "abcd1234", state: "working", grid_owner: owner }];
+      rows = [{ id: "abcd1234", state: "working", cols: 201, rows: 48, grid_owner: owner }];
       act(() => root!.render(<QueryClientProvider client={new QueryClient()}><TerminalPanel termId="abcd1234" sid="s1" harness="omp" /></QueryClientProvider>));
       expect(text("kb-term-grid")).toBe(label);
     }
@@ -377,7 +384,7 @@ describe("chip and controls", () => {
   });
 
   it("Fit to window posts the measured dims with the hello's viewer and reports in the aria-live status line inside the panel", async () => {
-    rows = [{ id: "abcd1234", state: "working", grid_owner: "local:9" }];
+    rows = [{ id: "abcd1234", state: "working", cols: 201, rows: 48, grid_owner: "local:9" }];
     await mountPanel();
     await profile();
     act(() => lastSession!.callbacks.onViewer("ws-viewer00001"));
@@ -395,7 +402,7 @@ describe("chip and controls", () => {
   });
 
   it("Release grid shows only for owner kb-term and posts release-size", async () => {
-    rows = [{ id: "abcd1234", state: "working", grid_owner: "kb-term" }];
+    rows = [{ id: "abcd1234", state: "working", cols: 201, rows: 48, grid_owner: "kb-term" }];
     await mountPanel();
     await profile();
     expect(q("kb-term-release")).not.toBeNull();
@@ -423,14 +430,14 @@ describe("chip and controls", () => {
   });
 
   it("a change of the list row's owner retires the hint (a local attach that took the grid after us shows)", async () => {
-    rows = [{ id: "abcd1234", state: "working", grid_owner: null }];
+    rows = [{ id: "abcd1234", state: "working", cols: 201, rows: 48, grid_owner: null }];
     await mountPanel();
     await profile();
     rig.reply(200, { cols: 166, rows: 43, owner: "kb-term" });
     act(() => q("kb-term-fit")!.click());
     await settle(10);
     expect(text("kb-term-grid")).toBe("201x48 · web");
-    rows = [{ id: "abcd1234", state: "working", grid_owner: "local:9" }];
+    rows = [{ id: "abcd1234", state: "working", cols: 201, rows: 48, grid_owner: "local:9" }];
     act(() => root!.render(<QueryClientProvider client={new QueryClient()}><TerminalPanel termId="abcd1234" sid="s1" harness="omp" /></QueryClientProvider>));
     await settle(2);
     expect(text("kb-term-grid")).toBe("201x48 · local attach");
@@ -673,5 +680,159 @@ describe("full screen", () => {
     await settle(2);
     expect(q("kb-terminal")!.classList.contains("kb-term--max")).toBe(false);
     expect(panel.classList.contains("kb-term--max")).toBe(false);
+  });
+});
+
+// ------------------------------------------------------- FUTERMPOLISH
+
+describe("W1: the owner chip tells the truth after a grid change", () => {
+  it("a list row of another size than the live grid is a stale snapshot: no suffix, never `free`", async () => {
+    rows = [{ id: "abcd1234", state: "working", cols: 201, rows: 48, grid_owner: null }];
+    await mountPanel();
+    await profile();
+    expect(text("kb-term-grid")).toBe("201x48 · free");
+    // Another client took 80x24; the list has not caught up.
+    act(() => lastSession!.sink.resize(80, 24));
+    expect(text("kb-term-grid")).toBe("80x24");
+    // The refetch lands: the row now matches and names the owner.
+    rows = [{ id: "abcd1234", state: "working", cols: 80, rows: 24, grid_owner: "kb-term" }];
+    act(() => root!.render(<QueryClientProvider client={new QueryClient()}><TerminalPanel termId="abcd1234" sid="s1" harness="omp" /></QueryClientProvider>));
+    expect(text("kb-term-grid")).toBe("80x24 · web");
+  });
+
+  it("a grid-change frame invalidates [\"terms\"] once, debounced, however many frames arrive", async () => {
+    const spy = vi.spyOn(QueryClient.prototype, "invalidateQueries");
+    await mountPanel();
+    await profile();
+    spy.mockClear();
+    act(() => {
+      lastSession!.sink.resize(80, 24);
+      lastSession!.sink.resize(100, 30);
+      lastSession!.sink.resize(120, 40);
+    });
+    expect(spy).not.toHaveBeenCalled();
+    await new Promise((r) => setTimeout(r, 450));
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith({ queryKey: ["terms"] });
+    spy.mockRestore();
+  });
+
+  it("nothing refetches by itself: no resize frame, no invalidation (no polling)", async () => {
+    const spy = vi.spyOn(QueryClient.prototype, "invalidateQueries");
+    await mountPanel();
+    await profile();
+    spy.mockClear();
+    await new Promise((r) => setTimeout(r, 450));
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("unmounting cancels the pending refetch", async () => {
+    const spy = vi.spyOn(QueryClient.prototype, "invalidateQueries");
+    await mountPanel();
+    await profile();
+    spy.mockClear();
+    act(() => lastSession!.sink.resize(80, 24));
+    act(() => root!.unmount());
+    root = null;
+    await new Promise((r) => setTimeout(r, 450));
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+});
+
+describe("W3: a grid change recomputes the font from scratch", () => {
+  it("201x48 -> 80x24 -> 201x48 in the same box: the font follows the plan each way and Cropped follows the floor", async () => {
+    box = { w: 1230, h: 576 };
+    await mountPanel();
+    const term = await profile();
+    expect(term.options.fontSize).toBe(9);
+    expect(q("kb-term-cropped")).toBeNull();
+    act(() => lastSession!.sink.resize(80, 24));
+    await settle(2);
+    // byHeight: floor(576 / (24 * 1.32)) = 18; width allows more.
+    expect(term.options.fontSize).toBe(18);
+    expect(text("kb-term-font")).toBe("font 18px");
+    expect(q("kb-term-cropped")).toBeNull();
+    act(() => lastSession!.sink.resize(120, 40));
+    await settle(2);
+    // floor(576 / (40 * 1.32)) = 10 (the fresh-load value)
+    expect(term.options.fontSize).toBe(10);
+    expect(q("kb-term-cropped")).toBeNull();
+    act(() => lastSession!.sink.resize(201, 48));
+    await settle(2);
+    expect(term.options.fontSize).toBe(9);
+  });
+
+  it("a narrow box crops at the floor and a smaller grid in it un-crops", async () => {
+    box = { w: 800, h: 800 };
+    await mountPanel();
+    await profile();
+    expect(q("kb-term-cropped")).not.toBeNull();
+    act(() => lastSession!.sink.resize(100, 30));
+    await settle(2);
+    expect(q("kb-term-cropped")).toBeNull();
+  });
+});
+
+describe("W4: a copy ends the selection", () => {
+  it("the second Ctrl+C after a copy is ^C (left to xterm), not another copy", async () => {
+    const writeText = vi.fn(async () => {});
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    await mountPanel();
+    const term = await profile();
+    term.selection = "picked text";
+    expect(term.keyHandler!(keyEv({ ctrlKey: true }))).toBe(false);
+    expect(writeText).toHaveBeenCalledTimes(1);
+    expect(term.selection).toBe("");
+    const second = keyEv({ ctrlKey: true });
+    expect(term.keyHandler!(second)).toBe(true);
+    expect(second.preventDefault).not.toHaveBeenCalled();
+    expect(writeText).toHaveBeenCalledTimes(1);
+  });
+
+  it("Ctrl+Shift+C also ends the selection", async () => {
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: vi.fn(async () => {}) } });
+    await mountPanel();
+    const term = await profile();
+    term.selection = "abc";
+    term.keyHandler!(keyEv({ ctrlKey: true, shiftKey: true, key: "C" }));
+    expect(term.selection).toBe("");
+  });
+});
+
+describe("W2: the panel scrolls itself into view on open and before a Fit, never on a re-render", () => {
+  it("scrolls once on mount, not on profile / state / resize frames", async () => {
+    const scroll = vi.fn();
+    (Element.prototype as unknown as { scrollIntoView: unknown }).scrollIntoView = scroll;
+    try {
+      await mountPanel();
+      expect(scroll).toHaveBeenCalledTimes(1);
+      expect(scroll.mock.contexts[0]).toBe(q("kb-terminal"));
+      await profile();
+      act(() => lastSession!.sink.resize(80, 24));
+      act(() => lastSession!.callbacks.onState({ phase: "live", epoch: null, applied: 0, resets: 0, gaps: 0, attempt: 0, caption: "live", exitCode: null, blockedReason: null }));
+      await settle(2);
+      expect(scroll).toHaveBeenCalledTimes(1);
+    } finally {
+      delete (Element.prototype as unknown as Record<string, unknown>).scrollIntoView;
+    }
+  });
+
+  it("Fit to window scrolls (instantly) BEFORE it measures and posts", async () => {
+    const order: string[] = [];
+    (Element.prototype as unknown as { scrollIntoView: unknown }).scrollIntoView = vi.fn(() => order.push("scroll"));
+    try {
+      await mountPanel();
+      await profile();
+      order.length = 0;
+      rig.reply(200, { cols: 166, rows: 43, owner: "kb-term" });
+      act(() => q("kb-term-fit")!.click());
+      await settle(10);
+      expect(order).toEqual(["scroll"]);
+      expect(rig.urls()).toEqual(["/api/terms/abcd1234/take-size"]);
+    } finally {
+      delete (Element.prototype as unknown as Record<string, unknown>).scrollIntoView;
+    }
   });
 });

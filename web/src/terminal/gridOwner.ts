@@ -35,3 +35,21 @@ export function chipText(grid: { cols: number; rows: number }, owner: string | n
   if (owner === undefined) return `${grid.cols}x${grid.rows}`;
   return `${grid.cols}x${grid.rows} · ${ownerLabel(owner)}`;
 }
+
+/**
+ * The owner a list row can vouch for, given the grid the stream shows NOW.
+ *
+ * The `["terms"]` row is a snapshot: after a grid change it keeps the old size
+ * (and the old owner) until the next refetch. A row whose size differs from the
+ * live grid describes a grid that no longer exists, so it must not say who owns
+ * this one: `undefined` (unknown) until the refetch lands, never a stale `free`.
+ * No row at all is unknown too.
+ */
+export function trustedOwner(
+  row: { cols: number; rows: number; grid_owner?: string | null } | undefined,
+  grid: { cols: number; rows: number } | null,
+): string | null | undefined {
+  if (!row) return undefined;
+  if (grid && (row.cols !== grid.cols || row.rows !== grid.rows)) return undefined;
+  return row.grid_owner ?? null;
+}

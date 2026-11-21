@@ -8,7 +8,7 @@ import { Sheet } from "@kb/ui/Sheet";
 import { toast } from "../../lib/toast";
 import { terminalOwnsEscape } from "./escape";
 import { CAPTION } from "./planSend";
-import { KeyBar } from "./KeyBar";
+import { KeyBar, moreToRight } from "./KeyBar";
 import { byId, maybeById, mkDrive, mount, press, rigFetch, settle, type FetchRig, type Mounted } from "./driveTestkit";
 import type { Drive } from "./driveApi";
 
@@ -273,5 +273,38 @@ describe("KeyBar", () => {
       panel.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
     });
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("FUTERMPOLISH W6d: the key row that scrolls says so", () => {
+  it("moreToRight: true only while keys sit past the right edge", () => {
+    expect(moreToRight({ scrollLeft: 0, clientWidth: 360, scrollWidth: 600 })).toBe(true);
+    expect(moreToRight({ scrollLeft: 100, clientWidth: 360, scrollWidth: 600 })).toBe(true);
+    expect(moreToRight({ scrollLeft: 240, clientWidth: 360, scrollWidth: 600 })).toBe(false);
+    expect(moreToRight({ scrollLeft: 0, clientWidth: 600, scrollWidth: 600 })).toBe(false);
+    // not laid out yet (jsdom, a hidden tree): no fade
+    expect(moreToRight({ scrollLeft: 0, clientWidth: 0, scrollWidth: 600 })).toBe(false);
+  });
+
+  it("the row carries data-more=right while it overflows, and loses it at the end of the scroll", () => {
+    const sw = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollWidth");
+    const cw = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+    Object.defineProperty(HTMLElement.prototype, "scrollWidth", { configurable: true, get: () => 600 });
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => 360 });
+    try {
+      bar(mkDrive());
+      const keys = byId(m!.host, "kb-drive-keys");
+      expect(keys.getAttribute("data-more")).toBe("right");
+      keys.scrollLeft = 240;
+      act(() => {
+        keys.dispatchEvent(new Event("scroll"));
+      });
+      expect(keys.getAttribute("data-more")).toBeNull();
+    } finally {
+      if (sw) Object.defineProperty(HTMLElement.prototype, "scrollWidth", sw);
+      else delete (HTMLElement.prototype as unknown as Record<string, unknown>).scrollWidth;
+      if (cw) Object.defineProperty(HTMLElement.prototype, "clientWidth", cw);
+      else delete (HTMLElement.prototype as unknown as Record<string, unknown>).clientWidth;
+    }
   });
 });

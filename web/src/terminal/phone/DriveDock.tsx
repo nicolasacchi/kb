@@ -15,7 +15,7 @@ import { useLiveSessions } from "../../hooks/useLiveSessions";
 import { ChoiceBar } from "./ChoiceBar";
 import { Composer } from "./Composer";
 import type { Drive } from "./driveApi";
-import { ownerClass } from "../gridOwner";
+import { chipText, ownerClass, trustedOwner } from "../gridOwner";
 import { releaseGrid, takeGrid, type GridCtx } from "../takeGrid";
 import { fitDims, type PhoneMeasure } from "./fitPhone";
 import { KeyBar } from "./KeyBar";
@@ -28,6 +28,10 @@ export interface DriveDockProps {
   viewer: string | null;
   /** The terminal's list row (`bracket_paste_flag`, `grid_owner`, `session_id`), if loaded. */
   row: TermRow | undefined;
+  /** The live session grid (the chip names it with its owner); null before the profile. */
+  grid?: { cols: number; rows: number } | null;
+  /** Full screen: the grid-controls row folds away; keys and composer stay. */
+  compact?: boolean;
   /** Measure the visible Watch area and one cell; null when not measurable yet. */
   measure: () => PhoneMeasure | null;
   /** The operator typed (the client half of the OSC 52 typing clock). */
@@ -42,7 +46,7 @@ export interface DriveDockProps {
 }
 
 export function DriveDock(props: DriveDockProps) {
-  const { termId, harness, viewer, row, measure, onTyped, ownerHint, onOwner } = props;
+  const { termId, harness, viewer, row, measure, onTyped, ownerHint, onOwner, grid: liveGrid = null, compact = false } = props;
   const confirm = useConfirm();
   const queryClient = useQueryClient();
   const { rows: live } = useLiveSessions();
@@ -53,7 +57,10 @@ export function DriveDock(props: DriveDockProps) {
   const liveRow = live.find((r) => r.term === termId);
   const bound = (row?.session_id ?? null) !== null || liveRow !== undefined;
   const blocked = liveRow?.blocked === true;
-  const owner = ownerHint ? ownerHint.owner : (row?.grid_owner ?? null);
+  // The owner the runner/list can vouch for; unknown (undefined) while the row is
+  // behind the live grid. Controls treat unknown like free.
+  const vouched: string | null | undefined = ownerHint ? ownerHint.owner : liveGrid ? trustedOwner(row, liveGrid) : (row?.grid_owner ?? null);
+  const owner = vouched ?? null;
 
   const grid = useMemo<GridCtx>(
     () => ({
@@ -95,37 +102,41 @@ export function DriveDock(props: DriveDockProps) {
 
   return (
     <div className="kb-drive" data-testid="kb-drive">
-      <div className="kb-drive__head">
-        <button
-          type="button"
-          className="kb-drive__key kb-drive__key--wide"
-          data-testid="kb-drive-fit"
-          disabled={fitting}
-          onPointerDown={(e) => e.preventDefault()}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => void fit()}
-        >
-          Fit to phone
-        </button>
-        {ownerClass(owner) === "web" ? (
-          <>
-            <button
-              type="button"
-              className="kb-drive__key kb-drive__key--wide"
-              data-testid="kb-drive-release"
-              disabled={fitting}
-              onPointerDown={(e) => e.preventDefault()}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => void release()}
-            >
-              Release grid
-            </button>
+      {compact ? null : (
+        <div className="kb-drive__head">
+          <button
+            type="button"
+            className="kb-drive__key kb-drive__key--wide"
+            data-testid="kb-drive-fit"
+            disabled={fitting}
+            onPointerDown={(e) => e.preventDefault()}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => void fit()}
+          >
+            Fit to phone
+          </button>
+          {ownerClass(owner) === "web" ? (
+            <>
+              <button
+                type="button"
+                className="kb-drive__key kb-drive__key--wide"
+                data-testid="kb-drive-release"
+                disabled={fitting}
+                onPointerDown={(e) => e.preventDefault()}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => void release()}
+              >
+                Release grid
+              </button>
+            </>
+          ) : null}
+          {liveGrid ? (
             <span className="kb-drive__chip" data-testid="kb-drive-grid-chip">
-              Grid: phone
+              {chipText(liveGrid, vouched)}
             </span>
-          </>
-        ) : null}
-      </div>
+          ) : null}
+        </div>
+      )}
       <ChoiceBar drive={drive} onTyped={onTyped} />
       <KeyBar drive={drive} onCaption={setCaption} onTyped={onTyped} />
       <Composer

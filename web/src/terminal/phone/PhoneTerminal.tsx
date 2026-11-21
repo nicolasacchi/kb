@@ -18,6 +18,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNo
 import type { Terminal } from "@xterm/xterm";
 import { ReadView } from "./ReadView";
 import { phoneFullscreenAvailable } from "../fullscreen";
+import { CROPPED_LABEL, CROPPED_PHONE_HINT, isCroppedX } from "../cropHint";
 import { useFullscreen } from "../useFullscreen";
 import { FONT_STEPS, stepFont } from "./scrollerCore";
 import { readFont } from "./fontSteps";
@@ -53,6 +54,8 @@ export interface PhoneStream {
 }
 
 export interface PhoneTerminalProps {
+  /** The harness name the title row shows (default "Terminal"). */
+  harness?: string;
   term: PhoneTerm | null;
   profile: PhoneProfile | null;
   /** The panel creates the xterm into this host (it exists before the term does). */
@@ -67,7 +70,7 @@ export interface PhoneTerminalProps {
    * hidden, in Read mode so a half-typed message survives a mode switch).
    * `measure` reports the visible Watch area and one cell for "Fit to phone".
    */
-  renderDrive?: (api: { measure: () => PhoneMeasure | null }) => ReactNode;
+  renderDrive?: (api: { measure: () => PhoneMeasure | null; fullscreen: boolean }) => ReactNode;
 }
 
 /**
@@ -94,11 +97,13 @@ function setAttr(el: HTMLElement, name: string, value: string | number | undefin
 }
 
 export function PhoneTerminal(props: PhoneTerminalProps) {
-  const { term, profile, hostRef, mode, onMode, stream, caption, onClose, renderDrive } = props;
+  const { term, profile, hostRef, mode, onMode, stream, caption, onClose, renderDrive, harness } = props;
   const [wrap, setWrap] = useState<HTMLDivElement | null>(null);
   const [viewport, setViewport] = useState<HTMLDivElement | null>(null);
   const [font, setFont] = useState<number>(() => readFont());
   const [behind, setBehind] = useState(false);
+  // The grid is wider than the screen (Watch pans it until Fit to phone).
+  const [cropped, setCropped] = useState(false);
   const termRef = useRef(term);
   termRef.current = term;
   // FUTERMFULL — element fullscreen of the sheet's root, only where the browser
@@ -153,6 +158,7 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
     setAttr(viewport, "data-kb-term-rows", t.rows);
     setAttr(viewport, "data-kb-term-sl", Math.round(wrap.scrollLeft));
     setBehind(b.viewportY < b.baseY);
+    setCropped(isCroppedX({ scrollWidth: viewport.scrollWidth, clientWidth: wrap.clientWidth }));
   }, [viewport, wrap]);
 
   useEffect(() => {
@@ -165,6 +171,13 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
       wrap?.removeEventListener("scroll", refresh);
     };
   }, [term, wrap, refresh]);
+
+  // A grid change (Fit to phone, another viewer's take) changes the width the pan
+  // has to cover; the screen repaints after the resize, so look again shortly after.
+  useEffect(() => {
+    const id = window.setTimeout(refresh, 100);
+    return () => window.clearTimeout(id);
+  }, [profile?.cols, profile?.rows, refresh]);
 
   usePhoneScroller({
     term: mode === "watch" ? term : null,
@@ -223,10 +236,10 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
   return (
     <div className="kb-term-phone" data-kb-term-root="" data-testid="kb-terminal" ref={setRoot}>
       <div className="kb-term-phone__bar">
-        <span className="kb-term-phone__title">Terminal</span>
-        <span className="kb-term-phone__caption" data-testid="kb-term-caption">
-          {caption}
+        <span className="kb-term-phone__title" data-testid="kb-term-phone-title">
+          {harness || "Terminal"}
         </span>
+        <span className="kb-term-phone__spacer" />
         <button
           type="button"
           className="kb-term-phone__btn"
@@ -262,15 +275,26 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
             className="kb-term-phone__btn"
             data-testid="kb-term-phone-fullscreen"
             aria-pressed={fs.on}
+            aria-label={fs.on ? "Exit full screen" : "Full screen"}
             onClick={fs.toggle}
           >
-            {fs.on ? "Exit full screen" : "Full screen"}
+            {fs.on ? "Exit" : "Full"}
           </button>
         ) : null}
         {onClose ? (
           <button type="button" className="kb-term-phone__btn" data-testid="kb-term-close" onClick={onClose}>
             Close
           </button>
+        ) : null}
+      </div>
+      <div className="kb-term-phone__sub">
+        <span className="kb-term-phone__caption" data-testid="kb-term-caption">
+          {caption}
+        </span>
+        {cropped && mode === "watch" ? (
+          <span className="kb-term-phone__crop" data-testid="kb-term-phone-cropped" title={CROPPED_PHONE_HINT}>
+            {CROPPED_LABEL}: pan, or Fit to phone
+          </span>
         ) : null}
       </div>
       <div className="kb-term-phone__watch" hidden={mode === "read"}>
@@ -309,7 +333,7 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
           onWatch={() => onMode("watch")}
         />
       ) : null}
-      {renderDrive ? <div hidden={mode === "read"}>{renderDrive({ measure })}</div> : null}
+      {renderDrive ? <div hidden={mode === "read"}>{renderDrive({ measure, fullscreen: fs.on })}</div> : null}
     </div>
   );
 }

@@ -121,7 +121,11 @@
    * (the panel also sets it inline from the active theme), so the two never
    * show different blacks. */
   min-height: var(--pad-4);
-  height: min(80dvh, 60rem);
+  /* FUTERMPOLISH — bar + view fit the window below the app bar: the page's own
+   * padding, the panel's chrome (two bar rows, gaps, a status line) and the
+   * app bar are reserved, so a panel scrolled to the top of its scroller never
+   * runs below the fold and "Fit to window" fills only what can be seen. */
+  height: max(calc(var(--pad-4) * 10), min(60rem, calc(100dvh - var(--topbar-h, var(--spine-h)) - var(--pad-3) * 8)));
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
@@ -143,9 +147,21 @@
   border-color: var(--accent);
 }
 
-.kb-term--typing .kb-term__view {
+/* FUTERMPOLISH — the ring and xterm's own scrollbar belong to the GRID, not to
+ * the host: the xterm element shrink-wraps its screen, so its outline and the
+ * scrollbar it positions at its right edge sit at the text, not at the far
+ * edge of an empty band. */
+.kb-term__view .xterm {
+  width: max-content;
+}
+
+.kb-term--typing .kb-term__view .xterm {
   outline: var(--pad-1) solid var(--accent);
   outline-offset: calc(-1 * var(--pad-1));
+}
+
+.kb-term {
+  scroll-margin-top: var(--pad-2);
 }
 
 .kb-term__jump {
