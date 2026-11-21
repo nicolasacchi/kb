@@ -145,4 +145,15 @@ describe("TerminalSlot bell dot (FUTERMATTN)", () => {
     });
     expect(screen.queryByTestId("kb-term-bell")).toBeNull();
   });
+
+  it("focus moving into the slot (focusin) clears the dot", async () => {
+    render(<TerminalSlot sid="sid-1" harness="omp" lane={lane} />);
+    screen.getByTestId("kb-term-open").click();
+    const bell = await screen.findByTestId("mock-panel-bell");
+    act(() => bell.click());
+    expect(screen.getByTestId("kb-term-bell")).toBeTruthy();
+    const close = screen.getByTestId("mock-panel-close");
+    act(() => close.focus());
+    expect(screen.queryByTestId("kb-term-bell")).toBeNull();
+  });
 });

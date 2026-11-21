@@ -421,7 +421,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
       term.onTitleChange((t) => setProgTitle(sanitizeOscTitle(t)));
       term.onBell(() => {
         const active = document.activeElement;
-        const termFocused = !!(active && term.element?.contains(active));
+        const termFocused = document.hasFocus() && !!(active && term.element?.contains(active));
         if (bellNeedsAttention({ hidden: document.hidden, termFocused })) onBellRef.current?.();
       });
       term.onData((data) => {

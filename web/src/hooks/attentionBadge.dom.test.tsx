@@ -7,7 +7,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import WaitingChip from "../components/chrome/WaitingChip";
 import { LIVE_SESSIONS_KEY } from "./useLiveSessions";
-import { useDocumentTitle } from "./useDocumentTitle";
+import { resetAttentionForTest, useDocumentTitle } from "./useDocumentTitle";
 import { fetchLiveStatus, type LiveStatusRow } from "../api/sessions";
 
 vi.mock("../api/sessions", async (importOriginal) => {
@@ -40,6 +40,7 @@ const setAppBadge = vi.fn(() => Promise.resolve());
 const clearAppBadge = vi.fn(() => Promise.resolve());
 
 beforeEach(() => {
+  resetAttentionForTest();
   qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   Object.defineProperty(navigator, "setAppBadge", { configurable: true, value: setAppBadge });
   Object.defineProperty(navigator, "clearAppBadge", { configurable: true, value: clearAppBadge });
@@ -83,11 +84,12 @@ describe("attention badge", () => {
     await waitFor(() => expect(document.title).toBe("(2) Sessions · kb"));
   });
 
-  it("a quiet fleet leaves the title alone and never calls the badge API with 0", async () => {
+  it("a quiet fleet leaves the title alone and clears a stale app badge exactly once", async () => {
     vi.mocked(fetchLiveStatus).mockResolvedValue([row({ session_id: "a", blocked: false })]);
     mount(false);
-    await waitFor(() => expect(fetchLiveStatus).toHaveBeenCalled());
+    await waitFor(() => expect(qc.getQueryState(LIVE_SESSIONS_KEY)?.status).toBe("success"));
+    await waitFor(() => expect(clearAppBadge).toHaveBeenCalledTimes(1));
     expect(document.title).toBe("kb");
-    expect(setAppBadge).not.toHaveBeenCalledWith(0);
+    expect(setAppBadge).not.toHaveBeenCalled();
   });
 });

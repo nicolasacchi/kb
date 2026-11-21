@@ -900,7 +900,9 @@ describe("FUTERMATTN attention hooks", () => {
     const focusedEl = document.createElement("textarea");
     term.element!.appendChild(focusedEl);
     focusedEl.focus();
+    const hf = vi.spyOn(document, "hasFocus").mockReturnValue(true);
     act(() => term.bellCbs.forEach((cb) => cb()));
+    hf.mockRestore();
     expect(onBell).not.toHaveBeenCalled();
     Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
     try {
@@ -908,6 +910,36 @@ describe("FUTERMATTN attention hooks", () => {
       expect(onBell).toHaveBeenCalledTimes(1);
     } finally {
       delete (document as unknown as Record<string, unknown>).hidden;
+    }
+  });
+
+  it("a BEL while the window lost focus (tab visible, textarea still active) calls onBell", async () => {
+    const onBell = vi.fn();
+    const term = await mountWith(onBell);
+    const focusedEl = document.createElement("textarea");
+    term.element!.appendChild(focusedEl);
+    focusedEl.focus();
+    const spy = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    try {
+      act(() => term.bellCbs.forEach((cb) => cb()));
+      expect(onBell).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("a BEL with focus elsewhere in the page calls onBell", async () => {
+    const onBell = vi.fn();
+    const term = await mountWith(onBell);
+    const other = document.createElement("input");
+    document.body.appendChild(other);
+    other.focus();
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    try {
+      act(() => term.bellCbs.forEach((cb) => cb()));
+      expect(onBell).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.restoreAllMocks();
     }
   });
 });
