@@ -19,6 +19,7 @@ describe("grid owner words", () => {
     expect(chipText(g, "local:9")).toBe("201x48 · local attach");
     expect(chipText(g, null)).toBe("201x48 · free");
     expect(chipText(g, "desk-1")).toBe("201x48 · desk-1");
+    expect(chipText(g, undefined)).toBe("201x48");
     for (const o of ["kb-term", "local:9", null, "desk-1"]) expect(ownerLabel(o)).not.toMatch(/window/i);
   });
 });

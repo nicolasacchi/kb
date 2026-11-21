@@ -30,7 +30,8 @@ export function ownerLabel(owner: string | null | undefined): string {
   }
 }
 
-/** `201x48 · web` (the owner is dropped to `free` until the list row is known). */
+/** `201x48 · web`; `201x48` alone while the owner is unknown (undefined: no list row yet). */
 export function chipText(grid: { cols: number; rows: number }, owner: string | null | undefined): string {
+  if (owner === undefined) return `${grid.cols}x${grid.rows}`;
   return `${grid.cols}x${grid.rows} · ${ownerLabel(owner)}`;
 }

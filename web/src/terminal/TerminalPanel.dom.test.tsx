@@ -307,6 +307,14 @@ describe("chip and controls", () => {
     }
   });
 
+  it("claims no owner while the list has no row for the term (unknown is not free)", async () => {
+    rows = [];
+    await mountPanel();
+    await profile();
+    expect(text("kb-term-grid")).not.toContain("free");
+    expect(text("kb-term-grid")).not.toContain("·");
+  });
+
   it("dims the panel while it is not live", async () => {
     await mountPanel();
     expect(q("kb-terminal")!.className).toContain("kb-term--idle");
@@ -347,7 +355,7 @@ describe("chip and controls", () => {
     rows = [];
     await mountPanel();
     await profile();
-    expect(text("kb-term-grid")).toBe("201x48 · free");
+    expect(text("kb-term-grid")).toBe("201x48");
     expect(q("kb-term-release")).toBeNull();
     rig.reply(200, { cols: 166, rows: 43, owner: "kb-term" });
     act(() => q("kb-term-fit")!.click());

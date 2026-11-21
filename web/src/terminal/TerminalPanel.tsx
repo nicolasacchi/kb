@@ -128,13 +128,15 @@ export function TerminalPanel(props: TerminalPanelProps) {
   const { terms } = useTerms();
   const termRow = terms.find((t) => t.id === props.termId);
   const rowState = termRow?.state ?? null;
-  const listOwner = termRow?.grid_owner ?? null;
+  // undefined = the list has no row for this term (still loading or the read
+  // failed): the owner is UNKNOWN, which is not the same as free.
+  const listOwner: string | null | undefined = termRow ? (termRow.grid_owner ?? null) : undefined;
   // The runner's answer to our own take/release names the owner NOW; the list
   // row is the source otherwise, and any change of the row's owner retires the
   // hint (a local attach that took the grid after us must show).
   const [ownerHint, setOwnerHint] = useState<{ owner: string | null } | null>(null);
   useEffect(() => setOwnerHint(null), [listOwner]);
-  const gridOwner = ownerHint ? ownerHint.owner : listOwner;
+  const gridOwner: string | null | undefined = ownerHint ? ownerHint.owner : listOwner;
   const onOwner = useCallback((owner: string | null): void => setOwnerHint({ owner }), []);
 
   // Fit the live terminal into the desktop host (font only; never a take-size).
@@ -606,7 +608,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
           termId={props.termId}
           harness={props.harness}
           viewer={viewer}
-          owner={gridOwner}
+          owner={gridOwner ?? null}
           measureWindow={measureWindow}
           say={say}
           onOwner={onOwner}
