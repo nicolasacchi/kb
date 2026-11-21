@@ -133,6 +133,36 @@
   -webkit-user-select: text;
 }
 
+.kb-term-read__link {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+/* FUPHONELINKS — the confirm row for a URL that spans rows: the whole address,
+ * Open and Cancel, over the top of the Watch area. */
+.kb-term-phone__linkrow {
+  position: absolute;
+  left: var(--pad-2);
+  right: var(--pad-2);
+  top: var(--pad-2);
+  display: flex;
+  align-items: center;
+  gap: var(--pad-2);
+  padding: var(--pad-2);
+  background: var(--bg-card);
+  border: var(--pad-1) solid var(--rule-hi);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+}
+
+.kb-term-phone__linkurl {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 .kb-term-read__image {
   color: var(--ink-mute);
   opacity: 0.6;
