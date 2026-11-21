@@ -27,7 +27,8 @@ vi.mock("../terminal/TerminalPanel.lazy", () => ({
   ),
 }));
 
-import { TermList, EndTerminalButton } from "./TermList";
+import { TermList } from "./TermList";
+import { EndTerminalButton } from "./TermControls";
 
 type Call = { method: string; url: string; intent: string | null; hasBody: boolean };
 let calls: Call[];

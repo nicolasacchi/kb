@@ -19,7 +19,7 @@ import { Link } from "react-router-dom";
 import { StateCard } from "@kb/ui/StateCard";
 import type { TerminalLane } from "../api/sessions";
 import { useIsMobile } from "../hooks/useIsMobile";
-import { TerminalControls } from "./TermList";
+import { TerminalControls } from "./TermControls";
 
 export type TerminalSlotProps = {
   sid: string;

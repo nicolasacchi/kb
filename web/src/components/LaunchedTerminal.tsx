@@ -17,7 +17,7 @@ import { StateCard } from "@kb/ui/StateCard";
 import { useTerms } from "../terminal/useTerms";
 import { BOUND_DEADLINE_MS, BOUND_POLL_MS } from "../lib/termLaunch";
 import { useIsMobile } from "../hooks/useIsMobile";
-import { TerminalControls } from "./TermList";
+import { TerminalControls } from "./TermControls";
 
 // Same lazy seam as `TerminalSlot`/`HandoffPanel`: xterm loads after a launch.
 const TerminalPanel = lazy(() => import("../terminal/TerminalPanel.lazy"));

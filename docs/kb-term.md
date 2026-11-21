@@ -579,8 +579,9 @@ its owner, and a link to the bound session, or "unbound" while the harness has
 not answered its trust prompt yet. **Open** mounts the same lazy panel (a phone
 gets the sheet) and puts `?term=<id>` in the URL: a reload, a shared link and
 Back land on the open terminal. Opening adds a history entry; the panel's Close
-replaces it, so Back never reopens a closed sheet. An id outside the kb id
-grammar opens nothing.
+replaces it, so Back never reopens a closed sheet. An id that is not a plain
+lowercase token (letters, digits, dash) opens nothing; the server still
+validates the exact id.
 
 **End** (the button on a row, above a desktop panel, in the phone sheet's own
 header row) asks first, naming the harness and directory, then sends one

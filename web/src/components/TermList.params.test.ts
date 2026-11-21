@@ -8,10 +8,11 @@ describe("?term= grammar", () => {
     ["abc123", "abc123"],
     ["a", "a"],
     ["z".repeat(32), "z".repeat(32)],
+    ["t-e2e", "t-e2e"],
   ])("%s is an open terminal id", (v, want) => {
     expect(openTermParam(v)).toBe(want);
   });
-  it.each([null, "", "ABC", "a-b", "a/b", "a b", "a".repeat(33), "../x"])("%s opens nothing", (v) => {
+  it.each([null, "", "ABC", "-a", "a_b", "a/b", "a b", "a".repeat(33), "../x"])("%s opens nothing", (v) => {
     expect(openTermParam(v)).toBeNull();
   });
   it("withTermParam sets and removes only term, keeping every other param and its order", () => {
