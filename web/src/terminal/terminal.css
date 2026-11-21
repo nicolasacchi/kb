@@ -163,6 +163,15 @@
   width: max-content;
 }
 
+/* FUTERMFONT — xterm nests its helper textarea and composition view inside the
+ * screen and parks the textarea at the last synced cursor row. After a grid
+ * shrink that row lies below the smaller screen; clipping to the screen box
+ * keeps it from extending the host's scroll extent (the fit also measures the
+ * screen's box, never its scroll extent). */
+.kb-term__view .xterm-screen {
+  overflow: hidden;
+}
+
 .kb-term--typing .kb-term__view .xterm {
   outline: var(--pad-1) solid var(--accent);
   outline-offset: calc(-1 * var(--pad-1));

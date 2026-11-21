@@ -105,8 +105,8 @@ vi.mock("@xterm/xterm", () => ({
       const screen = document.createElement("div");
       screen.className = "xterm-screen";
       // The rendered screen is cols x cellW by rows x cellH per px of font size (the probe's cell).
-      Object.defineProperty(screen, "scrollWidth", { get: () => this.cols * probe.cellW * this.options.fontSize });
-      Object.defineProperty(screen, "scrollHeight", { get: () => this.rows * probe.cellH * this.options.fontSize });
+      Object.defineProperty(screen, "offsetWidth", { get: () => this.cols * probe.cellW * this.options.fontSize });
+      Object.defineProperty(screen, "offsetHeight", { get: () => this.rows * probe.cellH * this.options.fontSize });
       el.appendChild(screen);
       host.appendChild(el);
       this.element = el;
