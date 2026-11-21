@@ -1769,8 +1769,8 @@ jobs:
       - name: Install Rust toolchain
         uses: ./.github/actions/setup-rust
 
-      - name: term_int_reseed + term_int_attach (nextest, real tmux 3.7c + bun driver)
-        run: KB_TMUX_BIN="$KB_TMUX_BIN" KB_REQUIRE_TMUX=1 cargo nextest run --locked --no-fail-fast --profile ci -p kb-term --test term_int_reseed --test term_int_attach
+      - name: term_int_reseed + term_int_attach + term_int_attach_real (nextest, real tmux 3.7c + bun driver + real tap)
+        run: KB_TMUX_BIN="$KB_TMUX_BIN" KB_TAP_BIN="$RUNNER_TEMP/kb-tap" KB_REQUIRE_TMUX=1 cargo nextest run --locked --no-fail-fast --profile ci -p kb-term --test term_int_reseed --test term_int_attach --test term_int_attach_real
         timeout-minutes: 25
 
       - name: Merge term-int JUnit (smoke + reseed)
