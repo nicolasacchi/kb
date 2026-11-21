@@ -250,3 +250,103 @@ describe("Composer", () => {
     });
   });
 });
+
+describe("FUKEYBAR PHONE-8: the draft survives an unmount", () => {
+  const ta = (): HTMLTextAreaElement => byId(m!.host, "kb-drive-input") as HTMLTextAreaElement;
+
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("type, unmount, remount with the same term id: the text is back; another term gets nothing", () => {
+    m = mount(<Host drive={mkDrive()} />);
+    typeInto(ta(), "half a thought");
+    m.unmount();
+    m = mount(<Host drive={mkDrive()} />);
+    expect(ta().value).toBe("half a thought");
+    m.unmount();
+    m = mount(<Host drive={mkDrive({ termId: "other999" })} />);
+    expect(ta().value).toBe("");
+  });
+
+  it("a successful send clears the stored draft; a failed one keeps it", async () => {
+    m = mount(<Host drive={mkDrive()} />);
+    typeInto(ta(), "keep me");
+    rig.reply(503, { type: "urn:kb:errors:terminal-runner-unavailable", detail: "down" });
+    vi.spyOn(toast, "err").mockImplementation(() => {});
+    click(byId(m.host, "kb-drive-send"));
+    await settle();
+    m.unmount();
+    m = mount(<Host drive={mkDrive()} />);
+    expect(ta().value).toBe("keep me");
+    click(byId(m.host, "kb-drive-send"));
+    await settle();
+    expect(ta().value).toBe("");
+    m.unmount();
+    m = mount(<Host drive={mkDrive()} />);
+    expect(ta().value).toBe("");
+  });
+
+  it("a draft older than the TTL is not restored", () => {
+    m = mount(<Host drive={mkDrive()} />);
+    typeInto(ta(), "stale");
+    m.unmount();
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now + 25 * 3600 * 1000);
+    m = mount(<Host drive={mkDrive()} />);
+    expect(ta().value).toBe("");
+  });
+});
+
+describe("FUKEYBAR FEATURES-3: quick replies go through planSend", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  const chips = (): HTMLElement[] =>
+    [...m!.host.querySelectorAll<HTMLElement>('[data-testid^="kb-drive-reply-"]')].filter((e) =>
+      /^kb-drive-reply-\d+$/.test(e.dataset.testid ?? ""),
+    );
+
+  it("a plain reply pastes then presses Enter once, and leaves the draft alone", async () => {
+    m = mount(<Host drive={mkDrive()} />);
+    typeInto(byId(m.host, "kb-drive-input") as HTMLTextAreaElement, "my draft");
+    const first = chips()[0];
+    const label = first.textContent ?? "";
+    expect(label.length).toBeGreaterThan(0);
+    click(first);
+    await settle();
+    expect(rig.urls()).toEqual(["/api/terms/abcd1234/paste", "/api/terms/abcd1234/enter"]);
+    expect(rig.calls[0].json?.text).toBe(label);
+    expect((byId(m.host, "kb-drive-input") as HTMLTextAreaElement).value).toBe("my draft");
+  });
+
+  it("while blocked a reply only pastes and says the session is waiting", async () => {
+    m = mount(<Host drive={mkDrive()} blocked />);
+    click(chips()[0]);
+    await settle();
+    expect(rig.urls()).toEqual(["/api/terms/abcd1234/paste"]);
+    expect(byId(m.host, "kb-drive-caption").textContent).toBe(CAPTION.holding);
+  });
+
+  it("a reply starting with / is pasted only", async () => {
+    localStorage.setItem("kb.term.quickReplies", JSON.stringify(["/compact"]));
+    m = mount(<Host drive={mkDrive()} />);
+    click(chips()[0]);
+    await settle();
+    expect(rig.urls()).toEqual(["/api/terms/abcd1234/paste"]);
+    expect(byId(m.host, "kb-drive-caption").textContent).toBe(CAPTION.pastedOnly);
+  });
+
+  it("editing persists: one reply per line, blanks dropped, capped", () => {
+    m = mount(<Host drive={mkDrive()} />);
+    click(byId(m.host, "kb-drive-replies-edit"));
+    typeInto(byId(m.host, "kb-drive-replies-text") as HTMLTextAreaElement, "ship it\n\n  go on  \n");
+    click(byId(m.host, "kb-drive-replies-save"));
+    expect(chips().map((c) => c.textContent)).toEqual(["ship it", "go on"]);
+    expect(JSON.parse(localStorage.getItem("kb.term.quickReplies") ?? "null")).toEqual(["ship it", "go on"]);
+    m.unmount();
+    m = mount(<Host drive={mkDrive()} />);
+    expect(chips().map((c) => c.textContent)).toEqual(["ship it", "go on"]);
+  });
+});
