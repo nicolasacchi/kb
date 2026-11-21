@@ -269,6 +269,10 @@ detection inside tmux yields no protocol).
   spills past the picture. Bytes come from the media route (see
   [Transcript image lane](#transcript-image-lane)) through an in-memory cache;
   a lightbox opens a picture full size.
+  The pictures follow the cells when the font changes (the fitter's delayed
+  passes after a late join): the layout is redone when the screen element
+  resizes, when a metric-change notification arrives, and on one verification
+  frame after every layout, so no picture stays at an old pixel position.
 - **Local mirror:** `kb-term attach` shows each picture as a one-row dim label
   such as `[image 1024x768, on web]` and keeps row counts exact.
 - **Other harnesses draw no terminal pictures** that kb-term shows; their
