@@ -386,6 +386,22 @@ to 20..=500 columns and 5..=200 rows.
   **web** owner a keypress takes nothing and forwards nothing. When the web
   releases the grid (`release-size`, owner none) the next keypress takes it
   (and is not sent) and the attach resumes as usual.
+- **A local attach cannot type while someone else owns the grid, and the runner
+  enforces it.** The runner's `keys`, `paste` and `enter` check the grid owner
+  for a viewer whose id is `local:<pid>` (the id an attach uses both as its
+  viewer and as its grid owner): while `@kb_owner_grid` names another owner
+  (the web relay, or another attach) the call is refused `grid-owned` with the
+  owner in the message, whatever the sizes. This matters when a web take sends
+  no resize (the web takes the grid at the attach's own size), so the attach
+  has no marker to learn from. Owner none and the attach's own ownership pass,
+  so a free grid behaves as before. Web viewers (the relay's own viewer, the
+  composer, paste, the phone dock) are never refused by this gate, whoever owns
+  the grid. The attach notices in two ways: the first key the runner refuses
+  (the key is dropped, the status line shows, the attach keeps watching, no
+  exit) and, without any key, its owner poll, which now runs while it owns the
+  grid too and re-joins as a watch behind the status line when someone else
+  holds it. While watching, the poll repaints the status line only when its
+  text changed.
 - **The attach's notices live on a status line, never in the mirrored rows.**
   The mirror owns the outer terminal's screen, so nothing else may be written
   at its cursor. The attach paints one reverse-video row on the outer
@@ -418,8 +434,10 @@ to 20..=500 columns and 5..=200 rows.
   followed by a retake. An owning attach that did not take the marker's size
   asks the runner who owns the grid first: if someone else does (the web
   outranks a local attach) it re-joins as a watch behind the status line and
-  never retakes on its own, so there is no resize loop (a repaint for the same
-  grid twice in a row is never repeated). While watching a grid of another
+  never retakes on its own, so there is no resize loop (the replay of the very
+  marker a repaint join was started for is never repainted again; that guard
+  lives for that one join, so a later take of the same grid after a retake is
+  handled like the first). While watching a grid of another
   width than the outer terminal, wrapped lines are painted at the session's
   width by the outer terminal's own autowrap, so rows can differ from the
   session until the grid matches again.
