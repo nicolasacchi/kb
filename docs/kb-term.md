@@ -760,7 +760,14 @@ the page.
 - **Links.** `http://` and `https://` text is a link: wrapped rows are joined,
   trailing punctuation and an unbalanced closing bracket are trimmed, and
   Ctrl/Cmd-click opens it in a new tab with `noopener,noreferrer`. A double-width
-  character before a link on the same row shifts its highlighted range.
+  character before a link on the same row shifts its highlighted range. Hovering
+  a link shows "Ctrl+click to open" ("Cmd+click" on Apple platforms) as a tooltip.
+  On a phone a still tap (under 10 px and under 550 ms, not a pan, a pinch or a
+  long press, and not the touch that stops a coasting fling) on a URL in Watch
+  opens it and is never sent to the terminal. A URL wrapped across rows is shown
+  whole in an inline Open / Cancel row first. A browser-cancelled touch is never a
+  tap. OSC 8 labelled links are not tappable on the phone (the scroller owns the
+  gesture); use the Read view for those.
 - **Scrollback.** "Jump to latest" appears while the view is scrolled up. Find
   restarts from the top when the query changes, Enter steps through the hits, and
   closing Find returns the keyboard to the terminal.
@@ -779,7 +786,11 @@ folds away and the key bar and composer stay.
   renderer is used on a phone-sized viewport.
 - **Read:** a snapshot of the panel's own buffer in a native scrolling, natively
   selectable view (up to 20 000 lines), refreshed on demand; it never follows the
-  stream by itself.
+  stream by itself. A long press in Watch opens Read centred on the pressed row
+  (on the normal screen; the alternate screen opens at the newest line). `http`
+  and `https` text in Read is a link (new tab, `noopener,noreferrer`; a row-wrapped
+  URL is linked per row, since Read keeps the grid's rows). **Copy all** copies the
+  snapshot with soft-wrapped rows joined back, so a wrapped URL copies whole.
 - **Drive:** a native `<textarea>` composer (xterm's hidden textarea is unreliable
   for phone input), a key bar, a choice bar and the explicit **Fit to phone**.
   - **Fit to phone** and **Release grid** share the desktop's take rule (see
