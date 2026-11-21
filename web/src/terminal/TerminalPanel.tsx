@@ -59,6 +59,7 @@ import { attachGfx, type GfxHandle, type OpenPicture } from "./gfx";
 import { Lightbox } from "./Lightbox";
 import { countHits, findNext, FIND_START, type FindHit } from "./find";
 import { useFullscreen } from "./useFullscreen";
+import { useTerminalPaste } from "./useTerminalPaste";
 import { clipboardAction, inputLabel, scrolledUp } from "./input";
 import { linksAtRow, openExternal } from "./links";
 import { useTerms } from "./useTerms";
@@ -226,6 +227,15 @@ export function TerminalPanel(props: TerminalPanelProps) {
     }, TERMS_REFRESH_MS);
   };
   const say = useCallback((message: string): void => setStatus(message), []);
+  // FUTERMPASTE: a picture paste or drop on the desktop host uploads and pastes its path.
+  const pastePath = useCallback((text: string): void => termRef.current?.paste(text), []);
+  useTerminalPaste({
+    hostRef,
+    termId: props.termId,
+    active: termInst !== null && !isMobile,
+    paste: pastePath,
+    say,
+  });
   const measureWindow = useCallback((): WindowMeasure | null => {
     const host = hostRef.current;
     const term = termRef.current;
