@@ -170,6 +170,21 @@ describe("FUPHONELINKS tap to open", () => {
     expect(open).not.toHaveBeenCalled();
   });
 
+  it("a touch that stops a coasting fling is not a tap", () => {
+    const f = fakeTerm();
+    mount(f.term);
+    ptr("pointerdown", 1, px(7), py(5));
+    clock += 20;
+    ptr("pointermove", 1, px(7), py(5) + 30);
+    clock += 20;
+    ptr("pointermove", 1, px(7), py(5) + 60);
+    clock += 10;
+    ptr("pointerup", 1, px(7), py(5) + 60);
+    // The fling is still coasting (its frame has not run): the next touch stops it.
+    tap(7, 0);
+    expect(open).not.toHaveBeenCalled();
+  });
+
   it("a pinch never opens a link, and the fingers lifting afterwards do not tap", () => {
     mount(fakeTerm().term);
     ptr("pointerdown", 1, px(7), py(0));

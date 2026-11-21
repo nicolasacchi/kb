@@ -4,7 +4,16 @@
 // "Refresh"; it never follows the stream by itself.
 
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { bufferToLines, isImageLine, type ReadBuffer } from "./readText";
+import { writeClipboardText } from "../clipboard";
+import {
+  bufferToCopyText,
+  centerScrollTop,
+  isImageLine,
+  linkParts,
+  snapshotLines,
+  type ReadBuffer,
+} from "./readText";
+import { takePressedLine } from "./pressedLine";
 
 const MAX_LINES = 20_000;
 
@@ -18,25 +27,37 @@ export interface ReadViewProps {
 
 interface Snapshot {
   lines: string[];
+  /** Rows the line cap cut off the front (a buffer row minus this is a `lines` index). */
+  dropped: number;
+  /** Copy all: the same rows with soft-wrapped continuations joined back. */
+  copy: string;
   at: string;
 }
 
 function take(read: () => ReadBuffer): Snapshot {
+  const buf = read();
+  const { lines, dropped } = snapshotLines(buf, { max: MAX_LINES });
   return {
-    lines: bufferToLines(read(), { max: MAX_LINES }),
+    lines,
+    dropped,
+    copy: bufferToCopyText(buf, { max: MAX_LINES }),
     at: new Date().toTimeString().slice(0, 8),
   };
 }
 
-/** Plain runs stay in one text node; an image placeholder line becomes a dim marker. */
+/**
+ * Plain runs stay in one text node (a 20k-line snapshot is a handful of nodes,
+ * not tens of thousands); an http(s) URL becomes an anchor (selection still
+ * works across it) and an image placeholder line becomes a dim marker.
+ */
 function renderLines(lines: string[]): ReactNode[] {
   const out: ReactNode[] = [];
-  let run: string[] = [];
+  let run = "";
   let key = 0;
   const flush = (): void => {
-    if (run.length > 0) {
-      out.push(run.join("\n") + "\n");
-      run = [];
+    if (run !== "") {
+      out.push(run);
+      run = "";
     }
   };
   for (const line of lines) {
@@ -48,9 +69,21 @@ function renderLines(lines: string[]): ReactNode[] {
           {"[image]\n"}
         </span>,
       );
-    } else {
-      run.push(line);
+      continue;
     }
+    for (const part of linkParts(line)) {
+      if (typeof part === "string") {
+        run += part;
+      } else {
+        flush();
+        out.push(
+          <a key={key++} className="kb-term-read__link" href={part.url} target="_blank" rel="noopener noreferrer">
+            {part.url}
+          </a>,
+        );
+      }
+    }
+    run += "\n";
   }
   flush();
   return out;
@@ -59,12 +92,41 @@ function renderLines(lines: string[]): ReactNode[] {
 export function ReadView({ read, fontSize, cols, onWatch }: ReadViewProps) {
   const [snap, setSnap] = useState<Snapshot>(() => take(read));
   const scroller = useRef<HTMLDivElement | null>(null);
+  const text = useRef<HTMLPreElement | null>(null);
+  const [copied, setCopied] = useState(false);
+  // FUPHONELINKS — the row a long press opened Read on, used for the first snapshot only.
+  const target = useRef<number | null | undefined>(undefined);
+  if (target.current === undefined) target.current = takePressedLine();
 
-  // Start (and restart after Refresh) scrolled to the newest line.
+  // Start (and restart after Refresh) scrolled to the newest line, except the
+  // first snapshot of a long press: centred on the pressed row.
   useLayoutEffect(() => {
     const el = scroller.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    const line = target.current;
+    target.current = null;
+    const pre = text.current;
+    if (line !== null && line !== undefined && pre && snap.lines.length > 0) {
+      const idx = Math.min(snap.lines.length - 1, Math.max(0, line - snap.dropped));
+      const pad = parseFloat(getComputedStyle(pre).paddingTop) || 0;
+      el.scrollTop = centerScrollTop({
+        line: idx,
+        lines: snap.lines.length,
+        contentHeight: pre.scrollHeight,
+        viewHeight: el.clientHeight,
+        pad,
+      });
+      return;
+    }
+    el.scrollTop = el.scrollHeight;
   }, [snap]);
+
+  const copyAll = (): void => {
+    void writeClipboardText(snap.copy).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    });
+  };
 
   return (
     <div className="kb-term-read" data-testid="kb-term-read" data-kb-term-read="">
@@ -76,9 +138,20 @@ export function ReadView({ read, fontSize, cols, onWatch }: ReadViewProps) {
           type="button"
           className="kb-term-phone__btn"
           data-testid="kb-term-read-refresh"
-          onClick={() => setSnap(take(read))}
+          onClick={() => {
+            setCopied(false);
+            setSnap(take(read));
+          }}
         >
           Refresh
+        </button>
+        <button
+          type="button"
+          className="kb-term-phone__btn"
+          data-testid="kb-term-read-copy"
+          onClick={copyAll}
+        >
+          {copied ? "Copied" : "Copy all"}
         </button>
         <button
           type="button"
@@ -93,6 +166,7 @@ export function ReadView({ read, fontSize, cols, onWatch }: ReadViewProps) {
         <pre
           className="kb-term-read__text"
           data-testid="kb-term-read-text"
+          ref={text}
           data-kb-term-cols={cols}
           style={{ fontSize: `${fontSize}px` }}
         >

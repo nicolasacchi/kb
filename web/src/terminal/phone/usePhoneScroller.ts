@@ -10,6 +10,8 @@ import {
   LONG_PRESS_MS,
   STOP_V,
   accumulateLines,
+  cellAt,
+  isStillTap,
   lockAxis,
   momentumStep,
   pinchFont,
@@ -19,13 +21,24 @@ import {
   type VelocitySample,
 } from "./scrollerCore";
 import { writeFont } from "./fontSteps";
+import { linkAtCell, linkSpansRows, openExternal, type LinkRange, type RowSource } from "../links";
+import { setPressedLine } from "./pressedLine";
 
 /** The slice of xterm's Terminal the scroller touches (a fake in tests). */
 export interface ScrollTerm {
   readonly rows: number;
+  /** Needed for tap-to-open links (absent in a fake that has no grid). */
+  readonly cols?: number | undefined;
   readonly element?: HTMLElement | undefined;
   readonly options: { fontSize?: number };
-  readonly buffer: { readonly active: { readonly viewportY: number } };
+  readonly buffer: {
+    readonly active: {
+      readonly viewportY: number;
+      readonly length?: number;
+      getLine?(y: number): { translateToString(trimRight?: boolean): string; readonly isWrapped: boolean } | undefined;
+    };
+    readonly normal?: unknown;
+  };
   scrollLines(n: number): void;
 }
 
@@ -74,8 +87,73 @@ interface Drag {
   y0: number;
   lx: number;
   ly: number;
+  t0: number;
+  /** The long press fired, or this touch stopped a coasting fling: the release is not a tap. */
+  noTap: boolean;
   axis: Axis | null;
   samples: VelocitySample[];
+}
+
+/**
+ * The link under a screen point, from the live buffer: the point maps to a cell
+ * through the rendered `.xterm-screen`, the cell to a buffer line, and the line
+ * (with its soft-wrapped neighbours) to a URL. Null off any URL.
+ */
+export function linkAtPoint(term: ScrollTerm, x: number, y: number): LinkRange | null {
+  const cols = term.cols ?? 0;
+  const buf = term.buffer.active;
+  const screen = term.element?.querySelector(".xterm-screen");
+  if (!screen || cols <= 0 || !buf.getLine) return null;
+  const cell = cellAt(x, y, screen.getBoundingClientRect(), cols, term.rows);
+  if (!cell) return null;
+  const getLine = buf.getLine.bind(buf);
+  const src: RowSource = {
+    length: buf.length ?? buf.viewportY + term.rows,
+    row: (i) => {
+      const l = getLine(i);
+      return l ? { text: l.translateToString(true), wrapped: l.isWrapped } : null;
+    },
+  };
+  return linkAtCell(src, cols, cell.x, buf.viewportY + cell.row);
+}
+
+/** The inline confirm row for a URL that spans rows: the whole address, Open and Cancel (not window.confirm). */
+function showLinkConfirm(host: HTMLElement, url: string, onOpen: () => void): () => void {
+  const row = document.createElement("div");
+  row.className = "kb-term-phone__linkrow";
+  row.setAttribute("data-testid", "kb-term-link-confirm");
+  const label = document.createElement("span");
+  label.className = "kb-term-phone__linkurl";
+  label.textContent = url;
+  const mk = (text: string, id: string, fn: () => void): HTMLButtonElement => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "kb-term-phone__btn";
+    b.setAttribute("data-testid", id);
+    b.textContent = text;
+    b.addEventListener("click", fn);
+    return b;
+  };
+  const close = (): void => row.remove();
+  row.append(
+    label,
+    mk("Open", "kb-term-link-open", () => {
+      close();
+      onOpen();
+    }),
+    mk("Cancel", "kb-term-link-cancel", close),
+  );
+  host.appendChild(row);
+  return close;
+}
+
+/** The buffer line under a point, only on the normal screen (Read walks `buffer.normal`). */
+function pressedBufferLine(term: ScrollTerm, x: number, y: number): number | null {
+  const screen = term.element?.querySelector(".xterm-screen");
+  const cols = term.cols ?? 0;
+  if (!screen || cols <= 0 || term.buffer.normal !== term.buffer.active) return null;
+  const cell = cellAt(x, y, screen.getBoundingClientRect(), cols, term.rows);
+  return cell ? term.buffer.active.viewportY + cell.row : null;
 }
 
 export function usePhoneScroller(args: PhoneScrollerArgs): void {
@@ -95,6 +173,11 @@ export function usePhoneScroller(args: PhoneScrollerArgs): void {
     let acc = 0;
     let raf = 0;
     let pressTimer: ReturnType<typeof setTimeout> | null = null;
+    let closeConfirm: (() => void) | null = null;
+    const dismissConfirm = (): void => {
+      closeConfirm?.();
+      closeConfirm = null;
+    };
 
     const clearPress = (): void => {
       if (pressTimer !== null) {
@@ -147,21 +230,31 @@ export function usePhoneScroller(args: PhoneScrollerArgs): void {
       } catch {
         // synthetic pointers have no active pointer to capture
       }
+      const coasting = raf !== 0;
       stopMomentum();
       clearPress();
+      dismissConfirm();
       if (ptrs.size === 1) {
         drag = {
           x0: e.clientX,
           y0: e.clientY,
           lx: e.clientX,
           ly: e.clientY,
+          t0: performance.now(),
+          noTap: coasting,
           axis: null,
           samples: [{ t: performance.now(), y: e.clientY }],
         };
         acc = 0;
         pressTimer = setTimeout(() => {
           pressTimer = null;
-          if (drag && drag.axis === null && ptrs.size === 1) longPressRef.current();
+          if (drag && drag.axis === null && ptrs.size === 1) {
+            drag.noTap = true;
+            // Read opens centred on this row (only meaningful on the normal screen).
+            const hit = pressedBufferLine(term, drag.x0, drag.y0);
+            setPressedLine(hit);
+            longPressRef.current();
+          }
         }, LONG_PRESS_MS);
       } else if (ptrs.size === 2) {
         drag = null;
@@ -221,11 +314,27 @@ export function usePhoneScroller(args: PhoneScrollerArgs): void {
       if (drag && ptrs.size === 0) {
         const d = drag;
         drag = null;
+        if (!d.noTap && d.axis === null && isStillTap(e.clientX - d.x0, e.clientY - d.y0, performance.now() - d.t0)) {
+          tapAt(e.clientX, e.clientY);
+          return;
+        }
         if (d.axis === "v") {
           const r = releaseVelocity(d.samples, performance.now());
           if (r.fling) startMomentum(r.v);
         }
       }
+    };
+
+    /** A still tap: open the URL under it (a wrapped one is confirmed whole first). Never sent to the pty. */
+    const tapAt = (x: number, y: number): void => {
+      const link = linkAtPoint(term, x, y);
+      if (!link) return;
+      const go = (): void => openExternal(link.url, window);
+      if (!linkSpansRows(link)) {
+        go();
+        return;
+      }
+      closeConfirm = showLinkConfirm(wrap.parentElement ?? wrap, link.url, go);
     };
 
     // xterm 6.0.0 has its own touch path; a real touch must not scroll twice.
@@ -252,6 +361,7 @@ export function usePhoneScroller(args: PhoneScrollerArgs): void {
       }
       stopMomentum();
       clearPress();
+      dismissConfirm();
     };
   }, [term, wrap, viewport]);
 }
