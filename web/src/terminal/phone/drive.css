@@ -156,3 +156,24 @@
   color: var(--ink-mute);
   font-size: var(--fs-xs);
 }
+
+/* FUKEYBAR — the quick-reply chip row scrolls sideways like the key row. */
+.kb-drive__replies {
+  display: flex;
+  gap: var(--pad-1);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.kb-drive__replies::-webkit-scrollbar {
+  display: none;
+}
+
+.kb-drive__replies--edit {
+  flex-wrap: wrap;
+  overflow: visible;
+}
+
+.kb-drive__replies--edit .kb-drive__input {
+  flex: 1 1 100%;
+}
