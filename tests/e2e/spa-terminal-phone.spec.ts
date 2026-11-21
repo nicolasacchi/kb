@@ -732,3 +732,47 @@ test.describe("FUWEBLAUNCH phone launch controls @phone", () => {
     await noHorizontalScroll(page);
   });
 });
+
+// FUPHONELINKS — a tap on a URL in the Watch grid opens it (the scroller owns every
+// gesture, so xterm's own link click never fires on a phone). Real touch input:
+// page.touchscreen.tap produces trusted touch + pointer events.
+test.describe("FUPHONELINKS tap to open @phone", () => {
+  const URL_TEXT = "https://example.com/fuphonelinks-e2e";
+
+  /** Viewport coordinates of a cell inside the rendered URL, from the DOM renderer's row. */
+  async function urlPoint(page: Page): Promise<{ x: number; y: number }> {
+    await expect
+      .poll(() => page.evaluate((t) => [...document.querySelectorAll(".xterm-rows > div")].some((r) => r.textContent?.includes(t)), URL_TEXT))
+      .toBe(true);
+    return page.evaluate((t) => {
+      const row = [...document.querySelectorAll(".xterm-rows > div")].find((r) => r.textContent?.includes(t)) as HTMLElement;
+      const cols = Number(document.querySelector("[data-kb-term-viewport]")!.getAttribute("data-kb-term-cols"));
+      const screen = document.querySelector(".xterm-screen") as HTMLElement;
+      const cellW = screen.getBoundingClientRect().width / cols;
+      const idx = (row.textContent ?? "").indexOf("https://");
+      const r = row.getBoundingClientRect();
+      return { x: screen.getBoundingClientRect().left + (idx + 4) * cellW, y: r.top + r.height / 2 };
+    }, URL_TEXT);
+  }
+
+  test("a real tap on a rendered URL opens it in a new tab; a pan across it does not", async ({ page }) => {
+    await page.context().route("https://example.com/**", (r) => r.fulfill({ status: 200, contentType: "text/html", body: "<title>ok</title>" }));
+    await openPhone(page, { total: 200, seedLines: 200, tailText: `open ${URL_TEXT} now\r\n` });
+    const p = await urlPoint(page);
+
+    const before = page.context().pages().length;
+    // A vertical drag that starts on the URL scrolls; it must not open anything.
+    await drag(page, { x0: p.x, y0: p.y, x1: p.x, y1: p.y + 30, holdMs: 100 });
+    await page.waitForTimeout(400);
+    expect(page.context().pages().length).toBe(before);
+
+    const p2 = await urlPoint(page);
+    const popupP = page.context().waitForEvent("page");
+    await page.touchscreen.tap(p2.x, p2.y);
+    const popup = await popupP;
+    await expect.poll(() => popup.url(), { timeout: 15_000 }).toBe(URL_TEXT);
+    await popup.close();
+    // The phone view is still the Watch grid: the tap was not sent as a click to the page.
+    await expect(page.locator(VP)).toBeVisible();
+  });
+});
