@@ -1628,6 +1628,13 @@
   flex-wrap: wrap;
   gap: var(--pad-2);
 }
+.kb-term-slot__bell {
+  display: inline-block;
+  width: var(--pad-2);
+  height: var(--pad-2);
+  border-radius: 50%;
+  background: var(--warn);
+}
 .kb-term-slot__state {
   color: var(--ink-mute);
   font-size: var(--fs-sm);

@@ -17,4 +17,6 @@ export interface TerminalPanelProps {
   harness: string;
   /** Close unmounts the panel (disconnect only) via the slot owner. */
   onClose?: () => void;
+  /** The program rang the bell while nobody was looking (FUTERMATTN). */
+  onBell?: () => void;
 }

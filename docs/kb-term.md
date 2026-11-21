@@ -764,6 +764,15 @@ the page.
 - **Scrollback.** "Jump to latest" appears while the view is scrolled up. Find
   restarts from the top when the query changes, Enter steps through the hits, and
   closing Find returns the keyboard to the terminal.
+- **Attention.** The panel bar shows the title the program sets with OSC 0/2, as
+  text only (control and bidi characters dropped, whitespace collapsed, capped at
+  60 characters). A bell while the tab is hidden or the terminal is not focused
+  puts one quiet dot on the session's terminal slot; it clears when the window
+  or the slot gets focus, or the tab turns visible. The tab title carries the
+  number of sessions blocked on you as `(n) ` and the installed app's badge
+  follows where the browser supports it; both read the existing live-status
+  query (no new stream, no poll) and clear when the session is answered. There
+  is no service worker and no push: a closed or frozen page is not notified.
 
 ## Phone
 
