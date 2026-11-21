@@ -115,13 +115,17 @@ impl Rig {
             shutdown_rx,
         ));
 
+        // A line-mode shell with a short prompt. Verbatim argv may not carry
+        // `-c`, so the shell is a one-line script.
+        let script = dir.path().join("shell.sh");
+        std::fs::write(&script, "#!/bin/sh\nPS1='q> '\nexport PS1\nexec sh -i\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
         let launch = Request::Launch {
             harness: Harness::Omp,
-            argv: Some(vec![
-                "/bin/sh".into(),
-                "-c".into(),
-                "PS1='q> '; export PS1; exec sh -i".into(),
-            ]),
+            argv: Some(vec![script.to_string_lossy().into_owned()]),
             resume_sid: None,
             handoff_from: None,
             cwd: dir.path().to_string_lossy().into_owned(),

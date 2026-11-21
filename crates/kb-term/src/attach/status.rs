@@ -323,17 +323,34 @@ mod tests {
     fn the_status_repaints_after_a_write_only_when_the_stream_is_at_ground() {
         let mut s = StatusLine::default();
         assert!(
-            s.after_write(b"row\r\n", (80, 24)).is_empty(),
+            s.after_write(b"row\r\n", (80, 24), None).is_empty(),
             "no notice, no paint"
         );
         s.set(Some("watching".to_string()));
-        let p = s.after_write(b"more\r\n", (80, 24));
+        let p = s.after_write(b"more\r\n", (80, 24), None);
         assert!(p.starts_with(b"\x1b7") && p.ends_with(b"\x1b8"));
         // A write that stops mid-CSI must not be followed by a paint.
-        assert!(s.after_write(b"x\x1b[38;2;1", (80, 24)).is_empty());
-        let p = s.after_write(b"0;2m", (80, 24));
+        assert!(s.after_write(b"x\x1b[38;2;1", (80, 24), None).is_empty());
+        let p = s.after_write(b"0;2m", (80, 24), None);
         assert!(!p.is_empty(), "the next write that ends at ground repaints");
         s.set(None);
-        assert!(s.after_write(b"y", (80, 24)).is_empty());
+        assert!(s.after_write(b"y", (80, 24), None).is_empty());
+    }
+
+    #[test]
+    fn a_session_shorter_than_the_outer_terminal_repaints_only_after_a_screen_erase() {
+        let mut s = StatusLine::default();
+        s.set(Some("watching".to_string()));
+        // 40 rows in a 50-row outer terminal: ordinary output cannot reach
+        // the last row, so nothing is repainted (the DECSC slot stays alone).
+        assert!(s.after_write(b"line\r\n", (160, 50), Some(40)).is_empty());
+        // A taller or equal grid can reach it.
+        assert!(!s.after_write(b"line\r\n", (160, 50), Some(50)).is_empty());
+        // A whole-screen erase wipes the notice row too.
+        assert!(!s
+            .after_write(b"\x1b[H\x1b[2J\x1b[3J", (160, 50), Some(40))
+            .is_empty());
+        assert!(clears_screen(super::super::JOIN_CLEAR));
+        assert!(!clears_screen(b"\x1b[K\x1b[38;2;1;2;3mtext\x1b[1;1H"));
     }
 }
