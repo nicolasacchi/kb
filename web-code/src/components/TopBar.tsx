@@ -122,10 +122,11 @@ export default function TopBar() {
                           (on ? " is-active" : "")
                         }
                         aria-current={on ? "page" : undefined}
+                        title={item.label}
                         {...{ [navTestAttr(item.key)]: true }}
                       >
                         <ItemIcon aria-hidden />
-                        {item.label}
+                        <span className="kbc-topbar__door-label">{item.label}</span>
                       </Link>
                     );
                   })}

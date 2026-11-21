@@ -64,9 +64,21 @@
   cursor: pointer;
 }
 
-@media (min-width: 861px) and (max-width: 1100px) {
+/* FUSPINE - 861-1280px: the bar must fit its window (the page never scrolls
+ * sideways) inside the 44px height budget. The switcher, crossing and right
+ * clusters are rigid, so the search slot gives up width first, down to a
+ * usable floor; each app then collapses its own labels (door text, chip
+ * text) to icons in its own stylesheet. */
+@media (min-width: 861px) and (max-width: 1280px) {
+  .kb-spine {
+    gap: var(--pad-2);
+    padding: 0 var(--pad-2);
+  }
   .kb-spine__search {
-    min-width: 12rem;
+    min-width: 6rem;
+  }
+  .kb-spine__right {
+    gap: var(--pad-1);
   }
 }
 
