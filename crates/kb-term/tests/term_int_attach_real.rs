@@ -199,11 +199,17 @@ impl Rig {
         rig
     }
 
+    /// The session's rows, scrollback first (`-S -`): the mirror paints the
+    /// twin's scrollback and screen from the outer terminal's top row, so for
+    /// a session shorter than the screen the outer rows are history +
+    /// screen. (tmux reflows a narrowed pane into a different number of
+    /// history rows than the twin does when the session is not full, which a
+    /// screen-only capture would show as a shifted top.)
     fn holder_rows(&self) -> Vec<String> {
         rows_of(&tmux(
             &self.tmux_bin,
             &self.holder,
-            &["capture-pane", "-p", "-t", "kb"],
+            &["capture-pane", "-p", "-S", "-", "-t", "kb"],
         ))
     }
 

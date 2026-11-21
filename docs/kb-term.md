@@ -406,6 +406,12 @@ to 20..=500 columns and 5..=200 rows.
   width than the outer terminal, wrapped lines are painted at the session's
   width by the outer terminal's own autowrap, so rows can differ from the
   session until the grid matches again.
+  The mirror paints the tap twin's scrollback and screen from the outer
+  terminal's top row, so for a session that does not fill the screen the rows
+  are history then screen; after a narrowing take, tmux and the twin can
+  disagree on how many rows of such a pane are history (tmux keeps one more row
+  above the visible area), which shows as a top row the session's own screen
+  does not have. The outer rows equal the twin's.
 - **Release.** `release-size` clears the owner only when it matches the web
   owner; a local owner is not cleared by it.
 - **The tap follows the grid.** A take-size is a tmux `resize-window`, and tmux
