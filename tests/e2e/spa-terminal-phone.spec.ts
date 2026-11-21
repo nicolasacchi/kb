@@ -732,3 +732,74 @@ test.describe("FUWEBLAUNCH phone launch controls @phone", () => {
     await noHorizontalScroll(page);
   });
 });
+
+// FUPHONEMODE - the panel's own phone predicate (a coarse pointer with a short
+// viewport is a phone even past the 860 px width breakpoint) and iOS Back.
+async function openAt(page: Page, size: { width: number; height: number }, opts: Record<string, unknown> = {}): Promise<Stats> {
+  await page.setViewportSize(size);
+  const stats = (await installFakeTerminal(page, { total: 300, seedLines: 300, drive: true, ...opts })) as Stats;
+  await page.goto(`${BASE}/sessions/${SID}`);
+  // Collapsed below the breakpoint, open above it: click only when closed.
+  const sec = page.locator('[data-testid="session-sec-terminal"]');
+  await expect(sec).toBeAttached({ timeout: 15_000 });
+  if (!(await sec.evaluate((d) => (d as HTMLDetailsElement).open))) {
+    await sec.locator(":scope > summary").click();
+  }
+  await expect(page.locator('[data-testid="kb-terminal-slot"]')).toBeVisible({ timeout: 15_000 });
+  await page.locator('[data-testid="kb-term-open"]').click();
+  return stats;
+}
+
+test.describe("FUPHONEMODE landscape phone and iOS Back @phone", () => {
+  test("PHONE-2: a touch phone in landscape (915x412) gets the Sheet and Drive, with the grid controls folded away", async ({ page }) => {
+    await openAt(page, { width: 915, height: 412 });
+    await expect(page.locator("[data-kb-sheet]")).toBeAttached({ timeout: 15_000 });
+    await expect(page.locator('[data-testid="kb-drive"]')).toBeVisible();
+    await expect(page.locator('[data-testid="kb-drive-keybar"]')).toBeVisible();
+    await expect(page.locator('[data-testid="kb-drive-composer"]')).toBeVisible();
+    // The dock keeps the key bar and the composer; the head row is folded.
+    await expect(page.locator('[data-testid="kb-drive-fit"]')).toBeHidden();
+    await expect(page.locator(VP)).toBeVisible({ timeout: 15_000 });
+  });
+
+  test("PHONE-2 negative control: a touch screen with a tall landscape viewport (1280x720) keeps the desktop panel", async ({ page }) => {
+    await openAt(page, { width: 1280, height: 720 });
+    await expect(page.locator('[data-testid="kb-terminal"]')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator("[data-kb-sheet]")).toHaveCount(0);
+    await expect(page.locator('[data-testid="kb-drive"]')).toHaveCount(0);
+  });
+
+  test("PHONE-4: without CloseWatcher the sheet owns one history entry; Back closes it and the page stays", async ({ page }) => {
+    await page.addInitScript(() => {
+      delete (window as unknown as { CloseWatcher?: unknown }).CloseWatcher;
+    });
+    await installFakeTerminal(page, { total: 300, seedLines: 300 });
+    await page.goto(`${BASE}/sessions/${SID}`);
+    await page.locator('[data-testid="session-sec-terminal"] > summary').click();
+    await expect(page.locator('[data-testid="kb-terminal-slot"]')).toBeVisible({ timeout: 15_000 });
+    const before = await page.evaluate(() => history.length);
+    await page.locator('[data-testid="kb-term-open"]').click();
+    await expect(page.locator("[data-kb-sheet]")).toBeAttached({ timeout: 15_000 });
+    expect(await page.evaluate(() => history.length)).toBe(before + 1);
+    const path = new URL(page.url()).pathname;
+    await page.evaluate(() => history.back());
+    await expect(page.locator("[data-kb-sheet]")).toHaveCount(0);
+    expect(new URL(page.url()).pathname).toBe(path);
+    await expect(page.locator('[data-testid="kb-terminal-slot"]')).toBeAttached();
+  });
+
+  test("PHONE-4: closing with the sheet's own button pops its entry, so Back later leaves nothing behind", async ({ page }) => {
+    await page.addInitScript(() => {
+      delete (window as unknown as { CloseWatcher?: unknown }).CloseWatcher;
+    });
+    await installFakeTerminal(page, { total: 300, seedLines: 300 });
+    await page.goto(`${BASE}/sessions/${SID}`);
+    await page.locator('[data-testid="session-sec-terminal"] > summary').click();
+    await expect(page.locator('[data-testid="kb-terminal-slot"]')).toBeVisible({ timeout: 15_000 });
+    await page.locator('[data-testid="kb-term-open"]').click();
+    await expect(page.locator("[data-kb-sheet]")).toBeAttached({ timeout: 15_000 });
+    await page.locator('[data-testid="kb-term-close"]').click();
+    await expect(page.locator("[data-kb-sheet]")).toHaveCount(0);
+    await expect.poll(() => page.evaluate(() => (history.state as { kbSheet?: string } | null)?.kbSheet ?? null)).toBeNull();
+  });
+});

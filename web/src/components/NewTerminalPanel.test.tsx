@@ -242,6 +242,41 @@ describe("failures are shown honestly", () => {
     expect(screen.getByTestId("new-terminal-launch")).toBeTruthy();
   });
 
+  // FUPHONEMODE (GAPS-9): what the operator reads for each refusal class.
+  it("a 400 shows the server's own title and detail", async () => {
+    launchReply = { status: 400, body: { type: "x", title: "bad body", detail: "cwd is not a directory" } };
+    mount();
+    open();
+    type("/w");
+    launch();
+    const msg = await screen.findByTestId("new-terminal-error");
+    expect(msg.textContent).toContain("bad body: cwd is not a directory");
+  });
+  it("a bodiless 404 (terminal disabled) shows the status line", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 404, statusText: "Not Found" })),
+    );
+    mount();
+    open();
+    type("/w");
+    launch();
+    const msg = await screen.findByTestId("new-terminal-error");
+    expect(msg.textContent).toContain("404 Not Found");
+    expect(screen.queryByTestId("launched-terminal")).toBeNull();
+  });
+  it("a 502 (runner unavailable) shows the runner's reason and keeps the form", async () => {
+    launchReply = { status: 502, body: { type: "x", title: "runner unavailable", detail: "runner.sock refused" } };
+    mount();
+    open();
+    type("/w");
+    launch();
+    const msg = await screen.findByTestId("new-terminal-error");
+    expect(msg.textContent).toContain("runner unavailable: runner.sock refused");
+    expect(screen.getByTestId("new-terminal-launch")).toBeTruthy();
+    expect(screen.queryByTestId("mock-panel")).toBeNull();
+  });
+
   it("a dead pane shows the exit code and stops saying 'appears in the list'", async () => {
     mount();
     open();
