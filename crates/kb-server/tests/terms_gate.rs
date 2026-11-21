@@ -296,12 +296,34 @@ async fn disabled_by_default_returns_bodiless_404_on_every_terms_route() {
     );
 }
 
+/// A same-origin browser `fetch()` GET carries no `Origin`. With the
+/// intent header it is admitted on every GET route (FUTERMGET); without
+/// it, it is refused with the intent refusal and never dials the runner.
 #[tokio::test]
-async fn absent_origin_is_refused_even_on_get() {
+async fn absent_origin_with_intent_is_admitted_on_get() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("list".to_string(), list_reply(&[TERM_ID]));
+    replies.insert("read".to_string(), ok_reply("{\"text\":\"\"}"));
+    replies.insert("history".to_string(), ok_reply("{\"text\":\"\"}"));
+    replies.insert(
+        "grid".to_string(),
+        ok_reply("{\"cols\":80,\"rows\":24,\"owner\":null}"),
+    );
     let tmp = tempfile::tempdir().unwrap();
-    let fake = spawn_fake(tmp.path(), Default::default());
+    let fake = spawn_fake(tmp.path(), replies);
     let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
     let c = client();
+    for suffix in ["", "/abcd1234/read", "/abcd1234/history", "/abcd1234/grid"] {
+        let resp = c
+            .get(format!("{}/api/terms{suffix}", base_url(addr)))
+            .header("x-kb-intent", "terminal")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 200, "GET {suffix}, no Origin");
+    }
+    let before = fake.conns.load(Ordering::SeqCst);
+    assert_eq!(before, 4, "each admitted GET dialled the runner once");
     let resp = c
         .get(format!("{}/api/terms", base_url(addr)))
         .send()
@@ -309,8 +331,114 @@ async fn absent_origin_is_refused_even_on_get() {
         .unwrap();
     assert_eq!(resp.status().as_u16(), 403);
     let (_s, text) = body_text(resp).await;
+    assert_problem(&text, "terminal-intent-required");
+    assert_eq!(fake.conns.load(Ordering::SeqCst), before);
+}
+
+/// The GET gate table (FUTERMGET), for every GET route: what a browser's
+/// same-origin read sends is admitted; every other shape is refused
+/// before the runner is dialled.
+#[tokio::test]
+async fn get_gate_table_over_every_get_route() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("list".to_string(), list_reply(&[TERM_ID]));
+    replies.insert("read".to_string(), ok_reply("{\"text\":\"\"}"));
+    replies.insert("history".to_string(), ok_reply("{\"text\":\"\"}"));
+    replies.insert(
+        "grid".to_string(),
+        ok_reply("{\"cols\":80,\"rows\":24,\"owner\":null}"),
+    );
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), replies);
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, true).await;
+    let c = client();
+    let own = origin_header(addr);
+    let get = |suffix: &str| c.get(format!("{}/api/terms{suffix}", base_url(addr)));
+    for suffix in ["", "/abcd1234/read", "/abcd1234/history", "/abcd1234/grid"] {
+        // Allowed: absent Origin + intent + same-origin / none / no fetch metadata.
+        for site in [Some("same-origin"), Some("none"), None] {
+            let mut req = get(suffix).header("x-kb-intent", "terminal");
+            if let Some(v) = site {
+                req = req.header("sec-fetch-site", v);
+            }
+            let resp = req.send().await.unwrap();
+            assert_eq!(resp.status().as_u16(), 200, "{suffix} site {site:?}");
+        }
+        // Allowed: the exact own Origin too.
+        let resp = get(suffix)
+            .header("x-kb-intent", "terminal")
+            .header("Origin", own.clone())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 200, "{suffix} own origin");
+    }
+    let admitted = fake.conns.load(Ordering::SeqCst);
+    assert_eq!(admitted, 16);
+
+    for suffix in ["", "/abcd1234/read", "/abcd1234/history", "/abcd1234/grid"] {
+        // Refused: no intent (with and without an Origin).
+        for origin in [None, Some(own.clone())] {
+            let mut req = get(suffix);
+            if let Some(o) = origin {
+                req = req.header("Origin", o);
+            }
+            let resp = req.send().await.unwrap();
+            assert_eq!(resp.status().as_u16(), 403, "{suffix} no intent");
+            let (_s, text) = body_text(resp).await;
+            assert_problem(&text, "terminal-intent-required");
+        }
+        // Refused: cross-site and same-site fetch metadata.
+        for site in ["cross-site", "same-site"] {
+            let resp = get(suffix)
+                .header("x-kb-intent", "terminal")
+                .header("sec-fetch-site", site)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status().as_u16(), 403, "{suffix} site {site}");
+            let (_s, text) = body_text(resp).await;
+            assert_problem(&text, "terminal-origin-refused");
+        }
+        // Refused: a present wrong Origin (an artifact subdomain, a foreign host).
+        for origin in ["http://x.artifacts.localhost", "https://evil.example"] {
+            let resp = get(suffix)
+                .header("x-kb-intent", "terminal")
+                .header("Origin", origin)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status().as_u16(), 403, "{suffix} origin {origin}");
+            let (_s, text) = body_text(resp).await;
+            assert_problem(&text, "terminal-origin-refused");
+        }
+        // Refused: a token caller (the default refuses them).
+        let resp = get(suffix)
+            .header("x-kb-intent", "terminal")
+            .header("Authorization", format!("Bearer {FIXTURE_TOKEN}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 403, "{suffix} token caller");
+        let (_s, text) = body_text(resp).await;
+        assert_problem(&text, "terminal-token-refused");
+    }
+    assert_eq!(
+        fake.conns.load(Ordering::SeqCst),
+        admitted,
+        "no refused GET may dial the runner"
+    );
+
+    // The POST gate is unchanged: an absent Origin still fails closed.
+    let resp = c
+        .post(format!("{}/api/terms/abcd1234/kill", base_url(addr)))
+        .header("x-kb-intent", "terminal")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 403);
+    let (_s, text) = body_text(resp).await;
     assert_problem(&text, "terminal-origin-refused");
-    assert_eq!(fake.conns.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -394,10 +522,10 @@ async fn post_without_intent_header_is_refused() {
     );
 }
 
-/// Every mutating terms route must demand `X-Kb-Intent: terminal`, and
-/// every terms route (GET included) must demand an Origin: a handler that
-/// passed `mutating=false` to the gate, or skipped it, would let one
-/// through without either and open the runner.
+/// Every mutating terms route must demand `X-Kb-Intent: terminal` and an
+/// Origin; every GET must demand the intent header and refuse a wrong
+/// Origin. A handler that skipped its gate would let one through and open
+/// the runner.
 #[tokio::test]
 async fn every_terms_route_enforces_intent_and_origin() {
     let tmp = tempfile::tempdir().unwrap();
@@ -449,12 +577,25 @@ async fn every_terms_route_enforces_intent_and_origin() {
         assert_problem(&text, "terminal-origin-refused");
     }
     for suffix in ["", "/abcd1234/read", "/abcd1234/history", "/abcd1234/grid"] {
+        // GETs: no intent is refused (a same-origin read sends the
+        // intent header but no Origin; see `get_gate_table_over_every_get_route`).
         let resp = c
             .get(format!("{}/api/terms{suffix}", base_url(addr)))
             .send()
             .await
             .unwrap();
-        assert_eq!(resp.status().as_u16(), 403, "GET {suffix} without Origin");
+        assert_eq!(resp.status().as_u16(), 403, "GET {suffix} without intent");
+        let (_s, text) = body_text(resp).await;
+        assert_problem(&text, "terminal-intent-required");
+        // A present wrong Origin is refused even with the intent header.
+        let resp = c
+            .get(format!("{}/api/terms{suffix}", base_url(addr)))
+            .header("x-kb-intent", "terminal")
+            .header("Origin", "https://evil.example")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 403, "GET {suffix} wrong Origin");
         let (_s, text) = body_text(resp).await;
         assert_problem(&text, "terminal-origin-refused");
     }
@@ -466,7 +607,7 @@ async fn every_terms_route_enforces_intent_and_origin() {
 }
 
 #[tokio::test]
-async fn get_routes_do_not_need_the_intent_header() {
+async fn get_routes_need_the_intent_header() {
     let mut replies = std::collections::HashMap::new();
     replies.insert("list".to_string(), list_reply(&[TERM_ID]));
     let tmp = tempfile::tempdir().unwrap();
@@ -479,7 +620,10 @@ async fn get_routes_do_not_need_the_intent_header() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status().as_u16(), 200);
+    assert_eq!(resp.status().as_u16(), 403);
+    let (_s, text) = body_text(resp).await;
+    assert_problem(&text, "terminal-intent-required");
+    assert_eq!(fake.conns.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]

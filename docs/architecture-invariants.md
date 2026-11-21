@@ -294,20 +294,30 @@ upgrade is a GET, so it gets no Origin check from middleware. The
 terminal routes therefore (a) 404 bodiless when `[terminal] enabled` is
 false, (b) require an `Origin` equal to the configured parent origin,
 or an http(s) origin whose scheme and Host are exactly equal to the
-request Host (a same-host Origin), and an absent Origin FAILS CLOSED;
-the artifact-suffix arm of the shared Origin check and the
+request Host (a same-host Origin), and on every mutation (POST) and the
+WebSocket upgrade an absent Origin FAILS CLOSED; the artifact-suffix arm of the shared Origin check and the
 KB_DEV_ORIGIN_ANY bypass are deliberately NOT accepted on this tier:
 an Origin on an artifact subdomain fails unless the request Host is
 that same subdomain (the Host-equality is the only admission, exactly
 as the parent-Origin equality is); (c) require an SPA-only intent header on
-every POST (precedent: the `X-Kb-Visibility` marker in
+every POST AND every GET (precedent: the `X-Kb-Visibility` marker in
 routes/comments.rs, an intent marker, not an authorization; header name
 `X-Kb-Intent: terminal`, fixed in T11), (d) mint a single-use ticket of
 about 30 s for the WS upgrade (binding details fixed in T11) and
 re-check Origin there. This is a convention gate for a single-machine,
 light-security setup: the headers are forgeable by a non-browser local
 client; the ruling is that agents and the CLI never call these routes,
-and no kb-cli verb exists. Bearer/registry-token callers are refused
+and no kb-cli verb exists. The ONE exception to
+fail-closed-on-absent-Origin is the GET gate (`gate_read`, shared by the
+list, read, history, grid and media GETs): a same-origin `fetch()` GET
+carries no `Origin`, so a GET is admitted on `X-Kb-Intent: terminal`
+(required), an Origin that is exact when present, a `Sec-Fetch-Site` of
+`same-origin` or `none` when present, and a non-token caller. It loosens
+nothing: a cross-site page cannot set the intent header without a CORS
+preflight (the CORS layer allows no request headers and only GET), a
+present Origin is still exact, and the browser sets `Sec-Fetch-Site`
+(scripts cannot); mutations and the WS upgrade keep the strict rule.
+Bearer/registry-token callers are refused
 by default, as decided in T11: `refuse_token_callers` (default `true`)
 refuses Token/Legacy identities with a token-refused problem body, so
 a script or agent holding a registry secret never reaches the

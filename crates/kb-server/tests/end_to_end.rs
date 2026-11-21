@@ -26811,6 +26811,7 @@ async fn get_terms_list(client: &reqwest::Client, addr: std::net::SocketAddr) ->
     client
         .get(url(addr, "/api/terms"))
         .header("Origin", term_origin(addr))
+        .header("x-kb-intent", "terminal")
         .send()
         .await
         .unwrap()

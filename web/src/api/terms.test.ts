@@ -114,6 +114,15 @@ describe("terms API", () => {
     expect(calls[0].init?.method).toBeUndefined();
   });
 
+  it("listTerms sends the intent header (a same-origin GET has no Origin, so intent is what the GET gate admits)", async () => {
+    const calls = mockFetch(() => jsonResponse(200, { terms: [] }));
+    await listTerms();
+    const headers = calls[0].init?.headers as Record<string, string>;
+    expect(headers[TERMINAL_INTENT_HEADER]).toBe(TERMINAL_INTENT_VALUE);
+    // No Origin and no credentials header are ever set by the SPA.
+    expect(Object.keys(headers).map((k) => k.toLowerCase())).not.toContain("origin");
+  });
+
   it("wsUrl uses ws: for an http daemon, wss: for https", () => {
     expect(wsUrl("t1", "tick")).toBe("ws://127.0.0.1:4737/api/terms/t1/ws?ticket=tick");
     vi.stubGlobal("location", { protocol: "https:", host: "kb.example.com" });
