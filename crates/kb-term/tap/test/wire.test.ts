@@ -235,3 +235,14 @@ test('wire_text_offsets_at_2pow53_rejected_like_rust', () => {
   ).toThrow(FrameError);
   expect(() => decodeTextFrame(`{"t":"clipboard","offset":${twoPow53},"data_b64":""}`)).toThrow(FrameError);
 });
+
+test('wire_pong_is_a_strict_server_frame_and_hello_may_carry_the_capability_bit', () => {
+  const pong = decodeTextFrame('{"t":"pong"}');
+  expect(pong.kind).toBe('known');
+  expect(encodeServerFrame(pong.frame as ServerFrame)).toBe('{"t":"pong"}');
+  expect(() => decodeTextFrame('{"t":"pong","extra":1}')).toThrow(FrameError);
+  const base = '{"t":"hello","proto":"kb-term/1","session":"s","epoch":"e","harness":"omp","bound_sid":null';
+  expect(decodeTextFrame(`${base},"pong":true}`).kind).toBe('known');
+  expect(() => decodeTextFrame(`${base},"pong":"yes"}`)).toThrow(FrameError);
+});
+
