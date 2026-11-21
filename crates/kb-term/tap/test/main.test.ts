@@ -146,7 +146,7 @@ test('default_attach_target_is_the_runner_tmux_session_kb', async () => {
   });
   const starting = stack.start();
   fake.stdout.push('%begin 1000 0 0\n%end 1000 0 0\n');
-  fake.stdout.push('%begin 1000 1 0\n%end 1000 1 0\n');
+  fake.stdout.push('%begin 1000 1 1\n%end 1000 1 1\n');
   await starting;
   try {
     const t = fake.argv.indexOf('-t');
@@ -175,7 +175,7 @@ test('seam_control_to_viewer_end_to_end', async () => {
   });
   const starting = stack.start();
   fake.stdout.push('%begin 1000 0 0\n%end 1000 0 0\n');
-  fake.stdout.push('%begin 1000 1 0\n%end 1000 1 0\n');
+  fake.stdout.push('%begin 1000 1 1\n%end 1000 1 1\n');
   await starting;
 
   try {
@@ -248,7 +248,7 @@ test('seam_sync_stuck_yields_busy_and_close', async () => {
   });
   const starting = stack.start();
   fake.stdout.push('%begin 1000 0 0\n%end 1000 0 0\n');
-  fake.stdout.push('%begin 1000 1 0\n%end 1000 1 0\n');
+  fake.stdout.push('%begin 1000 1 1\n%end 1000 1 1\n');
   await starting;
 
   try {
@@ -282,7 +282,7 @@ test('seam_mid_sequence_waits_for_strip_pending_to_clear', async () => {
   });
   const starting = stack.start();
   fake.stdout.push('%begin 1000 0 0\n%end 1000 0 0\n');
-  fake.stdout.push('%begin 1000 1 0\n%end 1000 1 0\n');
+  fake.stdout.push('%begin 1000 1 1\n%end 1000 1 1\n');
   await starting;
 
   try {
@@ -320,7 +320,7 @@ test('seam_media_stub_advances_offsets_and_counts', async () => {
   });
   const starting = stack.start();
   fake.stdout.push('%begin 1000 0 0\n%end 1000 0 0\n');
-  fake.stdout.push('%begin 1000 1 0\n%end 1000 1 0\n');
+  fake.stdout.push('%begin 1000 1 1\n%end 1000 1 1\n');
   await starting;
 
   try {
@@ -347,7 +347,7 @@ test('seam_media_stub_advances_offsets_and_counts', async () => {
 
 /** %begin/%end reply block: lines are the command's reply lines. */
 function block(num: number, lines: string[]): string {
-  return `%begin 1000 ${num} 0\n${lines.map((l) => `${l}\n`).join('')}%end 1000 ${num} 0\n`;
+  return `%begin 1000 ${num} 1\n${lines.map((l) => `${l}\n`).join('')}%end 1000 ${num} 1\n`;
 }
 
 /**
@@ -660,7 +660,7 @@ test('compiled_binary_smoke_pins_version_placeholder_and_listen', async () => {
     // needs a live fake tmux that answers the pause-after write's
     // %begin/%end block; then poll for the socket and kill the binary.
     const fakeTmux = join(dir, 'fake-tmux');
-    writeFileSync(fakeTmux, '#!/bin/sh\nwhile IFS= read -r _line; do\n  printf "%%begin 0 1 0\\n%%end 0 1 0\\n"\ndone\n');
+    writeFileSync(fakeTmux, '#!/bin/sh\nwhile IFS= read -r _line; do\n  printf "%%begin 0 1 1\\n%%end 0 1 1\\n"\ndone\n');
     chmodSync(fakeTmux, 0o755);
     const runDir = join(dir, 'run');
     const proc = Bun.spawn([bin, '--session', 'smoke0001', '--run-dir', runDir, '--harness', 'omp'], {
@@ -747,7 +747,7 @@ test('seam_take_size_resizes_the_twin_marks_live_viewers_and_seeds_late_joiners_
   });
   const starting = stack.start();
   fake.stdout.push('%begin 1000 0 0\n%end 1000 0 0\n');
-  fake.stdout.push('%begin 1000 1 0\n%end 1000 1 0\n');
+  fake.stdout.push('%begin 1000 1 1\n%end 1000 1 1\n');
   await starting;
 
   try {
@@ -822,7 +822,7 @@ test('seam_sync_grid_adopts_the_size_tmux_reports_after_a_restart', async () => 
   });
   const starting = stack.start();
   fake.stdout.push('%begin 1000 0 0\n%end 1000 0 0\n');
-  fake.stdout.push('%begin 1000 1 0\n%end 1000 1 0\n');
+  fake.stdout.push('%begin 1000 1 1\n%end 1000 1 1\n');
   await starting;
 
   try {
@@ -845,6 +845,81 @@ test('seam_sync_grid_adopts_the_size_tmux_reports_after_a_restart', async () => 
   }
 });
 
+test('seam_sync_grid_retries_a_null_reply_and_adopts_the_next_real_size', async () => {
+  const runDir = mkdtempSync(join(tmpdir(), 'kbt-grid-'));
+  const fake = new FakeSpawn();
+  const stack = createTapStack({
+    session: 'gridretry1',
+    runDir,
+    harness: 'claude',
+    cols: 120,
+    rows: 40,
+    epoch: 'a'.repeat(32),
+    spawn: fake.fn,
+    quiesceMs: 0,
+    joinWaitMs: 2000,
+    gridRetryMs: 0,
+  });
+  const starting = stack.start();
+  fake.stdout.push('%begin 1000 0 0\n%end 1000 0 0\n');
+  fake.stdout.push('%begin 1000 1 1\n%end 1000 1 1\n');
+  await starting;
+  try {
+    const sync = stack.syncGrid();
+    fake.stdout.push('%begin 1000 2 1\n%end 1000 2 1\n');
+    await waitUntil(() => fake.writes.filter((w) => w.startsWith('display-message')).length >= 2, 'second query');
+    fake.stdout.push('%begin 1000 3 1\n201 48\n%end 1000 3 1\n');
+    await sync;
+    expect(stack.twin.cols).toBe(201);
+    expect(stack.twin.rows).toBe(48);
+  } finally {
+    stack.stop();
+    rmSync(runDir, { recursive: true, force: true });
+  }
+});
+
+test('seam_sync_grid_gives_up_after_bounded_attempts_with_one_stderr_line_and_never_throws', async () => {
+  const runDir = mkdtempSync(join(tmpdir(), 'kbt-grid-'));
+  const fake = new FakeSpawn();
+  const stack = createTapStack({
+    session: 'gridgiveup',
+    runDir,
+    harness: 'claude',
+    cols: 120,
+    rows: 40,
+    epoch: 'a'.repeat(32),
+    spawn: fake.fn,
+    quiesceMs: 0,
+    joinWaitMs: 2000,
+    gridRetryMs: 0,
+  });
+  const starting = stack.start();
+  fake.stdout.push('%begin 1000 0 0\n%end 1000 0 0\n');
+  fake.stdout.push('%begin 1000 1 1\n%end 1000 1 1\n');
+  await starting;
+  const logged: string[] = [];
+  const realError = console.error;
+  console.error = (...a: unknown[]) => {
+    logged.push(a.join(' '));
+  };
+  try {
+    const sync = stack.syncGrid();
+    for (let n = 1; n <= 5; n++) {
+      await waitUntil(() => fake.writes.filter((w) => w.startsWith('display-message')).length >= n, `query ${n}`);
+      fake.stdout.push(`%begin 1000 ${n + 1} 1\nnot-a-size\n%end 1000 ${n + 1} 1\n`);
+    }
+    await sync;
+    expect(fake.writes.filter((w) => w.startsWith('display-message')).length).toBe(5);
+    expect(logged.length).toBe(1);
+    expect(logged[0]).toContain('gridgiveup');
+    expect(stack.twin.cols).toBe(120);
+  } finally {
+    console.error = realError;
+    stack.stop();
+    rmSync(runDir, { recursive: true, force: true });
+  }
+});
+
 test('seam_a_grid_change_on_an_idle_pane_reaches_a_caught_up_live_viewer_without_any_output', async () => {
   const runDir = mkdtempSync(join(tmpdir(), 'kbt-grid-'));
   const fake = new FakeSpawn();
@@ -861,7 +936,7 @@ test('seam_a_grid_change_on_an_idle_pane_reaches_a_caught_up_live_viewer_without
   });
   const starting = stack.start();
   fake.stdout.push('%begin 1000 0 0\n%end 1000 0 0\n');
-  fake.stdout.push('%begin 1000 1 0\n%end 1000 1 0\n');
+  fake.stdout.push('%begin 1000 1 1\n%end 1000 1 1\n');
   await starting;
 
   try {
