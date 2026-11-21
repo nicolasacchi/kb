@@ -585,6 +585,30 @@
 .kb-ses__newterm .kb-ses__resume-copy {
   float: none;
 }
+/* FUTERMPOLISH — Launch / Cancel are ordinary buttons (primary + secondary), not
+ * pill links: existing button tokens only. */
+.kb-ses__newterm-btn {
+  font: inherit;
+  font-size: var(--fs-sm);
+  color: var(--ink);
+  background: var(--bg-card);
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-sm);
+  padding: var(--pad-2) var(--pad-3);
+  cursor: pointer;
+}
+.kb-ses__newterm-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.kb-ses__newterm-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.kb-ses__newterm-btn--primary {
+  color: var(--accent-fg);
+  background: var(--accent);
+  border-color: var(--accent-bor);
+}
 .kb-ses__newterm-form {
   display: flex;
   flex-direction: column;

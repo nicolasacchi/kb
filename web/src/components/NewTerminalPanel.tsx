@@ -138,7 +138,7 @@ export function NewTerminalPanel({
           <div className="kb-ses__handoff-actions">
             <button
               type="submit"
-              className="kb-ses__resume-copy"
+              className="kb-ses__newterm-btn kb-ses__newterm-btn--primary"
               data-testid="new-terminal-launch"
               disabled={phase.kind === "launching"}
             >
@@ -146,7 +146,7 @@ export function NewTerminalPanel({
             </button>
             <button
               type="button"
-              className="kb-ses__resume-copy"
+              className="kb-ses__newterm-btn"
               data-testid="new-terminal-cancel"
               onClick={() => setPhase({ kind: "closed" })}
             >

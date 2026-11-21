@@ -588,12 +588,29 @@ the page.
   not the grid: the largest whole font size (9 to 20 px inline) at which the whole
   grid fits the host on both axes, using the cell size measured from the loaded
   webfont (a hidden probe, not a constant ratio), then verifies against the
-  rendered screen and steps down. The host is a bounded box (about the smaller of
-  80% of the viewport height and 60 rem) painted in the terminal's own background.
+  rendered screen and steps down. The host is a bounded box painted in the
+  terminal's own background: at most 60 rem, and at most what is left of the window
+  below the app bar once the page padding and the panel's own chrome are reserved,
+  so a panel scrolled to the top of its scroller never runs below the fold.
   Below the font floor the cropped axis scrolls and a "Cropped" hint appears. The
   page itself is checked not to scroll sideways at 1024 px and wider. A window resize only refits the font
   (100 ms debounce); a closed `<details>` (zero width) is never fitted, and
   opening it refits.
+  - **A new grid or box is planned from scratch.** The no-ratchet rule (a font at
+    which the rendered screen already fits is kept, so repeated refits of the same
+    grid in the same box never shrink it) applies only to a refit of the same grid
+    in the same box. A grid change or a window resize recomputes the font the way a
+    fresh load would, and "Cropped" is shown only when the floor font cannot hold
+    the grid. Because xterm paints after the call, every fit is followed by
+    verification passes about 60 ms later, repeated while the font still changes
+    (at most four), so the last result is read from a settled screen and a screen
+    that was still the old grid can no longer shrink the font or leave a stale
+    "Cropped".
+  - **In view.** Opening the panel (Open terminal, a New terminal launch, Resume)
+    scrolls its bar to just under the app bar, once per mount, and Fit to window
+    does the same (instantly) right before it measures, so the grid it fills is the
+    grid that is on screen. Nothing scrolls on a re-render or a stream event;
+    reduced motion turns the open animation off.
 - **Fonts.** The stream opens after the webfont loads (bounded at 1.5 s); a face
   that arrives later makes the panel re-measure and refit. The stack ends in
   system symbol faces before the generic family; no font files are added.
@@ -619,7 +636,13 @@ the page.
   while the panel is not live.
   The owner comes from the terminal list row; the runner's own answer to this
   panel's take or release names the owner immediately, and any later change of
-  the row's owner replaces that answer.
+  the row's owner replaces that answer. A list row describes the grid it was read
+  at: while its size differs from the stream's live grid (another tab or a local
+  attach changed the grid and the list has not caught up) the chip shows the size
+  alone, never a stale `· free`. Each grid-change frame the open panel sees
+  invalidates the list once, debounced (about 300 ms), and the list is refetched
+  once when the tab becomes visible again (only if the row is older than its
+  15 s freshness). Nothing polls.
 - **Theme.** Colors come from the Profile palette when it names one and from the
   app's tokens otherwise; selection, inactive selection and the cursor accent
   always come from tokens, and the theme is re-read when the SPA theme changes.
@@ -644,14 +667,17 @@ the page.
     screen **never takes the grid**: it sends no `take-size` and no resize. A grid
     larger than the screen shows the "Cropped" hint, and Fit to window is the
     explicit way to change the grid.
+  - The focus ring and xterm's scrollbar sit on the grid's own box (the xterm
+    element shrink-wraps its screen), not around the empty band of the host.
   - Closing the panel, unmounting it or switching terminal exits native
     fullscreen, releases the keyboard lock and drops the overlay class, so a
     reload or a navigation leaves no stuck state.
 - **Who is typing.** A chip says "typing" while the terminal has keyboard focus
   (the view also gets an accent ring) and "click to type" otherwise, with xterm's
   inactive cursor style. Nothing focuses the terminal on mount; a click does.
-- **Copy and paste.** Ctrl/Cmd+C copies the selection only when there is one;
-  with no selection the key is still ^C. Ctrl/Cmd+Shift+C always copies and
+- **Copy and paste.** Ctrl/Cmd+C copies the selection only when there is one and
+  then clears it, so a second Ctrl/Cmd+C is ^C (the Windows Terminal convention);
+  with no selection the key is ^C. Ctrl/Cmd+Shift+C always copies and
   Ctrl/Cmd+Shift+V is the browser's paste.
 - **Links.** `http://` and `https://` text is a link: wrapped rows are joined,
   trailing punctuation and an unbalanced closing bracket are trimmed, and
@@ -693,11 +719,19 @@ The phone view has three parts.
   - Guards for Claude: every `Left` and every message that is exactly `/bg` asks
     for confirmation first. This is a misfire guard, not a security boundary.
   - The keyboard opening or closing never resizes the pty. Back closes the panel.
+  - **The sheet bar.** The title row is the harness name and the buttons (Read or
+    Watch, A-, A+, Full, Close); the state caption and, in Watch, a "Cropped: pan, or
+    Fit to phone" hint (the same label as the desktop's) are on a line of their own
+    under it, so the buttons never squeeze them to an ellipsis. The grid chip beside
+    Fit to phone is the desktop chip's words (`120x40 · web`, `· free`, `· local
+    attach`, the size alone while the list row is behind the live grid). The key row
+    scrolls sideways and fades its right edge while more keys are off screen.
   - **Full screen on a phone.** The sheet's full detent is the whole dynamic
     viewport (`100dvh`, with the notch and home-indicator insets kept clear), and its
-    title is merged into the terminal bar. A "Full screen" button in the bar
+    title is merged into the terminal bar. A short "Full" button (named "Full screen" for assistive tech) in the bar
     appears only where the browser offers element fullscreen (Android Chrome); it
-    fullscreens the terminal so the browser's own bars go away, and the first
+    fullscreens the terminal so the browser's own bars go away (it also folds the
+    Fit, Release and chip row away; the keys and the composer stay), and the first
     Back leaves it. Where it is not offered (iPhone Safari) there is no button:
     the `100dvh` sheet is the most the browser allows. There is no overlay
     fallback and no Escape lock on a phone.

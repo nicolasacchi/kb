@@ -31,6 +31,7 @@
 // later grows (no mid-session addon load).
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Sheet, type Detent } from "@kb/ui/Sheet";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { Terminal, type IFunctionIdentifier } from "@xterm/xterm";
@@ -44,11 +45,14 @@ import { installReplyGuards } from "./replyGuards";
 import { profileMatchesBundle } from "./pins";
 import { FIT_MAX_FULL, FIT_MAX_INLINE, FIT_MIN_FULL, FIT_MIN_INLINE, type FitResult } from "./fit";
 import { fitHostNow } from "./fitHost";
+import { createFitter, type Fitter } from "./fitter";
+import { scrollPanelIntoView } from "./viewport";
 import { measureCellRatio } from "./cellProbe";
 import { fontGate, TERM_FONT_FAMILY } from "./fonts";
 import { readTheme } from "./theme";
 import { GridControls } from "./GridControls";
-import { chipText } from "./gridOwner";
+import { chipText, trustedOwner } from "./gridOwner";
+import { CROPPED_DESKTOP_HINT, CROPPED_LABEL } from "./cropHint";
 import type { WindowMeasure } from "./fitWindow";
 import { THEME_APPLIED_EVENT } from "@kb/ui/themes/apply";
 import { attachGfx, type GfxHandle, type OpenPicture } from "./gfx";
@@ -71,6 +75,10 @@ import { createPortal } from "react-dom";
 import "./terminal.css";
 
 const TRANSIENT_MS = 2_000;
+/** One `["terms"]` refetch this long after the last grid-change frame (W1). */
+const TERMS_REFRESH_MS = 300;
+/** Verification passes run this long after a fit, once the renderer has painted. */
+const FIT_SETTLE_MS = 60;
 
 /** e2e seam: `container.__kbTerm` exposes the live instance (no window global). */
 type TermSeam = HTMLElement & { __kbTerm?: Terminal };
@@ -143,35 +151,79 @@ export function TerminalPanel(props: TerminalPanelProps) {
       window.setTimeout(() => refitRef.current?.(), 60);
     },
   });
+  // W2 — opening the panel (Open terminal, a launch, Resume) brings its bar just
+  // under the app bar, once per mount; a re-render or a stream event never scrolls.
+  const scrolledOnOpenRef = useRef(false);
+  useEffect(() => {
+    if (!panelEl || isMobile || scrolledOnOpenRef.current) return;
+    scrolledOnOpenRef.current = true;
+    scrollPanelIntoView(panelEl);
+  }, [panelEl, isMobile]);
   // T15 — the picture layer for the CURRENT xterm instance (null before the
   // Profile builds the terminal and after teardown).
   const gfxRef = useRef<GfxHandle | null>(null);
   const [gfx, setGfx] = useState<GfxHandle | null>(null);
   const [picture, setPicture] = useState<OpenPicture | null>(null);
   const { terms } = useTerms();
+  const queryClient = useQueryClient();
+  const termsTimerRef = useRef<number | null>(null);
   const termRow = terms.find((t) => t.id === props.termId);
   const rowState = termRow?.state ?? null;
-  // undefined = the list has no row for this term (still loading or the read
-  // failed): the owner is UNKNOWN, which is not the same as free.
+  // The row's owner as the list states it (null = free). It retires the hint
+  // below whenever it changes.
   const listOwner: string | null | undefined = termRow ? (termRow.grid_owner ?? null) : undefined;
+  // undefined = the list cannot vouch for it: no row (still loading or the read
+  // failed) or a row for another grid size than the live one (a grid change the
+  // list has not caught up with). UNKNOWN is not the same as free.
+  const vouchedOwner: string | null | undefined = trustedOwner(termRow, grid);
   // The runner's answer to our own take/release names the owner NOW; the list
   // row is the source otherwise, and any change of the row's owner retires the
   // hint (a local attach that took the grid after us must show).
   const [ownerHint, setOwnerHint] = useState<{ owner: string | null } | null>(null);
   useEffect(() => setOwnerHint(null), [listOwner]);
-  const gridOwner: string | null | undefined = ownerHint ? ownerHint.owner : listOwner;
+  const gridOwner: string | null | undefined = ownerHint ? ownerHint.owner : vouchedOwner;
   const onOwner = useCallback((owner: string | null): void => setOwnerHint({ owner }), []);
 
   // Fit the live terminal into the desktop host (font only; never a take-size).
+  // The fitter plans a new grid or box from scratch and verifies after the
+  // renderer has painted (`fitter.ts`); only a refit of the same situation keeps
+  // a font that already fits.
+  const fitterRef = useRef<Fitter<Terminal, HTMLElement> | null>(null);
   const fitDesktop = (term: Terminal, host: HTMLElement): void => {
-    const g = gridRef.current;
-    if (!g) return;
-    const full = fullRef.current;
-    const r = fitHostNow(term, host, g, full ? { min: FIT_MIN_FULL, max: FIT_MAX_FULL } : { min: FIT_MIN_INLINE, max: FIT_MAX_INLINE });
-    if (!r) return;
-    setFit((prev) =>
-      prev && prev.fontSize === r.fontSize && prev.cropped.x === r.cropped.x && prev.cropped.y === r.cropped.y ? prev : r,
-    );
+    if (!gridRef.current) return;
+    if (!fitterRef.current) {
+      const bounds = (): { min: number; max: number } =>
+        fullRef.current ? { min: FIT_MIN_FULL, max: FIT_MAX_FULL } : { min: FIT_MIN_INLINE, max: FIT_MAX_INLINE };
+      fitterRef.current = createFitter<Terminal, HTMLElement>({
+        run: (t, h, fresh) => {
+          const g = gridRef.current;
+          return g ? fitHostNow(t, h, g, { ...bounds(), fresh }) : null;
+        },
+        key: (h) => {
+          const g = gridRef.current;
+          const b = bounds();
+          return `${g?.cols}x${g?.rows}|${h.clientWidth}x${h.clientHeight}|${b.min}-${b.max}`;
+        },
+        schedule: (fn) => window.setTimeout(fn, FIT_SETTLE_MS),
+        cancel: (handle) => window.clearTimeout(handle as number),
+        onResult: (r) =>
+          setFit((prev) =>
+            prev && prev.fontSize === r.fontSize && prev.cropped.x === r.cropped.x && prev.cropped.y === r.cropped.y
+              ? prev
+              : r,
+          ),
+      });
+    }
+    fitterRef.current.refit(term, host);
+  };
+  // A grid change this panel did not cause (another tab, a local attach) leaves
+  // the list row stale: refetch it once, after the burst of frames settles.
+  const refreshTermsSoon = (): void => {
+    if (termsTimerRef.current !== null) window.clearTimeout(termsTimerRef.current);
+    termsTimerRef.current = window.setTimeout(() => {
+      termsTimerRef.current = null;
+      void queryClient.invalidateQueries({ queryKey: ["terms"] });
+    }, TERMS_REFRESH_MS);
   };
   const say = useCallback((message: string): void => setStatus(message), []);
   const measureWindow = useCallback((): WindowMeasure | null => {
@@ -311,7 +363,11 @@ export function TerminalPanel(props: TerminalPanelProps) {
           if (ev.type === "keydown") {
             ev.preventDefault();
             const sel = term.getSelection();
-            if (sel) void writeClipboardText(sel);
+            if (sel) {
+              void writeClipboardText(sel);
+              // Copied: clear the selection, so the next Ctrl/Cmd+C has none and is ^C.
+              term.clearSelection();
+            }
           }
           return false;
         }
@@ -390,6 +446,8 @@ export function TerminalPanel(props: TerminalPanelProps) {
         // step with the grid the size owner just set.
         gridRef.current = { cols, rows };
         setGrid(gridRef.current);
+        // The list row's size/owner may now be behind: one debounced refetch.
+        refreshTermsSoon();
         // Phone: the grid is never fitted (the session grid pans instead).
         const host = isMobileRef.current ? null : hostRef.current;
         if (host) fitDesktop(term, host);
@@ -507,6 +565,10 @@ export function TerminalPanel(props: TerminalPanelProps) {
       const term = termRef.current;
       termRef.current = null;
       term?.dispose();
+      fitterRef.current?.dispose();
+      fitterRef.current = null;
+      if (termsTimerRef.current !== null) window.clearTimeout(termsTimerRef.current);
+      termsTimerRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.termId]);
@@ -634,6 +696,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
         ignoreEscape={terminalOwnsEscape}
       >
         <PhoneTerminal
+          harness={props.harness}
           term={termInst}
           profile={grid}
           hostRef={phoneHostRef}
@@ -642,8 +705,10 @@ export function TerminalPanel(props: TerminalPanelProps) {
           stream={state}
           caption={transient ?? state.caption}
           onClose={closePanel}
-          renderDrive={({ measure }) => (
+          renderDrive={({ measure, fullscreen }) => (
             <DriveDock
+              grid={grid}
+              compact={fullscreen}
               termId={props.termId}
               harness={props.harness}
               viewer={viewer}
@@ -695,8 +760,8 @@ export function TerminalPanel(props: TerminalPanelProps) {
           </span>
         ) : null}
         {fit && (fit.cropped.x || fit.cropped.y) ? (
-          <span className="kb-term__hint" data-testid="kb-term-cropped" title="The grid is larger than the panel at the smallest font: scroll the panel">
-            Cropped
+          <span className="kb-term__hint" data-testid="kb-term-cropped" title={CROPPED_DESKTOP_HINT}>
+            {CROPPED_LABEL}
           </span>
         ) : null}
         <span className="kb-term__caption" data-testid="kb-term-caption">
@@ -708,6 +773,10 @@ export function TerminalPanel(props: TerminalPanelProps) {
           viewer={viewer}
           owner={gridOwner ?? null}
           measureWindow={measureWindow}
+          onBeforeFit={() => {
+            // Measure the box the reader can see: bring the panel up first (not in full screen).
+            if (!fullRef.current) scrollPanelIntoView(panelEl, { instant: true });
+          }}
           say={say}
           onOwner={onOwner}
         />

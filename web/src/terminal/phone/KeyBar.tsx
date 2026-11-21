@@ -7,7 +7,7 @@
 // cannot interrupt the harness; a held `/` opens the harness's slash menu,
 // whose entries are PASTED and never entered.
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "../../lib/toast";
 import { CAPTION } from "./planSend";
 import { DriveError, pressEnter, sendKey, sendText, type Drive } from "./driveApi";
@@ -23,6 +23,11 @@ export interface KeyBarProps {
   onCaption: (text: string | null) => void;
   /** A key or menu entry went to the session (the OSC 52 typing clock). */
   onTyped?: () => void;
+}
+
+/** More keys sit past the right edge of the scrolling row (a pixel of slack). */
+export function moreToRight(el: { scrollLeft: number; clientWidth: number; scrollWidth: number }): boolean {
+  return el.clientWidth > 0 && el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
 }
 
 /** Report a failed Drive call: a toast (invariant #32), never a silent catch. */
@@ -59,6 +64,20 @@ function NoFocusButton(props: {
 export function KeyBar({ drive, onCaption, onTyped }: KeyBarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menu = slashMenuFor(drive.harness);
+  // The row scrolls (11 keys do not fit a phone): say so with a fade on the
+  // side that has more, instead of a key cut in half with no hint.
+  const [keysEl, setKeysEl] = useState<HTMLDivElement | null>(null);
+  const [more, setMore] = useState(false);
+  const measureMore = useCallback((): void => {
+    if (keysEl) setMore(moreToRight(keysEl));
+  }, [keysEl]);
+  useEffect(() => {
+    measureMore();
+    if (!keysEl || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measureMore);
+    ro.observe(keysEl);
+    return () => ro.disconnect();
+  }, [keysEl, measureMore]);
 
   const send = (key: KeyName): void => {
     onCaption(null);
@@ -130,7 +149,13 @@ export function KeyBar({ drive, onCaption, onTyped }: KeyBarProps) {
           />
         </div>
       ) : null}
-      <div className="kb-drive__keys">
+      <div
+        className="kb-drive__keys"
+        data-testid="kb-drive-keys"
+        data-more={more ? "right" : undefined}
+        ref={setKeysEl}
+        onScroll={measureMore}
+      >
         {KEYBAR_KEYS.map((k) => {
           if (k.name === "C-c") {
             return (

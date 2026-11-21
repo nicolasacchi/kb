@@ -156,3 +156,42 @@
   font-weight: 600;
   color: var(--ink);
 }
+
+/* FUTERMPOLISH — the title row is the harness name and the buttons; the state
+ * caption and the crop hint get a line of their own, so neither is squeezed to
+ * an ellipsis by the buttons. */
+.kb-term-phone__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-term-phone__spacer {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.kb-term-phone__btn {
+  white-space: nowrap;
+}
+
+.kb-term-phone__sub {
+  display: flex;
+  align-items: baseline;
+  gap: var(--pad-2);
+  padding: var(--pad-1) var(--pad-2);
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+  min-width: 0;
+}
+
+.kb-term-phone__sub .kb-term-phone__caption {
+  font-size: var(--fs-xs);
+}
+
+.kb-term-phone__crop {
+  flex: none;
+  color: var(--warn);
+  white-space: nowrap;
+}
