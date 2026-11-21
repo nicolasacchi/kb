@@ -49,8 +49,11 @@ describe("useSheetHistory", () => {
     const r = render(<Probe active onClose={onClose} />);
     expect(push).toHaveBeenCalledTimes(1);
     expect(sheetKey()).toBeTruthy();
-    await act(async () => {
+    // React flushes the effect cleanup when act exits: rerender first, wait after.
+    act(() => {
       r.rerender(<Probe active={false} onClose={onClose} />);
+    });
+    await act(async () => {
       await tick();
     });
     expect(sheetKey()).toBeUndefined();
@@ -97,8 +100,10 @@ describe("useSheetHistory", () => {
     const r = render(<Probe active onClose={() => {}} />);
     window.history.pushState({ idx: 9 }, "", "/other");
     const len = window.history.length;
-    await act(async () => {
+    act(() => {
       r.unmount();
+    });
+    await act(async () => {
       await tick();
     });
     expect(window.history.length).toBe(len);
