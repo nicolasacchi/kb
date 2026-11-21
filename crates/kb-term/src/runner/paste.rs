@@ -192,6 +192,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn paste_costs_one_tmux_client_process_whatever_the_shape() {
+        // Every spawn costs hundreds of ms on a loaded host: a paste is ONE
+        // tmux invocation (flag + load + paste + cleanup chained), for a
+        // single line, a bracketed multi-line paste and a refused one.
+        for (text, bracketed) in [("ab", false), ("ab", true), ("a\nb", true), ("a\nb", false)] {
+            let fake = fake_with(bracketed);
+            let _ = paste_with(&fake, &sock(), "abcd1234", text, 65536, 1).await;
+            assert_eq!(
+                args(&fake).len(),
+                1,
+                "text {text:?} bracketed={bracketed}: {:?}",
+                args(&fake)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn paste_chain_never_carries_the_text_in_argv() {
+        // The text rides stdin (an argv text ending in `;` would split the
+        // tmux command line); only fixed words and the scratch name are argv.
+        let fake = fake_with(true);
+        paste_with(&fake, &sock(), "abcd1234", "x;", 65536, 1)
+            .await
+            .unwrap();
+        for a in args(&fake).iter().flatten() {
+            assert!(!a.contains("x;"), "text leaked into argv: {a}");
+        }
+        assert_eq!(fake.stdin_log.lock().unwrap()[0], b"x;");
+    }
+
+    #[tokio::test]
     async fn paste_policy_table() {
         // Single-line, bracketed off: raw paste, no flags.
         let fake = fake_with(false);

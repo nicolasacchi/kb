@@ -175,6 +175,45 @@ describe("sendKey and sendText: the one guard", () => {
   });
 });
 
+describe("sendText with enter is ONE round trip (FUPHONESEND)", () => {
+  it("posts a single paste carrying enter:true and no separate enter request", async () => {
+    replies.push(json(200, { paste_only: false, bracketed: true, entered: true }));
+    const r = await sendText(mkDrive(), "hello", { enter: true });
+    expect(r).toEqual({ kind: "sent" });
+    expect(calls.map((c) => c.url)).toEqual(["/api/terms/abcd1234/paste"]);
+    expect(body(calls[0])).toEqual({ text: "hello", enter: true, viewer: "ws-abc1234567" });
+  });
+
+  it("without enter the body carries no enter key", async () => {
+    await sendText(mkDrive(), "/compact", { enter: false });
+    expect(body(calls[0])).toEqual({ text: "/compact", viewer: "ws-abc1234567" });
+  });
+
+  it("entered:false in a 200 is pasted-not-sent, conflict when the refusal was 409", async () => {
+    replies.push(
+      json(200, {
+        paste_only: false,
+        bracketed: true,
+        entered: false,
+        enter_error: { status: 409, type: "urn:kb:errors:term-blocked", detail: "the bound session is blocked" },
+      }),
+    );
+    const r = await sendText(mkDrive(), "hello", { enter: true });
+    expect(r).toEqual({ kind: "pasted-not-sent", detail: "the bound session is blocked", conflict: true });
+    replies.push(
+      json(200, { paste_only: false, bracketed: true, entered: false, enter_error: { status: 503, type: "x", detail: "runner down" } }),
+    );
+    const r2 = await sendText(mkDrive(), "hello", { enter: true });
+    expect(r2).toEqual({ kind: "pasted-not-sent", detail: "runner down", conflict: false });
+  });
+
+  it("a failed combined request throws (nothing was written)", async () => {
+    replies.push(json(422, { type: "urn:kb:errors:terminal-refused", detail: "multi-line paste refused" }));
+    await expect(sendText(mkDrive(), "a\nb", { enter: true })).rejects.toBeInstanceOf(DriveError);
+    expect(calls).toHaveLength(1);
+  });
+});
+
 describe("uploadImage", () => {
   const file = (size: number, type: string): File => new File([new Uint8Array(size)], "x", { type });
 
