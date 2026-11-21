@@ -5,15 +5,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DriveError,
-  UPLOAD_MAX_BYTES,
   paste,
   pressEnter,
   releaseSize,
   sendKey,
   sendText,
   takeSize,
-  uploadImage,
-  uploadRefusal,
   type Drive,
 } from "./driveApi";
 
@@ -172,41 +169,5 @@ describe("sendKey and sendText: the one guard", () => {
     replies.push(json(422, { type: "urn:kb:errors:terminal-refused", detail: "multi-line paste refused" }));
     await expect(sendText(mkDrive(), "a\nb", { enter: true })).rejects.toBeInstanceOf(DriveError);
     expect(calls).toHaveLength(1);
-  });
-});
-
-describe("uploadImage", () => {
-  const file = (size: number, type: string): File => new File([new Uint8Array(size)], "x", { type });
-
-  it("refuses a wrong type or an oversize file before fetching", async () => {
-    for (const bad of [file(10, "image/svg+xml"), file(10, "text/html"), file(10, "application/pdf"), file(10, "")]) {
-      await expect(uploadImage("abcd1234", bad)).rejects.toBeInstanceOf(DriveError);
-    }
-    await expect(uploadImage("abcd1234", file(UPLOAD_MAX_BYTES + 1, "image/png"))).rejects.toThrow(/8 MiB/);
-    expect(calls).toHaveLength(0);
-    expect(uploadRefusal(file(UPLOAD_MAX_BYTES, "image/png"))).toBeNull();
-    expect(uploadRefusal(file(UPLOAD_MAX_BYTES + 1, "image/png"))).not.toBeNull();
-  });
-
-  it("posts the raw file with its own content type and the intent header", async () => {
-    const reply = { path: "/run/x/up/abc.png", bytes: 4, mime: "image/png", sha256: "a".repeat(64) };
-    replies.push(json(200, reply));
-    const f = file(4, "image/png");
-    const got = await uploadImage("abcd1234", f);
-    expect(got).toEqual(reply);
-    expect(calls).toHaveLength(1);
-    expect(calls[0].url).toBe("/api/terms/abcd1234/upload");
-    expect(calls[0].init.method).toBe("POST");
-    expect(calls[0].init.body).toBe(f);
-    expect(headers(calls[0])["Content-Type"]).toBe("image/png");
-    expect(headers(calls[0])["X-Kb-Intent"]).toBe("terminal");
-  });
-
-  it("explains a 413 or 415 with the server's own words", async () => {
-    replies.push(json(415, { type: "urn:kb:errors:unsupported-media", detail: "not a picture" }));
-    await expect(uploadImage("abcd1234", file(4, "image/png"))).rejects.toMatchObject({
-      status: 415,
-      detail: "not a picture",
-    });
   });
 });

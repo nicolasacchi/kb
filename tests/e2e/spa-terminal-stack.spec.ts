@@ -1668,6 +1668,41 @@ test("FUTERMPOLISH W5: in full screen the focus ring and the scrollbar belong to
   expect(Math.abs(m.xtermRight - m.screenRight)).toBeLessThanOrEqual(2);
 });
 
+// ============================================ FUTERMPASTE: picture paste
+
+test("FUTERMPASTE: a synthetic picture paste into the focused panel posts exactly one /upload, and a text paste posts none", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const c = await prepare(page, request, winchHarness(), { cols: 120, rows: 40 });
+  await openPanel(page, c.sid);
+  const uploads: string[] = [];
+  page.on("request", (r) => {
+    if (r.method() === "POST" && /\/api\/terms\/[^/]+\/upload$/.test(r.url())) uploads.push(r.url());
+  });
+  const paste = (kind: "image" | "text") =>
+    page.evaluate((k) => {
+      const ta = document.querySelector('[data-testid="kb-terminal"] .xterm-helper-textarea') as HTMLElement;
+      ta.focus();
+      const dt = new DataTransfer();
+      if (k === "image") {
+        // A 1x1 PNG, generated here (synthetic).
+        const b = atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==");
+        const bytes = Uint8Array.from(b, (ch) => ch.charCodeAt(0));
+        dt.items.add(new File([bytes], "p.png", { type: "image/png" }));
+      } else {
+        dt.setData("text/plain", "hello");
+      }
+      const ev = new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true });
+      ta.dispatchEvent(ev);
+      return ev.defaultPrevented;
+    }, kind);
+  expect(await paste("text"), "a text paste is not prevented").toBe(false);
+  expect(await paste("image"), "a picture paste is taken").toBe(true);
+  await expect.poll(() => uploads.length, { timeout: 15_000 }).toBe(1);
+  await expect(page.locator('[data-testid="kb-term-status"]')).toContainText("Picture path pasted", { timeout: 15_000 });
+  expect(uploads.length, "exactly one upload").toBe(1);
+});
+
 test.describe.serial("T25 in-process restart", () => {
   test("kb restart closes 1012 within 3 s (proxy and browser), holder survives, the panel resumes with from= and the epoch, scrollback intact", async ({ page, request }) => {
     test.setTimeout(300_000);
