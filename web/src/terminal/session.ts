@@ -206,6 +206,8 @@ export class TermSession {
   private reconnectTimer: unknown = null;
   private probeTimer: unknown = null;
   private hiddenTimer: unknown = null;
+  // The tab is currently hidden (set by setHidden); a released session must not wake while true.
+  private hidden = false;
 
   // Seed bookkeeping: the seed payload chunks all carry seed.offset.
   private seeding = false;
@@ -263,6 +265,7 @@ export class TermSession {
    */
   kick(): void {
     if (this.disposed || this.isSettled()) return;
+    if (this.phase === "sleeping" && this.hidden) return; // online/pageshow while hidden: stay released
     if (this.phase === "sleeping" || this.phase === "expired") {
       // Wake: one mint, a resume join from the applied offset (connect() computes it).
       this.phase = "connecting";
@@ -317,6 +320,7 @@ export class TermSession {
    */
   setHidden(hidden: boolean): void {
     if (this.disposed) return;
+    this.hidden = hidden;
     if (this.hiddenTimer !== null) {
       this.fx.clearTimer(this.hiddenTimer);
       this.hiddenTimer = null;

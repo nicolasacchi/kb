@@ -979,6 +979,24 @@ describe("FUTERMLIVE hidden release", () => {
     expect(h.session.getState().phase).toBe("live");
   });
 
+  it("online/pageshow kick while still hidden after the release does not re-mint (M1)", async () => {
+    const h = setup();
+    const s = await goLivePong(h);
+    h.session.setHidden(true);
+    h.fire(180_000);
+    s.closeFromServer(1000);
+    await flush();
+    h.session.kick();
+    await flush();
+    expect(h.mintedTickets).toEqual(["tick-1"]);
+    expect(h.session.getState().phase).toBe("sleeping");
+    h.session.setHidden(false);
+    h.session.kick();
+    await flush();
+    expect(h.mintedTickets).toEqual(["tick-1", "tick-2"]);
+    expect(new URL(h.urls[1]).searchParams.get("from")).toBe("105");
+  });
+
   it("a rejoinFull while sleeping waits for the wake and then joins FULL", async () => {
     const h = setup();
     await goLivePong(h);
