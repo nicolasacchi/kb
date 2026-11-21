@@ -316,6 +316,22 @@ seed was taken at.
   with jitter, and the attempt count resets only after a connection stayed up for
   5 s. A first-frame watchdog of 6 s covers the time between socket open and the
   first frame. The relay pings the browser every 25 s.
+- **Liveness probe:** the relay's 25 s ping covers only the browser leg. A tap
+  advertises the `pong` capability on `hello`; after more than 8 s without a frame,
+  a visible / online / pageshow event makes the browser send one `ping`, and with
+  no frame back in 2.5 s it closes the socket and rejoins by resume from the
+  applied offset (no re-seed, no grid change). A tap without the capability is never
+  probed, so an older tap is never reconnect-looped.
+- **Hidden release:** a tab hidden for 3 minutes closes its socket (1000, no
+  reconnect caption) to free a viewer slot and rejoins by resume when shown.
+- **Refusal captions:** the relay close reasons are `idle` (1001), `slow consumer`
+  (1013) and `service restart` (1012) and the reconnect caption names them. A
+  refused upgrade is only a bare 1006 in a browser, so three consecutive closes
+  before any frame show "cannot reach terminal, retrying". A ticket mint that hits
+  an edge-auth lapse (a redirect, 401, or a 403 that is not the terminal gate's own)
+  settles as "session expired, reload" with no timers until a kick; an offline
+  fetch is captioned "offline" and retried; a mint 404 `terminal-not-found` after the
+  session was live shows "ended" and keeps the transcript.
 - **Stall policy:** the tap asks tmux for `pause-after=20`. When tmux pauses the
   client (`%pause`), the tap resumes it with `refresh-client -A '%P:continue'`
   and **reseeds** the twin: it waits for a quiescent point (50 ms quiet, bounded
@@ -327,9 +343,10 @@ seed was taken at.
   over 3 s, and re-tap if the tmux server's resident size passes 512 MiB.
 
 The server-to-client text frames are `hello`, `profile`, `imagedef`, `seed`,
-`resize`, `sizechanged`, `gfxreset`, `exit`, `clipboard` and `error`; the
+`resize`, `sizechanged`, `gfxreset`, `exit`, `clipboard`, `error` and `pong` (the
+tap's answer to a client `ping`, sent to that viewer only); the
 client-to-server frames are `resumefrom`, `takesize`, `input` and `ping` (unknown
-fields are rejected). The golden JSON files of the kb-term crate are the
+fields are rejected). `hello` may carry `pong: true`, the capability bit. The golden JSON files of the kb-term crate are the
 contract.
 
 ## Grid policy
