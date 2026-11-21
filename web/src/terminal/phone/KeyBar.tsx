@@ -3,7 +3,7 @@
 // It NEVER takes focus (a focus move pops the soft keyboard and drops the
 // composer): every button acts on `pointerdown` and calls `preventDefault()`
 // on both `pointerdown` and `mousedown`, and carries `tabIndex={-1}`. Keys are
-// sent as NAMES only (`keys.ts`). Ctrl-C must be HELD (600 ms) so a stray tap
+// sent as NAMES only (`keys.ts`). Ctrl-C and Ctrl-D must be HELD (600 ms) so a stray tap
 // cannot interrupt the harness; a held `/` opens the harness's slash menu,
 // whose entries are PASTED and never entered.
 
@@ -107,6 +107,12 @@ export function KeyBar({ drive, onCaption, onTyped }: KeyBarProps) {
     onTap: () => onCaption(CAPTION.holdCtrlC),
   });
 
+  // Ctrl-D ends a shell or a harness: a hold, like Ctrl-C.
+  const ctrlD = useHoldConfirm(CTRL_C_HOLD_MS, {
+    onHold: () => send("C-d"),
+    onTap: () => onCaption(CAPTION.holdCtrlD),
+  });
+
   const slash = useHoldConfirm(SLASH_HOLD_MS, {
     onHold: () => setMenuOpen(true),
     onTap: () => send("Slash"),
@@ -157,16 +163,16 @@ export function KeyBar({ drive, onCaption, onTyped }: KeyBarProps) {
         onScroll={measureMore}
       >
         {KEYBAR_KEYS.map((k) => {
-          if (k.name === "C-c") {
+          if (k.name === "C-c" || k.name === "C-d") {
             return (
               <button
                 key={k.name}
                 type="button"
                 tabIndex={-1}
                 className="kb-drive__key"
-                data-testid="kb-drive-key-C-c"
+                data-testid={`kb-drive-key-${k.name}`}
                 aria-label={k.aria}
-                {...ctrlC}
+                {...(k.name === "C-c" ? ctrlC : ctrlD)}
               >
                 {k.label}
               </button>

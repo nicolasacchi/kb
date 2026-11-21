@@ -40,6 +40,15 @@ describe("key vocabulary", () => {
     expect(isKeyName("/")).toBe(false);
   });
 
+  it("FUKEYBAR: the bar carries Backspace and Ctrl-D, both names the relay already forwards", () => {
+    const names = KEYBAR_KEYS.map((k) => k.name);
+    expect(names).toContain("BSpace");
+    expect(names).toContain("C-d");
+    expect(relayNames()).toContain("BSpace");
+    expect(relayNames()).toContain("C-d");
+    expect(KEYBAR_KEYS.find((k) => k.name === "C-d")?.aria).toMatch(/hold/i);
+  });
+
   it("the slash menu is per harness, pasted entries only, empty for the rest", () => {
     expect(slashMenuFor("claude")).toEqual(["/help", "/compact", "/clear", "/model", "/resume"]);
     expect(slashMenuFor("omp")).toEqual(["/compact", "/shake", "/tree"]);
