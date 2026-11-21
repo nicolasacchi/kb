@@ -928,3 +928,41 @@ test('viewers_resumefrom_text_frame_epoch_follows_the_shared_golden_grammar', as
   expect(good.closed).toBe(false);
   await server.close();
 });
+
+test('viewers_ping_is_answered_with_a_pong_to_that_viewer_only_and_hello_advertises_it', async () => {
+  const twin = makeTwin(120, 40);
+  const clock = fakeClock();
+  const server = new TapServer({ session: 'pong00001', harness: 'omp', epoch: 'e'.repeat(32), twin, now: clock.now, quiesceMs: 0, joinWaitMs: 5000, makeSeed: () => new Uint8Array(0) });
+  const t1 = new MockTransport();
+  const t2 = new MockTransport();
+  const c1 = openViewer(server, t1, 'v1');
+  openViewer(server, t2, 'v2');
+  await waitUntil(() => kinds(t1).includes('seed') && kinds(t2).includes('seed'), 'both joins land');
+  for (const t of [t1, t2]) {
+    const hello = collect(t).find((f) => f.text?.t === 'hello')?.text as Extract<ServerFrame, { t: 'hello' }>;
+    expect(hello.pong).toBe(true);
+  }
+  t1.clear();
+  t2.clear();
+  server.feedTransport(c1, encodeEnvelope(ENV_TEXT, wrapS2C('v1', enc('{"t":"ping"}'))));
+  const got1 = collect(t1);
+  expect(got1.map((f) => f.text?.t)).toEqual(['pong']);
+  expect(got1[0].id).toBe('v1');
+  expect(collect(t2)).toEqual([]);
+  await server.close();
+  twin.dispose();
+});
+
+test('viewers_ping_from_an_unknown_viewer_is_ignored', async () => {
+  const twin = makeTwin(120, 40);
+  const clock = fakeClock();
+  const server = new TapServer({ session: 'pong00002', harness: 'omp', epoch: 'e'.repeat(32), twin, now: clock.now, quiesceMs: 0, joinWaitMs: 5000, makeSeed: () => new Uint8Array(0) });
+  const t = new MockTransport();
+  const c = openViewer(server, t, 'v1');
+  await waitUntil(() => kinds(t).includes('seed'), 'join lands');
+  t.clear();
+  server.feedTransport(c, encodeEnvelope(ENV_TEXT, wrapS2C('ghost', enc('{"t":"ping"}'))));
+  expect(collect(t)).toEqual([]);
+  await server.close();
+  twin.dispose();
+});

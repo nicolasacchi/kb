@@ -29,7 +29,7 @@ export class FrameError extends Error {
 }
 
 export type ServerFrame =
-  | { t: 'hello'; proto: string; session: string; epoch: string; harness: string; bound_sid: string | null; viewer?: string }
+  | { t: 'hello'; proto: string; session: string; epoch: string; harness: string; bound_sid: string | null; viewer?: string; pong?: boolean }
   | {
       t: 'profile';
       xterm: string;
@@ -51,7 +51,8 @@ export type ServerFrame =
   | { t: 'gfxreset'; seq: number; gen: number; offset: number }
   | { t: 'exit'; seq: number; code: number | null; offset: number }
   | { t: 'clipboard'; offset: number; data_b64: string }
-  | { t: 'error'; code: string; msg: string };
+  | { t: 'error'; code: string; msg: string }
+  | { t: 'pong' };
 
 export type ClientFrame =
   | { t: 'resumefrom'; offset: number; mseq: number; epoch: string }
@@ -111,6 +112,7 @@ const SERVER_T: Record<string, true> = {
   exit: true,
   clipboard: true,
   error: true,
+  pong: true,
 };
 const CLIENT_T: Record<string, true> = { resumefrom: true, takesize: true, input: true, ping: true };
 const CONTROL_T: Record<string, true> = { 'viewer-open': true, 'viewer-close': true, typed: true, stats: true };
@@ -189,6 +191,11 @@ function validateServerFrame(o: FieldObj, t: string): void {
       // The viewer id this socket joined under (older taps omit it). Optional, but a
       // present non-string is a bad frame like any other field.
       if (o.viewer !== undefined) reqStr(o, t, 'viewer');
+      // The liveness capability bit (FUTERMLIVE): this tap answers a client `ping`
+      // with `{t:'pong'}`. Optional so an older tap's hello stays valid; a present
+      // non-boolean is a bad frame. The Rust ServerFrame::Hello is untouched: no
+      // Rust path re-serializes a tap hello (the relay forwards the text verbatim).
+      if (o.pong !== undefined) reqBool(o, t, 'pong');
       return;
     }
     case 'profile': {
@@ -252,6 +259,9 @@ function validateServerFrame(o: FieldObj, t: string): void {
     case 'error':
       reqStr(o, t, 'code');
       reqStr(o, t, 'msg');
+      return;
+    case 'pong':
+      // Server frames tolerate unknown fields (like the Rust side), so no key check.
       return;
     default:
       throw new FrameError(`bad-frame: unexpected server kind ${t}`);

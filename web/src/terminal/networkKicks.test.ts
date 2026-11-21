@@ -42,4 +42,15 @@ describe("bindNetworkKicks", () => {
     f.doc.dispatchEvent(new Event("visibilitychange"));
     expect(f.kicks()).toBe(0);
   });
+
+  it("reports hidden/visible transitions to the optional hook, hidden before the kick", () => {
+    const win = new EventTarget();
+    const doc = Object.assign(new EventTarget(), { visibilityState: "hidden" });
+    const log: string[] = [];
+    bindNetworkKicks(win, doc, () => log.push("kick"), (hidden) => log.push(hidden ? "hidden" : "shown"));
+    doc.dispatchEvent(new Event("visibilitychange"));
+    doc.visibilityState = "visible";
+    doc.dispatchEvent(new Event("visibilitychange"));
+    expect(log).toEqual(["hidden", "shown", "kick"]);
+  });
 });
