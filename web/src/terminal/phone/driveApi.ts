@@ -113,6 +113,15 @@ export async function takeSize(d: Drive, cols: number, rows: number): Promise<Gr
   return postJson<GridData>(d.termId, "take-size", withViewer({ cols, rows }, d.viewer));
 }
 
+/**
+ * `POST …/release-size`: give the grid back. The body is exactly `{}`: the
+ * route rejects unknown fields, so (unlike take-size) no viewer rides along.
+ * 409 `grid-owned` when the relay does not own the grid.
+ */
+export async function releaseSize(d: Pick<Drive, "termId">): Promise<void> {
+  await postJson(d.termId, "release-size", {});
+}
+
 export type SendKeyResult = { kind: "sent" } | { kind: "declined" };
 
 /** Send one key. The Claude guard asks first (every `Left`); declining sends nothing. */

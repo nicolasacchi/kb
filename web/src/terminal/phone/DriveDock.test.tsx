@@ -41,11 +41,15 @@ const row = (over: Partial<TermRow> = {}): TermRow =>
     ...over,
   }) as TermRow;
 
-function dock(r: TermRow | undefined, measure: () => PhoneMeasure | null = () => MEASURE) {
+function dock(
+  r: TermRow | undefined,
+  measure: () => PhoneMeasure | null = () => MEASURE,
+  extra: { ownerHint?: { owner: string | null } | null; onOwner?: (o: string | null) => void } = {},
+) {
   const qc = new QueryClient();
   m = mount(
     <QueryClientProvider client={qc}>
-      <DriveDock termId="abcd1234" harness="omp" viewer="ws-abc1234567" row={r} measure={measure} />
+      <DriveDock termId="abcd1234" harness="omp" viewer="ws-abc1234567" row={r} measure={measure} {...extra} />
     </QueryClientProvider>,
   );
 }
@@ -90,6 +94,41 @@ describe("DriveDock: Fit to phone", () => {
     await fit();
     expect(confirmMock).not.toHaveBeenCalled();
     expect(rig.calls).toHaveLength(1);
+  });
+
+  it("owner local:9 — no confirm (the web outranks a local attach), take-size posted, and it says so", async () => {
+    rig.reply(200, { cols: 54, rows: 23, owner: "kb-term" });
+    dock(row({ grid_owner: "local:9" }));
+    await fit();
+    expect(confirmMock).not.toHaveBeenCalled();
+    expect(rig.urls()).toEqual(["/api/terms/abcd1234/take-size"]);
+    expect(byId(m!.host, "kb-drive-caption").textContent).toBe(
+      "Took the grid from the local attach; it now watches (54x23).",
+    );
+  });
+
+  it("Release is shown only for owner kb-term, next to Fit, and posts release-size with an empty body", async () => {
+    dock(row({ grid_owner: "local:9" }));
+    expect(maybeById(m!.host, "kb-drive-release")).toBeNull();
+    m!.unmount();
+    dock(row({ grid_owner: "kb-term" }));
+    click(byId(m!.host, "kb-drive-release"));
+    await settle(10);
+    expect(rig.urls()).toEqual(["/api/terms/abcd1234/release-size"]);
+    expect(rig.calls[0].json).toEqual({});
+    expect(byId(m!.host, "kb-drive-caption").textContent).toBe("Released the grid.");
+    expect(confirmMock).not.toHaveBeenCalled();
+  });
+
+  it("the runner's named owner outranks a list that cannot say (no row): Release shows, and a take reports it", async () => {
+    dock(undefined, () => MEASURE, { ownerHint: { owner: "kb-term" } });
+    expect(maybeById(m!.host, "kb-drive-release")).not.toBeNull();
+    m!.unmount();
+    const seen: Array<string | null> = [];
+    rig.reply(200, { cols: 54, rows: 23, owner: "kb-term" });
+    dock(row(), () => MEASURE, { onOwner: (o) => seen.push(o) });
+    await fit();
+    expect(seen).toEqual(["kb-term"]);
   });
 
   it("shows no chip when nobody owns the grid", () => {

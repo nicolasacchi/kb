@@ -378,8 +378,10 @@ const PIXEL_TOL = 3;
 
 async function pictureChecks(page: Page, api: Api, c: Ctx, dpr: number, placements = 1): Promise<{ sha: string }> {
   expect(await page.evaluate(() => window.devicePixelRatio)).toBe(dpr);
-  // Let the view box grow with its content so the whole picture can be probed.
-  await page.addStyleTag({ content: ".kb-term__view{height:auto !important;overflow:visible !important;}" });
+  // The host is a bounded box (FUTERMFIT: its font is fitted to that box, so a
+  // content-sized height would feed back into the fit); only lift the clipping
+  // so nothing hides a probe.
+  await page.addStyleTag({ content: ".kb-term__view{overflow:visible !important;}" });
   await expect(page.locator(".xterm-screen .kbgfx-overlay")).toHaveCount(1, { timeout: 30_000 });
   await expect(page.locator(".kbgfx-overlay .kbgfx-img")).toHaveCount(placements, { timeout: 30_000 });
   await page.waitForFunction(
@@ -418,20 +420,28 @@ async function pictureChecks(page: Page, api: Api, c: Ctx, dpr: number, placemen
   const shot = decodePng(await img.screenshot());
   const near = (a: Rgb | null, b: Rgb | null, tol: number): boolean =>
     !!a && !!b && a.every((v, i) => Math.abs(v - b[i]) <= tol);
+  // The picture is `object-fit: contain` inside its cell box: scaled to fit and
+  // centred, letterboxed when the viewer's real cell aspect is not the tap's
+  // 9x18. FUTERMFIT fits the font from the LOADED webfont (taller cells than the
+  // fallback face the old fit measured), so a source pixel is mapped through the
+  // drawn rectangle rather than assuming the box and the picture share an aspect.
+  const scale = Math.min(shot.w / src.w, shot.h / src.h);
+  const offX = (shot.w - src.w * scale) / 2;
+  const offY = (shot.h - src.h * scale) / 2;
   const bad: string[] = [];
   let worst = 0;
   const y = 50;
   for (const x of [30, 130, 210]) {
     if (x >= src.w || y >= src.h) continue;
     const want = pixel(src, x, y);
-    const got = pixel(shot, (x / src.w) * shot.w, (y / src.h) * shot.h);
+    const got = pixel(shot, offX + x * scale, offY + y * scale);
     expect(Math.max(...(want ?? [0])), "reference pixel is not black").toBeGreaterThan(100);
     if (!near(got, want, PIXEL_TOL)) bad.push(`(${x},${y}) got ${JSON.stringify(got)} want ${JSON.stringify(want)}`);
     if (got && want) worst = Math.max(worst, ...want.map((v, i) => Math.abs(v - got[i])));
   }
   test.info().annotations.push({ type: "pixel-delta", description: `worst per-channel delta on the centre row, DPR ${dpr}: ${worst} (tolerance ${PIXEL_TOL})` });
   expect(bad, "drawn pixels that differ from the served PNG").toEqual([]);
-  const g = [0.25, 0.5, 0.75].map((f) => pixel(shot, 0.5 * shot.w, f * shot.h)?.[1] ?? -1);
+  const g = [0.25, 0.5, 0.75].map((f) => pixel(shot, 0.5 * shot.w, offY + f * src.h * scale)?.[1] ?? -1);
   expect(g[0], `green rises down the picture: ${g.join(",")}`).toBeGreaterThanOrEqual(0);
   expect(g[1]).toBeGreaterThan(g[0] + 20);
   expect(g[2]).toBeGreaterThan(g[1] + 20);
@@ -1107,6 +1117,161 @@ test.describe("T25 gate matrix on the real server", () => {
     await new Promise((r) => setTimeout(r, 3000));
     expect((await rawUpgrade(PORT_TTL, `/api/terms/${t.id}/ws?ticket=${old.ticket}`, { Origin: TTL })).status, "expired ticket").toBe(403);
   });
+});
+
+// ================================================ FUTERMFIT: fit, owner chip, Fit to window, Release
+
+/**
+ * A pane that repaints: it prints a dot every second and a mark on SIGWINCH, as
+ * a real harness redraws when the grid changes. (A silent pane never flushes the
+ * tap's queued resize marker to a live viewer until its next output, so the
+ * fit cases below use a pane that speaks.)
+ */
+const winchHarness = (): Harness => ({
+  out: scratch("winch"),
+  shell: `trap 'printf w' WINCH\nwhile :; do printf .; sleep 1 & wait $!; done\n`,
+});
+
+/** What the desktop panel shows right now: the terminal's grid and font, the host's box and the rendered screen. */
+async function panelGeometry(page: Page) {
+  return page.evaluate(() => {
+    const host = document.querySelector("[data-kb-term]") as unknown as HTMLElement & {
+      __kbTerm: { cols: number; rows: number; options: { fontSize: number } };
+    };
+    const screen = host.querySelector(".xterm-screen") as HTMLElement;
+    const chip = document.querySelector('[data-testid="kb-term-grid"]');
+    return {
+      cols: host.__kbTerm.cols,
+      rows: host.__kbTerm.rows,
+      font: host.__kbTerm.options.fontSize,
+      hostW: host.clientWidth,
+      hostH: host.clientHeight,
+      hostScrollW: host.scrollWidth,
+      screenW: screen.scrollWidth,
+      screenH: screen.scrollHeight,
+      chip: chip?.textContent ?? "",
+      phase: host.getAttribute("data-kb-term-phase") ?? "?",
+      status: document.querySelector('[data-testid="kb-term-status"]')?.textContent ?? "",
+      // Page content only: the app header (the shared Spine) has its own width budget.
+      overflowers: [...document.querySelectorAll("body *")]
+        .filter((el) => !el.closest(".xterm, header") && el.getBoundingClientRect().right > window.innerWidth + 1)
+        .slice(0, 6)
+        .map((el) => `${el.tagName.toLowerCase()}.${String(el.className).slice(0, 40)} right=${Math.round(el.getBoundingClientRect().right)}`),
+      cropped: document.querySelector('[data-testid="kb-term-cropped"]') !== null,
+      docW: document.documentElement.scrollWidth,
+      vw: window.innerWidth,
+    };
+  });
+}
+
+test("a 201x48 grid is fully visible at 1440x900 (font >= 9, no horizontal scroll), shows the Cropped hint when it cannot be at 1280x720, and the open panel adds no page width at 1024", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  // Launch at the default grid and take 201x48 through the web: the proven path
+  // (a pane launched AT 201x48 can leave the tap announcing its 120x40 default,
+  // and then nothing ever moves the viewer's grid).
+  const c = await prepare(page, request, winchHarness(), { cols: 120, rows: 40 });
+  const took = await takeViaWeb(c.api, c.term.id, 201, 48);
+  expect(took.status, `take-size: ${JSON.stringify(took.body)}`).toBe(200);
+  // Baseline first: at 1024 the page is as wide as the shared app header makes it
+  // (its right cluster does not wrap there), with the panel still closed.
+  let baseline = 0;
+  await openPanelWhen(page, c.sid, async () => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await page.waitForTimeout(500);
+    baseline = await page.evaluate(() => document.documentElement.scrollWidth);
+    await page.setViewportSize({ width: 1440, height: 900 });
+  });
+
+  // 1440x900: the whole grid, legibly, with nothing scrolling sideways.
+  // The poll waits for the taken 201x48 grid, then for it to be fitted: a
+  // 120x40 grid fits too.
+  await expect
+    .poll(async () => {
+      const m = await panelGeometry(page);
+      const fitted = m.font >= 9 && m.screenW <= m.hostW && m.screenH <= m.hostH;
+      return fitted && `${m.cols}x${m.rows}` === "201x48"
+        ? "ok"
+        : `grid ${m.cols}x${m.rows} font ${m.font} screen ${m.screenW}x${m.screenH} host ${m.hostW}x${m.hostH} phase ${m.phase} chip "${m.chip}"`;
+    }, { timeout: 30_000 })
+    .toBe("ok");
+  let g = await panelGeometry(page);
+  expect(`${g.cols}x${g.rows}`).toBe("201x48");
+  expect(g.hostScrollW, "no horizontal scroll inside the host").toBeLessThanOrEqual(g.hostW);
+  expect(g.cropped, "no Cropped hint when everything fits").toBe(false);
+  expect(g.docW, "no page-level horizontal overflow").toBeLessThanOrEqual(g.vw);
+  expect(g.hostW, "the panel breaks out of the 860px reading column").toBeGreaterThan(900);
+  // the list is readable (FUTERMGET), so the row is known and the chip carries its owner
+  expect(g.chip).toMatch(/^201x48 · /);
+
+  // 1280x720: either everything still fits, or the hint says it is cropped and the host scrolls.
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await expect
+    .poll(async () => {
+      const m = await panelGeometry(page);
+      return m.cropped || (m.screenW <= m.hostW && m.screenH <= m.hostH);
+    }, { timeout: 30_000 })
+    .toBe(true);
+  g = await panelGeometry(page);
+  expect(g.font).toBeGreaterThanOrEqual(9);
+  expect(g.docW).toBeLessThanOrEqual(g.vw);
+
+  // 1024: opening the panel adds no width to the page: it is exactly as wide as
+  // it was with the panel closed (the header's own width), never the 201-column grid.
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await expect
+    .poll(async () => {
+      const m = await panelGeometry(page);
+      return m.docW <= Math.max(baseline, m.vw)
+        ? "ok"
+        : `docW ${m.docW} > closed-panel width ${baseline} (vw ${m.vw}): ${m.overflowers.join(" | ")}`;
+    }, { timeout: 30_000 })
+    .toBe("ok");
+});
+
+test("Fit to window takes the grid, the chip then equals the measured cols x rows and names the web; Release frees it", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const c = await prepare(page, request, winchHarness(), { cols: 120, rows: 40 });
+  await openPanel(page, c.sid);
+  const ownerOf = async (): Promise<string | null> => {
+    const { body } = await c.api.json<{ terms: Array<{ id: string; grid_owner?: string | null }> }>("GET", "/api/terms");
+    return body.terms.find((t) => t.id === c.term.id)?.grid_owner ?? null;
+  };
+
+  // Opening the panel never takes the grid.
+  await page.waitForTimeout(1000);
+  expect(await ownerOf()).not.toBe("kb-term");
+  expect(`${(await panelGeometry(page)).cols}x${(await panelGeometry(page)).rows}`).toBe("120x40");
+
+  await page.locator('[data-testid="kb-term-fit"]').click();
+  // The runner took the grid for the web (read straight from the API) ...
+  await expect.poll(ownerOf, { timeout: 15_000 }).toBe("kb-term");
+  // ... the stream followed it ...
+  await expect
+    .poll(async () => {
+      const g = await panelGeometry(page);
+      return g.cols === 120 && g.rows === 40
+        ? `still 120x40: chip="${g.chip}" phase=${g.phase} status="${g.status}"`
+        : "moved";
+    }, { timeout: 30_000 })
+    .toBe("moved");
+  // ... and the chip equals the terminal's measured grid and names the web.
+  await expect
+    .poll(async () => {
+      const g = await panelGeometry(page);
+      return g.chip === `${g.cols}x${g.rows} · web` ? "ok" : `chip="${g.chip}" term=${g.cols}x${g.rows}`;
+    }, { timeout: 15_000 })
+    .toBe("ok");
+  const fitted = await panelGeometry(page);
+  expect(fitted.cols).toBeGreaterThanOrEqual(20);
+  expect(fitted.rows).toBeGreaterThanOrEqual(5);
+  await expect(page.locator('[data-testid="kb-term-status"]')).toContainText("Grid set to");
+
+  await page.locator('[data-testid="kb-term-release"]').click();
+  await expect.poll(ownerOf, { timeout: 15_000 }).toBeNull();
+  await expect(page.locator('[data-testid="kb-term-grid"]')).toHaveText(/ · free$/, { timeout: 15_000 });
+  await expect(page.locator('[data-testid="kb-term-release"]')).toHaveCount(0);
 });
 
 // ================================================ restart (Spec 10)

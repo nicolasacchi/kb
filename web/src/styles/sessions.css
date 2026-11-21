@@ -1580,6 +1580,48 @@
   border-top: 1px solid var(--rule);
   padding: 8px 0;
 }
+/* FUTERMFIT — the terminal section. While the panel is open the page column
+ * widens to up to 1400px so a wide grid fits at a legible font (the other
+ * sections keep the 860px reading column); every flex child on the way down
+ * may shrink (min-width: 0), or a 201-column grid would widen the page. */
+.kb-sp:has(.kb-term) {
+  max-width: min(100%, 1400px);
+}
+.kb-sp:has(.kb-term) > :not(#sec-terminal) {
+  width: 100%;
+  max-width: 860px;
+  align-self: center;
+}
+#sec-terminal,
+#sec-terminal .kb-sp__body,
+.kb-term-slot {
+  min-width: 0;
+  max-width: 100%;
+}
+.kb-term-slot__head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--pad-2);
+}
+.kb-term-slot__state {
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
+}
+/* The panel's stylesheet loads with the panel, so the closed slot carries its
+ * own copy of the button look (same tokens as `.kb-term__btn`). */
+.kb-term-slot__open {
+  background: var(--bg-card);
+  color: var(--ink);
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  padding: var(--pad-1) var(--pad-3);
+  cursor: pointer;
+}
+.kb-term-slot__open:hover {
+  border-color: var(--accent);
+}
 .kb-sp__sum {
   cursor: pointer;
   font-weight: 600;

@@ -576,6 +576,54 @@ row carries. A refused or failed launch (400, 404, 5xx) and a pane that ended
 - **Not exposed publicly:** there is no `/api/terms` rule in the public-mirror
   allowlist (`docs/public-mirror/allowlist.txt`) and none may be added.
 
+## Desktop panel
+
+The session page's Terminal section opens the panel from an "Open terminal"
+button; the panel's own Close disconnects (it never kills the session). While
+the panel is open the page column widens from the 860 px reading column to up to
+1400 px, and every box on the way down may shrink, so a wide grid cannot widen
+the page.
+
+- **Sizing.** The panel never sends a resize on its own. It fits the **font**,
+  not the grid: the largest whole font size (9 to 20 px inline) at which the whole
+  grid fits the host on both axes, using the cell size measured from the loaded
+  webfont (a hidden probe, not a constant ratio), then verifies against the
+  rendered screen and steps down. The host is a bounded box (about the smaller of
+  80% of the viewport height and 60 rem) painted in the terminal's own background.
+  Below the font floor the cropped axis scrolls and a "Cropped" hint appears. The
+  page itself is checked not to scroll sideways at 1024 px and wider. A window resize only refits the font
+  (100 ms debounce); a closed `<details>` (zero width) is never fitted, and
+  opening it refits.
+- **Fonts.** The stream opens after the webfont loads (bounded at 1.5 s); a face
+  that arrives later makes the panel re-measure and refit. The stack ends in
+  system symbol faces before the generic family; no font files are added.
+- **Fit to window.** A bar button. It measures the host at a 14 px reference font,
+  clamps to the daemon's bounds (20 to 500 columns, 5 to 200 rows) and posts the
+  existing `take-size` with the viewer id from the `hello` frame. It is only ever
+  an explicit click: opening the panel, resizing the window and focusing it never
+  send `take-size`.
+- **Release grid.** Shown while the web owns the grid (owner `kb-term`, the one
+  name every web client shares). It posts `release-size` with an empty body.
+- **The shared take rule.** The desktop button and the phone's "Fit to phone"
+  use one helper. The web outranks a local `kb-term attach`, and between two web
+  clients the latest explicit Fit wins, so there is no confirmation when the grid
+  is free, owned by the web or owned by a local attach (`local:<pid>`). A
+  confirmation is kept only for an owner of any other class. A refusal (409
+  `grid-owned`) shows the runner's own sentence.
+- **Status line.** Outcomes (took the grid, released it, a refusal, a network
+  error) go to an `aria-live="polite"` line inside the panel, so they survive a
+  full-screen panel; failures also raise a toast.
+- **Chip.** `201x48 · web`, `· local attach`, `· free` or `· <other owner>`, then
+  `font Npx` and the "Cropped" hint. It never says "this window": the relay is
+  shared by every web client and cannot tell windows apart. The chip is dimmed
+  while the panel is not live.
+  The owner comes from the terminal list row; the runner's own answer to this
+  panel's take or release names the owner immediately, and any later change of
+  the row's owner replaces that answer.
+- **Theme.** Colors come from the Profile palette when it names one and from the
+  app's tokens otherwise; selection, inactive selection and the cursor accent
+  always come from tokens, and the theme is re-read when the SPA theme changes.
+
 ## Phone
 
 The phone view has three parts.
@@ -589,6 +637,10 @@ The phone view has three parts.
   stream by itself.
 - **Drive:** a native `<textarea>` composer (xterm's hidden textarea is unreliable
   for phone input), a key bar, a choice bar and the explicit **Fit to phone**.
+  - **Fit to phone** and **Release grid** share the desktop's take rule (see
+    [Desktop panel](#desktop-panel)): no confirmation for a free, web or local-attach
+    owner, a confirmation for any other owner class. Release shows while the web
+    owns the grid, next to Fit.
   - The composer sends by bracketed paste. A multi-line message is refused when
     the pane has not enabled bracketed paste. Text that begins with `/` or `@` is
     pasted and **not** sent (the menu or file picker would take an Enter blindly);

@@ -62,6 +62,21 @@ describe("TerminalSlot (T14 seam)", () => {
     expect(mockEvalCount).toBe(1);
   });
 
+  it("while the panel is open the slot shows no Open button and no second Close; the panel's own Close brings Open back", async () => {
+    render(
+      <TerminalSlot
+        sid="sid-1"
+        harness="omp"
+        lane={{ available: true, term_id: "t1", harness: "omp", state: "working", admitted: true }}
+      />,
+    );
+    (screen.getByTestId("kb-term-open") as HTMLButtonElement).click();
+    expect(await screen.findByTestId("mock-panel")).toBeTruthy();
+    expect(screen.queryByTestId("kb-term-open")).toBeNull();
+    expect(screen.queryByText("Close terminal")).toBeNull();
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+  });
+
   it("child row (via root) → link text, no button, no panel", () => {
     render(
       <MemoryRouter>

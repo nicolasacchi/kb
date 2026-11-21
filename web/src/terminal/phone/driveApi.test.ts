@@ -8,6 +8,7 @@ import {
   UPLOAD_MAX_BYTES,
   paste,
   pressEnter,
+  releaseSize,
   sendKey,
   sendText,
   takeSize,
@@ -82,6 +83,14 @@ describe("every JSON POST", () => {
     expect(body(calls[0])).toEqual({ text: "hi", viewer: "ws-abc1234567" });
     expect(body(calls[2])).toEqual({ keys: ["Tab"], viewer: "ws-abc1234567" });
     expect(body(calls[3])).toEqual({ cols: 50, rows: 20, viewer: "ws-abc1234567" });
+  });
+
+  it("release-size posts exactly `{}` (the route rejects unknown fields, so no viewer) with the intent header", async () => {
+    await releaseSize(mkDrive());
+    expect(calls.map((c) => c.url)).toEqual(["/api/terms/abcd1234/release-size"]);
+    expect(calls[0].init.method).toBe("POST");
+    expect(body(calls[0])).toEqual({});
+    expect(headers(calls[0])["X-Kb-Intent"]).toBe("terminal");
   });
 
   it("omits the viewer when the tap named none (an older tap)", async () => {

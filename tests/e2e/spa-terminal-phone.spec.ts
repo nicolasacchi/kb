@@ -453,6 +453,52 @@ test.describe("T17 phone terminal: host and lifecycle @phone", () => {
   });
 });
 
+// FUTERMFIT — grid ownership from the phone. The web outranks a local attach,
+// so "Fit to phone" never asks about a `local:*` owner; "Release grid" shows
+// while the web owns the grid; and the page never scrolls sideways. The fake
+// relay's Drive controls are on (`drive: true`); the list row's owner is
+// `gridOwner`.
+type DriveStats = Stats & { drive: Array<{ op: string; json: Record<string, unknown> | null }> };
+
+test.describe("FUTERMFIT phone grid ownership @phone", () => {
+  const ops = (s: DriveStats): string[] => s.drive.map((c) => c.op);
+
+  test("Fit to phone with a local-attach owner shows no confirm and says it took the grid", async ({ page }) => {
+    const stats = (await openPhone(page, { total: 300, seedLines: 300, drive: true, gridOwner: "local:9" })) as DriveStats;
+    await expect(page.locator('[data-testid="kb-drive-release"]')).toHaveCount(0);
+    await page.locator('[data-testid="kb-drive-fit"]').click();
+    await expect.poll(() => ops(stats)).toEqual(["take-size"]);
+    await expect(page.locator('[data-testid="kb-drive-caption"]')).toContainText("Took the grid from the local attach");
+    // No confirm was ever raised.
+    await expect(page.locator(".confirm__go")).toHaveCount(0);
+  });
+
+  test("Release grid is visible while the web owns the grid, and posts release-size", async ({ page }) => {
+    const stats = (await openPhone(page, { total: 300, seedLines: 300, drive: true, gridOwner: "kb-term" })) as DriveStats;
+    const release = page.locator('[data-testid="kb-drive-release"]');
+    await expect(release).toBeVisible();
+    await release.click();
+    await expect.poll(() => ops(stats)).toEqual(["release-size"]);
+    expect(stats.drive[0].json).toEqual({});
+    await expect(page.locator('[data-testid="kb-drive-caption"]')).toHaveText("Released the grid.");
+  });
+
+  test("the page has no horizontal overflow with the sheet open, and the dock does not overflow its sheet", async ({ page }) => {
+    await openPhone(page, { total: 300, seedLines: 300, drive: true, gridOwner: "kb-term" });
+    const m = await page.evaluate(() => {
+      const dock = document.querySelector('[data-testid="kb-drive"]') as HTMLElement;
+      return {
+        docW: document.documentElement.scrollWidth,
+        vw: window.innerWidth,
+        dockScroll: dock.scrollWidth,
+        dockClient: dock.clientWidth,
+      };
+    });
+    expect(m.docW).toBeLessThanOrEqual(m.vw);
+    expect(m.dockScroll).toBeLessThanOrEqual(m.dockClient);
+  });
+});
+
 // FUWEBLAUNCH — the two launch controls on a phone: "New terminal" on
 // /sessions and "Resume in a kb terminal" on the session page. The daemon's
 // launch route and identity are mocked (the harness daemon has the terminal

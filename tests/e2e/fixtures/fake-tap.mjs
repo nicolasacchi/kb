@@ -145,7 +145,7 @@ export function fixtureCard() {
  *
  * T18 (all additive, inert unless `opts.drive` is true): the phone Drive
  * controls. `drive: true` also fakes `POST /api/terms/*\/{paste,enter,keys,
- * take-size,upload}` and `GET /api/sessions/live-status`, recording every
+ * take-size,release-size,upload}` and `GET /api/sessions/live-status`, recording every
  * Drive request in `stats.drive` (`{op, headers, json, bytes, contentType}`).
  * Options: `harness` (term row, card, hello), `bracketPaste` (the row's
  * `bracket_paste_flag`), `gridOwner` (the row's `grid_owner`), `viewer` (the
@@ -286,7 +286,7 @@ export async function installFakeTerminal(page, opts = {}) {
   });
 
   if (opts.drive) {
-    await page.route(/\/api\/terms\/[^/]+\/(paste|enter|keys|take-size|upload)$/, async (route) => {
+    await page.route(/\/api\/terms\/[^/]+\/(paste|enter|keys|take-size|release-size|upload)$/, async (route) => {
       const req = route.request();
       const op = new URL(req.url()).pathname.split("/").pop();
       const raw = req.postDataBuffer();
