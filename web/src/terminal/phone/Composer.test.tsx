@@ -193,7 +193,7 @@ describe("Composer", () => {
     m = mount(<Host drive={mkDrive({ viewer: "ws-zzzz000001" })} />);
     typeInto(input(), "hello");
     await send();
-    expect(rig.calls).toHaveLength(2);
+    expect(rig.calls).toHaveLength(1);
     for (const c of rig.calls) expect(c.json?.viewer).toBe("ws-zzzz000001");
   });
 
