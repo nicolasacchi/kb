@@ -1274,6 +1274,106 @@ test("Fit to window takes the grid, the chip then equals the measured cols x row
   await expect(page.locator('[data-testid="kb-term-release"]')).toHaveCount(0);
 });
 
+// ============================================ FUTERMFULL: full screen
+
+/** The panel's full-screen state, derived the way the app derives it, plus its box. */
+async function fullState(page: Page) {
+  return page.evaluate(() => {
+    const p = document.querySelector('[data-testid="kb-terminal"]') as HTMLElement | null;
+    if (!p) return { present: false, overlay: false, native: false, rect: null as null | { w: number; h: number } };
+    const r = p.getBoundingClientRect();
+    return {
+      present: true,
+      overlay: p.classList.contains("kb-term--max"),
+      native: document.fullscreenElement === p,
+      rect: { w: Math.round(r.width), h: Math.round(r.height) },
+    };
+  });
+}
+
+test("FUTERMFULL: the overlay maximises the panel, shows the whole 120x40 grid, sends NO grid request; exit, close and reload leave no stuck state", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  // Force the overlay path: without Keyboard Lock the panel never asks for native fullscreen.
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "keyboard", { value: undefined, configurable: true });
+  });
+  await page.setViewportSize({ width: 1280, height: 720 });
+  const c = await prepare(page, request, winchHarness(), { cols: 120, rows: 40 });
+  const gridCalls: string[] = [];
+  page.on("request", (r) => {
+    if (r.method() === "POST" && /\/api\/terms\/[^/]+\/(take-size|release-size|resize|size)/.test(r.url())) gridCalls.push(r.url());
+  });
+  await openPanel(page, c.sid);
+  const before = await panelGeometry(page);
+  expect(`${before.cols}x${before.rows}`).toBe("120x40");
+
+  await page.locator('[data-testid="kb-term-fullscreen"]').click();
+  await expect.poll(async () => (await fullState(page)).overlay).toBe(true);
+  const st = await fullState(page);
+  expect(st.native).toBe(false);
+  expect(st.rect).toEqual({ w: 1280, h: 720 });
+  await expect(page.locator('[data-testid="kb-term-fullscreen"]')).toHaveText("Exit full screen");
+  // refit fills the screen; 120x40 is fully visible at a legible font; the grid itself is unchanged
+  await expect
+    .poll(async () => {
+      const g = await panelGeometry(page);
+      const ok = g.cols === 120 && g.rows === 40 && g.font >= 8 && g.screenW <= g.hostW && g.screenH <= g.hostH && g.hostH > 400;
+      return ok ? "ok" : `grid ${g.cols}x${g.rows} font ${g.font} screen ${g.screenW}x${g.screenH} host ${g.hostW}x${g.hostH}`;
+    }, { timeout: 30_000 })
+    .toBe("ok");
+  // Escape is not bound by the overlay: it stays open
+  await page.keyboard.press("Escape");
+  expect((await fullState(page)).overlay).toBe(true);
+  // the bar is a slim header with Fit, Release (when owned), Find and Exit
+  for (const id of ["kb-term-fit", "kb-term-find-toggle", "kb-term-fullscreen", "kb-term-close"]) {
+    await expect(page.locator(`[data-testid="${id}"]`)).toBeVisible();
+  }
+
+  await page.locator('[data-testid="kb-term-fullscreen"]').click();
+  await expect.poll(async () => (await fullState(page)).overlay).toBe(false);
+  expect((await panelGeometry(page)).cols).toBe(120);
+
+  // closing the panel from full screen leaves it
+  await page.locator('[data-testid="kb-term-fullscreen"]').click();
+  await expect.poll(async () => (await fullState(page)).overlay).toBe(true);
+  await page.locator('[data-testid="kb-term-close"]').click();
+  await expect(page.locator('[data-testid="kb-terminal"]')).toHaveCount(0);
+  expect(await page.evaluate(() => document.querySelector(".kb-term--max") === null && document.fullscreenElement === null)).toBe(true);
+
+  // a reload mid-full-screen leaves nothing stuck
+  await page.locator('[data-testid="kb-term-open"]').click();
+  await expect(page.locator("[data-kb-term]")).toBeVisible({ timeout: 30_000 });
+  await page.locator('[data-testid="kb-term-fullscreen"]').click();
+  await expect.poll(async () => (await fullState(page)).overlay).toBe(true);
+  await page.reload();
+  await expect(page.locator('[data-testid="kb-term-open"]')).toBeVisible({ timeout: 30_000 });
+  expect(await page.evaluate(() => document.querySelector(".kb-term--max") === null && document.fullscreenElement === null)).toBe(true);
+
+  expect(gridCalls, "full screen never sends a grid change").toEqual([]);
+});
+
+test("FUTERMFULL: with Keyboard Lock the panel goes native when the browser allows it (best effort), else falls back to the overlay; either way it fills the screen and takes no grid", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  const c = await prepare(page, request, winchHarness(), { cols: 120, rows: 40 });
+  const gridCalls: string[] = [];
+  page.on("request", (r) => {
+    if (r.method() === "POST" && /\/api\/terms\/[^/]+\/(take-size|release-size|resize|size)/.test(r.url())) gridCalls.push(r.url());
+  });
+  await openPanel(page, c.sid);
+  await page.locator('[data-testid="kb-term-fullscreen"]').click();
+  await expect.poll(async () => { const s = await fullState(page); return s.overlay || s.native; }).toBe(true);
+  await expect
+    .poll(async () => {
+      const g = await panelGeometry(page);
+      return g.cols === 120 && g.rows === 40 && g.font >= 8 && g.screenW <= g.hostW && g.screenH <= g.hostH && g.hostH > 400 ? "ok" : `font ${g.font} screen ${g.screenW}x${g.screenH} host ${g.hostW}x${g.hostH}`;
+    }, { timeout: 30_000 })
+    .toBe("ok");
+  await page.locator('[data-testid="kb-term-fullscreen"]').click();
+  await expect.poll(async () => { const s = await fullState(page); return s.overlay || s.native; }).toBe(false);
+  expect(gridCalls).toEqual([]);
+});
+
 // ================================================ restart (Spec 10)
 
 /** Record the close code the BROWSER's own WebSocket objects see (the browser leg, past the proxy). */

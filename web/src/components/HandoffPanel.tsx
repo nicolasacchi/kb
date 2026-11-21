@@ -199,7 +199,6 @@ export function HandoffPanel({
             termId={term.termId}
             sid={sessionId}
             harness={term.to}
-            mode="watch"
             onClose={() => setTerm({ kind: "idle" })}
           />
         </Suspense>

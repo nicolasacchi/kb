@@ -279,4 +279,52 @@ describe("PhoneTerminal", () => {
     expect(ev.defaultPrevented).toBe(true);
     expect(seenAbove).not.toHaveBeenCalled();
   });
+
+  describe("full screen button (FUTERMFULL)", () => {
+    const setFs = (enabled: boolean | undefined, request: boolean): void => {
+      Object.defineProperty(document, "fullscreenEnabled", { configurable: true, value: enabled });
+      if (request) {
+        (HTMLElement.prototype as unknown as Record<string, unknown>).requestFullscreen = vi.fn(async () => {});
+      } else {
+        delete (HTMLElement.prototype as unknown as Record<string, unknown>).requestFullscreen;
+      }
+    };
+    afterEach(() => {
+      delete (document as unknown as Record<string, unknown>).fullscreenEnabled;
+      delete (HTMLElement.prototype as unknown as Record<string, unknown>).requestFullscreen;
+    });
+
+    it("is absent where element fullscreen is not available (iPhone Safari, jsdom)", () => {
+      setFs(undefined, false);
+      mount(fakeTerm(true).term);
+      expect(q('[data-testid="kb-term-phone-fullscreen"]')).toBeNull();
+    });
+
+    it("is absent when the document disables it, present when enabled and requestFullscreen exists", () => {
+      setFs(false, true);
+      mount(fakeTerm(true).term);
+      expect(q('[data-testid="kb-term-phone-fullscreen"]')).toBeNull();
+      act(() => root?.unmount());
+      host?.remove();
+      setFs(true, true);
+      mount(fakeTerm(true).term);
+      const btn = q('[data-testid="kb-term-phone-fullscreen"]');
+      expect(btn).not.toBeNull();
+      expect(btn.textContent).toBe("Full screen");
+    });
+
+    it("fullscreens the terminal root (not the page) when tapped", () => {
+      setFs(true, true);
+      mount(fakeTerm(true).term);
+      click('[data-testid="kb-term-phone-fullscreen"]');
+      const req = (HTMLElement.prototype as unknown as { requestFullscreen: ReturnType<typeof vi.fn> }).requestFullscreen;
+      expect(req).toHaveBeenCalledTimes(1);
+      expect(req.mock.contexts[0]).toBe(q("[data-kb-term-root]"));
+    });
+  });
+
+  it("carries ONE visible title: the bar's (the Sheet's is name-only)", () => {
+    mount(fakeTerm(true).term);
+    expect(q(".kb-term-phone__title").textContent).toBe("Terminal");
+  });
 });

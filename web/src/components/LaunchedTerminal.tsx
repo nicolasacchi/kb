@@ -87,7 +87,6 @@ export function LaunchedTerminal({
           termId={termId}
           sid={boundSid ?? sid ?? ""}
           harness={harness}
-          mode="watch"
           onClose={onClose}
         />
       </Suspense>

@@ -483,6 +483,43 @@ test.describe("FUTERMFIT phone grid ownership @phone", () => {
     await expect(page.locator('[data-testid="kb-drive-caption"]')).toHaveText("Released the grid.");
   });
 
+  // FUTERMFULL — the full detent is the whole dynamic viewport, the title lives in the phone
+  // bar only, and the full-screen button follows the browser's own feature detect.
+  test("FUTERMFULL: the sheet covers the viewport, one visible title, the bar still works, the full-screen button follows the feature detect", async ({ page }) => {
+    await openPhone(page, { total: 300, seedLines: 300 });
+    const m = await page.evaluate(() => {
+      const sheet = document.querySelector("[data-kb-sheet]") as HTMLElement;
+      const r = sheet.getBoundingClientRect();
+      const h2 = sheet.querySelector(".kb-sheet__title") as HTMLElement;
+      const hr = h2.getBoundingClientRect();
+      const bar = sheet.querySelector(".kb-term-phone__title") as HTMLElement;
+      return {
+        top: r.top,
+        height: r.height,
+        innerHeight: window.innerHeight,
+        sheetTitleW: hr.width,
+        sheetTitleH: hr.height,
+        barTitle: bar.textContent,
+        barTitleW: bar.getBoundingClientRect().width,
+        fsAvailable: document.fullscreenEnabled === true && typeof document.documentElement.requestFullscreen === "function",
+      };
+    });
+    expect(Math.abs(m.height - m.innerHeight), `sheet ${m.height} vs viewport ${m.innerHeight}`).toBeLessThanOrEqual(2);
+    expect(Math.abs(m.top)).toBeLessThanOrEqual(2);
+    expect(m.sheetTitleW).toBeLessThanOrEqual(1);
+    expect(m.sheetTitleH).toBeLessThanOrEqual(1);
+    expect(m.barTitle).toBe("Terminal");
+    expect(m.barTitleW).toBeGreaterThan(8);
+    await expect(page.locator('[data-testid="kb-term-phone-fullscreen"]')).toHaveCount(m.fsAvailable ? 1 : 0);
+    // the bar still works: Read and back, a font step
+    await page.locator('[data-testid="kb-term-phone-mode"]').click();
+    await expect(page.locator('[data-testid="kb-term-read-text"]')).toBeVisible();
+    await page.locator('[data-testid="kb-term-read-watch"]').click();
+    const before = await num(page, "font");
+    await page.locator('[data-testid="kb-term-phone-font-up"]').click();
+    await expect.poll(() => num(page, "font")).toBeGreaterThan(before);
+  });
+
   test("the page has no horizontal overflow with the sheet open, and the dock does not overflow its sheet", async ({ page }) => {
     await openPhone(page, { total: 300, seedLines: 300, drive: true, gridOwner: "kb-term" });
     const m = await page.evaluate(() => {

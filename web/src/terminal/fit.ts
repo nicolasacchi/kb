@@ -21,9 +21,12 @@ export function computeFontSize(
   return Math.min(max, Math.max(min, size));
 }
 
-/** Inline panel bounds (px of font size). FUTERMFULL passes its own, lower, floor. */
+/** Inline panel bounds (px of font size). Full screen passes its own bounds below. */
 export const FIT_MIN_INLINE = 9;
 export const FIT_MAX_INLINE = 20;
+/** Full screen: a lower floor (more of a big grid fits) and a higher ceiling (a big screen). */
+export const FIT_MIN_FULL = 8;
+export const FIT_MAX_FULL = 28;
 
 export interface FitInput {
   /** The host's content box, in CSS px. Zero or NaN means "not laid out yet". */
