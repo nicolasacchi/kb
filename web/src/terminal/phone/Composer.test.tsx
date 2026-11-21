@@ -273,7 +273,7 @@ describe("FUKEYBAR PHONE-8: the draft survives an unmount", () => {
     m = mount(<Host drive={mkDrive()} />);
     typeInto(ta(), "keep me");
     rig.reply(503, { type: "urn:kb:errors:terminal-runner-unavailable", detail: "down" });
-    vi.spyOn(toast, "err").mockImplementation(() => {});
+    vi.spyOn(toast, "err").mockImplementation(() => 0);
     click(byId(m.host, "kb-drive-send"));
     await settle();
     m.unmount();
