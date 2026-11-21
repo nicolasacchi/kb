@@ -184,6 +184,10 @@ export async function installFakeTerminal(page, opts = {}) {
     stream = Buffer.concat([cells, Buffer.from("\r\n", "utf8"), stream]);
   }
 
+  // FUPHONELINKS (additive, inert unless set): synthetic text appended after the numbered
+  // lines, so a spec can put a link on screen without touching any stream offset.
+  if (opts.tailText) stream = Buffer.concat([stream, Buffer.from(String(opts.tailText), "utf8")]);
+
   let holdAt = opts.holdAt ?? null;
   let refuseStatus = null;
   const liveSockets = new Set();

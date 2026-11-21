@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { findUrls, linksAtRow, openExternal, trimUrl, type RowSource } from "./links";
+import { findUrls, linkAtCell, linkHint, linkSpansRows, linksAtRow, openExternal, trimUrl, type RowSource } from "./links";
 
 describe("findUrls and trimUrl", () => {
   it("finds http and https, not other schemes or a bare scheme", () => {
@@ -71,5 +71,45 @@ describe("openExternal", () => {
     openExternal("javascript:alert(1)", { open });
     openExternal("file:///etc/passwd", { open });
     expect(open).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("FUPHONELINKS linkAtCell", () => {
+  const cols = 20;
+  it("hits only a cell inside the url; the cells around it miss", () => {
+    const s = src([["go https://a.dev/x ok", false]]);
+    // "https://a.dev/x" starts at offset 3 (cell 4) and is 15 cells long (cells 4..18).
+    expect(linkAtCell(s, 40, 4, 0)?.url).toBe("https://a.dev/x");
+    expect(linkAtCell(s, 40, 18, 0)?.url).toBe("https://a.dev/x");
+    expect(linkAtCell(s, 40, 3, 0)).toBeNull();
+    expect(linkAtCell(s, 40, 19, 0)).toBeNull();
+    expect(linkAtCell(s, 40, 1, 5)).toBeNull();
+  });
+
+  it("a url wrapped across rows resolves whole from a cell on either row", () => {
+    const s = src([
+      ["see https://example.", false],
+      ["com/path done", true],
+    ]);
+    // Row 0 is a full 20-cell row; the url runs from cell 5 of row 0 to cell 8 of row 1.
+    const a = linkAtCell(s, cols, 6, 0);
+    const b = linkAtCell(s, cols, 3, 1);
+    expect(a?.url).toBe("https://example.com/path");
+    expect(b?.url).toBe("https://example.com/path");
+    expect(a && linkSpansRows(a)).toBe(true);
+    expect(linkAtCell(s, cols, 4, 0)).toBeNull();
+    expect(linkAtCell(s, cols, 9, 1)).toBeNull();
+  });
+
+  it("a single-row link does not span rows", () => {
+    const l = linkAtCell(src([["https://a.dev/x", false]]), 40, 2, 0)!;
+    expect(linkSpansRows(l)).toBe(false);
+  });
+});
+
+describe("FUPHONELINKS linkHint", () => {
+  it("names the modifier of the platform", () => {
+    expect(linkHint(false)).toBe("Ctrl+click to open");
+    expect(linkHint(true)).toBe("Cmd+click to open");
   });
 });
