@@ -567,6 +567,23 @@ describe("copy, paste and links", () => {
   });
 });
 
+describe("FUPHONELINKS desktop link hint", () => {
+  it("hovering a link says how to open it and leaving clears the hint", async () => {
+    await mountPanel();
+    const term = await profile();
+    term.buf.lines = [{ text: "go https://a.dev/x now", wrapped: false }];
+    const got: Array<Array<Record<string, unknown>> | undefined> = [];
+    term.linkProvider!.provideLinks(1, (l) => got.push(l));
+    const link = got[0]![0] as { text: string; hover(e: unknown, t: string): void; leave(e: unknown, t: string): void };
+    const el = (term as unknown as { element: HTMLElement }).element;
+    expect(el.title).toBe("");
+    link.hover({}, link.text);
+    expect(el.title).toBe("Ctrl+click to open");
+    link.leave({}, link.text);
+    expect(el.title).toBe("");
+  });
+});
+
 describe("Jump to latest", () => {
   it("shows only while the view is scrolled up, and jumps to the bottom", async () => {
     await mountPanel();

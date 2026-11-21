@@ -60,7 +60,7 @@ import { Lightbox } from "./Lightbox";
 import { countHits, findNext, FIND_START, type FindHit } from "./find";
 import { useFullscreen } from "./useFullscreen";
 import { clipboardAction, inputLabel, scrolledUp } from "./input";
-import { linksAtRow, openExternal } from "./links";
+import { linksAtRow, openExternal, isMacLike, linkHint } from "./links";
 import { useTerms } from "./useTerms";
 import type { ImageDefFrame, ProfileFrame } from "./wire";
 import type { TerminalPanelProps } from "./TerminalPanel.lazy";
@@ -401,6 +401,14 @@ export function TerminalPanel(props: TerminalPanelProps) {
                   text: l.url,
                   activate: (e: MouseEvent, text: string) => {
                     if (e.ctrlKey || e.metaKey) openExternal(text, window);
+                  },
+                  // A plain click only selects: say how a link opens (native tooltip; the
+                  // phone opens a link by tap in its own scroller instead).
+                  hover: () => {
+                    if (term.element) term.element.title = linkHint(isMacLike(navigator));
+                  },
+                  leave: () => {
+                    if (term.element) term.element.title = "";
                   },
                 })),
           );
