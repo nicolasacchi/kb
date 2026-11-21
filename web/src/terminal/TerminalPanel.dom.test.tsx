@@ -616,6 +616,12 @@ describe("full screen", () => {
     expect(panel.classList.contains("kb-term--max")).toBe(true);
     expect(text("kb-term-fullscreen")).toBe("Exit full screen");
     expect(term.focus).toHaveBeenCalled();
+    // A React re-render of the panel's className (the focus chip, the idle state) must not wipe the overlay class.
+    act(() => host!.querySelector("[data-kb-term]")!.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
+    expect(panel.className).toContain("kb-term--typing");
+    expect(panel.classList.contains("kb-term--max")).toBe(true);
+    act(() => lastSession!.callbacks.onState({ phase: "live", epoch: null, applied: 0, resets: 0, gaps: 0, attempt: 0, caption: "live", exitCode: null, blockedReason: null }));
+    expect(panel.classList.contains("kb-term--max")).toBe(true);
     // Escape: xterm's own key path (the handler lets it through) -> onData -> the session's input.
     const esc = keyEv({ key: "Escape" });
     expect(term.keyHandler!(esc)).toBe(true);

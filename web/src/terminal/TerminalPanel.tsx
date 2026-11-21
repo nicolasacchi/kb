@@ -664,7 +664,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
 
   return (
     <div
-      className={`kb-term${state.phase === "live" ? "" : " kb-term--idle"}${focused ? " kb-term--typing" : ""}`}
+      className={`kb-term${state.phase === "live" ? "" : " kb-term--idle"}${focused ? " kb-term--typing" : ""}${fs.max ? " kb-term--max" : ""}`}
       data-testid="kb-terminal"
       data-kb-term-fullscreen={fs.on ? "" : undefined}
       ref={setPanelEl}
