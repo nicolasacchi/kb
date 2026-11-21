@@ -137,3 +137,22 @@
   color: var(--ink-mute);
   opacity: 0.6;
 }
+
+/* FUTERMFULL — the full detent is the whole dynamic viewport, so the sheet
+ * keeps clear of the notch and the home indicator itself. */
+.kb-sheet:has([data-kb-term-root]) {
+  box-sizing: border-box;
+  padding-top: env(safe-area-inset-top, 0);
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+
+/* The phone root in native fullscreen fills the screen. */
+[data-kb-term-root]:fullscreen {
+  max-height: none;
+  height: 100%;
+}
+
+.kb-term-phone__title {
+  font-weight: 600;
+  color: var(--ink);
+}

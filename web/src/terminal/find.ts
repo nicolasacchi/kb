@@ -65,3 +65,6 @@ export function countHits(source: FindLineSource, query: string): number {
   }
   return total;
 }
+
+/** The cursor a fresh search starts from: before the first column of the first line. */
+export const FIND_START: FindHit = { line: 0, col: -1, length: 0 };

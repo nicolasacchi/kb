@@ -20,6 +20,15 @@ interface FakeTermInst {
   options: { fontSize: number; fontFamily: string; theme?: { background?: string } };
   element?: HTMLElement;
   clearTextureAtlas: ReturnType<typeof vi.fn>;
+  keyHandler?: (ev: Record<string, unknown>) => boolean;
+  onDataCb?: (d: string) => void;
+  linkProvider?: { provideLinks(y: number, cb: (l?: Array<Record<string, unknown>>) => void): void };
+  scrollCbs: Array<() => void>;
+  selection: string;
+  buf: { viewportY: number; baseY: number; length: number; lines: Array<{ text: string; wrapped: boolean }> };
+  scrollToBottom: ReturnType<typeof vi.fn>;
+  focus: ReturnType<typeof vi.fn>;
+  select: ReturnType<typeof vi.fn>;
 }
 const terms: FakeTermInst[] = [];
 
@@ -32,6 +41,45 @@ vi.mock("@xterm/xterm", () => ({
     unicode = { versions: ["15-graphemes"], activeVersion: "" };
     parser = { registerOscHandler: () => ({ dispose() {} }) };
     clearTextureAtlas = vi.fn();
+    keyHandler: ((ev: Record<string, unknown>) => boolean) | undefined;
+    onDataCb: ((d: string) => void) | undefined;
+    linkProvider: FakeTermInst["linkProvider"];
+    scrollCbs: Array<() => void> = [];
+    selection = "";
+    buf = { viewportY: 0, baseY: 0, length: 1, lines: [] as Array<{ text: string; wrapped: boolean }> };
+    scrollToBottom = vi.fn();
+    focus = vi.fn();
+    select = vi.fn();
+    get buffer() {
+      const b = this.buf;
+      return {
+        active: {
+          viewportY: b.viewportY,
+          baseY: b.baseY,
+          length: b.lines.length || b.length,
+          getLine: (i: number) => {
+            const l = b.lines[i];
+            return l ? { translateToString: () => l.text, isWrapped: l.wrapped } : undefined;
+          },
+        },
+      };
+    }
+    hasSelection(): boolean {
+      return this.selection !== "";
+    }
+    getSelection(): string {
+      return this.selection;
+    }
+    registerLinkProvider(p: FakeTermInst["linkProvider"]): void {
+      this.linkProvider = p;
+    }
+    onScroll(cb: () => void): void {
+      this.scrollCbs.push(cb);
+    }
+    onWriteParsed(cb: () => void): void {
+      this.scrollCbs.push(cb);
+    }
+    scrollLines(): void {}
     constructor(o: { cols: number; rows: number; fontSize: number; fontFamily: string; theme?: { background?: string } }) {
       this.cols = o.cols;
       this.rows = o.rows;
@@ -51,15 +99,18 @@ vi.mock("@xterm/xterm", () => ({
       this.element = el;
     }
     loadAddon(): void {}
-    attachCustomKeyEventHandler(): void {}
-    onData(): void {}
+    attachCustomKeyEventHandler(h: (ev: Record<string, unknown>) => boolean): void {
+      this.keyHandler = h;
+    }
+    onData(cb: (d: string) => void): void {
+      this.onDataCb = cb;
+    }
     onBinary(): void {}
     resize(): void {}
     reset(): void {}
     write(_d: unknown, done?: () => void): void {
       done?.();
     }
-    focus(): void {}
     dispose(): void {}
   },
 }));
@@ -97,6 +148,7 @@ interface SessionOpts {
 }
 let lastSession: SessionOpts | null = null;
 const sessionStart = vi.fn();
+const sendInputMock = vi.fn();
 vi.mock("./session", () => ({
   TermSession: class {
     constructor(o: SessionOpts) {
@@ -105,7 +157,8 @@ vi.mock("./session", () => ({
     start = sessionStart;
     dispose(): void {}
     kick(): void {}
-    sendInput(): boolean {
+    sendInput(d: string): boolean {
+      sendInputMock(d);
       return true;
     }
     block(): void {}
@@ -150,6 +203,7 @@ beforeEach(() => {
   terms.length = 0;
   lastSession = null;
   sessionStart.mockReset();
+  sendInputMock.mockReset();
   setGfxTheme.mockReset();
   confirmMock.mockClear();
   gate = { ready: Promise.resolve(true), done: Promise.resolve() };
@@ -189,7 +243,7 @@ async function mountPanel(): Promise<void> {
   act(() =>
     root!.render(
       <QueryClientProvider client={qc}>
-        <TerminalPanel termId="abcd1234" sid="s1" harness="omp" mode="watch" />
+        <TerminalPanel termId="abcd1234" sid="s1" harness="omp" />
       </QueryClientProvider>,
     ),
   );
@@ -302,7 +356,7 @@ describe("chip and controls", () => {
       [null, "201x48 · free"],
     ] as const) {
       rows = [{ id: "abcd1234", state: "working", grid_owner: owner }];
-      act(() => root!.render(<QueryClientProvider client={new QueryClient()}><TerminalPanel termId="abcd1234" sid="s1" harness="omp" mode="watch" /></QueryClientProvider>));
+      act(() => root!.render(<QueryClientProvider client={new QueryClient()}><TerminalPanel termId="abcd1234" sid="s1" harness="omp" /></QueryClientProvider>));
       expect(text("kb-term-grid")).toBe(label);
     }
   });
@@ -377,7 +431,7 @@ describe("chip and controls", () => {
     await settle(10);
     expect(text("kb-term-grid")).toBe("201x48 · web");
     rows = [{ id: "abcd1234", state: "working", grid_owner: "local:9" }];
-    act(() => root!.render(<QueryClientProvider client={new QueryClient()}><TerminalPanel termId="abcd1234" sid="s1" harness="omp" mode="watch" /></QueryClientProvider>));
+    act(() => root!.render(<QueryClientProvider client={new QueryClient()}><TerminalPanel termId="abcd1234" sid="s1" harness="omp" /></QueryClientProvider>));
     await settle(2);
     expect(text("kb-term-grid")).toBe("201x48 · local attach");
   });
@@ -407,5 +461,211 @@ describe("theme", () => {
     await mountPanel();
     await profile();
     expect((host!.querySelector("[data-kb-term]") as HTMLElement).style.background).toBe("rgb(17, 17, 17)");
+  });
+});
+
+// ----------------------------------------------------------- FUTERMFULL
+
+const keyEv = (o: Record<string, unknown>) => ({
+  type: "keydown",
+  key: "c",
+  ctrlKey: false,
+  metaKey: false,
+  shiftKey: false,
+  altKey: false,
+  preventDefault: vi.fn(),
+  ...o,
+});
+
+describe("input state", () => {
+  it("starts as 'click to type' with no focus() on mount, says 'typing' on focus and back on blur", async () => {
+    await mountPanel();
+    const term = await profile();
+    expect(term.focus).not.toHaveBeenCalled();
+    expect(text("kb-term-input")).toBe("click to type");
+    expect(q("kb-terminal")!.className).not.toContain("kb-term--typing");
+    const view = host!.querySelector("[data-kb-term]")!;
+    act(() => view.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
+    expect(text("kb-term-input")).toBe("typing");
+    expect(q("kb-terminal")!.className).toContain("kb-term--typing");
+    act(() => view.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+    expect(text("kb-term-input")).toBe("click to type");
+  });
+});
+
+describe("copy, paste and links", () => {
+  it("Ctrl+C with a selection copies it and sends nothing; without one the key is left to xterm (^C)", async () => {
+    const writeText = vi.fn(async () => {});
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    await mountPanel();
+    const term = await profile();
+    term.selection = "picked text";
+    const withSel = keyEv({ ctrlKey: true });
+    expect(term.keyHandler!(withSel)).toBe(false);
+    expect(withSel.preventDefault).toHaveBeenCalled();
+    expect(writeText).toHaveBeenCalledWith("picked text");
+    term.selection = "";
+    const none = keyEv({ ctrlKey: true });
+    expect(term.keyHandler!(none)).toBe(true);
+    expect(none.preventDefault).not.toHaveBeenCalled();
+    expect(writeText).toHaveBeenCalledTimes(1);
+  });
+
+  it("Ctrl+Shift+C copies and Ctrl+Shift+V is the browser's paste (swallowed by xterm, not prevented)", async () => {
+    const writeText = vi.fn(async () => {});
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    await mountPanel();
+    const term = await profile();
+    term.selection = "abc";
+    expect(term.keyHandler!(keyEv({ ctrlKey: true, shiftKey: true, key: "C" }))).toBe(false);
+    expect(writeText).toHaveBeenCalledWith("abc");
+    const paste = keyEv({ ctrlKey: true, shiftKey: true, key: "V" });
+    expect(term.keyHandler!(paste)).toBe(false);
+    expect(paste.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("the link provider returns a wrapped URL on both rows and Ctrl-click opens it with noopener,noreferrer", async () => {
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    await mountPanel();
+    const term = await profile();
+    term.buf.lines = [
+      { text: "x".repeat(188) + " https://exam", wrapped: false },
+      { text: "ple.com/p done", wrapped: true },
+    ];
+    // cols = 201: the first row is 201 wide once padded.
+    const got: Array<Array<Record<string, unknown>> | undefined> = [];
+    term.linkProvider!.provideLinks(2, (l) => got.push(l));
+    expect(got[0]).toBeDefined();
+    const link = got[0]![0] as { text: string; activate(e: Partial<MouseEvent>, t: string): void };
+    expect(link.text).toBe("https://example.com/p");
+    link.activate({ ctrlKey: false, metaKey: false }, link.text);
+    expect(open).not.toHaveBeenCalled();
+    link.activate({ ctrlKey: true }, link.text);
+    expect(open).toHaveBeenCalledWith("https://example.com/p", "_blank", "noopener,noreferrer");
+    const none: Array<unknown> = [];
+    term.buf.lines = [{ text: "no links here", wrapped: false }];
+    term.linkProvider!.provideLinks(1, (l) => none.push(l));
+    expect(none).toEqual([undefined]);
+    open.mockRestore();
+  });
+});
+
+describe("Jump to latest", () => {
+  it("shows only while the view is scrolled up, and jumps to the bottom", async () => {
+    await mountPanel();
+    const term = await profile();
+    expect(q("kb-term-jump")).toBeNull();
+    term.buf.baseY = 100;
+    term.buf.viewportY = 20;
+    act(() => term.scrollCbs.forEach((cb) => cb()));
+    expect(q("kb-term-jump")).not.toBeNull();
+    act(() => q("kb-term-jump")!.click());
+    expect(term.scrollToBottom).toHaveBeenCalled();
+    term.buf.viewportY = 100;
+    act(() => term.scrollCbs.forEach((cb) => cb()));
+    expect(q("kb-term-jump")).toBeNull();
+  });
+});
+
+describe("find", () => {
+  it("a new query starts from the first match, not from the previous hit", async () => {
+    await mountPanel();
+    const term = await profile();
+    term.buf.lines = [{ text: "alpha one", wrapped: false }, { text: "beta two", wrapped: false }, { text: "alpha three", wrapped: false }];
+    act(() => q("kb-term-find-toggle")!.click());
+    const input = q("kb-term-find-input") as HTMLInputElement;
+    const setValue = (v: string): void => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      act(() => {
+        setter.call(input, v);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    };
+    const enter = (): void => act(() => void input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    setValue("alpha");
+    enter();
+    enter();
+    expect(term.select).toHaveBeenLastCalledWith(0, 2, 5);
+    // Fresh query "a": from the top the first hit is line 0 col 0. A cursor left at the
+    // previous hit (line 2, col 0) would continue to line 2 col 4 instead.
+    setValue("a");
+    enter();
+    expect(term.select).toHaveBeenLastCalledWith(0, 0, 1);
+    expect(text("kb-term-find-note")).toBe("5 matches");
+  });
+
+  it("closing Find returns focus to the terminal", async () => {
+    await mountPanel();
+    const term = await profile();
+    act(() => q("kb-term-find-toggle")!.click());
+    const input = q("kb-term-find-input")!;
+    act(() => void input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(q("kb-term-find-input")).toBeNull();
+    expect(term.focus).toHaveBeenCalled();
+  });
+});
+
+describe("full screen", () => {
+  it("the overlay: the button toggles .kb-term--max and its label, and an Escape reaches the agent and leaves it open", async () => {
+    await mountPanel();
+    const term = await profile();
+    const panel = q("kb-terminal")!;
+    expect(text("kb-term-fullscreen")).toBe("Full screen");
+    await act(async () => q("kb-term-fullscreen")!.click());
+    await settle(2);
+    expect(panel.classList.contains("kb-term--max")).toBe(true);
+    expect(text("kb-term-fullscreen")).toBe("Exit full screen");
+    expect(term.focus).toHaveBeenCalled();
+    // Escape: xterm's own key path (the handler lets it through) -> onData -> the session's input.
+    const esc = keyEv({ key: "Escape" });
+    expect(term.keyHandler!(esc)).toBe(true);
+    term.onDataCb!("\u001b");
+    expect(sendInputMock).toHaveBeenCalledWith("\u001b");
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      host!.querySelector("[data-kb-term]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    expect(panel.classList.contains("kb-term--max")).toBe(true);
+    await act(async () => q("kb-term-fullscreen")!.click());
+    await settle(2);
+    expect(panel.classList.contains("kb-term--max")).toBe(false);
+  });
+
+  it("refits with the full-screen bounds (min 8, max 28) and sends no take-size or resize", async () => {
+    box = { w: 2800, h: 1500 };
+    await mountPanel();
+    const term = await profile();
+    // inline: clamped to 20
+    expect(term.options.fontSize).toBe(20);
+    await act(async () => q("kb-term-fullscreen")!.click());
+    await new Promise((r) => setTimeout(r, 150));
+    await settle(2);
+    // 2800 / (0.6 * 201) = 23.2, 1500 / (1.32 * 48) = 23.67
+    expect(term.options.fontSize).toBe(23);
+    expect(rig.calls).toHaveLength(0);
+  });
+
+  it("closing the panel leaves full screen; so does unmounting it", async () => {
+    await mountPanel();
+    await profile();
+    const panel = q("kb-terminal")!;
+    await act(async () => q("kb-term-fullscreen")!.click());
+    await settle(2);
+    expect(panel.classList.contains("kb-term--max")).toBe(true);
+    act(() => root!.unmount());
+    expect(panel.classList.contains("kb-term--max")).toBe(false);
+    root = createRoot(host!);
+  });
+
+  it("a term id change drops the overlay", async () => {
+    await mountPanel();
+    await profile();
+    const panel = q("kb-terminal")!;
+    await act(async () => q("kb-term-fullscreen")!.click());
+    await settle(2);
+    act(() => root!.render(<QueryClientProvider client={new QueryClient()}><TerminalPanel termId="ffff0000" sid="s1" harness="omp" /></QueryClientProvider>));
+    await settle(2);
+    expect(q("kb-terminal")!.classList.contains("kb-term--max")).toBe(false);
+    expect(panel.classList.contains("kb-term--max")).toBe(false);
   });
 });

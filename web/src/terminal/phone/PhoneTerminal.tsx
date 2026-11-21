@@ -17,6 +17,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { Terminal } from "@xterm/xterm";
 import { ReadView } from "./ReadView";
+import { phoneFullscreenAvailable } from "../fullscreen";
+import { useFullscreen } from "../useFullscreen";
 import { FONT_STEPS, stepFont } from "./scrollerCore";
 import { readFont } from "./fontSteps";
 import { applyFont, measureCellHeight, usePhoneScroller, type ScrollTerm } from "./usePhoneScroller";
@@ -99,6 +101,12 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
   const [behind, setBehind] = useState(false);
   const termRef = useRef(term);
   termRef.current = term;
+  // FUTERMFULL — element fullscreen of the sheet's root, only where the browser
+  // has it (Android Chrome). No overlay here (the 100dvh sheet is the maximum)
+  // and no Escape lock (the phone has no Esc key to hold).
+  const [root, setRoot] = useState<HTMLDivElement | null>(null);
+  const fs = useFullscreen(root, "phone", { overlay: false, lockEscape: false });
+  const canFullscreen = typeof document !== "undefined" && phoneFullscreenAvailable(document);
 
   // Attach (open once, else re-parent) and force read-only while mounted.
   useLayoutEffect(() => {
@@ -213,8 +221,9 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
 
   const fontIdx = FONT_STEPS.indexOf(font as (typeof FONT_STEPS)[number]);
   return (
-    <div className="kb-term-phone" data-kb-term-root="" data-testid="kb-terminal">
+    <div className="kb-term-phone" data-kb-term-root="" data-testid="kb-terminal" ref={setRoot}>
       <div className="kb-term-phone__bar">
+        <span className="kb-term-phone__title">Terminal</span>
         <span className="kb-term-phone__caption" data-testid="kb-term-caption">
           {caption}
         </span>
@@ -247,6 +256,17 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
         >
           A+
         </button>
+        {canFullscreen ? (
+          <button
+            type="button"
+            className="kb-term-phone__btn"
+            data-testid="kb-term-phone-fullscreen"
+            aria-pressed={fs.on}
+            onClick={fs.toggle}
+          >
+            {fs.on ? "Exit full screen" : "Full screen"}
+          </button>
+        ) : null}
         {onClose ? (
           <button type="button" className="kb-term-phone__btn" data-testid="kb-term-close" onClick={onClose}>
             Close

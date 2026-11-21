@@ -131,3 +131,55 @@
 .kb-term--idle .kb-term__view {
   opacity: 0.7;
 }
+
+/* FUTERMFULL — where the keys go: the chip names it and the view carries an
+ * accent ring while the terminal has focus. */
+.kb-term__input {
+  color: var(--ink-mute);
+}
+
+.kb-term__input--on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.kb-term--typing .kb-term__view {
+  outline: var(--pad-1) solid var(--accent);
+  outline-offset: calc(-1 * var(--pad-1));
+}
+
+.kb-term__jump {
+  align-self: flex-end;
+}
+
+/* FUTERMFULL — full screen: native fullscreen or the maximised overlay (one
+ * rule set serves both). The bar stays as a slim header; the view takes the
+ * rest and refits by font. The overlay binds no Escape. */
+.kb-term--max {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  height: 100dvh;
+  max-width: none;
+  border-radius: 0;
+  border: 0;
+  padding-top: calc(var(--pad-2) + env(safe-area-inset-top, 0));
+  padding-right: calc(var(--pad-2) + env(safe-area-inset-right, 0));
+  padding-bottom: calc(var(--pad-2) + env(safe-area-inset-bottom, 0));
+  padding-left: calc(var(--pad-2) + env(safe-area-inset-left, 0));
+}
+
+.kb-term:fullscreen {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  border-radius: 0;
+  border: 0;
+}
+
+.kb-term:fullscreen .kb-term__view,
+.kb-term--max .kb-term__view {
+  height: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}

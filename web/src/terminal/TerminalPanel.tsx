@@ -15,6 +15,10 @@
 // window resize, opening the panel and focusing it refit the FONT only.
 // `sizechanged` updates the chip and the caption. No `focus()` on mount
 // (click focuses), no Escape binding, no global key handler.
+// FUTERMFULL: full screen (`fullscreen.ts`: native where Esc can stay with the
+// terminal, else a maximised overlay; never a take-size), the typing/click-to-type
+// chip, Ctrl/Cmd+C copies only with a selection (else ^C), http(s) links open on
+// Ctrl/Cmd-click, and Jump to latest while scrolled up.
 //
 // T17 — on a phone (`useIsMobile()`) the SAME terminal, socket and
 // reconnect state render through `PhoneTerminal` inside a `Sheet`. The
@@ -38,7 +42,7 @@ import { TermSession, type SessionState } from "./session";
 import { mintTicket } from "../api/terms";
 import { installReplyGuards } from "./replyGuards";
 import { profileMatchesBundle } from "./pins";
-import { FIT_MAX_INLINE, FIT_MIN_INLINE, type FitResult } from "./fit";
+import { FIT_MAX_FULL, FIT_MAX_INLINE, FIT_MIN_FULL, FIT_MIN_INLINE, type FitResult } from "./fit";
 import { fitHostNow } from "./fitHost";
 import { measureCellRatio } from "./cellProbe";
 import { fontGate, TERM_FONT_FAMILY } from "./fonts";
@@ -49,7 +53,10 @@ import type { WindowMeasure } from "./fitWindow";
 import { THEME_APPLIED_EVENT } from "@kb/ui/themes/apply";
 import { attachGfx, type GfxHandle, type OpenPicture } from "./gfx";
 import { Lightbox } from "./Lightbox";
-import { countHits, findNext, type FindHit } from "./find";
+import { countHits, findNext, FIND_START, type FindHit } from "./find";
+import { useFullscreen } from "./useFullscreen";
+import { clipboardAction, inputLabel, scrolledUp } from "./input";
+import { linksAtRow, openExternal } from "./links";
 import { useTerms } from "./useTerms";
 import type { ImageDefFrame, ProfileFrame } from "./wire";
 import type { TerminalPanelProps } from "./TerminalPanel.lazy";
@@ -119,7 +126,23 @@ export function TerminalPanel(props: TerminalPanelProps) {
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState("");
   const [findNote, setFindNote] = useState("");
-  const findHitRef = useRef<FindHit>({ line: 0, col: -1, length: 0 });
+  const findHitRef = useRef<FindHit>({ ...FIND_START });
+  // FUTERMFULL — the panel element (state, so the full-screen control binds once it exists),
+  // whether the terminal has focus, whether the view is scrolled up, and the
+  // refit the full-screen change asks for.
+  const [panelEl, setPanelEl] = useState<HTMLDivElement | null>(null);
+  const [focused, setFocused] = useState(false);
+  const [behind, setBehind] = useState(false);
+  const fullRef = useRef(false);
+  const refitRef = useRef<(() => void) | null>(null);
+  const fs = useFullscreen(panelEl, props.termId, {
+    onChange: (on) => {
+      fullRef.current = on;
+      if (on) termRef.current?.focus();
+      // The panel's box changes with the next layout: refit the FONT (never a take-size).
+      window.setTimeout(() => refitRef.current?.(), 60);
+    },
+  });
   // T15 — the picture layer for the CURRENT xterm instance (null before the
   // Profile builds the terminal and after teardown).
   const gfxRef = useRef<GfxHandle | null>(null);
@@ -143,7 +166,8 @@ export function TerminalPanel(props: TerminalPanelProps) {
   const fitDesktop = (term: Terminal, host: HTMLElement): void => {
     const g = gridRef.current;
     if (!g) return;
-    const r = fitHostNow(term, host, g, { min: FIT_MIN_INLINE, max: FIT_MAX_INLINE });
+    const full = fullRef.current;
+    const r = fitHostNow(term, host, g, full ? { min: FIT_MIN_FULL, max: FIT_MAX_FULL } : { min: FIT_MIN_INLINE, max: FIT_MAX_INLINE });
     if (!r) return;
     setFit((prev) =>
       prev && prev.fontSize === r.fontSize && prev.cropped.x === r.cropped.x && prev.cropped.y === r.cropped.y ? prev : r,
@@ -191,6 +215,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
         allowProposedApi: true,
         convertEol: false,
         cursorBlink: false,
+        cursorInactiveStyle: "outline",
         // Initial size only; `fitDesktop` picks the real one from the host.
         fontSize: phone
           ? readFont()
@@ -279,8 +304,51 @@ export function TerminalPanel(props: TerminalPanelProps) {
           }
           return false;
         }
+        // Copy only with a selection (else Ctrl/Cmd+C stays ^C); Ctrl/Cmd+Shift+C
+        // always copies and +V leaves the paste to the browser's paste event.
+        const action = clipboardAction(ev, term.hasSelection());
+        if (action === "copy") {
+          if (ev.type === "keydown") {
+            ev.preventDefault();
+            const sel = term.getSelection();
+            if (sel) void writeClipboardText(sel);
+          }
+          return false;
+        }
+        if (action === "paste") return false;
         return true;
       });
+      term.registerLinkProvider({
+        provideLinks: (y, cb) => {
+          const buf = term.buffer.active;
+          const found = linksAtRow(
+            {
+              length: buf.length,
+              row: (i) => {
+                const l = buf.getLine(i);
+                return l ? { text: l.translateToString(true), wrapped: l.isWrapped } : null;
+              },
+            },
+            y - 1,
+            term.cols,
+          );
+          cb(
+            found.length === 0
+              ? undefined
+              : found.map((l) => ({
+                  range: { start: l.start, end: l.end },
+                  text: l.url,
+                  activate: (e: MouseEvent, text: string) => {
+                    if (e.ctrlKey || e.metaKey) openExternal(text, window);
+                  },
+                })),
+          );
+        },
+      });
+      const syncBehind = (): void => setBehind(scrolledUp(term.buffer.active));
+      term.onScroll(syncBehind);
+      term.onWriteParsed(syncBehind);
+      setBehind(false);
       term.onData((data) => {
         if (sessionRef.current?.sendInput(data) ?? false) lastTypedRef.current = Date.now();
       });
@@ -454,8 +522,13 @@ export function TerminalPanel(props: TerminalPanelProps) {
     (host as TermSeam).__kbTerm = term;
     const onHostClick = (): void => term.focus();
     host.addEventListener("click", onHostClick);
+    const onFocusIn = (): void => setFocused(true);
+    const onFocusOut = (): void => setFocused(false);
+    host.addEventListener("focusin", onFocusIn);
+    host.addEventListener("focusout", onFocusOut);
     let fitTimer: number | null = null;
     const refit = (): void => fitDesktop(term, host);
+    refitRef.current = refit;
     refit();
     const observer = new ResizeObserver(() => {
       if (fitTimer !== null) window.clearTimeout(fitTimer);
@@ -470,6 +543,10 @@ export function TerminalPanel(props: TerminalPanelProps) {
       details?.removeEventListener("toggle", refit);
       if (fitTimer !== null) window.clearTimeout(fitTimer);
       host.removeEventListener("click", onHostClick);
+      host.removeEventListener("focusin", onFocusIn);
+      host.removeEventListener("focusout", onFocusOut);
+      setFocused(false);
+      refitRef.current = null;
       (host as TermSeam).__kbTerm = undefined;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -491,6 +568,9 @@ export function TerminalPanel(props: TerminalPanelProps) {
   }, [termInst]);
 
   const closePanel = (): void => {
+    // Leave full screen first (native, key lock, overlay): the effect cleanup
+    // repeats it on unmount, so a closed panel never leaves one behind.
+    fs.exit();
     if (props.onClose) {
       props.onClose();
       return;
@@ -505,6 +585,12 @@ export function TerminalPanel(props: TerminalPanelProps) {
     termRef.current = null;
     setTermInst(null);
     setGrid(null);
+  };
+
+  // Closing Find hands the keyboard back to the terminal.
+  const closeFind = (): void => {
+    setFindOpen(false);
+    termRef.current?.focus();
   };
 
   const runFind = (dir: 1 | -1): void => {
@@ -541,8 +627,9 @@ export function TerminalPanel(props: TerminalPanelProps) {
         open
         detent={detent}
         onDetentChange={setDetent}
-        full="92vh"
+        full="100dvh"
         title="Terminal"
+        titleHidden
         onClose={closePanel}
         ignoreEscape={terminalOwnsEscape}
       >
@@ -576,10 +663,21 @@ export function TerminalPanel(props: TerminalPanelProps) {
   }
 
   return (
-    <div className={`kb-term${state.phase === "live" ? "" : " kb-term--idle"}`} data-testid="kb-terminal">
+    <div
+      className={`kb-term${state.phase === "live" ? "" : " kb-term--idle"}${focused ? " kb-term--typing" : ""}`}
+      data-testid="kb-terminal"
+      data-kb-term-fullscreen={fs.on ? "" : undefined}
+      ref={setPanelEl}
+    >
       <div className="kb-term__bar">
         <span className="kb-term__harness" data-testid="kb-term-harness">
           {props.harness}
+        </span>
+        <span
+          className={`kb-term__chip kb-term__input${focused ? " kb-term__input--on" : ""}`}
+          data-testid="kb-term-input"
+        >
+          {inputLabel(focused)}
         </span>
         {rowState ? (
           <span className="kb-term__chip" data-testid="kb-term-state">
@@ -617,9 +715,18 @@ export function TerminalPanel(props: TerminalPanelProps) {
           type="button"
           className="kb-term__btn"
           data-testid="kb-term-find-toggle"
-          onClick={() => setFindOpen((v) => !v)}
+          onClick={() => (findOpen ? closeFind() : setFindOpen(true))}
         >
           Find
+        </button>
+        <button
+          type="button"
+          className="kb-term__btn"
+          data-testid="kb-term-fullscreen"
+          aria-pressed={fs.on}
+          onClick={fs.toggle}
+        >
+          {fs.on ? "Exit full screen" : "Full screen"}
         </button>
         <button
           type="button"
@@ -640,9 +747,16 @@ export function TerminalPanel(props: TerminalPanelProps) {
             className="kb-term__findinput"
             data-testid="kb-term-find-input"
             value={findQuery}
-            onChange={(e) => setFindQuery(e.target.value)}
+            autoFocus
+            onChange={(e) => {
+              setFindQuery(e.target.value);
+              // A new query starts from the top, never from the old hit.
+              findHitRef.current = { ...FIND_START };
+              setFindNote("");
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter") runFind(e.shiftKey ? -1 : 1);
+              if (e.key === "Escape") closeFind();
             }}
             aria-label="Find in terminal"
           />
@@ -662,6 +776,19 @@ export function TerminalPanel(props: TerminalPanelProps) {
         data-kb-term-scrollback={scrollback > 0 ? scrollback : undefined}
         ref={hostRef}
       />
+      {behind ? (
+        <button
+          type="button"
+          className="kb-term__btn kb-term__jump"
+          data-testid="kb-term-jump"
+          onClick={() => {
+            termRef.current?.scrollToBottom();
+            termRef.current?.focus();
+          }}
+        >
+          Jump to latest
+        </button>
+      ) : null}
       {gfx !== null ? (
         <Lightbox picture={picture} media={gfx.media} onClose={() => setPicture(null)} />
       ) : null}
