@@ -98,6 +98,7 @@ export default function Header({
                     to={item.href({ kb: explicitKb })}
                     className={"kb-door" + (active ? " is-active" : "")}
                     aria-current={active ? "page" : undefined}
+                    title={item.label}
                     data-testid={item.testid}
                   >
                     <item.Glyph />

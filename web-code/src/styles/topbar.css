@@ -56,6 +56,44 @@
 .kbc-topbar .kb-spine__search {
   min-width: 9rem;
 }
+/* FUSPINE - 861-1200px: the bar must fit the window. The search floor drops
+ * to the shared 6rem and the scope crumbs to 4rem, the search button
+ * ellipsizes and drops its key hint, the doors and the trail label collapse
+ * to their icons (the label stays in the accessibility tree and as the
+ * title) and the Space hint, a teaching hint rather than an action, is
+ * dropped (its key still works). From 1201px the 1280px layout is unchanged. */
+@media (min-width: 861px) and (max-width: 1200px) {
+  .kbc-topbar .kb-spine__search {
+    min-width: 6rem;
+  }
+  .kbc-topbar .kb-spine__scope {
+    min-width: 4rem;
+  }
+  .kbc-topbar .kbc-search-mini {
+    min-width: 0;
+  }
+  .kbc-topbar .kbc-search-mini__label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .kbc-topbar .kbc-search-mini kbd {
+    display: none;
+  }
+  .kbc-topbar__door-label,
+  .kbc-topbar .kbc-trailind__label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .kbc-topbar .kbc-spacehint {
+    display: none;
+  }
+}
 @media (max-width: 860px) {
   .kbc-topbar .kb-spine__search {
     min-width: 0;

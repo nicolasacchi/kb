@@ -15,10 +15,10 @@
 #   nextest 3962 run (9 skipped)        web vitest 1451     web-code vitest 3162
 
 [e2e]
-executed = 485
+executed = 500
 
 [code-e2e]
-executed = 305
+executed = 315
 
 [nextest]
 executed = 5680
