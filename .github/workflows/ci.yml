@@ -201,7 +201,7 @@ jobs:
 
       - name: Cache cargo + target
         if: steps.fast.outputs.run == 'true'
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace
           # RESTORE-ONLY: the `workspace` family is written by its test lane
@@ -314,7 +314,7 @@ jobs:
 
       - name: Cache cargo + target
         if: steps.fast.outputs.run == 'true'
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: workspace
           # Only main writes the cache — see the CACHING note at the top.
@@ -332,7 +332,7 @@ jobs:
 
       - name: Install cargo-nextest
         if: steps.fast.outputs.run == 'true'
-        uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2
+        uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2
         with:
           tool: cargo-nextest
 
@@ -453,7 +453,7 @@ jobs:
 
       - name: Cache cargo + target
         if: steps.fast.outputs.run == 'true'
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: drift
           # Only main writes the cache — see the CACHING note at the top.
@@ -522,7 +522,7 @@ jobs:
 
       - name: Cache cargo + target
         if: steps.changes.outputs.run == 'true'
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: code-drift
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -607,7 +607,7 @@ jobs:
 
       - name: Cache cargo + target
         if: steps.fast.outputs.run == 'true'
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: e2e-fast
           # Only main writes the cache — see the CACHING note at the top.
@@ -881,7 +881,7 @@ jobs:
 
       - name: Cache cargo + target
         if: steps.fast.outputs.run == 'true'
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: embedder
           # RESTORE-ONLY: the `embedder` family is written by its test lane
@@ -961,7 +961,7 @@ jobs:
 
       - name: Cache cargo + target
         if: steps.fast.outputs.run == 'true'
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: embedder
           # Only main writes the cache — see the CACHING note at the top.
@@ -1080,7 +1080,7 @@ jobs:
 
       - name: Cache cargo + target
         if: steps.changes.outputs.run == 'true'
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: code
           # RESTORE-ONLY: the `code` family is written by its test lane
@@ -1209,7 +1209,7 @@ jobs:
 
       - name: Cache cargo + target
         if: steps.changes.outputs.run == 'true'
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: code
           # Only main writes the cache — see the CACHING note at the top.
@@ -1221,7 +1221,7 @@ jobs:
 
       - name: Install cargo-nextest
         if: steps.changes.outputs.run == 'true'
-        uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2
+        uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2
         with:
           tool: cargo-nextest
 
@@ -1420,7 +1420,7 @@ jobs:
 
       - name: Cache cargo + target
         if: steps.changes.outputs.run == 'true'
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           # OWN family, not `e2e-fast` (2026-09-06): the two Playwright
           # lanes build DIFFERENT fast-profile binaries, and the `e2e` job
@@ -1762,7 +1762,7 @@ jobs:
           bun build --compile src/main.ts --outfile "$RUNNER_TEMP/kb-tap"
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2
+        uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2
         with:
           tool: cargo-nextest
 
@@ -1803,7 +1803,7 @@ jobs:
 
       - name: Cache cargo + target
         if: steps.crate.outputs.present == 'true'
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           # Only main writes the cache — see the CACHING note at the top.
           shared-key: term-int
@@ -2006,7 +2006,7 @@ jobs:
 
       - name: Cache cargo + target
         if: steps.fast.outputs.run == 'true'
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           shared-key: term-e2e-fast
           # Only main writes the cache — see the CACHING note at the top.
@@ -2213,7 +2213,7 @@ jobs:
       - name: Install Rust toolchain
         uses: ./.github/actions/setup-rust
       - name: Install cargo-deny
-        uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2
+        uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2
         with:
           tool: cargo-deny
       # cargo-about is the same shape as cargo-deny: a prebuilt release binary
@@ -2233,7 +2233,7 @@ jobs:
       # that same version and committing the result, or the gate goes red for
       # a reason that has nothing to do with the dependency graph.
       - name: Install cargo-about
-        uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2
+        uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2
         with:
           tool: cargo-about@0.9.2
       - name: Install just (NOTICE drift recipe)
