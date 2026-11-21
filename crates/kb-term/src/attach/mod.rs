@@ -222,9 +222,11 @@ struct AttachContext {
     runner: RunnerClient,
     /// How the next join starts after a repaint (see [`Preset`]).
     preset: Option<Preset>,
-    /// The grid of the last repaint this attach asked for. A repaint for
-    /// the same grid twice in a row is never repeated (a loop guard: a real
-    /// tap's new profile already carries the new grid).
+    /// The grid marker the next join was started for by a repaint. That join
+    /// takes it (see [`marker_replayed`]) and does not repaint for the same
+    /// marker again (a loop guard: a real tap's new profile already carries
+    /// the new grid). It lives for ONE join: a later ownership epoch (a
+    /// retake, a reconnect) never inherits it.
     last_repaint: Option<(u16, u16)>,
 }
 
@@ -312,6 +314,45 @@ fn row_id(row: &serde_json::Value) -> Option<&str> {
 }
 
 /// Why a join attempt ended.
+/// The loop guard's step for one grid marker. `guard` is the marker the
+/// current join was started for by a repaint: seeing exactly that marker
+/// replayed is `true` (suppress, and keep the guard for another replay);
+/// any other marker clears the guard and is `false`, so a later marker equal
+/// to the old one (A, then B with no repaint, then A again) is handled.
+fn marker_replayed(guard: &mut Option<(u16, u16)>, marker: (u16, u16)) -> bool {
+    if *guard == Some(marker) {
+        true
+    } else {
+        *guard = None;
+        false
+    }
+}
+
+/// What forwarding typed bytes to the session did.
+enum KeyOutcome {
+    /// The runner took the bytes.
+    Sent,
+    /// The runner refused: someone else owns the grid (`grid-owned`). The key
+    /// is dropped; the attach watches behind the status line. Carries the
+    /// owner named in the refusal.
+    Refused(String),
+    /// Any other failure (`no-viewer`, a dead runner): the attach fails.
+    Failed,
+}
+
+async fn forward_keys(ctx: &mut AttachContext, bytes: &[u8]) -> KeyOutcome {
+    match send_keys(&mut ctx.runner, &ctx.args.id, &ctx.viewer, bytes).await {
+        Ok(()) => KeyOutcome::Sent,
+        Err(RunnerClientError::Code { code, message }) if code == "grid-owned" => {
+            KeyOutcome::Refused(fallback::owner_from_message(&message))
+        }
+        Err(e) => {
+            eprintln!("kb-term: keys: {e}");
+            KeyOutcome::Failed
+        }
+    }
+}
+
 enum SessionResult {
     /// The session exited (exit code shown, exit 0).
     Normal(Option<i32>),
@@ -514,6 +555,7 @@ async fn run_one_join_inner(
     // The one-row notice on the outer terminal's last row (never the
     // mirror's cursor: that would overwrite mirrored rows).
     let preset = ctx.preset.take();
+    let mut replay_guard = ctx.last_repaint.take();
     if let Some(Preset::Watching(owner)) = &preset {
         status.set(Some(fallback::grid_status(Some(owner.as_str()))));
         grid_owned = Some(owner.clone());
@@ -584,7 +626,7 @@ async fn run_one_join_inner(
                         // behind the status line and never retakes on its own.
                         if let Some(marker) = state.size_marker.take() {
                             let painted = state.grid;
-                            let repeated = ctx.last_repaint == Some(marker);
+                            let repeated = marker_replayed(&mut replay_guard, marker);
                             if !ctx.is_watch() && !repeated {
                                 if let Some(owner) = grid_owned.clone() {
                                     if painted.is_some_and(|g| g != marker) {
@@ -639,13 +681,24 @@ async fn run_one_join_inner(
                                 }
                                 FallbackKey::Failed => return SessionResult::Detached,
                             }
-                        } else if let Err(e) =
-                            send_keys(&mut ctx.runner, &ctx.args.id, &ctx.viewer, &bytes).await
-                        {
-                            eprintln!("kb-term: keys: {e}");
-                            return SessionResult::KeysFailed;
                         } else {
-                            let _ = send_typed(&mut conn, &ctx.viewer).await;
+                            match forward_keys(ctx, &bytes).await {
+                                KeyOutcome::Sent => {
+                                    let _ = send_typed(&mut conn, &ctx.viewer).await;
+                                }
+                                // The runner refused: another owner holds the
+                                // grid. The key is dropped; watch behind the
+                                // status line (the first-key path of the same
+                                // notice the owner poll paints).
+                                KeyOutcome::Refused(now_owner) => {
+                                    status.set(Some(fallback::grid_status(Some(now_owner.as_str()))));
+                                    if write_out(&status.paint_now(outer_size(ctx))).await.is_err() {
+                                        return SessionResult::Detached;
+                                    }
+                                    grid_owned = Some(now_owner);
+                                }
+                                KeyOutcome::Failed => return SessionResult::KeysFailed,
+                            }
                         }
                     }
                 }
@@ -678,16 +731,26 @@ async fn run_one_join_inner(
                     }
                 }
             }
-            _ = owner_poll.tick(), if grid_owned.is_some() => {
-                // Who owns the grid now? (None = released.) Only the text
-                // changes; a change of owner repaints the status line.
+            _ = owner_poll.tick(), if !ctx.is_watch() => {
+                // Who owns the grid now? (None = released.) Watching: only a
+                // changed text repaints the status line (each paint spends the
+                // terminal's single DECSC/DECRC slot, which a mirrored app may
+                // hold between frames). Owning: if someone else holds the
+                // grid now (a web take that sent no resize, e.g. at this
+                // attach's own size), re-join as a watch behind the status
+                // line, without waiting for a key. The runner's input gate is
+                // the guarantee; this is the notice.
                 if let Some(cur) = current_owner(ctx).await.filter(|c| c.as_deref() != Some(ctx.viewer.as_str())) {
-                    let text = fallback::grid_status(cur.as_deref());
-                    // Always repaint: a screen erase split across two writes
-                    // is the one case after_write cannot see.
-                    status.set(Some(text));
-                    if write_out(&status.paint_now(outer_size(ctx))).await.is_err() {
-                        return SessionResult::Detached;
+                    if grid_owned.is_some() {
+                        let text = fallback::grid_status(cur.as_deref());
+                        if status.text() != Some(text.as_str()) {
+                            status.set(Some(text));
+                            if write_out(&status.paint_now(outer_size(ctx))).await.is_err() {
+                                return SessionResult::Detached;
+                            }
+                        }
+                    } else if let Some(owner) = cur {
+                        return SessionResult::Repaint(Preset::Watching(owner));
                     }
                 }
             }
@@ -724,13 +787,24 @@ async fn run_one_join_inner(
                                 }
                                 FallbackKey::Failed => return SessionResult::Detached,
                             }
-                        } else if let Err(e) =
-                            send_keys(&mut ctx.runner, &ctx.args.id, &ctx.viewer, &bytes).await
-                        {
-                            eprintln!("kb-term: keys: {e}");
-                            return SessionResult::KeysFailed;
                         } else {
-                            let _ = send_typed(&mut conn, &ctx.viewer).await;
+                            match forward_keys(ctx, &bytes).await {
+                                KeyOutcome::Sent => {
+                                    let _ = send_typed(&mut conn, &ctx.viewer).await;
+                                }
+                                // The runner refused: another owner holds the
+                                // grid. The key is dropped; watch behind the
+                                // status line (the first-key path of the same
+                                // notice the owner poll paints).
+                                KeyOutcome::Refused(now_owner) => {
+                                    status.set(Some(fallback::grid_status(Some(now_owner.as_str()))));
+                                    if write_out(&status.paint_now(outer_size(ctx))).await.is_err() {
+                                        return SessionResult::Detached;
+                                    }
+                                    grid_owned = Some(now_owner);
+                                }
+                                KeyOutcome::Failed => return SessionResult::KeysFailed,
+                            }
                         }
                     } else {
                         // Not yet idle long enough: re-arm once.
@@ -1665,6 +1739,26 @@ mod tests {
             size_marker: None,
             grid: None,
         }
+    }
+
+    #[test]
+    fn the_replay_guard_suppresses_only_the_marker_the_join_was_started_for() {
+        // A repaint join sees its own marker replayed: suppressed, and it
+        // stays suppressed on a second replay (the anti-loop property).
+        let a = (120, 40);
+        let b = (160, 50);
+        let mut guard = Some(a);
+        assert!(marker_replayed(&mut guard, a));
+        assert!(marker_replayed(&mut guard, a));
+        // A different marker is handled and clears the guard ...
+        assert!(!marker_replayed(&mut guard, b));
+        assert_eq!(guard, None);
+        // ... so the first marker coming back (A, B with no repaint, A) is
+        // handled too, not mistaken for a replay.
+        assert!(!marker_replayed(&mut guard, a));
+        // A fresh ownership epoch starts with no guard at all.
+        let mut none = None;
+        assert!(!marker_replayed(&mut none, a));
     }
 
     #[test]

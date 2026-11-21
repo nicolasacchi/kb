@@ -2659,3 +2659,90 @@ async fn term_int_dirty_runner_env_does_not_leak_to_pane() {
     assert!(captured.contains("TMUX="), "TMUX present;\n{captured}");
     assert!(captured.contains("TERM="), "TERM present;\n{captured}");
 }
+
+/// FUATTACHOWN: the runner's input gate. A viewer that is a local attach
+/// (`local:<pid>`) may type only while it owns the grid or nobody does; once
+/// another owner (the web relay) holds the grid its keys and pastes are
+/// refused `grid-owned`. A web viewer is never refused, whoever owns the grid.
+#[tokio::test(flavor = "multi_thread")]
+async fn term_int_a_local_viewer_never_types_over_another_grid_owner() {
+    let Some(tmux_bin) = require_tmux() else {
+        return;
+    };
+    let tr = TestRunner::new(tmux_bin);
+    boot_runner(&tr).await;
+    let (id, log) = launch_probe(&tr, "raw").await;
+    for viewer in ["web", "local:4242"] {
+        dispatch_ok(
+            &tr,
+            Request::ViewerOpen {
+                id: id.clone(),
+                viewer: viewer.to_string(),
+            },
+        )
+        .await;
+    }
+    let keys = |viewer: &str, bytes: &[u8]| Request::Keys {
+        id: id.clone(),
+        viewer: viewer.to_string(),
+        input: kb_term::wire::KeyInput::Bytes {
+            bytes_b64: base64::engine::general_purpose::STANDARD.encode(bytes),
+        },
+    };
+    let take = |owner: &str| Request::TakeSize {
+        id: id.clone(),
+        cols: 100,
+        rows: 30,
+        owner: owner.to_string(),
+        force: false,
+    };
+    let hex = |bytes: &[u8]| -> String { bytes.iter().map(|b| format!("{b:02x}")).collect() };
+    let seen = |bytes: &[u8]| {
+        let want = hex(bytes);
+        let log = log.clone();
+        async move {
+            poll_log(&log, Duration::from_secs(10), |t| {
+                t.lines().collect::<String>().contains(&want)
+            })
+            .await
+        }
+    };
+
+    // No owner at all: a local viewer's keys pass (grid-free behaviour).
+    dispatch_ok(&tr, keys("local:4242", b"AAAA")).await;
+    assert!(seen(b"AAAA").await, "free grid: {}", read_log(&log));
+
+    // The local viewer owns the grid: its keys pass.
+    dispatch_ok(&tr, take("local:4242")).await;
+    dispatch_ok(&tr, keys("local:4242", b"BBBB")).await;
+    assert!(seen(b"BBBB").await, "own grid: {}", read_log(&log));
+
+    // The web takes it: the local viewer is refused, the web viewer passes.
+    dispatch_ok(&tr, take("kb-term")).await;
+    for req in [
+        keys("local:4242", b"CCCC"),
+        Request::Paste {
+            id: id.clone(),
+            viewer: "local:4242".to_string(),
+            text: "PPPP".to_string(),
+        },
+    ] {
+        match rpc::dispatch(&tr.runner, &req).await {
+            Response::Err { code, message } => {
+                assert_eq!(code, "grid-owned", "{message}");
+                assert!(
+                    message.contains("kb-term"),
+                    "owner in the message: {message}"
+                );
+            }
+            Response::Ok { .. } => panic!("a local viewer typed over the web owner: {req:?}"),
+        }
+    }
+    dispatch_ok(&tr, keys("web", b"DDDD")).await;
+    assert!(seen(b"DDDD").await, "web viewer: {}", read_log(&log));
+    let text = read_log(&log).lines().collect::<String>();
+    assert!(
+        !text.contains(&hex(b"CCCC")),
+        "the refused key never reached the pane: {text}"
+    );
+}

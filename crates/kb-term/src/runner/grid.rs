@@ -93,6 +93,35 @@ pub fn decide_take(current: &Option<String>, owner: &str, force: bool) -> Result
     }
 }
 
+/// The input gate: whether `viewer` may type into the session given the
+/// grid's current `owner`. Only a viewer that is a local attach
+/// (`local:<pid>`, the id the attach also uses as its grid owner) is ever
+/// refused: it may type while it owns the grid or nobody does, and never
+/// while another owner (the web relay, another attach) holds it. Every other
+/// viewer (the web relay, the phone dock, the composer) is never refused.
+pub fn decide_input(owner: &Option<String>, viewer: &str) -> Result<(), RunnerError> {
+    match owner {
+        Some(cur) if is_local_owner(viewer) && cur != viewer => {
+            Err(RunnerError::GridOwned(format!("grid is owned by {cur}")))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Run [`decide_input`] against the live owner. The tmux read happens only
+/// for a local viewer, so web input pays nothing for the gate.
+pub async fn check_input<S: crate::runner::supervisor::Supervisor>(
+    runner: &Runner<S>,
+    id: &str,
+    viewer: &str,
+) -> Result<(), RunnerError> {
+    if !is_local_owner(viewer) {
+        return Ok(());
+    }
+    let owner = read_owner(&runner.tmux, &runner.holder_socket(id)).await;
+    decide_input(&owner, viewer)
+}
+
 /// Read the current grid + owner from the holder.
 pub async fn grid_state<T: Tmux>(tmux: &T, sock: &Path) -> Result<GridState, RunnerError> {
     let out = tmux
@@ -309,6 +338,25 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_input_gate_refuses_only_a_local_viewer_under_another_owner() {
+        let some = |o: &str| Some(o.to_string());
+        // A local viewer: free grid and own grid pass; any other owner refuses.
+        assert!(decide_input(&None, "local:7").is_ok());
+        assert!(decide_input(&some("local:7"), "local:7").is_ok());
+        for owner in ["kb-term", "local:8", "phone-1"] {
+            let e = decide_input(&some(owner), "local:7").unwrap_err();
+            assert_eq!(e.code(), "grid-owned");
+            assert!(e.message().contains(owner), "{}", e.message());
+        }
+        // A web viewer is never refused, whoever owns the grid.
+        for owner in [None, some("kb-term"), some("local:7"), some("phone-1")] {
+            for viewer in ["web", "kb-term", "w-abc123", "phone-1"] {
+                assert!(decide_input(&owner, viewer).is_ok(), "{owner:?} {viewer}");
+            }
+        }
+    }
     use crate::runner::config::RunnerConfig;
     use crate::runner::supervisor::DirectSupervisor;
     use crate::runner::tmux::fake::FakeTmux;

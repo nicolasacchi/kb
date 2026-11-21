@@ -374,8 +374,8 @@ async fn attach_notices_and_resume_never_corrupt_the_mirrored_rows() {
 
     // 2. A key while the web owns the grid: nothing is typed, nothing is
     // written into the mirrored rows.
-    rig.type_driver("k");
-    tokio::time::sleep(Duration::from_millis(600)).await;
+    rig.type_driver("Kwatch");
+    rig.expect_absent("Kwatch", "key while watching").await;
     rig.expect_equal("key while watching").await;
     assert!(
         rig.driver_row(last).contains("web panel owns the grid"),
@@ -398,17 +398,13 @@ async fn attach_notices_and_resume_never_corrupt_the_mirrored_rows() {
 
     // 4. A key retakes the grid; that key is NOT sent, the screen repaints
     // clean (no residue of the notices).
-    rig.type_driver("z");
+    rig.type_driver("Zretake");
     rig.wait_until("the attach took the grid back", |r| {
         r.driver_row(last).is_empty()
     })
     .await;
     rig.expect_equal("retake").await;
-    assert!(
-        !rig.holder_rows().iter().any(|row| row.contains('z')),
-        "the retake key is not forwarded: {:?}",
-        rig.holder_rows()
-    );
+    rig.expect_absent("Zretake", "retake key").await;
 
     // 5. Typing works again and the mirror follows.
     rig.type_driver("echo done");
@@ -422,4 +418,134 @@ async fn attach_notices_and_resume_never_corrupt_the_mirrored_rows() {
     })
     .await;
     rig.expect_equal("echo").await;
+}
+
+impl Rig {
+    /// `token` never shows up in the session's rows (scrollback included)
+    /// for a bounded settle window: a key that was typed into the outer
+    /// terminal and must have been dropped by the attach. Polls every
+    /// 100 ms until the hard deadline instead of sleeping once.
+    async fn expect_absent(&self, token: &str, step: &str) {
+        let deadline = Instant::now() + Duration::from_millis(1500);
+        while Instant::now() < deadline {
+            let rows = self.holder_rows();
+            assert!(
+                !rows.iter().any(|row| row.contains(token)),
+                "step `{step}`: the key `{token}` reached the session: {rows:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// The driver's last row carries the watch status text.
+    async fn expect_status(&self, needle: &str, step: &str) {
+        let last = usize::from(OUTER.1) - 1;
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let row = self.driver_row(last);
+            if row.contains(needle) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "step `{step}`: the status line never said `{needle}`: {row:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    async fn web_take(&self, cols: u16, rows: u16) {
+        self.call_ok(Request::TakeSize {
+            id: self.id.clone(),
+            cols,
+            rows,
+            owner: "kb-term".into(),
+            force: false,
+        })
+        .await;
+    }
+}
+
+/// FUATTACHOWN B1: take, release, retake, then a SECOND web take of the same
+/// grid. The attach must notice the second take like the first (status line)
+/// and its keys must never reach the session. A key while the attach owns the
+/// grid is still sent (the gate is not a blanket refusal).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_second_web_take_after_a_retake_still_stops_the_attach_typing() {
+    let Some((tmux_bin, tap)) = gate() else {
+        return;
+    };
+    let lines = vec!["echo one".to_string(), "echo two".to_string()];
+    let rig = Rig::start(tmux_bin, tap, (201, 48), &lines).await;
+    rig.type_attach();
+    rig.expect_equal("attach").await;
+
+    // Own typing while the attach owns the grid IS sent.
+    rig.type_driver("echo ownmark");
+    tmux(
+        &rig.tmux_bin,
+        &rig.driver,
+        &["send-keys", "-t", "drv", "Enter"],
+    );
+    rig.wait_until("own typing reached the session", |r| {
+        r.holder_rows().iter().any(|row| row == "ownmark")
+    })
+    .await;
+
+    // 1. First web take: status line, key swallowed.
+    rig.web_take(120, 40).await;
+    rig.expect_status("web panel owns the grid", "first take")
+        .await;
+    rig.type_driver("K1xq");
+    rig.expect_absent("K1xq", "key under the first take").await;
+
+    // 2. Release, then a key retakes and is not sent.
+    rig.call_ok(Request::ReleaseSize {
+        id: rig.id.clone(),
+        owner: "kb-term".into(),
+    })
+    .await;
+    rig.expect_status("press any key to take the grid back", "release")
+        .await;
+    rig.type_driver("Zretk");
+    let last = usize::from(OUTER.1) - 1;
+    rig.wait_until("the attach took the grid back", |r| {
+        r.driver_row(last).is_empty()
+    })
+    .await;
+    rig.expect_absent("Zretk", "retake key").await;
+
+    // 3. The SECOND web take of the very same grid.
+    rig.web_take(120, 40).await;
+    rig.expect_status("web panel owns the grid", "second take")
+        .await;
+    rig.type_driver("K2xq");
+    rig.expect_absent("K2xq", "key under the second take").await;
+    rig.expect_status("web panel owns the grid", "after the second key")
+        .await;
+}
+
+/// FUATTACHOWN B2: the web takes the grid at the attach's OWN size, so no
+/// resize reaches the attach. A key typed at once must not reach the session
+/// (the runner refuses it for a local viewer), and the attach says it is
+/// watching.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_web_take_at_the_attachs_own_size_stops_its_keys() {
+    let Some((tmux_bin, tap)) = gate() else {
+        return;
+    };
+    let lines = vec!["echo one".to_string(), "echo two".to_string()];
+    let rig = Rig::start(tmux_bin, tap, (201, 48), &lines).await;
+    rig.type_attach();
+    rig.expect_equal("attach").await;
+
+    rig.web_take(OUTER.0, OUTER.1).await;
+    // No wait for any notice: the key races the owner poll on purpose.
+    rig.type_driver("Q7xq");
+    rig.expect_absent("Q7xq", "key right after a same-size web take")
+        .await;
+    rig.expect_status("web panel owns the grid", "same-size take")
+        .await;
+    rig.type_driver("Q8xq");
+    rig.expect_absent("Q8xq", "second key").await;
 }
