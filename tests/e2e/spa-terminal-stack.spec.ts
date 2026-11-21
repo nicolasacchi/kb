@@ -1167,7 +1167,12 @@ async function panelGeometry(page: Page) {
 test("a 201x48 grid is fully visible at 1440x900 (font >= 9, no horizontal scroll), shows the Cropped hint when it cannot be at 1280x720, and the open panel adds no page width at 1024", async ({ page, request }) => {
   test.setTimeout(240_000);
   await page.setViewportSize({ width: 1440, height: 900 });
-  const c = await prepare(page, request, winchHarness(), { cols: 201, rows: 48 });
+  // Launch at the default grid and take 201x48 through the web: the proven path
+  // (a pane launched AT 201x48 can leave the tap announcing its 120x40 default,
+  // and then nothing ever moves the viewer's grid).
+  const c = await prepare(page, request, winchHarness(), { cols: 120, rows: 40 });
+  const took = await takeViaWeb(c.api, c.term.id, 201, 48);
+  expect(took.status, `take-size: ${JSON.stringify(took.body)}`).toBe(200);
   // Baseline first: at 1024 the page is as wide as the shared app header makes it
   // (its right cluster does not wrap there), with the panel still closed.
   let baseline = 0;
@@ -1179,9 +1184,8 @@ test("a 201x48 grid is fully visible at 1440x900 (font >= 9, no horizontal scrol
   });
 
   // 1440x900: the whole grid, legibly, with nothing scrolling sideways.
-  // The panel is built from the tap's first profile (its default 120x40) and
-  // follows the launched 201x48 when the resize frame arrives, so the poll waits
-  // for THAT grid, then for it to be fitted: a 120x40 grid fits too.
+  // The poll waits for the taken 201x48 grid, then for it to be fitted: a
+  // 120x40 grid fits too.
   await expect
     .poll(async () => {
       const m = await panelGeometry(page);
