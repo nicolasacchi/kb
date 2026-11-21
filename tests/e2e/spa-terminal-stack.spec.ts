@@ -1146,6 +1146,40 @@ const winchHarness = (): Harness => ({
   shell: `trap 'printf w' WINCH\nwhile :; do printf .; sleep 1 & wait $!; done\n`,
 });
 
+/**
+ * FUTERMFONT: a pane whose prompt sits on the LAST row, as a real shell, Claude
+ * or omp leaves it (more lines than any grid has rows, then the cursor stays at
+ * the bottom). xterm parks its helper textarea at the cursor row, so a grid that
+ * later shrinks leaves the textarea below the new, smaller screen.
+ */
+const bottomCursorHarness = (): Harness => ({
+  out: scratch("bottom"),
+  shell: `trap 'printf w' WINCH\ni=0\nwhile [ $i -lt 120 ]; do echo "synthetic line $i"; i=$((i+1)); done\nprintf '$ '\nwhile :; do printf .; sleep 1 & wait $!; done\n`,
+});
+
+/**
+ * FUTERMFONT: samples (every animation frame) whether xterm's helper textarea ever
+ * lies below the bottom of `.xterm-screen`, the exact trigger of the stray scroll
+ * extent. The geometry is the same with or without the CSS clip, so the flag proves
+ * the fixture reaches the trigger rather than passing on a page that never did.
+ */
+async function armTextareaProbe(page: Page) {
+  await page.evaluate(() => {
+    const w = window as unknown as { __kbTaBelow: number };
+    w.__kbTaBelow = 0;
+    const tick = () => {
+      const screen = document.querySelector("[data-kb-term] .xterm-screen");
+      const ta = screen?.querySelector(".xterm-helper-textarea");
+      if (screen && ta) {
+        const below = ta.getBoundingClientRect().bottom - screen.getBoundingClientRect().bottom;
+        if (below > w.__kbTaBelow) w.__kbTaBelow = below;
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+}
+
 /** What the desktop panel shows right now: the terminal's grid and font, the host's box and the rendered screen. */
 async function panelGeometry(page: Page) {
   return page.evaluate(() => {
@@ -1588,7 +1622,7 @@ for (const vp of [
 test("FUTERMPOLISH W3: after a window resize and grid changes the font and Cropped equal a fresh load of the same page and grid", async ({ page, request }) => {
   test.setTimeout(360_000);
   await page.setViewportSize({ width: 1440, height: 900 });
-  const c = await prepare(page, request, winchHarness(), { cols: 120, rows: 40 });
+  const c = await prepare(page, request, bottomCursorHarness(), { cols: 120, rows: 40 });
   const t201 = await takeViaWeb(c.api, c.term.id, 201, 48);
   expect(t201.status, JSON.stringify(t201.body)).toBe(200);
   await openPanel(page, c.sid);
@@ -1634,6 +1668,53 @@ test("FUTERMPOLISH W3: after a window resize and grid changes the font and Cropp
     }
   }
 });
+
+for (const [cols, rows] of [
+  [80, 24],
+  [120, 40],
+] as const) {
+  test(`FUTERMFONT: a ${cols}x${rows} grid another client took, with the cursor on the last row, leaves the font and Cropped of a fresh load (no stray scroll extent)`, async ({ page, request }) => {
+    test.setTimeout(360_000);
+    await page.setViewportSize({ width: 1280, height: 720 });
+    const c = await prepare(page, request, bottomCursorHarness(), { cols: 120, rows: 40 });
+    const t201 = await takeViaWeb(c.api, c.term.id, 201, 48);
+    expect(t201.status, JSON.stringify(t201.body)).toBe(200);
+    await openPanel(page, c.sid);
+    await expect.poll(async () => `${(await polishState(page)).cols}x${(await polishState(page)).rows}`, { timeout: 30_000 }).toBe("201x48");
+    await settledState(page);
+    await armTextareaProbe(page);
+    // Another client (the API, not this panel's Fit) takes the smaller grid.
+    const r = await takeViaWeb(c.api, c.term.id, cols, rows);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    await expect.poll(async () => `${(await polishState(page)).cols}x${(await polishState(page)).rows}`, { timeout: 30_000 }).toBe(`${cols}x${rows}`);
+    // Precondition: the trigger happened (the helper textarea sat below the shrunken screen).
+    const below = await page.evaluate(() => (window as unknown as { __kbTaBelow: number }).__kbTaBelow);
+    expect(below, "fixture reached the trigger: helper textarea below the shrunken screen").toBeGreaterThan(1);
+    const got = await settledState(page);
+    const other = await page.context().newPage();
+    let want: Awaited<ReturnType<typeof settledState>>;
+    try {
+      await other.setViewportSize({ width: 1280, height: 720 });
+      await openPanel(other, c.sid);
+      want = await settledState(other);
+    } finally {
+      await other.close();
+    }
+    expect({ grid: `${got.cols}x${got.rows}`, font: got.font, cropped: got.cropped }).toEqual({
+      grid: `${want.cols}x${want.rows}`,
+      font: want.font,
+      cropped: want.cropped,
+    });
+    if (!got.cropped) {
+      const ext = await page.evaluate(() => {
+        const host = document.querySelector("[data-kb-term]") as HTMLElement;
+        return { sh: host.scrollHeight, ch: host.clientHeight, sw: host.scrollWidth, cw: host.clientWidth };
+      });
+      expect(ext.sh, "no stray child extends the host's scroll height").toBeLessThanOrEqual(ext.ch);
+      expect(ext.sw).toBeLessThanOrEqual(ext.cw);
+    }
+  });
+}
 
 test("FUTERMPOLISH W5: in full screen the focus ring and the scrollbar belong to the grid, not to the empty host", async ({ page, request }) => {
   test.setTimeout(240_000);

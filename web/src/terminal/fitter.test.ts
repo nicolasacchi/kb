@@ -34,8 +34,8 @@ function rig(box: { w: number; h: number }, lag: "grid" | "both" = "grid") {
   Object.defineProperty(host, "clientWidth", { get: () => box.w, configurable: true });
   Object.defineProperty(host, "clientHeight", { get: () => box.h, configurable: true });
   const fontNow = (): number => (lag === "grid" ? term.options.fontSize : painted.font);
-  Object.defineProperty(screen, "scrollWidth", { get: () => painted.cols * Math.floor(fontNow() * CW), configurable: true });
-  Object.defineProperty(screen, "scrollHeight", { get: () => painted.rows * Math.floor(fontNow() * CH), configurable: true });
+  Object.defineProperty(screen, "offsetWidth", { get: () => painted.cols * Math.floor(fontNow() * CW), configurable: true });
+  Object.defineProperty(screen, "offsetHeight", { get: () => painted.rows * Math.floor(fontNow() * CH), configurable: true });
   const paint = (): void => {
     painted = { cols: term.cols, rows: term.rows, font: term.options.fontSize };
   };
