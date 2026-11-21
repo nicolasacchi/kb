@@ -362,21 +362,46 @@ to 20..=500 columns and 5..=200 rows.
   other local owner. A local attach started later takes the grid only when the
   owner is none or a local one.
 - **The local attach does not fight the web.** An attach refused with
-  `grid-owned` prints a banner and keeps running as a watch inside the mirror
-  (it does not `exec tmux`: the empty key tables mean tmux's own attach could
-  not implement "any key takes the size back"). Under a **local or other**
-  owner the first keypress takes the size back, as before. Under the **web**
-  owner a keypress takes nothing and forwards nothing: the attach prints one
-  short line (at most once per 10 s) saying the web panel owns the grid and
-  that the operator can release it there or detach with Ctrl-], and keeps
-  watching. When the web releases the grid (`release-size`, owner none) the
-  next keypress takes it and the attach resumes as usual.
-- **An attach that loses the grid** notices it: a `resize` marker whose size
-  differs from the size it last took makes it ask the runner who owns the grid.
-  If the owner is now someone else it drops into the same watch with the banner
-  (never retaking on its own, so no resize loop) and the session keeps running.
-  The ruling also allows the web to detach the local attach; that is **not
-  built**, because watching behind a banner already satisfies the ruling.
+  `grid-owned` keeps running as a watch inside the mirror (it does not
+  `exec tmux`: the empty key tables mean tmux's own attach could not implement
+  "any key takes the size back"). Under a **local or other** owner the first
+  keypress takes the size back and is not sent to the session. Under the
+  **web** owner a keypress takes nothing and forwards nothing. When the web
+  releases the grid (`release-size`, owner none) the next keypress takes it
+  (and is not sent) and the attach resumes as usual.
+- **The attach's notices live on a status line, never in the mirrored rows.**
+  The mirror owns the outer terminal's screen, so nothing else may be written
+  at its cursor. The attach paints one reverse-video row on the outer
+  terminal's LAST row: save cursor, move to the last row, the text fitted to
+  the width, erase to the end of the row, restore cursor (no line feed is ever
+  emitted). It is repainted after every stream write that ends between escape
+  sequences, erased when the attach exits or re-joins, and says what the next
+  key does: "web panel owns the grid", watching, detach with Ctrl-] . while the
+  web owns it; "press any key to take the grid back (that key is not sent)"
+  once the web released it (the attach asks the runner who owns the grid every
+  two seconds while it watches); "another kb-term attach / another device owns
+  the grid" with "any key takes it back (that key is not sent)" otherwise. A
+  session taller than the outer terminal loses its last row to the status line
+  while a notice is shown.
+- **Every join starts from a clean screen.** The seed paints rows from the top
+  without erasing, so each join first resets attributes, the scroll region and
+  origin mode, homes the cursor, erases the visible screen and the
+  scrollback, then writes the seed. What the outer terminal showed before (the
+  shell line that started the attach, an earlier join's longer rows, a notice)
+  can no longer survive under the seed.
+- **The mirror repaints when the grid changes under it.** A `resize` or
+  `sizechanged` marker for a grid other than the one the screen was painted for
+  (the join's `profile`) makes the attach re-join with a fresh seed. That
+  covers the attach's own take-size (its seed is taken at the old grid, the
+  take lands after it, and tmux reflows wrapped lines), a web Fit and a release
+  followed by a retake. An owning attach that did not take the marker's size
+  asks the runner who owns the grid first: if someone else does (the web
+  outranks a local attach) it re-joins as a watch behind the status line and
+  never retakes on its own, so there is no resize loop (a repaint for the same
+  grid twice in a row is never repeated). While watching a grid of another
+  width than the outer terminal, wrapped lines are painted at the session's
+  width by the outer terminal's own autowrap, so rows can differ from the
+  session until the grid matches again.
 - **Release.** `release-size` clears the owner only when it matches the web
   owner; a local owner is not cleared by it.
 - **The tap follows the grid.** A take-size is a tmux `resize-window`, and tmux

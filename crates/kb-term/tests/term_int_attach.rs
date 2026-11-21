@@ -1425,13 +1425,18 @@ fn attach_under_a_web_owner_never_takes_the_grid_until_the_web_releases() {
     let (code, out) = proc.0.wait_for_exit(Duration::from_secs(30));
     assert_eq!(code, Some(0));
     assert!(
-        count_of(&out, "grid owned by the web panel; watching") == 1,
-        "the web-owner banner prints once"
+        count_of(&out, "web panel owns the grid") >= 1,
+        "the web-owner status line is painted"
     );
     assert_eq!(
-        count_of(&out, "the web panel owns the grid; release it there"),
-        1,
-        "rate limited: one notice for two refused keys"
+        count_of(&out, "web panel owns the grid"),
+        count_of(&out, "\x1b[0;7mweb panel owns the grid"),
+        "every paint of the notice is the status-line paint (reverse video on the last row)"
+    );
+    assert_eq!(
+        count_of(&out, "release it there"),
+        0,
+        "no notice line is written at the mirror's cursor any more"
     );
     assert!(
         !rig.runner.recorded_keys().is_empty(),
@@ -1485,14 +1490,14 @@ fn an_owning_attach_that_loses_the_grid_watches_and_never_retakes() {
     );
     let (code, out) = proc.0.wait_for_exit(Duration::from_secs(30));
     assert_eq!(code, Some(0), "the session is never killed or detached");
-    assert_eq!(
-        count_of(&out, "grid owned by the web panel; watching"),
-        1,
-        "losing the grid prints the web banner"
-    );
     assert!(
-        count_of(&out, "scrollback may be incomplete") >= 1,
-        "banner keeps the scrollback clause"
+        count_of(&out, "web panel owns the grid") >= 1,
+        "losing the grid shows the web status line"
+    );
+    assert_eq!(
+        count_of(&out, "web panel owns the grid"),
+        count_of(&out, "\x1b[0;7mweb panel owns the grid"),
+        "the notice only ever goes through the status-line paint"
     );
 }
 
@@ -1515,7 +1520,7 @@ fn a_grid_marker_while_the_attach_still_owns_the_grid_changes_nothing() {
     proc.1.write_all(b"T").expect("typed key");
     let (code, out) = proc.0.wait_for_exit(Duration::from_secs(30));
     assert_eq!(code, Some(0));
-    assert_eq!(count_of(&out, "grid owned by"), 0, "no fallback banner");
+    assert_eq!(count_of(&out, "owns the grid"), 0, "no status line");
     assert!(
         !rig.runner.recorded_keys().is_empty(),
         "the attach still forwards keys"
@@ -1546,9 +1551,9 @@ fn attach_grid_owned_prints_banner_and_watches_until_key() {
     let (code, out) = proc.0.wait_for_exit(Duration::from_secs(20));
     assert_eq!(code, Some(0));
     assert!(
-        out.windows(b"grid owned by another kb-term attach".len())
-            .any(|w| w == b"grid owned by another kb-term attach"),
-        "fallback banner (stderr merged onto the pty)"
+        out.windows(b"another kb-term attach owns the grid".len())
+            .any(|w| w == b"another kb-term attach owns the grid"),
+        "fallback status line (painted on the last row)"
     );
     let takes = rig.runner.recorded_takes();
     // Two takes: the forced take the key triggers, and the normal

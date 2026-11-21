@@ -1,9 +1,9 @@
 //! `kb-term attach|new|ls|kill`: the host-local mirror client.
 //!
 //! The mirror is a normal tap viewer (`<run-dir>/s/<id>/tap.sock`):
-//! it writes the leading `ESC[3J` itself, then the twin SEED, then the
-//! live stream from the exact offset the seed was taken at — the whole
-//! session in native scrollback. Picture rows become dim one-row
+//! it clears the visible screen and the scrollback itself ([`JOIN_CLEAR`]),
+//! then writes the twin SEED, then the live stream from the exact offset
+//! the seed was taken at — the whole session in native scrollback. Picture rows become dim one-row
 //! labels from [`label::LabelRewriter`]. Runner control (list, launch,
 //! take-size, the hidden-client keys path) goes through
 //! [`crate::runner_client`]; the tap socket carries only the stream
@@ -12,6 +12,7 @@
 pub mod fallback;
 pub mod graphics;
 pub mod label;
+pub mod status;
 mod tables;
 #[cfg(test)]
 mod testscreen;
@@ -27,7 +28,17 @@ use crate::runner_client::{run_dir_of, tap_socket_path, RunnerClient, RunnerClie
 use crate::wire::{ControlMessage, KeyInput, Request, ResumeInfo, ServerFrame, TextFrame};
 
 use label::LabelRewriter;
+use status::StatusLine;
 use tty::{InputFilter, RawGuard, StdinDecision, RESTORE_BYTES};
+
+/// What every join writes before its seed. The seed paints rows from the
+/// top without erasing, so whatever the outer terminal showed (the shell
+/// line that started the attach, a previous join's rows, a notice) would
+/// survive under a shorter row. SGR is reset first so the erase fills with
+/// the default background; the scroll region and origin mode are reset so
+/// `H` means the screen's top-left; `2J` erases the visible screen and `3J`
+/// the scrollback (the mirror owns the scrollback, see the module doc).
+pub const JOIN_CLEAR: &[u8] = b"\x1b[0m\x1b[?6l\x1b[r\x1b[H\x1b[2J\x1b[3J";
 
 // ---------------------------------------------------------------- CLI args
 
@@ -125,9 +136,10 @@ fn jitter_ms() -> u64 {
 
 /// The client-side stream state: the applied-offset counter and marker
 /// bookkeeping. The contract is brief §2.5: on a full join the mirror
-/// writes `ESC[3J`, then the seed, then live data from the seed's
-/// offset. T7's seed relation (mirroring `tap/src/viewers.ts`
-/// `joinNow`): the seed is captured at `X = ring.head`, the seed
+/// writes [`JOIN_CLEAR`] (reset attributes, scroll region and origin mode,
+/// home, erase the screen, erase the scrollback), then the seed, then live
+/// data from the seed's offset. T7's seed relation (mirroring
+/// `tap/src/viewers.ts` `joinNow`): the seed is captured at `X = ring.head`, the seed
 /// chunks carry header `X`, and `viewer.sentOffset` starts at `X` —
 /// the seed bytes are NOT stream bytes from a later offset, so the
 /// client counts exactly `Seed.len` bytes as the seed (ignoring chunk
@@ -148,6 +160,8 @@ struct StreamState {
     /// The size of the newest `resize`/`sizechanged` marker not yet looked
     /// at by the pump (an owning attach checks it against its last take).
     size_marker: Option<(u16, u16)>,
+    /// The grid the screen was painted for (the join's `profile`).
+    grid: Option<(u16, u16)>,
 }
 
 impl StreamState {
@@ -206,6 +220,22 @@ struct AttachContext {
     local_size: (u16, u16),
     dim: bool,
     runner: RunnerClient,
+    /// How the next join starts after a repaint (see [`Preset`]).
+    preset: Option<Preset>,
+    /// The grid of the last repaint this attach asked for. A repaint for
+    /// the same grid twice in a row is never repeated (a loop guard: a real
+    /// tap's new profile already carries the new grid).
+    last_repaint: Option<(u16, u16)>,
+}
+
+/// How a repaint join starts: the grid ownership is already known, so the
+/// join neither takes the size again nor asks who owns it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Preset {
+    /// This attach owns the grid (its own take just changed the size).
+    Own,
+    /// Someone else owns the grid: watch behind the status line.
+    Watching(String),
 }
 
 impl AttachContext {
@@ -264,6 +294,8 @@ pub async fn run_attach(args: AttachArgs) -> u8 {
         viewer: view_id,
         local_size,
         runner,
+        preset: None,
+        last_repaint: None,
     };
     attach_session(ctx).await
 }
@@ -287,6 +319,10 @@ enum SessionResult {
     Detached,
     /// The grid is owned by someone else (fallback path).
     GridOwned(String),
+    /// The grid changed under the painted screen: re-join with a fresh
+    /// seed (which clears the screen first) so the mirror equals the
+    /// session again.
+    Repaint(Preset),
     /// The tap connection died (retry with resume + backoff).
     Error(&'static str),
     /// The hidden-client keys path rejected key bytes (e.g. `no-viewer`
@@ -368,6 +404,12 @@ async fn attach_session(mut ctx: AttachContext) -> u8 {
                 banner_printed = false;
                 continue 'outer;
             }
+            SessionResult::Repaint(preset) => {
+                state = StreamState::default();
+                rewriter.reset();
+                ctx.preset = Some(preset);
+                continue 'outer;
+            }
             SessionResult::KeysFailed => {
                 break 'outer SessionResult::KeysFailed;
             }
@@ -403,7 +445,10 @@ async fn attach_session(mut ctx: AttachContext) -> u8 {
     let _ = stdout.write_all(RESTORE_BYTES).await;
     let _ = stdout.flush().await;
     match result {
-        SessionResult::Normal(_) | SessionResult::Detached | SessionResult::GridOwned(_) => 0,
+        SessionResult::Normal(_)
+        | SessionResult::Detached
+        | SessionResult::GridOwned(_)
+        | SessionResult::Repaint(_) => 0,
         SessionResult::Error(_) | SessionResult::KeysFailed => 1,
     }
 }
@@ -418,8 +463,41 @@ async fn run_one_join(
     resume: Option<ResumeInfo>,
     banner_printed: &mut bool,
     backoff: &mut Backoff,
+    stdin_rx: Option<&mut tokio::sync::mpsc::Receiver<Vec<u8>>>,
+    filter: &mut InputFilter,
+) -> SessionResult {
+    let mut status = StatusLine::default();
+    let result = run_one_join_inner(
+        ctx,
+        rewriter,
+        state,
+        resume,
+        banner_printed,
+        backoff,
+        stdin_rx,
+        filter,
+        &mut status,
+    )
+    .await;
+    // However the join ends, the notice row is erased: it was never part
+    // of the mirror, and a detach must hand the terminal back clean.
+    if status.text().is_some() {
+        let _ = write_out(&status::clear_bytes(outer_size(ctx))).await;
+    }
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_one_join_inner(
+    ctx: &mut AttachContext,
+    rewriter: &mut LabelRewriter,
+    state: &mut StreamState,
+    resume: Option<ResumeInfo>,
+    banner_printed: &mut bool,
+    backoff: &mut Backoff,
     mut stdin_rx: Option<&mut tokio::sync::mpsc::Receiver<Vec<u8>>>,
     filter: &mut InputFilter,
+    status: &mut StatusLine,
 ) -> SessionResult {
     let mut conn = match connect_tap(&ctx.tap_path, &ctx.viewer, resume).await {
         Ok(c) => c,
@@ -433,14 +511,21 @@ async fn run_one_join(
     // keeps pumping the tap as a watcher, and the first stdin key
     // takes the size back (force) and restarts the attach.
     let mut grid_owned: Option<String> = None;
-    if !ctx.is_watch() {
+    // The one-row notice on the outer terminal's last row (never the
+    // mirror's cursor: that would overwrite mirrored rows).
+    let preset = ctx.preset.take();
+    if let Some(Preset::Watching(owner)) = &preset {
+        status.set(Some(fallback::grid_status(Some(owner))));
+        grid_owned = Some(owner.clone());
+    }
+    if !ctx.is_watch() && preset.is_none() {
         let args_id = ctx.args.id.clone();
         let viewer = ctx.viewer.clone();
         match runner_takesize(&mut ctx.runner, &args_id, ctx.local_size, &viewer).await {
             Ok(()) => {}
             Err(RunnerClientError::Code { code, message }) if code == "grid-owned" => {
                 let owner = fallback::owner_from_message(&message);
-                eprintln!("{}", fallback::grid_banner(&owner));
+                status.set(Some(fallback::grid_status(Some(&owner))));
                 grid_owned = Some(owner);
             }
             Err(e) => {
@@ -460,7 +545,10 @@ async fn run_one_join(
     // A pending bare Esc becomes a key once idle for 20 ms.
     let mut esc_deadline: Option<tokio::time::Instant> = None;
     let mut sink: Vec<u8> = Vec::new();
-    let mut notice_gate = fallback::NoticeGate::default();
+    // While watching under another owner, ask the runner now and then so
+    // the status line can say "press any key" once the web releases.
+    let mut owner_poll = tokio::time::interval(Duration::from_secs(2));
+    owner_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
             result = conn.read_next_envelope() => {
@@ -473,18 +561,40 @@ async fn run_one_join(
                             EnvelopeOutcome::DropAndResume => return SessionResult::Error("tap rejoin"),
                             EnvelopeOutcome::GapResume => return SessionResult::Error("tap gap"),
                         }
-                        if !sink.is_empty() && write_out(&sink).await.is_err() {
-                            return SessionResult::Detached;
+                        if !sink.is_empty() {
+                            // The stream's bytes, then (when the stream stopped
+                            // at ground) the status line again: the stream may
+                            // have scrolled or overwritten the last row.
+                            let repaint = status.after_write(&sink, outer_size(ctx));
+                            sink.extend_from_slice(&repaint);
+                            if write_out(&sink).await.is_err() {
+                                return SessionResult::Detached;
+                            }
                         }
-                        // A grid marker that differs from the size this attach
-                        // last took: ask who owns the grid now. If someone else
-                        // does (the web outranks a local attach), fall back to
-                        // watching behind a banner; never retake it here.
+                        // A grid marker: the screen was painted for another grid
+                        // unless it equals the profile's. Re-join (a fresh seed
+                        // clears the screen first) so the mirror equals the
+                        // session. An owning attach that did not take this size
+                        // asks who owns the grid now (the web outranks a local
+                        // attach): if someone else does, it re-joins as a watch
+                        // behind the status line and never retakes on its own.
                         if let Some(marker) = state.size_marker.take() {
-                            if !ctx.is_watch() && grid_owned.is_none() && marker != last_taken {
-                                if let Some(owner) = lost_grid_owner(ctx).await {
-                                    eprintln!("{}", fallback::grid_banner(&owner));
-                                    grid_owned = Some(owner);
+                            let painted = state.grid;
+                            let repeated = ctx.last_repaint == Some(marker);
+                            if !ctx.is_watch() && !repeated {
+                                if let Some(owner) = grid_owned.clone() {
+                                    if painted.is_some_and(|g| g != marker) {
+                                        ctx.last_repaint = Some(marker);
+                                        return SessionResult::Repaint(Preset::Watching(owner));
+                                    }
+                                } else if marker == last_taken {
+                                    if painted.is_some_and(|g| g != marker) {
+                                        ctx.last_repaint = Some(marker);
+                                        return SessionResult::Repaint(Preset::Own);
+                                    }
+                                } else if let Some(owner) = lost_grid_owner(ctx).await {
+                                    ctx.last_repaint = Some(marker);
+                                    return SessionResult::Repaint(Preset::Watching(owner));
                                 }
                             }
                         }
@@ -512,11 +622,17 @@ async fn run_one_join(
                             // Fallback take key: NOT forwarded; force the
                             // size back and restart the attach.
                             let owner = grid_owned.clone().unwrap_or_default();
-                            match fallback_take_key(ctx, &owner, &mut notice_gate).await {
+                            match fallback_take_key(ctx, &owner).await {
                                 FallbackKey::Taken => return SessionResult::GridOwned(owner),
                                 // The web owns the grid: the key is dropped,
                                 // nothing is taken, the attach keeps watching.
-                                FallbackKey::Held(now_owner) => grid_owned = Some(now_owner),
+                                FallbackKey::Held(now_owner) => {
+                                    status.set(Some(fallback::grid_status(Some(&now_owner))));
+                                    if write_out(&status.paint_now(outer_size(ctx))).await.is_err() {
+                                        return SessionResult::Detached;
+                                    }
+                                    grid_owned = Some(now_owner);
+                                }
                                 FallbackKey::Failed => return SessionResult::Detached,
                             }
                         } else if let Err(e) =
@@ -549,8 +665,24 @@ async fn run_one_join(
                     {
                         if code == "grid-owned" {
                             let owner = fallback::owner_from_message(&message);
-                            eprintln!("{}", fallback::grid_banner(&owner));
+                            status.set(Some(fallback::grid_status(Some(&owner))));
+                            if write_out(&status.paint_now(outer_size(ctx))).await.is_err() {
+                                return SessionResult::Detached;
+                            }
                             grid_owned = Some(owner);
+                        }
+                    }
+                }
+            }
+            _ = owner_poll.tick(), if grid_owned.is_some() => {
+                // Who owns the grid now? (None = released.) Only the text
+                // changes; a change of owner repaints the status line.
+                if let Some(cur) = current_owner(ctx).await.filter(|c| c.as_deref() != Some(ctx.viewer.as_str())) {
+                    let text = fallback::grid_status(cur.as_deref());
+                    if status.text() != Some(text.as_str()) {
+                        status.set(Some(text));
+                        if write_out(&status.paint_now(outer_size(ctx))).await.is_err() {
+                            return SessionResult::Detached;
                         }
                     }
                 }
@@ -575,11 +707,17 @@ async fn run_one_join(
                     if let Some(bytes) = filter.take_expired_esc(Duration::from_millis(20)) {
                         if grid_owned.is_some() {
                             let owner = grid_owned.clone().unwrap_or_default();
-                            match fallback_take_key(ctx, &owner, &mut notice_gate).await {
+                            match fallback_take_key(ctx, &owner).await {
                                 FallbackKey::Taken => return SessionResult::GridOwned(owner),
                                 // The web owns the grid: the key is dropped,
                                 // nothing is taken, the attach keeps watching.
-                                FallbackKey::Held(now_owner) => grid_owned = Some(now_owner),
+                                FallbackKey::Held(now_owner) => {
+                                    status.set(Some(fallback::grid_status(Some(&now_owner))));
+                                    if write_out(&status.paint_now(outer_size(ctx))).await.is_err() {
+                                        return SessionResult::Detached;
+                                    }
+                                    grid_owned = Some(now_owner);
+                                }
                                 FallbackKey::Failed => return SessionResult::Detached,
                             }
                         } else if let Err(e) =
@@ -616,11 +754,7 @@ enum FallbackKey {
 /// with the web gone (owner none) or another local owner, the key takes the
 /// size back exactly as before. The runner enforces the same precedence, so
 /// a race with a web take is refused there with `grid-owned`.
-async fn fallback_take_key(
-    ctx: &mut AttachContext,
-    remembered_owner: &str,
-    gate: &mut fallback::NoticeGate,
-) -> FallbackKey {
+async fn fallback_take_key(ctx: &mut AttachContext, remembered_owner: &str) -> FallbackKey {
     let id = ctx.args.id.clone();
     let mut owner = remembered_owner.to_string();
     if let Ok(data) = ctx.runner.call(&Request::Grid { id: id.clone() }).await {
@@ -631,7 +765,6 @@ async fn fallback_take_key(
             .to_string();
     }
     if fallback::is_web_owner(&owner) {
-        notify_web_owner(gate);
         return FallbackKey::Held(owner);
     }
     let size = RawGuard::size(0).unwrap_or(ctx.local_size);
@@ -651,20 +784,34 @@ async fn fallback_take_key(
             FallbackKey::Taken
         }
         Err(RunnerClientError::Code { code, message }) if code == "grid-owned" => {
-            let now_owner = fallback::owner_from_message(&message);
-            if fallback::is_web_owner(&now_owner) {
-                notify_web_owner(gate);
-            }
-            FallbackKey::Held(now_owner)
+            FallbackKey::Held(fallback::owner_from_message(&message))
         }
         Err(_) => FallbackKey::Failed,
     }
 }
 
-fn notify_web_owner(gate: &mut fallback::NoticeGate) {
-    if gate.allow(std::time::Instant::now()) {
-        eprint!("{}\r\n", fallback::WEB_OWNER_NOTICE);
-    }
+/// The outer terminal's current size (the status line goes on its last
+/// row): the live tty size, else the size at start.
+fn outer_size(ctx: &AttachContext) -> (u16, u16) {
+    RawGuard::size(0).unwrap_or(ctx.local_size)
+}
+
+/// The grid's current owner as the runner reports it: `Some(None)` = no
+/// owner, `Some(Some(o))` = owned by `o`, `None` = the runner could not say.
+async fn current_owner(ctx: &mut AttachContext) -> Option<Option<String>> {
+    let data = ctx
+        .runner
+        .call(&Request::Grid {
+            id: ctx.args.id.clone(),
+        })
+        .await
+        .ok()?;
+    Some(
+        data.get("owner")
+            .and_then(|v| v.as_str())
+            .filter(|o| !o.is_empty())
+            .map(str::to_string),
+    )
 }
 
 /// An owning attach saw a grid marker for a size it did not take:
@@ -854,6 +1001,7 @@ fn apply_server_frame(
         }
         ServerFrame::Profile { cols, rows, .. } => {
             rewriter.set_cols(cols);
+            state.grid = Some((cols, rows));
             if !ctx.is_watch && !*banner_printed {
                 let (lc, lr) = ctx.local_size;
                 if (cols, rows) != (lc, lr) {
@@ -877,7 +1025,7 @@ fn apply_server_frame(
             // (`reset_stream` preserves defs) so the seed labels keep
             // their pixel dims.
             rewriter.reset_stream();
-            sink.extend_from_slice(b"\x1b[3J");
+            sink.extend_from_slice(JOIN_CLEAR);
             EnvelopeOutcome::Continue
         }
         ServerFrame::Resize {
@@ -1511,6 +1659,7 @@ mod tests {
             seed_remaining: None,
             seed_x: Some(x),
             size_marker: None,
+            grid: None,
         }
     }
 
@@ -1619,7 +1768,7 @@ mod tests {
             &mut banner,
             &mut sink,
         );
-        assert_eq!(sink, b"\x1b[3J");
+        assert_eq!(sink, JOIN_CLEAR);
         // Epoch 2: the next Seed emits a fresh leading ED3.
         sink.clear();
         apply_server_frame(
@@ -1639,7 +1788,7 @@ mod tests {
             &mut banner,
             &mut sink,
         );
-        assert_eq!(sink, b"\x1b[3J", "fresh ED3 after epoch change");
+        assert_eq!(sink, JOIN_CLEAR, "fresh clear after epoch change");
         // Same epoch again: the Seed still leads with ED3 (a rejoin
         // always restarts at the seed step).
         sink.clear();
@@ -1659,7 +1808,7 @@ mod tests {
             &mut banner,
             &mut sink,
         );
-        assert_eq!(sink, b"\x1b[3J");
+        assert_eq!(sink, JOIN_CLEAR);
     }
 
     #[test]
