@@ -79,7 +79,7 @@ pub async fn terms_upload(
     Path(id): Path<String>,
     body: Result<Bytes, BytesRejection>,
 ) -> Response<Body> {
-    if let Err(e) = gate(&state, &headers, &identity, true).await {
+    if let Err(e) = gate(&state, &headers, &identity).await {
         return e;
     }
     if !is_valid_term_id(&id) {

@@ -929,6 +929,7 @@ async fn card_terminal_lane_for_a_child_resolves_to_the_root_terminal() {
     let resp = client
         .get(url(addr, "/api/terms"))
         .header("Origin", origin_header(addr))
+        .header("x-kb-intent", "terminal")
         .send()
         .await
         .unwrap();
@@ -1706,6 +1707,7 @@ async fn a_beat_only_bound_session_gets_a_live_only_card() {
     let resp = client
         .get(url(addr, "/api/terms"))
         .header("Origin", origin_header(addr))
+        .header("x-kb-intent", "terminal")
         .send()
         .await
         .unwrap();

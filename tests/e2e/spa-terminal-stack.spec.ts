@@ -930,16 +930,51 @@ test.describe("T25 gate matrix on the real server", () => {
     expect(ok.status).toBe(101);
   });
 
-  test("an ABSENT Origin is 403 (loopback gets no bypass) on REST and on the WebSocket upgrade", async ({ request }) => {
+  test("an ABSENT Origin is 403 on a POST and on the WebSocket upgrade (loopback gets no bypass); a GET needs the intent header instead", async ({ request }) => {
     const api = new Api(request);
     const t = await launch(api, idleHarness());
     expect((await api.call("POST", `/api/terms/${t.id}/ticket`, { origin: null, data: {} })).status()).toBe(403);
-    expect((await api.call("GET", "/api/terms", { origin: null })).status()).toBe(403);
-    expect((await api.call("GET", `/api/terms/${t.id}/read`, { origin: null })).status()).toBe(403);
+    // A GET is different (FUTERMGET): a same-origin browser GET sends no Origin, so intent is what admits it.
+    expect((await api.call("GET", "/api/terms", { origin: null, intent: false })).status()).toBe(403);
+    expect((await api.call("GET", `/api/terms/${t.id}/read`, { origin: null, intent: false })).status()).toBe(403);
     const { ticket } = await mintTicket(api, t.id);
     const refused = await rawUpgrade(PORT_MAIN, `/api/terms/${t.id}/ws?ticket=${ticket}`);
     expect(refused.status).toBe(403);
     expect((await rawUpgrade(PORT_MAIN, `/api/terms/${t.id}/ws?ticket=${ticket}`, { Origin: MAIN })).status).toBe(101);
+  });
+
+  test("the SPA's own terms read (a same-origin fetch GET: no Origin, intent header) returns the launched row", async ({ page, request }) => {
+    const api = new Api(request);
+    const t = await launch(api, idleHarness());
+    // A real page of the real SPA: the browser decides which headers a
+    // same-origin GET carries, nothing is set by hand here.
+    await page.goto(`${MAIN}/`);
+    const read = (path: string, withIntent: boolean) =>
+      page.evaluate(
+        async ([p, intent]) => {
+          const headers: Record<string, string> = { Accept: "application/json" };
+          if (intent) headers["X-Kb-Intent"] = "terminal";
+          const r = await fetch(p as string, { headers });
+          let body: unknown = null;
+          try {
+            body = await r.json();
+          } catch {
+            body = null;
+          }
+          return { status: r.status, body };
+        },
+        [path, withIntent] as [string, boolean],
+      );
+    const list = await read("/api/terms", true);
+    expect(list.status, "GET /api/terms from the page").toBe(200);
+    const ids = ((list.body as { terms?: Array<{ id: string }> }).terms ?? []).map((x) => x.id);
+    expect(ids, "the launched terminal is in the SPA's own list").toContain(t.id);
+    const grid = await read(`/api/terms/${t.id}/grid`, true);
+    expect(grid.status, "GET grid from the page").toBe(200);
+    // Control: the same read without the intent header is the gate's refusal.
+    const bare = await read("/api/terms", false);
+    expect(bare.status, "control: the page's read without intent").toBe(403);
+    expect((bare.body as { type?: string }).type).toBe("urn:kb:errors:terminal-intent-required");
   });
 
   test("every /api/terms route refuses no intent, a wrong Origin and an absent Origin, and a refusal touches no state", async ({ request }) => {
@@ -960,13 +995,13 @@ test.describe("T25 gate matrix on the real server", () => {
       path: string;
       body?: unknown;
       headers?: Record<string, string>;
-      /** The media GET: it DOES require the intent header (unlike the other GETs) and an absent Origin is its normal same-origin shape. */
-      media?: boolean;
+      /** A GET: it requires the intent header and an absent Origin is its normal same-origin shape (the shared GET gate). */
+      get?: boolean;
     }
     const routes: Route[] = [
-      { name: "list", method: "GET", path: "/api/terms" },
+      { name: "list", method: "GET", path: "/api/terms", get: true },
       { name: "launch", method: "POST", path: "/api/terms", body: { harness: "omp", cwd: root() } },
-      { name: "media", method: "GET", path: `/api/terms/media/${"0".repeat(64)}`, media: true },
+      { name: "media", method: "GET", path: `/api/terms/media/${"0".repeat(64)}`, get: true },
       { name: "ticket", method: "POST", path: `/api/terms/${id}/ticket`, body: {} },
       { name: "paste", method: "POST", path: `/api/terms/${id}/paste`, body: { text: "GATEPASTE" } },
       { name: "enter", method: "POST", path: `/api/terms/${id}/enter`, body: {} },
@@ -976,9 +1011,9 @@ test.describe("T25 gate matrix on the real server", () => {
       { name: "resize", method: "POST", path: `/api/terms/${id}/resize`, body: { cols: 90, rows: 30 } },
       { name: "viewer-close", method: "POST", path: `/api/terms/${id}/viewer-close`, body: {} },
       { name: "upload", method: "POST", path: `/api/terms/${id}/upload`, body: png, headers: { "Content-Type": "image/png" } },
-      { name: "read", method: "GET", path: `/api/terms/${id}/read` },
-      { name: "history", method: "GET", path: `/api/terms/${id}/history` },
-      { name: "grid", method: "GET", path: `/api/terms/${id}/grid` },
+      { name: "read", method: "GET", path: `/api/terms/${id}/read`, get: true },
+      { name: "history", method: "GET", path: `/api/terms/${id}/history`, get: true },
+      { name: "grid", method: "GET", path: `/api/terms/${id}/grid`, get: true },
       { name: "kill", method: "POST", path: `/api/terms/${id}/kill`, body: {} },
     ];
     const call = (r: Route, o: { origin?: string | null; intent?: boolean } = {}) =>
@@ -995,14 +1030,26 @@ test.describe("T25 gate matrix on the real server", () => {
     const rowBefore = await rowOf();
     const countBefore = (await listTerms(api)).length;
     const stdinBefore = stdinLog();
-    const mediaRef = (await call(routes.find((r) => r.media)!)).status();
-    expect(mediaRef, "control: the media route with the right Origin and intent is not a gate refusal").not.toBe(403);
+    // Every GET's reference answer: the right Origin and intent (not a gate refusal).
+    const getRef = new Map<string, number>();
+    for (const r of routes.filter((x) => x.get)) {
+      const ref = (await call(r)).status();
+      expect(ref, `control: ${r.name} with the right Origin and intent is not a gate refusal`).not.toBe(403);
+      getRef.set(r.name, ref);
+    }
 
     for (const r of routes) {
-      if (r.method === "POST" || r.media) {
+      if (r.method === "POST" || r.get) {
         const resp = await call(r, { intent: false });
         expect(resp.status(), `${r.name}: no intent`).toBe(403);
         expect(await problemType(resp), `${r.name}: no intent -> the intent refusal`).toBe(INTENT_URN);
+      }
+      if (r.get) {
+        // The GET gate also refuses cross-site fetch metadata, whatever the Origin.
+        for (const site of ["cross-site", "same-site"]) {
+          const resp = await api.call(r.method, r.path, { origin: null, headers: { "Sec-Fetch-Site": site } });
+          expect(resp.status(), `${r.name}: Sec-Fetch-Site ${site}`).toBe(403);
+        }
       }
       const wrong = await call(r, { origin: evil });
       expect(wrong.status(), `${r.name}: wrong Origin`).toBe(403);
@@ -1010,9 +1057,9 @@ test.describe("T25 gate matrix on the real server", () => {
       // origin allowlist middleware (its own urn); a GET reaches the terminal gate.
       expect(await problemType(wrong), `${r.name}: wrong Origin -> the origin refusal`).toBe(r.method === "POST" ? MIDDLEWARE_ORIGIN_URN : ORIGIN_URN);
       const absent = await call(r, { origin: null });
-      if (r.media) {
-        // The media GET is same-origin `fetch`, which sends no Origin: absent is admitted (module docs, terminal/media.rs).
-        expect(absent.status(), "media: an absent Origin is the normal same-origin shape, answered like the right Origin").toBe(mediaRef);
+      if (r.get) {
+        // A GET is same-origin `fetch`, which sends no Origin: absent is admitted (terminal/gate.rs `gate_read`).
+        expect(absent.status(), `${r.name}: an absent Origin is the normal same-origin shape, answered like the right Origin`).toBe(getRef.get(r.name));
       } else {
         expect(absent.status(), `${r.name}: absent Origin`).toBe(403);
         expect(await problemType(absent), `${r.name}: absent Origin -> the origin refusal`).toBe(ORIGIN_URN);

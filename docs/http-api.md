@@ -1551,16 +1551,25 @@ GET  /api/terms                             SPA-only terminal relays
                                             every route below, so the
                                             tier is invisible. The gate
                                             runs in the handler (not
-                                            middleware): an exact
-                                            `Origin` (absent fails
+                                            middleware). Mutations: an
+                                            exact `Origin` (absent fails
                                             closed; only the configured
                                             parent Origin or a
                                             same-host Origin passes,
                                             artifact-subdomain origins
-                                            are refused even on GETs)
-                                            and — on every POST — an
+                                            are refused) and an
                                             `X-Kb-Intent: terminal`
-                                            header. The loopback bypass
+                                            header. Every GET (this
+                                            list, `/{id}`, `/{id}/history`,
+                                            `/{id}/grid`, media) uses
+                                            one shared GET gate: a
+                                            same-origin `fetch` sends no
+                                            `Origin`, so `X-Kb-Intent:
+                                            terminal` is REQUIRED, a
+                                            present `Origin` must be
+                                            exact, and a present
+                                            `Sec-Fetch-Site` must be
+                                            `same-origin` or `none`. The loopback bypass
                                             does NOT apply, and
                                             `Token`/`Legacy` callers are
                                             refused (see
@@ -1979,7 +1988,7 @@ GET    /api/terms/media/{sha256}            A stored terminal picture
                                             `sha256` is 64 lowercase hex
                                             characters (else 400, before
                                             the runner is reached). A GET
-                                            variant of the gate: the tier
+                                            variant of the gate (the one shared GET gate): the tier
                                             must be enabled (else a
                                             bodiless 404) and the request
                                             must carry `X-Kb-Intent:
