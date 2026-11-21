@@ -71,8 +71,9 @@ test.describe("kb-code Spine fits 861-1280 px (FUSPINE)", () => {
         expect(m.outside, "controls outside the viewport").toEqual([]);
         expect(m.height, "no second row").toBeLessThanOrEqual(45);
         // Reachability by accessible name, however a door collapses.
-        await expect(page.getByRole("link", { name: "Settings" })).toBeVisible();
-        await expect(page.getByRole("link", { name: "Inbox" })).toBeVisible();
+        const bar = page.locator("[data-kb-spine]");
+        await expect(bar.getByRole("link", { name: "Settings", exact: true })).toBeVisible();
+        await expect(bar.getByRole("link", { name: "Inbox", exact: true })).toBeVisible();
       });
     }
   }

@@ -56,13 +56,18 @@
 .kbc-topbar .kb-spine__search {
   min-width: 9rem;
 }
-/* FUSPINE - 861-1280px: the bar must fit the window. The search floor drops
- * back to the shared 6rem, the search button ellipsizes and drops its key
- * hint, and the doors collapse to their icons (the label stays in the
- * accessibility tree and as the link's title). */
-@media (min-width: 861px) and (max-width: 1280px) {
+/* FUSPINE - 861-1200px: the bar must fit the window. The search floor drops
+ * to the shared 6rem and the scope crumbs to 4rem, the search button
+ * ellipsizes and drops its key hint, the doors and the trail label collapse
+ * to their icons (the label stays in the accessibility tree and as the
+ * title) and the Space hint, a teaching hint rather than an action, is
+ * dropped (its key still works). From 1201px the 1280px layout is unchanged. */
+@media (min-width: 861px) and (max-width: 1200px) {
   .kbc-topbar .kb-spine__search {
     min-width: 6rem;
+  }
+  .kbc-topbar .kb-spine__scope {
+    min-width: 4rem;
   }
   .kbc-topbar .kbc-search-mini {
     min-width: 0;
@@ -76,15 +81,6 @@
   .kbc-topbar .kbc-search-mini kbd {
     display: none;
   }
-  .kbc-topbar .kb-spine__scope {
-    min-width: 4rem;
-  }
-}
-/* Below 1200px the rigid labels go too: door text and the trail label
- * collapse to their icons (the label stays in the accessibility tree and as
- * the title) and the Space hint, a teaching hint rather than an action, is
- * dropped; its key still works. */
-@media (min-width: 861px) and (max-width: 1200px) {
   .kbc-topbar__door-label,
   .kbc-topbar .kbc-trailind__label {
     position: absolute;
