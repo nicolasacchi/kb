@@ -1675,12 +1675,28 @@ POST   /api/terms/{id}/upload               Phone Drive: store one
                                             pixels. The SPA pastes the
                                             path, never Enter. Unknown
                                             session 404.
-POST   /api/terms/{id}/paste                Body `{text, viewer?}`; decoded
+POST   /api/terms/{id}/paste                Body `{text, enter?, viewer?}`; decoded
                                             text over 32 KiB is 413
                                             (the cap counts bytes, so
                                             multibyte characters count
                                             by their byte length).
-                                            Relayed verbatim.
+                                            Relayed verbatim, unless
+                                            `enter: true` (the composer's
+                                            Send): then the same request
+                                            also presses Enter, under the
+                                            `…/enter` guards (blocked
+                                            session, paste-only paste,
+                                            400 ms quiet, 5 s cap), and
+                                            the answer adds `entered`
+                                            (bool) and, when false,
+                                            `enter_error {status, type,
+                                            detail}`. A refused Enter is
+                                            still a 200 (the text is in
+                                            the pane: "pasted, not
+                                            sent"); a failed paste is an
+                                            error status and wrote
+                                            nothing. `enter` absent =
+                                            false, answer unchanged.
                                             `viewer` (the id the panel's
                                             WebSocket `hello` frame
                                             gave it, `[a-z0-9:_-]{1,64}`,

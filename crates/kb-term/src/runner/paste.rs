@@ -1,7 +1,8 @@
 //! Paste policy: bracketed-aware, validated, server-side.
 //!
 //! The paste goes through the tmux server (`load-buffer` +
-//! `paste-buffer -p -r -S -d`), never through the hidden client. `-r` is
+//! `paste-buffer -p -r -S -d`), never through the hidden client, and in ONE
+//! tmux client process (the steps are chained with `\;`). `-r` is
 //! mandatory: tmux replaces LF with CR by default even with `-p`, which
 //! would turn a bracketed multi-line paste into Enter keys. `-S` stops
 //! vis(3) sanitising (the text is already validated here). Multi-line
@@ -45,31 +46,6 @@ pub fn check_text(text: &str, max_bytes: usize) -> Result<(), RunnerError> {
 pub fn is_paste_only(text: &str) -> bool {
     text.starts_with('/') || text.starts_with('@')
 }
-async fn pane_flag_and_id<T: Tmux>(tmux: &T, sock: &Path) -> Result<(bool, String), RunnerError> {
-    let out = tmux
-        .run(
-            sock,
-            &[
-                "display-message",
-                "-p",
-                "-t",
-                "kb",
-                "#{bracket_paste_flag} #{pane_id}",
-            ],
-            None,
-        )
-        .await?;
-    if !out.ok {
-        return Err(RunnerError::NotFound(format!(
-            "no pane in {}",
-            sock.display()
-        )));
-    }
-    let mut parts = out.stdout.split_whitespace();
-    let bracketed = parts.next() == Some("1");
-    let pane = parts.next().unwrap_or("kb").to_string();
-    Ok((bracketed, pane))
-}
 
 /// The outcome of a successful paste.
 #[derive(Debug, Clone, Copy)]
@@ -104,6 +80,16 @@ where
 
 /// Validated paste against any [`Tmux`] (real or fake); the RPC records
 /// the `paste_only` flag after success.
+///
+/// ONE tmux client process does everything: the pane's bracketed-paste
+/// flag is printed first, the buffer is loaded from stdin, and the paste
+/// is made (a multi-line one only when the flag is on, through `if-shell
+/// -F`; otherwise the scratch buffer is deleted in the same invocation).
+/// The text never enters argv: only fixed words, the pane target and the
+/// scratch-buffer name do, and `paste-buffer -d` removes the buffer on
+/// success. A spawn costs hundreds of ms on a loaded host, so the old
+/// four-process sequence (flag, load, paste, delete) made every composer
+/// send cost 0.7-1.3 s.
 pub async fn paste_with<T: Tmux>(
     tmux: &T,
     sock: &Path,
@@ -113,49 +99,67 @@ pub async fn paste_with<T: Tmux>(
     seq: u64,
 ) -> Result<PasteOutcome, RunnerError> {
     check_text(text, max_bytes)?;
-    let (bracketed, pane) = pane_flag_and_id(tmux, sock).await?;
-    if text.contains('\n') && !bracketed {
-        return Err(RunnerError::MultiLineRefused(
-            "multi-line paste refused: bracketed paste is off in the pane".to_string(),
-        ));
-    }
     let name = format!("kbterm-{id}-{seq}");
-    let loaded = tmux
-        .run_with_stdin(
-            sock,
-            &["load-buffer", "-b", &name, "-"],
-            Some(text.as_bytes()),
-        )
-        .await;
-    if let Err(e) = loaded {
-        let _ = tmux.run(sock, &["delete-buffer", "-b", &name], None).await;
-        return Err(e);
+    let multi_line = text.contains('\n');
+    let paste_cmd = format!("paste-buffer -p -r -S -d -b {name} -t kb");
+    let drop_cmd = format!("delete-buffer -b {name}");
+    let gate = "#{bracket_paste_flag}";
+    let mut argv: Vec<&str> = vec![
+        "display-message",
+        "-p",
+        gate,
+        ";",
+        "load-buffer",
+        "-b",
+        &name,
+        "-",
+        ";",
+    ];
+    if multi_line {
+        argv.extend(["if-shell", "-F", gate, &paste_cmd, &drop_cmd]);
+    } else {
+        argv.extend([
+            "paste-buffer",
+            "-p",
+            "-r",
+            "-S",
+            "-d",
+            "-b",
+            &name,
+            "-t",
+            "kb",
+        ]);
     }
     let out = tmux
-        .run(
-            sock,
-            &[
-                "paste-buffer",
-                "-p",
-                "-r",
-                "-S",
-                "-d",
-                "-b",
-                &name,
-                "-t",
-                &pane,
-            ],
-            None,
-        )
+        .run_with_stdin(sock, &argv, Some(text.as_bytes()))
         .await;
-    // The buffer is a named scratch space; delete it on every path.
-    let _ = tmux.run(sock, &["delete-buffer", "-b", &name], None).await;
-    let out = out?;
+    let out = match out {
+        Ok(o) => o,
+        Err(e) => {
+            // The buffer is a named scratch space; never leave one behind.
+            let _ = tmux.run(sock, &["delete-buffer", "-b", &name], None).await;
+            return Err(e);
+        }
+    };
+    let flag_seen = out.stdout.split_whitespace().next();
     if !out.ok {
+        if flag_seen.is_none() {
+            return Err(RunnerError::NotFound(format!(
+                "no pane in {}",
+                sock.display()
+            )));
+        }
+        let _ = tmux.run(sock, &["delete-buffer", "-b", &name], None).await;
         return Err(RunnerError::TmuxFailed(format!(
             "paste-buffer failed: {}",
             out.stderr.trim()
         )));
+    }
+    let bracketed = flag_seen == Some("1");
+    if multi_line && !bracketed {
+        return Err(RunnerError::MultiLineRefused(
+            "multi-line paste refused: bracketed paste is off in the pane".to_string(),
+        ));
     }
     Ok(PasteOutcome {
         bracketed,
@@ -231,8 +235,8 @@ mod tests {
             .unwrap();
         assert!(!out.bracketed);
         assert!(!out.paste_only);
-        // Multi-line, bracketed off: refused, nothing pasted (no
-        // load-buffer call).
+        // Multi-line, bracketed off: refused; the chained invocation
+        // deletes the scratch buffer instead of pasting it.
         let fake = fake_with(false);
         assert_eq!(
             paste_with(&fake, &sock(), "abcd1234", "a\nb", 65536, 1)
@@ -241,11 +245,18 @@ mod tests {
                 .code(),
             "multi-line-refused"
         );
-        assert!(
-            args(&fake)
-                .iter()
-                .all(|a| a.first().map(String::as_str) != Some("load-buffer")),
-            "refused paste must not load a buffer"
+        let argv = args(&fake);
+        assert_eq!(argv.len(), 1);
+        let ifs = argv[0].iter().position(|a| a == "if-shell").unwrap();
+        assert_eq!(
+            &argv[0][ifs..],
+            &[
+                "if-shell",
+                "-F",
+                "#{bracket_paste_flag}",
+                "paste-buffer -p -r -S -d -b kbterm-abcd1234-1 -t kb",
+                "delete-buffer -b kbterm-abcd1234-1"
+            ]
         );
         // Multi-line, bracketed on: pasted, LF preserved by -r.
         let fake = fake_with(true);
@@ -261,18 +272,28 @@ mod tests {
             assert_eq!(stdin[0], b"a\nb", "stdin must be the text bytes");
         }
         let argv = args(&fake);
-        let load = argv
-            .iter()
-            .find(|a| a.first().map(String::as_str) == Some("load-buffer"))
-            .expect("load-buffer must be called");
-        assert_eq!(load, &vec!["load-buffer", "-b", "kbterm-abcd1234-1", "-"]);
-        let paste = argv
-            .iter()
-            .find(|a| a.first().map(String::as_str) == Some("paste-buffer"))
-            .expect("paste-buffer must be called");
         assert_eq!(
-            paste,
-            &vec![
+            &argv[0][..9],
+            &[
+                "display-message",
+                "-p",
+                "#{bracket_paste_flag}",
+                ";",
+                "load-buffer",
+                "-b",
+                "kbterm-abcd1234-1",
+                "-",
+                ";"
+            ]
+        );
+        // Single line: an unconditional paste-buffer with the full flags.
+        let fake = fake_with(false);
+        paste_with(&fake, &sock(), "abcd1234", "ab", 65536, 1)
+            .await
+            .unwrap();
+        assert_eq!(
+            &args(&fake)[0][9..],
+            &[
                 "paste-buffer",
                 "-p",
                 "-r",
@@ -281,7 +302,7 @@ mod tests {
                 "-b",
                 "kbterm-abcd1234-1",
                 "-t",
-                "%5"
+                "kb"
             ]
         );
         // Control bytes and DEL -> bad-text; tab is fine.

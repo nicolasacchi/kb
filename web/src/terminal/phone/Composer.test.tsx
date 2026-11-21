@@ -103,12 +103,12 @@ describe("Composer", () => {
     expect(rig.urls()).toEqual(["/api/terms/abcd1234/paste"]);
   });
 
-  it("(c) a plain message is pasted, then Enter, in that order", async () => {
+  it("(c) a plain message is pasted with Enter in ONE request", async () => {
     const onTyped = vi.fn();
     m = mount(<Host drive={mkDrive()} onTyped={onTyped} />);
     typeInto(input(), "fix the failing test");
     await send();
-    expect(rig.urls()).toEqual(["/api/terms/abcd1234/paste", "/api/terms/abcd1234/enter"]);
+    expect(rig.urls()).toEqual(["/api/terms/abcd1234/paste"]);
     expect(input().value).toBe("");
     expect(caption()).toBeNull();
     expect(onTyped).toHaveBeenCalledTimes(1);
@@ -133,12 +133,14 @@ describe("Composer", () => {
 
   it("(d) an Enter refusal keeps 'pasted, not sent', clears the text and raises no error toast", async () => {
     const err = vi.spyOn(toast, "err");
-    rig.reply(200);
-    rig.reply(409, { type: "urn:kb:errors:term-blocked", detail: "the bound session is blocked" });
+    rig.reply(200, {
+      entered: false,
+      enter_error: { status: 409, type: "urn:kb:errors:term-blocked", detail: "the bound session is blocked" },
+    });
     m = mount(<Host drive={mkDrive()} />);
     typeInto(input(), "hello");
     await send();
-    expect(rig.urls()).toEqual(["/api/terms/abcd1234/paste", "/api/terms/abcd1234/enter"]);
+    expect(rig.urls()).toEqual(["/api/terms/abcd1234/paste"]);
     expect(caption()).toBe("Pasted, not sent: the bound session is blocked");
     expect(input().value).toBe("");
     expect(err).not.toHaveBeenCalled();

@@ -150,22 +150,9 @@ describe("sendKey and sendText: the one guard", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("pastes then enters, in that order", async () => {
-    const r = await sendText(mkDrive(), "hello", { enter: true });
-    expect(r).toEqual({ kind: "sent" });
-    expect(calls.map((c) => c.url)).toEqual(["/api/terms/abcd1234/paste", "/api/terms/abcd1234/enter"]);
-  });
-
   it("without enter, only pastes", async () => {
     await sendText(mkDrive(), "/compact", { enter: false });
     expect(calls.map((c) => c.url)).toEqual(["/api/terms/abcd1234/paste"]);
-  });
-
-  it("an Enter refusal after a good paste is a result, not a throw", async () => {
-    replies.push(json(200, {}));
-    replies.push(json(409, { type: "urn:kb:errors:term-blocked", detail: "the bound session is blocked" }));
-    const r = await sendText(mkDrive(), "hello", { enter: true });
-    expect(r).toEqual({ kind: "pasted-not-sent", detail: "the bound session is blocked", conflict: true });
   });
 
   it("a failed paste throws (nothing was written)", async () => {
