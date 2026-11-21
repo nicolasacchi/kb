@@ -21,6 +21,10 @@ export const STOP_V = 0.02;
 export const FONT_STEPS = [8, 9, 10, 11, 12, 13, 14, 16, 18, 20, 22, 24] as const;
 export const DEFAULT_FONT = 12;
 export const LONG_PRESS_MS = 500;
+/** A tap travels under this many px (FUPHONELINKS)... */
+export const TAP_MAX_PX = 10;
+/** ...and lasts under this many ms (past LONG_PRESS_MS, so a long press is never a tap). */
+export const TAP_MAX_MS = 550;
 
 export type Axis = "h" | "v";
 export interface VelocitySample {
@@ -83,4 +87,35 @@ export function stepFont(current: number, dir: 1 | -1): number {
   const idx = FONT_STEPS.indexOf(nearestFontStep(current) as (typeof FONT_STEPS)[number]);
   const next = Math.min(FONT_STEPS.length - 1, Math.max(0, idx + dir));
   return FONT_STEPS[next];
+}
+
+/** A still tap: under TAP_MAX_PX of travel and under TAP_MAX_MS of contact. */
+export function isStillTap(dx: number, dy: number, ms: number): boolean {
+  return Math.hypot(dx, dy) < TAP_MAX_PX && ms < TAP_MAX_MS;
+}
+
+export interface ScreenRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * The cell under a point: a 1-based column and a 0-based screen row, or null
+ * when the point is outside the rendered screen (the rect already carries any
+ * horizontal pan, since it is the live bounding box).
+ */
+export function cellAt(
+  x: number,
+  y: number,
+  rect: ScreenRect,
+  cols: number,
+  rows: number,
+): { x: number; row: number } | null {
+  if (rect.width <= 0 || rect.height <= 0 || cols <= 0 || rows <= 0) return null;
+  const cx = Math.floor((x - rect.left) / (rect.width / cols));
+  const cy = Math.floor((y - rect.top) / (rect.height / rows));
+  if (cx < 0 || cx >= cols || cy < 0 || cy >= rows) return null;
+  return { x: cx + 1, row: cy };
 }
