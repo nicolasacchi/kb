@@ -389,7 +389,15 @@ to 20..=500 columns and 5..=200 rows.
   a joiner waits for a pending twin resize, so its seed and its profile agree. A
   repeat of the current size does nothing. At start the tap also asks tmux for
   the window's current size, so a tap restarted after a take-size does not keep
-  the launch grid. Before the FUATTACH fix nothing resized the twin: `profile`,
+  the launch grid. That query is the only way the tap learns the size of a pane
+  launched at a non-default grid (the session already has its size before the
+  tap attaches, so no `%layout-change` ever follows): the tap's own 120x40 is
+  just the value it holds until the reply. tmux marks each reply block with a
+  flags value whose first bit is set only for a command this client wrote, and
+  the tap pairs a reply with a command only for such blocks (the attach itself
+  opens a block with the bit clear); a null or failed reply is retried five
+  times 200 ms apart, then one stderr line names the session and the tap keeps
+  its current grid until the next layout change. Before the FUATTACH fix nothing resized the twin: `profile`,
   the web panel's header and terminal, and the seed of every viewer that joined
   after a take-size kept the launch grid (120x40) while the pane was larger, so
   a wider stream was drawn at the wrong width (rules wrapped onto a second row,

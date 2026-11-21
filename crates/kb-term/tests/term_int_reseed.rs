@@ -1127,3 +1127,65 @@ fn term_int_partial_sequence_quiescent_wait() {
     }
     let _ = stderr2;
 }
+
+/// A pane launched at a non-default grid reaches a viewer at that size: the
+/// tap learns the real window size with its attach-time query, and real
+/// tmux 3.7c opens a flags-0 block for the attach that must never be paired
+/// with that query's pending reply. Each round boots a fresh tap (the
+/// production start + syncGrid sequence) against the same 201x48 server and
+/// joins a viewer at once; the tap's own default is 120x40.
+#[test]
+fn term_int_a_pane_launched_at_a_non_default_grid_reaches_the_viewer_at_that_size() {
+    let Some(tmux) = tmux_bin() else {
+        eprintln!("SKIP: tmux absent (workspace-test)");
+        return;
+    };
+    let srv = Server::start(&tmux);
+    let ready = srv._dir.file("ready");
+    std::fs::write(&ready, b"").expect("ready file");
+    let _pane = srv.new_session("kb", 201, 48, &ready, &["sleep", "300"]);
+    let driver = tap_dir().join("tap/test/int/launchgrid-driver.ts");
+    for round in 0..4 {
+        let run_dir = TempDir::new("lgrid");
+        let child = Command::new(bun_bin())
+            .arg("run")
+            .arg(&driver)
+            .args(["--socket", &srv.sock.to_string_lossy()])
+            .args(["--session-name", "kb"])
+            .args(["--run-dir", &run_dir.0.to_string_lossy()])
+            .args(["--tmux", &tmux.to_string_lossy()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap_or_else(|e| panic!("spawn launchgrid driver: {e}"));
+        let pid = child.id();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(child.wait_with_output());
+        });
+        let out = match rx.recv_timeout(Duration::from_secs(60)) {
+            Ok(r) => r.expect("driver output"),
+            Err(_) => {
+                let _ = Command::new("kill").arg(pid.to_string()).status();
+                panic!("launchgrid driver round {round} exceeded 60s");
+            }
+        };
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let last = stdout.lines().last().unwrap_or("");
+        let json: serde_json::Value = serde_json::from_str(last)
+            .unwrap_or_else(|_| panic!("round {round}: unparseable {last:?}\nstderr={stderr}"));
+        assert_eq!(json["ok"], true, "round {round}: {json}\nstderr={stderr}");
+        assert_eq!(
+            (json["profileCols"].as_u64(), json["profileRows"].as_u64()),
+            (Some(201), Some(48)),
+            "round {round}: viewer profile must carry the launch grid: {json}"
+        );
+        assert_eq!(
+            (json["twinCols"].as_u64(), json["twinRows"].as_u64()),
+            (Some(201), Some(48)),
+            "round {round}: twin must carry the launch grid: {json}"
+        );
+    }
+}
