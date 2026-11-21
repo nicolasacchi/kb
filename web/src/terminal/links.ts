@@ -107,3 +107,38 @@ export function openExternal(url: string, win: { open: (u: string, target: strin
   if (!/^https?:\/\//i.test(url)) return;
   win.open(url, "_blank", "noopener,noreferrer");
 }
+
+/** Is the 1-based cell (x, y1) inside the range (reading order, end inclusive)? */
+function inRange(l: LinkRange, x: number, y1: number): boolean {
+  if (y1 < l.start.y || y1 > l.end.y) return false;
+  if (y1 === l.start.y && x < l.start.x) return false;
+  if (y1 === l.end.y && x > l.end.x) return false;
+  return true;
+}
+
+/**
+ * FUPHONELINKS — the link under one cell: `x` is the 1-based column, `y0` the
+ * 0-based buffer line. A URL wrapped across rows resolves whole from a cell on
+ * any of its rows. Null when the cell is not part of a URL.
+ */
+export function linkAtCell(src: RowSource, cols: number, x: number, y0: number): LinkRange | null {
+  for (const l of linksAtRow(src, y0, cols)) {
+    if (inRange(l, x, y0 + 1)) return l;
+  }
+  return null;
+}
+
+/** A URL that continues on another row is confirmed before it opens on a phone. */
+export function linkSpansRows(l: LinkRange): boolean {
+  return l.start.y !== l.end.y;
+}
+
+/** The desktop hover hint: how a link is opened (a plain click selects). */
+export function linkHint(mac: boolean): string {
+  return mac ? "Cmd+click to open" : "Ctrl+click to open";
+}
+
+/** Apple platforms open with Cmd. */
+export function isMacLike(nav: { platform?: string; userAgent?: string } | undefined): boolean {
+  return /Mac|iPhone|iPad|iPod/i.test(nav?.platform || nav?.userAgent || "");
+}
