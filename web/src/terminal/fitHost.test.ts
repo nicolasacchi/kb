@@ -138,4 +138,23 @@ describe("fitHostNow: a stray child of the screen never decides the fit (FUTERMF
     expect(got?.cropped).toEqual({ x: false, y: false });
     expect(got?.fontSize).toBeGreaterThan(9);
   });
+
+  it("a TRUE overflow is still Cropped when a stray child also sits below the screen", () => {
+    probe();
+    const term = { options: { fontSize: 9, fontFamily: "monospace" } };
+    const r = fitHostNow(term, withStrayTextarea(560, 700, 900), { cols: 80, rows: 24 }, { min: 9, max: 20, fresh: true });
+    expect(r?.cropped).toEqual({ x: false, y: true });
+    expect(term.options.fontSize).toBe(9);
+  });
+
+  it("a refit (fresh false) with a stray child decides like one without it", () => {
+    probe();
+    const grid = { cols: 80, rows: 24 };
+    const clean = { options: { fontSize: 9, fontFamily: "monospace" } };
+    const want = fitHostNow(clean, withStrayTextarea(560, 408, 0), grid, { min: 9, max: 20, fresh: false });
+    const term = { options: { fontSize: 9, fontFamily: "monospace" } };
+    const got = fitHostNow(term, withStrayTextarea(560, 408, 576), grid, { min: 9, max: 20, fresh: false });
+    expect(got).toEqual(want);
+    expect(got?.cropped).toEqual({ x: false, y: false });
+  });
 });

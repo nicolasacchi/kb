@@ -93,6 +93,62 @@ describe("native full screen (Keyboard Lock present)", () => {
   });
 });
 
+describe("FUMINPANEL races", () => {
+  it("a fast double toggle requests fullscreen once (an in-flight enter is not doubled)", async () => {
+    const r = rig();
+    let release: () => void = () => {};
+    r.panel.requestFullscreen = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          release = () => {
+            r.doc.fullscreenElement = r.panel;
+            resolve();
+          };
+        }),
+    );
+    const first = r.ctl.enter();
+    const second = r.ctl.enter();
+    expect(r.panel.requestFullscreen).toHaveBeenCalledTimes(1);
+    release();
+    await Promise.all([first, second]);
+    expect(r.ctl.active()).toBe(true);
+    expect(r.classes.has(MAX_CLASS)).toBe(false);
+  });
+
+  it("after a rejected request the next enter may try again", async () => {
+    const r = rig({ request: "reject" });
+    await r.ctl.enter();
+    await r.ctl.exit();
+    await r.ctl.enter();
+    expect(r.panel.requestFullscreen).toHaveBeenCalledTimes(2);
+  });
+
+  it("a rejected keyboard.lock leaves fullscreen on, does not throw, and the next change retries the lock", async () => {
+    const r = rig();
+    r.lock.mockRejectedValueOnce(new Error("lock refused"));
+    await r.ctl.enter();
+    r.fire();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(r.lock).toHaveBeenCalledTimes(1);
+    expect(r.ctl.active()).toBe(true);
+    r.fire();
+    expect(r.lock).toHaveBeenCalledTimes(2);
+    // Only a held lock is released on exit.
+    await r.ctl.exit();
+    expect(r.unlock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a lock that is still pending is not asked for twice", async () => {
+    const r = rig();
+    r.lock.mockImplementation(() => new Promise<void>(() => {}));
+    await r.ctl.enter();
+    r.fire();
+    r.fire();
+    expect(r.lock).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("overlay (no Keyboard Lock)", () => {
   it("uses the overlay and never calls requestFullscreen", async () => {
     const r = rig({ lock: false });
