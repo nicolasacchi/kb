@@ -83,6 +83,8 @@ export function createFullscreen(o: FsOptions): FsControl {
   const lockEscape = o.lockEscape !== false;
   let locked = false;
   let disposed = false;
+  // A fast double toggle must not ask the browser twice while the first request is pending.
+  let entering = false;
 
   const native = (): boolean => doc.fullscreenElement === panel;
   const active = (): boolean => native() || panel.classList.contains(MAX_CLASS);
@@ -124,7 +126,7 @@ export function createFullscreen(o: FsOptions): FsControl {
   return {
     active,
     async enter() {
-      if (disposed || active()) return;
+      if (disposed || active() || entering) return;
       const usable = lockEscape
         ? nativeUsable(nav, doc, panel)
         : doc.fullscreenEnabled !== false && typeof panel.requestFullscreen === "function";
@@ -132,6 +134,7 @@ export function createFullscreen(o: FsOptions): FsControl {
         if (overlayAllowed) useOverlay();
         return;
       }
+      entering = true;
       try {
         await panel.requestFullscreen!({ navigationUI: "hide" });
         // The change event drives the lock and the state; a browser that
@@ -139,6 +142,8 @@ export function createFullscreen(o: FsOptions): FsControl {
         if (native()) onFsChange();
       } catch {
         if (overlayAllowed) useOverlay();
+      } finally {
+        entering = false;
       }
     },
     async exit() {

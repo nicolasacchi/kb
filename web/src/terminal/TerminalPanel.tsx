@@ -42,6 +42,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
 import { TermSession, type SessionState } from "./session";
 import { mintTicket } from "../api/terms";
+import { toast } from "../lib/toast";
 import { installReplyGuards } from "./replyGuards";
 import { profileMatchesBundle } from "./pins";
 import { FIT_MAX_FULL, FIT_MAX_INLINE, FIT_MIN_FULL, FIT_MIN_INLINE, type FitResult } from "./fit";
@@ -66,7 +67,7 @@ import { linksAtRow, openExternal, isMacLike, linkHint } from "./links";
 import { useTerms } from "./useTerms";
 import type { ImageDefFrame, ProfileFrame } from "./wire";
 import type { TerminalPanelProps } from "./TerminalPanel.lazy";
-import { osc52ClipboardText, writeClipboardText } from "./clipboard";
+import { osc52ClipboardText, tryWriteClipboardText, writeClipboardText } from "./clipboard";
 import { PhoneTerminal, attachTerm, type PhoneMode } from "./phone/PhoneTerminal";
 import { DriveDock } from "./phone/DriveDock";
 import { terminalOwnsEscape } from "./phone/escape";
@@ -196,6 +197,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
   // renderer has painted (`fitter.ts`); only a refit of the same situation keeps
   // a font that already fits.
   const fitterRef = useRef<Fitter<Terminal, HTMLElement> | null>(null);
+  const lastFitFontRef = useRef<number | null>(null);
   const fitDesktop = (term: Terminal, host: HTMLElement): void => {
     if (!gridRef.current) return;
     if (!fitterRef.current) {
@@ -213,12 +215,19 @@ export function TerminalPanel(props: TerminalPanelProps) {
         },
         schedule: (fn) => window.setTimeout(fn, FIT_SETTLE_MS),
         cancel: (handle) => window.clearTimeout(handle as number),
-        onResult: (r) =>
+        onResult: (r) => {
+          // A new font moves every cell: the picture layer re-lays out (the
+          // renderer hears no event for a late font change on its own).
+          if (lastFitFontRef.current !== r.fontSize) {
+            lastFitFontRef.current = r.fontSize;
+            gfxRef.current?.notifyMetricsChanged();
+          }
           setFit((prev) =>
             prev && prev.fontSize === r.fontSize && prev.cropped.x === r.cropped.x && prev.cropped.y === r.cropped.y
               ? prev
               : r,
-          ),
+          );
+        },
       });
     }
     fitterRef.current.refit(term, host);
@@ -233,6 +242,11 @@ export function TerminalPanel(props: TerminalPanelProps) {
     }, TERMS_REFRESH_MS);
   };
   const say = useCallback((message: string): void => setStatus(message), []);
+  // FUMINPANEL: the program's title belongs to one live connection: a reconnect or an
+  // ended session must not keep showing the previous run's title.
+  useEffect(() => {
+    if (state.phase !== "live") setProgTitle("");
+  }, [state.phase]);
   // FUTERMPASTE: a picture paste or drop on the desktop host uploads and pastes its path.
   const pastePath = useCallback((text: string): void => termRef.current?.paste(text), []);
   useTerminalPaste({
@@ -380,9 +394,13 @@ export function TerminalPanel(props: TerminalPanelProps) {
             ev.preventDefault();
             const sel = term.getSelection();
             if (sel) {
-              void writeClipboardText(sel);
-              // Copied: clear the selection, so the next Ctrl/Cmd+C has none and is ^C.
-              term.clearSelection();
+              // Copied: clear the selection once the write LANDED, so the next
+              // Ctrl/Cmd+C has none and is ^C. A refused write keeps it and says so.
+              void tryWriteClipboardText(sel).then((ok) => {
+                if (dead) return;
+                if (ok) term.clearSelection();
+                else toast.err("Could not copy to the clipboard");
+              });
             }
           }
           return false;

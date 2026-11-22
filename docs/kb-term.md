@@ -329,7 +329,8 @@ seed was taken at.
 - **Hidden release:** a tab hidden for 3 minutes closes its socket (1000, no
   reconnect caption) to free a viewer slot and rejoins by resume when shown.
 - **Refusal captions:** the relay close reasons are `idle` (1001), `slow consumer`
-  (1013) and `service restart` (1012) and the reconnect caption names them. A
+  (1013) and `service restart` (1012) and the reconnect caption names them; a bare
+  1001 with no reason is a plain reconnect, not "idle". A
   refused upgrade is only a bare 1006 in a browser, so three consecutive closes
   before any frame show "cannot reach terminal, retrying". A ticket mint that hits
   an edge-auth lapse (a redirect, 401, or a 403 that is not the terminal gate's own)
@@ -793,7 +794,8 @@ the page.
   (the view also gets an accent ring) and "click to type" otherwise, with xterm's
   inactive cursor style. Nothing focuses the terminal on mount; a click does.
 - **Copy and paste.** Ctrl/Cmd+C copies the selection only when there is one and
-  then clears it, so a second Ctrl/Cmd+C is ^C (the Windows Terminal convention);
+  then clears it once the clipboard write has succeeded (a refused write keeps the
+  selection and shows a toast), so a second Ctrl/Cmd+C is ^C (the Windows Terminal convention);
   with no selection the key is ^C. Ctrl/Cmd+Shift+C always copies and
   Ctrl/Cmd+Shift+V is the browser's paste.
 - **Picture paste and drop.** A paste whose clipboard carries a picture file and
