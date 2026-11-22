@@ -1842,3 +1842,106 @@ async fn reading_a_live_only_card_writes_no_session_row() {
         "no capture-backed row may appear: {list}"
     );
 }
+
+/// FUMINSERVER — a terminal beat (`term` + `pid`) on a daemon whose
+/// `[terminal]` tier is OFF never yields a terminal lane or binding on the
+/// live-only card, and the daemon still hides the tier (bodiless 404).
+#[tokio::test]
+async fn a_terminal_beat_with_the_tier_off_yields_no_terminal_lane_on_a_live_only_card() {
+    let (_tmp, addr, _paths) = boot().await;
+    let client = reqwest::Client::new();
+    let mut b = beat("tier-off-1", "start");
+    b.insert("term".into(), json!("abc123"));
+    b.insert("pid".into(), json!(4242));
+    post_beat(&client, addr, Value::Object(b)).await;
+    let (status, card, body) = get_json(&client, addr, "/api/sessions/tier-off-1/card").await;
+    assert_eq!(status, 200, "{card}");
+    assert_eq!(card["capture_pending"], true, "{card}");
+    assert_eq!(card["terminal"]["available"], false, "{card}");
+    assert_eq!(card["terminal"]["reason"], "terminal disabled", "{card}");
+    assert_eq!(card["terminal"]["admitted"], false, "{card}");
+    for key in ["term_id", "harness", "state", "blocked", "via"] {
+        assert!(card["terminal"].get(key).is_none(), "{key} leaked: {card}");
+    }
+    assert!(!body.contains("abc123"), "the term id leaked: {body}");
+    let text = card["text"].as_str().unwrap();
+    assert!(!text.contains("abc123"), "{text}");
+    // The tier itself stays invisible.
+    let resp = client
+        .get(url(addr, "/api/terms"))
+        .header("x-kb-intent", "terminal")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 404);
+}
+
+/// FUMINSERVER — a caller the terminal gate would refuse (a token caller,
+/// by default) sees `admitted: false` on a live-only card, so the SPA
+/// offers no Open affordance, and the lane carries no field beyond the
+/// closed registry-derived set (never a URL, socket or ticket).
+#[tokio::test]
+async fn a_non_admitted_caller_sees_no_terminal_affordance_on_a_live_only_card() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("list".to_string(), runner_list_reply(&["abc123"]));
+    let fake_dir = tempfile::tempdir().unwrap();
+    let fake = spawn_fake_runner(fake_dir.path(), replies);
+    let (_tmp, addr, _paths) = boot_terminal(fake.socket.clone()).await;
+    let client = reqwest::Client::new();
+    let mut b = beat("non-admitted-1", "start");
+    b.insert("term".into(), json!("abc123"));
+    b.insert("pid".into(), json!(4242));
+    post_beat(&client, addr, Value::Object(b)).await;
+    // Control: the loopback operator is admitted.
+    let (_, card, _) = get_json(&client, addr, "/api/sessions/non-admitted-1/card").await;
+    assert_eq!(card["terminal"]["admitted"], true, "{card}");
+    // The token caller is not.
+    let resp = client
+        .get(url(addr, "/api/sessions/non-admitted-1/card"))
+        .header("Authorization", format!("Bearer {FIXTURE_TOKEN}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let card: Value = resp.json().await.unwrap();
+    assert_eq!(card["capture_pending"], true, "{card}");
+    assert_eq!(card["terminal"]["admitted"], false, "{card}");
+    let allowed = [
+        "available",
+        "reason",
+        "term_id",
+        "harness",
+        "state",
+        "blocked",
+        "admitted",
+        "via",
+    ];
+    for key in card["terminal"].as_object().unwrap().keys() {
+        assert!(allowed.contains(&key.as_str()), "unexpected field {key}");
+    }
+}
+
+/// FUMINSERVER — the capture row ALWAYS wins over the registry row. A
+/// registry row alone answers the live-only card; the capture row's
+/// arrival flips the same sid to the full card (no marker, capture lanes).
+#[tokio::test]
+async fn a_registry_row_alone_is_live_only_and_the_capture_row_flips_it_to_the_full_card() {
+    let (_tmp, addr, paths) = boot().await;
+    let client = reqwest::Client::new();
+    post_beat(&client, addr, Value::Object(beat("flip-1", "start"))).await;
+    let (status, card, _) = get_json(&client, addr, "/api/sessions/flip-1/card").await;
+    assert_eq!(status, 200, "{card}");
+    assert_eq!(card["capture_pending"], true, "{card}");
+    assert_eq!(card["files"]["available"], false, "{card}");
+    {
+        let mut db = open_db(&paths);
+        db.sessions_upsert(&row("art-flip", "flip-1", 1_000))
+            .unwrap();
+        seed_file(&mut db, "art-flip", "flip-1", 3);
+    }
+    let (status, card, body) = get_json(&client, addr, "/api/sessions/flip-1/card").await;
+    assert_eq!(status, 200, "{card}");
+    assert!(!body.contains("capture_pending"), "{body}");
+    assert_eq!(card["artifact_id"], "art-flip");
+    assert_eq!(card["files"]["total"], 3);
+}

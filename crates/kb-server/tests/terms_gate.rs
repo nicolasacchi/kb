@@ -1768,3 +1768,177 @@ async fn ticket_and_paste_text_never_reach_the_tracing_output() {
         "paste text must never reach the log stream"
     );
 }
+
+/// Every GET route the gate covers, media included (FUMINSERVER: the
+/// media route was missing from the Rust table).
+fn every_get_suffix() -> Vec<String> {
+    let mut v: Vec<String> = ["", "/abcd1234/read", "/abcd1234/history", "/abcd1234/grid"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    v.push(format!("/media/{}", "a".repeat(64)));
+    v
+}
+
+/// A disabled tier answers a bodiless 404 on every GET (media included)
+/// even when the request carries NO intent header and no Origin: the
+/// enabled check runs before the intent check, so a disabled daemon
+/// never answers 403 (which would name the feature).
+#[tokio::test]
+async fn disabled_tier_get_without_intent_is_a_bodiless_404_not_403() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (_tmp, addr) = boot(TerminalSection::default(), &fake, false).await;
+    let c = client();
+    for suffix in every_get_suffix() {
+        for with_origin in [false, true] {
+            let mut req = c.get(format!("{}/api/terms{suffix}", base_url(addr)));
+            if with_origin {
+                req = req.header("Origin", origin_header(addr));
+            }
+            let resp = req.send().await.unwrap();
+            assert_eq!(resp.status().as_u16(), 404, "{suffix} origin={with_origin}");
+            assert!(resp.headers().get("content-type").is_none(), "{suffix}");
+            let (_s, text) = body_text(resp).await;
+            assert!(text.is_empty(), "{suffix} must be bodiless, got: {text}");
+        }
+    }
+    assert_eq!(fake.conns.load(Ordering::SeqCst), 0);
+}
+
+/// The refusal rows the table was missing, over every GET route including
+/// the media route: an own-Origin request that carries a cross-site
+/// `Sec-Fetch-Site` is refused (the Origin alone must not admit it), and
+/// the media route refuses a missing intent, a foreign Origin and a token
+/// caller like the other GETs. No refused GET dials the runner.
+#[tokio::test]
+async fn get_refusals_over_every_route_including_media_and_own_origin_cross_site() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, true).await;
+    let c = client();
+    let own = origin_header(addr);
+    for suffix in every_get_suffix() {
+        let get = || c.get(format!("{}/api/terms{suffix}", base_url(addr)));
+        for site in ["cross-site", "same-site"] {
+            let resp = get()
+                .header("x-kb-intent", "terminal")
+                .header("Origin", own.clone())
+                .header("sec-fetch-site", site)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status().as_u16(), 403, "{suffix} own origin {site}");
+            let (_s, text) = body_text(resp).await;
+            assert_problem(&text, "terminal-origin-refused");
+        }
+        let resp = get().header("Origin", own.clone()).send().await.unwrap();
+        assert_eq!(resp.status().as_u16(), 403, "{suffix} no intent");
+        let (_s, text) = body_text(resp).await;
+        assert_problem(&text, "terminal-intent-required");
+        let resp = get()
+            .header("x-kb-intent", "terminal")
+            .header("Origin", "https://evil.example")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 403, "{suffix} foreign origin");
+        let (_s, text) = body_text(resp).await;
+        assert_problem(&text, "terminal-origin-refused");
+        let resp = get()
+            .header("x-kb-intent", "terminal")
+            .header("Authorization", format!("Bearer {FIXTURE_TOKEN}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 403, "{suffix} token caller");
+        let (_s, text) = body_text(resp).await;
+        assert_problem(&text, "terminal-token-refused");
+    }
+    assert_eq!(fake.conns.load(Ordering::SeqCst), 0);
+}
+
+/// The Sec-Fetch-Site refusal names its own cause: same problem URN and
+/// 403, but a detail distinct from the Origin refusal's, on every GET.
+#[tokio::test]
+async fn sec_fetch_site_refusal_has_its_own_detail() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    let detail_of = |text: &str| -> String {
+        serde_json::from_str::<serde_json::Value>(text)
+            .unwrap()
+            .get("detail")
+            .and_then(|d| d.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    for suffix in every_get_suffix() {
+        let url = format!("{}/api/terms{suffix}", base_url(addr));
+        let resp = c
+            .get(&url)
+            .header("x-kb-intent", "terminal")
+            .header("sec-fetch-site", "cross-site")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 403, "{suffix}");
+        let (_s, text) = body_text(resp).await;
+        assert_problem(&text, "terminal-origin-refused");
+        let site_detail = detail_of(&text);
+        assert!(
+            site_detail.contains("Sec-Fetch-Site"),
+            "{suffix}: the detail must name the header, got: {site_detail}"
+        );
+        let resp = c
+            .get(&url)
+            .header("x-kb-intent", "terminal")
+            .header("Origin", "https://evil.example")
+            .send()
+            .await
+            .unwrap();
+        let (_s, text) = body_text(resp).await;
+        let origin_detail = detail_of(&text);
+        assert!(!origin_detail.contains("Sec-Fetch-Site"), "{origin_detail}");
+        assert_ne!(site_detail, origin_detail, "{suffix}");
+    }
+}
+
+/// Restores `KB_DEV_ORIGIN_ANY` on drop, even when an assert panics.
+struct DevOriginAny(Option<std::ffi::OsString>);
+
+impl Drop for DevOriginAny {
+    fn drop(&mut self) {
+        match self.0.take() {
+            Some(v) => std::env::set_var("KB_DEV_ORIGIN_ANY", v),
+            None => std::env::remove_var("KB_DEV_ORIGIN_ANY"),
+        }
+    }
+}
+
+/// `KB_DEV_ORIGIN_ANY=1` widens the daemon's CORS-style `origin_allowed`
+/// for any localhost origin; it must NOT widen the terminal GET gate: a
+/// foreign-port localhost Origin is still refused on every GET route.
+#[tokio::test]
+async fn kb_dev_origin_any_does_not_open_a_terminal_get() {
+    let _restore = DevOriginAny(std::env::var_os("KB_DEV_ORIGIN_ANY"));
+    std::env::set_var("KB_DEV_ORIGIN_ANY", "1");
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    for suffix in every_get_suffix() {
+        let resp = c
+            .get(format!("{}/api/terms{suffix}", base_url(addr)))
+            .header("x-kb-intent", "terminal")
+            .header("Origin", "http://localhost:9999")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 403, "{suffix}");
+        let (_s, text) = body_text(resp).await;
+        assert_problem(&text, "terminal-origin-refused");
+    }
+    assert_eq!(fake.conns.load(Ordering::SeqCst), 0);
+}

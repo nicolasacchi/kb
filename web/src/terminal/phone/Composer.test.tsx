@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 // T18 — the native composer: which calls Send makes, in which order, and what it says.
 
-import { useState } from "react";
+import { act, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "../../lib/toast";
-import { Composer, DRAFT_DEBOUNCE_MS } from "./Composer";
+import { Composer, DRAFT_DEBOUNCE_MS, DRAFT_TTL_MS } from "./Composer";
 import type { Drive } from "./driveApi";
 import { UPLOAD_MAX_BYTES } from "../upload";
 import { CAPTION } from "./planSend";
@@ -418,5 +418,182 @@ describe("FUKEYBAR FEATURES-3: quick replies go through planSend", () => {
     m.unmount();
     m = mount(<Host drive={mkDrive()} />);
     expect(chips().map((c) => c.textContent)).toEqual(["ship it", "go on"]);
+  });
+});
+
+describe("FUMINPHONE: quick-reply chip guards", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+  const chips = (): HTMLElement[] =>
+    [...m!.host.querySelectorAll<HTMLElement>('[data-testid^="kb-drive-reply-"]')].filter((e) =>
+      /^kb-drive-reply-\d+$/.test(e.dataset.testid ?? ""),
+    );
+
+  it("a multi-line reply never becomes a chip (so it cannot be sent line by line without bracketed paste)", async () => {
+    localStorage.setItem("kb.term.quickReplies", JSON.stringify(["first\nsecond", "single"]));
+    m = mount(<Host drive={mkDrive()} bracketPaste={false} />);
+    expect(chips().map((c) => c.textContent)).toEqual(["single"]);
+  });
+
+  it("a reply starting with @ is pasted only and never entered", async () => {
+    localStorage.setItem("kb.term.quickReplies", JSON.stringify(["@notes.md"]));
+    m = mount(<Host drive={mkDrive()} />);
+    click(chips()[0]);
+    await settle();
+    expect(rig.urls()).toEqual(["/api/terms/abcd1234/paste"]);
+    expect(rig.calls[0].json?.enter).toBeUndefined();
+    expect(byId(m.host, "kb-drive-caption").textContent).toBe(CAPTION.pastedOnly);
+  });
+
+  it("a reply whose Enter was refused says pasted-not-sent and leaves the draft alone", async () => {
+    rig.reply(200, {
+      entered: false,
+      enter_error: { status: 409, type: "urn:kb:errors:term-blocked", detail: "the bound session is blocked" },
+    });
+    m = mount(<Host drive={mkDrive()} />);
+    typeInto(input(), "my draft");
+    click(chips()[0]);
+    await settle();
+    expect(caption()).toBe("Pasted, not sent: the bound session is blocked");
+    expect(input().value).toBe("my draft");
+  });
+
+  it("the chips are disabled while a send is in flight (a busy terminal gets one request)", async () => {
+    let release: (r: Response) => void = () => {};
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        calls.push(url);
+        return new Promise<Response>((res) => {
+          release = res;
+        });
+      }),
+    );
+    m = mount(<Host drive={mkDrive()} />);
+    click(chips()[0]);
+    await settle();
+    expect(calls).toHaveLength(1);
+    expect(chips().every((c) => (c as HTMLButtonElement).disabled)).toBe(true);
+    click(chips()[1]);
+    await settle();
+    expect(calls).toHaveLength(1);
+    release(new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }));
+    await settle();
+    expect(chips().every((c) => !(c as HTMLButtonElement).disabled)).toBe(true);
+  });
+});
+
+describe("FUMINPHONE: expired drafts are swept on mount", () => {
+  const PREFIX = "kb.term.draft.";
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("removes expired and malformed draft entries of OTHER terminals, keeps fresh ones and other keys", () => {
+    const now = Date.now();
+    localStorage.setItem(`${PREFIX}stale001`, JSON.stringify({ t: "old", at: now - DRAFT_TTL_MS - 1000 }));
+    localStorage.setItem(`${PREFIX}broken01`, "{not json");
+    localStorage.setItem(`${PREFIX}wrongsh1`, JSON.stringify({ t: 5, at: "x" }));
+    localStorage.setItem(`${PREFIX}fresh001`, JSON.stringify({ t: "keep me", at: now - 1000 }));
+    // Not a draft key: never touched, even when it looks expired.
+    localStorage.setItem("kb.term.other.stale", JSON.stringify({ t: "x", at: 1 }));
+    localStorage.setItem("kb.something", "{not json");
+    m = mount(<Host drive={mkDrive()} />);
+    expect(localStorage.getItem(`${PREFIX}stale001`)).toBeNull();
+    expect(localStorage.getItem(`${PREFIX}broken01`)).toBeNull();
+    expect(localStorage.getItem(`${PREFIX}wrongsh1`)).toBeNull();
+    expect(localStorage.getItem(`${PREFIX}fresh001`)).not.toBeNull();
+    expect(localStorage.getItem("kb.term.other.stale")).not.toBeNull();
+    expect(localStorage.getItem("kb.something")).toBe("{not json");
+  });
+
+  it("a draft just inside the TTL survives the sweep", () => {
+    localStorage.setItem(`${PREFIX}edge0001`, JSON.stringify({ t: "edge", at: Date.now() - DRAFT_TTL_MS + 60_000 }));
+    m = mount(<Host drive={mkDrive()} />);
+    expect(localStorage.getItem(`${PREFIX}edge0001`)).not.toBeNull();
+  });
+});
+
+describe("FUMINPHONE: picture paste hardening", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+  const png = (size: number): File => new File([new Uint8Array(size)], "p.png", { type: "image/png" });
+  const SHA = "0123456789abcdef".repeat(4);
+  const paste = (types: string[], files: File[]): Event => {
+    const el = byId(m!.host, "kb-drive-input");
+    const ev = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(ev, "clipboardData", { value: fakeDt({ types, files }) });
+    act(() => {
+      el.dispatchEvent(ev);
+    });
+    return ev;
+  };
+
+  it("an oversize pasted picture is refused client-side: nothing is requested, a toast says why", async () => {
+    const err = vi.spyOn(toast, "err");
+    m = mount(<Host drive={mkDrive()} />);
+    const ev = paste(["Files"], [png(UPLOAD_MAX_BYTES + 1)]);
+    await settle();
+    expect(ev.defaultPrevented).toBe(true);
+    expect(rig.calls).toHaveLength(0);
+    expect(err).toHaveBeenCalledWith(expect.stringMatching(/8 MiB/));
+  });
+
+  it("a clipboard with text AND a picture is a text paste: left alone, nothing uploaded", async () => {
+    m = mount(<Host drive={mkDrive()} />);
+    const ev = paste(["text/plain", "Files"], [png(16)]);
+    await settle();
+    expect(ev.defaultPrevented).toBe(false);
+    expect(rig.calls).toHaveLength(0);
+  });
+
+  it("a second picture pasted while one is still uploading is not started (one upload in flight)", async () => {
+    let release: (r: Response) => void = () => {};
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        calls.push(url);
+        return new Promise<Response>((res) => {
+          release = res;
+        });
+      }),
+    );
+    m = mount(<Host drive={mkDrive()} />);
+    paste(["Files"], [png(16)]);
+    await settle();
+    expect(calls).toEqual(["/api/terms/abcd1234/upload"]);
+    const second = paste(["Files"], [png(16)]);
+    await settle();
+    expect(second.defaultPrevented).toBe(true);
+    expect(calls).toEqual(["/api/terms/abcd1234/upload"]);
+    expect(caption()).toBe(CAPTION.attachBusy);
+    release(
+      new Response(JSON.stringify({ path: "/run/x/up/x.png", bytes: 16, mime: "image/png", sha256: SHA }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    await settle(12);
+  });
+
+  it("a multi-file paste uploads the first picture and says how many more were dropped", async () => {
+    rig.reply(200, { path: "/run/kb-term/s/abcd1234/up/x.png", bytes: 16, mime: "image/png", sha256: SHA });
+    m = mount(<Host drive={mkDrive()} />);
+    paste(["Files"], [png(16), png(17), png(18)]);
+    await settle(12);
+    expect(rig.urls()).toEqual(["/api/terms/abcd1234/upload", "/api/terms/abcd1234/paste"]);
+    expect(caption()).toContain(CAPTION.extraDropped(2));
+  });
+
+  it("a single-picture paste does not mention dropped pictures", async () => {
+    rig.reply(200, { path: "/run/kb-term/s/abcd1234/up/x.png", bytes: 16, mime: "image/png", sha256: SHA });
+    m = mount(<Host drive={mkDrive()} />);
+    paste(["Files"], [png(16)]);
+    await settle(12);
+    expect(caption()).toBe(CAPTION.pastedOnly);
   });
 });
