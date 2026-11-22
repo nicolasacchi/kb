@@ -251,5 +251,44 @@ async fn kb_sessions_card_renders_a_live_only_card_honestly() {
     let json_stdout = fx.ok(&["card", "live-cli-1", "--json"]);
     let as_json: Value = serde_json::from_str(&json_stdout).expect("json stdout");
     assert_eq!(as_json["capture_pending"], true);
-    assert_eq!(as_json["text"], stdout.as_str());
+    // The live lane prints "<N>s ago" from the daemon's wall clock at each
+    // request, so two separate invocations can straddle a second boundary.
+    // Normalise ONLY that token (asserting it is present and well-formed in
+    // both) and compare everything else byte-for-byte.
+    let json_text = as_json["text"].as_str().expect("text is a string");
+    assert_eq!(
+        mask_age(json_text),
+        mask_age(&stdout),
+        "the CLI must print the daemon `text` verbatim (age token aside)"
+    );
+}
+
+/// Replace the single `<digits>s ago` token of a live lane with `<age>`,
+/// panicking if it is absent, malformed or not unique.
+fn mask_age(text: &str) -> String {
+    let mut out = String::new();
+    let mut found = 0;
+    for line in text.split_inclusive('\n') {
+        match line.find("s ago") {
+            Some(end) => {
+                let head = &line[..end];
+                let digits = head
+                    .chars()
+                    .rev()
+                    .take_while(|c| c.is_ascii_digit())
+                    .count();
+                assert!(digits > 0, "malformed age token in {line:?}");
+                out.push_str(&head[..head.len() - digits]);
+                out.push_str("<age>");
+                out.push_str(&line[end + 1..]);
+                found += 1;
+            }
+            None => out.push_str(line),
+        }
+    }
+    assert_eq!(
+        found, 1,
+        "expected exactly one `<N>s ago` token in {text:?}"
+    );
+    out
 }
