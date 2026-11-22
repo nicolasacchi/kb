@@ -521,8 +521,10 @@ fn handle_runner_conn(
 }
 
 // ----------------------------------------------------------------- fake tap --
-#[derive(Clone)]
+/// A re-join's profile size and resize marker (after_ms, cols, rows).
+type RejoinScript = ((u16, u16), (u64, u16, u16));
 
+#[derive(Clone)]
 struct TapScript {
     cols: u16,
     rows: u16,
@@ -549,7 +551,7 @@ struct TapScript {
     /// From the second connection on (a re-join): the profile size the tap
     /// reports and the resize marker it sends, replacing `cols`/`rows` and
     /// `resize_marker` (the tap after a grid change).
-    rejoin: Option<((u16, u16), (u64, u16, u16))>,
+    rejoin: Option<RejoinScript>,
 }
 
 struct FakeTap {
