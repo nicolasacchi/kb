@@ -16,6 +16,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { StateCard } from "@kb/ui/StateCard";
 import { useTerms } from "../terminal/useTerms";
 import { BOUND_DEADLINE_MS, BOUND_POLL_MS } from "../lib/termLaunch";
+import { useIsMobile } from "../hooks/useIsMobile";
+import { TerminalControls } from "./TermControls";
 
 // Same lazy seam as `TerminalSlot`/`HandoffPanel`: xterm loads after a launch.
 const TerminalPanel = lazy(() => import("../terminal/TerminalPanel.lazy"));
@@ -24,7 +26,9 @@ export function LaunchedTerminal({
   termId,
   harness,
   sid,
+  cwd,
   onClose,
+  onSwitch,
   pollMs = BOUND_POLL_MS,
   deadlineMs = BOUND_DEADLINE_MS,
 }: {
@@ -32,7 +36,11 @@ export function LaunchedTerminal({
   harness: string;
   /// The session this launch resumes, when known (panel context only).
   sid?: string;
+  /// The directory, when known (End's confirm names it); else the list row's.
+  cwd?: string | null;
   onClose: () => void;
+  /// Phone sheet: switch to another live terminal (the list's `?term=` setter).
+  onSwitch?: (termId: string) => void;
   pollMs?: number;
   deadlineMs?: number;
 }) {
@@ -44,6 +52,14 @@ export function LaunchedTerminal({
   const [timedOut, setTimedOut] = useState(false);
   const stop = boundSid !== null || dead;
   const startedAt = useRef(Date.now());
+  const isMobile = useIsMobile();
+  const controls = (
+    <TerminalControls
+      target={{ termId, harness, cwd: cwd ?? row?.cwd, stale: row?.stale === true }}
+      onSwitch={isMobile ? onSwitch : undefined}
+      className={isMobile ? "kb-term-phone__btn" : undefined}
+    />
+  );
 
   useEffect(() => {
     if (stop) return;
@@ -82,12 +98,18 @@ export function LaunchedTerminal({
           </p>
         )
       )}
+      {isMobile ? null : (
+        <div className="kb-ses__launched-ctl" data-testid="launched-terminal-ctl">
+          {controls}
+        </div>
+      )}
       <Suspense fallback={<StateCard kind="loading" title="Loading terminal" reason={harness} />}>
         <TerminalPanel
           termId={termId}
           sid={boundSid ?? sid ?? ""}
           harness={harness}
           onClose={onClose}
+          headerExtra={isMobile ? controls : undefined}
         />
       </Suspense>
     </div>

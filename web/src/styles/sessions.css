@@ -636,6 +636,53 @@
 .kb-ses__launched {
   margin: var(--pad-2) 0;
 }
+.kb-ses__launched-ctl,
+.kb-term-slot__ctl {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pad-2);
+  margin: var(--pad-1) 0;
+}
+
+/* FUTERMLIST — the Terminals list on /sessions. */
+.kb-ses__terms {
+  margin: var(--pad-2) 0;
+}
+.kb-ses__terms-h {
+  margin: 0 0 var(--pad-1);
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+}
+.kb-ses__terms-ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.kb-ses__terms-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pad-2);
+  padding: var(--pad-1) 0;
+  border-bottom: 1px solid var(--rule);
+  font-size: var(--fs-sm);
+}
+.kb-ses__terms-harness {
+  font-weight: 600;
+}
+.kb-ses__terms-cwd {
+  min-width: 0;
+  max-width: 14em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-ses__terms-state,
+.kb-ses__terms-owner,
+.kb-ses__terms-unbound {
+  color: var(--ink-mute);
+}
 
 /* Cross-harness handoff panel (components/HandoffPanel.tsx) — reuses the
  * resume-command row + copy button; only the stacking/meta lines are new. */

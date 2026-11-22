@@ -36,6 +36,7 @@ export function NewTerminalPanel({
   sessionCwds = [],
   pollMs,
   deadlineMs,
+  onLaunched,
 }: {
   /// `terminal_admitted` from `GET /api/identity`.
   admitted: boolean;
@@ -44,6 +45,9 @@ export function NewTerminalPanel({
   /// Binding-poll timings (tests shorten them; defaults in `termLaunch.ts`).
   pollMs?: number;
   deadlineMs?: number;
+  /// FUTERMLIST: when set, a 2xx hands the new terminal to the page (which opens
+  /// it through the Terminals list and `?term=`) instead of mounting one inline.
+  onLaunched?: (termId: string, harness: string) => void;
 }) {
   const [phase, setPhase] = useState<Phase>({ kind: "closed" });
   const [harness, setHarness] = useState(() => pickLaunchHarness(loadLastTermHarness()));
@@ -66,6 +70,12 @@ export function NewTerminalPanel({
       (r) => {
         saveLastTermHarness(harness);
         saveRecentTermCwd(cwdTrim);
+        if (onLaunched) {
+          setPhase({ kind: "closed" });
+          setCwd("");
+          onLaunched(r.id, harness);
+          return;
+        }
         setPhase({ kind: "open", termId: r.id, harness });
       },
       (e: unknown) => {

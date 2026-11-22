@@ -65,6 +65,8 @@ export interface PhoneTerminalProps {
   stream: PhoneStream;
   caption: string;
   onClose?: () => void;
+  /** FUTERMLIST: extra title-bar controls (the End button, the terminal switcher). */
+  headerExtra?: ReactNode;
   /**
    * T18 — the Drive dock, rendered below the Watch grid (kept mounted, only
    * hidden, in Read mode so a half-typed message survives a mode switch).
@@ -97,7 +99,7 @@ function setAttr(el: HTMLElement, name: string, value: string | number | undefin
 }
 
 export function PhoneTerminal(props: PhoneTerminalProps) {
-  const { term, profile, hostRef, mode, onMode, stream, caption, onClose, renderDrive, harness } = props;
+  const { term, profile, hostRef, mode, onMode, stream, caption, onClose, renderDrive, harness, headerExtra } = props;
   const [wrap, setWrap] = useState<HTMLDivElement | null>(null);
   const [viewport, setViewport] = useState<HTMLDivElement | null>(null);
   const [font, setFont] = useState<number>(() => readFont());
@@ -287,6 +289,11 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
           </button>
         ) : null}
       </div>
+      {headerExtra ? (
+        <div className="kb-term-phone__extra" data-testid="kb-term-phone-extra">
+          {headerExtra}
+        </div>
+      ) : null}
       <div className="kb-term-phone__sub">
         <span className="kb-term-phone__caption" data-testid="kb-term-caption">
           {caption}
