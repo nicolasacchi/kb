@@ -155,16 +155,17 @@ describe("useSheetHistory", () => {
   it("switching to another terminal keeps ONE entry: a single Back closes the new sheet once", async () => {
     const closeA = vi.fn();
     const closeB = vi.fn();
-    const before = window.history.length;
+    const push = vi.spyOn(window.history, "pushState");
     const r = render(<Probe key="a" active onClose={closeA} />);
-    expect(window.history.length).toBe(before + 1);
+    expect(push).toHaveBeenCalledTimes(1);
     act(() => {
       r.rerender(<Probe key="b" active onClose={closeB} />);
     });
     await act(async () => {
       await tick();
     });
-    expect(window.history.length).toBe(before + 1);
+    // The new sheet adopted A's entry: still exactly one push in total.
+    expect(push).toHaveBeenCalledTimes(1);
     expect(sheetKey()).toBeTruthy();
     await act(async () => {
       window.history.back();
