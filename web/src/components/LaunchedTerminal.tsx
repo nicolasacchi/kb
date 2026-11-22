@@ -45,7 +45,7 @@ export function LaunchedTerminal({
   deadlineMs?: number;
 }) {
   const qc = useQueryClient();
-  const { terms } = useTerms();
+  const { terms, isError } = useTerms();
   const row = terms.find((t) => t.id === termId);
   const boundSid = row?.session_id ?? null;
   const dead = row?.pane_dead === true;
@@ -58,6 +58,7 @@ export function LaunchedTerminal({
       target={{ termId, harness, cwd: cwd ?? row?.cwd, stale: row?.stale === true }}
       onSwitch={isMobile ? onSwitch : undefined}
       className={isMobile ? "kb-term-phone__btn" : undefined}
+      onEnded={() => void qc.invalidateQueries({ queryKey: ["terms"] })}
     />
   );
 
@@ -88,6 +89,18 @@ export function LaunchedTerminal({
           <Link to={`/sessions/${encodeURIComponent(boundSid)}#sec-terminal`}>
             open this session's page
           </Link>
+        </p>
+      ) : isError && !dead ? (
+        <p className="kb-ses__ins-errors" role="alert" data-testid="launched-terminal-list-error">
+          Cannot read the terminal list, so it is unknown whether a session has started.{" "}
+          <button
+            type="button"
+            className="kb-ses__newterm-btn"
+            data-testid="launched-terminal-list-retry"
+            onClick={() => void qc.invalidateQueries({ queryKey: ["terms"] })}
+          >
+            Retry
+          </button>
         </p>
       ) : (
         !dead && (

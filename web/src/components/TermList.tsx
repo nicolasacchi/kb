@@ -56,7 +56,7 @@ export function TermList({
   launched?: { id: string; harness: string };
 }): ReactElement | null {
   const qc = useQueryClient();
-  const { terms, isLoading } = useTerms();
+  const { terms, isLoading, isError } = useTerms();
   const refresh = useCallback(() => void qc.invalidateQueries({ queryKey: ["terms"] }), [qc]);
   const openRow = openId ? terms.find((t) => t.id === openId) : undefined;
   // Ids seen in the list: a launch hint stops counting once its row has been
@@ -66,7 +66,10 @@ export function TermList({
   const hint = launched && launched.id === openId ? launched : undefined;
   const mountable =
     openId !== null && (openRow !== undefined || (hint !== undefined && !seen.current.has(openId)));
-  const unknownOpen = openId !== null && !isLoading && !mountable;
+  // Only a SUCCESSFUL list that lacks the id means "not found": a failed read
+  // says nothing about the terminal, so `?term=` stays and an error is shown.
+  const unknownOpen = openId !== null && !isLoading && !isError && !mountable;
+  const listError = openId !== null && isError && openRow === undefined;
   const [missing, setMissing] = useState<string | null>(null);
   useEffect(() => {
     if (unknownOpen && openId !== null) {
@@ -119,20 +122,31 @@ export function TermList({
                     Open
                   </button>
                 )}
-                <EndTerminalButton
-                  className="kb-ses__newterm-btn"
-                  onEnded={refresh}
-                  target={{
-                    termId: r.id,
-                    harness: r.harness,
-                    cwd: r.cwd,
-                    stale: r.stale || r.pane_dead,
-                  }}
-                />
+                {/* The open terminal's panel carries its own End: one End per terminal. */}
+                {!(mountable && openId === r.id) && (
+                  <EndTerminalButton
+                    className="kb-ses__newterm-btn"
+                    onEnded={refresh}
+                    target={{
+                      termId: r.id,
+                      harness: r.harness,
+                      cwd: r.cwd,
+                      stale: r.stale || r.pane_dead,
+                    }}
+                  />
+                )}
               </li>
             ))}
           </ul>
         </>
+      )}
+      {listError && (
+        <p className="kb-ses__ins-errors" role="alert" data-testid="term-list-error">
+          Cannot read the terminal list, so terminal {openId} cannot be opened yet.{" "}
+          <button type="button" className="kb-ses__newterm-btn" data-testid="term-list-retry" onClick={refresh}>
+            Retry
+          </button>
+        </p>
       )}
       {missing !== null && (
         <p className="kb-ses__terms-missing" role="status" data-testid="term-not-found">

@@ -1084,3 +1084,75 @@ test.describe("POLISH2 landscape phone dock @phone", () => {
     expect(input.height).toBeGreaterThan(50);
   });
 });
+
+// FUMINLIST - the phone sheet's terminal switcher with two listed terminals:
+// switching in the sheet moves `?term=` to the other id. Switching PUSHES a
+// history entry (openTerm is replace:false), so Back first returns to the
+// previous terminal and a second Back closes the sheet.
+test.describe("FUMINLIST two-terminal switcher @phone", () => {
+  const OTHER_ID = "t-e2f";
+  const termRow = (id: string, cwd: string) => ({
+    id,
+    harness: "omp",
+    cwd,
+    started_unix: 1760000000,
+    resume_sid: null,
+    pane_pid: 1,
+    cols: 120,
+    rows: 40,
+    bracket_paste_flag: false,
+    pane_dead: false,
+    exit_code: null,
+    grid_owner: null,
+    conf_version: 1,
+    anchor_pid: null,
+    stale: false,
+    session_id: null,
+    state: null,
+    blocked: false,
+  });
+
+  test("switching terminals in the sheet makes ?term= follow", async ({ page }) => {
+    await installFakeTerminal(page, { total: 300, seedLines: 300 });
+    await page.route("**/api/identity", async (route) => {
+      const res = await route.fetch();
+      const j = (await res.json()) as Record<string, unknown>;
+      await route.fulfill({ response: res, json: { ...j, terminal_admitted: true } });
+    });
+    // Registered after installFakeTerminal's routes, so it is consulted first.
+    await page.route("**/api/terms", (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ terms: [termRow(TERM_ID, "/synthetic/one"), termRow(OTHER_ID, "/synthetic/two")] }),
+      });
+    });
+    await page.goto(`${BASE}/sessions`);
+    const first = page.locator(`[data-testid="term-row"][data-term="${TERM_ID}"] [data-testid="term-row-open"]`);
+    await expect(first).toBeVisible({ timeout: 20_000 });
+    await first.click();
+    await expect(page.locator("[data-kb-sheet]")).toBeAttached({ timeout: 15_000 });
+    await expect.poll(() => new URL(page.url()).searchParams.get("term")).toBe(TERM_ID);
+
+    const sw = page.locator('[data-testid="kb-term-switch"]');
+    await expect(sw).toBeVisible({ timeout: 15_000 });
+    // The switcher offers only the OTHER live terminal.
+    await expect(sw.locator("option")).toHaveCount(2);
+    await sw.selectOption(OTHER_ID);
+    await expect.poll(() => new URL(page.url()).searchParams.get("term")).toBe(OTHER_ID);
+    await expect(page.locator("[data-kb-sheet]")).toBeAttached();
+    await expect(page.locator('[data-testid="launched-terminal"]')).toHaveAttribute("data-term", OTHER_ID);
+
+    // Back #1 undoes the switch (the switch pushed an entry): same sheet, first terminal.
+    await page.goBack();
+    await expect.poll(() => new URL(page.url()).searchParams.get("term")).toBe(TERM_ID);
+    await expect(page.locator("[data-kb-sheet]")).toBeAttached();
+    await expect(page.locator('[data-testid="launched-terminal"]')).toHaveAttribute("data-term", TERM_ID);
+    // Back #2 closes the sheet and drops ?term=.
+    await page.goBack();
+    await expect.poll(() => new URL(page.url()).searchParams.get("term")).toBeNull();
+    await expect(page.locator("[data-kb-sheet]")).toHaveCount(0);
+    await expect(page.locator('[data-testid="launched-terminal"]')).toHaveCount(0);
+  });
+});

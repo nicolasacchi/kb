@@ -8,7 +8,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { listTerms, type TermRow } from "../api/terms";
 
-export function useTerms(): { terms: TermRow[]; isLoading: boolean } {
+export function useTerms(): {
+  terms: TermRow[];
+  isLoading: boolean;
+  /// The last read failed. `terms` keeps whatever an earlier read returned (or
+  /// is empty): callers must not treat an error as "no such terminal".
+  isError: boolean;
+} {
   const q = useQuery({
     queryKey: ["terms"] as const,
     queryFn: ({ signal }) => listTerms(signal),
@@ -18,5 +24,5 @@ export function useTerms(): { terms: TermRow[]; isLoading: boolean } {
     // older than staleTime. Not polling; the global default is off.
     refetchOnWindowFocus: true,
   });
-  return { terms: q.data ?? [], isLoading: q.isPending };
+  return { terms: q.data ?? [], isLoading: q.isPending, isError: q.isError };
 }
