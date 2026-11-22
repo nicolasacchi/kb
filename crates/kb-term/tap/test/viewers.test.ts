@@ -998,6 +998,7 @@ test('viewers_set_grid_keeps_a_backpressured_viewer_in_order_with_one_resize_mar
   expect(Buffer.from(frames[0].binary!.payload).toString('utf-8')).toBe('AAAA');
   expect(frames[2].binary?.offset).toBe(X + 4);
   expect(Buffer.from(frames[2].binary!.payload).toString('utf-8')).toBe('BBBB');
+  await server.drainTwinQueue(); // the twin resize is queued behind the feeds
   expect(twin.cols).toBe(100);
   expect(twin.rows).toBe(30);
   await server.close();
