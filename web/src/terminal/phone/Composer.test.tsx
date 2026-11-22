@@ -5,8 +5,10 @@ import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "../../lib/toast";
 import { Composer, DRAFT_DEBOUNCE_MS } from "./Composer";
-import { UPLOAD_MAX_BYTES, type Drive } from "./driveApi";
+import type { Drive } from "./driveApi";
+import { UPLOAD_MAX_BYTES } from "../upload";
 import { CAPTION } from "./planSend";
+import { fakeDt } from "../upload.testkit";
 import {
   byId,
   click,
@@ -239,6 +241,33 @@ describe("Composer", () => {
       expect(UPLOAD_MAX_BYTES).toBe(8 * 1024 * 1024);
       expect(rig.calls).toHaveLength(0);
       expect(err).toHaveBeenCalledWith(expect.stringMatching(/8 MiB/));
+    });
+
+    describe("pasting a picture into the textarea", () => {
+      const paste = async (types: string[], files: File[]): Promise<Event> => {
+        const el = byId(m!.host, "kb-drive-input");
+        const ev = new Event("paste", { bubbles: true, cancelable: true });
+        Object.defineProperty(ev, "clipboardData", { value: fakeDt({ types, files }) });
+        el.dispatchEvent(ev);
+        await settle(8);
+        return ev;
+      };
+
+      it("uploads a pasted picture once and pastes its PATH without Enter", async () => {
+        rig.reply(200, { path: "/run/kb-term/s/abcd1234/up/x.png", bytes: 16, mime: "image/png", sha256: SHA });
+        m = mount(<Host drive={mkDrive()} />);
+        const ev = await paste(["Files"], [png(16)]);
+        expect(ev.defaultPrevented).toBe(true);
+        expect(rig.urls()).toEqual(["/api/terms/abcd1234/upload", "/api/terms/abcd1234/paste"]);
+        expect(rig.calls[1].json?.text).toBe("/run/kb-term/s/abcd1234/up/x.png");
+      });
+
+      it("leaves a text paste alone (negative control)", async () => {
+        m = mount(<Host drive={mkDrive()} />);
+        const ev = await paste(["text/plain"], []);
+        expect(ev.defaultPrevented).toBe(false);
+        expect(rig.calls).toHaveLength(0);
+      });
     });
 
     it("explains a server refusal with a toast and pastes nothing", async () => {

@@ -12,14 +12,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "@kb/ui/icons";
 import { toast } from "../../lib/toast";
-import {
-  DriveError,
-  UPLOAD_TYPES,
-  sendText,
-  uploadImage,
-  uploadRefusal,
-  type Drive,
-} from "./driveApi";
+import { DriveError, sendText, type Drive } from "./driveApi";
+import { UPLOAD_TYPES, pastedPictureFiles, uploadImage, uploadRefusal } from "../upload";
 import { CAPTION, planSend } from "./planSend";
 import { QuickReplies } from "./QuickReplies";
 
@@ -219,6 +213,13 @@ export function Composer(props: ComposerProps) {
         spellCheck
         value={text}
         onChange={(e) => setText(e.target.value)}
+        onPaste={(e) => {
+          // A pasted picture (no text on the clipboard) is uploaded like a picked one.
+          const [first] = pastedPictureFiles(e.clipboardData);
+          if (first === undefined) return;
+          e.preventDefault();
+          void attach(first);
+        }}
         onKeyDown={(e) => {
           // A hardware keyboard: Ctrl/Cmd+Enter sends. Plain Enter is a newline.
           if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {

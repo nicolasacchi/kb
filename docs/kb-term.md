@@ -796,6 +796,15 @@ the page.
   then clears it, so a second Ctrl/Cmd+C is ^C (the Windows Terminal convention);
   with no selection the key is ^C. Ctrl/Cmd+Shift+C always copies and
   Ctrl/Cmd+Shift+V is the browser's paste.
+- **Picture paste and drop.** A paste whose clipboard carries a picture file and
+  no `text/plain`, or a dropped file, is uploaded through the same
+  `POST /api/terms/{id}/upload` the phone composer uses (PNG, JPEG, GIF or WebP up
+  to 8 MiB; anything else is refused client-side with a toast and no request). The
+  returned absolute path is pasted into the prompt and never followed by Enter; the
+  status line says so, and whether the program attaches a picture from a pasted path
+  is the program's own behaviour. A text paste, bracketed paste and Ctrl/Cmd+Shift+V
+  are untouched. The listener is on the panel host in the capture phase; the phone
+  composer takes a pasted picture the same way.
 - **Links.** `http://` and `https://` text is a link: wrapped rows are joined,
   trailing punctuation and an unbalanced closing bracket are trimmed, and
   Ctrl/Cmd-click opens it in a new tab with `noopener,noreferrer`. A double-width
