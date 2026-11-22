@@ -66,6 +66,14 @@ async function until(cond: () => void, ms = 3000) {
     }
   }
 }
+/** Let in-flight fetch/parse/render promise chains finish (real macrotask hops). */
+async function settle() {
+  for (let i = 0; i < 5; i++) {
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+  }
+}
 /** Advance the virtual clock, then hop one real macrotask so refetches start. */
 async function advance(ms: number) {
   await act(async () => {
@@ -81,6 +89,7 @@ describe("LaunchedTerminal poll", () => {
     mount();
     await until(() => expect(screen.getByTestId("launched-terminal-unbound")).toBeTruthy());
     await until(() => expect(fetchFn.mock.calls.length).toBe(1));
+    await settle();
     // Just under one period: nothing yet. On the period: exactly one more read.
     await advance(BOUND_POLL_MS - 1);
     expect(fetchFn.mock.calls.length).toBe(1);
@@ -103,8 +112,11 @@ describe("LaunchedTerminal poll", () => {
     const fetchFn = stub(() => ({ id: "t1", session_id: bound ? "s-1" : null }));
     mount();
     await until(() => expect(screen.getByTestId("launched-terminal-unbound")).toBeTruthy());
+    await until(() => expect(fetchFn.mock.calls.length).toBe(1));
+    await settle();
     await advance(BOUND_POLL_MS);
     await until(() => expect(fetchFn.mock.calls.length).toBeGreaterThan(1));
+    await settle();
     bound = true;
     await advance(BOUND_POLL_MS);
     await until(() => expect(screen.getByTestId("launched-terminal-bound")).toBeTruthy());

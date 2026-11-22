@@ -170,7 +170,7 @@ describe("/sessions ?term= history (FUMINLIST)", () => {
     stubTerms();
     mountAt(["/sessions?q=before", "/sessions?term=zzz9"], 1);
     await screen.findByTestId("term-not-found");
-    expect(loc()).toBe("/sessions");
+    await waitFor(() => expect(loc()).toBe("/sessions"));
     fireEvent.click(screen.getByTestId("back"));
     // One Back reaches the entry BEFORE the bad link, not a leftover ?term=zzz9.
     await waitFor(() => expect(loc()).toBe("/sessions?q=before"));
