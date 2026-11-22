@@ -145,7 +145,26 @@ describe("DriveDock: Fit to phone", () => {
     m!.unmount();
     // Another viewer took 54x23; the list row still describes 120x40.
     dock(row({ grid_owner: null, cols: 120, rows: 40 }), () => MEASURE, { grid: { cols: 54, rows: 23 } });
-    expect(byId(m!.host, "kb-drive-grid-chip").textContent).toBe("54x23");
+    expect(byId(m!.host, "kb-drive-grid-chip").textContent).toBe("54x23 · checking");
+  });
+
+  it("FUMINPHONE: while the owner is unknown the chip says so and Release stays hidden until the row is vouched", () => {
+    // The row still describes 120x40 and says the web owns it; the live grid is 54x23.
+    dock(row({ grid_owner: "kb-term", cols: 120, rows: 40 }), () => MEASURE, { grid: { cols: 54, rows: 23 } });
+    const chip = byId(m!.host, "kb-drive-grid-chip");
+    expect(chip.textContent).toBe("54x23 · checking");
+    expect(chip.getAttribute("data-owner")).toBe("checking");
+    expect(maybeById(m!.host, "kb-drive-release")).toBeNull();
+    m!.unmount();
+    // No row at all (the list has not loaded): unknown as well.
+    dock(undefined, () => MEASURE, { grid: { cols: 54, rows: 23 } });
+    expect(byId(m!.host, "kb-drive-grid-chip").textContent).toBe("54x23 · checking");
+    expect(maybeById(m!.host, "kb-drive-release")).toBeNull();
+    m!.unmount();
+    // Vouched: the row matches the live grid, the chip names the owner and Release shows.
+    dock(row({ grid_owner: "kb-term", cols: 54, rows: 23 }), () => MEASURE, { grid: { cols: 54, rows: 23 } });
+    expect(byId(m!.host, "kb-drive-grid-chip").textContent).toBe("54x23 · web");
+    expect(maybeById(m!.host, "kb-drive-release")).not.toBeNull();
   });
 
   it("no chip before the live grid is known", () => {

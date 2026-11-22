@@ -581,7 +581,7 @@ test.describe("FUTERMPOLISH phone sheet @phone", () => {
     await openPhone(page, { total: 300, seedLines: 300, drive: true, gridOwner: "kb-term" });
     const keys = page.locator('[data-testid="kb-drive-keys"]');
     const scrolls = await keys.evaluate((el) => el.scrollWidth > el.clientWidth + 1);
-    if (!scrolls) return; // everything fits this phone: nothing to signal
+    test.skip(!scrolls, "everything fits this phone: the key row has nothing to signal");
     await expect(keys).toHaveAttribute("data-more", "right");
     await keys.evaluate((el) => {
       el.scrollLeft = el.scrollWidth;
@@ -606,7 +606,7 @@ test.describe("FUTERMPOLISH phone sheet @phone", () => {
   test("W6f: full screen folds the grid-controls row away; the keys and the composer stay (where the browser has full screen)", async ({ page }) => {
     await openPhone(page, { total: 300, seedLines: 300, drive: true, gridOwner: "kb-term" });
     const btn = page.locator('[data-testid="kb-term-phone-fullscreen"]');
-    if ((await btn.count()) === 0) return; // iPhone Safari has no element full screen
+    test.skip((await btn.count()) === 0, "this browser has no element full screen (iPhone Safari)");
     await expect(page.locator('[data-testid="kb-drive-fit"]')).toBeVisible();
     await btn.click();
     await expect(page.locator('[data-testid="kb-drive-fit"]')).toHaveCount(0, { timeout: 10_000 });
@@ -916,7 +916,9 @@ test.describe("FUPHONELINKS tap to open @phone", () => {
     const before = page.context().pages().length;
     // A vertical drag that starts on the URL scrolls; it must not open anything.
     await drag(page, { x0: p.x, y0: p.y, x1: p.x, y1: p.y + 30, holdMs: 100 });
-    await page.waitForTimeout(400);
+    // A link opens synchronously in the pointerup handler, so a pop-up would already exist by the
+    // time a round trip through the page returns (same CDP channel, in order): wait for that, not a timer.
+    await page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
     expect(page.context().pages().length).toBe(before);
 
     const p2 = await urlPoint(page);
@@ -927,6 +929,40 @@ test.describe("FUPHONELINKS tap to open @phone", () => {
     await popup.close();
     // The phone view is still the Watch grid: the tap was not sent as a click to the page.
     await expect(page.locator(VP)).toBeVisible();
+  });
+
+  // FUMINPHONE: a still tap on a URL opens it and nothing else - no byte reaches the pty.
+  test("a still tap on a URL sends nothing to the pty", async ({ page }) => {
+    await page.context().route("https://example.com/**", (r) => r.fulfill({ status: 200, contentType: "text/html", body: "<title>ok</title>" }));
+    const stats = await openPhone(page, { total: 200, seedLines: 200, tailText: `open ${URL_TEXT} now\r\n` });
+    const p = await urlPoint(page);
+    const popupP = page.context().waitForEvent("page");
+    await page.touchscreen.tap(p.x, p.y);
+    const popup = await popupP;
+    await popup.close();
+    expect(stats.inputs).toEqual([]);
+  });
+});
+
+// FUMINPHONE (FUTERMFULL follow-up) - the Full screen button really enters element
+// full screen on an Android-class phone and the same button leaves it.
+test.describe("FUMINPHONE full screen button @phone", () => {
+  test("a real tap on Full enters full screen on the terminal root; Exit leaves it", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "chromium-pixel7", "only Android Chrome has element full screen on the phone view");
+    await openPhone(page, { total: 300, seedLines: 300, drive: true, gridOwner: "kb-term" });
+    const btn = page.locator('[data-testid="kb-term-phone-fullscreen"]');
+    await expect(btn).toHaveAttribute("aria-label", "Full screen");
+    await btn.tap();
+    await expect
+      .poll(() => page.evaluate(() => document.fullscreenElement?.hasAttribute("data-kb-term-root") ?? false), { timeout: 10_000 })
+      .toBe(true);
+    await expect(btn).toHaveAttribute("aria-label", "Exit full screen");
+    // The grid-controls row folds away in full screen (W6f) and nothing was sent to the pty.
+    await expect(page.locator('[data-testid="kb-drive-fit"]')).toHaveCount(0);
+    await btn.tap();
+    await expect.poll(() => page.evaluate(() => document.fullscreenElement === null), { timeout: 10_000 }).toBe(true);
+    await expect(btn).toHaveAttribute("aria-label", "Full screen");
+    await expect(page.locator('[data-testid="kb-drive-fit"]')).toBeVisible();
   });
 });
 
