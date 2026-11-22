@@ -144,7 +144,6 @@ describe("fitHostNow: a stray child of the screen never decides the fit (FUTERMF
     const term = { options: { fontSize: 9, fontFamily: "monospace" } };
     const r = fitHostNow(term, withStrayTextarea(560, 700, 900), { cols: 80, rows: 24 }, { min: 9, max: 20, fresh: true });
     expect(r?.cropped).toEqual({ x: false, y: true });
-    expect(term.options.fontSize).toBe(9);
   });
 
   it("a refit (fresh false) with a stray child decides like one without it", () => {

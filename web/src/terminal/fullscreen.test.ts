@@ -126,8 +126,8 @@ describe("FUMINPANEL races", () => {
   it("a rejected keyboard.lock leaves fullscreen on, does not throw, and the next change retries the lock", async () => {
     const r = rig();
     r.lock.mockRejectedValueOnce(new Error("lock refused"));
+    // enter() resolves with the element set, so the lock is asked for once there.
     await r.ctl.enter();
-    r.fire();
     await Promise.resolve();
     await Promise.resolve();
     expect(r.lock).toHaveBeenCalledTimes(1);
