@@ -14,7 +14,7 @@
 // engine edge is the dynamic `lazy(...)` import below, so the panel
 // chunk is fetched only after the click.
 
-import { Suspense, lazy, useState, type ReactElement } from "react";
+import { Suspense, lazy, useCallback, useEffect, useState, type ReactElement } from "react";
 import { Link } from "react-router-dom";
 import { StateCard } from "@kb/ui/StateCard";
 import type { TerminalLane } from "../api/sessions";
@@ -38,6 +38,23 @@ const TerminalPanel = lazy(() => import("../terminal/TerminalPanel.lazy"));
 
 export function TerminalSlot(props: TerminalSlotProps): ReactElement | null {
   const [open, setOpen] = useState(false);
+  // FUTERMATTN: a quiet, deduplicated dot when the program rang the bell while
+  // nobody was looking; cleared when the window or the panel gets focus.
+  const [bell, setBell] = useState(false);
+  const onBell = useCallback(() => setBell(true), []);
+  useEffect(() => {
+    if (!bell) return;
+    const clear = (): void => setBell(false);
+    const onVis = (): void => {
+      if (!document.hidden) clear();
+    };
+    window.addEventListener("focus", clear);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.removeEventListener("focus", clear);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [bell]);
   const isMobile = useIsMobile();
   const { lane } = props;
   const termId = props.termId ?? lane.term_id;
@@ -66,7 +83,16 @@ export function TerminalSlot(props: TerminalSlotProps): ReactElement | null {
     />
   );
   return (
-    <div className="kb-term-slot" data-testid="kb-terminal-slot">
+    <div className="kb-term-slot" data-testid="kb-terminal-slot" onFocusCapture={() => setBell(false)}>
+      {bell ? (
+        <span
+          className="kb-term-slot__bell"
+          data-testid="kb-term-bell"
+          role="img"
+          aria-label="The terminal rang the bell"
+          title="The terminal rang the bell"
+        />
+      ) : null}
       {open ? null : (
         <div className="kb-term-slot__head">
           <span className="kb-term-slot__state" data-testid="kb-term-slot-state">
@@ -98,6 +124,7 @@ export function TerminalSlot(props: TerminalSlotProps): ReactElement | null {
             sid={props.sid}
             harness={harness}
             onClose={() => setOpen(false)}
+            onBell={onBell}
             headerExtra={isMobile ? controls : undefined}
           />
         </Suspense>

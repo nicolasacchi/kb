@@ -72,6 +72,7 @@ import { terminalOwnsEscape } from "./phone/escape";
 import { readFont } from "./phone/fontSteps";
 import { scrollbackFor } from "./phone/scrollback";
 import { bindNetworkKicks } from "./networkKicks";
+import { bellNeedsAttention, sanitizeOscTitle } from "../lib/termAttention";
 import { createPortal } from "react-dom";
 import "./terminal.css";
 
@@ -132,6 +133,10 @@ export function TerminalPanel(props: TerminalPanelProps) {
   const [scrollback, setScrollback] = useState(0);
   const [widthActive, setWidthActive] = useState(false);
   const [transient, setTransient] = useState<string | null>(null);
+  // FUTERMATTN: the program's own OSC 0/2 title, sanitized (text only), and the bell hook.
+  const [progTitle, setProgTitle] = useState("");
+  const onBellRef = useRef(props.onBell);
+  onBellRef.current = props.onBell;
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState("");
   const [findNote, setFindNote] = useState("");
@@ -423,6 +428,12 @@ export function TerminalPanel(props: TerminalPanelProps) {
       term.onScroll(syncBehind);
       term.onWriteParsed(syncBehind);
       setBehind(false);
+      term.onTitleChange((t) => setProgTitle(sanitizeOscTitle(t)));
+      term.onBell(() => {
+        const active = document.activeElement;
+        const termFocused = document.hasFocus() && !!(active && term.element?.contains(active));
+        if (bellNeedsAttention({ hidden: document.hidden, termFocused })) onBellRef.current?.();
+      });
       term.onData((data) => {
         if (sessionRef.current?.sendInput(data) ?? false) lastTypedRef.current = Date.now();
       });
@@ -757,6 +768,11 @@ export function TerminalPanel(props: TerminalPanelProps) {
         <span className="kb-term__harness" data-testid="kb-term-harness">
           {props.harness}
         </span>
+        {progTitle ? (
+          <span className="kb-term__progtitle" data-testid="kb-term-title" title={progTitle}>
+            {progTitle}
+          </span>
+        ) : null}
         <span
           className={`kb-term__chip kb-term__input${focused ? " kb-term__input--on" : ""}`}
           data-testid="kb-term-input"

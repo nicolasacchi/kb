@@ -6,7 +6,7 @@
 // == 1 after proves the boundary. A child row (`via: "root"`) shows
 // link text and no button.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 let mockEvalCount = 0;
@@ -15,8 +15,11 @@ vi.mock("../terminal/TerminalPanel.lazy", () => {
   mockEvalCount += 1;
   return {
     __esModule: true,
-    default: (props: { onClose?: () => void }) => (
+    default: (props: { onClose?: () => void; onBell?: () => void }) => (
       <div data-testid="mock-panel">
+        <div data-testid="mock-panel-bell" onClick={() => props.onBell?.()}>
+          Bell
+        </div>
         <button type="button" data-testid="mock-panel-close" onClick={() => props.onClose?.()}>
           Close
         </button>
@@ -108,5 +111,49 @@ describe("TerminalSlot (T14 seam)", () => {
     (screen.getByTestId("mock-panel-close") as HTMLButtonElement).click();
     await waitFor(() => expect(screen.queryByTestId("mock-panel")).toBeNull());
     expect(screen.getByTestId("kb-term-open").textContent).toBe("Open terminal");
+  });
+});
+
+describe("TerminalSlot bell dot (FUTERMATTN)", () => {
+  const lane = { available: true, term_id: "t1", harness: "omp", state: "working", admitted: true } as const;
+
+  it("a bell sets one quiet dot, however many arrive, and focus clears it", async () => {
+    render(<TerminalSlot sid="sid-1" harness="omp" lane={lane} />);
+    expect(screen.queryByTestId("kb-term-bell")).toBeNull();
+    screen.getByTestId("kb-term-open").click();
+    const bell = await screen.findByTestId("mock-panel-bell");
+    act(() => {
+      bell.click();
+      bell.click();
+      bell.click();
+    });
+    expect(screen.getAllByTestId("kb-term-bell")).toHaveLength(1);
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(screen.queryByTestId("kb-term-bell")).toBeNull();
+  });
+
+  it("a tab turning visible clears the dot as well", async () => {
+    render(<TerminalSlot sid="sid-1" harness="omp" lane={lane} />);
+    screen.getByTestId("kb-term-open").click();
+    const bell = await screen.findByTestId("mock-panel-bell");
+    act(() => bell.click());
+    expect(screen.getByTestId("kb-term-bell")).toBeTruthy();
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(screen.queryByTestId("kb-term-bell")).toBeNull();
+  });
+
+  it("focus moving into the slot (focusin) clears the dot", async () => {
+    render(<TerminalSlot sid="sid-1" harness="omp" lane={lane} />);
+    screen.getByTestId("kb-term-open").click();
+    const bell = await screen.findByTestId("mock-panel-bell");
+    act(() => bell.click());
+    expect(screen.getByTestId("kb-term-bell")).toBeTruthy();
+    const close = screen.getByTestId("mock-panel-close");
+    act(() => close.focus());
+    expect(screen.queryByTestId("kb-term-bell")).toBeNull();
   });
 });
