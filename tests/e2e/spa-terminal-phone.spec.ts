@@ -1050,8 +1050,9 @@ test.describe("POLISH2 landscape phone dock @phone", () => {
 });
 
 // FUMINLIST - the phone sheet's terminal switcher with two listed terminals:
-// switching in the sheet moves `?term=` to the other id, and closing the sheet
-// with its own button removes it.
+// switching in the sheet moves `?term=` to the other id. Switching PUSHES a
+// history entry (openTerm is replace:false), so Back first returns to the
+// previous terminal and a second Back closes the sheet.
 test.describe("FUMINLIST two-terminal switcher @phone", () => {
   const OTHER_ID = "t-e2f";
   const termRow = (id: string, cwd: string) => ({
@@ -1106,5 +1107,16 @@ test.describe("FUMINLIST two-terminal switcher @phone", () => {
     await expect.poll(() => new URL(page.url()).searchParams.get("term")).toBe(OTHER_ID);
     await expect(page.locator("[data-kb-sheet]")).toBeAttached();
     await expect(page.locator('[data-testid="launched-terminal"]')).toHaveAttribute("data-term", OTHER_ID);
+
+    // Back #1 undoes the switch (the switch pushed an entry): same sheet, first terminal.
+    await page.goBack();
+    await expect.poll(() => new URL(page.url()).searchParams.get("term")).toBe(TERM_ID);
+    await expect(page.locator("[data-kb-sheet]")).toBeAttached();
+    await expect(page.locator('[data-testid="launched-terminal"]')).toHaveAttribute("data-term", TERM_ID);
+    // Back #2 closes the sheet and drops ?term=.
+    await page.goBack();
+    await expect.poll(() => new URL(page.url()).searchParams.get("term")).toBeNull();
+    await expect(page.locator("[data-kb-sheet]")).toHaveCount(0);
+    await expect(page.locator('[data-testid="launched-terminal"]')).toHaveCount(0);
   });
 });
