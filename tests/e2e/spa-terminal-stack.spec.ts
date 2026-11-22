@@ -1192,17 +1192,55 @@ async function armTextareaProbe(page: Page) {
   await page.evaluate(() => {
     const w = window as unknown as { __kbTaBelow: number };
     w.__kbTaBelow = 0;
-    const tick = () => {
+    const sample = () => {
       const screen = document.querySelector("[data-kb-term] .xterm-screen");
       const ta = screen?.querySelector(".xterm-helper-textarea");
       if (screen && ta) {
         const below = ta.getBoundingClientRect().bottom - screen.getBoundingClientRect().bottom;
         if (below > w.__kbTaBelow) w.__kbTaBelow = below;
       }
+    };
+    // The textarea sits below the shrunken screen only between xterm resizing the
+    // screen box and its next render moving the textarea to the new cursor row,
+    // a window shorter than one frame. A rAF sampler alone races it, so sample at
+    // the mutations themselves (microtask, before any paint) as well.
+    const mo = new MutationObserver(sample);
+    const host = document.querySelector("[data-kb-term]");
+    if (host) mo.observe(host, { subtree: true, attributes: true, attributeFilter: ["style", "class"], childList: true });
+    const tick = () => {
+      sample();
       requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
   });
+}
+
+/**
+ * FUTERMFONT: waits until the pane really is at the trigger state: the buffer's
+ * cursor is on the last row of the grid and the helper textarea sits on that row
+ * (at the bottom of the screen), so the later shrink has a bottom cursor to strand.
+ */
+async function expectCursorOnLastRow(page: Page) {
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const host = document.querySelector("[data-kb-term]") as unknown as HTMLElement & {
+            __kbTerm?: { rows: number; buffer: { active: { cursorY: number } } };
+          };
+          const screen = host?.querySelector(".xterm-screen");
+          const ta = screen?.querySelector(".xterm-helper-textarea");
+          if (!host?.__kbTerm || !screen || !ta) return "no terminal yet";
+          const t = host.__kbTerm;
+          const rowH = screen.getBoundingClientRect().height / t.rows;
+          const gap = screen.getBoundingClientRect().bottom - ta.getBoundingClientRect().bottom;
+          return t.buffer.active.cursorY === t.rows - 1 && gap <= rowH * 1.5
+            ? "ok"
+            : `cursorY ${t.buffer.active.cursorY}/${t.rows} textarea gap ${gap}`;
+        }),
+      { timeout: 30_000 },
+    )
+    .toBe("ok");
 }
 
 /** What the desktop panel shows right now: the terminal's grid and font, the host's box and the rendered screen. */
@@ -1707,6 +1745,7 @@ for (const [cols, rows] of [
     await openPanel(page, c.sid);
     await expect.poll(async () => `${(await polishState(page)).cols}x${(await polishState(page)).rows}`, { timeout: 30_000 }).toBe("201x48");
     await settledState(page);
+    await expectCursorOnLastRow(page);
     await armTextareaProbe(page);
     // Another client (the API, not this panel's Fit) takes the smaller grid.
     const r = await takeViaWeb(c.api, c.term.id, cols, rows);

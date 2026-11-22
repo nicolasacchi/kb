@@ -858,3 +858,66 @@ test.describe("FUPHONELINKS tap to open @phone", () => {
     await expect(page.locator(VP)).toBeVisible();
   });
 });
+
+// POLISH1 — the /sessions Terminals list keeps the page's horizontal inset on a
+// phone: its heading and rows must not touch the screen's left edge, and sit no
+// further left than the New terminal control above them.
+test.describe("POLISH1 terminals list inset @phone", () => {
+  test("the Terminals list and its rows start at the same inset as the New terminal button", async ({ page }) => {
+    await installFakeTerminal(page, {});
+    await page.route("**/api/identity", async (route) => {
+      const res = await route.fetch();
+      const j = (await res.json()) as Record<string, unknown>;
+      await route.fulfill({ response: res, json: { ...j, terminal_admitted: true } });
+    });
+    await page.route("**/api/terms", (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          terms: [
+            {
+              id: TERM_ID,
+              harness: "omp",
+              cwd: "/synthetic",
+              started_unix: 1760000000,
+              resume_sid: null,
+              pane_pid: 1,
+              cols: 120,
+              rows: 40,
+              bracket_paste_flag: false,
+              pane_dead: false,
+              exit_code: null,
+              grid_owner: null,
+              conf_version: 1,
+              anchor_pid: null,
+              stale: false,
+              session_id: null,
+              state: null,
+              blocked: false,
+            },
+          ],
+        }),
+      });
+    });
+    await page.goto(`${BASE}/sessions`);
+    const list = page.locator('[data-testid="term-list"]');
+    const row = page.locator(`[data-testid="term-row"][data-term="${TERM_ID}"]`);
+    const open = page.locator('[data-testid="new-terminal-open"]');
+    await expect(row).toBeVisible({ timeout: 20_000 });
+    await expect(open).toBeVisible();
+    const heading = list.locator(".kb-ses__terms-h");
+    const left = async (l: import("@playwright/test").Locator) => (await l.evaluate((el) => el.getBoundingClientRect().left));
+    const openLeft = await left(open);
+    // The list's content (heading text and row) starts at the page inset, not at x=0.
+    const contentLeft = await list.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      return el.getBoundingClientRect().left + parseFloat(cs.paddingLeft);
+    });
+    expect(openLeft).toBeGreaterThan(0);
+    expect(contentLeft).toBeGreaterThanOrEqual(openLeft - 1);
+    expect(await left(row)).toBeGreaterThanOrEqual(openLeft - 1);
+    expect(await left(heading)).toBeGreaterThanOrEqual(openLeft - 1);
+  });
+});
