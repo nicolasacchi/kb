@@ -992,3 +992,59 @@ test.describe("POLISH1 terminals list inset @phone", () => {
     expect(await left(heading)).toBeGreaterThanOrEqual(openLeft - 1);
   });
 });
+
+// POLISH2 - a landscape phone keeps at least half the sheet for the terminal:
+// the key row and the quick replies share one scrolling row, and the composer
+// is one line with the attach button and Send beside it.
+test.describe("POLISH2 landscape phone dock @phone", () => {
+  const box = async (page: Page, sel: string) => {
+    const b = await page.locator(sel).first().boundingBox();
+    expect(b, sel).not.toBeNull();
+    return b!;
+  };
+  const centreY = (b: { y: number; height: number }) => b.y + b.height / 2;
+
+  test("POLISH2: at 915x412 the Watch pane is at least half the sheet and every control stays reachable", async ({ page }) => {
+    await openAt(page, { width: 915, height: 412 });
+    await expect(page.locator(VP)).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-testid="kb-drive-composer"]')).toBeVisible();
+    // The last quick reply sits at the end of the key row: scroll it into view.
+    await page.locator('[data-testid="kb-drive-keys"]').evaluate((el) => {
+      el.scrollLeft = el.scrollWidth;
+    });
+    const sheet = await box(page, "[data-kb-sheet]");
+    const watch = await box(page, ".kb-term-phone__watch");
+    const share = watch.height / sheet.height;
+    expect(share, `watch ${watch.height} of sheet ${sheet.height}`).toBeGreaterThanOrEqual(0.5);
+    const vp = page.viewportSize()!;
+    for (const id of ["kb-drive-keybar", "kb-drive-reply-0", "kb-drive-input", "kb-drive-send"]) {
+      await expect(page.locator(`[data-testid="${id}"]`)).toBeVisible();
+      const b = await box(page, `[data-testid="${id}"]`);
+      expect(b.y, id).toBeGreaterThanOrEqual(0);
+      expect(b.y + b.height, id).toBeLessThanOrEqual(vp.height + 1);
+      expect(b.x + b.width, id).toBeLessThanOrEqual(vp.width + 1);
+    }
+    // A reply chip shares the key row; the textarea and Send share the composer row.
+    const key = await box(page, '[data-testid="kb-drive-key-Enter"]');
+    const reply = await box(page, '[data-testid="kb-drive-reply-0"]');
+    expect(Math.abs(centreY(key) - centreY(reply))).toBeLessThanOrEqual(3);
+    const input = await box(page, '[data-testid="kb-drive-input"]');
+    const send = await box(page, '[data-testid="kb-drive-send"]');
+    expect(Math.abs(centreY(input) - centreY(send))).toBeLessThanOrEqual(4);
+  });
+
+  test("POLISH2 negative control: portrait 412x839 keeps the replies row above the textarea and Send below it", async ({ page }) => {
+    await openAt(page, { width: 412, height: 839 });
+    await expect(page.locator(VP)).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-testid="kb-drive-input"]')).toBeVisible();
+    const key = await box(page, '[data-testid="kb-drive-key-Enter"]');
+    const reply = await box(page, '[data-testid="kb-drive-reply-0"]');
+    const input = await box(page, '[data-testid="kb-drive-input"]');
+    const send = await box(page, '[data-testid="kb-drive-send"]');
+    expect(reply.y).toBeGreaterThan(key.y + key.height - 1);
+    expect(input.y).toBeGreaterThan(reply.y + reply.height - 1);
+    expect(send.y).toBeGreaterThan(input.y + input.height - 1);
+    // Two lines of text, as on main (rows=2).
+    expect(input.height).toBeGreaterThan(50);
+  });
+});

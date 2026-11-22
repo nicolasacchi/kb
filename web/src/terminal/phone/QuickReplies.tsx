@@ -7,6 +7,7 @@
 // to the terminal itself.
 
 import { useState } from "react";
+import { createPortal } from "react-dom";
 
 export const REPLIES_KEY = "kb.term.quickReplies";
 export const REPLIES_MAX = 6;
@@ -49,6 +50,12 @@ export interface QuickRepliesProps {
   /** Send this text exactly as the composer's Send would. */
   onSend: (text: string) => void;
   disabled?: boolean;
+  /**
+   * POLISH2 — a landscape phone: the chips render inside this element (the key
+   * bar's scroller, after the keys) so keys and replies share one scrolling row.
+   * Null/absent: the chips render in place, above the composer.
+   */
+  host?: HTMLElement | null;
 }
 
 // Buttons act on click but never take focus on press (the soft keyboard stays up).
@@ -57,7 +64,7 @@ const keepFocus = {
   onMouseDown: (e: { preventDefault(): void }) => e.preventDefault(),
 };
 
-export function QuickReplies({ onSend, disabled = false }: QuickRepliesProps) {
+export function QuickReplies({ onSend, disabled = false, host = null }: QuickRepliesProps) {
   const [replies, setReplies] = useState<string[]>(loadReplies);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -98,7 +105,7 @@ export function QuickReplies({ onSend, disabled = false }: QuickRepliesProps) {
     );
   }
 
-  return (
+  const chips = (
     <div className="kb-drive__replies" data-testid="kb-drive-replies" role="toolbar" aria-label="Quick replies">
       {replies.map((r, i) => (
         <button
@@ -128,4 +135,5 @@ export function QuickReplies({ onSend, disabled = false }: QuickRepliesProps) {
       </button>
     </div>
   );
+  return host ? createPortal(chips, host) : chips;
 }

@@ -177,3 +177,56 @@
 .kb-drive__replies--edit .kb-drive__input {
   flex: 1 1 100%;
 }
+
+/* POLISH2 — a phone held in landscape (the same condition as phone.css's
+ * FUPHONEMODE fold; DriveDock's LANDSCAPE_PHONE_QUERY is the JS twin). The
+ * Watch pane keeps at least half the sheet: the quick replies share the key
+ * row (DriveDock portals them into the reply host), and the composer is one
+ * line with the attach button and Send on its row. Portrait is untouched. */
+.kb-drive__replies-host {
+  display: none;
+}
+
+@media (pointer: coarse) and (orientation: landscape) and (max-height: 599px) {
+  .kb-drive__replies-host {
+    display: flex;
+    flex: none;
+    gap: var(--pad-1);
+  }
+
+  .kb-drive__replies-host .kb-drive__replies {
+    display: contents;
+  }
+
+  .kb-drive__composer {
+    flex-flow: row wrap;
+    align-items: center;
+    gap: var(--pad-2);
+  }
+
+  .kb-drive__composer-row {
+    display: contents;
+  }
+
+  .kb-drive__composer > .kb-drive__input {
+    flex: 1 1 0;
+    min-width: 0;
+    width: auto;
+    height: var(--spine-h);
+    max-height: calc(var(--spine-h) * 2);
+    overflow-y: auto;
+  }
+
+  @supports (field-sizing: content) {
+    .kb-drive__composer > .kb-drive__input {
+      field-sizing: content;
+      height: auto;
+      min-height: var(--spine-h);
+    }
+  }
+
+  .kb-drive__composer > .kb-drive__replies--edit,
+  .kb-drive__composer > .kb-drive__caption {
+    flex: 1 1 100%;
+  }
+}
