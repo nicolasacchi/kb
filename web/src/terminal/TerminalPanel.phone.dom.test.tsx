@@ -24,11 +24,14 @@ vi.mock("./session", () => ({
   },
 }));
 vi.mock("./useTerms", () => ({ useTerms: () => ({ terms: [], isLoading: false }) }));
-vi.mock("./phone/PhoneTerminal", () => ({ PhoneTerminal: (p: { onClose?: () => void }) => (
+vi.mock("./phone/PhoneTerminal", () => ({
+  PhoneTerminal: (p: { onClose?: () => void }) => (
     <div data-testid="phone-stub">
       <button type="button" data-testid="kb-term-close" onClick={p.onClose} />
     </div>
-  ), attachTerm: () => {} }));
+  ),
+  attachTerm: () => {},
+}));
 vi.mock("./phone/DriveDock", () => ({ DriveDock: () => null }));
 vi.mock("./gfx", () => ({ attachGfx: () => ({}) }));
 vi.mock("./Lightbox", () => ({ Lightbox: () => null }));
