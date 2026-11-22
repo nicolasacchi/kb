@@ -648,6 +648,7 @@
 /* FUTERMLIST — the Terminals list on /sessions. */
 .kb-ses__terms {
   margin: var(--pad-2) 0;
+  padding-inline: var(--pad-3);
 }
 .kb-ses__terms-h {
   margin: 0 0 var(--pad-1);
