@@ -476,7 +476,8 @@ enabled`) is a separate, SPA-only surface; see architecture-invariants
 #11, KT amendment. For a caller the tier admits, `/sessions` carries a **New
 terminal** control under the page head (harness, working directory, Launch)
 and a session page's Resume section carries **Resume in a kb terminal**; both
-open the terminal inline. The how and the limits are in
+open the terminal. `/sessions` also lists the terminals with Open, End and
+`?term=<id>` deep links. The how and the limits are in
 [kb-term.md](kb-term.md#start-or-resume-from-the-web).
 The panel goes full screen from its bar on desktop (native where Esc can stay
 with the terminal, a maximised overlay elsewhere) and, where the browser has
