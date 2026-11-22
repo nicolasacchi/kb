@@ -26,6 +26,10 @@ import { applyFont, measureCellHeight, usePhoneScroller, type ScrollTerm } from 
 import type { PhoneMeasure } from "./fitPhone";
 import "./phone.css";
 
+/** How long a Full tap waits for the browser to enter full screen before saying it did not. */
+const FULLSCREEN_GRACE_MS = 1500;
+const FULLSCREEN_FAILED = "Full screen is not available here.";
+
 export type PhoneMode = "watch" | "read";
 
 /** The slice of the xterm Terminal this view uses (a fake in the dom test). */
@@ -114,6 +118,33 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
   const [root, setRoot] = useState<HTMLDivElement | null>(null);
   const fs = useFullscreen(root, "phone", { overlay: false, lockEscape: false });
   const canFullscreen = typeof document !== "undefined" && phoneFullscreenAvailable(document);
+  // A refused requestFullscreen (no user activation, a policy) leaves no state change at all:
+  // say so after a short grace instead of failing silently.
+  const [fsNote, setFsNote] = useState<string | null>(null);
+  const fsOnRef = useRef(false);
+  fsOnRef.current = fs.on;
+  useEffect(() => {
+    if (fs.on) setFsNote(null);
+  }, [fs.on]);
+  const fsTimer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (fsTimer.current !== null) window.clearTimeout(fsTimer.current);
+    },
+    [],
+  );
+  const toggleFullscreen = (): void => {
+    const entering = !fs.on;
+    if (fsTimer.current !== null) window.clearTimeout(fsTimer.current);
+    fsTimer.current = null;
+    setFsNote(null);
+    fs.toggle();
+    if (!entering) return;
+    fsTimer.current = window.setTimeout(() => {
+      fsTimer.current = null;
+      if (!fsOnRef.current) setFsNote(FULLSCREEN_FAILED);
+    }, FULLSCREEN_GRACE_MS);
+  };
 
   // Attach (open once, else re-parent) and force read-only while mounted.
   useLayoutEffect(() => {
@@ -278,7 +309,7 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
             data-testid="kb-term-phone-fullscreen"
             aria-pressed={fs.on}
             aria-label={fs.on ? "Exit full screen" : "Full screen"}
-            onClick={fs.toggle}
+            onClick={toggleFullscreen}
           >
             {fs.on ? "Exit" : "Full"}
           </button>
@@ -298,6 +329,11 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
         <span className="kb-term-phone__caption" data-testid="kb-term-caption">
           {caption}
         </span>
+        {fsNote !== null ? (
+          <span className="kb-term-phone__crop" data-testid="kb-term-phone-fs-note" role="status">
+            {fsNote}
+          </span>
+        ) : null}
         {cropped && mode === "watch" ? (
           <span className="kb-term-phone__crop" data-testid="kb-term-phone-cropped" title={CROPPED_PHONE_HINT}>
             {CROPPED_LABEL}: pan, or Fit to phone

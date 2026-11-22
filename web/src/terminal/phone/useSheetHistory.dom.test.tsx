@@ -148,4 +148,65 @@ describe("useSheetHistory", () => {
     expect(back).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  // FUMINPHONE: switching between terminals remounts the sheet's hook (new key)
+  // while the old entry is still the current one. The new owner must adopt it:
+  // two stacked entries would need two Backs to leave one sheet.
+  it("switching to another terminal keeps ONE entry: a single Back closes the new sheet once", async () => {
+    const closeA = vi.fn();
+    const closeB = vi.fn();
+    const push = vi.spyOn(window.history, "pushState");
+    const r = render(<Probe key="a" active onClose={closeA} />);
+    expect(push).toHaveBeenCalledTimes(1);
+    act(() => {
+      r.rerender(<Probe key="b" active onClose={closeB} />);
+    });
+    await act(async () => {
+      await tick();
+    });
+    // The new sheet adopted A's entry: still exactly one push in total.
+    expect(push).toHaveBeenCalledTimes(1);
+    expect(sheetKey()).toBeTruthy();
+    await act(async () => {
+      window.history.back();
+      await tick();
+    });
+    expect(closeB).toHaveBeenCalledTimes(1);
+    expect(closeA).not.toHaveBeenCalled();
+    expect(sheetKey()).toBeUndefined();
+  });
+
+  it("after a switch the new sheet's own Close pops the adopted entry exactly once", async () => {
+    const closeB = vi.fn();
+    const r = render(<Probe key="a" active onClose={() => {}} />);
+    act(() => {
+      r.rerender(<Probe key="b" active onClose={closeB} />);
+    });
+    await act(async () => {
+      await tick();
+    });
+    const back = vi.spyOn(window.history, "back");
+    let popped = false;
+    await act(async () => {
+      popped = popOwnEntry();
+      await tick();
+    });
+    expect(popped).toBe(true);
+    expect(back).toHaveBeenCalledTimes(1);
+    expect(closeB).toHaveBeenCalledTimes(1);
+    expect(sheetKey()).toBeUndefined();
+  });
+
+  it("a reload with the sheet's entry still current adopts it instead of pushing a second", async () => {
+    window.history.replaceState({ idx: 4, kbSheet: "left-over" }, "", "/sessions?term=t1");
+    const push = vi.spyOn(window.history, "pushState");
+    const onClose = vi.fn();
+    render(<Probe active onClose={onClose} />);
+    expect(push).not.toHaveBeenCalled();
+    await act(async () => {
+      popOwnEntry();
+      await tick();
+    });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
 });
