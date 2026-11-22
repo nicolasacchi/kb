@@ -43,6 +43,14 @@
   color: var(--ink-mute);
 }
 
+.kb-term__progtitle {
+  color: var(--ink-mute);
+  max-width: 24em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .kb-term__caption {
   color: var(--ink-mute);
   flex: 1;

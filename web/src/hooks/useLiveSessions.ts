@@ -18,8 +18,11 @@
 // opts out of (presence has no corresponding SSE event to react to;
 // `session.state` does).
 
+import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchLiveStatus, type LiveStatusRow } from "../api/sessions";
+import { blockedCount } from "../lib/liveSessionLanes";
+import { setAttentionCount } from "./useDocumentTitle";
 
 /// Exported so the bridge (`queryClient.ts`) and any other consumer key off
 /// the SAME query key rather than re-typing the literal.
@@ -38,5 +41,14 @@ export function useLiveSessions(): {
     staleTime: POLL_MS,
     refetchInterval: POLL_MS,
   });
-  return { rows: q.data ?? EMPTY, loading: q.isPending };
+  const rows = q.data ?? EMPTY;
+  // FUTERMATTN: the blocked count rides this ONE cached query into the tab
+  // title and the app badge (the Header chip always mounts a consumer); no
+  // second poll, no stream. Idempotent across consumers.
+  const blocked = blockedCount(rows);
+  useEffect(() => {
+    if (q.isPending) return;
+    setAttentionCount(blocked);
+  }, [blocked, q.isPending]);
+  return { rows, loading: q.isPending };
 }
