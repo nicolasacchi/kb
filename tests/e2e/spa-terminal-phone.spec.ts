@@ -733,6 +733,88 @@ test.describe("FUWEBLAUNCH phone launch controls @phone", () => {
   });
 });
 
+test.describe("FUTERMLIST terminals list @phone", () => {
+  async function admitWithUnboundRow(page: Page): Promise<string[]> {
+    await page.route("**/api/identity", async (route) => {
+      const res = await route.fetch();
+      const j = (await res.json()) as Record<string, unknown>;
+      await route.fulfill({ response: res, json: { ...j, terminal_admitted: true } });
+    });
+    const kills: string[] = [];
+    // Registered after installFakeTerminal's routes, so it is consulted first.
+    await page.route("**/api/terms", (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          terms: [
+            {
+              id: TERM_ID,
+              harness: "omp",
+              cwd: "/synthetic",
+              started_unix: 1760000000,
+              resume_sid: null,
+              pane_pid: 1,
+              cols: 120,
+              rows: 40,
+              bracket_paste_flag: false,
+              pane_dead: false,
+              exit_code: null,
+              grid_owner: null,
+              conf_version: 1,
+              anchor_pid: null,
+              stale: false,
+              session_id: null,
+              state: null,
+              blocked: false,
+            },
+          ],
+        }),
+      });
+    });
+    await page.route("**/api/terms/*/kill", (route) => {
+      kills.push(`${route.request().method()} ${new URL(route.request().url()).pathname} ${route.request().headers()["x-kb-intent"] ?? ""}`);
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ exit_code: null }) });
+    });
+    return kills;
+  }
+
+  test("from /sessions, tap a running unbound terminal: the sheet opens with ?term= in the URL, and a reload reopens it", async ({ page }) => {
+    await installFakeTerminal(page, {});
+    await admitWithUnboundRow(page);
+    await page.goto(`${BASE}/sessions`);
+    const row = page.locator(`[data-testid="term-row"][data-term="${TERM_ID}"]`);
+    await expect(row).toBeVisible({ timeout: 20_000 });
+    await expect(row.locator('[data-testid="term-row-unbound"]')).toBeVisible();
+    await row.locator('[data-testid="term-row-open"]').click();
+    await expect(page.locator(VP)).toBeVisible({ timeout: 30_000 });
+    await expect(page).toHaveURL(new RegExp(`[?&]term=${TERM_ID}(&|$)`));
+    await page.reload();
+    await expect(page.locator(VP)).toBeVisible({ timeout: 30_000 });
+    await expect(page).toHaveURL(new RegExp(`[?&]term=${TERM_ID}(&|$)`));
+  });
+
+  test("End in the sheet: Cancel sends nothing, Confirm sends exactly one kill with the intent header, and the sheet stays until the stream ends it", async ({ page }) => {
+    await installFakeTerminal(page, {});
+    const kills = await admitWithUnboundRow(page);
+    await page.goto(`${BASE}/sessions?term=${TERM_ID}`);
+    await expect(page.locator(VP)).toBeVisible({ timeout: 30_000 });
+    const end = page.locator('[data-testid="kb-term-phone-extra"] [data-testid="kb-term-end"]');
+    await expect(end).toBeVisible();
+    await end.click();
+    await page.locator(".confirm__cancel").click();
+    await page.waitForTimeout(300);
+    expect(kills).toEqual([]);
+    await end.click();
+    await page.locator(".confirm__go").click();
+    await expect.poll(() => kills.length).toBe(1);
+    expect(kills[0]).toBe(`POST /api/terms/${TERM_ID}/kill terminal`);
+    // The client never ends the panel itself.
+    await expect(page.locator(VP)).toBeVisible();
+  });
+});
+
 // FUPHONELINKS — a tap on a URL in the Watch grid opens it (the scroller owns every
 // gesture, so xterm's own link click never fires on a phone). Real touch input:
 // page.touchscreen.tap produces trusted touch + pointer events.
