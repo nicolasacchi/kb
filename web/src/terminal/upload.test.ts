@@ -63,6 +63,13 @@ describe("uploadImage", () => {
     expect(headers(calls[0])["X-Kb-Intent"]).toBe("terminal");
   });
 
+  it("hands the caller's AbortSignal to fetch", async () => {
+    replies.push(json(200, { path: "/up/a.png", bytes: 4, mime: "image/png", sha256: "a".repeat(64) }));
+    const ctl = new AbortController();
+    await uploadImage("abcd1234", file(4, "image/png"), ctl.signal);
+    expect(calls[0].init.signal).toBe(ctl.signal);
+  });
+
   it("explains a 413 or 415 with the server's own words", async () => {
     replies.push(json(415, { type: "urn:kb:errors:unsupported-media", detail: "not a picture" }));
     await expect(uploadImage("abcd1234", file(4, "image/png"))).rejects.toMatchObject({

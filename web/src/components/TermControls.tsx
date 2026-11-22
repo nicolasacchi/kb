@@ -103,16 +103,19 @@ export function TerminalControls({
   target,
   onSwitch,
   className,
+  onEnded,
 }: {
   target: EndTarget;
   /// Phone only: switch to another live terminal.
   onSwitch?: (termId: string) => void;
   className?: string;
+  /// After a successful End (a list host refreshes its rows; the SSE bridge does too).
+  onEnded?: () => void;
 }): ReactElement {
   return (
     <>
       {onSwitch ? <TermSwitcher currentId={target.termId} onSwitch={onSwitch} /> : null}
-      <EndTerminalButton target={target} className={className} />
+      <EndTerminalButton target={target} className={className} onEnded={onEnded} />
     </>
   );
 }

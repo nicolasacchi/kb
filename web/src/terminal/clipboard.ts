@@ -25,13 +25,20 @@ export function osc52ClipboardText(
   }
 }
 
+/** Write `text` to the clipboard and say whether it landed (never throws). */
+export async function tryWriteClipboardText(text: string): Promise<boolean> {
+  try {
+    if (!navigator.clipboard) return false;
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Write `text` to the clipboard, swallowing every failure silently. */
 export async function writeClipboardText(text: string): Promise<void> {
-  try {
-    await navigator.clipboard?.writeText(text);
-  } catch {
-    // Clipboard failures are caught silently.
-  }
+  await tryWriteClipboardText(text);
 }
 
 /** Combined: gate on recent typing, then write; never throws. */

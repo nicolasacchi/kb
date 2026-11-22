@@ -314,3 +314,108 @@ describe("onLaunched (FUTERMLIST)", () => {
     expect(onLaunched).not.toHaveBeenCalled();
   });
 });
+
+// FUMINLIST — Cancel during a launch aborts it; the late 2xx never re-opens the panel.
+describe("cancel while launching (FUMINLIST)", () => {
+  let release: (() => void) | null = null;
+  let postSignal: AbortSignal | null = null;
+  beforeEach(() => {
+    release = null;
+    postSignal = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string | URL, init?: RequestInit) => {
+        if ((init?.method ?? "GET") === "POST") {
+          postSignal = init?.signal ?? null;
+          // A slow launch that still answers 2xx even when aborted (a late
+          // reply racing the abort): the panel must ignore it either way.
+          return new Promise<Response>((resolve) => {
+            release = () =>
+              resolve(
+                new Response(JSON.stringify({ id: "late1" }), {
+                  status: 200,
+                  headers: { "Content-Type": "application/json" },
+                }),
+              );
+          });
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify({ terms: [] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }),
+    );
+  });
+
+  it("Cancel is usable mid-launch, aborts the request and the late 2xx never opens a panel", async () => {
+    const onLaunched = vi.fn();
+    mount({ onLaunched });
+    open();
+    type("/srv/work");
+    launch();
+    await waitFor(() => expect(postSignal).not.toBeNull());
+    const cancel = screen.getByTestId("new-terminal-cancel") as HTMLButtonElement;
+    expect(cancel.disabled).toBe(false);
+    fireEvent.click(cancel);
+    expect(postSignal?.aborted).toBe(true);
+    expect(screen.queryByTestId("new-terminal-form")).toBeNull();
+    release?.();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(onLaunched).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("new-terminal-form")).toBeNull();
+    expect(screen.queryByTestId("launched-terminal")).toBeNull();
+  });
+
+  it("the late 2xx never mounts the inline panel either (no onLaunched)", async () => {
+    mount();
+    open();
+    type("/srv/work");
+    launch();
+    await waitFor(() => expect(postSignal).not.toBeNull());
+    fireEvent.click(screen.getByTestId("new-terminal-cancel"));
+    release?.();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByTestId("mock-panel")).toBeNull();
+    expect(screen.queryByTestId("launched-terminal")).toBeNull();
+  });
+
+  it("an aborted launch is not an error: no toast, no error line", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string | URL, init?: RequestInit) => {
+        if ((init?.method ?? "GET") === "POST") {
+          postSignal = init?.signal ?? null;
+          return new Promise<Response>((_res, rej) => {
+            init?.signal?.addEventListener("abort", () =>
+              rej(new DOMException("aborted", "AbortError")),
+            );
+          });
+        }
+        return Promise.resolve(new Response(JSON.stringify({ terms: [] }), { status: 200 }));
+      }),
+    );
+    const err = vi.spyOn(toast, "err");
+    mount();
+    open();
+    type("/srv/work");
+    launch();
+    await waitFor(() => expect(postSignal).not.toBeNull());
+    fireEvent.click(screen.getByTestId("new-terminal-cancel"));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(err).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("new-terminal-error")).toBeNull();
+  });
+
+  it("unmounting mid-launch aborts the request", async () => {
+    const { unmount } = mount();
+    open();
+    type("/srv/work");
+    launch();
+    await waitFor(() => expect(postSignal).not.toBeNull());
+    expect(postSignal?.aborted).toBe(false);
+    unmount();
+    expect(postSignal?.aborted).toBe(true);
+  });
+});

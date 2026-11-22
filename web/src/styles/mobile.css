@@ -544,7 +544,7 @@ body.kb-immersive .kb-folio-colophon {
   .kb-ses__newterm .kb-ses__resume-copy,
   .kb-ses__handoff .kb-ses__resume-copy {
     min-height: 44px;
-    padding: 0 14px;
+    padding: 0 var(--pad-3);
   }
 
   /* ContextBar: scroll the action row horizontally instead of overflowing

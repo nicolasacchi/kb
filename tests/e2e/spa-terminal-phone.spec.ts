@@ -581,7 +581,7 @@ test.describe("FUTERMPOLISH phone sheet @phone", () => {
     await openPhone(page, { total: 300, seedLines: 300, drive: true, gridOwner: "kb-term" });
     const keys = page.locator('[data-testid="kb-drive-keys"]');
     const scrolls = await keys.evaluate((el) => el.scrollWidth > el.clientWidth + 1);
-    if (!scrolls) return; // everything fits this phone: nothing to signal
+    test.skip(!scrolls, "everything fits this phone: the key row has nothing to signal");
     await expect(keys).toHaveAttribute("data-more", "right");
     await keys.evaluate((el) => {
       el.scrollLeft = el.scrollWidth;
@@ -606,7 +606,7 @@ test.describe("FUTERMPOLISH phone sheet @phone", () => {
   test("W6f: full screen folds the grid-controls row away; the keys and the composer stay (where the browser has full screen)", async ({ page }) => {
     await openPhone(page, { total: 300, seedLines: 300, drive: true, gridOwner: "kb-term" });
     const btn = page.locator('[data-testid="kb-term-phone-fullscreen"]');
-    if ((await btn.count()) === 0) return; // iPhone Safari has no element full screen
+    test.skip((await btn.count()) === 0, "this browser has no element full screen (iPhone Safari)");
     await expect(page.locator('[data-testid="kb-drive-fit"]')).toBeVisible();
     await btn.click();
     await expect(page.locator('[data-testid="kb-drive-fit"]')).toHaveCount(0, { timeout: 10_000 });
@@ -916,7 +916,9 @@ test.describe("FUPHONELINKS tap to open @phone", () => {
     const before = page.context().pages().length;
     // A vertical drag that starts on the URL scrolls; it must not open anything.
     await drag(page, { x0: p.x, y0: p.y, x1: p.x, y1: p.y + 30, holdMs: 100 });
-    await page.waitForTimeout(400);
+    // A link opens synchronously in the pointerup handler, so a pop-up would already exist by the
+    // time a round trip through the page returns (same CDP channel, in order): wait for that, not a timer.
+    await page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
     expect(page.context().pages().length).toBe(before);
 
     const p2 = await urlPoint(page);
@@ -927,6 +929,40 @@ test.describe("FUPHONELINKS tap to open @phone", () => {
     await popup.close();
     // The phone view is still the Watch grid: the tap was not sent as a click to the page.
     await expect(page.locator(VP)).toBeVisible();
+  });
+
+  // FUMINPHONE: a still tap on a URL opens it and nothing else - no byte reaches the pty.
+  test("a still tap on a URL sends nothing to the pty", async ({ page }) => {
+    await page.context().route("https://example.com/**", (r) => r.fulfill({ status: 200, contentType: "text/html", body: "<title>ok</title>" }));
+    const stats = await openPhone(page, { total: 200, seedLines: 200, tailText: `open ${URL_TEXT} now\r\n` });
+    const p = await urlPoint(page);
+    const popupP = page.context().waitForEvent("page");
+    await page.touchscreen.tap(p.x, p.y);
+    const popup = await popupP;
+    await popup.close();
+    expect(stats.inputs).toEqual([]);
+  });
+});
+
+// FUMINPHONE (FUTERMFULL follow-up) - the Full screen button really enters element
+// full screen on an Android-class phone and the same button leaves it.
+test.describe("FUMINPHONE full screen button @phone", () => {
+  test("a real tap on Full enters full screen on the terminal root; Exit leaves it", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "chromium-pixel7", "only Android Chrome has element full screen on the phone view");
+    await openPhone(page, { total: 300, seedLines: 300, drive: true, gridOwner: "kb-term" });
+    const btn = page.locator('[data-testid="kb-term-phone-fullscreen"]');
+    await expect(btn).toHaveAttribute("aria-label", "Full screen");
+    await btn.tap();
+    await expect
+      .poll(() => page.evaluate(() => document.fullscreenElement?.hasAttribute("data-kb-term-root") ?? false), { timeout: 10_000 })
+      .toBe(true);
+    await expect(btn).toHaveAttribute("aria-label", "Exit full screen");
+    // The grid-controls row folds away in full screen (W6f) and nothing was sent to the pty.
+    await expect(page.locator('[data-testid="kb-drive-fit"]')).toHaveCount(0);
+    await btn.tap();
+    await expect.poll(() => page.evaluate(() => document.fullscreenElement === null), { timeout: 10_000 }).toBe(true);
+    await expect(btn).toHaveAttribute("aria-label", "Full screen");
+    await expect(page.locator('[data-testid="kb-drive-fit"]')).toBeVisible();
   });
 });
 
@@ -1046,5 +1082,77 @@ test.describe("POLISH2 landscape phone dock @phone", () => {
     expect(send.y).toBeGreaterThan(input.y + input.height - 1);
     // Two lines of text, as on main (rows=2).
     expect(input.height).toBeGreaterThan(50);
+  });
+});
+
+// FUMINLIST - the phone sheet's terminal switcher with two listed terminals:
+// switching in the sheet moves `?term=` to the other id. Switching PUSHES a
+// history entry (openTerm is replace:false), so Back first returns to the
+// previous terminal and a second Back closes the sheet.
+test.describe("FUMINLIST two-terminal switcher @phone", () => {
+  const OTHER_ID = "t-e2f";
+  const termRow = (id: string, cwd: string) => ({
+    id,
+    harness: "omp",
+    cwd,
+    started_unix: 1760000000,
+    resume_sid: null,
+    pane_pid: 1,
+    cols: 120,
+    rows: 40,
+    bracket_paste_flag: false,
+    pane_dead: false,
+    exit_code: null,
+    grid_owner: null,
+    conf_version: 1,
+    anchor_pid: null,
+    stale: false,
+    session_id: null,
+    state: null,
+    blocked: false,
+  });
+
+  test("switching terminals in the sheet makes ?term= follow", async ({ page }) => {
+    await installFakeTerminal(page, { total: 300, seedLines: 300 });
+    await page.route("**/api/identity", async (route) => {
+      const res = await route.fetch();
+      const j = (await res.json()) as Record<string, unknown>;
+      await route.fulfill({ response: res, json: { ...j, terminal_admitted: true } });
+    });
+    // Registered after installFakeTerminal's routes, so it is consulted first.
+    await page.route("**/api/terms", (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ terms: [termRow(TERM_ID, "/synthetic/one"), termRow(OTHER_ID, "/synthetic/two")] }),
+      });
+    });
+    await page.goto(`${BASE}/sessions`);
+    const first = page.locator(`[data-testid="term-row"][data-term="${TERM_ID}"] [data-testid="term-row-open"]`);
+    await expect(first).toBeVisible({ timeout: 20_000 });
+    await first.click();
+    await expect(page.locator("[data-kb-sheet]")).toBeAttached({ timeout: 15_000 });
+    await expect.poll(() => new URL(page.url()).searchParams.get("term")).toBe(TERM_ID);
+
+    const sw = page.locator('[data-testid="kb-term-switch"]');
+    await expect(sw).toBeVisible({ timeout: 15_000 });
+    // The switcher offers only the OTHER live terminal.
+    await expect(sw.locator("option")).toHaveCount(2);
+    await sw.selectOption(OTHER_ID);
+    await expect.poll(() => new URL(page.url()).searchParams.get("term")).toBe(OTHER_ID);
+    await expect(page.locator("[data-kb-sheet]")).toBeAttached();
+    await expect(page.locator('[data-testid="launched-terminal"]')).toHaveAttribute("data-term", OTHER_ID);
+
+    // Back #1 undoes the switch (the switch pushed an entry): same sheet, first terminal.
+    await page.goBack();
+    await expect.poll(() => new URL(page.url()).searchParams.get("term")).toBe(TERM_ID);
+    await expect(page.locator("[data-kb-sheet]")).toBeAttached();
+    await expect(page.locator('[data-testid="launched-terminal"]')).toHaveAttribute("data-term", TERM_ID);
+    // Back #2 closes the sheet and drops ?term=.
+    await page.goBack();
+    await expect.poll(() => new URL(page.url()).searchParams.get("term")).toBeNull();
+    await expect(page.locator("[data-kb-sheet]")).toHaveCount(0);
+    await expect(page.locator('[data-testid="launched-terminal"]')).toHaveCount(0);
   });
 });

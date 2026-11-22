@@ -911,7 +911,15 @@ describe("SessionPage — live-only card (FUWEBOPEN)", () => {
   });
 
   describe("#sec-terminal", () => {
-    afterEach(() => vi.unstubAllGlobals());
+    // jsdom has no scrollIntoView: remember what the prototype carried (usually
+    // nothing) and put it back, so the stub never leaks into later tests.
+    const hadScroll = Object.prototype.hasOwnProperty.call(Element.prototype, "scrollIntoView");
+    const origScroll = Element.prototype.scrollIntoView;
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      if (hadScroll) Element.prototype.scrollIntoView = origScroll;
+      else delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    });
 
     function mobile() {
       vi.stubGlobal("matchMedia", (q: string) => ({
@@ -926,7 +934,10 @@ describe("SessionPage — live-only card (FUWEBOPEN)", () => {
 
     it("opens the Terminal section on mobile (sections otherwise collapsed) and scrolls to it", async () => {
       mobile();
-      const scroll = vi.fn();
+      const targets: Element[] = [];
+      const scroll = vi.fn(function (this: Element) {
+        targets.push(this);
+      });
       Element.prototype.scrollIntoView = scroll;
       vi.stubGlobal("fetch", mockFetch({ card: liveOnlyCard() }));
       renderLiveOnly(`/sessions/${SID}#sec-terminal`);
@@ -935,6 +946,14 @@ describe("SessionPage — live-only card (FUWEBOPEN)", () => {
       // The resume section (not the target) stays collapsed on mobile.
       expect((screen.getByTestId("session-sec-resume") as HTMLDetailsElement).open).toBe(false);
       await waitFor(() => expect(scroll).toHaveBeenCalled());
+      // It scrolled THE terminal section, not some other element.
+      expect(targets.every((t) => t.id === "sec-terminal")).toBe(true);
+      expect(targets[0]).toBe(sec);
+      expect(scroll).toHaveBeenCalledWith({ block: "start" });
+    });
+
+    it("restores the scrollIntoView prototype between tests", () => {
+      expect(Element.prototype.scrollIntoView === undefined || !vi.isMockFunction(Element.prototype.scrollIntoView)).toBe(true);
     });
 
     it("also opens it on the full page, and stays closed without the hash on mobile", async () => {
@@ -955,6 +974,14 @@ describe("SessionPage — live-only card (FUWEBOPEN)", () => {
 // page feeds the component the card's terminal lane and the detail's cwd.
 describe("SessionPage resume in a kb terminal", () => {
   const withCwd = { ...(DETAIL as object), cwd: "/srv/w" };
+  // The detail query (the cwd source) has been asked AND its answer rendered: a
+  // fetch-call condition plus a few macrotask hops, no fixed-duration sleep.
+  async function detailSettled(f: ReturnType<typeof mockFetch>) {
+    await waitFor(() =>
+      expect(f.mock.calls.some((c) => String(c[0]).endsWith(`/api/sessions/${SID}`))).toBe(true),
+    );
+    for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+  }
   const admitted = (extra: Record<string, unknown> = {}) => ({
     available: false,
     reason: "no live terminal",
@@ -972,43 +999,37 @@ describe("SessionPage resume in a kb terminal", () => {
   });
 
   it("hides it when the tier is disabled for the caller", async () => {
-    vi.stubGlobal(
-      "fetch",
-      mockFetch({
-        card: fullCard({ terminal: { available: false, reason: "terminal disabled", admitted: false } }),
-        detail: withCwd,
-      }),
-    );
+    const f = mockFetch({
+      card: fullCard({ terminal: { available: false, reason: "terminal disabled", admitted: false } }),
+      detail: withCwd,
+    });
+    vi.stubGlobal("fetch", f);
     renderPage();
     await screen.findByTestId("session-sec-resume");
-    // Let the detail query (the cwd source) settle before the negative check.
-    await new Promise((r) => setTimeout(r, 80));
+    await detailSettled(f);
     expect(screen.queryByTestId("session-resume-term-go")).toBeNull();
   });
 
   it("hides it when the session already has a live bound terminal", async () => {
-    vi.stubGlobal(
-      "fetch",
-      mockFetch({
-        card: fullCard({
-          terminal: { available: true, admitted: true, term_id: "t1", harness: "claude" },
-        }),
-        detail: withCwd,
+    const f = mockFetch({
+      card: fullCard({
+        terminal: { available: true, admitted: true, term_id: "t1", harness: "claude" },
       }),
-    );
+      detail: withCwd,
+    });
+    vi.stubGlobal("fetch", f);
     renderPage();
     await screen.findByTestId("session-sec-resume");
-    // Let the detail query (the cwd source) settle before the negative check.
-    await new Promise((r) => setTimeout(r, 80));
+    await detailSettled(f);
     expect(screen.queryByTestId("session-resume-term-go")).toBeNull();
   });
 
   it("hides it when the session has no recorded cwd", async () => {
-    vi.stubGlobal("fetch", mockFetch({ card: fullCard({ terminal: admitted() }) }));
+    const f = mockFetch({ card: fullCard({ terminal: admitted() }) });
+    vi.stubGlobal("fetch", f);
     renderPage();
     await screen.findByTestId("session-sec-resume");
-    // Let the detail query (the cwd source) settle before the negative check.
-    await new Promise((r) => setTimeout(r, 80));
+    await detailSettled(f);
     expect(screen.queryByTestId("session-resume-term-go")).toBeNull();
   });
 });

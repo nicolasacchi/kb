@@ -296,6 +296,7 @@ export class TermSession {
     if (this.probeTimer !== null) return;
     if (this.fx.now() - this.lastHeardAt <= PROBE_AFTER_SILENCE_MS) return;
     const gen = this.socketGen;
+    const pingAt = this.fx.now();
     try {
       this.socket.send(encodePing());
     } catch {
@@ -304,6 +305,9 @@ export class TermSession {
     this.probeTimer = this.fx.setTimer(() => {
       this.probeTimer = null;
       if (this.disposed || gen !== this.socketGen || this.phase !== "live") return;
+      // Any frame heard since the ping proves the socket alive (the cancel in
+      // `heard` can lose a race with a timer already queued).
+      if (this.lastHeardAt >= pingAt) return;
       this.closeForRejoin();
       this.attempt = 0;
       this.reconnectReason = null;
@@ -551,7 +555,9 @@ export class TermSession {
    * toward the "cannot reach terminal" caption.
    */
   private noteClose(code: number, reason: string): void {
-    this.reconnectReason = reason === "idle" || code === 1001 ? "idle"
+    // Only the relay's own `idle` reason is captioned idle: a bare 1001 (going
+    // away, no reason) is a plain reconnect.
+    this.reconnectReason = reason === "idle" ? "idle"
       : reason === "slow consumer" || code === 1013 ? "slow link"
       : reason === "service restart" || code === 1012 ? "service restarting"
       : null;

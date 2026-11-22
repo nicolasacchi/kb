@@ -1315,27 +1315,29 @@ test("a 201x48 grid is fully visible at 1440x900 (font >= 9, no horizontal scrol
   // the list is readable (FUTERMGET), so the row is known and the chip carries its owner
   expect(g.chip).toMatch(/^201x48 · /);
 
-  // 1280x720: either everything still fits, or the hint says it is cropped and the host scrolls.
+  // 1280x720 cannot hold 201x48: the font settles at the floor (9) and the hint says
+  // the grid is cropped (FUTERMPOLISH: "font 9 + Cropped, which is correct").
   await page.setViewportSize({ width: 1280, height: 720 });
   await expect
     .poll(async () => {
       const m = await panelGeometry(page);
-      return m.cropped || (m.screenW <= m.hostW && m.screenH <= m.hostH);
+      return m.cropped && m.font === 9 ? "ok" : `cropped ${m.cropped} font ${m.font} screen ${m.screenW}x${m.screenH} host ${m.hostW}x${m.hostH}`;
     }, { timeout: 30_000 })
-    .toBe(true);
+    .toBe("ok");
   g = await panelGeometry(page);
-  expect(g.font).toBeGreaterThanOrEqual(9);
+  expect(g.cropped).toBe(true);
+  expect(g.font).toBe(9);
   expect(g.docW).toBeLessThanOrEqual(g.vw);
 
-  // 1024: opening the panel adds no width to the page: it is exactly as wide as
-  // it was with the panel closed (the header's own width), never the 201-column grid.
+  // 1024: opening the panel adds no width to the page: the page is never wider than
+  // the viewport, never the 201-column grid.
   await page.setViewportSize({ width: 1024, height: 768 });
   await expect
     .poll(async () => {
       const m = await panelGeometry(page);
-      return m.docW <= Math.max(baseline, m.vw)
+      return m.docW <= m.vw
         ? "ok"
-        : `docW ${m.docW} > closed-panel width ${baseline} (vw ${m.vw}): ${m.overflowers.join(" | ")}`;
+        : `docW ${m.docW} > vw ${m.vw} (closed-panel baseline ${baseline}): ${m.overflowers.join(" | ")}`;
     }, { timeout: 30_000 })
     .toBe("ok");
 });
@@ -1344,14 +1346,27 @@ test("Fit to window takes the grid, the chip then equals the measured cols x row
   test.setTimeout(240_000);
   await page.setViewportSize({ width: 1440, height: 900 });
   const c = await prepare(page, request, winchHarness(), { cols: 120, rows: 40 });
+  const gridPosts: string[] = [];
+  page.on("request", (r) => {
+    if (r.method() === "POST" && /\/api\/terms\/[^/]+\/(take-size|release-size|resize|size)/.test(r.url())) gridPosts.push(r.url());
+  });
   await openPanel(page, c.sid);
   const ownerOf = async (): Promise<string | null> => {
     const { body } = await c.api.json<{ terms: Array<{ id: string; grid_owner?: string | null }> }>("GET", "/api/terms");
     return body.terms.find((t) => t.id === c.term.id)?.grid_owner ?? null;
   };
 
-  // Opening the panel never takes the grid.
-  await page.waitForTimeout(1000);
+  // Opening the panel never takes the grid: wait until the panel has settled (live, the
+  // 120x40 grid fitted into the host), then no grid request has been sent.
+  await expect
+    .poll(async () => {
+      const m = await panelGeometry(page);
+      return m.phase === "live" && `${m.cols}x${m.rows}` === "120x40" && m.screenW <= m.hostW && m.screenH <= m.hostH
+        ? "ok"
+        : `phase ${m.phase} grid ${m.cols}x${m.rows} screen ${m.screenW}x${m.screenH} host ${m.hostW}x${m.hostH}`;
+    }, { timeout: 30_000 })
+    .toBe("ok");
+  expect(gridPosts, "opening the panel sends no grid request").toEqual([]);
   expect(await ownerOf()).not.toBe("kb-term");
   expect(`${(await panelGeometry(page)).cols}x${(await panelGeometry(page)).rows}`).toBe("120x40");
 
@@ -1456,8 +1471,14 @@ test("FUTERMFULL: the overlay maximises the panel, shows the whole 120x40 grid, 
   await expect(page.locator("[data-kb-term]")).toBeVisible({ timeout: 30_000 });
   await page.locator('[data-testid="kb-term-fullscreen"]').click();
   await expect.poll(async () => (await fullState(page)).overlay).toBe(true);
+  expect(await page.evaluate(() => document.querySelector(".kb-term--max") !== null)).toBe(true);
   await page.reload();
   await expect(page.locator('[data-testid="kb-term-open"]')).toBeVisible({ timeout: 30_000 });
+  expect(await page.evaluate(() => document.querySelector(".kb-term--max") === null && document.fullscreenElement === null)).toBe(true);
+  // Non-vacuous: the panel that opens after the reload is NOT maximised (no state survived).
+  await page.locator('[data-testid="kb-term-open"]').click();
+  await expect(page.locator("[data-kb-term]")).toBeVisible({ timeout: 30_000 });
+  expect((await fullState(page)).overlay).toBe(false);
   expect(await page.evaluate(() => document.querySelector(".kb-term--max") === null && document.fullscreenElement === null)).toBe(true);
 
   expect(gridCalls, "full screen never sends a grid change").toEqual([]);

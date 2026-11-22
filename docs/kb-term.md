@@ -329,7 +329,8 @@ seed was taken at.
 - **Hidden release:** a tab hidden for 3 minutes closes its socket (1000, no
   reconnect caption) to free a viewer slot and rejoins by resume when shown.
 - **Refusal captions:** the relay close reasons are `idle` (1001), `slow consumer`
-  (1013) and `service restart` (1012) and the reconnect caption names them. A
+  (1013) and `service restart` (1012) and the reconnect caption names them; a bare
+  1001 with no reason is a plain reconnect, not "idle". A
   refused upgrade is only a bare 1006 in a browser, so three consecutive closes
   before any frame show "cannot reach terminal, retrying". A ticket mint that hits
   an edge-auth lapse (a redirect, 401, or a 403 that is not the terminal gate's own)
@@ -610,7 +611,11 @@ the row carries a session id the panel shows a link to that session's Terminal
 section. The link is never followed for you, and a harness may resume into a
 different session id than the one you resumed; the link names whichever id the
 row carries. A refused or failed launch (400, 404, 5xx) and a pane that ended
-(with its exit code) are shown as they are.
+(with its exit code) are shown as they are. Cancel while a launch is still in
+flight aborts the request and the form closes; a late answer never opens a panel
+(a terminal the runner had already started stays in the Terminals list). If the
+terminal list cannot be read, the panel says so with a Retry button instead of
+the "appears in the list" line.
 
 ### The Terminals list, End and `?term=`
 
@@ -623,7 +628,11 @@ gets the sheet) and puts `?term=<id>` in the URL: a reload, a shared link and
 Back land on the open terminal. Opening adds a history entry; the panel's Close
 replaces it, so Back never reopens a closed sheet. An id that is not a plain
 lowercase token (letters, digits, dash) opens nothing; the server still
-validates the exact id.
+validates the exact id. An id the list does not contain is dropped from the URL
+with "Terminal not found", but only after a list that was read successfully: if
+the list cannot be read, `?term=` stays and the page shows an error with a
+Retry button. While a terminal is open in its panel, its row has no End button
+(the panel's End is the one).
 
 **End** (the button on a row, above a desktop panel, in the phone sheet's own
 header row) asks first, naming the harness and directory, then sends one
@@ -796,7 +805,8 @@ the page.
   (the view also gets an accent ring) and "click to type" otherwise, with xterm's
   inactive cursor style. Nothing focuses the terminal on mount; a click does.
 - **Copy and paste.** Ctrl/Cmd+C copies the selection only when there is one and
-  then clears it, so a second Ctrl/Cmd+C is ^C (the Windows Terminal convention);
+  then clears it once the clipboard write has succeeded (a refused write keeps the
+  selection and shows a toast), so a second Ctrl/Cmd+C is ^C (the Windows Terminal convention);
   with no selection the key is ^C. Ctrl/Cmd+Shift+C always copies and
   Ctrl/Cmd+Shift+V is the browser's paste.
 - **Picture paste and drop.** A paste whose clipboard carries a picture file and
@@ -837,7 +847,9 @@ the page.
 The phone view has three parts. The panel shows it when the viewport is at most
 860 px wide, or when the pointer is coarse and the viewport is under 600 px high (a
 phone held in landscape); a touch tablet in landscape, and any fine-pointer window,
-keep the desktop panel. In that landscape case the grid-controls row of the dock
+keep the desktop panel. The height arm is latched on the device's own short side
+(`screen`), so a soft keyboard that shrinks a landscape tablet's viewport under
+600 px does not flip it to the phone view. In that landscape case the grid-controls row of the dock
 folds away and the key bar and composer stay.
 
 - **Watch:** the terminal at the session grid, default font 12 px (steps 8 to 24),
@@ -884,7 +896,9 @@ folds away and the key bar and composer stay.
     in the browser (no server state), editable with Edit. A tap goes through the same
     send plan as Send, so a reply that begins with `/` or `@` is pasted and not sent,
     and a blocked session gets a paste with no Enter. The composer draft is kept per
-    terminal in the browser for a day and cleared by a successful send.
+    terminal in the browser for a day and cleared by a successful send. Drafts are
+    stored as plaintext in the browser's localStorage (`kb.term.draft.<id>`); expired
+    ones are swept whenever a composer mounts.
   - The choice bar appears only while a bound session is blocked on the operator,
     which is known from beats alone.
   - Guards for Claude: every `Left` and every message that is exactly `/bg` asks
@@ -898,7 +912,8 @@ folds away and the key bar and composer stay.
     Fit to phone" hint (the same label as the desktop's) are on a line of their own
     under it, so the buttons never squeeze them to an ellipsis. The grid chip beside
     Fit to phone is the desktop chip's words (`120x40 · web`, `· free`, `· local
-    attach`, the size alone while the list row is behind the live grid). The key row
+    attach`; `checking` while the list row is behind the live grid, and Release is not
+    offered until the list vouches for the owner). The key row
     scrolls sideways and fades its right edge while more keys are off screen.
   - **Full screen on a phone.** The sheet's full detent is the whole dynamic
     viewport (`100dvh`, with the notch and home-indicator insets kept clear), and its
@@ -908,10 +923,13 @@ folds away and the key bar and composer stay.
     Fit, Release and chip row away; the keys and the composer stay), and the first
     Back leaves it. Where it is not offered (iPhone Safari) there is no button:
     the `100dvh` sheet is the most the browser allows. There is no overlay
-    fallback and no Escape lock on a phone.
+    fallback and no Escape lock on a phone. If the browser refuses the request, the
+    bar says "Full screen is not available here." instead of doing nothing.
   - **Image upload** accepts `image/png`, `image/jpeg`, `image/gif` or
     `image/webp` up to 8 MiB, stores the file in the session's own 0700 upload
-    directory and pastes its absolute path.
+    directory and pastes its absolute path. Pasting a picture into the composer uploads one at a
+    time: a second paste during an upload is refused with a status line, and the
+    extra pictures of a multi-file paste are dropped and counted in the status line.
 
 Verification: CI runs the phone specs in Chromium (Pixel 7 and iPhone 15
 emulation) and WebKit (iPhone 15 emulation) with synthetic pointer events and

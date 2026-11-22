@@ -300,7 +300,7 @@ KB_DEV_ORIGIN_ANY bypass are deliberately NOT accepted on this tier:
 an Origin on an artifact subdomain fails unless the request Host is
 that same subdomain (the Host-equality is the only admission, exactly
 as the parent-Origin equality is); (c) require an SPA-only intent header on
-every POST AND every GET (precedent: the `X-Kb-Visibility` marker in
+every POST and every REST GET (list, read, history, grid, media; the WS upgrade, also a GET, uses Origin plus the ticket instead) (precedent: the `X-Kb-Visibility` marker in
 routes/comments.rs, an intent marker, not an authorization; header name
 `X-Kb-Intent: terminal`, fixed in T11), (d) mint a single-use ticket of
 about 30 s for the WS upgrade (binding details fixed in T11) and
@@ -1064,8 +1064,10 @@ the detail route, the card's `summary.resume`, and live-status registry
 rows resolved through `sessions_root_of`). The CLI prints the daemon's
 `text` verbatim and never renders a lane (`kb sessions card`; the
 slate-digest precedent). The `terminal` lane is the constant
-`{available: false, reason: "no terminal runner"}` until the kb-term
-track fills it without changing the shape; the card gives agents and the
+registry-derived (`terminal_lane`: `{available: false, reason: "terminal disabled"}`
+with the tier off, `"not running in kb-term"` with no bound terminal, else the
+bound term id, harness, state and `admitted`, with `via: "root"` for a child
+resolved to its tree root); the card gives agents and the
 CLI no attach or type surface. *FUWEBOPEN (2026-11):* a sid with no capture row
 but a live-registry row answers a LIVE-ONLY card (`capture_pending: true`,
 skip-serialised when false so capture-backed cards stay byte-identical;

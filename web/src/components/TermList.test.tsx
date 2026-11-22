@@ -3,7 +3,7 @@
 // FUTERMLIST — the Terminals list, the End action and the phone switcher.
 // The kill route is real server-side; here fetch is a recording stub.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { toast } from "../lib/toast";
@@ -314,5 +314,95 @@ describe("EndTerminalButton without a confirm host", () => {
   it("with a host it is one End button", () => {
     const { container } = render(<EndTerminalButton target={{ termId: "t1", harness: "claude" }} />);
     expect(container.querySelectorAll('[data-testid="kb-term-end"]')).toHaveLength(1);
+  });
+});
+
+// FUMINLIST — a failed list read is not an empty list; the row End is not doubled.
+describe("list read failure (FUMINLIST)", () => {
+  function failList() {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string | URL, init?: RequestInit) => {
+        const method = init?.method ?? "GET";
+        calls.push({ method, url: String(url), intent: null, hasBody: false });
+        return new Response(JSON.stringify({ title: "Bad Gateway", detail: "runner down" }), {
+          status: 502,
+          statusText: "Bad Gateway",
+          headers: { "Content-Type": "application/json" },
+        });
+      }),
+    );
+  }
+
+  it("with ?term= set, an error keeps the param (no close, no 'not found') and shows an error with retry", async () => {
+    failList();
+    const onCloseOpen = vi.fn();
+    mount({ openId: "t1", onCloseOpen });
+    await screen.findByTestId("term-list-error");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(onCloseOpen).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("term-not-found")).toBeNull();
+    expect(screen.getByTestId("term-list-error").textContent).toMatch(/cannot read the terminal list/i);
+  });
+
+  it("Retry refetches, and a good list that has the id mounts the panel", async () => {
+    failList();
+    const onCloseOpen = vi.fn();
+    mount({ openId: "t1", onCloseOpen });
+    await screen.findByTestId("term-list-error");
+    const before = calls.length;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ terms: [row()] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    fireEvent.click(screen.getByTestId("term-list-retry"));
+    await screen.findByTestId("mock-panel");
+    expect(calls.length).toBeGreaterThanOrEqual(before);
+    expect(screen.queryByTestId("term-list-error")).toBeNull();
+    expect(onCloseOpen).not.toHaveBeenCalled();
+  });
+
+  it("only a SUCCESSFUL list without the id says not found", async () => {
+    rows = [row({ id: "t-a" })];
+    const onCloseOpen = vi.fn();
+    mount({ openId: "t-zzz", onCloseOpen });
+    await screen.findByTestId("term-not-found");
+    expect(screen.queryByTestId("term-list-error")).toBeNull();
+    expect(onCloseOpen).toHaveBeenCalled();
+  });
+
+  it("with no ?term= an error stays quiet (the list simply is not shown)", async () => {
+    failList();
+    const { container } = mount();
+    await waitFor(() => expect(calls.length).toBeGreaterThan(0));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(container.innerHTML).toBe("");
+  });
+});
+
+describe("one End per open terminal (FUMINLIST)", () => {
+  it("the row of the terminal open in its panel has no End; the panel End stays; other rows keep theirs", async () => {
+    rows = [row({ id: "t1" }), row({ id: "t2" })];
+    mount({ openId: "t1" });
+    await screen.findByTestId("mock-panel");
+    const rowEls = screen.getAllByTestId("term-row");
+    const r1 = rowEls.find((r) => r.getAttribute("data-term") === "t1") as HTMLElement;
+    const r2 = rowEls.find((r) => r.getAttribute("data-term") === "t2") as HTMLElement;
+    expect(within(r1).queryByTestId("kb-term-end")).toBeNull();
+    expect(within(r2).getByTestId("kb-term-end")).toBeTruthy();
+    expect(within(screen.getByTestId("launched-terminal")).getByTestId("kb-term-end")).toBeTruthy();
+    expect(screen.getAllByTestId("kb-term-end")).toHaveLength(2);
+  });
+
+  it("with nothing open every row has its End", async () => {
+    rows = [row({ id: "t1" }), row({ id: "t2" })];
+    mount();
+    await screen.findAllByTestId("term-row");
+    expect(screen.getAllByTestId("kb-term-end")).toHaveLength(2);
   });
 });

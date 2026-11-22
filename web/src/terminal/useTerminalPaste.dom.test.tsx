@@ -163,3 +163,71 @@ describe("a file drop", () => {
     expect(err).toHaveBeenCalledWith(expect.stringMatching(/PNG, JPEG, GIF and WebP/));
   });
 });
+
+describe("FUMINPANEL upload hardening", () => {
+  const pendingFetch = (): { release: () => void; signals: AbortSignal[] } => {
+    const signals: AbortSignal[] = [];
+    let release: () => void = () => {};
+    fetchMock.mockImplementation(
+      (_u: string, init: RequestInit) =>
+        new Promise<Response>((resolve, reject) => {
+          signals.push(init.signal as AbortSignal);
+          init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+          release = () =>
+            resolve(
+              new Response(JSON.stringify({ path: "/up/x.png", bytes: 4, mime: "image/png", sha256: SHA }), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+              }),
+            );
+        }),
+    );
+    return { release: () => release(), signals };
+  };
+
+  it("a second picture while one uploads is refused with a toast and sends nothing more", async () => {
+    const pending = pendingFetch();
+    const err = vi.spyOn(toast, "err");
+    const ta = mountRig();
+    await fire(ta, "paste", fakeDt({ types: ["Files"], files: [png(4)] }));
+    await fire(ta, "paste", fakeDt({ types: ["Files"], files: [png(4)] }));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(err).toHaveBeenCalledWith(expect.stringMatching(/Still uploading/));
+    await act(async () => {
+      pending.release();
+      for (let i = 0; i < 6; i += 1) await Promise.resolve();
+    });
+    expect(pasted).toEqual(["/up/x.png"]);
+  });
+
+  it("a drop of two pictures and one non-picture uploads the two, toasts the refusal and joins the paths", async () => {
+    const err = vi.spyOn(toast, "err");
+    const ta = mountRig();
+    const note = new File(["hi"], "n.txt", { type: "text/plain" });
+    const ev = await fire(ta, "drop", fakeDt({ types: ["Files"], files: [png(4), note, png(4)] }));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(err).toHaveBeenCalledWith(expect.stringMatching(/Only PNG/));
+    expect(pasted).toEqual(["/up/x.png /up/x.png"]);
+    expect(ev.defaultPrevented).toBe(true);
+    // stopPropagation: xterm's own drop handling never sees it.
+    expect(childSaw).toEqual([]);
+  });
+
+  it("unmounting mid-upload aborts the request and stays silent (no paste, no toast)", async () => {
+    const pending = pendingFetch();
+    const err = vi.spyOn(toast, "err");
+    const ta = mountRig();
+    await fire(ta, "paste", fakeDt({ types: ["Files"], files: [png(4)] }));
+    expect(pending.signals).toHaveLength(1);
+    expect(pending.signals[0].aborted).toBe(false);
+    await act(async () => {
+      root!.unmount();
+      for (let i = 0; i < 6; i += 1) await Promise.resolve();
+    });
+    root = null;
+    expect(pending.signals[0].aborted).toBe(true);
+    expect(pasted).toEqual([]);
+    expect(err).not.toHaveBeenCalled();
+    expect(said.at(-1)).not.toBe(PASTE_NOTE);
+  });
+});

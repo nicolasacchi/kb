@@ -458,3 +458,47 @@ test.describe("T14 — desktop terminal panel", () => {
       .toBe("auto");
   });
 });
+
+// FUMINLIST — a live-only session page (the registry has heard from the
+// session, no capture yet) becomes the full page by itself when the capture
+// lands: the real `session.captured` SSE event drives it, with no reload and
+// no hand-made cache invalidation. Everything is synthetic.
+test.describe("FUMINLIST — live-only card to full card on a real capture", () => {
+  test("the pending caption goes away and the capture-backed sections appear", async ({
+    page,
+    request,
+  }) => {
+    const sid = `e2e-fuminlist-${Date.now()}`;
+    const at = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+    const beat = await request.post(`${BASE}/api/sessions/beat`, {
+      data: { v: 1, session_id: sid, harness: "claude", event: "start", at, cwd: "/work/e2e-fuminlist" },
+    });
+    expect(beat.status()).toBe(200);
+
+    await page.goto(`${BASE}/sessions/${sid}`);
+    await expect(page.getByTestId("session-capture-pending")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("session-sec-outcome")).toHaveCount(0);
+
+    const lines = [
+      `{"type":"user","timestamp":"2026-07-01T09:00:00Z","cwd":"/work/e2e-fuminlist","gitBranch":"main","promptSource":"typed","message":{"role":"user","content":"synthetic prompt"}}`,
+      `{"type":"assistant","timestamp":"2026-07-01T09:05:00Z","message":{"role":"assistant","content":[{"type":"text","text":"synthetic closing"}]}}`,
+    ];
+    const seed = await request.post(`${BASE}/api/kb/mem/artifacts`, {
+      data: {
+        title: `Session transcript 20260701T0900${sid.slice(-4)}Z`,
+        body_html: `<pre>${lines.join("\n")}</pre>`,
+        category: "memory-session",
+        session_id: sid,
+      },
+    });
+    expect(seed.ok()).toBeTruthy();
+
+    // No reload and no invalidation from the test: only the SSE bridge.
+    await expect(page.getByTestId("session-sec-outcome")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("session-capture-pending")).toHaveCount(0);
+
+    await request.post(`${BASE}/api/sessions/beat`, {
+      data: { v: 1, session_id: sid, harness: "claude", event: "end", at, cwd: "/work/e2e-fuminlist" },
+    });
+  });
+});

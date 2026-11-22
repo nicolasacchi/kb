@@ -42,6 +42,8 @@ export function useTerminalPaste(opts: TerminalPasteOptions): void {
     const host = hostRef.current;
     if (!active || !host) return;
     let busy = false;
+    // Unmount (or a term id change) aborts an upload in flight: nothing is pasted into a dead panel.
+    const abort = new AbortController();
 
     const run = async (files: File[]): Promise<void> => {
       if (busy) {
@@ -60,11 +62,13 @@ export function useTerminalPaste(opts: TerminalPasteOptions): void {
         const paths: string[] = [];
         for (const [i, f] of ok.entries()) {
           ref.current.say(`Uploading picture ${i + 1} of ${ok.length}…`);
-          paths.push((await uploadImage(termId, f)).path);
+          paths.push((await uploadImage(termId, f, abort.signal)).path);
         }
+        if (abort.signal.aborted) return;
         ref.current.paste(paths.join(" "));
         ref.current.say(PASTE_NOTE);
       } catch (e) {
+        if (abort.signal.aborted) return;
         ref.current.say("");
         toast.err(e instanceof DriveError ? e.detail : "Could not send the picture");
       } finally {
@@ -94,6 +98,7 @@ export function useTerminalPaste(opts: TerminalPasteOptions): void {
     host.addEventListener("dragover", onDragOver, true);
     host.addEventListener("drop", onDrop, true);
     return () => {
+      abort.abort();
       host.removeEventListener("paste", onPaste, true);
       host.removeEventListener("dragover", onDragOver, true);
       host.removeEventListener("drop", onDrop, true);
