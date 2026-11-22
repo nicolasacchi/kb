@@ -49,6 +49,8 @@ export const CAPTION = {
   refuse:
     "This pane did not enable bracketed paste, so a multi-line message would be sent line by line. Send one line, or paste it into the Read view instead.",
   unbound: "No session bound: Enter is disabled",
+  attachBusy: "Still sending the previous picture.",
+  extraDropped: (n: number): string => `${n} more ${n === 1 ? "picture was" : "pictures were"} not attached: one picture at a time.`,
   holdCtrlC: "Hold to send Ctrl-C",
   holdCtrlD: "Hold to send Ctrl-D",
   pastedNotSent: (detail: string): string => `Pasted, not sent: ${detail}`,

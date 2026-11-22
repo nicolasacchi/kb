@@ -19,10 +19,10 @@ import { chipText, ownerClass, trustedOwner } from "../gridOwner";
 import { releaseGrid, takeGrid, type GridCtx } from "../takeGrid";
 import { fitDims, type PhoneMeasure } from "./fitPhone";
 import { KeyBar } from "./KeyBar";
+import { LANDSCAPE_PHONE_QUERY } from "./queries";
 import "./drive.css";
 
-/** A phone held in landscape (POLISH2): keep in sync with the media query in drive.css and phone.css. */
-export const LANDSCAPE_PHONE_QUERY = "(pointer: coarse) and (orientation: landscape) and (max-height: 599px)";
+export { LANDSCAPE_PHONE_QUERY };
 
 function useLandscapePhone(): boolean {
   const mq = (): MediaQueryList | null =>
@@ -79,7 +79,7 @@ export function DriveDock(props: DriveDockProps) {
   const bound = (row?.session_id ?? null) !== null || liveRow !== undefined;
   const blocked = liveRow?.blocked === true;
   // The owner the runner/list can vouch for; unknown (undefined) while the row is
-  // behind the live grid. Controls treat unknown like free.
+  // behind the live grid. Release needs a vouched web owner; the chip says "checking".
   const vouched: string | null | undefined = ownerHint ? ownerHint.owner : liveGrid ? trustedOwner(row, liveGrid) : (row?.grid_owner ?? null);
   const owner = vouched ?? null;
 
@@ -152,8 +152,10 @@ export function DriveDock(props: DriveDockProps) {
             </>
           ) : null}
           {liveGrid ? (
-            <span className="kb-drive__chip" data-testid="kb-drive-grid-chip">
-              {chipText(liveGrid, vouched)}
+            // Unknown owner (the list row is behind the live grid, or there is none):
+            // say "checking" and offer no Release until the list vouches for it.
+            <span className="kb-drive__chip" data-testid="kb-drive-grid-chip" data-owner={vouched === undefined ? "checking" : ownerClass(vouched)}>
+              {vouched === undefined ? `${liveGrid.cols}x${liveGrid.rows} · checking` : chipText(liveGrid, vouched)}
             </span>
           ) : null}
         </div>
