@@ -956,3 +956,39 @@ test('seam_a_grid_change_on_an_idle_pane_reaches_a_caught_up_live_viewer_without
     rmSync(runDir, { recursive: true, force: true });
   }
 });
+
+test('seam_sync_grid_drops_a_reply_older_than_a_layout_change_that_landed_while_it_was_in_flight', async () => {
+  const runDir = mkdtempSync(join(tmpdir(), 'kbt-grid-'));
+  const fake = new FakeSpawn();
+  const stack = createTapStack({
+    session: 'gridstale1',
+    runDir,
+    harness: 'claude',
+    cols: 80,
+    rows: 24,
+    epoch: 'a'.repeat(32),
+    spawn: fake.fn,
+    quiesceMs: 0,
+    joinWaitMs: 2000,
+  });
+  const starting = stack.start();
+  fake.stdout.push('%begin 1000 0 0\n%end 1000 0 0\n');
+  fake.stdout.push('%begin 1000 1 1\n%end 1000 1 1\n');
+  await starting;
+  try {
+    const sync = stack.syncGrid();
+    expect(fake.writes[fake.writes.length - 1]).toBe("display-message -p '#{window_width} #{window_height}'\n");
+    // A take-size lands while the query is in flight ...
+    fake.stdout.push('%layout-change @0 a9fd,201x48,0,0,0 a9fd,201x48,0,0,0 *\n');
+    await waitUntil(() => stack.twin.cols === 201, 'layout applied');
+    // ... then the OLDER answer arrives. It must not win.
+    fake.stdout.push('%begin 1000 2 1\n100 30\n%end 1000 2 1\n');
+    await sync;
+    await new Promise<void>((r) => setTimeout(r, 50));
+    expect(stack.twin.cols).toBe(201);
+    expect(stack.twin.rows).toBe(48);
+  } finally {
+    stack.stop();
+    rmSync(runDir, { recursive: true, force: true });
+  }
+});

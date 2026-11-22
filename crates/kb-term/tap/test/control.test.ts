@@ -449,3 +449,19 @@ test('a_stray_block_mid_stream_does_not_shift_a_reseed_style_batch', async () =>
   expect(await b).toEqual(['B-reply']);
   c.stop();
 });
+
+test('a_begin_block_with_non_numeric_flags_is_tracked_but_never_consumes_a_pending', async () => {
+  const fake = new FakeSpawn();
+  const c = await start(fake);
+  const a = c.cmd('display-message -p A');
+  // Non-numeric flags: parseInt gives NaN. The block is the open block (its
+  // lines are dropped) and the queued Pending stays queued.
+  fake.stdout.push(enc('%begin 8100 20 x\nstray-x\n%end 8100 20 x\n'));
+  fake.stdout.push(enc('%begin 8100 21 1\nA-reply\n%end 8100 21 1\n'));
+  expect(await a).toEqual(['A-reply']);
+  const b = c.cmd('display-message -p B');
+  fake.stdout.push(enc('%begin 8100 22 zz\nstray-zz\n%end 8100 22 zz\n'));
+  fake.stdout.push(enc('%begin 8100 23 1\nB-reply\n%end 8100 23 1\n'));
+  expect(await b).toEqual(['B-reply']);
+  c.stop();
+});

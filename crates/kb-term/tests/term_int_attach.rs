@@ -2019,6 +2019,105 @@ fn attach_sigwinch_retakes_once_debounced() {
         "initial take + one debounced SIGWINCH take: {takes:?}"
     );
 }
+fn resize_pty(proc: &PtyProc, cols: u16, rows: u16) {
+    unsafe {
+        let mut ws: libc::winsize = std::mem::zeroed();
+        ws.ws_col = cols;
+        ws.ws_row = rows;
+        libc::ioctl(proc.master.as_raw_fd(), libc::TIOCSWINSZ, &ws);
+    }
+}
+
+#[test]
+fn a_refused_window_size_take_keeps_watching_and_takes_nothing_more() {
+    if !term_int_gate() {
+        return;
+    }
+    // The attach owns the grid, then the web takes it. A SIGWINCH to a new
+    // outer size must not fight for it: the runner refuses the local take,
+    // the attach keeps watching behind the status line, no further take.
+    let mut script = t4_script();
+    script.seed_lines = 300;
+    script.live_lines = 30;
+    script.exit_delay_ms = 5_000;
+    let rig = setup_rig_owned(None, script);
+    std::thread::sleep(Duration::from_millis(100));
+    let mut proc = spawn_bin(
+        &["attach", "abcd1234", "--runner-sock", &rig.sock_str],
+        201,
+        48,
+    );
+    std::thread::sleep(Duration::from_millis(1_200));
+    assert_eq!(
+        rig.runner.recorded_takes().len(),
+        1,
+        "the attach took the grid"
+    );
+    rig.runner.set_owner(Some("kb-term"));
+    resize_pty(&proc.0, 100, 24);
+    kill_pid(proc.0.child.id(), 28); // SIGWINCH
+    std::thread::sleep(Duration::from_millis(1_500));
+    assert_eq!(
+        rig.runner.recorded_takes().len(),
+        1,
+        "a refused window-size take takes nothing more: {:?}",
+        rig.runner.recorded_takes()
+    );
+    assert_eq!(
+        rig.runner.current_owner().as_deref(),
+        Some("kb-term"),
+        "the web still owns the grid"
+    );
+    assert!(
+        rig.runner.recorded_keys().is_empty(),
+        "nothing is typed into the session"
+    );
+    let (code, out) = proc.0.wait_for_exit(Duration::from_secs(25));
+    assert_eq!(code, Some(0), "the attach keeps watching to the end");
+    assert!(
+        count_of(&out, "web panel owns the grid") >= 1,
+        "the watch status line is printed"
+    );
+    assert_eq!(
+        rig.runner.recorded_takes().len(),
+        1,
+        "still one take at exit"
+    );
+}
+
+#[test]
+fn an_owning_rejoin_after_a_sigwinch_keeps_the_new_outer_size() {
+    if !term_int_gate() {
+        return;
+    }
+    // Pins the current behaviour: the SIGWINCH take moves local_size, so the
+    // grid-marker re-join that follows (Preset::Own) neither re-takes nor
+    // goes back to the old outer size.
+    let mut script = t4_script();
+    script.seed_lines = 300;
+    script.live_lines = 30;
+    script.exit_delay_ms = 7_000;
+    script.resize_marker = Some((3_500, 100, 24));
+    let rig = setup_rig_owned(None, script);
+    std::thread::sleep(Duration::from_millis(100));
+    let mut proc = spawn_bin(
+        &["attach", "abcd1234", "--runner-sock", &rig.sock_str],
+        201,
+        48,
+    );
+    std::thread::sleep(Duration::from_millis(1_200));
+    resize_pty(&proc.0, 100, 24);
+    kill_pid(proc.0.child.id(), 28); // SIGWINCH
+    let (code, _out) = proc.0.wait_for_exit(Duration::from_secs(30));
+    assert_eq!(code, Some(0));
+    let takes = rig.runner.recorded_takes();
+    assert_eq!(
+        takes.iter().map(|t| (t.0, t.1)).collect::<Vec<_>>(),
+        vec![(201, 48), (100, 24)],
+        "the initial take, then the SIGWINCH take; the Own re-join adds none: {takes:?}"
+    );
+}
+
 fn kill_pid(pid: u32, sig: i32) {
     unsafe {
         libc::kill(pid as i32, sig);

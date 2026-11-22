@@ -966,3 +966,72 @@ test('viewers_ping_from_an_unknown_viewer_is_ignored', async () => {
   await server.close();
   twin.dispose();
 });
+
+// FUMINTAP: setGrid with a viewer that is behind (backpressured) and one
+// whose join is mid-wait. Both end at the new grid; no frame is lost or
+// duplicated; the marker keeps its place in the stream.
+test('viewers_set_grid_keeps_a_backpressured_viewer_in_order_with_one_resize_marker', async () => {
+  const clock = fakeClock();
+  const twin = makeTwin(120, 40);
+  const server = new TapServer({ session: 'sgbehind1', harness: 'omp', epoch: 'e'.repeat(32), twin, now: clock.now, quiesceMs: 0, joinWaitMs: 5000, makeSeed: () => new Uint8Array(0) });
+  const t = new MockTransport();
+  openViewer(server, t, 'v1');
+  await waitUntil(() => kinds(t).includes('seed'), 'join');
+  const X = (collect(t).find((f) => f.text?.t === 'seed')?.text as Extract<ServerFrame, { t: 'seed' }>).offset;
+  t.clear();
+  t.alwaysBlock = true;
+  server.feed([{ kind: 'bytes', data: enc('AAAA') }]); // the viewer is now behind
+  server.setGrid(100, 30);
+  server.feed([{ kind: 'bytes', data: enc('BBBB') }]);
+  t.alwaysBlock = false;
+  for (let i = 0; i < 4; i++) t.drain();
+  await waitUntil(() => collect(t).filter((f) => f.binary).length >= 2, 'both byte runs delivered');
+  const frames = collect(t);
+  const order = frames.map((f) => (f.text?.t ?? 'binary'));
+  expect(order.filter((k) => k === 'resize').length).toBe(1);
+  expect(order).toEqual(['binary', 'resize', 'binary']);
+  const resize = frames[1].text as Extract<ServerFrame, { t: 'resize' }>;
+  expect(resize.cols).toBe(100);
+  expect(resize.rows).toBe(30);
+  expect(resize.offset).toBe(X + 4);
+  expect(frames[0].binary?.offset).toBe(X);
+  expect(Buffer.from(frames[0].binary!.payload).toString('utf-8')).toBe('AAAA');
+  expect(frames[2].binary?.offset).toBe(X + 4);
+  expect(Buffer.from(frames[2].binary!.payload).toString('utf-8')).toBe('BBBB');
+  expect(twin.cols).toBe(100);
+  expect(twin.rows).toBe(30);
+  await server.close();
+  twin.dispose();
+});
+
+test('viewers_set_grid_while_a_join_waits_seeds_the_joiner_at_the_new_grid_once', async () => {
+  const clock = fakeClock();
+  const twin = makeTwin(120, 40);
+  const server = new TapServer({ session: 'sgmid0001', harness: 'omp', epoch: 'e'.repeat(32), twin, now: clock.now, quiesceMs: 0, joinWaitMs: 5000 });
+  server.feed([{ kind: 'bytes', data: enc('AAAA') }]);
+  server.feed([{ kind: 'bytes', data: enc(`${E}[?2026h`) }]);
+  const t = new MockTransport();
+  openViewer(server, t, 'v1');
+  await waitUntil(() => server.withholder.syncOn, 'sync on');
+  expect(kinds(t).includes('hello')).toBe(false); // the join is waiting
+  server.setGrid(100, 30);
+  server.feed([{ kind: 'bytes', data: enc(`${E}[?2026l`) }]);
+  await waitUntil(() => kinds(t).includes('seed'), 'join lands');
+  const frames = collect(t);
+  const profile = frames.find((f) => f.text?.t === 'profile')?.text as Extract<ServerFrame, { t: 'profile' }>;
+  expect(profile.cols).toBe(100);
+  expect(profile.rows).toBe(30);
+  expect(frames.filter((f) => f.text?.t === 'resize').length).toBe(0);
+  expect(frames.filter((f) => f.text?.t === 'seed').length).toBe(1);
+  const seed = frames.find((f) => f.text?.t === 'seed')?.text as Extract<ServerFrame, { t: 'seed' }>;
+  t.clear();
+  server.feed([{ kind: 'bytes', data: enc('ZZ') }]);
+  const live = collect(t).filter((f) => f.binary);
+  expect(live.length).toBe(1);
+  expect(live[0].binary?.offset).toBe(seed.offset);
+  expect(Buffer.from(live[0].binary!.payload).toString('utf-8')).toBe('ZZ');
+  expect(twin.cols).toBe(100);
+  expect(twin.rows).toBe(30);
+  await server.close();
+  twin.dispose();
+});
