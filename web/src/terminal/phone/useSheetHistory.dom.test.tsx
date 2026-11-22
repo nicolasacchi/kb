@@ -9,8 +9,9 @@ import { act, cleanup, render } from "@testing-library/react";
 import { StrictMode } from "react";
 import { useSheetHistory } from "./useSheetHistory";
 
+let popOwnEntry: () => boolean = () => false;
 function Probe(props: { active: boolean; onClose: () => void }) {
-  useSheetHistory(props.active, props.onClose);
+  popOwnEntry = useSheetHistory(props.active, props.onClose);
   return null;
 }
 
@@ -108,5 +109,29 @@ describe("useSheetHistory", () => {
     });
     expect(window.history.length).toBe(len);
     expect(window.location.pathname).toBe("/other");
+  });
+
+  // FUTERMLIST interaction: opening a terminal pushes `?term=<id>` (entry below);
+  // the sheet's own entry sits on top with the same URL.
+  it("the close button pops the sheet entry so the ?term= entry below is replaced, not left to re-open the sheet", async () => {
+    window.history.replaceState({ idx: 4 }, "", "/sessions?term=t1");
+    const entryBelow = window.history.length;
+    // The page's close handler replaces ?term= on whichever entry is current.
+    const onClose = vi.fn(() => window.history.replaceState({ idx: 4 }, "", "/sessions"));
+    render(<Probe active onClose={onClose} />);
+    expect(sheetKey()).toBeTruthy();
+    expect(window.history.length).toBe(entryBelow + 1);
+    let popped = false;
+    await act(async () => {
+      popped = popOwnEntry();
+      await tick();
+    });
+    expect(popped).toBe(true);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    // Back from here must not land on a ?term= entry: the one below was rewritten.
+    expect(window.location.search).toBe("");
+    expect(sheetKey()).toBeUndefined();
+    // With the entry gone, a second request is a no-op the caller closes itself.
+    expect(popOwnEntry()).toBe(false);
   });
 });

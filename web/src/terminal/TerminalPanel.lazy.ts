@@ -9,6 +9,8 @@
 // React rejects that with error 306 ("Lazy element type must resolve
 // to a class or function") — the whole panel then never mounts.
 
+import type { ReactNode } from "react";
+
 export { TerminalPanel as default } from "./TerminalPanel";
 
 export interface TerminalPanelProps {
@@ -17,4 +19,8 @@ export interface TerminalPanelProps {
   harness: string;
   /** Close unmounts the panel (disconnect only) via the slot owner. */
   onClose?: () => void;
+  /** The program rang the bell while nobody was looking (FUTERMATTN). */
+  onBell?: () => void;
+  /** Phone sheet only: extra controls in the title bar (End, terminal switcher). */
+  headerExtra?: ReactNode;
 }

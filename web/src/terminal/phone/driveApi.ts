@@ -18,12 +18,6 @@ import type { ConfirmOptions } from "../../components/ConfirmProvider";
 import { needsConfirm } from "./guards";
 import type { KeyName } from "./keys";
 
-/** The largest picture the relay accepts (the server holds the same number). */
-export const UPLOAD_MAX_BYTES = 8 * 1024 * 1024;
-
-/** The picture types the relay accepts, as the request `Content-Type`. */
-export const UPLOAD_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const;
-
 /** A non-2xx answer (or a client-side refusal, status 0) from a Drive call. */
 export class DriveError extends Error {
   readonly status: number;
@@ -40,7 +34,7 @@ export class DriveError extends Error {
   }
 }
 
-async function driveError(res: Response): Promise<DriveError> {
+export async function driveError(res: Response): Promise<DriveError> {
   let type: string | null = null;
   let detail = `${res.status} ${res.statusText}`.trim();
   try {
@@ -54,7 +48,7 @@ async function driveError(res: Response): Promise<DriveError> {
   return new DriveError(res.status, type, detail);
 }
 
-function url(termId: string, op: string): string {
+export function url(termId: string, op: string): string {
   return `${currentDaemonBase()}/api/terms/${encodeURIComponent(termId)}/${op}`;
 }
 
@@ -138,11 +132,19 @@ export type SendTextResult =
   /** The text is in the pane but the Enter did not go (`conflict`: the runner refused it with 409). */
   | { kind: "pasted-not-sent"; detail: string; conflict: boolean };
 
+/** What `POST …/paste` answers; `entered`/`enter_error` only when the request asked for Enter. */
+interface PasteReply {
+  entered?: boolean;
+  enter_error?: { status?: number; type?: string; detail?: string };
+}
+
 /**
- * Paste `text`; with `enter`, then press Enter. The Claude guard asks BEFORE any
- * request. A paste failure throws (nothing was written); an Enter failure after
- * a successful paste is a result, not a throw, because the text already is in
- * the pane and the caller must not offer a resend.
+ * Paste `text`; with `enter`, then press Enter, in ONE request (`paste` with
+ * `enter: true`: the server pastes, waits out the quiet guard and sends the
+ * Enter, so a send costs one round trip instead of two). The Claude guard
+ * asks BEFORE any request. A paste failure throws (nothing was written); an
+ * Enter refusal after a successful paste is a result, not a throw, because the
+ * text already is in the pane and the caller must not offer a resend.
  */
 export async function sendText(
   d: Drive,
@@ -151,55 +153,18 @@ export async function sendText(
 ): Promise<SendTextResult> {
   const copy = needsConfirm(d.harness, { kind: "text", text });
   if (copy !== null && !(await d.confirm(copy))) return { kind: "declined" };
-  await paste(d, text);
-  if (!opts.enter) return { kind: "sent" };
-  try {
-    await pressEnter(d);
-  } catch (e) {
-    if (e instanceof DriveError) {
-      return { kind: "pasted-not-sent", detail: e.detail, conflict: e.status === 409 };
-    }
-    throw e;
+  const reply = await postJson<PasteReply>(
+    d.termId,
+    "paste",
+    withViewer(opts.enter ? { text, enter: true } : { text }, d.viewer),
+  );
+  if (opts.enter && reply.entered === false) {
+    const e = reply.enter_error;
+    return {
+      kind: "pasted-not-sent",
+      detail: e?.detail ?? "Enter was not sent",
+      conflict: e?.status === 409,
+    };
   }
   return { kind: "sent" };
-}
-
-/** The server's stored-picture reply (`kb-server`'s `UploadData`; hand-written, not generated). */
-export interface UploadResult {
-  path: string;
-  bytes: number;
-  mime: string;
-  sha256: string;
-}
-
-/** Why a file cannot be uploaded, or null when it can (checked before any request). */
-export function uploadRefusal(file: { size: number; type: string }): string | null {
-  if (!(UPLOAD_TYPES as readonly string[]).includes(file.type)) {
-    return "Only PNG, JPEG, GIF and WebP pictures can be sent.";
-  }
-  if (file.size > UPLOAD_MAX_BYTES) {
-    return "That picture is over the 8 MiB limit.";
-  }
-  return null;
-}
-
-/**
- * `POST …/upload` with the raw file as the body. The runner stores it and
- * answers an absolute path; the caller PASTES the path (never Enter). Rejects
- * a wrong type or an oversize file before fetching.
- */
-export async function uploadImage(termId: string, file: File): Promise<UploadResult> {
-  const refusal = uploadRefusal(file);
-  if (refusal !== null) throw new DriveError(0, null, refusal);
-  const res = await fetch(url(termId, "upload"), {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": file.type,
-      [TERMINAL_INTENT_HEADER]: TERMINAL_INTENT_VALUE,
-    },
-    body: file,
-  });
-  if (!res.ok) throw await driveError(res);
-  return (await res.json()) as UploadResult;
 }

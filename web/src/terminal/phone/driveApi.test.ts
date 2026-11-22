@@ -5,15 +5,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DriveError,
-  UPLOAD_MAX_BYTES,
   paste,
   pressEnter,
   releaseSize,
   sendKey,
   sendText,
   takeSize,
-  uploadImage,
-  uploadRefusal,
   type Drive,
 } from "./driveApi";
 
@@ -150,22 +147,9 @@ describe("sendKey and sendText: the one guard", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("pastes then enters, in that order", async () => {
-    const r = await sendText(mkDrive(), "hello", { enter: true });
-    expect(r).toEqual({ kind: "sent" });
-    expect(calls.map((c) => c.url)).toEqual(["/api/terms/abcd1234/paste", "/api/terms/abcd1234/enter"]);
-  });
-
   it("without enter, only pastes", async () => {
     await sendText(mkDrive(), "/compact", { enter: false });
     expect(calls.map((c) => c.url)).toEqual(["/api/terms/abcd1234/paste"]);
-  });
-
-  it("an Enter refusal after a good paste is a result, not a throw", async () => {
-    replies.push(json(200, {}));
-    replies.push(json(409, { type: "urn:kb:errors:term-blocked", detail: "the bound session is blocked" }));
-    const r = await sendText(mkDrive(), "hello", { enter: true });
-    expect(r).toEqual({ kind: "pasted-not-sent", detail: "the bound session is blocked", conflict: true });
   });
 
   it("a failed paste throws (nothing was written)", async () => {
@@ -175,38 +159,41 @@ describe("sendKey and sendText: the one guard", () => {
   });
 });
 
-describe("uploadImage", () => {
-  const file = (size: number, type: string): File => new File([new Uint8Array(size)], "x", { type });
-
-  it("refuses a wrong type or an oversize file before fetching", async () => {
-    for (const bad of [file(10, "image/svg+xml"), file(10, "text/html"), file(10, "application/pdf"), file(10, "")]) {
-      await expect(uploadImage("abcd1234", bad)).rejects.toBeInstanceOf(DriveError);
-    }
-    await expect(uploadImage("abcd1234", file(UPLOAD_MAX_BYTES + 1, "image/png"))).rejects.toThrow(/8 MiB/);
-    expect(calls).toHaveLength(0);
-    expect(uploadRefusal(file(UPLOAD_MAX_BYTES, "image/png"))).toBeNull();
-    expect(uploadRefusal(file(UPLOAD_MAX_BYTES + 1, "image/png"))).not.toBeNull();
+describe("sendText with enter is ONE round trip (FUPHONESEND)", () => {
+  it("posts a single paste carrying enter:true and no separate enter request", async () => {
+    replies.push(json(200, { paste_only: false, bracketed: true, entered: true }));
+    const r = await sendText(mkDrive(), "hello", { enter: true });
+    expect(r).toEqual({ kind: "sent" });
+    expect(calls.map((c) => c.url)).toEqual(["/api/terms/abcd1234/paste"]);
+    expect(body(calls[0])).toEqual({ text: "hello", enter: true, viewer: "ws-abc1234567" });
   });
 
-  it("posts the raw file with its own content type and the intent header", async () => {
-    const reply = { path: "/run/x/up/abc.png", bytes: 4, mime: "image/png", sha256: "a".repeat(64) };
-    replies.push(json(200, reply));
-    const f = file(4, "image/png");
-    const got = await uploadImage("abcd1234", f);
-    expect(got).toEqual(reply);
+  it("without enter the body carries no enter key", async () => {
+    await sendText(mkDrive(), "/compact", { enter: false });
+    expect(body(calls[0])).toEqual({ text: "/compact", viewer: "ws-abc1234567" });
+  });
+
+  it("entered:false in a 200 is pasted-not-sent, conflict when the refusal was 409", async () => {
+    replies.push(
+      json(200, {
+        paste_only: false,
+        bracketed: true,
+        entered: false,
+        enter_error: { status: 409, type: "urn:kb:errors:term-blocked", detail: "the bound session is blocked" },
+      }),
+    );
+    const r = await sendText(mkDrive(), "hello", { enter: true });
+    expect(r).toEqual({ kind: "pasted-not-sent", detail: "the bound session is blocked", conflict: true });
+    replies.push(
+      json(200, { paste_only: false, bracketed: true, entered: false, enter_error: { status: 503, type: "x", detail: "runner down" } }),
+    );
+    const r2 = await sendText(mkDrive(), "hello", { enter: true });
+    expect(r2).toEqual({ kind: "pasted-not-sent", detail: "runner down", conflict: false });
+  });
+
+  it("a failed combined request throws (nothing was written)", async () => {
+    replies.push(json(422, { type: "urn:kb:errors:terminal-refused", detail: "multi-line paste refused" }));
+    await expect(sendText(mkDrive(), "a\nb", { enter: true })).rejects.toBeInstanceOf(DriveError);
     expect(calls).toHaveLength(1);
-    expect(calls[0].url).toBe("/api/terms/abcd1234/upload");
-    expect(calls[0].init.method).toBe("POST");
-    expect(calls[0].init.body).toBe(f);
-    expect(headers(calls[0])["Content-Type"]).toBe("image/png");
-    expect(headers(calls[0])["X-Kb-Intent"]).toBe("terminal");
-  });
-
-  it("explains a 413 or 415 with the server's own words", async () => {
-    replies.push(json(415, { type: "urn:kb:errors:unsupported-media", detail: "not a picture" }));
-    await expect(uploadImage("abcd1234", file(4, "image/png"))).rejects.toMatchObject({
-      status: 415,
-      detail: "not a picture",
-    });
   });
 });

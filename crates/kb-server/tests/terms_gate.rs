@@ -1224,6 +1224,80 @@ async fn input_opens_the_spa_viewer_lazily_and_composer_enter_is_refused_after_p
 }
 
 #[tokio::test]
+async fn paste_with_enter_is_one_request_that_pastes_then_enters() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake_stateful(tmp.path());
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    // `enter: true`: ONE HTTP request, the runner sees paste then enter.
+    let resp = post_json(
+        addr,
+        &format!("/{TERM_ID}/paste"),
+        "{\"text\":\"hello\",\"enter\":true}",
+    )
+    .await;
+    let (status, text) = body_text(resp).await;
+    assert_eq!(status, 200, "{text}");
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(v["entered"], true, "{text}");
+    assert_eq!(v["paste_only"], false);
+    assert_eq!(v["bracketed"], true);
+    assert!(v.get("enter_error").is_none(), "{text}");
+    {
+        let reqs = fake.reqs.lock().unwrap();
+        let ops: Vec<&str> = reqs
+            .iter()
+            .map(|r| r["op"].as_str().unwrap())
+            .filter(|o| *o == "paste" || *o == "enter")
+            .collect();
+        assert_eq!(ops, ["paste", "enter"]);
+        let enter = reqs.iter().find(|r| r["op"] == "enter").unwrap();
+        assert_eq!(enter["from_composer"], true);
+        assert_eq!(enter["viewer"], "spa");
+    }
+    // Without the option the answer carries no `entered` and no enter is sent.
+    let before = fake.reqs.lock().unwrap().len();
+    let resp = post_json(addr, &format!("/{TERM_ID}/paste"), "{\"text\":\"plain\"}").await;
+    let (status, text) = body_text(resp).await;
+    assert_eq!(status, 200, "{text}");
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert!(v.get("entered").is_none(), "{text}");
+    let reqs = fake.reqs.lock().unwrap();
+    assert!(
+        reqs[before..].iter().all(|r| r["op"] != "enter"),
+        "a plain paste must not press Enter"
+    );
+}
+
+#[tokio::test]
+async fn paste_with_enter_keeps_pasted_not_sent_distinct_from_a_failed_paste() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake_stateful(tmp.path());
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    // The paste lands (a leading `/` is paste_only), the Enter is refused:
+    // 200 with `entered: false` and the refusal, never an error status.
+    let resp = post_json(
+        addr,
+        &format!("/{TERM_ID}/paste"),
+        "{\"text\":\"/refresh\",\"enter\":true}",
+    )
+    .await;
+    let (status, text) = body_text(resp).await;
+    assert_eq!(status, 200, "{text}");
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(v["paste_only"], true);
+    assert_eq!(v["entered"], false, "{text}");
+    assert_eq!(v["enter_error"]["status"], 409, "{text}");
+    assert!(
+        v["enter_error"]["type"]
+            .as_str()
+            .unwrap()
+            .ends_with("terminal-conflict"),
+        "{text}"
+    );
+    assert!(v["enter_error"]["detail"].as_str().is_some());
+}
+
+#[tokio::test]
 async fn relay_payloads_carry_the_requested_fields() {
     let mut replies = std::collections::HashMap::new();
     replies.insert("launch".to_string(), ok_reply("{\"id\":\"abcd1234\"}"));

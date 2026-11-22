@@ -142,6 +142,9 @@ with kb-code), plus a per-view control row. It replaced the old 52px header,
 - **Keys teach themselves.** After a chord prefix (`g`, `w`, marks, registers) a
   which-key overlay lists the possible next keys 400ms later. `?` opens the
   keyboard help sheet, generated from the same key registry that binds the keys.
+- **Attention.** The tab title shows `(n) ` for the n sessions blocked on you, and
+  the installed app's badge follows where supported (same live-status query as
+  the waiting chip; no push, no service worker).
 - **Themes.** The theme family comes from the shared kbc-theme/1 generator: the
   default **kb-classic** plus 13 other families (29 themes, each with dark and
   light variants where the family has them). The choice is stored in this
@@ -476,7 +479,8 @@ enabled`) is a separate, SPA-only surface; see architecture-invariants
 #11, KT amendment. For a caller the tier admits, `/sessions` carries a **New
 terminal** control under the page head (harness, working directory, Launch)
 and a session page's Resume section carries **Resume in a kb terminal**; both
-open the terminal inline. The how and the limits are in
+open the terminal. `/sessions` also lists the terminals with Open, End and
+`?term=<id>` deep links. The how and the limits are in
 [kb-term.md](kb-term.md#start-or-resume-from-the-web).
 The panel goes full screen from its bar on desktop (native where Esc can stay
 with the terminal, a maximised overlay elsewhere) and, where the browser has

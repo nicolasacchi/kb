@@ -5,8 +5,10 @@ import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "../../lib/toast";
 import { Composer, DRAFT_DEBOUNCE_MS } from "./Composer";
-import { UPLOAD_MAX_BYTES, type Drive } from "./driveApi";
+import type { Drive } from "./driveApi";
+import { UPLOAD_MAX_BYTES } from "../upload";
 import { CAPTION } from "./planSend";
+import { fakeDt } from "../upload.testkit";
 import {
   byId,
   click,
@@ -103,12 +105,12 @@ describe("Composer", () => {
     expect(rig.urls()).toEqual(["/api/terms/abcd1234/paste"]);
   });
 
-  it("(c) a plain message is pasted, then Enter, in that order", async () => {
+  it("(c) a plain message is pasted with Enter in ONE request", async () => {
     const onTyped = vi.fn();
     m = mount(<Host drive={mkDrive()} onTyped={onTyped} />);
     typeInto(input(), "fix the failing test");
     await send();
-    expect(rig.urls()).toEqual(["/api/terms/abcd1234/paste", "/api/terms/abcd1234/enter"]);
+    expect(rig.urls()).toEqual(["/api/terms/abcd1234/paste"]);
     expect(input().value).toBe("");
     expect(caption()).toBeNull();
     expect(onTyped).toHaveBeenCalledTimes(1);
@@ -133,12 +135,14 @@ describe("Composer", () => {
 
   it("(d) an Enter refusal keeps 'pasted, not sent', clears the text and raises no error toast", async () => {
     const err = vi.spyOn(toast, "err");
-    rig.reply(200);
-    rig.reply(409, { type: "urn:kb:errors:term-blocked", detail: "the bound session is blocked" });
+    rig.reply(200, {
+      entered: false,
+      enter_error: { status: 409, type: "urn:kb:errors:term-blocked", detail: "the bound session is blocked" },
+    });
     m = mount(<Host drive={mkDrive()} />);
     typeInto(input(), "hello");
     await send();
-    expect(rig.urls()).toEqual(["/api/terms/abcd1234/paste", "/api/terms/abcd1234/enter"]);
+    expect(rig.urls()).toEqual(["/api/terms/abcd1234/paste"]);
     expect(caption()).toBe("Pasted, not sent: the bound session is blocked");
     expect(input().value).toBe("");
     expect(err).not.toHaveBeenCalled();
@@ -191,7 +195,7 @@ describe("Composer", () => {
     m = mount(<Host drive={mkDrive({ viewer: "ws-zzzz000001" })} />);
     typeInto(input(), "hello");
     await send();
-    expect(rig.calls).toHaveLength(2);
+    expect(rig.calls).toHaveLength(1);
     for (const c of rig.calls) expect(c.json?.viewer).toBe("ws-zzzz000001");
   });
 
@@ -237,6 +241,33 @@ describe("Composer", () => {
       expect(UPLOAD_MAX_BYTES).toBe(8 * 1024 * 1024);
       expect(rig.calls).toHaveLength(0);
       expect(err).toHaveBeenCalledWith(expect.stringMatching(/8 MiB/));
+    });
+
+    describe("pasting a picture into the textarea", () => {
+      const paste = async (types: string[], files: File[]): Promise<Event> => {
+        const el = byId(m!.host, "kb-drive-input");
+        const ev = new Event("paste", { bubbles: true, cancelable: true });
+        Object.defineProperty(ev, "clipboardData", { value: fakeDt({ types, files }) });
+        el.dispatchEvent(ev);
+        await settle(8);
+        return ev;
+      };
+
+      it("uploads a pasted picture once and pastes its PATH without Enter", async () => {
+        rig.reply(200, { path: "/run/kb-term/s/abcd1234/up/x.png", bytes: 16, mime: "image/png", sha256: SHA });
+        m = mount(<Host drive={mkDrive()} />);
+        const ev = await paste(["Files"], [png(16)]);
+        expect(ev.defaultPrevented).toBe(true);
+        expect(rig.urls()).toEqual(["/api/terms/abcd1234/upload", "/api/terms/abcd1234/paste"]);
+        expect(rig.calls[1].json?.text).toBe("/run/kb-term/s/abcd1234/up/x.png");
+      });
+
+      it("leaves a text paste alone (negative control)", async () => {
+        m = mount(<Host drive={mkDrive()} />);
+        const ev = await paste(["text/plain"], []);
+        expect(ev.defaultPrevented).toBe(false);
+        expect(rig.calls).toHaveLength(0);
+      });
     });
 
     it("explains a server refusal with a toast and pastes nothing", async () => {
@@ -346,7 +377,7 @@ describe("FUKEYBAR FEATURES-3: quick replies go through planSend", () => {
       /^kb-drive-reply-\d+$/.test(e.dataset.testid ?? ""),
     );
 
-  it("a plain reply pastes then presses Enter once, and leaves the draft alone", async () => {
+  it("a plain reply is one paste request carrying enter, and leaves the draft alone", async () => {
     m = mount(<Host drive={mkDrive()} />);
     typeInto(byId(m.host, "kb-drive-input") as HTMLTextAreaElement, "my draft");
     const first = chips()[0];
@@ -354,8 +385,9 @@ describe("FUKEYBAR FEATURES-3: quick replies go through planSend", () => {
     expect(label.length).toBeGreaterThan(0);
     click(first);
     await settle();
-    expect(rig.urls()).toEqual(["/api/terms/abcd1234/paste", "/api/terms/abcd1234/enter"]);
+    expect(rig.urls()).toEqual(["/api/terms/abcd1234/paste"]);
     expect(rig.calls[0].json?.text).toBe(label);
+    expect(rig.calls[0].json?.enter).toBe(true);
     expect((byId(m.host, "kb-drive-input") as HTMLTextAreaElement).value).toBe("my draft");
   });
 

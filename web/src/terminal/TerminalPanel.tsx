@@ -60,6 +60,7 @@ import { attachGfx, type GfxHandle, type OpenPicture } from "./gfx";
 import { Lightbox } from "./Lightbox";
 import { countHits, findNext, FIND_START, type FindHit } from "./find";
 import { useFullscreen } from "./useFullscreen";
+import { useTerminalPaste } from "./useTerminalPaste";
 import { clipboardAction, inputLabel, scrolledUp } from "./input";
 import { linksAtRow, openExternal, isMacLike, linkHint } from "./links";
 import { useTerms } from "./useTerms";
@@ -72,6 +73,7 @@ import { terminalOwnsEscape } from "./phone/escape";
 import { readFont } from "./phone/fontSteps";
 import { scrollbackFor } from "./phone/scrollback";
 import { bindNetworkKicks } from "./networkKicks";
+import { bellNeedsAttention, sanitizeOscTitle } from "../lib/termAttention";
 import { createPortal } from "react-dom";
 import "./terminal.css";
 
@@ -132,6 +134,10 @@ export function TerminalPanel(props: TerminalPanelProps) {
   const [scrollback, setScrollback] = useState(0);
   const [widthActive, setWidthActive] = useState(false);
   const [transient, setTransient] = useState<string | null>(null);
+  // FUTERMATTN: the program's own OSC 0/2 title, sanitized (text only), and the bell hook.
+  const [progTitle, setProgTitle] = useState("");
+  const onBellRef = useRef(props.onBell);
+  onBellRef.current = props.onBell;
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState("");
   const [findNote, setFindNote] = useState("");
@@ -227,6 +233,15 @@ export function TerminalPanel(props: TerminalPanelProps) {
     }, TERMS_REFRESH_MS);
   };
   const say = useCallback((message: string): void => setStatus(message), []);
+  // FUTERMPASTE: a picture paste or drop on the desktop host uploads and pastes its path.
+  const pastePath = useCallback((text: string): void => termRef.current?.paste(text), []);
+  useTerminalPaste({
+    hostRef,
+    termId: props.termId,
+    active: termInst !== null && !isMobile,
+    paste: pastePath,
+    say,
+  });
   const measureWindow = useCallback((): WindowMeasure | null => {
     const host = hostRef.current;
     const term = termRef.current;
@@ -414,6 +429,12 @@ export function TerminalPanel(props: TerminalPanelProps) {
       term.onScroll(syncBehind);
       term.onWriteParsed(syncBehind);
       setBehind(false);
+      term.onTitleChange((t) => setProgTitle(sanitizeOscTitle(t)));
+      term.onBell(() => {
+        const active = document.activeElement;
+        const termFocused = document.hasFocus() && !!(active && term.element?.contains(active));
+        if (bellNeedsAttention({ hidden: document.hidden, termFocused })) onBellRef.current?.();
+      });
       term.onData((data) => {
         if (sessionRef.current?.sendInput(data) ?? false) lastTypedRef.current = Date.now();
       });
@@ -642,6 +663,9 @@ export function TerminalPanel(props: TerminalPanelProps) {
     // Leave full screen first (native, key lock, overlay): the effect cleanup
     // repeats it on unmount, so a closed panel never leaves one behind.
     fs.exit();
+    // On iOS the sheet's own history entry is popped first; the popstate then
+    // re-enters here with the entry gone and closes for real.
+    if (isMobileRef.current && popSheetEntry()) return;
     if (props.onClose) {
       props.onClose();
       return;
@@ -660,7 +684,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
 
   // iOS Safari has no CloseWatcher: the sheet takes one history entry of its
   // own so edge-swipe Back closes it instead of leaving the page.
-  useSheetHistory(isMobile, closePanel);
+  const popSheetEntry = useSheetHistory(isMobile, closePanel);
 
   // Closing Find hands the keyboard back to the terminal.
   const closeFind = (): void => {
@@ -710,6 +734,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
       >
         <PhoneTerminal
           harness={props.harness}
+          headerExtra={props.headerExtra}
           term={termInst}
           profile={grid}
           hostRef={phoneHostRef}
@@ -751,6 +776,11 @@ export function TerminalPanel(props: TerminalPanelProps) {
         <span className="kb-term__harness" data-testid="kb-term-harness">
           {props.harness}
         </span>
+        {progTitle ? (
+          <span className="kb-term__progtitle" data-testid="kb-term-title" title={progTitle}>
+            {progTitle}
+          </span>
+        ) : null}
         <span
           className={`kb-term__chip kb-term__input${focused ? " kb-term__input--on" : ""}`}
           data-testid="kb-term-input"

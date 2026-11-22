@@ -24,6 +24,8 @@ interface FakeTermInst {
   onDataCb?: (d: string) => void;
   linkProvider?: { provideLinks(y: number, cb: (l?: Array<Record<string, unknown>>) => void): void };
   scrollCbs: Array<() => void>;
+  bellCbs: Array<() => void>;
+  titleCbs: Array<(t: string) => void>;
   selection: string;
   buf: { viewportY: number; baseY: number; length: number; lines: Array<{ text: string; wrapped: boolean }> };
   scrollToBottom: ReturnType<typeof vi.fn>;
@@ -45,6 +47,8 @@ vi.mock("@xterm/xterm", () => ({
     onDataCb: ((d: string) => void) | undefined;
     linkProvider: FakeTermInst["linkProvider"];
     scrollCbs: Array<() => void> = [];
+    bellCbs: Array<() => void> = [];
+    titleCbs: Array<(t: string) => void> = [];
     selection = "";
     buf = { viewportY: 0, baseY: 0, length: 1, lines: [] as Array<{ text: string; wrapped: boolean }> };
     scrollToBottom = vi.fn();
@@ -82,6 +86,12 @@ vi.mock("@xterm/xterm", () => ({
     onWriteParsed(cb: () => void): void {
       this.scrollCbs.push(cb);
     }
+    onBell(cb: () => void): void {
+      this.bellCbs.push(cb);
+    }
+    onTitleChange(cb: (t: string) => void): void {
+      this.titleCbs.push(cb);
+    }
     scrollLines(): void {}
     constructor(o: { cols: number; rows: number; fontSize: number; fontFamily: string; theme?: { background?: string } }) {
       this.cols = o.cols;
@@ -95,8 +105,8 @@ vi.mock("@xterm/xterm", () => ({
       const screen = document.createElement("div");
       screen.className = "xterm-screen";
       // The rendered screen is cols x cellW by rows x cellH per px of font size (the probe's cell).
-      Object.defineProperty(screen, "scrollWidth", { get: () => this.cols * probe.cellW * this.options.fontSize });
-      Object.defineProperty(screen, "scrollHeight", { get: () => this.rows * probe.cellH * this.options.fontSize });
+      Object.defineProperty(screen, "offsetWidth", { get: () => this.cols * probe.cellW * this.options.fontSize });
+      Object.defineProperty(screen, "offsetHeight", { get: () => this.rows * probe.cellH * this.options.fontSize });
       el.appendChild(screen);
       host.appendChild(el);
       this.element = el;
@@ -850,6 +860,86 @@ describe("W2: the panel scrolls itself into view on open and before a Fit, never
       expect(rig.urls()).toEqual(["/api/terms/abcd1234/take-size"]);
     } finally {
       delete (Element.prototype as unknown as Record<string, unknown>).scrollIntoView;
+    }
+  });
+});
+
+describe("FUTERMATTN attention hooks", () => {
+  async function mountWith(onBell: () => void): Promise<FakeTermInst> {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    act(() =>
+      root!.render(
+        <QueryClientProvider client={new QueryClient()}>
+          <TerminalPanel termId="abcd1234" sid="s1" harness="omp" onBell={onBell} />
+        </QueryClientProvider>,
+      ),
+    );
+    await settle(4);
+    return profile();
+  }
+
+  it("shows the program's OSC title as text, sanitized and capped", async () => {
+    await mountPanel();
+    const term = await profile();
+    expect(q("kb-term-title")).toBeNull();
+    act(() => term.titleCbs.forEach((cb) => cb("<img src=x onerror=alert(1)>\u202e " + "w".repeat(200))));
+    const el = q("kb-term-title")!;
+    expect(el.querySelector("img")).toBeNull();
+    expect(el.textContent!.startsWith("<img src=x onerror=alert(1)>")).toBe(true);
+    expect(el.textContent).not.toContain("\u202e");
+    expect(el.textContent!.length).toBeLessThanOrEqual(60);
+    act(() => term.titleCbs.forEach((cb) => cb("")));
+    expect(q("kb-term-title")).toBeNull();
+  });
+
+  it("a BEL while the tab is hidden calls onBell; a BEL in a visible, focused terminal does not", async () => {
+    const onBell = vi.fn();
+    const term = await mountWith(onBell);
+    const focusedEl = document.createElement("textarea");
+    term.element!.appendChild(focusedEl);
+    focusedEl.focus();
+    const hf = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    act(() => term.bellCbs.forEach((cb) => cb()));
+    hf.mockRestore();
+    expect(onBell).not.toHaveBeenCalled();
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+    try {
+      act(() => term.bellCbs.forEach((cb) => cb()));
+      expect(onBell).toHaveBeenCalledTimes(1);
+    } finally {
+      delete (document as unknown as Record<string, unknown>).hidden;
+    }
+  });
+
+  it("a BEL while the window lost focus (tab visible, textarea still active) calls onBell", async () => {
+    const onBell = vi.fn();
+    const term = await mountWith(onBell);
+    const focusedEl = document.createElement("textarea");
+    term.element!.appendChild(focusedEl);
+    focusedEl.focus();
+    const spy = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    try {
+      act(() => term.bellCbs.forEach((cb) => cb()));
+      expect(onBell).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("a BEL with focus elsewhere in the page calls onBell", async () => {
+    const onBell = vi.fn();
+    const term = await mountWith(onBell);
+    const other = document.createElement("input");
+    document.body.appendChild(other);
+    other.focus();
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    try {
+      act(() => term.bellCbs.forEach((cb) => cb()));
+      expect(onBell).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.restoreAllMocks();
     }
   });
 });
