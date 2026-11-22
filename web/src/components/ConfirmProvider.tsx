@@ -34,6 +34,12 @@ export function useConfirm(): ConfirmFn {
   return fn;
 }
 
+/// Like `useConfirm`, but `null` outside a provider (a surface that merely
+/// hides a destructive control when no host exists, e.g. a unit-test mount).
+export function useConfirmOptional(): ConfirmFn | null {
+  return useContext(ConfirmContext);
+}
+
 export default function ConfirmProvider({ children }: { children: ReactNode }) {
   const [pending, setPending] = useState<ConfirmOptions | null>(null);
   // The promise resolver for the in-flight prompt, kept out of state so

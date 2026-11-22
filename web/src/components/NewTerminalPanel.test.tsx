@@ -254,3 +254,28 @@ describe("failures are shown honestly", () => {
     expect(screen.queryByTestId("launched-terminal-unbound")).toBeNull();
   });
 });
+
+describe("onLaunched (FUTERMLIST)", () => {
+  it("hands the new terminal to the page and mounts no inline panel", async () => {
+    const onLaunched = vi.fn();
+    mount({ onLaunched });
+    open();
+    type("/srv/work");
+    launch();
+    await waitFor(() => expect(onLaunched).toHaveBeenCalledWith("t1", "claude"));
+    expect(screen.queryByTestId("launched-terminal")).toBeNull();
+    expect(screen.queryByTestId("mock-panel")).toBeNull();
+    expect(screen.queryByTestId("new-terminal-form")).toBeNull();
+    expect(posts()).toHaveLength(1);
+  });
+  it("a failed launch never calls it", async () => {
+    launchReply = { status: 500, body: { title: "x" } };
+    const onLaunched = vi.fn();
+    mount({ onLaunched });
+    open();
+    type("/srv/work");
+    launch();
+    await screen.findByTestId("new-terminal-error");
+    expect(onLaunched).not.toHaveBeenCalled();
+  });
+});

@@ -1840,3 +1840,34 @@ test.describe.serial("T25 in-process restart", () => {
     }
   });
 });
+
+test("FUTERMLIST: End from the /sessions Terminals list asks first, kills the pane, and the row goes away on the lifecycle event", async ({ page, request }) => {
+  test.setTimeout(120_000);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const c = await prepare(page, request, idleHarness(), { cols: 120, rows: 40 });
+  await page.route("**/api/identity", async (route) => {
+    const res = await route.fetch();
+    const j = (await res.json()) as Record<string, unknown>;
+    await route.fulfill({ response: res, json: { ...j, terminal_admitted: true } });
+  });
+  const kills: string[] = [];
+  page.on("request", (r) => {
+    if (r.method() === "POST" && /\/api\/terms\/[^/]+\/kill$/.test(r.url())) kills.push(r.url());
+  });
+  await page.goto(`${MAIN}/sessions`);
+  const row = page.locator(`[data-testid="term-row"][data-term="${c.term.id}"]`);
+  await expect(row).toBeVisible({ timeout: 30_000 });
+  // Cancel: nothing is sent, the pane lives.
+  await row.locator('[data-testid="kb-term-end"]').click();
+  await page.locator(".confirm__cancel").click();
+  await page.waitForTimeout(500);
+  expect(kills).toEqual([]);
+  expect(alive(c.term.panePid), "Cancel must not end the pane").toBe(true);
+  // Confirm: exactly one kill, the pane dies, the row goes away without a reload.
+  await row.locator('[data-testid="kb-term-end"]').click();
+  await page.locator(".confirm__go").click();
+  await expect(row).toHaveCount(0, { timeout: 30_000 });
+  expect(kills).toHaveLength(1);
+  await expect.poll(() => alive(c.term.panePid), { timeout: 15_000 }).toBe(false);
+  expect((await listTerms(c.api)).map((t) => t.id)).not.toContain(c.term.id);
+});

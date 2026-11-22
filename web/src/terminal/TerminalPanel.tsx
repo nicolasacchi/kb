@@ -705,6 +705,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
       >
         <PhoneTerminal
           harness={props.harness}
+          headerExtra={props.headerExtra}
           term={termInst}
           profile={grid}
           hostRef={phoneHostRef}
