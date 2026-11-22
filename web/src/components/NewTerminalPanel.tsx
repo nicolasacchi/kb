@@ -7,7 +7,7 @@
 // the server does and suggestions come only from data the page already has
 // (never a directory listing route).
 
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { launchTerm } from "../api/terms";
 import { toast } from "../lib/toast";
 import {
@@ -55,6 +55,10 @@ export function NewTerminalPanel({
   const [touched, setTouched] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const listId = useId();
+  // The in-flight launch request. Cancel and unmount abort it; a terminal the
+  // runner already started stays recoverable from the Terminals list.
+  const inflight = useRef<AbortController | null>(null);
+  useEffect(() => () => inflight.current?.abort(), []);
   if (!admitted) return null;
 
   const cwdTrim = cwd.trim();
@@ -66,8 +70,12 @@ export function NewTerminalPanel({
     if (invalid !== null) return;
     setError(null);
     setPhase({ kind: "launching" });
-    launchTerm(launchBody(harness, cwdTrim)).then(
+    inflight.current?.abort();
+    const ctl = new AbortController();
+    inflight.current = ctl;
+    launchTerm(launchBody(harness, cwdTrim), ctl.signal).then(
       (r) => {
+        if (ctl.signal.aborted) return;
         saveLastTermHarness(harness);
         saveRecentTermCwd(cwdTrim);
         if (onLaunched) {
@@ -79,6 +87,7 @@ export function NewTerminalPanel({
         setPhase({ kind: "open", termId: r.id, harness });
       },
       (e: unknown) => {
+        if (ctl.signal.aborted) return;
         const msg = e instanceof Error ? e.message : String(e);
         setError(msg);
         toast.err(`terminal launch failed: ${msg}`);
@@ -158,7 +167,11 @@ export function NewTerminalPanel({
               type="button"
               className="kb-ses__newterm-btn"
               data-testid="new-terminal-cancel"
-              onClick={() => setPhase({ kind: "closed" })}
+              onClick={() => {
+                inflight.current?.abort();
+                inflight.current = null;
+                setPhase({ kind: "closed" });
+              }}
             >
               Cancel
             </button>

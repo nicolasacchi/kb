@@ -607,7 +607,11 @@ the row carries a session id the panel shows a link to that session's Terminal
 section. The link is never followed for you, and a harness may resume into a
 different session id than the one you resumed; the link names whichever id the
 row carries. A refused or failed launch (400, 404, 5xx) and a pane that ended
-(with its exit code) are shown as they are.
+(with its exit code) are shown as they are. Cancel while a launch is still in
+flight aborts the request and the form closes; a late answer never opens a panel
+(a terminal the runner had already started stays in the Terminals list). If the
+terminal list cannot be read, the panel says so with a Retry button instead of
+the "appears in the list" line.
 
 ### The Terminals list, End and `?term=`
 
@@ -620,7 +624,11 @@ gets the sheet) and puts `?term=<id>` in the URL: a reload, a shared link and
 Back land on the open terminal. Opening adds a history entry; the panel's Close
 replaces it, so Back never reopens a closed sheet. An id that is not a plain
 lowercase token (letters, digits, dash) opens nothing; the server still
-validates the exact id.
+validates the exact id. An id the list does not contain is dropped from the URL
+with "Terminal not found", but only after a list that was read successfully: if
+the list cannot be read, `?term=` stays and the page shows an error with a
+Retry button. While a terminal is open in its panel, its row has no End button
+(the panel's End is the one).
 
 **End** (the button on a row, above a desktop panel, in the phone sheet's own
 header row) asks first, naming the harness and directory, then sends one

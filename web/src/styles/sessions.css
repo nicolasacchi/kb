@@ -579,7 +579,7 @@
 /* FUWEBLAUNCH — "New terminal" (components/NewTerminalPanel.tsx) and the
  * inline launched terminal. Mobile sizing lives in mobile.css (860px block). */
 .kb-ses__newterm {
-  padding: 0 16px;
+  padding: 0 var(--pad-3);
   margin: var(--pad-2) 0;
 }
 .kb-ses__newterm .kb-ses__resume-copy {
@@ -619,7 +619,7 @@
 .kb-ses__newterm-field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--pad-1);
   color: var(--ink-mute);
   font-size: var(--fs-sm);
 }
@@ -630,7 +630,7 @@
   background: var(--bg-panel);
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
-  padding: 4px 8px;
+  padding: var(--pad-1) var(--pad-2);
   min-width: 0;
 }
 .kb-ses__launched {
