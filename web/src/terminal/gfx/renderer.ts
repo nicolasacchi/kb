@@ -179,6 +179,11 @@ export class PlaceholderRenderer {
   private readonly decos = new Map<GfxMarker, Map<string, GfxDisposable>>();
   private bg: string;
   private raf = 0;
+  private verifyRaf = 0;
+  private verifyQueued = false;
+  /** The metrics the pictures were last laid out for. */
+  private laid: Metrics | null = null;
+  private resizeObs: { disconnect(): void } | null = null;
   private disposed = false;
 
   constructor(term: GfxTerm, defs: ImageDefStore, media: MediaCache, opts: RendererOptions) {
@@ -201,6 +206,40 @@ export class PlaceholderRenderer {
     this.subs.push(term.onRender(() => this.render()));
     this.subs.push(term.onScroll(() => this.schedule()));
     this.subs.push(term.onResize(() => this.schedule()));
+    // A font change (the fitter's delayed passes) moves every cell, and xterm
+    // does not always announce it through the events above: the screen
+    // element's own size is the signal that always follows.
+    if (typeof ResizeObserver !== "undefined") {
+      const obs = new ResizeObserver(() => this.schedule());
+      obs.observe(screen);
+      this.resizeObs = obs;
+    }
+  }
+
+  /** The cell size or the font changed: lay the pictures out again on the next frame. */
+  notifyMetricsChanged(): void {
+    this.schedule();
+  }
+
+  private sameMetrics(a: Metrics, b: Metrics): boolean {
+    return a.cw === b.cw && a.ch === b.ch && a.dpr === b.dpr && a.viewportY === b.viewportY;
+  }
+
+  /**
+   * After a layout, look once more on the next frame: a measurement taken in
+   * the frame the font changed can still describe the previous screen. A
+   * changed measurement lays out again (and verifies again); a stable one ends
+   * the chain, so an idle terminal schedules nothing.
+   */
+  private queueVerify(): void {
+    if (this.disposed || this.verifyQueued) return;
+    this.verifyQueued = true;
+    this.verifyRaf = this.reqFrame(() => {
+      this.verifyQueued = false;
+      this.verifyRaf = 0;
+      if (this.disposed || this.laid === null) return;
+      if (!this.sameMetrics(this.laid, this.measureFn())) this.render();
+    });
   }
 
   /** The overlay element (hit-testing and tests). */
@@ -277,6 +316,8 @@ export class PlaceholderRenderer {
     if (cells.length === 0 && this.groups.size === 0 && this.decos.size === 0) return;
     this.stats.frames += 1;
     const m = this.measureFn();
+    this.laid = { ...m };
+    this.queueVerify();
     const snap = (v: number): number => Math.round(v * m.dpr) / m.dpr;
 
     const groups = new Map<string, Group>();
@@ -384,6 +425,10 @@ export class PlaceholderRenderer {
     this.disposed = true;
     if (this.raf !== 0) this.cancelFrame(this.raf);
     this.raf = 0;
+    if (this.verifyRaf !== 0) this.cancelFrame(this.verifyRaf);
+    this.verifyRaf = 0;
+    this.resizeObs?.disconnect();
+    this.resizeObs = null;
     for (const s of this.subs) s.dispose();
     this.subs.length = 0;
     this.disposeAllDecorations();

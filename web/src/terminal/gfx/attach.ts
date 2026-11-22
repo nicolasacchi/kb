@@ -54,6 +54,8 @@ export interface GfxHandle {
   /** The seed is applied: later defs load immediately. */
   markLive(): void;
   setTheme(bg: string): void;
+  /** The cell metrics changed (a font change): the pictures follow the cells. */
+  notifyMetricsChanged(): void;
   dispose(): void;
   /** For the lightbox. */
   readonly media: MediaCache;
@@ -192,6 +194,9 @@ export function attachGfx(term: Terminal, opts: AttachGfxOptions): GfxHandle {
     },
     setTheme(bg: string): void {
       if (!disposed) renderer.setTheme(normalizeBg(bg));
+    },
+    notifyMetricsChanged(): void {
+      if (!disposed) renderer.notifyMetricsChanged();
     },
     dispose(): void {
       if (disposed) return;
