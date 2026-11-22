@@ -890,6 +890,24 @@ describe("FUTERMLIVE liveness probe", () => {
     expect(h.session.getState().phase).toBe("live");
   });
 
+  it("a frame that lands after the ping makes a late timeout a no-op (no rejoin, no caption)", async () => {
+    const h = setup();
+    const s = await goLivePong(h);
+    h.advance(12_000);
+    h.session.kick();
+    const timer = h.timers.find((t) => t.ms === 2500 && !t.cleared && !t.fired)!;
+    h.advance(100);
+    s.pushBinary(105, "x");
+    // The cancel can lose a race with the timer already queued: run it anyway.
+    timer.fired = true;
+    timer.fn();
+    await flush();
+    expect(s.closeCodes).toEqual([]);
+    expect(h.sockets).toHaveLength(1);
+    expect(h.mintedTickets).toEqual(["tick-1"]);
+    expect(h.session.getState().phase).toBe("live");
+  });
+
   it("a tap without the pong capability is never probed and never reconnect-looped", async () => {
     const h = setup();
     const s = await goLive(h);
@@ -1061,6 +1079,13 @@ describe("FUTERMLIVE refusal captions", () => {
       expect(caption, reason).toMatch(/^reconnecting in \d+s/);
       expect(caption, reason).toContain(shown);
     }
+  });
+
+  it("a bare 1001 (going away, no reason) is NOT captioned idle: the generic reconnect caption", async () => {
+    const h = setup();
+    const s = await goLive(h);
+    s.closeFromServer(1001, "");
+    expect(h.session.getState().caption).toBe("reconnecting in 1s");
   });
 
   it("an unexplained close keeps the plain caption", async () => {

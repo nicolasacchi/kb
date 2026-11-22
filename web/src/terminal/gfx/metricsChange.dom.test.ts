@@ -89,6 +89,40 @@ describe("pictures follow a cell-metric change", () => {
     renderer.dispose();
   });
 
+  it("dispose cancels the queued verification frame, and a late frame is a no-op", () => {
+    const cancelled: number[] = [];
+    const fake = new FakeTerm(20, 10);
+    const defs = new ImageDefStore();
+    const media = new MediaCache({
+      fetchImpl: (() => Promise.resolve(new Response(new Uint8Array(4), { status: 200 }))) as typeof fetch,
+      createObjectURL: () => "blob:test/pic",
+      revokeObjectURL: () => {},
+      decode: () => Promise.resolve(),
+      sleep: () => Promise.resolve(),
+    });
+    const m: Metrics = { cw: 10, ch: 20, dpr: 2, viewportY: 0 };
+    const frames: Array<() => void> = [];
+    let measures = 0;
+    const renderer = new PlaceholderRenderer(fake.asTerm(), defs, media, {
+      bg: "#000000",
+      measure: () => {
+        measures += 1;
+        return { ...m };
+      },
+      requestFrame: (cb) => frames.push(cb),
+      cancelFrame: (h) => cancelled.push(h),
+    });
+    fake.picture(ID, 0, 3, 2, 2);
+    renderer.render();
+    // render() queued one verification frame (handle = its 1-based position).
+    expect(frames.length).toBeGreaterThan(0);
+    renderer.dispose();
+    expect(cancelled.length).toBeGreaterThan(0);
+    const before = measures;
+    for (const cb of frames.splice(0)) cb();
+    expect(measures).toBe(before);
+  });
+
   it("settles: a stable metric stops scheduling frames", () => {
     const { fake, renderer, frames, flush } = setup();
     fake.picture(ID, 0, 0, 2, 2);

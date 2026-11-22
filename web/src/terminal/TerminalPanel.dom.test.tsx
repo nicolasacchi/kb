@@ -147,9 +147,11 @@ vi.mock("./phone/PhoneTerminal", () => ({
 vi.mock("./phone/DriveDock", () => ({ DriveDock: () => null }));
 
 const setGfxTheme = vi.fn();
+const gfxMetrics = vi.fn();
 vi.mock("./gfx", () => ({
   attachGfx: () => ({
     dispose() {},
+    notifyMetricsChanged: () => gfxMetrics(),
     markLive() {},
     onImageDef() {},
     onGfxReset() {},
@@ -162,10 +164,17 @@ vi.mock("./gfx", () => ({
 interface SessionOpts {
   callbacks: { onProfile(p: unknown): void; onViewer(v: string): void; onState(s: unknown): void };
   sink: { resize(cols: number, rows: number): void };
+  effects: {
+    openSocket(
+      url: string,
+      handlers: { onMessageBinary(b: Uint8Array): void; onMessageText(t: string): void; onClose(code: number, reason: string): void },
+    ): unknown;
+  };
 }
 let lastSession: SessionOpts | null = null;
 const sessionStart = vi.fn();
 const sendInputMock = vi.fn();
+const setHiddenMock = vi.fn();
 vi.mock("./session", () => ({
   TermSession: class {
     constructor(o: SessionOpts) {
@@ -179,6 +188,9 @@ vi.mock("./session", () => ({
       return true;
     }
     block(): void {}
+    setHidden(h: boolean): void {
+      setHiddenMock(h);
+    }
     rejoinFull(): void {}
   },
 }));
@@ -222,6 +234,8 @@ beforeEach(() => {
   sessionStart.mockReset();
   sendInputMock.mockReset();
   setGfxTheme.mockReset();
+  gfxMetrics.mockReset();
+  setHiddenMock.mockReset();
   confirmMock.mockClear();
   gate = { ready: Promise.resolve(true), done: Promise.resolve() };
   box = { w: 1400, h: 800 };
@@ -811,6 +825,7 @@ describe("W4: a copy ends the selection", () => {
     term.selection = "picked text";
     expect(term.keyHandler!(keyEv({ ctrlKey: true }))).toBe(false);
     expect(writeText).toHaveBeenCalledTimes(1);
+    await settle(3);
     expect(term.selection).toBe("");
     const second = keyEv({ ctrlKey: true });
     expect(term.keyHandler!(second)).toBe(true);
@@ -824,6 +839,7 @@ describe("W4: a copy ends the selection", () => {
     const term = await profile();
     term.selection = "abc";
     term.keyHandler!(keyEv({ ctrlKey: true, shiftKey: true, key: "C" }));
+    await settle(3);
     expect(term.selection).toBe("");
   });
 });
@@ -941,5 +957,141 @@ describe("FUTERMATTN attention hooks", () => {
     } finally {
       vi.restoreAllMocks();
     }
+  });
+});
+
+// ------------------------------------------------------------ FUMINPANEL
+
+const LIVE = { phase: "live", epoch: null, applied: 0, resets: 0, gaps: 0, attempt: 0, caption: "live", exitCode: null, blockedReason: null };
+
+describe("FUMINPANEL: the panel's wiring to the session machine", () => {
+  it("a socket close reaches the session with its code AND reason (the caption's input)", async () => {
+    class FakeWs {
+      static last: FakeWs | null = null;
+      binaryType = "";
+      onmessage: ((ev: unknown) => void) | null = null;
+      onclose: ((ev: { code: number; reason: string }) => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor(public url: string) {
+        FakeWs.last = this;
+      }
+      send(): void {}
+      close(): void {}
+    }
+    vi.stubGlobal("WebSocket", FakeWs);
+    await mountPanel();
+    const onClose = vi.fn();
+    lastSession!.effects.openSocket("wss://x/ws", { onMessageBinary() {}, onMessageText() {}, onClose });
+    FakeWs.last!.onclose!({ code: 1001, reason: "idle" });
+    expect(onClose).toHaveBeenCalledWith(1001, "idle");
+  });
+
+  it("a visibilitychange reaches the session's setHidden (hidden, then visible)", async () => {
+    await mountPanel();
+    const desc = Object.getOwnPropertyDescriptor(document, "visibilityState");
+    try {
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(setHiddenMock).toHaveBeenLastCalledWith(true);
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(setHiddenMock).toHaveBeenLastCalledWith(false);
+    } finally {
+      if (desc) Object.defineProperty(document, "visibilityState", desc);
+      else delete (document as unknown as Record<string, unknown>).visibilityState;
+    }
+  });
+});
+
+describe("FUMINPANEL: the program title belongs to one live connection", () => {
+  it("is cleared when the session leaves live (reconnecting) and is not resurrected", async () => {
+    await mountPanel();
+    const term = await profile();
+    act(() => lastSession!.callbacks.onState(LIVE));
+    act(() => term.titleCbs.forEach((cb) => cb("build running")));
+    expect(text("kb-term-title")).toBe("build running");
+    act(() => lastSession!.callbacks.onState({ ...LIVE, phase: "reconnecting", caption: "reconnecting in 1s" }));
+    expect(q("kb-term-title")).toBeNull();
+  });
+
+  it("a title that arrives while live stays through further live state updates", async () => {
+    await mountPanel();
+    const term = await profile();
+    act(() => lastSession!.callbacks.onState(LIVE));
+    act(() => term.titleCbs.forEach((cb) => cb("steady")));
+    act(() => lastSession!.callbacks.onState({ ...LIVE, applied: 5 }));
+    expect(text("kb-term-title")).toBe("steady");
+  });
+});
+
+describe("FUMINPANEL: copy clears the selection only after the clipboard write succeeded", () => {
+  it("keeps the selection while the write is pending, clears it once it resolves", async () => {
+    let resolve!: () => void;
+    const writeText = vi.fn(() => new Promise<void>((r) => (resolve = r)));
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    await mountPanel();
+    const term = await profile();
+    term.selection = "picked";
+    term.keyHandler!(keyEv({ ctrlKey: true }));
+    await settle(2);
+    expect(writeText).toHaveBeenCalledWith("picked");
+    expect(term.selection).toBe("picked");
+    resolve();
+    await settle(3);
+    expect(term.selection).toBe("");
+  });
+
+  it("a rejected write keeps the selection and says so (toast.err)", async () => {
+    const { toast } = await import("../lib/toast");
+    vi.mocked(toast.err).mockClear();
+    const writeText = vi.fn(async () => {
+      throw new Error("denied");
+    });
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    await mountPanel();
+    const term = await profile();
+    term.selection = "picked";
+    term.keyHandler!(keyEv({ ctrlKey: true }));
+    await settle(3);
+    expect(term.selection).toBe("picked");
+    expect(toast.err).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("FUMINPANEL: a font or grid change tells the picture layer", () => {
+  it("notifies the gfx layer when a fit result changes the font, and not on an unchanged result", async () => {
+    await mountPanel();
+    await profile();
+    expect(gfxMetrics).toHaveBeenCalled();
+    gfxMetrics.mockClear();
+    // Same grid, same box: a refit keeps the font, nothing moved.
+    act(() => roCallbacks.forEach((cb) => cb()));
+    await new Promise((r) => setTimeout(r, 150));
+    await settle(2);
+    expect(gfxMetrics).not.toHaveBeenCalled();
+    // A smaller grid in the same box changes the font: the pictures must follow.
+    act(() => lastSession!.sink.resize(80, 24));
+    await new Promise((r) => setTimeout(r, 150));
+    await settle(2);
+    expect(gfxMetrics).toHaveBeenCalled();
+  });
+});
+
+describe("FUMINPANEL: the full-screen font bounds", () => {
+  it("never goes above 28 in a huge box and never below 8 (then Cropped) in a small one", async () => {
+    box = { w: 9000, h: 4000 };
+    await mountPanel();
+    const term = await profile();
+    await act(async () => q("kb-term-fullscreen")!.click());
+    await new Promise((r) => setTimeout(r, 150));
+    await settle(2);
+    expect(term.options.fontSize).toBe(28);
+    box = { w: 900, h: 400 };
+    act(() => lastSession!.sink.resize(201, 48));
+    act(() => roCallbacks.forEach((cb) => cb()));
+    await new Promise((r) => setTimeout(r, 400));
+    await settle(2);
+    expect(term.options.fontSize).toBe(8);
+    expect(q("kb-term-cropped")).not.toBeNull();
   });
 });

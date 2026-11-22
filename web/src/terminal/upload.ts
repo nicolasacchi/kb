@@ -36,7 +36,7 @@ export function uploadRefusal(file: { size: number; type: string }): string | nu
  * answers an absolute path; the caller PASTES the path (never Enter). Rejects
  * a wrong type or an oversize file before fetching.
  */
-export async function uploadImage(termId: string, file: File): Promise<UploadResult> {
+export async function uploadImage(termId: string, file: File, signal?: AbortSignal): Promise<UploadResult> {
   const refusal = uploadRefusal(file);
   if (refusal !== null) throw new DriveError(0, null, refusal);
   const res = await fetch(url(termId, "upload"), {
@@ -47,6 +47,7 @@ export async function uploadImage(termId: string, file: File): Promise<UploadRes
       [TERMINAL_INTENT_HEADER]: TERMINAL_INTENT_VALUE,
     },
     body: file,
+    signal,
   });
   if (!res.ok) throw await driveError(res);
   return (await res.json()) as UploadResult;
