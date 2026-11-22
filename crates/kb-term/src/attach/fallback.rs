@@ -60,6 +60,13 @@ pub fn grid_status(owner: Option<&str>) -> String {
             "another kb-term attach owns the grid \u{2014} watching; any key takes it back (that key is not sent); detach: Ctrl-] ."
                 .to_string()
         }
+        // An owner released between the refusal and the banner (or a refusal
+        // message that named nobody) arrives as an empty string: a fixed
+        // neutral label, never a blank name.
+        Some(o) if o.trim().is_empty() => {
+            "another client owns the grid \u{2014} watching; any key takes it back (that key is not sent); detach: Ctrl-] ."
+                .to_string()
+        }
         Some(_) => {
             "another device owns the grid \u{2014} watching; any key takes it back (that key is not sent); detach: Ctrl-] ."
                 .to_string()
@@ -102,6 +109,12 @@ mod tests {
         assert!(foreign.contains("that key is not sent"), "{foreign}");
         for t in [&web, &free, &local, &foreign] {
             assert!(!t.chars().any(char::is_control), "one printable row: {t:?}");
+        }
+        // An empty / blank owner never renders a blank name: the neutral label.
+        for blank in ["", "   "] {
+            let t = grid_status(Some(blank));
+            assert!(t.starts_with("another client owns the grid"), "{t:?}");
+            assert!(t.contains("that key is not sent"), "{t:?}");
         }
         assert!(is_local_mirror_owner("local:1"));
         assert!(!is_local_mirror_owner("relay:1"));

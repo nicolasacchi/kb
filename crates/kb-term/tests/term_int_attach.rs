@@ -223,6 +223,8 @@ fn bin_env(viewer: &str, offset: u64, payload: &[u8]) -> Vec<u8> {
 #[derive(Default, Debug)]
 struct RunnerLog {
     takes: Vec<(u16, u16, String, bool)>,
+    /// EVERY take_size request, refused ones included: (cols, rows, owner, force).
+    take_attempts: Vec<(u16, u16, String, bool)>,
     keys: Vec<Vec<u8>>,
     launches: Vec<serde_json::Value>,
     opened_viewers: std::collections::HashSet<String>,
@@ -345,6 +347,9 @@ impl FakeRunner {
     fn recorded_takes(&self) -> Vec<(u16, u16, String, bool)> {
         self.log.lock().unwrap().takes.clone()
     }
+    fn recorded_take_attempts(&self) -> Vec<(u16, u16, String, bool)> {
+        self.log.lock().unwrap().take_attempts.clone()
+    }
     fn recorded_keys(&self) -> Vec<Vec<u8>> {
         self.log.lock().unwrap().keys.clone()
     }
@@ -416,6 +421,10 @@ fn handle_runner_conn(
                     .unwrap_or("")
                     .to_string();
                 let force = req.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+                log.lock()
+                    .unwrap()
+                    .take_attempts
+                    .push((cols, rows, owner.clone(), force));
                 let mut f = take_failures.lock().unwrap();
                 let stateful = log.lock().unwrap().stateful;
                 if stateful {
@@ -512,8 +521,10 @@ fn handle_runner_conn(
 }
 
 // ----------------------------------------------------------------- fake tap --
-#[derive(Clone)]
+/// A re-join's profile size and resize marker (after_ms, cols, rows).
+type RejoinScript = ((u16, u16), (u64, u16, u16));
 
+#[derive(Clone)]
 struct TapScript {
     cols: u16,
     rows: u16,
@@ -537,6 +548,10 @@ struct TapScript {
     /// During the Exit hold, send one `resize` marker (cols, rows) this
     /// many ms after the hold starts (the tap following a grid change).
     resize_marker: Option<(u64, u16, u16)>,
+    /// From the second connection on (a re-join): the profile size the tap
+    /// reports and the resize marker it sends, replacing `cols`/`rows` and
+    /// `resize_marker` (the tap after a grid change).
+    rejoin: Option<RejoinScript>,
 }
 
 struct FakeTap {
@@ -577,7 +592,14 @@ impl FakeTap {
                 let budget = script.drops.get(conn_index).copied().unwrap_or(u64::MAX);
                 let opens3 = opens2.clone();
                 let controls3 = controls2.clone();
-                let s = script.clone();
+                let mut s = script.clone();
+                if conn_index >= 1 {
+                    if let Some(((c, r), m)) = s.rejoin {
+                        s.cols = c;
+                        s.rows = r;
+                        s.resize_marker = Some(m);
+                    }
+                }
                 std::thread::spawn(move || {
                     handle_tap_conn(conn, &s, budget, &opens3, &controls3);
                 });
@@ -1185,6 +1207,7 @@ fn t4_script() -> TapScript {
         exit_delay_ms: 0,
         tail_trigger_no_lf: false,
         resize_marker: None,
+        rejoin: None,
     }
 }
 
@@ -2019,6 +2042,152 @@ fn attach_sigwinch_retakes_once_debounced() {
         "initial take + one debounced SIGWINCH take: {takes:?}"
     );
 }
+fn resize_pty(proc: &PtyProc, cols: u16, rows: u16) {
+    unsafe {
+        let mut ws: libc::winsize = std::mem::zeroed();
+        ws.ws_col = cols;
+        ws.ws_row = rows;
+        libc::ioctl(proc.master.as_raw_fd(), libc::TIOCSWINSZ, &ws);
+    }
+}
+
+#[test]
+fn a_refused_window_size_take_keeps_watching_and_takes_nothing_more() {
+    if !term_int_gate() {
+        return;
+    }
+    // The attach owns the grid, then the web takes it. A SIGWINCH to a new
+    // outer size must not fight for it: the runner refuses the local take,
+    // the attach keeps watching behind the status line, no further take.
+    let mut script = t4_script();
+    script.seed_lines = 300;
+    script.live_lines = 30;
+    script.exit_delay_ms = 5_000;
+    let rig = setup_rig_owned(None, script);
+    std::thread::sleep(Duration::from_millis(100));
+    let mut proc = spawn_bin(
+        &["attach", "abcd1234", "--runner-sock", &rig.sock_str],
+        201,
+        48,
+    );
+    let up = Instant::now() + Duration::from_millis(1_200);
+    while rig.runner.recorded_takes().is_empty() && Instant::now() < up {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(
+        rig.runner.recorded_takes().len(),
+        1,
+        "the attach took the grid"
+    );
+    // The SIGWINCH take must really be attempted (and refused): below we wait
+    // for the runner to see the second request, so the owner poll cannot have
+    // swallowed the SIGWINCH arm.
+    rig.runner.set_owner(Some("kb-term"));
+    resize_pty(&proc.0, 100, 24);
+    kill_pid(proc.0.child.id(), 28);
+    let deadline = Instant::now() + Duration::from_millis(1_800);
+    while rig.runner.recorded_take_attempts().len() < 2 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let attempts = rig.runner.recorded_take_attempts();
+    assert_eq!(
+        attempts.len(),
+        2,
+        "the SIGWINCH take was attempted once (and refused): {attempts:?}"
+    );
+    // A second resize well inside the 2 s owner poll: the refusal itself must
+    // have switched the attach to watching (the poll has not run yet), so the
+    // SIGWINCH arm is disabled and no third take is attempted.
+    resize_pty(&proc.0, 90, 20);
+    kill_pid(proc.0.child.id(), 28);
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(
+        rig.runner.recorded_take_attempts().len(),
+        2,
+        "a refusal makes the attach watch at once: {:?}",
+        rig.runner.recorded_take_attempts()
+    );
+    std::thread::sleep(Duration::from_millis(1_000));
+    assert_eq!((attempts[1].0, attempts[1].1), (100, 24));
+    assert!(!attempts[1].3, "the window-size take is never forced");
+    assert_eq!(
+        rig.runner.recorded_takes().len(),
+        1,
+        "a refused window-size take takes nothing more: {:?}",
+        rig.runner.recorded_takes()
+    );
+    assert_eq!(
+        rig.runner.current_owner().as_deref(),
+        Some("kb-term"),
+        "the web still owns the grid"
+    );
+    assert!(
+        rig.runner.recorded_keys().is_empty(),
+        "nothing is typed into the session"
+    );
+    let (code, out) = proc.0.wait_for_exit(Duration::from_secs(25));
+    assert_eq!(code, Some(0), "the attach keeps watching to the end");
+    assert!(
+        count_of(&out, "web panel owns the grid") >= 1,
+        "the watch status line is printed"
+    );
+    assert_eq!(
+        rig.runner.recorded_takes().len(),
+        1,
+        "still one take at exit"
+    );
+    assert_eq!(
+        rig.runner.recorded_take_attempts().len(),
+        2,
+        "no further attempt after the refusal"
+    );
+}
+
+#[test]
+fn an_owning_rejoin_after_a_sigwinch_starts_from_the_new_outer_size() {
+    if !term_int_gate() {
+        return;
+    }
+    // The SIGWINCH take moves local_size, and every re-join starts its
+    // `last_taken` from it. Join 1 gets a marker equal to the new outer size
+    // (100x24, painted 201x48): an owning attach that took it re-joins
+    // (Preset::Own), without a take. Join 2 reports a 100x24 profile and then
+    // a 201x48 marker (the OLD outer size): relative to the new `last_taken`
+    // that is a foreign size, so the attach asks the runner who owns the grid
+    // (itself) and stays. With a stale local_size of 201x48 the same marker
+    // would equal `last_taken` against a 100x24 painted grid and force a
+    // third join.
+    let mut script = t4_script();
+    script.seed_lines = 300;
+    script.live_lines = 30;
+    script.exit_delay_ms = 6_000;
+    script.resize_marker = Some((3_500, 100, 24));
+    script.rejoin = Some(((100, 24), (1_500, 201, 48)));
+    let rig = setup_rig_owned(None, script);
+    std::thread::sleep(Duration::from_millis(100));
+    let mut proc = spawn_bin(
+        &["attach", "abcd1234", "--runner-sock", &rig.sock_str],
+        201,
+        48,
+    );
+    std::thread::sleep(Duration::from_millis(1_200));
+    resize_pty(&proc.0, 100, 24);
+    kill_pid(proc.0.child.id(), 28); // SIGWINCH
+    let (code, _out) = proc.0.wait_for_exit(Duration::from_secs(40));
+    assert_eq!(code, Some(0));
+    let takes = rig.runner.recorded_takes();
+    assert_eq!(
+        takes.iter().map(|t| (t.0, t.1)).collect::<Vec<_>>(),
+        vec![(201, 48), (100, 24)],
+        "the initial take, then the SIGWINCH take; the Own re-join adds none: {takes:?}"
+    );
+    assert_eq!(
+        rig.tap.recorded_opens().len(),
+        2,
+        "exactly one re-join: the new outer size is the re-join's last_taken"
+    );
+}
+
 fn kill_pid(pid: u32, sig: i32) {
     unsafe {
         libc::kill(pid as i32, sig);

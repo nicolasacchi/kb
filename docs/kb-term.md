@@ -459,9 +459,10 @@ to 20..=500 columns and 5..=200 rows.
   with the pane's output. The tap resizes its headless twin at that point of the
   stream (after the bytes already queued for it, never while earlier writes are
   unparsed), stamps a `resize` marker at the current offset so every live viewer
-  resizes at the same point (a caught-up live viewer gets the marker at once, even when the
-  pane prints nothing afterwards; an idle pane used to hold it until its next byte), and reports the new size in later `profile` frames;
-  a joiner waits for a pending twin resize, so its seed and its profile agree. A
+  resizes at the same point (a caught-up live viewer gets the marker at once,
+  even when the pane prints nothing afterwards; an idle pane used to hold it
+  until its next byte), and reports the new size in later `profile` frames; a
+  joiner waits for a pending twin resize, so its seed and its profile agree. A
   repeat of the current size does nothing. At start the tap also asks tmux for
   the window's current size, so a tap restarted after a take-size does not keep
   the launch grid. That query is the only way the tap learns the size of a pane
@@ -472,11 +473,13 @@ to 20..=500 columns and 5..=200 rows.
   the tap pairs a reply with a command only for such blocks (the attach itself
   opens a block with the bit clear); a null or failed reply is retried five
   times 200 ms apart, then one stderr line names the session and the tap keeps
-  its current grid until the next layout change. Before the FUATTACH fix nothing resized the twin: `profile`,
-  the web panel's header and terminal, and the seed of every viewer that joined
-  after a take-size kept the launch grid (120x40) while the pane was larger, so
-  a wider stream was drawn at the wrong width (rules wrapped onto a second row,
-  rows doubled).
+  its current grid until the next layout change. A `%layout-change` that lands
+  while that size query is still in flight is newer than the query's answer, so
+  the older answer is dropped and never overwrites it. Before the FUATTACH fix
+  nothing resized the twin: `profile`, the web panel's header and terminal, and
+  the seed of every viewer that joined after a take-size kept the launch grid
+  (120x40) while the pane was larger, so a wider stream was drawn at the wrong
+  width (rules wrapped onto a second row, rows doubled).
 - **Why a single grid:** zellij moves a scrolled row into its scrollback only
   when the scroll region is the whole pane, so a local mirror's scrollback is
   complete only while the local pane equals the grid.

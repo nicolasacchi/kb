@@ -255,7 +255,13 @@ export function createTapStack(opts: TapStackOpts): TapStack {
   // The runner's take-size is a tmux `resize-window`; tmux announces it with
   // `%layout-change`, in order with the pane's %output. The twin, the
   // profile and every live viewer follow it here.
-  control.onLayout((grid) => server.setGrid(grid.cols, grid.rows));
+  // Each layout bumps a generation: a syncGrid query that was in flight
+  // when it landed holds an OLDER answer and must not overwrite it.
+  let layoutGen = 0;
+  control.onLayout((grid) => {
+    layoutGen++;
+    server.setGrid(grid.cols, grid.rows);
+  });
   control.onExit((reason) => {
     server.recordMarker((seq, offset) => encodeServerFrame({ t: 'exit', seq, code: null, offset }));
     if (exitNeedsReseed(reason)) reseed(lastPane);
@@ -275,7 +281,11 @@ export function createTapStack(opts: TapStackOpts): TapStack {
       for (let attempt = 0; attempt < SYNC_GRID_ATTEMPTS; attempt++) {
         if (attempt > 0 && waitMs > 0) await new Promise<void>((r) => setTimeout(r, waitMs));
         try {
+          const gen = layoutGen;
           const grid = await control.queryGrid();
+          // A %layout-change handled while the query was in flight is newer
+          // than this reply: drop the reply, the layout already set the grid.
+          if (gen !== layoutGen) return;
           if (grid !== null) {
             server.setGrid(grid.cols, grid.rows);
             return;
