@@ -1757,6 +1757,53 @@ async fn term_int_paste_is_bracketed_only_when_the_pane_asked_and_multiline_is_r
     );
 }
 
+/// FUPHONESEND: the runner-side paste is ONE tmux client process, so it
+/// costs milliseconds, not the 0.7-1.3 s four spawns cost on a loaded host.
+/// The p50 bound is the brief's 150 ms; CI is far faster than that, so the
+/// bound guards against a regression to per-step spawns only loosely, and the
+/// spawn count itself is pinned in `paste.rs` over the fake.
+#[tokio::test(flavor = "multi_thread")]
+async fn term_int_paste_latency_p50_is_within_150ms() {
+    let Some(tmux_bin) = require_tmux() else {
+        return;
+    };
+    let tr = TestRunner::new(tmux_bin);
+    boot_runner(&tr).await;
+    let (id, log) = launch_probe(&tr, "paste-on").await;
+    dispatch_ok(
+        &tr,
+        Request::ViewerOpen {
+            id: id.clone(),
+            viewer: "web".to_string(),
+        },
+    )
+    .await;
+    let mut ms = Vec::new();
+    for i in 0..15 {
+        let t0 = std::time::Instant::now();
+        dispatch_ok(
+            &tr,
+            Request::Paste {
+                id: id.clone(),
+                viewer: "web".to_string(),
+                text: format!("line {i}\nsecond"),
+            },
+        )
+        .await;
+        ms.push(t0.elapsed().as_millis());
+    }
+    ms.sort_unstable();
+    let p50 = ms[ms.len() / 2];
+    eprintln!("FUPHONESEND runner paste ms: {ms:?} p50={p50}");
+    assert!(p50 <= 150, "paste p50 {p50} ms over {ms:?}");
+    // And every paste really arrived, bracketed, text intact.
+    let ok = poll_log(&log, Duration::from_secs(10), |t| {
+        t.contains("1b5b3230307e6c696e652031340a7365636f6e641b5b3230317e")
+    })
+    .await;
+    assert!(ok, "last paste arrived: {}", read_log(&log));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn term_int_enter_waits_for_quiet_and_honours_blocked() {
     let Some(tmux_bin) = require_tmux() else {

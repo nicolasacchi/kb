@@ -342,6 +342,31 @@ test("keys sent through the REST composer path reach the pane (control for the s
     .toContain("yn7");
 });
 
+test("FUPHONESEND: the composer's paste-with-enter is one request and answers fast (p50 well under 900 ms)", async ({ request }) => {
+  test.setTimeout(120_000);
+  const api = new Api(request);
+  const out = scratch("sendlat");
+  const log = join(out, "stdin.log");
+  // Raw, no echo: the pane's stdin is exactly what the relay typed.
+  const h: Harness = { out, shell: `stty raw -echo\nexec cat >> ${log}\n` };
+  const t = await launch(api, h);
+  await expect.poll(() => existsSync(log), { timeout: 30_000 }).toBe(true);
+  const ms: number[] = [];
+  for (let i = 0; i < 7; i += 1) {
+    const text = `send-${i}-ok`;
+    const t0 = Date.now();
+    const r = await api.call("POST", `/api/terms/${t.id}/paste`, { data: { text, enter: true } });
+    ms.push(Date.now() - t0);
+    expect(r.status(), await r.text()).toBe(200);
+    expect((await r.json()).entered, "the Enter went in the same request").toBe(true);
+    await expect.poll(() => readFileSync(log, "latin1"), { timeout: 10_000 }).toContain(`${text}\r`);
+  }
+  ms.sort((a, b) => a - b);
+  const p50 = ms[Math.floor(ms.length / 2)];
+  console.log(`FUPHONESEND paste+enter request ms: ${ms.join(",")} p50=${p50}`);
+  expect(p50, `paste+enter p50 ${p50} ms over ${ms.join(",")}`).toBeLessThanOrEqual(900);
+});
+
 test("typed keys sent over the WebSocket reach the pane", async ({ page, request }) => {
   // The panel sends client `input` frames over the WebSocket. The tap has no
   // input path (it ignores them), so the runner's stream splice takes them out

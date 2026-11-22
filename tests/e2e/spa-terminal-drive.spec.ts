@@ -60,15 +60,16 @@ test.describe("T18 phone Drive: composer", () => {
   test("Send pastes then enters; a leading / pastes only; every request names the viewer and carries the intent header", async ({ page }) => {
     const stats = await openDrive(page, { bracketPaste: true });
     await typeAndSend(page, "fix the failing test");
-    await expect.poll(() => ops(stats)).toEqual(["paste", "enter"]);
+    // FUPHONESEND: Send is ONE request (paste with enter:true), not paste then enter.
+    await expect.poll(() => ops(stats)).toEqual(["paste"]);
     await expect(page.locator(id("kb-drive-input"))).toHaveValue("");
 
     await typeAndSend(page, "/help");
-    await expect.poll(() => ops(stats)).toEqual(["paste", "enter", "paste"]);
+    await expect.poll(() => ops(stats)).toEqual(["paste", "paste"]);
     await expect(page.locator(id("kb-drive-caption"))).toContainText("Pasted, not sent");
 
-    expect(stats.drive[0].json).toEqual({ text: "fix the failing test", viewer: VIEWER });
-    expect(stats.drive[2].json).toEqual({ text: "/help", viewer: VIEWER });
+    expect(stats.drive[0].json).toEqual({ text: "fix the failing test", enter: true, viewer: VIEWER });
+    expect(stats.drive[1].json).toEqual({ text: "/help", viewer: VIEWER });
     for (const c of stats.drive) {
       expect(c.headers["x-kb-intent"]).toBe("terminal");
       expect(c.json?.viewer).toBe(VIEWER);

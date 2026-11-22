@@ -844,6 +844,18 @@ The phone view has three parts.
   - Enter is never implied. The runner presses it only after the pane has been
     quiet for 400 ms (it gives up after 5 s with `busy`), and the server refuses
     it with 409 while the bound session is blocked.
+  - **Send is one request and one tmux process.** The composer's Send posts a
+    single `paste` with `enter: true`; the server pastes, then runs the same Enter
+    path as `enter` (quiet guard included) and answers `entered: true`, or
+    `entered: false` with the refusal when the paste landed but the Enter did not
+    ("Pasted, not sent"). The separate `enter` route still exists (the key bar's
+    Enter button, and clients that predate the option). On the runner a paste is
+    ONE tmux client invocation: the pane's bracketed-paste flag, the buffer load
+    (text on stdin, never in argv) and the paste are chained with `;`, and a
+    multi-line paste on a pane without bracketed paste deletes its scratch buffer
+    in the same invocation instead of pasting. The old sequence spawned four tmux
+    processes (flag, load, paste, delete), which cost 0.7-1.3 s on a loaded host.
+    What remains on a Send is the 400 ms quiet guard and one round trip.
   - The key bar sends key **names** from a closed vocabulary (it includes
     Backspace); Ctrl-C and Ctrl-D must be held (600 ms); a held `/` opens the harness's slash menu, whose entries are
     pasted and never entered.
