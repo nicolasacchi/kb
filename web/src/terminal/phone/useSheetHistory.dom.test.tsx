@@ -134,4 +134,18 @@ describe("useSheetHistory", () => {
     // With the entry gone, a second request is a no-op the caller closes itself.
     expect(popOwnEntry()).toBe(false);
   });
+
+  it("a second Close before the popstate does not call history.back() again", async () => {
+    const onClose = vi.fn();
+    render(<Probe active onClose={onClose} />);
+    const back = vi.spyOn(window.history, "back");
+    let r: boolean[] = [];
+    await act(async () => {
+      r = [popOwnEntry(), popOwnEntry()];
+      await tick();
+    });
+    expect(r).toEqual([true, true]);
+    expect(back).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
 });

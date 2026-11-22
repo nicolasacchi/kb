@@ -30,11 +30,16 @@ export function useSheetHistory(active: boolean, onClose: () => void): () => boo
   onCloseRef.current = onClose;
   const entryRef = useRef<string | null>(null);
   const aliveRef = useRef(false);
+  // A pop is in flight (back() is async): a second Close before the popstate
+  // must not issue a second back(), which would leave the page.
+  const poppingRef = useRef(false);
 
   const popOwnEntry = useCallback((): boolean => {
     if (entryRef.current === null) return false;
+    if (poppingRef.current) return true;
     const cur = (window.history.state as Record<string, unknown> | null)?.[KEY];
     if (cur !== entryRef.current) return false;
+    poppingRef.current = true;
     window.history.back();
     return true;
   }, []);
@@ -54,12 +59,14 @@ export function useSheetHistory(active: boolean, onClose: () => void): () => boo
       if (cur === entryRef.current) return;
       entryRef.current = null;
       aliveRef.current = false;
+      poppingRef.current = false;
       onCloseRef.current();
     };
     window.addEventListener("popstate", onPop);
     return () => {
       window.removeEventListener("popstate", onPop);
       aliveRef.current = false;
+      poppingRef.current = false;
       const id = entryRef.current;
       if (id === null) return;
       // Deferred one microtask so a StrictMode replay (same task) keeps the entry.
