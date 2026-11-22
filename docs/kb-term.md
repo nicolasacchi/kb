@@ -834,7 +834,9 @@ the page.
 The phone view has three parts. The panel shows it when the viewport is at most
 860 px wide, or when the pointer is coarse and the viewport is under 600 px high (a
 phone held in landscape); a touch tablet in landscape, and any fine-pointer window,
-keep the desktop panel. In that landscape case the grid-controls row of the dock
+keep the desktop panel. The height arm is latched on the device's own short side
+(`screen`), so a soft keyboard that shrinks a landscape tablet's viewport under
+600 px does not flip it to the phone view. In that landscape case the grid-controls row of the dock
 folds away and the key bar and composer stay.
 
 - **Watch:** the terminal at the session grid, default font 12 px (steps 8 to 24),
@@ -881,7 +883,9 @@ folds away and the key bar and composer stay.
     in the browser (no server state), editable with Edit. A tap goes through the same
     send plan as Send, so a reply that begins with `/` or `@` is pasted and not sent,
     and a blocked session gets a paste with no Enter. The composer draft is kept per
-    terminal in the browser for a day and cleared by a successful send.
+    terminal in the browser for a day and cleared by a successful send. Drafts are
+    stored as plaintext in the browser's localStorage (`kb.term.draft.<id>`); expired
+    ones are swept whenever a composer mounts.
   - The choice bar appears only while a bound session is blocked on the operator,
     which is known from beats alone.
   - Guards for Claude: every `Left` and every message that is exactly `/bg` asks
@@ -895,7 +899,8 @@ folds away and the key bar and composer stay.
     Fit to phone" hint (the same label as the desktop's) are on a line of their own
     under it, so the buttons never squeeze them to an ellipsis. The grid chip beside
     Fit to phone is the desktop chip's words (`120x40 · web`, `· free`, `· local
-    attach`, the size alone while the list row is behind the live grid). The key row
+    attach`; `checking` while the list row is behind the live grid, and Release is not
+    offered until the list vouches for the owner). The key row
     scrolls sideways and fades its right edge while more keys are off screen.
   - **Full screen on a phone.** The sheet's full detent is the whole dynamic
     viewport (`100dvh`, with the notch and home-indicator insets kept clear), and its
@@ -905,10 +910,13 @@ folds away and the key bar and composer stay.
     Fit, Release and chip row away; the keys and the composer stay), and the first
     Back leaves it. Where it is not offered (iPhone Safari) there is no button:
     the `100dvh` sheet is the most the browser allows. There is no overlay
-    fallback and no Escape lock on a phone.
+    fallback and no Escape lock on a phone. If the browser refuses the request, the
+    bar says "Full screen is not available here." instead of doing nothing.
   - **Image upload** accepts `image/png`, `image/jpeg`, `image/gif` or
     `image/webp` up to 8 MiB, stores the file in the session's own 0700 upload
-    directory and pastes its absolute path.
+    directory and pastes its absolute path. Pasting a picture into the composer uploads one at a
+    time: a second paste during an upload is refused with a status line, and the
+    extra pictures of a multi-file paste are dropped and counted in the status line.
 
 Verification: CI runs the phone specs in Chromium (Pixel 7 and iPhone 15
 emulation) and WebKit (iPhone 15 emulation) with synthetic pointer events and

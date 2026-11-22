@@ -21,7 +21,33 @@ import { QuickReplies } from "./QuickReplies";
 export const DRAFT_TTL_MS = 24 * 3600 * 1000;
 /** Quiet time before a typed draft is written to storage. */
 export const DRAFT_DEBOUNCE_MS = 300;
-const draftKey = (termId: string): string => `kb.term.draft.${termId}`;
+const DRAFT_PREFIX = "kb.term.draft.";
+const draftKey = (termId: string): string => `${DRAFT_PREFIX}${termId}`;
+
+/**
+ * Remove every expired or unreadable draft of the `kb.term.draft.` family (any
+ * terminal's): a draft of a terminal that is never opened again is otherwise
+ * never swept. Other keys are never touched. Drafts are plaintext in
+ * localStorage (docs/kb-term.md says so).
+ */
+export function sweepDrafts(now: number = Date.now()): void {
+  try {
+    const stale: string[] = [];
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const k = localStorage.key(i);
+      if (k === null || !k.startsWith(DRAFT_PREFIX)) continue;
+      try {
+        const v = JSON.parse(localStorage.getItem(k) ?? "null") as { t?: unknown; at?: unknown } | null;
+        if (v === null || typeof v.t !== "string" || typeof v.at !== "number" || now - v.at > DRAFT_TTL_MS) stale.push(k);
+      } catch {
+        stale.push(k);
+      }
+    }
+    for (const k of stale) localStorage.removeItem(k);
+  } catch {
+    // storage blocked: nothing to sweep
+  }
+}
 
 export function loadDraft(termId: string): string {
   try {
@@ -80,6 +106,9 @@ export function Composer(props: ComposerProps) {
   const [busy, setBusy] = useState(false);
   const [chip, setChip] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  // A picture upload is in flight (a ref: two pastes can land before a re-render).
+  const attaching = useRef(false);
+  useEffect(() => sweepDrafts(), []);
 
   // The draft write is debounced (a keystroke must not hit localStorage), is
   // flushed on unmount / pagehide / hidden so a close or reload keeps the text,
@@ -162,12 +191,18 @@ export function Composer(props: ComposerProps) {
     }
   };
 
-  const attach = async (file: File): Promise<void> => {
+  // `dropped` = further pictures of the same multi-file paste that are NOT attached.
+  const attach = async (file: File, dropped = 0): Promise<void> => {
+    if (attaching.current || busy) {
+      onCaption(CAPTION.attachBusy);
+      return;
+    }
     const refusal = uploadRefusal(file);
     if (refusal !== null) {
       toast.err(refusal);
       return;
     }
+    attaching.current = true;
     setBusy(true);
     try {
       const stored = await uploadImage(drive.termId, file);
@@ -176,11 +211,12 @@ export function Composer(props: ComposerProps) {
       if (r.kind === "sent") {
         onTyped?.();
         setChip(imageChip(stored.sha256, stored.mime));
-        onCaption(CAPTION.pastedOnly);
+        onCaption(dropped > 0 ? `${CAPTION.pastedOnly} ${CAPTION.extraDropped(dropped)}` : CAPTION.pastedOnly);
       }
     } catch (e) {
       toast.err(e instanceof DriveError ? e.detail : "Could not send the picture");
     } finally {
+      attaching.current = false;
       setBusy(false);
     }
   };
@@ -217,10 +253,11 @@ export function Composer(props: ComposerProps) {
         onChange={(e) => setText(e.target.value)}
         onPaste={(e) => {
           // A pasted picture (no text on the clipboard) is uploaded like a picked one.
-          const [first] = pastedPictureFiles(e.clipboardData);
+          // One picture at a time: the rest of a multi-file paste is dropped, and the status says so.
+          const [first, ...rest] = pastedPictureFiles(e.clipboardData);
           if (first === undefined) return;
           e.preventDefault();
-          void attach(first);
+          void attach(first, rest.length);
         }}
         onKeyDown={(e) => {
           // A hardware keyboard: Ctrl/Cmd+Enter sends. Plain Enter is a newline.

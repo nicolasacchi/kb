@@ -329,6 +329,53 @@ describe("PhoneTerminal", () => {
     });
   });
 
+  describe("FUMINPHONE a failed full screen says so", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+      delete (document as unknown as Record<string, unknown>).fullscreenEnabled;
+      delete (HTMLElement.prototype as unknown as Record<string, unknown>).requestFullscreen;
+    });
+
+    it("a rejected requestFullscreen shows a caption instead of failing silently, and a later tap clears it", async () => {
+      vi.useFakeTimers();
+      Object.defineProperty(document, "fullscreenEnabled", { configurable: true, value: true });
+      (HTMLElement.prototype as unknown as Record<string, unknown>).requestFullscreen = vi.fn(async () => {
+        throw new Error("denied");
+      });
+      mount(fakeTerm(true).term);
+      expect(q('[data-testid="kb-term-phone-fs-note"]')).toBeNull();
+      click('[data-testid="kb-term-phone-fullscreen"]');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      const note = q('[data-testid="kb-term-phone-fs-note"]');
+      expect(note).not.toBeNull();
+      expect(note.textContent).toMatch(/full screen/i);
+      expect(note.getAttribute("role")).toBe("status");
+      click('[data-testid="kb-term-phone-fullscreen"]');
+      expect(q('[data-testid="kb-term-phone-fs-note"]')).toBeNull();
+    });
+
+    it("no caption when the browser did enter full screen", async () => {
+      vi.useFakeTimers();
+      Object.defineProperty(document, "fullscreenEnabled", { configurable: true, value: true });
+      let fsEl: Element | null = null;
+      Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => fsEl });
+      (HTMLElement.prototype as unknown as Record<string, unknown>).requestFullscreen = vi.fn(async function (this: Element) {
+        fsEl = this;
+        document.dispatchEvent(new Event("fullscreenchange"));
+      });
+      mount(fakeTerm(true).term);
+      click('[data-testid="kb-term-phone-fullscreen"]');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      expect(q('[data-testid="kb-term-phone-fs-note"]')).toBeNull();
+      fsEl = null;
+      delete (document as unknown as Record<string, unknown>).fullscreenElement;
+    });
+  });
+
   it("carries ONE visible title: the bar's (the Sheet's is name-only)", () => {
     mount(fakeTerm(true).term);
     expect(q(".kb-term-phone__title").textContent).toBe("Terminal");
