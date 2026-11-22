@@ -2070,7 +2070,10 @@ fn a_refused_window_size_take_keeps_watching_and_takes_nothing_more() {
         201,
         48,
     );
-    std::thread::sleep(Duration::from_millis(1_200));
+    let up = Instant::now() + Duration::from_millis(1_200);
+    while rig.runner.recorded_takes().is_empty() && Instant::now() < up {
+        std::thread::sleep(Duration::from_millis(20));
+    }
     assert_eq!(
         rig.runner.recorded_takes().len(),
         1,
@@ -2086,13 +2089,25 @@ fn a_refused_window_size_take_keeps_watching_and_takes_nothing_more() {
     while rig.runner.recorded_take_attempts().len() < 2 && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
     }
-    std::thread::sleep(Duration::from_millis(1_000));
     let attempts = rig.runner.recorded_take_attempts();
     assert_eq!(
         attempts.len(),
         2,
         "the SIGWINCH take was attempted once (and refused): {attempts:?}"
     );
+    // A second resize well inside the 2 s owner poll: the refusal itself must
+    // have switched the attach to watching (the poll has not run yet), so the
+    // SIGWINCH arm is disabled and no third take is attempted.
+    resize_pty(&proc.0, 90, 20);
+    kill_pid(proc.0.child.id(), 28);
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(
+        rig.runner.recorded_take_attempts().len(),
+        2,
+        "a refusal makes the attach watch at once: {:?}",
+        rig.runner.recorded_take_attempts()
+    );
+    std::thread::sleep(Duration::from_millis(1_000));
     assert_eq!((attempts[1].0, attempts[1].1), (100, 24));
     assert!(!attempts[1].3, "the window-size take is never forced");
     assert_eq!(
