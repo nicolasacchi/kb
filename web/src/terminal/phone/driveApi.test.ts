@@ -150,25 +150,51 @@ describe("sendKey and sendText: the one guard", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("pastes then enters, in that order", async () => {
-    const r = await sendText(mkDrive(), "hello", { enter: true });
-    expect(r).toEqual({ kind: "sent" });
-    expect(calls.map((c) => c.url)).toEqual(["/api/terms/abcd1234/paste", "/api/terms/abcd1234/enter"]);
-  });
-
   it("without enter, only pastes", async () => {
     await sendText(mkDrive(), "/compact", { enter: false });
     expect(calls.map((c) => c.url)).toEqual(["/api/terms/abcd1234/paste"]);
   });
 
-  it("an Enter refusal after a good paste is a result, not a throw", async () => {
-    replies.push(json(200, {}));
-    replies.push(json(409, { type: "urn:kb:errors:term-blocked", detail: "the bound session is blocked" }));
+  it("a failed paste throws (nothing was written)", async () => {
+    replies.push(json(422, { type: "urn:kb:errors:terminal-refused", detail: "multi-line paste refused" }));
+    await expect(sendText(mkDrive(), "a\nb", { enter: true })).rejects.toBeInstanceOf(DriveError);
+    expect(calls).toHaveLength(1);
+  });
+});
+
+describe("sendText with enter is ONE round trip (FUPHONESEND)", () => {
+  it("posts a single paste carrying enter:true and no separate enter request", async () => {
+    replies.push(json(200, { paste_only: false, bracketed: true, entered: true }));
     const r = await sendText(mkDrive(), "hello", { enter: true });
-    expect(r).toEqual({ kind: "pasted-not-sent", detail: "the bound session is blocked", conflict: true });
+    expect(r).toEqual({ kind: "sent" });
+    expect(calls.map((c) => c.url)).toEqual(["/api/terms/abcd1234/paste"]);
+    expect(body(calls[0])).toEqual({ text: "hello", enter: true, viewer: "ws-abc1234567" });
   });
 
-  it("a failed paste throws (nothing was written)", async () => {
+  it("without enter the body carries no enter key", async () => {
+    await sendText(mkDrive(), "/compact", { enter: false });
+    expect(body(calls[0])).toEqual({ text: "/compact", viewer: "ws-abc1234567" });
+  });
+
+  it("entered:false in a 200 is pasted-not-sent, conflict when the refusal was 409", async () => {
+    replies.push(
+      json(200, {
+        paste_only: false,
+        bracketed: true,
+        entered: false,
+        enter_error: { status: 409, type: "urn:kb:errors:term-blocked", detail: "the bound session is blocked" },
+      }),
+    );
+    const r = await sendText(mkDrive(), "hello", { enter: true });
+    expect(r).toEqual({ kind: "pasted-not-sent", detail: "the bound session is blocked", conflict: true });
+    replies.push(
+      json(200, { paste_only: false, bracketed: true, entered: false, enter_error: { status: 503, type: "x", detail: "runner down" } }),
+    );
+    const r2 = await sendText(mkDrive(), "hello", { enter: true });
+    expect(r2).toEqual({ kind: "pasted-not-sent", detail: "runner down", conflict: false });
+  });
+
+  it("a failed combined request throws (nothing was written)", async () => {
     replies.push(json(422, { type: "urn:kb:errors:terminal-refused", detail: "multi-line paste refused" }));
     await expect(sendText(mkDrive(), "a\nb", { enter: true })).rejects.toBeInstanceOf(DriveError);
     expect(calls).toHaveLength(1);

@@ -138,11 +138,19 @@ export type SendTextResult =
   /** The text is in the pane but the Enter did not go (`conflict`: the runner refused it with 409). */
   | { kind: "pasted-not-sent"; detail: string; conflict: boolean };
 
+/** What `POST …/paste` answers; `entered`/`enter_error` only when the request asked for Enter. */
+interface PasteReply {
+  entered?: boolean;
+  enter_error?: { status?: number; type?: string; detail?: string };
+}
+
 /**
- * Paste `text`; with `enter`, then press Enter. The Claude guard asks BEFORE any
- * request. A paste failure throws (nothing was written); an Enter failure after
- * a successful paste is a result, not a throw, because the text already is in
- * the pane and the caller must not offer a resend.
+ * Paste `text`; with `enter`, then press Enter, in ONE request (`paste` with
+ * `enter: true`: the server pastes, waits out the quiet guard and sends the
+ * Enter, so a send costs one round trip instead of two). The Claude guard
+ * asks BEFORE any request. A paste failure throws (nothing was written); an
+ * Enter refusal after a successful paste is a result, not a throw, because the
+ * text already is in the pane and the caller must not offer a resend.
  */
 export async function sendText(
   d: Drive,
@@ -151,15 +159,18 @@ export async function sendText(
 ): Promise<SendTextResult> {
   const copy = needsConfirm(d.harness, { kind: "text", text });
   if (copy !== null && !(await d.confirm(copy))) return { kind: "declined" };
-  await paste(d, text);
-  if (!opts.enter) return { kind: "sent" };
-  try {
-    await pressEnter(d);
-  } catch (e) {
-    if (e instanceof DriveError) {
-      return { kind: "pasted-not-sent", detail: e.detail, conflict: e.status === 409 };
-    }
-    throw e;
+  const reply = await postJson<PasteReply>(
+    d.termId,
+    "paste",
+    withViewer(opts.enter ? { text, enter: true } : { text }, d.viewer),
+  );
+  if (opts.enter && reply.entered === false) {
+    const e = reply.enter_error;
+    return {
+      kind: "pasted-not-sent",
+      detail: e?.detail ?? "Enter was not sent",
+      conflict: e?.status === 409,
+    };
   }
   return { kind: "sent" };
 }
