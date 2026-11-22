@@ -20,7 +20,7 @@
 // chip, Ctrl/Cmd+C copies only with a selection (else ^C), http(s) links open on
 // Ctrl/Cmd-click, and Jump to latest while scrolled up.
 //
-// T17 — on a phone (`useIsMobile()`) the SAME terminal, socket and
+// T17 — on a phone (`usePhonePanel()`) the SAME terminal, socket and
 // reconnect state render through `PhoneTerminal` inside a `Sheet`. The
 // instance lives here, above the mobile/desktop switch, so a rotation
 // across the breakpoint re-parents the xterm element and never
@@ -33,7 +33,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Sheet, type Detent } from "@kb/ui/Sheet";
-import { useIsMobile } from "../hooks/useIsMobile";
+import { usePhonePanel } from "../hooks/useIsMobile";
+import { useSheetHistory } from "./phone/useSheetHistory";
 import { Terminal, type IFunctionIdentifier } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { ImageAddon } from "@xterm/addon-image";
@@ -97,7 +98,7 @@ function flattenParams(params: (number | number[])[]): number[] {
 }
 
 export function TerminalPanel(props: TerminalPanelProps) {
-  const isMobile = useIsMobile();
+  const isMobile = usePhonePanel();
   const isMobileRef = useRef(isMobile);
   isMobileRef.current = isMobile;
   // Whether the live terminal was created for a phone (renderer, scrollback).
@@ -662,6 +663,9 @@ export function TerminalPanel(props: TerminalPanelProps) {
     // Leave full screen first (native, key lock, overlay): the effect cleanup
     // repeats it on unmount, so a closed panel never leaves one behind.
     fs.exit();
+    // On iOS the sheet's own history entry is popped first; the popstate then
+    // re-enters here with the entry gone and closes for real.
+    if (isMobileRef.current && popSheetEntry()) return;
     if (props.onClose) {
       props.onClose();
       return;
@@ -677,6 +681,10 @@ export function TerminalPanel(props: TerminalPanelProps) {
     setTermInst(null);
     setGrid(null);
   };
+
+  // iOS Safari has no CloseWatcher: the sheet takes one history entry of its
+  // own so edge-swipe Back closes it instead of leaving the page.
+  const popSheetEntry = useSheetHistory(isMobile, closePanel);
 
   // Closing Find hands the keyboard back to the terminal.
   const closeFind = (): void => {

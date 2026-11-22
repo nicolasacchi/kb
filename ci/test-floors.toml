@@ -15,7 +15,7 @@
 #   nextest 3962 run (9 skipped)        web vitest 1451     web-code vitest 3162
 
 [e2e]
-executed = 530
+executed = 550
 
 [code-e2e]
 executed = 315
@@ -57,4 +57,4 @@ executed = 30
 # fully green run. FXTESTS: 30 executed on the green run -> 30 - 30%5 - 5 = 25
 # (the witness formula; the run was too close to the floor to print it).
 [term-e2e]
-executed = 35
+executed = 50
