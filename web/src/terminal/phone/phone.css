@@ -244,3 +244,11 @@
     display: none;
   }
 }
+
+/* POLISH2 — landscape: the state caption row costs a line the grid needs. */
+@media (pointer: coarse) and (orientation: landscape) and (max-height: 599px) {
+  .kb-term-phone__sub {
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+}

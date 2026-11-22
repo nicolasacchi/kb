@@ -58,6 +58,8 @@ export interface ComposerProps {
   caption: string | null;
   onCaption: (text: string | null) => void;
   onTyped?: () => void;
+  /** POLISH2 — the key bar's reply host in a landscape phone (see QuickReplies). */
+  repliesHost?: HTMLElement | null;
 }
 
 const EXT: Record<string, string> = {
@@ -73,7 +75,7 @@ export function imageChip(sha256: string, mime: string): string {
 }
 
 export function Composer(props: ComposerProps) {
-  const { drive, bracketPaste, blocked, bound, caption, onCaption, onTyped } = props;
+  const { drive, bracketPaste, blocked, bound, caption, onCaption, onTyped, repliesHost = null } = props;
   const [text, setText] = useState(() => loadDraft(drive.termId));
   const [busy, setBusy] = useState(false);
   const [chip, setChip] = useState<string | null>(null);
@@ -200,7 +202,7 @@ export function Composer(props: ComposerProps) {
         void send();
       }}
     >
-      <QuickReplies onSend={(t) => void send(t)} disabled={busy} />
+      <QuickReplies onSend={(t) => void send(t)} disabled={busy} host={repliesHost} />
       <textarea
         className="kb-drive__input"
         data-testid="kb-drive-input"

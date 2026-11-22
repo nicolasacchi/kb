@@ -7,7 +7,7 @@
 // `../takeGrid.ts`: the web outranks a local attach, so it asks only for an
 // owner of any other class), and Release gives the grid back.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useConfirm } from "../../components/ConfirmProvider";
 import type { TermRow } from "../../api/terms";
@@ -20,6 +20,24 @@ import { releaseGrid, takeGrid, type GridCtx } from "../takeGrid";
 import { fitDims, type PhoneMeasure } from "./fitPhone";
 import { KeyBar } from "./KeyBar";
 import "./drive.css";
+
+/** A phone held in landscape (POLISH2): keep in sync with the media query in drive.css and phone.css. */
+export const LANDSCAPE_PHONE_QUERY = "(pointer: coarse) and (orientation: landscape) and (max-height: 599px)";
+
+function useLandscapePhone(): boolean {
+  const mq = (): MediaQueryList | null =>
+    typeof window !== "undefined" && typeof window.matchMedia === "function" ? window.matchMedia(LANDSCAPE_PHONE_QUERY) : null;
+  const [on, setOn] = useState<boolean>(() => mq()?.matches ?? false);
+  useEffect(() => {
+    const m = mq();
+    if (!m) return;
+    const f = (): void => setOn(m.matches);
+    f();
+    m.addEventListener("change", f);
+    return () => m.removeEventListener("change", f);
+  }, []);
+  return on;
+}
 
 export interface DriveDockProps {
   termId: string;
@@ -52,6 +70,9 @@ export function DriveDock(props: DriveDockProps) {
   const { rows: live } = useLiveSessions();
   const [caption, setCaption] = useState<string | null>(null);
   const [fitting, setFitting] = useState(false);
+  // POLISH2: in a landscape phone the quick replies join the key row.
+  const landscape = useLandscapePhone();
+  const [repliesHost, setRepliesHost] = useState<HTMLElement | null>(null);
 
   const drive = useMemo<Drive>(() => ({ termId, harness, viewer, confirm }), [termId, harness, viewer, confirm]);
   const liveRow = live.find((r) => r.term === termId);
@@ -138,7 +159,7 @@ export function DriveDock(props: DriveDockProps) {
         </div>
       )}
       <ChoiceBar drive={drive} onTyped={onTyped} />
-      <KeyBar drive={drive} onCaption={setCaption} onTyped={onTyped} />
+      <KeyBar drive={drive} onCaption={setCaption} onTyped={onTyped} repliesRef={setRepliesHost} />
       <Composer
         drive={drive}
         bracketPaste={row?.bracket_paste_flag ?? null}
@@ -147,6 +168,7 @@ export function DriveDock(props: DriveDockProps) {
         caption={caption}
         onCaption={setCaption}
         onTyped={onTyped}
+        repliesHost={landscape ? repliesHost : null}
       />
     </div>
   );

@@ -23,6 +23,8 @@ export interface KeyBarProps {
   onCaption: (text: string | null) => void;
   /** A key or menu entry went to the session (the OSC 52 typing clock). */
   onTyped?: () => void;
+  /** POLISH2 — receives the span the landscape quick replies render into (end of the key row). */
+  repliesRef?: (el: HTMLElement | null) => void;
 }
 
 /** More keys sit past the right edge of the scrolling row (a pixel of slack). */
@@ -61,7 +63,7 @@ function NoFocusButton(props: {
   );
 }
 
-export function KeyBar({ drive, onCaption, onTyped }: KeyBarProps) {
+export function KeyBar({ drive, onCaption, onTyped, repliesRef }: KeyBarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menu = slashMenuFor(drive.harness);
   // The row scrolls (11 keys do not fit a phone): say so with a fade on the
@@ -76,6 +78,9 @@ export function KeyBar({ drive, onCaption, onTyped }: KeyBarProps) {
     if (!keysEl || typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(measureMore);
     ro.observe(keysEl);
+    // The reply host grows when the chips land in it (or the list is edited).
+    const host = keysEl.querySelector(".kb-drive__replies-host");
+    if (host) ro.observe(host);
     return () => ro.disconnect();
   }, [keysEl, measureMore]);
 
@@ -203,6 +208,7 @@ export function KeyBar({ drive, onCaption, onTyped }: KeyBarProps) {
             />
           );
         })}
+        <span className="kb-drive__replies-host" ref={repliesRef} />
       </div>
     </div>
   );

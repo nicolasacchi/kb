@@ -858,6 +858,7 @@ folds away and the key bar and composer stay.
     the pane has not enabled bracketed paste. Text that begins with `/` or `@` is
     pasted and **not** sent (the menu or file picker would take an Enter blindly);
     the operator presses Enter on the key bar.
+  - **Landscape phone** (POLISH2): the quick replies join the key row (one scrolling row) and the composer is one line with the attach button and Send beside it, so the Watch pane keeps at least half the sheet; portrait is unchanged.
   - Enter is never implied. The runner presses it only after the pane has been
     quiet for 400 ms (it gives up after 5 s with `busy`), and the server refuses
     it with 409 while the bound session is blocked.
