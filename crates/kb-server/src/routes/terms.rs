@@ -166,7 +166,8 @@ fn relay(reply: RunnerReply) -> Response<Body> {
 /// codes (`RunnerError::code()`); matching underscore forms here would
 /// make every failure a 502. Every code the runner can emit is pinned
 /// by `runner_err_maps_every_dash_code`.
-pub(crate) fn runner_err(code: &str, message: &str) -> Response<Body> {
+/// The status, problem `type` and detail a runner error code maps to.
+fn runner_err_parts(code: &str, message: &str) -> (StatusCode, &'static str, String) {
     let (status, urn) = match code {
         "invalid-id" | "invalid-harness" | "bad-request" | "bad-viewer" | "bad-input"
         | "bad-key" | "bad-text" | "bad-size" => {
@@ -197,6 +198,11 @@ pub(crate) fn runner_err(code: &str, message: &str) -> Response<Body> {
     } else {
         message.to_string()
     };
+    (status, urn, detail)
+}
+
+pub(crate) fn runner_err(code: &str, message: &str) -> Response<Body> {
+    let (status, urn, detail) = runner_err_parts(code, message);
     no_store(Problem::response(
         urn,
         status,
@@ -622,9 +628,35 @@ pub async fn ticket(
 #[serde(deny_unknown_fields)]
 struct PasteBody {
     text: String,
+    /// FUPHONESEND: press Enter after the paste, in this one request (the
+    /// composer's Send). The runner's Enter guards all apply; a refused
+    /// Enter does not undo the paste (see [`PasteEnterReply`]).
+    #[serde(default)]
+    enter: bool,
     /// T18: the panel's viewer id (the OSC 52 typing clock).
     #[serde(default)]
     viewer: Option<String>,
+}
+
+/// The answer to a paste that asked for Enter: the runner's paste data
+/// plus whether the Enter went. A refused Enter is `entered: false` with
+/// the refusal inside a 200, because the text IS in the pane: the caller
+/// must tell "pasted, not sent" from a failed paste (which is an error
+/// status and wrote nothing).
+#[derive(Serialize)]
+struct PasteEnterReply {
+    #[serde(flatten)]
+    paste: serde_json::Value,
+    entered: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enter_error: Option<EnterRefusal>,
+}
+
+#[derive(Serialize)]
+struct EnterRefusal {
+    status: u16,
+    r#type: &'static str,
+    detail: String,
 }
 
 pub async fn paste(
@@ -664,8 +696,66 @@ pub async fn paste(
         Err(e) => e,
         Ok(reply) => {
             notify_typed(&state, &id, typed_by.as_deref(), &reply).await;
-            relay(reply)
+            match reply {
+                RunnerReply::Ok { data } if parsed.enter => {
+                    let reply = paste_then_enter(&state, &id, data).await;
+                    no_store(axum::Json(reply).into_response())
+                }
+                reply => relay(reply),
+            }
         }
+    }
+}
+
+/// The Enter half of a paste-with-enter: the same gates as `POST …/enter`
+/// (a blocked bound session, then the runner's paste-only / quiet / cap
+/// guards), but a refusal is reported inside the answer instead of failing
+/// the request, since the paste already landed.
+async fn paste_then_enter(
+    state: &Arc<KbHandles>,
+    id: &str,
+    paste: serde_json::Value,
+) -> PasteEnterReply {
+    let refused = |status: StatusCode, r#type: &'static str, detail: String| PasteEnterReply {
+        paste: paste.clone(),
+        entered: false,
+        enter_error: Some(EnterRefusal {
+            status: status.as_u16(),
+            r#type,
+            detail,
+        }),
+    };
+    let term_gate = state
+        .live_registry
+        .term_gate(id, chrono::Utc::now().timestamp());
+    if term_gate.blocked {
+        return refused(
+            StatusCode::CONFLICT,
+            crate::terminal::gate::ERR_TERM_BLOCKED,
+            "the bound session is blocked".to_string(),
+        );
+    }
+    let req = RunnerRequest::Enter {
+        id: id.to_string(),
+        viewer: SPA_VIEWER.to_string(),
+        blocked: false,
+        from_composer: true,
+    };
+    match call(state, &req).await {
+        Ok(RunnerReply::Ok { .. }) => PasteEnterReply {
+            paste: paste.clone(),
+            entered: true,
+            enter_error: None,
+        },
+        Ok(RunnerReply::Err { code, message }) => {
+            let (status, urn, detail) = runner_err_parts(&code, &message);
+            refused(status, urn, detail)
+        }
+        Err(resp) => refused(
+            resp.status(),
+            ERR_TERMINAL_RUNNER_UNAVAILABLE,
+            "terminal runner unavailable".to_string(),
+        ),
     }
 }
 

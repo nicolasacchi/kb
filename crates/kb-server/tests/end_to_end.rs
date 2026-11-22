@@ -26715,6 +26715,8 @@ async fn pretool_beats_on_a_working_session_emit_no_session_state_event() {
 /// `UnixListener` answering by op, with a connection counter.
 struct FakeRunner {
     conns: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Every op the runner saw, in arrival order.
+    ops: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     socket: std::path::PathBuf,
 }
 
@@ -26728,6 +26730,8 @@ fn spawn_fake_runner(
     let listener = tokio::net::UnixListener::bind(&sock).unwrap();
     let conns = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let counter = conns.clone();
+    let ops = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let op_sink = ops.clone();
     tokio::spawn(async move {
         loop {
             let (stream, _) = match listener.accept().await {
@@ -26736,6 +26740,7 @@ fn spawn_fake_runner(
             };
             counter.fetch_add(1, Ordering::SeqCst);
             let replies = replies.clone();
+            let op_sink = op_sink.clone();
             tokio::spawn(async move {
                 let mut line = String::new();
                 let mut reader = tokio::io::BufReader::new(stream);
@@ -26746,6 +26751,7 @@ fn spawn_fake_runner(
                     .ok()
                     .and_then(|v| v.get("op").and_then(|v| v.as_str()).map(String::from))
                     .unwrap_or_default();
+                op_sink.lock().unwrap().push(op.clone());
                 let reply = replies.get(&op).cloned().unwrap_or_else(|| {
                     "{\"status\":\"err\",\"code\":\"not_found\",\"message\":\"no script\"}"
                         .to_string()
@@ -26758,6 +26764,7 @@ fn spawn_fake_runner(
     });
     FakeRunner {
         conns,
+        ops,
         socket: sock,
     }
 }
@@ -27175,6 +27182,111 @@ async fn enter_returns_409_term_blocked_when_the_bound_session_is_blocked() {
             .and_then(|v| v.to_str().ok()),
         Some("unbound")
     );
+}
+
+/// FUPHONESEND — the combined paste+Enter route keeps the blocked-session
+/// 409, a failed paste fails the request, and an Enter-side runner error is
+/// reported inside a 200. Returns (status, body, ops the runner saw).
+async fn paste_enter_probe(
+    paste_reply: &str,
+    enter_reply: &str,
+    block: bool,
+) -> (u16, serde_json::Value, Vec<String>) {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("list".to_string(), runner_list_reply(&["abc123"]));
+    replies.insert(
+        "viewer_open".to_string(),
+        "{\"status\":\"ok\",\"data\":{\"viewer\":\"spa\"}}".to_string(),
+    );
+    replies.insert("paste".to_string(), paste_reply.to_string());
+    replies.insert("enter".to_string(), enter_reply.to_string());
+    let fake_dir = tempfile::tempdir().unwrap();
+    let fake = spawn_fake_runner(fake_dir.path(), replies);
+    let (_tmp, addr) = boot_with_terminal(&fake).await;
+    let client = reqwest::Client::new();
+    let list = get_terms_list(&client, addr).await;
+    assert_eq!(list.status().as_u16(), 200);
+    post_term_beat(
+        &client,
+        addr,
+        "main-1",
+        "start",
+        Some("abc123"),
+        Some(4242),
+        serde_json::json!({}),
+    )
+    .await;
+    if block {
+        post_term_beat(
+            &client,
+            addr,
+            "main-1",
+            "blocked",
+            Some("abc123"),
+            Some(4242),
+            serde_json::json!({"reason": "needs approval", "tool": "Bash"}),
+        )
+        .await;
+    }
+    let resp = client
+        .post(url(addr, "/api/terms/abc123/paste"))
+        .header("Origin", term_origin(addr))
+        .header("x-kb-intent", "terminal")
+        .json(&serde_json::json!({"text": "hello", "enter": true}))
+        .send()
+        .await
+        .unwrap();
+    let status = resp.status().as_u16();
+    let body: serde_json::Value = resp.json().await.unwrap_or_default();
+    let ops = fake.ops.lock().unwrap().clone();
+    (status, body, ops)
+}
+
+const PASTE_OK: &str = "{\"status\":\"ok\",\"data\":{\"paste_only\":false,\"bracketed\":true}}";
+const ENTER_OK: &str = "{\"status\":\"ok\",\"data\":{}}";
+
+#[tokio::test]
+async fn paste_with_enter_on_a_blocked_bound_session_pastes_but_never_enters() {
+    let (status, v, ops) = paste_enter_probe(PASTE_OK, ENTER_OK, true).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(v["entered"], false, "{v}");
+    assert_eq!(v["enter_error"]["status"], 409, "{v}");
+    assert!(
+        v["enter_error"]["type"]
+            .as_str()
+            .unwrap()
+            .ends_with("term-blocked"),
+        "{v}"
+    );
+    assert!(ops.iter().any(|o| o == "paste"), "{ops:?}");
+    assert!(
+        ops.iter().all(|o| o != "enter"),
+        "Enter must never reach a blocked bound session: {ops:?}"
+    );
+    // Control: the same route on an unblocked binding does press Enter.
+    let (status, v, ops) = paste_enter_probe(PASTE_OK, ENTER_OK, false).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(v["entered"], true, "{v}");
+    assert!(ops.iter().any(|o| o == "enter"), "{ops:?}");
+}
+
+#[tokio::test]
+async fn paste_with_enter_whose_paste_fails_is_an_error_status_with_no_enter() {
+    let failed = "{\"status\":\"err\",\"code\":\"multi-line-refused\",\"message\":\"synthetic\"}";
+    let (status, _v, ops) = paste_enter_probe(failed, ENTER_OK, false).await;
+    assert_eq!(status, 422);
+    assert!(ops.iter().any(|o| o == "paste"), "{ops:?}");
+    assert!(ops.iter().all(|o| o != "enter"), "{ops:?}");
+}
+
+#[tokio::test]
+async fn paste_with_enter_maps_an_enter_side_runner_error_inside_a_200() {
+    let busy = "{\"status\":\"err\",\"code\":\"tap-timeout\",\"message\":\"synthetic\"}";
+    let (status, v, ops) = paste_enter_probe(PASTE_OK, busy, false).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(v["entered"], false, "{v}");
+    assert_eq!(v["enter_error"]["status"], 503, "{v}");
+    assert!(ops.iter().any(|o| o == "enter"), "{ops:?}");
 }
 
 /// FUBRANCH — `rewound_turns` on `GET /api/sessions/{id}/view`: a rewound
