@@ -189,6 +189,23 @@ export async function listTerms(signal?: AbortSignal): Promise<TermRow[]> {
 }
 
 /**
+ * End a terminal: `POST /api/terms/{id}/kill`. Operator-intent only (call from
+ * a confirmed click): same gate as `mintTicket` (same-origin Origin, intent
+ * header, no token), no body. A 200 is success even when the holder was
+ * already gone (`exit_code: null`). Non-2xx throws `TermsApiError`. The caller
+ * never marks the terminal ended itself: the exit frame and the `term.ended`
+ * SSE do.
+ */
+export async function killTerm(termId: string, signal?: AbortSignal): Promise<void> {
+  const res = await fetch(`${currentDaemonBase()}/api/terms/${encodeURIComponent(termId)}/kill`, {
+    method: "POST",
+    headers: { Accept: "application/json", [TERMINAL_INTENT_HEADER]: TERMINAL_INTENT_VALUE },
+    signal,
+  });
+  if (!res.ok) throw await termsError(res);
+}
+
+/**
  * The WebSocket URL for a panel. `ws:`/`wss:` is derived from
  * `currentDaemonBase()` (or `location` for a same-origin daemon);
  * `from` is the resume offset, included only when `from > 0`; `epoch`

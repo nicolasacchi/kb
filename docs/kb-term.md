@@ -591,8 +591,9 @@ For a caller the terminal tier admits (`terminal_admitted` on
   it has no live bound terminal. It launches the harness's own resume for that
   session (`resume_sid` is the session id; a bare continue is never sent).
 
-Both send nothing until the click, then open the terminal inline at once. A
-harness in a directory it has never trusted shows its trust prompt before any
+Both send nothing until the click. A launch from `/sessions` opens the terminal
+through the Terminals list below (the URL gets `?term=<id>`); a resume opens it
+inline at once. A harness in a directory it has never trusted shows its trust prompt before any
 hook runs, so the new session may stay unbound until you answer that prompt in
 the terminal itself. While it is unbound the panel says the session appears in
 the list once the harness starts. The page re-reads the existing terminals list
@@ -603,6 +604,33 @@ section. The link is never followed for you, and a harness may resume into a
 different session id than the one you resumed; the link names whichever id the
 row carries. A refused or failed launch (400, 404, 5xx) and a pane that ended
 (with its exit code) are shown as they are.
+
+### The Terminals list, End and `?term=`
+
+For an admitted caller `/sessions` lists every terminal the daemon knows (the
+existing terminals query; it never polls, and the lifecycle events refresh it).
+A row shows the harness, the directory's last segment, the state, the grid and
+its owner, and a link to the bound session, or "unbound" while the harness has
+not answered its trust prompt yet. **Open** mounts the same lazy panel (a phone
+gets the sheet) and puts `?term=<id>` in the URL: a reload, a shared link and
+Back land on the open terminal. Opening adds a history entry; the panel's Close
+replaces it, so Back never reopens a closed sheet. An id that is not a plain
+lowercase token (letters, digits, dash) opens nothing; the server still
+validates the exact id.
+
+**End** (the button on a row, above a desktop panel, in the phone sheet's own
+header row) asks first, naming the harness and directory, then sends one
+`POST /api/terms/{id}/kill` through the terminal gate (same-origin, intent
+header, no token). Cancel sends nothing. The client never marks the terminal
+ended itself: the panel's exit frame and the `term.ended` event do. A failure is
+a toast and leaves the panel and the row as they were. A 200 for a session whose
+holder was already gone counts as success. A **stale** or ended row offers
+**Remove** instead of Open (the same kill, which clears the leftover entry).
+Close stays a plain disconnect.
+
+The phone sheet's header row also carries a **Switch** menu over the other
+live terminals (harness and directory, "waiting" when blocked): one tap
+changes `?term=` to that terminal.
 
 ## Security model
 
@@ -657,7 +685,8 @@ row carries. A refused or failed launch (400, 404, 5xx) and a pane that ended
 ## Desktop panel
 
 The session page's Terminal section opens the panel from an "Open terminal"
-button; the panel's own Close disconnects (it never kills the session). While
+button; the panel's own Close disconnects (it never kills the session; End, above
+the panel, is the separate confirmed kill). While
 the panel is open the page column widens from the 860 px reading column to up to
 1400 px, and every box on the way down may shrink, so a wide grid cannot widen
 the page.
@@ -684,6 +713,12 @@ the page.
     (at most four), so the last result is read from a settled screen and a screen
     that was still the old grid can no longer shrink the font or leave a stale
     "Cropped".
+  - **The grid is measured by its box.** The fit compares the rendered screen's
+    own box with the host, never its scroll extent: xterm keeps its helper
+    textarea inside the screen at the last synced cursor row, so after another
+    client shrinks the grid with the cursor on the last row the extent reaches
+    below the smaller screen. The screen is also clipped to its box in CSS, so
+    that textarea cannot widen the host's scroll area either.
   - **In view.** Opening the panel (Open terminal, a New terminal launch, Resume)
     scrolls its bar to just under the app bar, once per mount, and Fit to window
     does the same (instantly) right before it measures, so the grid it fills is the
