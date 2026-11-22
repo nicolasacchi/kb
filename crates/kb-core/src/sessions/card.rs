@@ -129,8 +129,8 @@ pub struct SessionCard {
     pub live: LiveLane,
     pub slate: SlateLane,
     pub children: ChildrenLane,
-    /// Constant until the kb-term track fills it; the card gives agents
-    /// and the CLI no attach or type surface.
+    /// Registry-derived per request (kb-server `terminal_lane`); the card
+    /// gives agents and the CLI no attach or type surface.
     pub terminal: TerminalLane,
 }
 
