@@ -1387,6 +1387,13 @@ const LIVE_ONLY_TITLE_MAX_CHARS: usize = kb_core::sessions::OUTCOME_WIRE_MAX_CHA
 /// not carried at all. The `terminal` lane is the ONE [`terminal_lane`]
 /// path. Every capture-backed lane is `available: false` with
 /// [`CAPTURE_PENDING_REASON`].
+///
+/// The capture row always wins: [`card`] calls this only when
+/// `find_session` found no capture, so the moment a capture row exists the
+/// same sid answers the full card. The converse is bounded, not prevented:
+/// a registry row that outlives its capture (a deleted capture) keeps
+/// answering `capture_pending` until the registry sweeps it, at most
+/// `live_registry::REGISTRY_TTL_SECS` after its last beat.
 fn live_only_card(
     state: &Arc<KbHandles>,
     peer: Option<std::net::IpAddr>,

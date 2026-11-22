@@ -125,6 +125,10 @@ pub(crate) fn check_origin(headers: &HeaderMap, cfg: &OriginConfig) -> Result<()
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GateRefusal {
     Origin,
+    /// `Sec-Fetch-Site` was present and not `same-origin`/`none`
+    /// ([`gate_read`] only). Same URN and status as [`GateRefusal::Origin`]
+    /// (a cross-site fetch is an origin problem) but its own detail.
+    SecFetchSite,
     Intent,
     Token,
 }
@@ -132,7 +136,7 @@ pub(crate) enum GateRefusal {
 impl GateRefusal {
     pub(crate) fn urn(self) -> &'static str {
         match self {
-            GateRefusal::Origin => ERR_TERMINAL_ORIGIN_REFUSED,
+            GateRefusal::Origin | GateRefusal::SecFetchSite => ERR_TERMINAL_ORIGIN_REFUSED,
             GateRefusal::Intent => ERR_TERMINAL_INTENT_REQUIRED,
             GateRefusal::Token => ERR_TERMINAL_TOKEN_REFUSED,
         }
@@ -141,6 +145,9 @@ impl GateRefusal {
     pub(crate) fn detail(self) -> &'static str {
         match self {
             GateRefusal::Origin => "terminal routes require an exact parent or same-host Origin",
+            GateRefusal::SecFetchSite => {
+                "terminal GET routes refuse a request whose Sec-Fetch-Site is not same-origin or none"
+            }
             GateRefusal::Intent => "terminal routes require `X-Kb-Intent: terminal`",
             GateRefusal::Token => "token-authenticated callers are refused on terminal routes",
         }
@@ -314,7 +321,7 @@ pub(crate) async fn gate_read(
             .to_str()
             .is_ok_and(|v| v == "same-origin" || v == "none");
         if !ok {
-            return Err(Problem::refusal(GateRefusal::Origin));
+            return Err(Problem::refusal(GateRefusal::SecFetchSite));
         }
     }
     if !caller_class_admitted(identity.source, terminal.refuse_token_callers()) {
@@ -410,6 +417,18 @@ mod tests {
             None => std::env::remove_var("KB_DEV_ORIGIN_ANY"),
         }
         assert_eq!(refused, Err(GateRefusal::Origin));
+    }
+
+    #[test]
+    fn sec_fetch_site_refusal_shares_the_origin_urn_with_its_own_detail() {
+        assert_eq!(GateRefusal::SecFetchSite.urn(), GateRefusal::Origin.urn());
+        assert_ne!(
+            GateRefusal::SecFetchSite.detail(),
+            GateRefusal::Origin.detail()
+        );
+        assert!(GateRefusal::SecFetchSite
+            .detail()
+            .contains("Sec-Fetch-Site"));
     }
 
     #[test]
