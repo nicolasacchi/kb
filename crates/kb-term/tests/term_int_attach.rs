@@ -2074,12 +2074,12 @@ fn a_refused_window_size_take_keeps_watching_and_takes_nothing_more() {
         1,
         "the attach took the grid"
     );
+    // The SIGWINCH take must really be attempted (and refused): below we wait
+    // for the runner to see the second request, so the owner poll cannot have
+    // swallowed the SIGWINCH arm.
     rig.runner.set_owner(Some("kb-term"));
     resize_pty(&proc.0, 100, 24);
-    kill_pid(proc.0.child.id(), 28); // SIGWINCH
-                                     // The SIGWINCH take must really be attempted (and refused): wait for the
-                                     // runner to see the second request, so the owner poll cannot have
-                                     // swallowed the SIGWINCH arm.
+    kill_pid(proc.0.child.id(), 28);
     let deadline = Instant::now() + Duration::from_millis(1_800);
     while rig.runner.recorded_take_attempts().len() < 2 && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
