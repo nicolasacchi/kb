@@ -497,8 +497,9 @@ redeploy CONFIG:
 # nothing here uses a second instance), so there's exactly one process to
 # find and replace. kb-code-cli has no `daemon stop`-equivalent verb (no
 # process-lifecycle commands at all — see `kb-code --help`), so the running
-# instance is found and killed by matching its exact binary path instead of
-# a pidfile.
+# instance is found by the executable its process runs (/proc/<pid>/exe)
+# instead of a pidfile, however it was started (bare `kb-code-server` off
+# PATH, the ~/.local/bin symlink, or the full target/release path).
 #   just redeploy-code
 redeploy-code:
     #!/usr/bin/env bash
@@ -520,11 +521,27 @@ redeploy-code:
     KBC="$(pwd)/target/release/kb-code-server"
     SPA_DIST="$(pwd)/web-code/dist"
     echo ">>> stopping kb-code-server"
-    # `-x` (exact cmdline match, not `redeploy`'s trailing-\$-anchor-only
-    # substring match) so a future second instance started with `--config`
-    # for isolation — the recipe comment above admits nothing today uses
-    # this, but the flag exists — is never caught by this pattern too.
-    pkill -TERM -f -x -- "$KBC" 2>/dev/null || true
+    # Match the running server by the EXECUTABLE its process runs, not by its
+    # command line. The old `pkill -f -x "$KBC"` matched only a server
+    # started by its full target/release path; one started as bare
+    # `kb-code-server` off PATH (argv[0] is then just the name) survived, kept
+    # :4747, and the replacement died on "Address already in use" while the
+    # recipe still printed "started" (2026-11-23). /proc/<pid>/exe resolves
+    # the ~/.local/bin symlink and reads "<path> (deleted)" once the cargo
+    # build above has replaced the file, so the suffix is stripped before
+    # comparing. Only an instance with NO arguments is matched, so a second
+    # instance started with `--config` for isolation is still never caught.
+    KBC_REAL="$(readlink -f "$KBC")"
+    kbc_pids() {
+      local pid exe argc
+      for pid in $(pgrep -x kb-code-server || true); do
+        exe="$(readlink "/proc/$pid/exe" 2>/dev/null)" || continue
+        [ "${exe% (deleted)}" = "$KBC_REAL" ] || continue
+        argc="$(tr -cd '\0' <"/proc/$pid/cmdline" 2>/dev/null | wc -c)" || continue
+        [ "$argc" -eq 1 ] || continue
+        echo "$pid"
+      done
+    }
     # Give the graceful TERM a window, ESCALATE to -9 only if it's still
     # alive after that, then wait AGAIN and confirm departure before
     # starting a replacement. kb-code-server has no pidfile/stale-pid
@@ -532,16 +549,27 @@ redeploy-code:
     # standing between a clean handoff and two processes fighting over
     # :4747 — unlike a naive "kill -9 unconditionally right after TERM",
     # this still gives an in-flight request a chance to drain first.
-    for _ in $(seq 1 20); do
-      pgrep -f -x -- "$KBC" >/dev/null 2>&1 || break
-      sleep 0.3
-    done
-    if pgrep -f -x -- "$KBC" >/dev/null 2>&1; then
-      pkill -9 -f -x -- "$KBC" 2>/dev/null || true
+    mapfile -t pids < <(kbc_pids)
+    if [ "${#pids[@]}" -gt 0 ]; then
+      echo "    stopping pid(s) ${pids[*]}"
+      kill -TERM "${pids[@]}" 2>/dev/null || true
       for _ in $(seq 1 20); do
-        pgrep -f -x -- "$KBC" >/dev/null 2>&1 || break
+        [ -n "$(kbc_pids)" ] || break
         sleep 0.3
       done
+      mapfile -t pids < <(kbc_pids)
+      if [ "${#pids[@]}" -gt 0 ]; then
+        echo "    still alive after TERM, sending KILL to ${pids[*]}"
+        kill -9 "${pids[@]}" 2>/dev/null || true
+        for _ in $(seq 1 20); do
+          [ -n "$(kbc_pids)" ] || break
+          sleep 0.3
+        done
+      fi
+    fi
+    if [ -n "$(kbc_pids)" ]; then
+      echo "!!! kb-code-server pid(s) $(kbc_pids | tr '\n' ' ')survived KILL — not starting a second one" >&2
+      exit 1
     fi
     echo ">>> starting fresh kb-code-server"
     log="/tmp/kb-code-server.log"
