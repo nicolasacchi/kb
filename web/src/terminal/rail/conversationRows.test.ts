@@ -50,6 +50,7 @@ describe("freshness", () => {
   it("parses unix seconds out of capture_gen", () => {
     expect(captureMtime(`${T}-12`)).toBe(T);
     expect(captureMtime("garbage")).toBeNull();
+    expect(captureMtime("0-5")).toBeNull();
     expect(captureMtime("12-")).toBeNull();
   });
   it("scales just now / minutes / hours / days at the boundaries", () => {

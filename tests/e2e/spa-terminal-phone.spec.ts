@@ -1172,7 +1172,7 @@ test.describe("BSHELL phone tab sheet @phone", () => {
     await expect(page.locator('[data-testid="conv-rail"]')).toHaveCount(0);
     await handle.click();
     await expect(handle).toHaveAttribute("aria-expanded", "true");
-    await expect(page.locator('[data-testid="term-sheet"] [role="tab"]')).toHaveCount(3);
+    await expect(page.locator('[data-testid="term-sheet"] [role="tab"]')).toHaveCount(7);
     await expect(page.locator('[data-testid="conv-rail"]')).toBeVisible();
     await handle.click();
     await expect(page.locator('[data-testid="conv-rail"]')).toHaveCount(0);

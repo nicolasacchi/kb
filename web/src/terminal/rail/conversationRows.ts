@@ -27,14 +27,15 @@ export function excerpt(text: string, max: number = ANSWER_EXCERPT_CHARS): strin
 }
 
 /**
- * The capture's file mtime (unix SECONDS), parsed from the server's
- * `capture_gen` (`"{mtime_unix}-{turns_total}"`). null when unparsable.
+ * The session's last-event time (unix SECONDS, `sessions.ended_at`; the
+ * capture file mtime only when no event time exists), parsed from the
+ * server's `capture_gen` (`"{time}-{turns_total}"`). null when unparsable or 0.
  */
 export function captureMtime(captureGen: string): number | null {
   const m = /^(\d+)-\d+$/.exec(captureGen);
   if (!m) return null;
   const n = Number(m[1]);
-  return Number.isSafeInteger(n) ? n : null;
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
 }
 
 /** "As of last capture, N min ago" with hour/day scaling; never claims liveness. */

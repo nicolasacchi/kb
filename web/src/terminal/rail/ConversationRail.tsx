@@ -141,7 +141,7 @@ export function ConversationRail(): ReactElement {
       </div>
     );
   }
-  if (q.isError || !q.data) {
+  if (!q.data) {
     return (
       <div className="kb-convrail" data-testid="conv-rail">
         <StateCard
@@ -182,6 +182,7 @@ export function ConversationRail(): ReactElement {
     );
   }
   const shown = filterRows(rows, filter);
+  const stale = q.isError;
   const win = windowCaption(conversation.total, rows.length);
   const rel = detail?.source_relative;
 
@@ -207,6 +208,11 @@ export function ConversationRail(): ReactElement {
           {freshnessText(conversation.capture_gen, now)}
         </p>
         <p className="kb-convrail__hint">{LIVE_CAPTURE_HINT}</p>
+        {stale ? (
+          <p className="kb-convrail__hint" data-testid="conv-stale" role="status">
+            Refresh failed; showing the last loaded turns.
+          </p>
+        ) : null}
         {win ? <p className="kb-convrail__hint" data-testid="conv-window">{win}</p> : null}
       </div>
       {shown.length === 0 ? (

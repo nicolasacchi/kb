@@ -176,4 +176,21 @@ describe("ConversationRail", () => {
     fireEvent.click(screen.getByText("Retry"));
     expect(await screen.findAllByTestId("conv-row")).toHaveLength(3);
   });
+
+  it("a failed refetch keeps the rows and adds a stale caption", async () => {
+    mockFetch(200);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <TermRailContext.Provider value={{ termId: "t1", harness: "claude", sid: "sid-1" }}>
+          <ConversationRail />
+        </TermRailContext.Provider>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findAllByTestId("conv-row")).toHaveLength(3);
+    mockFetch(500, {});
+    await qc.invalidateQueries({ queryKey: ["sessions", "conversation"] });
+    expect(await screen.findByTestId("conv-stale")).toBeTruthy();
+    expect(screen.getAllByTestId("conv-row")).toHaveLength(3);
+  });
 });
