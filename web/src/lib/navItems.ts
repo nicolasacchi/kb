@@ -36,6 +36,10 @@ export function underPath(pathname: string, base: string): boolean {
   return pathname === base || pathname.startsWith(`${base}/`);
 }
 
+// Client-derived state the optional `badge` / `visible` fields read. Both come
+// from queries the SPA already runs (never a new fetch); see useNavState.
+export type NavState = { terminalAdmitted: boolean; blockedTerms: number };
+
 export type NavItem = {
   id: NavId;
   label: string;
@@ -45,7 +49,37 @@ export type NavItem = {
   isActive: (pathname: string) => boolean;
   // Preserve existing e2e selectors when a door grows a test hook.
   testid?: string;
+  // Optional attention count: a number or a function of NavState. Hidden at 0.
+  badge?: number | ((s: NavState) => number);
+  // Optional visibility; absent = visible. A hidden door is absent from every
+  // surface (strip, mobile list, palette) and never lights.
+  visible?: boolean | ((s: NavState) => boolean);
+  // Optional Cmd+K row for the door.
+  cmdk?: { label: string; hint: string; kbd?: string };
 };
+
+export type ResolvedNavItem = NavItem & { badge: number };
+
+function normaliseBadge(n: unknown): number {
+  return typeof n === "number" && Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+/// The ONE resolver every nav surface reads: drops hidden items, normalises
+/// badges to integers >= 0. Pure; order preserved; input not mutated.
+export function resolveNavItems(
+  items: NavItem[],
+  s: NavState,
+): ResolvedNavItem[] {
+  const out: ResolvedNavItem[] = [];
+  for (const item of items) {
+    const v = item.visible;
+    const shown = v === undefined ? true : typeof v === "function" ? v(s) : v;
+    if (!shown) continue;
+    const b = typeof item.badge === "function" ? item.badge(s) : item.badge;
+    out.push({ ...item, badge: normaliseBadge(b) });
+  }
+  return out;
+}
 
 export const NAV_ITEMS: NavItem[] = [
   {
@@ -98,8 +132,11 @@ export const NAV_ITEMS: NavItem[] = [
 ];
 
 /// The door that lights for `pathname`, or null (settings, inbox, anchors…).
-export function matchActiveNavItem(pathname: string): NavItem | null {
-  return NAV_ITEMS.find((item) => item.isActive(pathname)) ?? null;
+export function matchActiveNavItem(
+  pathname: string,
+  items: NavItem[] = NAV_ITEMS,
+): NavItem | null {
+  return items.find((item) => item.isActive(pathname)) ?? null;
 }
 
 // ── sub-nav rows ──────────────────────────────────────────────────────────

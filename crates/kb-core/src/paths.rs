@@ -231,6 +231,23 @@ impl KbPaths {
         self.state.join("saved-queries.json")
     }
 
+    /// `<state>/term-prompts/` — the kbt2 PQSTORE per-project prompt-queue
+    /// ledgers (`kb-term-prompts/1`), one `<slug>.json` each. Daemon-wide
+    /// (keyed on the project slug, like `slates/`), outside every kb's
+    /// source root so the indexer can never see it.
+    pub fn term_prompts_dir(&self) -> PathBuf {
+        self.state.join("term-prompts")
+    }
+
+    /// `<state>/term-prompts/<slug>.json` — one project's prompt queue.
+    /// The [`SlateSlug`] grammar (`[a-z0-9_-]{1,64}`) is what keeps a
+    /// request-supplied project name from ever reaching a path join as
+    /// anything but a flat file name.
+    pub fn term_prompts_file(&self, slug: &SlateSlug) -> PathBuf {
+        self.term_prompts_dir()
+            .join(format!("{}.json", slug.as_str()))
+    }
+
     /// `<state>/tombstone-era.json` — MI-W2.4c EPOCH HONESTY marker.
     /// Written ONCE, the first time this daemon process observes it's
     /// absent (`kb_server::state::ensure_tombstone_era`, called at
@@ -391,6 +408,12 @@ impl KbPaths {
             member(
                 "slates",
                 self.state.join("slates"),
+                Daemon,
+                Persistent(Copy),
+            ),
+            member(
+                "term-prompts",
+                self.term_prompts_dir(),
                 Daemon,
                 Persistent(Copy),
             ),
@@ -715,6 +738,42 @@ mod tests {
             tmp.path()
                 .join("state/smoke/canon/.attachments/abc123def456/_manifest.json")
         );
+    }
+
+    /// kbt2 PQSTORE — the prompt-queue dir is a daemon-scope persistent
+    /// member (so backup packs it), sits under `<state>/` but outside every
+    /// kb's own state dir (so `kb reset`, which only removes entries of
+    /// `<state>/<kb>/`, leaves it alone, exactly like `slates/`), and a
+    /// project file is a flat `<slug>.json` inside it.
+    #[test]
+    fn term_prompts_member_is_daemon_persistent_and_outside_every_kb_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = KbPaths::rooted_at(tmp.path(), "smoke");
+        let kb = KbName::new("canon").unwrap();
+        let slug = SlateSlug::new("proj").unwrap();
+        assert_eq!(
+            paths.term_prompts_dir(),
+            tmp.path().join("state/smoke/term-prompts")
+        );
+        assert_eq!(
+            paths.term_prompts_file(&slug),
+            tmp.path().join("state/smoke/term-prompts/proj.json")
+        );
+        let members = paths.state_members(&kb);
+        let m = members
+            .iter()
+            .find(|m| m.name == "term-prompts")
+            .expect("term-prompts must be registered");
+        assert_eq!(m.scope, StateScope::Daemon);
+        assert!(m.is_persistent());
+        assert_eq!(m.path, paths.term_prompts_dir());
+        // `kb reset` removes only lance, index.db(+wal/shm) and `.review`
+        // of ONE kb; none of those can contain the prompt queue.
+        assert!(!paths.term_prompts_dir().starts_with(paths.kb_state(&kb)));
+        // Nor does it sit under a kb source root (the indexer cannot see it).
+        assert!(!paths
+            .term_prompts_dir()
+            .starts_with(tmp.path().join("corpus")));
     }
 
     #[test]
