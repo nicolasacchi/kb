@@ -57,6 +57,7 @@ export const DEFAULT_ICON_SIZES = {
   Brain: 14,
   Warn: 14,
   Terminal: 14,
+  TerminalHub: 14,
   Comment: 14,
   Plus: 14,
   Trash: 14,
@@ -366,6 +367,14 @@ export function createIconSet(overrides: IconSizeOverrides = {}) {
         <rect x="1.5" y="2.5" width="11" height="9" rx="1.2" />
         <path d="M3.5 5.5l1.6 1.5-1.6 1.5" />
         <path d="M6.8 9.2h3" />
+      </svg>
+    ),
+    TerminalHub: (p: P) => (
+      <svg {...base(sz("TerminalHub"))} {...p} strokeLinecap="round" strokeLinejoin="round">
+        <rect x="4.5" y="1.5" width="10" height="8" rx="1.2" />
+        <path d="M1.5 5v7.3a1.2 1.2 0 0 0 1.2 1.2H11" />
+        <path d="M7 4.2l1.6 1.3L7 6.8" />
+        <path d="M10 7h2.4" />
       </svg>
     ),
     Comment: (p: P) => (

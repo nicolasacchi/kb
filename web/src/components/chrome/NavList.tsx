@@ -1,6 +1,7 @@
 import { Link, useLocation } from "react-router-dom";
 import { Icon } from "@kb/ui/icons";
-import { NAV_ITEMS, withKb } from "../../lib/navItems";
+import { withKb } from "../../lib/navItems";
+import { useNavItems } from "../../hooks/useNavState";
 import { useExplicitKb } from "../../hooks/useActiveKb";
 import { useAnchors } from "../../hooks/useAnchors";
 import { useInbox } from "../../hooks/useInbox";
@@ -20,6 +21,7 @@ import { cycleTheme } from "../../api/prefs";
 export default function NavList({ onNavigate }: { onNavigate: () => void }) {
   const loc = useLocation();
   const kb = useExplicitKb();
+  const navItems = useNavItems();
   const onSettings = loc.pathname === "/settings";
   const onInbox = loc.pathname === "/inbox";
   const onAnchors = loc.pathname === "/anchors";
@@ -37,7 +39,7 @@ export default function NavList({ onNavigate }: { onNavigate: () => void }) {
   return (
     <nav className="kb-navlist" aria-label="views">
       <div className="kb-navlist__sect">Navigate</div>
-      {NAV_ITEMS.map((item) => {
+      {navItems.map((item) => {
         const active = item.isActive(loc.pathname);
         return (
           <Link
@@ -51,10 +53,19 @@ export default function NavList({ onNavigate }: { onNavigate: () => void }) {
               <item.Glyph />
             </span>
             <span className="kb-navlist__label">{item.label}</span>
-            {item.id === "worklog" && slateAttention > 0 && (
+            {item.id === "worklog" && slateAttention > 0 ? (
               <span className="kb-navlist__badge kb-navlist__badge--slate">
                 {slateAttention}
               </span>
+            ) : (
+              item.badge > 0 && (
+                <span
+                  className="kb-navlist__badge kb-navlist__badge--door"
+                  data-testid={`navlist-badge-${item.id}`}
+                >
+                  {item.badge}
+                </span>
+              )
             )}
           </Link>
         );
