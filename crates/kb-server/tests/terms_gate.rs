@@ -2101,11 +2101,14 @@ async fn every_term_prompts_route_enforces_intent_and_origin() {
             assert_problem(&text, "terminal-intent-required");
         }
         // A present wrong Origin (an artifact subdomain, a foreign host).
+        // On a mutation the daemon-wide Origin middleware may answer first
+        // with its own `origin-refused`; either way it is a 403 that never
+        // reaches the handler's store.
         for origin in ["http://x.artifacts.localhost", "https://evil.example"] {
             let resp = build(Some(origin), Some("terminal")).send().await.unwrap();
             assert_eq!(resp.status().as_u16(), 403, "{m} {suffix} origin {origin}");
             let (_s, text) = body_text(resp).await;
-            assert_problem(&text, "terminal-origin-refused");
+            assert_problem(&text, "origin-refused");
         }
         // No Origin: refused on every mutation; a same-origin GET is the
         // one shape that legitimately omits it.

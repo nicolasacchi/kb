@@ -77,7 +77,9 @@ pub(crate) const ERR_PROMPTS_IO: &str = "urn:kb:errors:prompts-io";
 // Wire types
 // ---------------------------------------------------------------------------
 
-/// One queued prompt on the wire. `order` is the index in the queue.
+// One queued prompt on the wire. `order` is the index in the queue.
+// (Plain comments, not doc comments: ts-rs would copy a doc comment into the
+// generated TS file.)
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Clone, Serialize)]
 pub struct PromptItem {
@@ -100,7 +102,7 @@ impl fmt::Debug for PromptItem {
     }
 }
 
-/// One project's whole queue.
+// One project's whole queue.
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Serialize)]
 pub struct PromptList {
@@ -110,7 +112,7 @@ pub struct PromptList {
     pub items: Vec<PromptItem>,
 }
 
-/// `POST` body.
+// `POST` body.
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -126,8 +128,8 @@ impl fmt::Debug for PromptAdd {
     }
 }
 
-/// `PATCH` body: at least one field. `position` is the new index in the
-/// queue, clamped to the last slot.
+// `PATCH` body: at least one field. `position` is the new index in the
+// queue, clamped to the last slot.
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -153,8 +155,8 @@ impl fmt::Debug for PromptPatch {
     }
 }
 
-/// The `term.prompts` SSE payload: the project and its new revision, never
-/// any text. A client refetches the list.
+// The `term.prompts` SSE payload: the project and its new revision, never
+// any text. A client refetches the list.
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Serialize)]
 pub struct TermPromptsEvent {
@@ -564,12 +566,14 @@ fn store_error_response(e: StoreError) -> Response<Body> {
 }
 
 /// A bad project slug is a 400 here, before any path join.
+#[allow(clippy::result_large_err)]
 fn parse_slug(project: &str) -> Result<SlateSlug, Response<Body>> {
     SlateSlug::new(project).map_err(|_| {
         bad_request("invalid project slug (expected 1-64 characters of a-z, 0-9, `_`, `-`)")
     })
 }
 
+#[allow(clippy::result_large_err)]
 fn check_item_id(item: &str) -> Result<(), Response<Body>> {
     if is_valid_item_id(item) {
         Ok(())
@@ -601,6 +605,7 @@ fn parse_if_match(headers: &HeaderMap) -> IfMatch {
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn parse_body<T: serde::de::DeserializeOwned>(body: &Bytes) -> Result<T, Response<Body>> {
     if body.len() > MAX_BODY_BYTES {
         return Err(problem(
