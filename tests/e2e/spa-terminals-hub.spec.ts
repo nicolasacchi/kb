@@ -64,7 +64,7 @@ test.describe("HUBDOOR Terminals door and hub", () => {
     const door = page.locator(DOOR);
     await expect(door).toBeVisible({ timeout: 20_000 });
     await expect(page.locator('[data-testid="door-badge-terminals"]')).toHaveText("1");
-    await expect(page.getByRole("link", { name: "Terminals, 1 needs attention" })).toBeVisible();
+    await expect(page.getByRole("link", { name: /Terminals\s*,\s*1 needs attention/ })).toBeVisible();
     await door.click();
     await expect(page).toHaveURL(/\/terminals$/);
     const rows = page.locator('[data-testid="hub-row"]');
@@ -102,4 +102,21 @@ test.describe("HUBDOOR Terminals door and hub", () => {
     const w = await page.locator(`${DOOR} .kb-door__label`).evaluate((el) => el.getBoundingClientRect().width);
     expect(w).toBeLessThanOrEqual(1);
   });
+
+  for (const width of [861, 915, 1000]) {
+    test(`six doors fit at ${width}px: no sideways page scroll, bar inside the viewport`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 720 });
+      await installFakeTerminal(page, { total: 300, seedLines: 100 });
+      await twoTerms(page, TERM_ID);
+      await page.goto(`${BASE}/`);
+      await expect(page.locator(DOOR)).toBeVisible({ timeout: 20_000 });
+      const fit = await page.evaluate(() => ({
+        inner: window.innerWidth,
+        doc: document.documentElement.scrollWidth,
+        right: Math.max(...[...document.querySelectorAll(".kb-doors .kb-door")].map((e) => e.getBoundingClientRect().right)),
+      }));
+      expect(fit.doc, "document scrollWidth").toBeLessThanOrEqual(fit.inner);
+      expect(fit.right, "last door right edge").toBeLessThanOrEqual(fit.inner);
+    });
+  }
 });

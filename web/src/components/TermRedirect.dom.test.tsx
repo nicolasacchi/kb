@@ -4,7 +4,7 @@
 // keeping the query, hash and navigation state; a malformed id lands on the
 // terminal page's own not-found card (through the real route table).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes, useLocation, useNavigationType } from "react-router-dom";
 
@@ -32,14 +32,14 @@ function Where() {
   );
 }
 
-function mount(entry: Parameters<typeof MemoryRouter>[0]["initialEntries"]) {
+function mount(entry: Parameters<typeof MemoryRouter>[0]["initialEntries"], withPage = true) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={entry}>
         <Routes>
           <Route path="/term/:id" element={<TermRedirect />} />
-          <Route path="/terminals/:id" element={<><Where /><TermPageRoute /></>} />
+          <Route path="/terminals/:id" element={<><Where />{withPage ? <TermPageRoute /> : null}</>} />
           <Route path="*" element={<Where />} />
         </Routes>
       </MemoryRouter>
@@ -60,10 +60,16 @@ afterEach(() => {
 
 describe("TermRedirect", () => {
   it("/term/t1?x=1#h -> /terminals/t1?x=1#h, replace, state preserved", () => {
-    mount([{ pathname: "/term/t1", search: "?x=1", hash: "#h", state: { launched: { id: "t1", harness: "omp" } } }]);
+    mount([{ pathname: "/term/t1", search: "?x=1", hash: "#h", state: { launched: { id: "t1", harness: "omp" } } }], false);
     expect(screen.getByTestId("at").textContent).toBe("/terminals/t1?x=1#h");
     expect(screen.getByTestId("state").textContent).toBe('{"launched":{"id":"t1","harness":"omp"}}');
     expect(screen.getByTestId("nav").textContent).toBe("REPLACE");
+  });
+
+  it("the page consuming the launch hint keeps the hash", async () => {
+    mount([{ pathname: "/term/t1", search: "?x=1", hash: "#h", state: { launched: { id: "t1", harness: "omp" } } }]);
+    await waitFor(() => expect(screen.getByTestId("state").textContent).toBe("null"));
+    expect(screen.getByTestId("at").textContent).toBe("/terminals/t1?x=1#h");
   });
 
   it("a malformed id still lands on the terminal page's not-found card", async () => {

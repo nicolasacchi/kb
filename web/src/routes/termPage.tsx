@@ -50,8 +50,8 @@ export default function TermPageRoute(): ReactElement {
   const hinted = termId !== null && hint?.id === termId && !seen.current ? hint : undefined;
   const hasStateHint = stateHint !== undefined;
   useEffect(() => {
-    if (hasStateHint) void navigate({ pathname: location.pathname, search: location.search }, { replace: true, state: null });
-  }, [hasStateHint, navigate, location.pathname, location.search]);
+    if (hasStateHint) void navigate({ pathname: location.pathname, search: location.search, hash: location.hash }, { replace: true, state: null });
+  }, [hasStateHint, navigate, location.pathname, location.search, location.hash]);
   const harness = row?.harness ?? hinted?.harness ?? "terminal";
   const base = row ? cwdBase(row.cwd) : "";
 

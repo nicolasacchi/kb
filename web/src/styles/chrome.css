@@ -400,8 +400,10 @@
  * launcher drops its key hint and ellipsizes, and the identity chip is
  * narrower, so the 44px bar fits the window with the Now chip showing. */
 @media (min-width: 861px) and (max-width: 1200px) {
+  /* HUBDOOR - six doors (Terminals, when admitted) must still fit at 861px:
+   * tighter side padding recovers the width the sixth icon takes. */
   .kb-door {
-    padding: 0 var(--pad-2);
+    padding: 0 var(--pad-1);
   }
   .kb-door__label {
     position: absolute;
