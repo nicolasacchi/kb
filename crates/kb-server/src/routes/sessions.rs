@@ -30,7 +30,8 @@ use kb_core::sessions::resume_command;
 // beat route/registry never re-derive state logic).
 use kb_core::sessions::live::{
     background_visible, derive_state, is_tool_label, tool_evidence_visible, tool_label,
-    BackgroundCounts, Holder, LivePolicy, LiveState, StateSource, BACKGROUND_COUNT_MAX,
+    BackgroundCounts, Holder, LivePolicy, LiveState, LiveStatusInfo, StateSource,
+    BACKGROUND_COUNT_MAX,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -8757,6 +8758,27 @@ pub struct BeatBody {
     /// dropped silently; the beat is always accepted (never a 400).
     #[serde(default)]
     pub term: Option<serde_json::Value>,
+    /// STATREG — the typed status of an `event == "status"` beat. A `Value`
+    /// like `term`: a malformed shape is dropped by
+    /// [`LiveStatusInfo::from_wire`], never a 400.
+    #[serde(default)]
+    pub status: Option<serde_json::Value>,
+}
+
+/// The `200` body of a `status` beat.
+#[derive(Serialize)]
+struct StatusBeatResponse {
+    ok: bool,
+    session_id: String,
+    applied: bool,
+    changed: bool,
+}
+
+/// The `session.status` SSE payload: identity only, never values.
+#[derive(Serialize)]
+struct SessionStatusPayload<'a> {
+    session_id: &'a str,
+    harness: &'a str,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -9191,13 +9213,17 @@ fn parse_term_items(data: &serde_json::Value) -> Option<Vec<(String, i64)>> {
 /// unknown `harness`, empty `session_id`, or unparseable `at` 400s with a
 /// problem+json body. Never a panic, never a 500.
 pub async fn beat(State(state): State<Arc<KbHandles>>, Json(body): Json<BeatBody>) -> Response {
-    let Some((holder, blocked)) = map_event(&body.event) else {
+    // STATREG: `status` is not a lifecycle event (it never maps to a holder);
+    // it is handled below, after the shared validation.
+    let is_status = body.event == "status";
+    let mapped = map_event(&body.event);
+    if mapped.is_none() && !is_status {
         return error_to_problem_json(&kb_core::Error::BadRequest(format!(
             "unknown beat event {:?} (expected one of: start, prompt, tool, \
-             turn_end, blocked, unblocked, end)",
+             turn_end, blocked, unblocked, end, status)",
             body.event
         )));
-    };
+    }
     if !kb_core::sessions::HARNESSES.contains(&body.harness.as_str()) {
         return error_to_problem_json(&kb_core::Error::BadRequest(format!(
             "unknown beat harness {:?} (expected one of: {:?})",
@@ -9215,6 +9241,38 @@ pub async fn beat(State(state): State<Arc<KbHandles>>, Json(body): Json<BeatBody
             "unparseable beat 'at' timestamp: {:?}",
             body.at
         )));
+    };
+
+    if is_status {
+        let (applied, changed) = match body.status.as_ref().and_then(LiveStatusInfo::from_wire) {
+            Some(info) => {
+                let o = state
+                    .live_registry
+                    .record_status(&body.session_id, &body.harness, info);
+                (o.applied, o.changed)
+            }
+            None => (false, false),
+        };
+        if changed {
+            if let Ok(payload) = serde_json::to_value(SessionStatusPayload {
+                session_id: &body.session_id,
+                harness: &body.harness,
+            }) {
+                state.bus.emit("session.status", payload);
+            }
+        }
+        return Json(StatusBeatResponse {
+            ok: true,
+            session_id: body.session_id,
+            applied,
+            changed,
+        })
+        .into_response();
+    }
+    let Some((holder, blocked)) = mapped else {
+        return error_to_problem_json(&kb_core::Error::BadRequest(
+            "unmappable beat event".to_string(),
+        ));
     };
 
     let now_unix = chrono::Utc::now().timestamp();
@@ -9271,6 +9329,7 @@ pub async fn beat(State(state): State<Arc<KbHandles>>, Json(body): Json<BeatBody
         background,
         term,
         term_bound_unix: None,
+        status: None,
     };
 
     let outcome =
@@ -9382,6 +9441,13 @@ pub struct LiveStatusRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-export", ts(optional))]
     pub term: Option<String>,
+    /// STATREG: the typed status a `status` beat merged into this hook row
+    /// (model, context %, cost, permission mode, branch). Separate from the
+    /// top-level `model` (the lifecycle beats' own field). Display only;
+    /// re-validated by the non-loopback scrub floor.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub status: Option<LiveStatusInfo>,
 }
 
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
@@ -9542,6 +9608,8 @@ fn redact_for_non_loopback(row: &mut LiveStatusRow) {
     {
         row.term = None;
     }
+    // STATREG — re-run the status validators; an emptied status is dropped.
+    row.status = row.status.take().and_then(|s| s.sanitized());
 }
 /// A3 — point every registry (hook) row at its `sessions_root_of` target
 /// (its tree root, its segment head, else itself). A row with no lookup
@@ -9729,6 +9797,7 @@ pub async fn live_status(
                 last_tool_at,
                 background: r.background.filter(|_| background_visible(live_state)),
                 term,
+                status: r.status,
             }
         })
         .collect();
@@ -9832,6 +9901,7 @@ pub async fn live_status(
                         last_tool_at: None,
                         background: None,
                         term: None,
+                        status: None,
                     }
                 })
                 .collect()
@@ -10118,6 +10188,7 @@ mod lsc2_tests {
             last_tool_at: None,
             background: None,
             term: None,
+            status: None,
         }
     }
 
@@ -10249,6 +10320,61 @@ mod lsc2_tests {
         redact_for_non_loopback(&mut ok);
         assert_eq!(ok.last_tool.as_deref(), Some("Bash"));
         assert_eq!(ok.last_tool_at, Some(1));
+    }
+
+    #[test]
+    fn map_event_still_rejects_status() {
+        assert_eq!(map_event("status"), None);
+    }
+
+    #[test]
+    fn redact_for_non_loopback_drops_an_invalid_status() {
+        let mut r = row(LiveState::Working, 5, "a");
+        r.status = Some(LiveStatusInfo {
+            model: Some("x".repeat(80)),
+            context_pct: Some(200),
+            branch: Some("main".to_string()),
+            ..Default::default()
+        });
+        redact_for_non_loopback(&mut r);
+        let s = r.status.expect("branch survives");
+        assert_eq!(s.model, None);
+        assert_eq!(s.context_pct, None);
+        assert_eq!(s.branch.as_deref(), Some("main"));
+        let mut e = row(LiveState::Working, 5, "b");
+        e.status = Some(LiveStatusInfo {
+            context_pct: Some(101),
+            ..Default::default()
+        });
+        redact_for_non_loopback(&mut e);
+        assert!(e.status.is_none());
+    }
+
+    #[test]
+    fn live_status_row_omits_status_when_absent() {
+        let v = serde_json::to_value(row(LiveState::Working, 5, "a")).unwrap();
+        assert!(v.get("status").is_none(), "{v}");
+    }
+
+    #[test]
+    fn live_status_row_serializes_status_shape() {
+        let mut r = row(LiveState::Working, 5, "a");
+        r.model = Some("top".to_string());
+        r.status = Some(LiveStatusInfo {
+            model: Some("inner".to_string()),
+            context_pct: Some(42),
+            cost_usd: Some(1.5),
+            permission_mode: Some(kb_core::sessions::live::PermissionMode::Accept),
+            branch: None,
+        });
+        let v = serde_json::to_value(r).unwrap();
+        assert_eq!(v["model"], "top");
+        assert_eq!(
+            v["status"],
+            serde_json::json!({
+                "model": "inner", "context_pct": 42, "cost_usd": 1.5, "permission_mode": "accept"
+            })
+        );
     }
 
     #[test]
@@ -10479,6 +10605,7 @@ mod lsc2_tests {
             background: None,
             term: None,
             term_bound_unix: None,
+            status: None,
         };
         let out = reg.record_beat_effect(row, at, block_effect(event));
         session_state_payload(&out)
@@ -10801,6 +10928,7 @@ mod lsc2_tests {
             background: None,
             term: None,
             term_bound_unix: None,
+            status: None,
         };
         let a = reg.record_beat(
             mk("a", sanitize_touches("tool", with.detail.as_ref(), 500)),
@@ -11042,6 +11170,7 @@ mod lsc2_tests {
             background: sanitize_background(event, Some(&d)),
             term: None,
             term_bound_unix: None,
+            status: None,
         };
         reg.record_beat_effect(row, at, block_effect(event))
     }
@@ -11238,6 +11367,7 @@ mod lsc2_tests {
                 background: None,
                 term: term.map(str::to_string),
                 term_bound_unix: None,
+                status: None,
             };
             reg.record_beat_term(r, now, crate::live_registry::BlockEffect::Clear, is_start)
         };
@@ -12562,6 +12692,7 @@ mod evidence_wire_tests {
             last_tool_at: None,
             background: None,
             term: None,
+            status: None,
         }
     }
 

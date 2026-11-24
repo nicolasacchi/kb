@@ -296,6 +296,138 @@ impl BackgroundCounts {
     }
 }
 
+/// Longest `model` / `branch` a status may carry, in chars.
+pub const STATUS_TEXT_MAX_CHARS: usize = 64;
+
+/// The closed permission-mode vocabulary a status beat may carry. The
+/// producer (hook) maps harness-specific words onto these; the daemon
+/// accepts only the five and never coerces.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PermissionMode {
+    Default,
+    Plan,
+    Accept,
+    Bypass,
+    Other,
+}
+
+impl PermissionMode {
+    /// Parse one of the five lowercase words; anything else is `None`.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "default" => Some(Self::Default),
+            "plan" => Some(Self::Plan),
+            "accept" => Some(Self::Accept),
+            "bypass" => Some(Self::Bypass),
+            "other" => Some(Self::Other),
+            _ => None,
+        }
+    }
+}
+
+/// A typed, display-only status snapshot a `status` beat carries (model,
+/// context %, cost, permission mode, branch). In-memory only; never a
+/// [`derive_state`] input and never persisted.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct LiveStatusInfo {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub context_pct: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub cost_usd: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub permission_mode: Option<PermissionMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub branch: Option<String>,
+}
+
+fn status_text(t: &str) -> Option<String> {
+    let t = t.trim();
+    let n = t.chars().count();
+    if n == 0 || n > STATUS_TEXT_MAX_CHARS || t.chars().any(char::is_control) {
+        None
+    } else {
+        Some(t.to_string())
+    }
+}
+
+fn status_cost(n: f64) -> Option<f64> {
+    if n.is_finite() && (0.0..=100_000.0).contains(&n) {
+        Some((n * 100.0).round() / 100.0)
+    } else {
+        None
+    }
+}
+
+impl LiveStatusInfo {
+    /// True when no field is set.
+    pub fn is_empty(&self) -> bool {
+        self.model.is_none()
+            && self.context_pct.is_none()
+            && self.cost_usd.is_none()
+            && self.permission_mode.is_none()
+            && self.branch.is_none()
+    }
+
+    /// Parse the wire `status` object. Each field is validated on its own
+    /// and an invalid one is dropped (never the beat); a non-object or a
+    /// result with no valid field is `None`. Unknown keys are ignored.
+    pub fn from_wire(v: &Value) -> Option<Self> {
+        let o = v.as_object()?;
+        let s = Self {
+            model: o.get("model").and_then(Value::as_str).and_then(status_text),
+            context_pct: o
+                .get("context_pct")
+                .and_then(Value::as_f64)
+                .filter(|n| n.is_finite() && (0.0..=100.0).contains(n))
+                .map(|n| n.round() as u8),
+            cost_usd: o
+                .get("cost_usd")
+                .and_then(Value::as_f64)
+                .and_then(status_cost),
+            permission_mode: o
+                .get("permission_mode")
+                .and_then(Value::as_str)
+                .and_then(PermissionMode::parse),
+            branch: o
+                .get("branch")
+                .and_then(Value::as_str)
+                .and_then(status_text),
+        };
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
+    }
+
+    /// Re-run the validators over an already-typed status (the non-loopback
+    /// scrub floor). Invalid fields are dropped; an emptied status is `None`.
+    pub fn sanitized(&self) -> Option<Self> {
+        let s = Self {
+            model: self.model.as_deref().and_then(status_text),
+            context_pct: self.context_pct.filter(|n| *n <= 100),
+            cost_usd: self.cost_usd.and_then(status_cost),
+            permission_mode: self.permission_mode,
+            branch: self.branch.as_deref().and_then(status_text),
+        };
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
+    }
+}
+
 /// AH7 — whether a row's background counts may be shown: `Waiting` only.
 /// A display gate only, never an input to [`derive_state`]. `Cold` is
 /// excluded on purpose: an 8-hour-old row is honestly cold, and a crashed
@@ -1650,5 +1782,86 @@ mod tests {
         });
         let v = serde_json::to_value(&got).unwrap();
         assert_eq!(v["background"]["agent"], 1);
+    }
+
+    #[test]
+    fn status_info_from_wire_validates_every_field() {
+        use serde_json::json;
+        let long = "x".repeat(65);
+        let ok = "y".repeat(64);
+        let got = LiveStatusInfo::from_wire(&json!({
+            "model": long, "branch": ok, "context_pct": 101, "cost_usd": -1, "permission_mode": "yolo"
+        }))
+        .unwrap();
+        assert_eq!(got.model, None);
+        assert_eq!(got.branch.as_deref(), Some(ok.as_str()));
+        assert_eq!(got.context_pct, None);
+        assert_eq!(got.cost_usd, None);
+        assert_eq!(got.permission_mode, None);
+        for bad in [
+            json!({"model": "a\nb"}),
+            json!({"model": "  "}),
+            json!({"context_pct": -1}),
+            json!({"context_pct": "NaN"}),
+            json!({"cost_usd": 1e9}),
+            json!({"permission_mode": "acceptEdits"}),
+            json!({"extra": 1}),
+            json!({}),
+            json!("str"),
+            json!(null),
+        ] {
+            assert_eq!(LiveStatusInfo::from_wire(&bad), None, "{bad}");
+        }
+        let all = LiveStatusInfo::from_wire(&json!({
+            "model": " Sonnet ", "context_pct": 0, "cost_usd": 100000, "permission_mode": "bypass",
+            "branch": "main", "unknown": true
+        }))
+        .unwrap();
+        assert_eq!(all.model.as_deref(), Some("Sonnet"));
+        assert_eq!(all.context_pct, Some(0));
+        assert_eq!(all.cost_usd, Some(100000.0));
+        assert_eq!(all.permission_mode, Some(PermissionMode::Bypass));
+    }
+
+    #[test]
+    fn status_info_rounds_pct_and_cost() {
+        use serde_json::json;
+        let s =
+            LiveStatusInfo::from_wire(&json!({"context_pct": 42.4, "cost_usd": 1.234})).unwrap();
+        assert_eq!(s.context_pct, Some(42));
+        assert_eq!(s.cost_usd, Some(1.23));
+        let s = LiveStatusInfo::from_wire(&json!({"context_pct": 99.6})).unwrap();
+        assert_eq!(s.context_pct, Some(100));
+    }
+
+    #[test]
+    fn live_status_info_json_omits_absent_fields() {
+        use serde_json::json;
+        let s = LiveStatusInfo {
+            permission_mode: Some(PermissionMode::Plan),
+            context_pct: Some(7),
+            ..Default::default()
+        };
+        assert_eq!(
+            serde_json::to_value(&s).unwrap(),
+            json!({"context_pct": 7, "permission_mode": "plan"})
+        );
+    }
+
+    #[test]
+    fn status_info_sanitized_drops_invalid_fields() {
+        let s = LiveStatusInfo {
+            model: Some("x".repeat(70)),
+            context_pct: Some(250),
+            cost_usd: Some(f64::NAN),
+            permission_mode: Some(PermissionMode::Other),
+            branch: Some("ok".into()),
+        };
+        let c = s.sanitized().unwrap();
+        assert_eq!(c.model, None);
+        assert_eq!(c.context_pct, None);
+        assert_eq!(c.cost_usd, None);
+        assert_eq!(c.branch.as_deref(), Some("ok"));
+        assert_eq!(LiveStatusInfo::default().sanitized(), None);
     }
 }

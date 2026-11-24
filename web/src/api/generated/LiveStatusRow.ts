@@ -3,6 +3,7 @@ import type { BackgroundCounts } from "./BackgroundCounts";
 import type { Confidence } from "./Confidence";
 import type { Holder } from "./Holder";
 import type { LiveState } from "./LiveState";
+import type { LiveStatusInfo } from "./LiveStatusInfo";
 import type { StateSource } from "./StateSource";
 
 /**
@@ -56,4 +57,11 @@ background?: BackgroundCounts,
  * while `[terminal] enabled`. It names no path and no host; it grants nothing — attaching
  * still needs the SPA-only gate (Origin + intent header + single-use ticket).
  */
-term?: string, };
+term?: string, 
+/**
+ * STATREG: the typed status a `status` beat merged into this hook row
+ * (model, context %, cost, permission mode, branch). Separate from the
+ * top-level `model` (the lifecycle beats' own field). Display only;
+ * re-validated by the non-loopback scrub floor.
+ */
+status?: LiveStatusInfo, };
