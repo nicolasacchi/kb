@@ -586,3 +586,76 @@ describe("PHIN0 direct typing flag", () => {
     expect(location.href).not.toContain("hunter2");
   });
 });
+
+// PHIN1 - cursor-follow rides the direct-typing pref and the proxy's focus; off = no footprint.
+describe("PHIN1 cursor-follow wiring", () => {
+  const setSearch = (s: string): void => window.history.replaceState(null, "", `/${s}`);
+  const proxy = (): HTMLTextAreaElement | null => host!.querySelector("[data-kb-term-input]");
+  const added: string[] = [];
+  const removed: string[] = [];
+
+  function installVV(): void {
+    added.length = 0;
+    removed.length = 0;
+    const vv = {
+      height: 600,
+      width: 400,
+      offsetTop: 0,
+      offsetLeft: 0,
+      addEventListener: (t: string) => void added.push(t),
+      removeEventListener: (t: string) => void removed.push(t),
+    };
+    Object.defineProperty(window, "visualViewport", { configurable: true, value: vv });
+  }
+
+  afterEach(() => {
+    setSearch("");
+    Reflect.deleteProperty(window, "visualViewport");
+    window.sessionStorage.clear();
+  });
+
+  it("flag off: only the existing keyboard-height sync listens to the visual viewport, and the wrapper gets no offset", () => {
+    installVV();
+    extraProps = { sendInput: vi.fn(() => true) };
+    mount(fakeTerm(false).term);
+    expect(added).toEqual(["resize", "scroll"]);
+    expect(q(".kb-term-phone__wrap").style.marginBottom).toBe("");
+    expect(proxy()).toBeNull();
+  });
+
+  it("flag on, proxy not focused: still no follow listener", () => {
+    installVV();
+    setSearch("?direct=1");
+    extraProps = { sendInput: vi.fn(() => true) };
+    mount(fakeTerm(false).term);
+    expect(proxy()).not.toBeNull();
+    expect(added).toEqual(["resize", "scroll"]);
+  });
+
+  it("flag on + proxy focus enables the follow (its own resize + scroll listeners); blur removes them", () => {
+    installVV();
+    setSearch("?direct=1");
+    extraProps = { sendInput: vi.fn(() => true) };
+    mount(fakeTerm(false).term);
+    act(() => proxy()!.focus());
+    expect(added).toEqual(["resize", "scroll", "resize", "scroll"]);
+    expect(removed).toEqual([]);
+    act(() => proxy()!.blur());
+    expect(removed).toEqual(["resize", "scroll"]);
+    expect(q(".kb-term-phone__wrap").style.marginBottom).toBe("");
+  });
+
+  it("entering Read while the proxy is focused tears the follow down", () => {
+    installVV();
+    setSearch("?direct=1");
+    extraProps = { sendInput: vi.fn(() => true) };
+    mount(fakeTerm(false).term);
+    act(() => proxy()!.focus());
+    expect(added).toHaveLength(4);
+    click('[data-testid="kb-term-phone-mode"]');
+    expect(removed).toEqual(["resize", "scroll"]);
+    // back in Watch the proxy is a fresh, unfocused element: no stale follow
+    click('[data-testid="kb-term-phone-mode"]');
+    expect(added).toHaveLength(4);
+  });
+});

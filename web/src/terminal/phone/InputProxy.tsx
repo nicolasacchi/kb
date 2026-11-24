@@ -14,6 +14,7 @@ import {
   type ProxyCore,
   type ProxyVariant,
 } from "./inputProxy";
+import { tryWriteClipboardText } from "../clipboard";
 import "./inputProxy.css";
 
 /** The ring the strip shows: the last 20 events and the bytes sent, in memory only. */
@@ -59,6 +60,9 @@ export interface ProxyTerm {
   readonly buffer: { readonly active: { readonly cursorX: number; readonly cursorY: number } };
   readonly modes?: { readonly bracketedPasteMode?: boolean };
   onWriteParsed?(cb: () => void): { dispose(): void };
+  /** PHIN1: the terminal's own selection (Ctrl/Cmd+C copies it instead of sending ^C); absent in a fake. */
+  hasSelection?(): boolean;
+  getSelection?(): string;
 }
 
 export interface InputProxyProps {
@@ -69,6 +73,8 @@ export interface InputProxyProps {
   send: (data: string) => boolean;
   handleRef: MutableRefObject<ProxyHandle | null>;
   log?: DebugLog | undefined;
+  /** PHIN1: the element gained (true) or lost (false) focus; false again when it unmounts. */
+  onFocusChange?: ((focused: boolean) => void) | undefined;
 }
 
 export function InputProxy(props: InputProxyProps) {
@@ -80,6 +86,8 @@ export function InputProxy(props: InputProxyProps) {
   termRef.current = term;
   const logRef = useRef(props.log);
   logRef.current = props.log;
+  const focusRef = useRef(props.onFocusChange);
+  focusRef.current = props.onFocusChange;
 
   // The element at the cursor cell, refreshed on every parsed write.
   useEffect(() => {
@@ -126,6 +134,12 @@ export function InputProxy(props: InputProxyProps) {
       variant,
       log: (e) => logRef.current?.push(e),
       setValue: put,
+      getValue: () => el.value,
+      hasSelection: () => termRef.current.hasSelection?.() === true,
+      copy: () => {
+        const text = termRef.current.getSelection?.() ?? "";
+        if (text !== "") void tryWriteClipboardText(text);
+      },
     });
     put(core.initialValue);
     const onBefore = (e: Event): void => {
@@ -148,6 +162,7 @@ export function InputProxy(props: InputProxyProps) {
           altKey: ke.altKey,
           metaKey: ke.metaKey,
           isComposing: ke.isComposing,
+          shiftKey: ke.shiftKey,
         })
       ) {
         e.preventDefault();
@@ -158,7 +173,11 @@ export function InputProxy(props: InputProxyProps) {
       const text = (e as ClipboardEvent).clipboardData?.getData("text/plain") ?? "";
       core.onPaste(text, termRef.current.modes?.bracketedPasteMode === true);
     };
-    const onBlur = (): void => core.reset();
+    const onBlur = (): void => {
+      core.reset();
+      focusRef.current?.(false);
+    };
+    const onFocus = (): void => focusRef.current?.(true);
     const on: Array<[string, (e: Event) => void]> = [
       ["beforeinput", onBefore],
       ["input", onInput],
@@ -167,6 +186,7 @@ export function InputProxy(props: InputProxyProps) {
       ["keydown", onKey],
       ["paste", onPaste],
       ["blur", onBlur],
+      ["focus", onFocus],
     ];
     for (const [n, f] of on) el.addEventListener(n, f);
     handleRef.current = {
@@ -176,6 +196,7 @@ export function InputProxy(props: InputProxyProps) {
     return () => {
       for (const [n, f] of on) el.removeEventListener(n, f);
       handleRef.current = null;
+      focusRef.current?.(false);
     };
   }, [variant, handleRef]);
 

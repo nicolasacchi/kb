@@ -215,3 +215,104 @@ describe("the debug strip", () => {
     expect(down.defaultPrevented).toBe(true);
   });
 });
+
+// PHIN1 - focus reporting, composition + Enter and the physical clipboard chords in a DOM.
+describe("PHIN1 InputProxy", () => {
+  function mountWith(extra: { onFocusChange?: (f: boolean) => void; term?: ProxyTerm; variant?: ProxyVariant }) {
+    host = document.createElement("div");
+    const viewport = document.createElement("div");
+    viewport.getBoundingClientRect = () =>
+      ({ left: 10, top: 40, width: 500, height: 300, right: 510, bottom: 340, x: 10, y: 40, toJSON: () => ({}) }) as DOMRect;
+    host.appendChild(viewport);
+    document.body.appendChild(host);
+    root = createRoot(viewport);
+    const send = vi.fn(() => true);
+    const handleRef: MutableRefObject<ProxyHandle | null> = { current: null };
+    act(() =>
+      root!.render(
+        createElement(InputProxy, {
+          term: extra.term ?? fakeTerm(),
+          viewport,
+          variant: extra.variant ?? DEFAULT_VARIANT,
+          send,
+          handleRef,
+          ...(extra.onFocusChange ? { onFocusChange: extra.onFocusChange } : {}),
+        }),
+      ),
+    );
+    const el = viewport.querySelector("[data-kb-term-input]") as HTMLTextAreaElement;
+    return { el, send };
+  }
+
+  const keydown = (el: HTMLElement, init: KeyboardEventInit) => {
+    const ev = new KeyboardEvent("keydown", { cancelable: true, bubbles: true, ...init });
+    act(() => {
+      el.dispatchEvent(ev);
+    });
+    return ev;
+  };
+
+  it("reports focus and blur, and false again when it unmounts focused", () => {
+    const seen: boolean[] = [];
+    const { el } = mountWith({ onFocusChange: (f) => seen.push(f) });
+    act(() => el.focus());
+    expect(seen).toEqual([true]);
+    act(() => el.blur());
+    expect(seen).toEqual([true, false]);
+    act(() => el.focus());
+    act(() => root!.unmount());
+    expect(seen).toEqual([true, false, true, false]);
+    root = createRoot(host!.firstElementChild as HTMLElement);
+  });
+
+  it("Enter during a composition flushes the composed text first, then one carriage return", () => {
+    const { el, send } = mountWith({ variant: { ...DEFAULT_VARIANT, send: "deferred" } });
+    act(() => {
+      el.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      el.value = "world";
+      el.dispatchEvent(new InputEvent("input", { inputType: "insertCompositionText", isComposing: true, bubbles: true }));
+    });
+    expect(send).not.toHaveBeenCalled();
+    const enter = new InputEvent("beforeinput", { inputType: "insertLineBreak", isComposing: true, cancelable: true, bubbles: true });
+    act(() => {
+      el.dispatchEvent(enter);
+      el.dispatchEvent(new CompositionEvent("compositionend", { data: "world", bubbles: true }));
+    });
+    expect(enter.defaultPrevented).toBe(true);
+    expect(send.mock.calls.map((c) => (c as unknown as [string])[0])).toEqual(["world", "\r"]);
+  });
+
+  it("Ctrl+C with a terminal selection copies it to the clipboard and sends nothing", () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    try {
+      const term = { ...fakeTerm(), hasSelection: () => true, getSelection: () => "picked" } as ProxyTerm;
+      const { el, send } = mountWith({ term });
+      const ev = keydown(el, { key: "c", keyCode: 67, ctrlKey: true });
+      expect(ev.defaultPrevented).toBe(true);
+      expect(writeText).toHaveBeenCalledWith("picked");
+      expect(send).not.toHaveBeenCalled();
+    } finally {
+      Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+
+  it("Ctrl+C without a selection is ^C", () => {
+    const { el, send } = mountWith({});
+    keydown(el, { key: "c", keyCode: 67, ctrlKey: true });
+    expect(send).toHaveBeenCalledWith("\x03");
+  });
+
+  it("Ctrl+V is not consumed and its paste event types the clipboard text once", () => {
+    const { el, send } = mountWith({});
+    const ev = keydown(el, { key: "v", keyCode: 86, ctrlKey: true });
+    expect(ev.defaultPrevented).toBe(false);
+    expect(send).not.toHaveBeenCalled();
+    act(() => {
+      const paste = new Event("paste", { cancelable: true, bubbles: true });
+      Object.defineProperty(paste, "clipboardData", { value: { getData: () => "pasted" } });
+      el.dispatchEvent(paste);
+    });
+    expect(send.mock.calls.map((c) => (c as unknown as [string])[0])).toEqual(["pasted"]);
+  });
+});
