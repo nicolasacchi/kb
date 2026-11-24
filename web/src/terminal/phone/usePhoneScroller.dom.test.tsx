@@ -257,3 +257,138 @@ describe("FUPHONELINKS pressed row for Read", () => {
     expect(takePressedLine()).toBeNull();
   });
 });
+
+// PHIN0 - tap-to-focus for the direct-typing input. The keyboard is raised from the
+// `click` the browser synthesizes after a still tap, so the touch handler must not cancel it.
+describe("PHIN0 tap to focus", () => {
+  function FocusHarness(p: { term: ScrollTerm; onTapFocus?: () => void; focusOn?: "click" | "pointerup" }) {
+    const [wrap, setWrap] = useState<HTMLDivElement | null>(null);
+    const [vp, setVp] = useState<HTMLDivElement | null>(null);
+    usePhoneScroller({
+      term: p.term,
+      wrap,
+      viewport: vp,
+      onLongPress: () => {},
+      ...(p.onTapFocus ? { onTapFocus: p.onTapFocus } : {}),
+      ...(p.focusOn ? { focusOn: p.focusOn } : {}),
+    });
+    return createElement(
+      "div",
+      { className: "watch" },
+      createElement("div", { ref: setWrap }, createElement("div", { "data-kb-term-viewport": "", ref: setVp })),
+    );
+  }
+
+  function mountFocus(p: { onTapFocus?: () => void; focusOn?: "click" | "pointerup"; term?: ScrollTerm }) {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    const term = p.term ?? fakeTerm().term;
+    act(() => root!.render(createElement(FocusHarness, { term, ...(p.onTapFocus ? { onTapFocus: p.onTapFocus } : {}), ...(p.focusOn ? { focusOn: p.focusOn } : {}) })));
+  }
+
+  const click = () =>
+    act(() => {
+      q("[data-kb-term-viewport]")!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+
+  const touch = (type: string) => {
+    const ev = new Event(type, { bubbles: true, cancelable: true });
+    act(() => {
+      q("[data-kb-term-viewport]")!.dispatchEvent(ev);
+    });
+    return ev;
+  };
+
+  it("with onTapFocus the touch sequence is NOT cancelled, so the browser still synthesizes the click", () => {
+    mountFocus({ onTapFocus: vi.fn() });
+    for (const t of ["touchstart", "touchmove", "touchend"]) expect(touch(t).defaultPrevented).toBe(false);
+  });
+
+  it("without onTapFocus the touch sequence is cancelled exactly as before", () => {
+    mountFocus({});
+    for (const t of ["touchstart", "touchmove", "touchend"]) expect(touch(t).defaultPrevented).toBe(true);
+  });
+
+  it("touch events still stop at the viewport (xterm never sees them)", () => {
+    mountFocus({ onTapFocus: vi.fn() });
+    const above = vi.fn();
+    host!.addEventListener("touchend", above);
+    touch("touchend");
+    expect(above).not.toHaveBeenCalled();
+  });
+
+  it("a still tap off any URL focuses from the click, once", () => {
+    const focus = vi.fn();
+    mountFocus({ onTapFocus: focus });
+    tap(3, 1);
+    expect(focus).not.toHaveBeenCalled(); // nothing at pointerup: the click is the gesture
+    clock += 30;
+    click();
+    expect(focus).toHaveBeenCalledTimes(1);
+    click(); // the flag is consumed
+    expect(focus).toHaveBeenCalledTimes(1);
+  });
+
+  it("a click that comes late, or with no tap before it, focuses nothing", () => {
+    const focus = vi.fn();
+    mountFocus({ onTapFocus: focus });
+    click();
+    tap(3, 1);
+    clock += 500;
+    click();
+    expect(focus).not.toHaveBeenCalled();
+  });
+
+  it("a tap on a URL opens it and does not focus", () => {
+    const focus = vi.fn();
+    mountFocus({ onTapFocus: focus });
+    tap(7, 0);
+    clock += 30;
+    click();
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(focus).not.toHaveBeenCalled();
+  });
+
+  it("a drag never focuses", () => {
+    const focus = vi.fn();
+    const f = fakeTerm();
+    mountFocus({ onTapFocus: focus, term: f.term });
+    ptr("pointerdown", 1, px(3), py(1));
+    clock += 60;
+    ptr("pointermove", 1, px(3), py(1) + 40);
+    clock += 60;
+    ptr("pointerup", 1, px(3), py(1) + 40);
+    clock += 10;
+    click();
+    expect(focus).not.toHaveBeenCalled();
+  });
+
+  it("a long press never focuses", () => {
+    const focus = vi.fn();
+    mountFocus({ onTapFocus: focus });
+    ptr("pointerdown", 1, px(3), py(1));
+    clock += 700;
+    ptr("pointerup", 1, px(3), py(1));
+    click();
+    expect(focus).not.toHaveBeenCalled();
+  });
+
+  it("a new touch disarms an earlier tap's click", () => {
+    const focus = vi.fn();
+    mountFocus({ onTapFocus: focus });
+    tap(3, 1);
+    ptr("pointerdown", 1, px(3), py(1));
+    click();
+    expect(focus).not.toHaveBeenCalled();
+  });
+
+  it("focusOn pointerup calls at the pointerup and the click adds nothing", () => {
+    const focus = vi.fn();
+    mountFocus({ onTapFocus: focus, focusOn: "pointerup" });
+    tap(3, 1);
+    expect(focus).toHaveBeenCalledTimes(1);
+    click();
+    expect(focus).toHaveBeenCalledTimes(1);
+  });
+});

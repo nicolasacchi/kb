@@ -24,6 +24,8 @@ import { FONT_STEPS, stepFont } from "./scrollerCore";
 import { readFont } from "./fontSteps";
 import { applyFont, measureCellHeight, usePhoneScroller, type ScrollTerm } from "./usePhoneScroller";
 import type { PhoneMeasure } from "./fitPhone";
+import { InputDebugStrip, InputProxy, createDebugLog, type ProxyHandle } from "./InputProxy";
+import { DEFAULT_VARIANT, inputDebugEnabled, phoneDirectEnabled, readVariant, writeVariant, type ProxyVariant } from "./inputProxy";
 import "./phone.css";
 
 /** How long a Full tap waits for the browser to enter full screen before saying it did not. */
@@ -38,6 +40,8 @@ export type PhoneTerm = ScrollTerm & {
   readonly textarea?: HTMLTextAreaElement | undefined;
   readonly buffer: Terminal["buffer"];
   readonly options: { fontSize?: number; disableStdin?: boolean; scrollback?: number };
+  /** PHIN0: the terminal's private modes (xterm 6); absent in a fake. */
+  readonly modes?: { readonly bracketedPasteMode?: boolean };
   open(parent: HTMLElement): void;
   scrollToBottom(): void;
   onScroll?(cb: () => void): { dispose(): void };
@@ -77,6 +81,20 @@ export interface PhoneTerminalProps {
    * `measure` reports the visible Watch area and one cell for "Fit to phone".
    */
   renderDrive?: (api: { measure: () => PhoneMeasure | null; fullscreen: boolean }) => ReactNode;
+  /**
+   * PHIN0: one WS input frame (false when it was not sent). Only used behind
+   * the hidden `?direct=1` / `kb.term.phoneDirect` pref; without it (or with
+   * the pref off) the view is the read-only one, untouched.
+   */
+  sendInput?: (data: string) => boolean;
+}
+
+function safeLocalStorage(): Storage | null {
+  try {
+    return typeof window === "undefined" ? null : window.localStorage;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -103,7 +121,7 @@ function setAttr(el: HTMLElement, name: string, value: string | number | undefin
 }
 
 export function PhoneTerminal(props: PhoneTerminalProps) {
-  const { term, profile, hostRef, mode, onMode, stream, caption, onClose, renderDrive, harness, headerExtra } = props;
+  const { term, profile, hostRef, mode, onMode, stream, caption, onClose, renderDrive, harness, headerExtra, sendInput } = props;
   const [wrap, setWrap] = useState<HTMLDivElement | null>(null);
   const [viewport, setViewport] = useState<HTMLDivElement | null>(null);
   const [font, setFont] = useState<number>(() => readFont());
@@ -112,6 +130,16 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
   const [cropped, setCropped] = useState(false);
   const termRef = useRef(term);
   termRef.current = term;
+  // PHIN0: the hidden direct-typing pref, read once per mount (`?direct=` also writes it).
+  const [directPref] = useState<boolean>(() =>
+    typeof window === "undefined" ? false : phoneDirectEnabled(window.location.search, safeLocalStorage()),
+  );
+  const proxyOn = directPref && sendInput !== undefined && mode === "watch";
+  const [debugLog] = useState(() =>
+    directPref && typeof window !== "undefined" && inputDebugEnabled(window.location.search) ? createDebugLog() : null,
+  );
+  const [variant, setVariant] = useState<ProxyVariant>(() => (directPref ? readVariant(safeLocalStorage()) : DEFAULT_VARIANT));
+  const proxyHandle = useRef<ProxyHandle | null>(null);
   // FUTERMFULL — element fullscreen of the sheet's root, only where the browser
   // has it (Android Chrome). No overlay here (the 100dvh sheet is the maximum)
   // and no Escape lock (the phone has no Esc key to hold).
@@ -219,6 +247,7 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
     onLongPress: () => onMode("read"),
     onActivity: refresh,
     onFont: setFont,
+    ...(proxyOn ? { onTapFocus: () => proxyHandle.current?.focus() } : {}),
   });
 
   // Apply the chosen font to the grid (Watch only: a hidden xterm cannot
@@ -352,6 +381,17 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
             ref={setViewport}
           >
             <div className="kb-term-phone__host" ref={hostRef} />
+            {proxyOn && term && viewport && sendInput ? (
+              <InputProxy
+                key={`${variant.send}/${variant.sentinel}/${variant.attrs}`}
+                term={term}
+                viewport={viewport}
+                variant={variant}
+                send={sendInput}
+                handleRef={proxyHandle}
+                log={debugLog ?? undefined}
+              />
+            ) : null}
           </div>
         </div>
         {behind && mode === "watch" ? (
@@ -368,6 +408,16 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
           </button>
         ) : null}
       </div>
+      {proxyOn && debugLog ? (
+        <InputDebugStrip
+          log={debugLog}
+          variant={variant}
+          onVariant={(v) => {
+            setVariant(v);
+            writeVariant(safeLocalStorage(), v);
+          }}
+        />
+      ) : null}
       {mode === "read" && term ? (
         <ReadView
           read={() => termRef.current?.buffer.normal ?? term.buffer.normal}
