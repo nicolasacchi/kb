@@ -39,7 +39,7 @@ export function LaunchedTerminal({
   /// The directory, when known (End's confirm names it); else the list row's.
   cwd?: string | null;
   onClose: () => void;
-  /// Phone sheet: switch to another live terminal (the list's `?term=` setter).
+  /// Phone sheet: switch to another live terminal (navigates to /term/:id).
   onSwitch?: (termId: string) => void;
   pollMs?: number;
   deadlineMs?: number;

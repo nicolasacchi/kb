@@ -52,6 +52,8 @@ const ListDetailRoute = lazy(() => import("./routes/listDetail"));
 const BoardRoute = lazy(() => import("./routes/board"));
 const SessionsRoute = lazy(() => import("./routes/sessions"));
 const SessionPageRoute = lazy(() => import("./routes/sessionPage"));
+// BSHELL — the terminal's own page; xterm stays behind TerminalPanel.lazy.
+const TermPageRoute = lazy(() => import("./routes/termPage"));
 const NotesRoute = lazy(() => import("./routes/notes"));
 const SearchRoute = lazy(() => import("./routes/search"));
 const InboxRoute = lazy(() => import("./routes/inbox"));
@@ -332,6 +334,15 @@ export default function App() {
           element={
             <RailShell rail={false}>
               <SessionsRoute />
+            </RailShell>
+          }
+        />
+        {/* BSHELL — one terminal's own page (TermShell wraps the lazy panel). */}
+        <Route
+          path="/term/:id"
+          element={
+            <RailShell rail={false}>
+              <TermPageRoute />
             </RailShell>
           }
         />

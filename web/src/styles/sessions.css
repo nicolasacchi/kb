@@ -636,8 +636,7 @@
 .kb-ses__launched {
   margin: var(--pad-2) 0;
 }
-.kb-ses__launched-ctl,
-.kb-term-slot__ctl {
+.kb-ses__launched-ctl {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1675,13 +1674,6 @@
   align-items: center;
   flex-wrap: wrap;
   gap: var(--pad-2);
-}
-.kb-term-slot__bell {
-  display: inline-block;
-  width: var(--pad-2);
-  height: var(--pad-2);
-  border-radius: 50%;
-  background: var(--warn);
 }
 .kb-term-slot__state {
   color: var(--ink-mute);
