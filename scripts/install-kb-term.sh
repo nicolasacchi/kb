@@ -231,8 +231,9 @@ systemd_env_line() {
 
 # Print (never write) the kb-termd.service drop-in step, pre-filled from the
 # current shell: KB_SESSIONS_DIR, and a PATH that always holds the dir `kb`
-# resolves from plus the dir of every harness found (panes inherit the
-# runner's PATH, so a missing dir means exit 127 or a silent hook no-op).
+# resolves from plus the dir of every harness found, in the shell's own
+# precedence (panes inherit the runner's PATH, so a missing dir means exit 127
+# or a silent hook no-op, and a wrongly ordered one launches a stale copy).
 print_env_dropin() {
   dirs=""
   for bin in kb claude codex opencode grok omp; do
@@ -252,7 +253,40 @@ print_env_dropin() {
     case ":${dirs}:" in *":${d}:"*) continue ;; esac
     dirs="${dirs:+${dirs}:}${d}"
   done
-  env_path="${dirs:+${dirs}:}/usr/local/bin:/usr/bin"
+  # Emit the needed dirs in the order the installer's own $PATH lists them
+  # (the operator's shell precedence), not in the order of the binary list:
+  # an earlier dir shadows a later one, so every binary must resolve under the
+  # printed PATH to the file `command -v` resolved here. A needed dir that is
+  # not a $PATH entry (only after normalisation: `dirname` strips trailing and
+  # doubled slashes, a $PATH entry may carry them, so each entry is normalised
+  # the same way before the membership test) is appended last.
+  ordered=""
+  old_ifs="$IFS"
+  IFS=":"
+  set -f
+  for d in $PATH; do
+    case "$d" in /*) ;; *) continue ;; esac
+    while :; do
+      case "$d" in
+        *//*) d="${d%%//*}/${d#*//}" ;;
+        ?*/) d="${d%/}" ;;
+        *) break ;;
+      esac
+    done
+    case ":${dirs}:" in *":${d}:"*) ;; *) continue ;; esac
+    case ":${ordered}:" in *":${d}:"*) continue ;; esac
+    ordered="${ordered:+${ordered}:}${d}"
+  done
+  set +f
+  IFS="$old_ifs"
+  rest="$dirs"
+  while [ -n "$rest" ]; do
+    d="${rest%%:*}"
+    case "$rest" in *:*) rest="${rest#*:}" ;; *) rest="" ;; esac
+    case ":${ordered}:" in *":${d}:"*) continue ;; esac
+    ordered="${ordered:+${ordered}:}${d}"
+  done
+  env_path="${ordered:+${ordered}:}/usr/local/bin:/usr/bin"
   sessions_dir="${KB_SESSIONS_DIR:-/path/to/the/sessions/corpus}"
   say "       mkdir -p ~/.config/systemd/user/kb-termd.service.d"
   say "       cat > ~/.config/systemd/user/kb-termd.service.d/env.conf <<'EOF'"

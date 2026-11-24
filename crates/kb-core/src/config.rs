@@ -226,9 +226,33 @@ pub struct TerminalSection {
     /// 60s, enter 15s, list 30s.
     #[serde(default)]
     pub runner_timeout_secs: Option<u64>,
+
+    /// `[terminal.files]` — where the terminal Files feature stores
+    /// uploads. Absent = the feature has no corpus (off).
+    #[serde(default)]
+    pub files: Option<TerminalFilesSection>,
+}
+
+/// `[terminal.files]` — the Files feature's corpus binding.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TerminalFilesSection {
+    /// Name of the `[kb.<name>]` corpus that receives uploaded files
+    /// (a writable mount). `None`/blank = off.
+    #[serde(default)]
+    pub kb: Option<String>,
 }
 
 impl TerminalSection {
+    /// The kb that receives terminal file uploads: `[terminal.files] kb`,
+    /// trimmed; blank or absent = `None` (off).
+    pub fn files_kb(&self) -> Option<&str> {
+        self.files
+            .as_ref()
+            .and_then(|f| f.kb.as_deref())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
+
     /// Default socket of the `kb-termd` runner (the inner unix socket
     /// lives under the `/run/kb-term` bind mount the runner owns).
     pub const DEFAULT_RUNNER_SOCKET: &str = "/run/kb-term/runner/runner.sock";
@@ -2615,6 +2639,16 @@ impl KbConfig {
                         ),
                     ));
                 }
+            }
+        }
+
+        // [terminal.files] kb must name a configured corpus.
+        if let Some(name) = self.terminal.files_kb() {
+            if !self.kb.keys().any(|k| k.as_str() == name) {
+                issues.push(ValidationIssue::hard(
+                    "/terminal/files/kb",
+                    format!("`{name}` is not a configured [kb.*] corpus"),
+                ));
             }
         }
 
@@ -5077,6 +5111,58 @@ mod tests {
     }
 
     #[test]
+    fn terminal_files_kb_accessor_and_roundtrip() {
+        assert_eq!(TerminalSection::default().files_kb(), None);
+        let absent: KbConfig = toml::from_str("[terminal]\nenabled = true\n").unwrap();
+        assert_eq!(absent.terminal.files_kb(), None);
+        let c: KbConfig = toml::from_str("[terminal.files]\nkb = \"files\"\n").unwrap();
+        assert_eq!(c.terminal.files_kb(), Some("files"));
+        let back: TerminalSection = toml::from_str(&toml::to_string(&c.terminal).unwrap()).unwrap();
+        assert_eq!(back.files_kb(), Some("files"));
+        for blank in ["", "   "] {
+            let s = TerminalSection {
+                files: Some(TerminalFilesSection {
+                    kb: Some(blank.to_string()),
+                }),
+                ..Default::default()
+            };
+            assert_eq!(s.files_kb(), None);
+        }
+        let empty_table = TerminalSection {
+            files: Some(TerminalFilesSection::default()),
+            ..Default::default()
+        };
+        assert_eq!(empty_table.files_kb(), None);
+    }
+
+    #[test]
+    fn validate_terminal_files_kb_must_exist() {
+        let mut c = KbConfig::default();
+        assert!(!c
+            .validate()
+            .iter()
+            .any(|i| i.pointer == "/terminal/files/kb"));
+        c.terminal.files = Some(TerminalFilesSection {
+            kb: Some("files".to_string()),
+        });
+        let hard: Vec<_> = c
+            .validate()
+            .into_iter()
+            .filter(|i| i.pointer == "/terminal/files/kb")
+            .collect();
+        assert_eq!(hard.len(), 1);
+        assert!(hard[0].is_hard());
+        let with_kb: KbConfig = toml::from_str(
+            "[terminal.files]\nkb = \"files\"\n[kb.files]\npath = \"/tmp/files-src\"\n",
+        )
+        .expect("deserialize");
+        assert!(!with_kb
+            .validate()
+            .iter()
+            .any(|i| i.pointer == "/terminal/files/kb"));
+    }
+
+    #[test]
     fn terminal_runner_socket_tilde_expands() {
         // `~/` expansion is pinned under a controlled `HOME` (the
         // `HOME_ENV_LOCK` pattern below): an actual assertion on the
@@ -5270,6 +5356,11 @@ mod docs_coverage_tests {
     #[test]
     fn every_terminal_key_is_documented() {
         assert_documented("terminal", &["TerminalSection"]);
+    }
+
+    #[test]
+    fn every_terminal_files_key_is_documented() {
+        assert_documented("terminal.files", &["TerminalFilesSection"]);
     }
 
     #[test]

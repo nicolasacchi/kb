@@ -26804,6 +26804,7 @@ async fn boot_with_terminal(fake: &FakeRunner) -> (tempfile::TempDir, std::net::
         ticket_ttl_secs: None,
         refuse_token_callers: None,
         runner_timeout_secs: None,
+        files: None,
     };
     std::fs::create_dir_all(&paths.config).unwrap();
     std::fs::write(paths.token_file(), FIXTURE_TOKEN).unwrap();

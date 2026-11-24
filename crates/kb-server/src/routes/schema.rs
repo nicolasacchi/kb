@@ -245,6 +245,10 @@ const V0_0_1_TYPES: &[&str] = &[
     "term.created",
     "term.ended",
     "term.state",
+    // kbt2 PQSTORE — the per-project prompt queue changed (one event per
+    // durable mutation, payload `{project, rev}` only, never prompt text).
+    // Emitter: `terminal::prompts`.
+    "term.prompts",
 ];
 
 #[derive(Debug, Serialize)]
@@ -455,6 +459,7 @@ pub async fn per_type(Path((kind, version)): Path<(String, String)>) -> Response
         "term.created" => json!({"type": kind, "payload": TERM_CREATED_KEYS}),
         "term.ended" => json!({"type": kind, "payload": TERM_ENDED_KEYS}),
         "term.state" => json!({"type": kind, "payload": TERM_STATE_KEYS}),
+        "term.prompts" => json!({"type": kind, "payload": TERM_PROMPTS_KEYS}),
         _ => unreachable!("contains-check above"),
     };
     Json(schema).into_response()
@@ -490,6 +495,11 @@ pub const TERM_ENDED_KEYS: [&str; 2] = ["id", "exit_code?"];
 /// `sizechanged` frame or on `ended`, never per data frame).
 /// `state` is `"live"` or `"ended"`.
 pub const TERM_STATE_KEYS: [&str; 5] = ["id", "state", "cols?", "rows?", "grid_owner?"];
+
+/// The declared payload keys of `term.prompts` (kbt2 PQSTORE): the project
+/// slug and the new revision, nothing else. The queue's text is
+/// operator-authored content and never rides an event; a client refetches.
+pub const TERM_PROMPTS_KEYS: [&str; 2] = ["project", "rev"];
 
 /// The declared payload keys of `maintenance.backup.written`.
 pub const BACKUP_WRITTEN_KEYS: [&str; 3] = ["kb", "path", "remote"];

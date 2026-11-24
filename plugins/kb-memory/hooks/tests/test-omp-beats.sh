@@ -425,6 +425,127 @@ test("omp_beat_ppid_is_the_host_process_pid", async () => {
     else process.env.KB_TERM_ID = prev;
   }
 });
+// ---- CONVLIVE: mid-turn live capture (KB_CAPTURE_LIVE) ----
+function liveCtx(sid: string, kind: string = "main"): any {
+  return {
+    cwd: process.env.KB_TEST_CWD!,
+    hasUI: false,
+    agent: { kind, id: "x", name: "n", depth: kind === "sub" ? 1 : 0 },
+    sessionManager: { getSessionId: () => sid, getCwd: () => process.env.KB_TEST_CWD!, getSessionFile: () => "/tmp/live-" + sid + ".jsonl" },
+  };
+}
+async function captureCount(settleMs = 700): Promise<number> {
+  await Bun.sleep(settleMs); // fire-and-forget stub; a negative needs a settle window
+  return logLines(readFileSync(CAPTURE_CALLS, "utf8")).length;
+}
+async function withEnv(env: Record<string, string | undefined>, fn: () => Promise<void>) {
+  const prev: Record<string, string | undefined> = {};
+  for (const k of Object.keys(env)) {
+    prev[k] = process.env[k];
+    if (env[k] === undefined) delete process.env[k];
+    else process.env[k] = env[k];
+  }
+  try {
+    await fn();
+  } finally {
+    for (const k of Object.keys(prev)) {
+      if (prev[k] === undefined) delete process.env[k];
+      else process.env[k] = prev[k];
+    }
+  }
+}
+const toolEvt: any = { type: "tool_call", toolName: "edit", input: { path: "a.rs" } };
+const apprEvt: any = { type: "tool_approval_requested", toolName: "bash", reason: "needs approval" };
+
+test("shouldLiveCapture: first fires, interval gates a throttled fire, debounce gates a blocked fire", () => {
+  expect(M.shouldLiveCapture(undefined, 1000, 240000, false, 20000)).toBe(true);
+  expect(M.shouldLiveCapture(1000, 2000, 240000, false, 20000)).toBe(false);
+  expect(M.shouldLiveCapture(1000, 241000, 240000, false, 20000)).toBe(true);
+  expect(M.shouldLiveCapture(1000, 2000, 240000, true, 20000)).toBe(false);
+  expect(M.shouldLiveCapture(1000, 21000, 240000, true, 20000)).toBe(true);
+});
+
+test("live capture on: the first tool_call captures, a second inside the interval does not", async () => {
+  await withEnv({ KB_CAPTURE_LIVE: "1", KB_CAPTURE_MIN_INTERVAL_SECS: "3600" }, async () => {
+    await Bun.sleep(600);
+    writeFileSync(CAPTURE_CALLS, "");
+    const h = makePi();
+    const c = liveCtx("live-a");
+    await h.get("tool_call")(toolEvt, c);
+    await h.get("tool_call")(toolEvt, c);
+    expect(await captureCount()).toBe(1);
+  });
+});
+
+test("live capture on: interval env respected (0 captures every tool_call)", async () => {
+  await withEnv({ KB_CAPTURE_LIVE: "yes", KB_CAPTURE_MIN_INTERVAL_SECS: "0" }, async () => {
+    await Bun.sleep(600);
+    writeFileSync(CAPTURE_CALLS, "");
+    const h = makePi();
+    const c = liveCtx("live-b");
+    await h.get("tool_call")(toolEvt, c);
+    await h.get("tool_call")(toolEvt, c);
+    expect(await captureCount()).toBe(2);
+  });
+});
+
+test("live capture on: an approval bypasses the interval, debounced by default", async () => {
+  await withEnv({ KB_CAPTURE_LIVE: "1", KB_CAPTURE_MIN_INTERVAL_SECS: "3600", KB_CAPTURE_BLOCKED_DEBOUNCE_SECS: undefined }, async () => {
+    await Bun.sleep(600);
+    writeFileSync(CAPTURE_CALLS, "");
+    const h = makePi();
+    const c = liveCtx("live-c");
+    await h.get("tool_call")(toolEvt, c); // 1
+    await h.get("tool_approval_requested")(apprEvt, c); // inside the 20 s debounce: none
+    expect(await captureCount()).toBe(1);
+  });
+  await withEnv({ KB_CAPTURE_LIVE: "1", KB_CAPTURE_MIN_INTERVAL_SECS: "3600", KB_CAPTURE_BLOCKED_DEBOUNCE_SECS: "0" }, async () => {
+    writeFileSync(CAPTURE_CALLS, "");
+    const h = makePi();
+    const c = liveCtx("live-d");
+    await h.get("tool_call")(toolEvt, c); // 1
+    await h.get("tool_approval_requested")(apprEvt, c); // debounce 0: bypasses the hour interval
+    await h.get("tool_approval_requested")(apprEvt, c); // debounce 0 again
+    expect(await captureCount()).toBe(3);
+  });
+});
+
+test("live capture off: no extra capture on tool_call or approval", async () => {
+  await withEnv({ KB_CAPTURE_LIVE: undefined, KB_CAPTURE_MIN_INTERVAL_SECS: "0", KB_CAPTURE_BLOCKED_DEBOUNCE_SECS: "0" }, async () => {
+    await Bun.sleep(600);
+    writeFileSync(CAPTURE_CALLS, "");
+    const h = makePi();
+    const c = liveCtx("live-e");
+    await h.get("tool_call")(toolEvt, c);
+    await h.get("tool_approval_requested")(apprEvt, c);
+    expect(await captureCount()).toBe(0);
+  });
+});
+
+test("live capture on: a sub-session never captures mid-turn", async () => {
+  await withEnv({ KB_CAPTURE_LIVE: "1", KB_CAPTURE_MIN_INTERVAL_SECS: "0", KB_CAPTURE_BLOCKED_DEBOUNCE_SECS: "0" }, async () => {
+    await Bun.sleep(600);
+    writeFileSync(CAPTURE_CALLS, "");
+    const h = makePi();
+    const c = liveCtx("live-f", "sub");
+    await h.get("tool_call")(toolEvt, c);
+    await h.get("tool_approval_requested")(apprEvt, c);
+    expect(await captureCount()).toBe(0);
+  });
+});
+
+test("live capture clock is cleared on shutdown (next tool_call fires again)", async () => {
+  await withEnv({ KB_CAPTURE_LIVE: "1", KB_CAPTURE_MIN_INTERVAL_SECS: "3600" }, async () => {
+    await Bun.sleep(600);
+    writeFileSync(CAPTURE_CALLS, "");
+    const h = makePi();
+    const c = liveCtx("live-g");
+    await h.get("tool_call")(toolEvt, c); // 1
+    await h.get("session_shutdown")({}, c); // 2 (final capture) and clears the clock
+    await h.get("tool_call")(toolEvt, c); // 3
+    expect(await captureCount()).toBe(3);
+  });
+});
 TS
 
 if ( cd "$TMPROOT" && HOME="$TMPROOT" PATH="$TMPROOT/bin:$PATH" KB_OMP_TS="$OMP_TS" \

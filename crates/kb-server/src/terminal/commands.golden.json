@@ -1,0 +1,5903 @@
+{
+ "cases": [
+  {
+   "name": "accept-empty-harnesses",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {}
+   },
+   "errors": []
+  },
+  {
+   "name": "accept-command",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "/help"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": []
+  },
+  {
+   "name": "accept-command-full",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "/help",
+          "description": "d",
+          "mode": "paste",
+          "unverified": true
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": []
+  },
+  {
+   "name": "accept-chord",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "k",
+          "kind": "chord",
+          "label": "K",
+          "keys": [
+           "Esc",
+           "Esc"
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": []
+  },
+  {
+   "name": "accept-reply",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "r",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": []
+  },
+  {
+   "name": "accept-run",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "/compact",
+          "mode": "run"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": []
+  },
+  {
+   "name": "accept-paste-newline-tab",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "line one\n\tline two"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": []
+  },
+  {
+   "name": "accept-args",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "/model {name} now",
+          "args": [
+           {
+            "name": "name",
+            "hint": "model name",
+            "default": "x"
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": []
+  },
+  {
+   "name": "accept-escaped-braces",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "{{literal}} and {a}",
+          "args": [
+           {
+            "name": "a",
+            "hint": "h"
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": []
+  },
+  {
+   "name": "accept-two-harnesses",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "omp": {
+      "groups": []
+     },
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "/help"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": []
+  },
+  {
+   "name": "accept-astral-label-40",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00",
+          "text": "/help"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": []
+  },
+  {
+   "name": "astral-label-41",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00",
+          "text": "/help"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "too-long",
+     "path": "/harnesses/claude/groups/0/items/0/label"
+    }
+   ]
+  },
+  {
+   "name": "bad-type-root-null",
+   "doc": null,
+   "errors": [
+    {
+     "code": "bad-type",
+     "path": ""
+    }
+   ]
+  },
+  {
+   "name": "bad-type-root-array",
+   "doc": [],
+   "errors": [
+    {
+     "code": "bad-type",
+     "path": ""
+    }
+   ]
+  },
+  {
+   "name": "bad-type-harnesses",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": []
+   },
+   "errors": [
+    {
+     "code": "bad-type",
+     "path": "/harnesses"
+    }
+   ]
+  },
+  {
+   "name": "bad-type-schema",
+   "doc": {
+    "schema": 1,
+    "harnesses": {}
+   },
+   "errors": [
+    {
+     "code": "bad-type",
+     "path": "/schema"
+    }
+   ]
+  },
+  {
+   "name": "missing-fields-root",
+   "doc": {},
+   "errors": [
+    {
+     "code": "missing-field",
+     "path": "/schema"
+    },
+    {
+     "code": "missing-field",
+     "path": "/harnesses"
+    }
+   ]
+  },
+  {
+   "name": "bad-schema",
+   "doc": {
+    "schema": "kb-term-commands/2",
+    "harnesses": {}
+   },
+   "errors": [
+    {
+     "code": "bad-schema",
+     "path": "/schema"
+    }
+   ]
+  },
+  {
+   "name": "unknown-field-root",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {},
+    "zeta": 1,
+    "alpha": 2
+   },
+   "errors": [
+    {
+     "code": "unknown-field",
+     "path": "/alpha"
+    },
+    {
+     "code": "unknown-field",
+     "path": "/zeta"
+    }
+   ]
+  },
+  {
+   "name": "unknown-harness",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "gemini": {
+      "groups": []
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "unknown-harness",
+     "path": "/harnesses/gemini"
+    }
+   ]
+  },
+  {
+   "name": "unknown-harness-pointer-escape",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "a/b~c": {}
+    }
+   },
+   "errors": [
+    {
+     "code": "unknown-harness",
+     "path": "/harnesses/a~1b~0c"
+    }
+   ]
+  },
+  {
+   "name": "harness-not-object",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": []
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-type",
+     "path": "/harnesses/claude"
+    }
+   ]
+  },
+  {
+   "name": "harness-missing-groups",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {}
+    }
+   },
+   "errors": [
+    {
+     "code": "missing-field",
+     "path": "/harnesses/claude/groups"
+    }
+   ]
+  },
+  {
+   "name": "harness-unknown-field",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [],
+      "x": 1
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "unknown-field",
+     "path": "/harnesses/claude/x"
+    }
+   ]
+  },
+  {
+   "name": "groups-not-array",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": {}
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-type",
+     "path": "/harnesses/claude/groups"
+    }
+   ]
+  },
+  {
+   "name": "group-not-object",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       1
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-type",
+     "path": "/harnesses/claude/groups/0"
+    }
+   ]
+  },
+  {
+   "name": "group-missing-fields",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {}
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "missing-field",
+     "path": "/harnesses/claude/groups/0/id"
+    },
+    {
+     "code": "missing-field",
+     "path": "/harnesses/claude/groups/0/label"
+    },
+    {
+     "code": "missing-field",
+     "path": "/harnesses/claude/groups/0/items"
+    }
+   ]
+  },
+  {
+   "name": "group-unknown-field",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [],
+        "extra": 1
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "unknown-field",
+     "path": "/harnesses/claude/groups/0/extra"
+    }
+   ]
+  },
+  {
+   "name": "group-items-not-array",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": 1
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-type",
+     "path": "/harnesses/claude/groups/0/items"
+    }
+   ]
+  },
+  {
+   "name": "accept-groups-20",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g0",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g1",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g2",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g3",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g4",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g5",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g6",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g7",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g8",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g9",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g10",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g11",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g12",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g13",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g14",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g15",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g16",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g17",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g18",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g19",
+        "label": "G",
+        "items": []
+       }
+      ]
+     }
+    }
+   },
+   "errors": []
+  },
+  {
+   "name": "too-many-groups-21",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g0",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g1",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g2",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g3",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g4",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g5",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g6",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g7",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g8",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g9",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g10",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g11",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g12",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g13",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g14",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g15",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g16",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g17",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g18",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g19",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g20",
+        "label": "G",
+        "items": []
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "too-many",
+     "path": "/harnesses/claude/groups"
+    }
+   ]
+  },
+  {
+   "name": "accept-items-200",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g0",
+        "label": "G",
+        "items": [
+         {
+          "id": "r0-0",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-1",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-2",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-3",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-4",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-5",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-6",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-7",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-8",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-9",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-10",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-11",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-12",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-13",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-14",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-15",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-16",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-17",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-18",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-19",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         }
+        ]
+       },
+       {
+        "id": "g1",
+        "label": "G",
+        "items": [
+         {
+          "id": "r1-0",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-1",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-2",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-3",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-4",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-5",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-6",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-7",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-8",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-9",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-10",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-11",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-12",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-13",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-14",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-15",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-16",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-17",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-18",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-19",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "G",
+        "items": [
+         {
+          "id": "r2-0",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-1",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-2",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-3",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-4",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-5",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-6",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-7",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-8",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-9",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-10",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-11",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-12",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-13",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-14",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-15",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-16",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-17",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-18",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-19",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         }
+        ]
+       },
+       {
+        "id": "g3",
+        "label": "G",
+        "items": [
+         {
+          "id": "r3-0",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-1",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-2",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-3",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-4",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-5",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-6",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-7",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-8",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-9",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-10",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-11",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-12",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-13",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-14",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-15",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-16",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-17",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-18",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-19",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         }
+        ]
+       },
+       {
+        "id": "g4",
+        "label": "G",
+        "items": [
+         {
+          "id": "r4-0",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-1",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-2",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-3",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-4",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-5",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-6",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-7",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-8",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-9",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-10",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-11",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-12",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-13",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-14",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-15",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-16",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-17",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-18",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-19",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         }
+        ]
+       },
+       {
+        "id": "g5",
+        "label": "G",
+        "items": [
+         {
+          "id": "r5-0",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-1",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-2",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-3",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-4",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-5",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-6",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-7",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-8",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-9",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-10",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-11",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-12",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-13",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-14",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-15",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-16",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-17",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-18",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-19",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         }
+        ]
+       },
+       {
+        "id": "g6",
+        "label": "G",
+        "items": [
+         {
+          "id": "r6-0",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-1",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-2",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-3",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-4",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-5",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-6",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-7",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-8",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-9",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-10",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-11",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-12",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-13",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-14",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-15",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-16",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-17",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-18",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-19",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         }
+        ]
+       },
+       {
+        "id": "g7",
+        "label": "G",
+        "items": [
+         {
+          "id": "r7-0",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-1",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-2",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-3",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-4",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-5",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-6",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-7",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-8",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-9",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-10",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-11",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-12",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-13",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-14",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-15",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-16",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-17",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-18",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-19",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         }
+        ]
+       },
+       {
+        "id": "g8",
+        "label": "G",
+        "items": [
+         {
+          "id": "r8-0",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-1",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-2",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-3",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-4",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-5",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-6",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-7",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-8",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-9",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-10",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-11",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-12",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-13",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-14",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-15",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-16",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-17",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-18",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-19",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         }
+        ]
+       },
+       {
+        "id": "g9",
+        "label": "G",
+        "items": [
+         {
+          "id": "r9-0",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-1",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-2",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-3",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-4",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-5",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-6",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-7",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-8",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-9",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-10",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-11",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-12",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-13",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-14",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-15",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-16",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-17",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-18",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-19",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": []
+  },
+  {
+   "name": "too-many-items-201",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g0",
+        "label": "G",
+        "items": [
+         {
+          "id": "r0-0",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-1",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-2",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-3",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-4",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-5",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-6",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-7",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-8",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-9",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-10",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-11",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-12",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-13",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-14",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-15",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-16",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-17",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-18",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r0-19",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         }
+        ]
+       },
+       {
+        "id": "g1",
+        "label": "G",
+        "items": [
+         {
+          "id": "r1-0",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-1",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-2",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-3",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-4",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-5",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-6",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-7",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-8",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-9",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-10",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-11",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-12",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-13",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-14",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-15",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-16",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-17",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-18",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r1-19",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "G",
+        "items": [
+         {
+          "id": "r2-0",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-1",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-2",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-3",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-4",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-5",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-6",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-7",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-8",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-9",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-10",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-11",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-12",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-13",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-14",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-15",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-16",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-17",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-18",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r2-19",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         }
+        ]
+       },
+       {
+        "id": "g3",
+        "label": "G",
+        "items": [
+         {
+          "id": "r3-0",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-1",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-2",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-3",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-4",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-5",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-6",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-7",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-8",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-9",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-10",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-11",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-12",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-13",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-14",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-15",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-16",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-17",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-18",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r3-19",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         }
+        ]
+       },
+       {
+        "id": "g4",
+        "label": "G",
+        "items": [
+         {
+          "id": "r4-0",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-1",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-2",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-3",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-4",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-5",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-6",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-7",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-8",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-9",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-10",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-11",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-12",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-13",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-14",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-15",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-16",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-17",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-18",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r4-19",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         }
+        ]
+       },
+       {
+        "id": "g5",
+        "label": "G",
+        "items": [
+         {
+          "id": "r5-0",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-1",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-2",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-3",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-4",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-5",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-6",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-7",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-8",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-9",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-10",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-11",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-12",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-13",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-14",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-15",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-16",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-17",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-18",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r5-19",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         }
+        ]
+       },
+       {
+        "id": "g6",
+        "label": "G",
+        "items": [
+         {
+          "id": "r6-0",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-1",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-2",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-3",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-4",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-5",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-6",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-7",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-8",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-9",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-10",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-11",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-12",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-13",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-14",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-15",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-16",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-17",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-18",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r6-19",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         }
+        ]
+       },
+       {
+        "id": "g7",
+        "label": "G",
+        "items": [
+         {
+          "id": "r7-0",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-1",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-2",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-3",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-4",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-5",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-6",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-7",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-8",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-9",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-10",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-11",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-12",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-13",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-14",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-15",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-16",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-17",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-18",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r7-19",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         }
+        ]
+       },
+       {
+        "id": "g8",
+        "label": "G",
+        "items": [
+         {
+          "id": "r8-0",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-1",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-2",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-3",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-4",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-5",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-6",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-7",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-8",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-9",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-10",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-11",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-12",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-13",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-14",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-15",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-16",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-17",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-18",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r8-19",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         }
+        ]
+       },
+       {
+        "id": "g9",
+        "label": "G",
+        "items": [
+         {
+          "id": "r9-0",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-1",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-2",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-3",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-4",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-5",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-6",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-7",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-8",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-9",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-10",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-11",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-12",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-13",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-14",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-15",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-16",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-17",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-18",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-19",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         },
+         {
+          "id": "r9-20",
+          "kind": "reply",
+          "label": "R",
+          "text": "yes"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "too-many",
+     "path": "/harnesses/claude/groups"
+    }
+   ]
+  },
+  {
+   "name": "bad-id-uppercase",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "Help",
+          "kind": "command",
+          "label": "C",
+          "text": "/help"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-id",
+     "path": "/harnesses/claude/groups/0/items/0/id"
+    }
+   ]
+  },
+  {
+   "name": "bad-id-empty",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "",
+          "kind": "command",
+          "label": "C",
+          "text": "/help"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-id",
+     "path": "/harnesses/claude/groups/0/items/0/id"
+    }
+   ]
+  },
+  {
+   "name": "bad-id-leading-dash",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "-a",
+          "kind": "command",
+          "label": "C",
+          "text": "/help"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-id",
+     "path": "/harnesses/claude/groups/0/items/0/id"
+    }
+   ]
+  },
+  {
+   "name": "bad-id-group",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "G g",
+        "label": "G",
+        "items": []
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-id",
+     "path": "/harnesses/claude/groups/0/id"
+    }
+   ]
+  },
+  {
+   "name": "accept-id-48",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "command",
+          "label": "C",
+          "text": "/help"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": []
+  },
+  {
+   "name": "bad-id-49",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "command",
+          "label": "C",
+          "text": "/help"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-id",
+     "path": "/harnesses/claude/groups/0/items/0/id"
+    }
+   ]
+  },
+  {
+   "name": "bad-type-id",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": 5,
+          "kind": "command",
+          "label": "C",
+          "text": "/help"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-type",
+     "path": "/harnesses/claude/groups/0/items/0/id"
+    }
+   ]
+  },
+  {
+   "name": "duplicate-group-id",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": []
+       },
+       {
+        "id": "g",
+        "label": "H",
+        "items": []
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "duplicate-id",
+     "path": "/harnesses/claude/groups/1/id"
+    }
+   ]
+  },
+  {
+   "name": "duplicate-item-id-across-groups",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "G",
+        "items": [
+         {
+          "id": "x",
+          "kind": "command",
+          "label": "C",
+          "text": "/help"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "H",
+        "items": [
+         {
+          "id": "x",
+          "kind": "command",
+          "label": "C",
+          "text": "/help"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "duplicate-id",
+     "path": "/harnesses/claude/groups/1/items/0/id"
+    }
+   ]
+  },
+  {
+   "name": "group-and-item-ids-are-separate-namespaces",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "x",
+        "label": "G",
+        "items": [
+         {
+          "id": "x",
+          "kind": "command",
+          "label": "C",
+          "text": "/help"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": []
+  },
+  {
+   "name": "accept-label-40",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "text": "/help"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": []
+  },
+  {
+   "name": "too-long-label-41",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "text": "/help"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "too-long",
+     "path": "/harnesses/claude/groups/0/items/0/label"
+    }
+   ]
+  },
+  {
+   "name": "empty-label",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "",
+          "text": "/help"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "empty",
+     "path": "/harnesses/claude/groups/0/items/0/label"
+    }
+   ]
+  },
+  {
+   "name": "accept-description-200",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "/help",
+          "description": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": []
+  },
+  {
+   "name": "too-long-description-201",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "/help",
+          "description": "ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "too-long",
+     "path": "/harnesses/claude/groups/0/items/0/description"
+    }
+   ]
+  },
+  {
+   "name": "accept-empty-description",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "/help",
+          "description": ""
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": []
+  },
+  {
+   "name": "accept-text-1000",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": []
+  },
+  {
+   "name": "too-long-text-1001",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "ttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "too-long",
+     "path": "/harnesses/claude/groups/0/items/0/text"
+    }
+   ]
+  },
+  {
+   "name": "empty-text",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": ""
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "empty",
+     "path": "/harnesses/claude/groups/0/items/0/text"
+    }
+   ]
+  },
+  {
+   "name": "bad-type-text",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": 5
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-type",
+     "path": "/harnesses/claude/groups/0/items/0/text"
+    }
+   ]
+  },
+  {
+   "name": "bad-type-label",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": [],
+          "text": "/help"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-type",
+     "path": "/harnesses/claude/groups/0/items/0/label"
+    }
+   ]
+  },
+  {
+   "name": "missing-kind",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "label": "C",
+          "text": "/help"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "missing-field",
+     "path": "/harnesses/claude/groups/0/items/0/kind"
+    }
+   ]
+  },
+  {
+   "name": "bad-type-kind",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": 3,
+          "label": "C",
+          "text": "/help"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-type",
+     "path": "/harnesses/claude/groups/0/items/0/kind"
+    }
+   ]
+  },
+  {
+   "name": "unknown-kind",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "macro",
+          "label": "C",
+          "text": "/help"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "kind-shape",
+     "path": "/harnesses/claude/groups/0/items/0/kind"
+    }
+   ]
+  },
+  {
+   "name": "kind-shape-command-without-text",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "kind-shape",
+     "path": "/harnesses/claude/groups/0/items/0/text"
+    }
+   ]
+  },
+  {
+   "name": "kind-shape-reply-without-text",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "r",
+          "kind": "reply",
+          "label": "R"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "kind-shape",
+     "path": "/harnesses/claude/groups/0/items/0/text"
+    }
+   ]
+  },
+  {
+   "name": "kind-shape-command-with-keys",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "/help",
+          "keys": [
+           "Esc"
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "kind-shape",
+     "path": "/harnesses/claude/groups/0/items/0/keys"
+    }
+   ]
+  },
+  {
+   "name": "kind-shape-chord-without-keys",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "k",
+          "kind": "chord",
+          "label": "K"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "kind-shape",
+     "path": "/harnesses/claude/groups/0/items/0/keys"
+    }
+   ]
+  },
+  {
+   "name": "kind-shape-chord-with-text-mode-args",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "k",
+          "kind": "chord",
+          "label": "K",
+          "keys": [
+           "Esc"
+          ],
+          "text": "x",
+          "mode": "run",
+          "args": []
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "kind-shape",
+     "path": "/harnesses/claude/groups/0/items/0/text"
+    },
+    {
+     "code": "kind-shape",
+     "path": "/harnesses/claude/groups/0/items/0/mode"
+    },
+    {
+     "code": "kind-shape",
+     "path": "/harnesses/claude/groups/0/items/0/args"
+    }
+   ]
+  },
+  {
+   "name": "bad-mode",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "/help",
+          "mode": "type"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-mode",
+     "path": "/harnesses/claude/groups/0/items/0/mode"
+    }
+   ]
+  },
+  {
+   "name": "bad-type-mode",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "/help",
+          "mode": 1
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-type",
+     "path": "/harnesses/claude/groups/0/items/0/mode"
+    }
+   ]
+  },
+  {
+   "name": "run-multiline-lf",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "a\nb",
+          "mode": "run"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "run-multiline",
+     "path": "/harnesses/claude/groups/0/items/0/text"
+    }
+   ]
+  },
+  {
+   "name": "run-multiline-cr",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "a\rb",
+          "mode": "run"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "run-multiline",
+     "path": "/harnesses/claude/groups/0/items/0/text"
+    }
+   ]
+  },
+  {
+   "name": "run-control-tab",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "a\tb",
+          "mode": "run"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "control-char",
+     "path": "/harnesses/claude/groups/0/items/0/text"
+    }
+   ]
+  },
+  {
+   "name": "run-control-esc",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "a\u001bb",
+          "mode": "run"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "control-char",
+     "path": "/harnesses/claude/groups/0/items/0/text"
+    }
+   ]
+  },
+  {
+   "name": "control-char-paste-esc",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "a\u001b[31m"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "control-char",
+     "path": "/harnesses/claude/groups/0/items/0/text"
+    }
+   ]
+  },
+  {
+   "name": "control-char-paste-cr",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "a\rb"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "control-char",
+     "path": "/harnesses/claude/groups/0/items/0/text"
+    }
+   ]
+  },
+  {
+   "name": "control-char-paste-nul",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "a\u0000b"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "control-char",
+     "path": "/harnesses/claude/groups/0/items/0/text"
+    }
+   ]
+  },
+  {
+   "name": "control-char-paste-del",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "a\u007fb"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "control-char",
+     "path": "/harnesses/claude/groups/0/items/0/text"
+    }
+   ]
+  },
+  {
+   "name": "control-char-paste-c1",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "a\u0085b"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "control-char",
+     "path": "/harnesses/claude/groups/0/items/0/text"
+    }
+   ]
+  },
+  {
+   "name": "undeclared-arg",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "/x {who}"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "undeclared-arg",
+     "path": "/harnesses/claude/groups/0/items/0/text"
+    }
+   ]
+  },
+  {
+   "name": "unused-arg",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "/x",
+          "args": [
+           {
+            "name": "who",
+            "hint": "h"
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "unused-arg",
+     "path": "/harnesses/claude/groups/0/items/0/args/0"
+    }
+   ]
+  },
+  {
+   "name": "bad-placeholder-lone-open",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "/x {"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-placeholder",
+     "path": "/harnesses/claude/groups/0/items/0/text"
+    }
+   ]
+  },
+  {
+   "name": "bad-placeholder-lone-close",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "/x }"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-placeholder",
+     "path": "/harnesses/claude/groups/0/items/0/text"
+    }
+   ]
+  },
+  {
+   "name": "bad-placeholder-empty",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "/x {}"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-placeholder",
+     "path": "/harnesses/claude/groups/0/items/0/text"
+    }
+   ]
+  },
+  {
+   "name": "bad-placeholder-uppercase",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "/x {Who}"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-placeholder",
+     "path": "/harnesses/claude/groups/0/items/0/text"
+    }
+   ]
+  },
+  {
+   "name": "bad-placeholder-nested-open",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "/x {a{b}"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-placeholder",
+     "path": "/harnesses/claude/groups/0/items/0/text"
+    }
+   ]
+  },
+  {
+   "name": "placeholder-triple-brace",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "{{{a}}}",
+          "args": [
+           {
+            "name": "a",
+            "hint": "h"
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": []
+  },
+  {
+   "name": "placeholder-then-lone-close",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "{a}}",
+          "args": [
+           {
+            "name": "a",
+            "hint": "h"
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-placeholder",
+     "path": "/harnesses/claude/groups/0/items/0/text"
+    }
+   ]
+  },
+  {
+   "name": "placeholder-repeated-undeclared",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "{a} {a}"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "undeclared-arg",
+     "path": "/harnesses/claude/groups/0/items/0/text"
+    },
+    {
+     "code": "undeclared-arg",
+     "path": "/harnesses/claude/groups/0/items/0/text"
+    }
+   ]
+  },
+  {
+   "name": "bad-arg-name",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "/x",
+          "args": [
+           {
+            "name": "Who",
+            "hint": "h"
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-arg",
+     "path": "/harnesses/claude/groups/0/items/0/args/0/name"
+    }
+   ]
+  },
+  {
+   "name": "bad-arg-duplicate",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "{a}",
+          "args": [
+           {
+            "name": "a",
+            "hint": "h"
+           },
+           {
+            "name": "a",
+            "hint": "h"
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-arg",
+     "path": "/harnesses/claude/groups/0/items/0/args/1/name"
+    }
+   ]
+  },
+  {
+   "name": "accept-arg-name-24",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "{aaaaaaaaaaaaaaaaaaaaaaaa}",
+          "args": [
+           {
+            "name": "aaaaaaaaaaaaaaaaaaaaaaaa",
+            "hint": "h"
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": []
+  },
+  {
+   "name": "bad-arg-name-25",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "x",
+          "args": [
+           {
+            "name": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+            "hint": "h"
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-arg",
+     "path": "/harnesses/claude/groups/0/items/0/args/0/name"
+    }
+   ]
+  },
+  {
+   "name": "arg-missing-fields",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "/help",
+          "args": [
+           {}
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "missing-field",
+     "path": "/harnesses/claude/groups/0/items/0/args/0/name"
+    },
+    {
+     "code": "missing-field",
+     "path": "/harnesses/claude/groups/0/items/0/args/0/hint"
+    }
+   ]
+  },
+  {
+   "name": "arg-not-object",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "/help",
+          "args": [
+           1
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-type",
+     "path": "/harnesses/claude/groups/0/items/0/args/0"
+    }
+   ]
+  },
+  {
+   "name": "arg-unknown-field",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "{a}",
+          "args": [
+           {
+            "name": "a",
+            "hint": "h",
+            "z": 1
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "unknown-field",
+     "path": "/harnesses/claude/groups/0/items/0/args/0/z"
+    }
+   ]
+  },
+  {
+   "name": "arg-hint-empty",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "{a}",
+          "args": [
+           {
+            "name": "a",
+            "hint": ""
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "empty",
+     "path": "/harnesses/claude/groups/0/items/0/args/0/hint"
+    }
+   ]
+  },
+  {
+   "name": "accept-arg-hint-60",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "{a}",
+          "args": [
+           {
+            "name": "a",
+            "hint": "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh"
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": []
+  },
+  {
+   "name": "arg-hint-61",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "{a}",
+          "args": [
+           {
+            "name": "a",
+            "hint": "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh"
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "too-long",
+     "path": "/harnesses/claude/groups/0/items/0/args/0/hint"
+    }
+   ]
+  },
+  {
+   "name": "accept-arg-default-200",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "{a}",
+          "args": [
+           {
+            "name": "a",
+            "hint": "h",
+            "default": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": []
+  },
+  {
+   "name": "arg-default-201",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "{a}",
+          "args": [
+           {
+            "name": "a",
+            "hint": "h",
+            "default": "ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "too-long",
+     "path": "/harnesses/claude/groups/0/items/0/args/0/default"
+    }
+   ]
+  },
+  {
+   "name": "args-not-array",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "/help",
+          "args": {}
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-type",
+     "path": "/harnesses/claude/groups/0/items/0/args"
+    }
+   ]
+  },
+  {
+   "name": "accept-args-4",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "{a}{b}{c}{d}",
+          "args": [
+           {
+            "name": "a",
+            "hint": "h"
+           },
+           {
+            "name": "b",
+            "hint": "h"
+           },
+           {
+            "name": "c",
+            "hint": "h"
+           },
+           {
+            "name": "d",
+            "hint": "h"
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": []
+  },
+  {
+   "name": "too-many-args-5",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "{a}{b}{c}{d}{e}",
+          "args": [
+           {
+            "name": "a",
+            "hint": "h"
+           },
+           {
+            "name": "b",
+            "hint": "h"
+           },
+           {
+            "name": "c",
+            "hint": "h"
+           },
+           {
+            "name": "d",
+            "hint": "h"
+           },
+           {
+            "name": "e",
+            "hint": "h"
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "too-many",
+     "path": "/harnesses/claude/groups/0/items/0/args"
+    }
+   ]
+  },
+  {
+   "name": "bad-key",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "k",
+          "kind": "chord",
+          "label": "K",
+          "keys": [
+           "Escape"
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-key",
+     "path": "/harnesses/claude/groups/0/items/0/keys/0"
+    }
+   ]
+  },
+  {
+   "name": "bad-key-second-position",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "k",
+          "kind": "chord",
+          "label": "K",
+          "keys": [
+           "Esc",
+           "BTab",
+           "Enter"
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-key",
+     "path": "/harnesses/claude/groups/0/items/0/keys/1"
+    }
+   ]
+  },
+  {
+   "name": "bad-type-key",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "k",
+          "kind": "chord",
+          "label": "K",
+          "keys": [
+           "Esc",
+           1
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-type",
+     "path": "/harnesses/claude/groups/0/items/0/keys/1"
+    }
+   ]
+  },
+  {
+   "name": "empty-keys",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "k",
+          "kind": "chord",
+          "label": "K",
+          "keys": []
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "empty",
+     "path": "/harnesses/claude/groups/0/items/0/keys"
+    }
+   ]
+  },
+  {
+   "name": "accept-keys-8",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "k",
+          "kind": "chord",
+          "label": "K",
+          "keys": [
+           "Esc",
+           "Esc",
+           "Esc",
+           "Esc",
+           "Esc",
+           "Esc",
+           "Esc",
+           "Esc"
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": []
+  },
+  {
+   "name": "too-many-keys-9",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "k",
+          "kind": "chord",
+          "label": "K",
+          "keys": [
+           "Esc",
+           "Esc",
+           "Esc",
+           "Esc",
+           "Esc",
+           "Esc",
+           "Esc",
+           "Esc",
+           "Esc"
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "too-many",
+     "path": "/harnesses/claude/groups/0/items/0/keys"
+    }
+   ]
+  },
+  {
+   "name": "keys-not-array",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "k",
+          "kind": "chord",
+          "label": "K",
+          "keys": "Esc"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-type",
+     "path": "/harnesses/claude/groups/0/items/0/keys"
+    }
+   ]
+  },
+  {
+   "name": "accept-every-relay-key",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "k0",
+          "kind": "chord",
+          "label": "K",
+          "keys": [
+           "Esc",
+           "Tab",
+           "S-Tab",
+           "Enter",
+           "Up",
+           "Down",
+           "Right",
+           "Left"
+          ]
+         },
+         {
+          "id": "k1",
+          "kind": "chord",
+          "label": "K",
+          "keys": [
+           "C-c",
+           "C-d",
+           "C-u",
+           "BSpace",
+           "Slash",
+           "1",
+           "2",
+           "3"
+          ]
+         },
+         {
+          "id": "k2",
+          "kind": "chord",
+          "label": "K",
+          "keys": [
+           "4",
+           "5",
+           "6",
+           "7",
+           "8",
+           "9",
+           "y",
+           "n"
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": []
+  },
+  {
+   "name": "bad-type-unverified",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "/help",
+          "unverified": "yes"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-type",
+     "path": "/harnesses/claude/groups/0/items/0/unverified"
+    }
+   ]
+  },
+  {
+   "name": "unknown-field-item",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         {
+          "id": "c",
+          "kind": "command",
+          "label": "C",
+          "text": "/help",
+          "zz": 1,
+          "aa": 2
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "unknown-field",
+     "path": "/harnesses/claude/groups/0/items/0/aa"
+    },
+    {
+     "code": "unknown-field",
+     "path": "/harnesses/claude/groups/0/items/0/zz"
+    }
+   ]
+  },
+  {
+   "name": "item-not-object",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g",
+        "label": "G",
+        "items": [
+         5
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-type",
+     "path": "/harnesses/claude/groups/0/items/0"
+    }
+   ]
+  },
+  {
+   "name": "many-errors-document-order",
+   "doc": {
+    "schema": "kb-term-commands/1",
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "BAD",
+        "label": "",
+        "items": [
+         {
+          "id": "Bad",
+          "kind": "command",
+          "label": "",
+          "text": "a\u001b{x}",
+          "mode": "x",
+          "unverified": 1,
+          "extra": 1
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "errors": [
+    {
+     "code": "bad-id",
+     "path": "/harnesses/claude/groups/0/id"
+    },
+    {
+     "code": "empty",
+     "path": "/harnesses/claude/groups/0/label"
+    },
+    {
+     "code": "bad-id",
+     "path": "/harnesses/claude/groups/0/items/0/id"
+    },
+    {
+     "code": "empty",
+     "path": "/harnesses/claude/groups/0/items/0/label"
+    },
+    {
+     "code": "control-char",
+     "path": "/harnesses/claude/groups/0/items/0/text"
+    },
+    {
+     "code": "undeclared-arg",
+     "path": "/harnesses/claude/groups/0/items/0/text"
+    },
+    {
+     "code": "bad-mode",
+     "path": "/harnesses/claude/groups/0/items/0/mode"
+    },
+    {
+     "code": "bad-type",
+     "path": "/harnesses/claude/groups/0/items/0/unverified"
+    },
+    {
+     "code": "unknown-field",
+     "path": "/harnesses/claude/groups/0/items/0/extra"
+    }
+   ]
+  }
+ ]
+}

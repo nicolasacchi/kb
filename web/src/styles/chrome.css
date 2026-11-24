@@ -7184,3 +7184,11 @@ a.proposal-row__chip:hover {
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
+
+/* HUBNAV - attention pill on a door; stays visible when the label collapses. */
+.kb-door__badge {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--warn);
+}

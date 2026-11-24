@@ -256,6 +256,29 @@ async fn handle_connection<S: Supervisor + 'static>(runner: Arc<Runner<S>>, stre
                 }
                 continue;
             }
+            Ok(crate::wire::Request::UploadAppend {
+                id,
+                upload,
+                offset,
+                len,
+            }) => {
+                // Same framing as `upload`: a refusal before the body is
+                // read, or a short body, ends the connection.
+                if !respond_upload_append(
+                    &mut reader,
+                    &mut write_half,
+                    req_id,
+                    &runner,
+                    (id, upload),
+                    offset,
+                    len,
+                )
+                .await
+                {
+                    return;
+                }
+                continue;
+            }
             Ok(req) => rpc::dispatch(&runner, &req).await,
             Err(e) => crate::wire::Response::Err {
                 code: e.code().to_string(),
@@ -326,6 +349,74 @@ async fn respond_upload<S: Supervisor + 'static>(
                 sha256: s.sha256,
             })
             .unwrap_or(Value::Null);
+            crate::wire::Response::Ok { data }
+        }
+        Ok(Err(e)) => refuse(e),
+        Err(_) => refuse(crate::runner::RunnerError::Io(
+            "upload task failed".to_string(),
+        )),
+    };
+    respond(w, id, resp).await.is_ok()
+}
+
+/// Answer an `upload_append` request (FXRUN). Same contract as
+/// [`respond_upload`]: every check that needs no body (id, session, token,
+/// chunk cap, offset, declared size) runs BEFORE a body byte is read, the
+/// body is read in full under [`upload::UPLOAD_BODY_TIMEOUT`], and only a
+/// complete chunk reaches the disk, so a short body leaves the partial at
+/// its last good offset. Returns whether the connection may carry another
+/// request.
+async fn respond_upload_append<S: Supervisor + 'static>(
+    reader: &mut BufReader<tokio::net::unix::OwnedReadHalf>,
+    w: &mut tokio::net::unix::OwnedWriteHalf,
+    id: Option<Value>,
+    runner: &Arc<Runner<S>>,
+    target: (String, String),
+    offset: u64,
+    len: u64,
+) -> bool {
+    let refuse = |e: crate::runner::RunnerError| crate::wire::Response::Err {
+        code: e.code().to_string(),
+        message: e.message(),
+    };
+    let (session, token) = target;
+    let dir = runner.sessions_dir();
+    let pre = {
+        let (dir, session, token) = (dir.clone(), session.clone(), token.clone());
+        tokio::task::spawn_blocking(move || {
+            upload::check_append(&dir, &session, &token, offset, len)
+        })
+        .await
+    };
+    match pre {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => {
+            let _ = respond(w, id, refuse(e)).await;
+            return false;
+        }
+        Err(_) => {
+            let e = crate::runner::RunnerError::Io("upload task failed".to_string());
+            let _ = respond(w, id, refuse(e)).await;
+            return false;
+        }
+    }
+    // `len` is at most CHUNK_MAX_BYTES here, so the allocation is bounded.
+    let mut body = vec![0u8; len as usize];
+    let read =
+        tokio::time::timeout(upload::UPLOAD_BODY_TIMEOUT, reader.read_exact(&mut body)).await;
+    if !matches!(read, Ok(Ok(_))) {
+        let e = crate::runner::RunnerError::Io("upload body was short or timed out".to_string());
+        let _ = respond(w, id, refuse(e)).await;
+        return false;
+    }
+    let appended = tokio::task::spawn_blocking(move || {
+        upload::append_chunk(&dir, &session, &token, offset, &body)
+    })
+    .await;
+    let resp = match appended {
+        Ok(Ok(received)) => {
+            let data = serde_json::to_value(crate::wire::UploadAppendData { received })
+                .unwrap_or(Value::Null);
             crate::wire::Response::Ok { data }
         }
         Ok(Err(e)) => refuse(e),
