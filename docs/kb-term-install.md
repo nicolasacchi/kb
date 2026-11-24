@@ -114,8 +114,13 @@ exact path, so a distro tmux upgrade cannot kill or mismatch any session.
    systemctl --user restart kb-termd.service
    ```
 
-   The `PATH` always includes the directory `kb` resolves from, then the
-   directory of every harness found, then `/usr/local/bin:/usr/bin`. Each
+   The `PATH` always includes the directory `kb` resolves from and the
+   directory of every harness found, in the order your shell's own `PATH`
+   lists them, then `/usr/local/bin:/usr/bin`. That order matters: an earlier
+   directory shadows a later one, so a stale copy of a harness in an earlier
+   directory is what every pane launches. After moving or reinstalling a
+   harness, re-run the installer (it only prints the step) or reorder the
+   `PATH` by hand so it matches your shell. Each
    assignment is one double-quoted word, as systemd requires for a value with
    a space; inside the quotes a backslash and a double quote are
    backslash-escaped and `%` is written `%%` (systemd expands `%x` in unit
@@ -126,7 +131,11 @@ exact path, so a distro tmux upgrade cannot kill or mismatch any session.
    unit's `MainPID` names) and FAILs `runner_env_sessions_dir` when
    `KB_SESSIONS_DIR` is missing there, and WARNs `runner_env_kb` or
    `runner_env_harness_*` when `kb` or a harness your shell finds is not on
-   the runner's `PATH`.
+   the runner's `PATH`. It also WARNs `runner_env_harness_*` when the
+   runner's `PATH` and your shell resolve a harness to two different files
+   (a symlink to the same file is fine), and the `harness_*` version probe
+   runs the binary the runner resolves when its environment is readable,
+   saying which one in the check detail.
 
    Anything that did not change the machine (a tmpfiles re-run, a schema
    note) needs no restart. Do **not** restart `kb-term@*` holder units to

@@ -498,6 +498,19 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
             post(routes::terms::viewer_close),
         )
         .route("/terms/{id}/ws", get(terminal::ws::upgrade))
+        // kbt2 PQSTORE — the per-project prompt queue (terminal tier; the
+        // gate runs in each handler). Outside `/terms/` so no `{id}` route
+        // can shadow it.
+        .route("/term-prompts/{project}", get(terminal::prompts::list))
+        .route("/term-prompts/{project}", post(terminal::prompts::add))
+        .route(
+            "/term-prompts/{project}/{item}",
+            patch(terminal::prompts::patch),
+        )
+        .route(
+            "/term-prompts/{project}/{item}",
+            delete(terminal::prompts::delete),
+        )
         .route("/sessions/beat", post(routes::sessions::beat))
         .route("/sessions/live-status", get(routes::sessions::live_status))
         // OL PRES1 — which files live agent sessions are touching. Same

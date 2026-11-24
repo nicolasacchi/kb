@@ -192,6 +192,9 @@
 .kb-navlist__badge--anchor {
   color: var(--warn);
 }
+.kb-navlist__badge--door {
+  color: var(--warn);
+}
 
 /* ── compact header + collapsed layout at ≤860px ─────────────────────── */
 @media (max-width: 860px) {

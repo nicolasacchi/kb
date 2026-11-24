@@ -623,14 +623,65 @@ pub fn probe_harness_at(path: &Path, env: &[(String, String)], timeout: Duration
     }
 }
 
+/// Which search path chose the binary a `--version` probe ran.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProbeSource {
+    /// The runner's own PATH: what kb-term panes actually launch.
+    Runner,
+    /// doctor's own shell (the runner environment was unreadable or does not
+    /// resolve the harness).
+    Shell,
+}
+
+impl ProbeSource {
+    pub fn label(self) -> &'static str {
+        match self {
+            ProbeSource::Runner => "runner PATH",
+            ProbeSource::Shell => "your shell",
+        }
+    }
+}
+
+/// Pick the binary to probe: the one the RUNNER resolves when its PATH is
+/// known and holds the harness (that is what a pane launches), else the one
+/// doctor's own shell finds. Pure: no process is spawned.
+pub fn select_probe_target(
+    bin: &str,
+    runner_path: Option<&str>,
+    shell: Option<PathBuf>,
+) -> Option<(PathBuf, ProbeSource)> {
+    if let Some(p) = runner_path.and_then(|rp| resolve_on_path(bin, rp)) {
+        return Some((p, ProbeSource::Runner));
+    }
+    shell.map(|p| (p, ProbeSource::Shell))
+}
+
+/// Say, in a harness check's detail, which search path the probed binary came
+/// from. A SKIP (nothing probed) is returned unchanged.
+pub fn with_probe_source(mut check: Check, source: ProbeSource) -> Check {
+    if check.status != CheckStatus::Skip {
+        check.detail = format!("{} [probed via {}]", check.detail, source.label());
+    }
+    check
+}
+
 /// [`probe_harness_at`] for a harness name on the doctor's own search path.
 pub fn probe_harness(name: &str) -> HarnessProbe {
-    match harness_bin_path(name) {
-        None => HarnessProbe::NotFound,
-        Some(p) => probe_harness_at(
-            &p,
-            &allowlisted_env(),
-            Duration::from_secs(HARNESS_PROBE_SECS),
+    probe_harness_via(name, None).0
+}
+
+/// [`probe_harness`], preferring the binary the runner resolves from
+/// `runner_path` (see [`select_probe_target`]). Returns where it probed.
+pub fn probe_harness_via(name: &str, runner_path: Option<&str>) -> (HarnessProbe, ProbeSource) {
+    match select_probe_target(name, runner_path, harness_bin_path(name)) {
+        None => (HarnessProbe::NotFound, ProbeSource::Shell),
+        Some((p, src)) => (
+            probe_harness_at(
+                &p,
+                &allowlisted_env(),
+                Duration::from_secs(HARNESS_PROBE_SECS),
+            ),
+            src,
         ),
     }
 }
@@ -1121,6 +1172,15 @@ pub fn resolve_on_path(name: &str, path: &str) -> Option<PathBuf> {
         .find(|c| c.is_file() && is_executable(c))
 }
 
+/// True when both paths name the same file (symlinks followed). When either
+/// cannot be canonicalised the paths are compared as written.
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a == b,
+    }
+}
+
 const ENV_DROPIN_FIX: &str = "write ~/.config/systemd/user/kb-termd.service.d/env.conf with Environment=PATH=... and Environment=KB_SESSIONS_DIR=..., then systemctl --user daemon-reload && systemctl --user restart kb-termd.service (see docs/kb-term-install.md)";
 
 /// Checks against the RUNNER's environment (what every pane inherits),
@@ -1165,6 +1225,23 @@ pub fn decide_runner_env(
     for (name, local) in harnesses {
         let id = format!("runner_env_harness_{name}");
         match (resolve_on_path(name, path), local) {
+            // Both resolve, to different files: a pane launches the runner's
+            // copy, not the one the operator's shell (and `--version`) sees.
+            // Canonicalised, so a symlink to the same file is the same binary.
+            // WARN, not FAIL: a deliberate pin can look the same.
+            (Some(p), Some(l)) if !same_file(&p, l) => out.push(
+                Check::warn(
+                    id,
+                    format!(
+                        "{name} resolves to {} for kb-term panes but to {} in your shell: panes run a different binary",
+                        p.display(),
+                        l.display()
+                    ),
+                )
+                .with_fix(format!(
+                    "put the directory your shell resolves {name} from first in the PATH of the kb-termd drop-in (re-run the installer to print it in your shell's order). {ENV_DROPIN_FIX}"
+                )),
+            ),
             (Some(p), _) => out.push(Check::pass(
                 id,
                 format!("{name} resolves on the runner PATH ({})", p.display()),
@@ -1247,17 +1324,18 @@ pub fn run_checks() -> Vec<Check> {
         None
     };
     checks.push(decide_xterm_pins(pins.as_deref()));
-    // harnesses
+    // harnesses: probe what the runner launches when its PATH is readable
+    let runner_path =
+        probe_runner_env().and_then(|e| e.into_iter().find(|(k, _)| k == "PATH").map(|(_, v)| v));
     for name in crate::profiles::HARNESSES {
         let known_good = KNOWN_GOOD.iter().find(|(n, _)| *n == name).map(|(_, v)| *v);
         let experimental = crate::profiles::table::row(name)
             .map(|r| r.experimental)
             .unwrap_or(false);
-        checks.push(decide_harness_probe(
-            name,
-            &probe_harness(name),
-            known_good,
-            experimental,
+        let (probe, source) = probe_harness_via(name, runner_path.as_deref());
+        checks.push(with_probe_source(
+            decide_harness_probe(name, &probe, known_good, experimental),
+            source,
         ));
     }
     // omp overlay
