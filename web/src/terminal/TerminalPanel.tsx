@@ -766,6 +766,11 @@ export function TerminalPanel(props: TerminalPanelProps) {
           stream={state}
           caption={transient ?? state.caption}
           onClose={closePanel}
+          sendInput={(d) => {
+            const ok = sessionRef.current?.sendInput(d) ?? false;
+            if (ok) lastTypedRef.current = Date.now();
+            return ok;
+          }}
           renderDrive={({ measure, fullscreen }) => (
             <DriveDock
               grid={grid}
