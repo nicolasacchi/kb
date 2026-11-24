@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use kb_term::wire::{
     decode_binary, decode_text_frame, encode_binary, encode_envelope, is_valid_sha256_hex,
     is_valid_term_id, parse_s2c_body, s2c_body, ClientFrame, ControlMessage, EnvelopeDecoder,
-    Harness, Profile, Request, Response, ResumeInfo, ServerFrame, SessionInfo, TextFrame,
+    FileData, Harness, Profile, Request, Response, ResumeInfo, ServerFrame, SessionInfo, TextFrame,
     UploadData, WireError, MAX_ENVELOPE_LEN,
 };
 
@@ -79,6 +79,10 @@ fn request_goldens() -> Vec<&'static str> {
         "req_stream.json",
         "req_stream_resume.json",
         "req_upload.json",
+        "req_upload_begin.json",
+        "req_upload_append.json",
+        "req_upload_commit.json",
+        "req_upload_abort.json",
         "req_typed.json",
     ]
 }
@@ -412,6 +416,7 @@ fn golden_files_are_complete() {
             "resp_list.json",
             "session_info.json",
             "upload_data.json",
+            "file_data.json",
         ])
         .map(str::to_string)
         .collect();
@@ -525,6 +530,27 @@ fn upload_data_matches_golden() {
     let data: UploadData = serde_json::from_slice(&bytes).expect("deserialize upload_data.json");
     let out = serde_json::to_vec(&data).expect("serialize upload_data.json");
     assert_eq!(out, bytes, "upload_data golden");
+}
+
+#[test]
+fn file_data_matches_golden() {
+    let bytes = read_golden("file_data.json");
+    let data: FileData = serde_json::from_slice(&bytes).expect("deserialize file_data.json");
+    let out = serde_json::to_vec(&data).expect("serialize file_data.json");
+    assert_eq!(out, bytes, "file_data golden");
+}
+
+#[test]
+fn chunked_upload_requests_reject_unknown_fields() {
+    for bad in [
+        r#"{"op":"upload_begin","id":"abcd1234","name":"a","mime":"x/y","size":1,"extra":1}"#,
+        r#"{"op":"upload_append","id":"abcd1234","upload":"0123456789abcdef0123456789abcdef","offset":0,"len":1,"extra":1}"#,
+        r#"{"op":"upload_commit","id":"abcd1234","upload":"0123456789abcdef0123456789abcdef","extra":1}"#,
+        r#"{"op":"upload_abort","id":"abcd1234","upload":"0123456789abcdef0123456789abcdef","extra":1}"#,
+    ] {
+        let r: Result<Request, _> = serde_json::from_str(bad);
+        assert!(r.is_err(), "unknown field must be rejected: {bad}");
+    }
 }
 
 #[test]
