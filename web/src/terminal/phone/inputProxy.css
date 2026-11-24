@@ -1,0 +1,49 @@
+/* PHIN0 - the phone input proxy. Present in layout and painted (opacity .01,
+ * 16px font so iOS never zooms): display:none, visibility:hidden or an
+ * off-screen box make Chrome skip scroll-into-view and Firefox drop the IME.
+ * The viewport's own `user-select:none` would otherwise reach it. */
+.kb-term-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  resize: none;
+  overflow: hidden;
+  opacity: 0.01;
+  font-size: 16px;
+  line-height: 1;
+  color: transparent;
+  background: transparent;
+  caret-color: transparent;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.kb-term-input-debug {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-1, 4px);
+  max-height: 34dvh;
+  padding: var(--pad-1, 4px) var(--pad-2, 8px);
+  border-top: 1px solid var(--border, currentColor);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.kb-term-input-debug__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pad-1, 4px);
+  align-items: center;
+}
+
+.kb-term-input-debug__log {
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
