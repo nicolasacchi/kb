@@ -81,6 +81,36 @@ const TOOL_RESULT_CAP = 30_000;
 /** CT-A3 marker. Body is an unordered key=value bag — `kb` and `id` required, `pos` and unknown pairs accepted — same grammar as view.rs `parse_recall_marker`. Layout v2's trailing `pos=` must match. */
 const RECALL_MARKER_RE = /<!--kb-recall\/1\s+([^>]*?)-->/g;
 
+/** Same truthy set as the shell gate in kb-capture-throttle.sh (case-insensitive). */
+export function liveCaptureOn(): boolean {
+  const v = (process.env.KB_CAPTURE_LIVE ?? "").toLowerCase();
+  return v === "1" || v === "true" || v === "yes";
+}
+
+function envSecs(name: string, dflt: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || !/^\d+$/.test(raw.trim())) return dflt;
+  return Number(raw.trim());
+}
+
+/**
+ * Live (mid-turn) capture decision, mirroring kb-capture-throttle.sh: a
+ * throttled fire needs `intervalMs` since the last one (first fire always
+ * passes); a blocked fire bypasses the interval but is debounced by
+ * `debounceMs`. `lastMs` is the previous live capture for the session, or
+ * undefined when none yet.
+ */
+export function shouldLiveCapture(
+  lastMs: number | undefined,
+  nowMs: number,
+  intervalMs: number,
+  blocked: boolean,
+  debounceMs: number,
+): boolean {
+  if (lastMs === undefined) return true;
+  return nowMs - lastMs >= (blocked ? debounceMs : intervalMs);
+}
+
 /** EXACT customType — a downstream capture-phase reader is built against it. */
 const RECALL_LEDGER_TYPE = "kb.recall";
 
@@ -639,6 +669,22 @@ export default function kbMemoryOmp(pi: {
   // carry the memories forward instead of re-deriving them (no re-run of
   // kb-recall.sh, no ranking, no new storage).
   const lastRecall = new Map<string, { text: string; markers: string[] }>();
+  // Live-capture clock per main session (tool_call interval / approval debounce).
+  const liveCapturedAt = new Map<string, number>();
+  function liveCapture(info: Awaited<ReturnType<typeof sessionInfo>>, blocked: boolean) {
+    if (!liveCaptureOn() || info.isSub || !info.sid) return;
+    const now = Date.now();
+    const ok = shouldLiveCapture(
+      liveCapturedAt.get(info.sid),
+      now,
+      envSecs("KB_CAPTURE_MIN_INTERVAL_SECS", 240) * 1000,
+      blocked,
+      envSecs("KB_CAPTURE_BLOCKED_DEBOUNCE_SECS", 20) * 1000,
+    );
+    if (!ok) return;
+    liveCapturedAt.set(info.sid, now);
+    void capture(info).catch(() => {});
+  }
 
   // ---------------------------------------------------------------- kill switch
   // Registered at LOAD (register* methods are load-only). Read lazily from
@@ -2073,6 +2119,7 @@ export default function kbMemoryOmp(pi: {
       // or `write` touches. omp's hashline / apply_patch edit modes carry the
       // paths inside a text `input`, which is not read: those calls beat
       // without a path.
+      liveCapture(info, false);
       const toolName = typeof event?.toolName === "string" ? event.toolName : "";
       const rawPath = (event?.input as Record<string, unknown> | undefined)?.path;
       void run(join(HOOKS, "kb-beat-throttle.sh"), ["omp"], {
@@ -2099,6 +2146,7 @@ export default function kbMemoryOmp(pi: {
       const tool = String(event?.toolName ?? "tool");
       const reason = String(event?.reason ?? "approval required");
       beat("blocked", info, { message: `${tool}: ${reason}`.slice(0, 240) });
+      liveCapture(info, true);
     } catch {}
   });
 
@@ -2260,6 +2308,7 @@ export default function kbMemoryOmp(pi: {
         lastRecall.delete(info.sid);
         distilled.delete(info.sid);
         waked.delete(info.sid);
+        liveCapturedAt.delete(info.sid);
       }
       await capture(info);
     } catch {}
