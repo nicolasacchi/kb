@@ -102,8 +102,9 @@ export default function TermPageRoute(): ReactElement {
       onEnded={retry}
     />
   );
-  const close = (): void =>
-    navigate(sessionId ? `/sessions/${encodeURIComponent(sessionId)}` : "/sessions", { replace: true });
+  const close = (): void => {
+    void navigate(sessionId ? `/sessions/${encodeURIComponent(sessionId)}` : "/sessions", { replace: true });
+  };
 
   return (
     <TermShell key={termId} termId={termId} harness={harness} sid={sessionId} header={phone ? undefined : controls}>
