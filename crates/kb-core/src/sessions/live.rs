@@ -1786,6 +1786,7 @@ mod tests {
 
     #[test]
     fn status_info_from_wire_validates_every_field() {
+        use serde_json::json;
         let long = "x".repeat(65);
         let ok = "y".repeat(64);
         let got = LiveStatusInfo::from_wire(&json!({
@@ -1824,6 +1825,7 @@ mod tests {
 
     #[test]
     fn status_info_rounds_pct_and_cost() {
+        use serde_json::json;
         let s =
             LiveStatusInfo::from_wire(&json!({"context_pct": 42.4, "cost_usd": 1.234})).unwrap();
         assert_eq!(s.context_pct, Some(42));
@@ -1834,6 +1836,7 @@ mod tests {
 
     #[test]
     fn live_status_info_json_omits_absent_fields() {
+        use serde_json::json;
         let s = LiveStatusInfo {
             permission_mode: Some(PermissionMode::Plan),
             context_pct: Some(7),
