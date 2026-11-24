@@ -74,6 +74,7 @@ const EXPECTED_NAMES = [
   "Table",
   "Tasks",
   "Terminal",
+  "TerminalHub",
   "ThumbDown",
   "ThumbUp",
   "Trash",
@@ -108,6 +109,12 @@ describe("ui/icons", () => {
     const html = (G: ComponentType) => renderToString(createElement(G));
     expect(html(Icon.Inbox)).not.toBe(html(Icon.List));
     expect(html(Icon.Inbox)).toContain('viewBox="0 0 16 16"');
+  });
+
+  it("TerminalHub is an svg and differs from Terminal", () => {
+    const html = (G: ComponentType) => renderToString(createElement(G));
+    expect(html(Icon.TerminalHub).startsWith("<svg")).toBe(true);
+    expect(html(Icon.TerminalHub)).not.toBe(html(Icon.Terminal));
   });
 
   it("every size-table name is a real icon", () => {

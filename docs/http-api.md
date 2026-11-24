@@ -3348,6 +3348,25 @@ POST   /api/terms/{id}/release-size         release grid [terminal]
 POST   /api/terms/{id}/resize               resize grid [terminal]
 POST   /api/terms/{id}/viewer-close         close spa viewer [terminal]
 GET    /api/terms/media/{sha256}            stored terminal picture [terminal]
+GET    /api/term-prompts/{project}          a project's saved prompt queue
+                                            {project, rev, items:[{id, text,
+                                            created_at, done_at, order}]} +
+                                            ETag "<rev>"; rev 0 and no items
+                                            when it has none [terminal]
+POST   /api/term-prompts/{project}          append {text} (1..8192 bytes after
+                                            trim, no NUL; 100 items per
+                                            project, 64 projects): 201 + the
+                                            queue. No If-Match (adds commute)
+                                            [terminal]
+PATCH  /api/term-prompts/{project}/{item}   {text?, done?, position?} (>=1,
+                                            position clamped): If-Match
+                                            REQUIRED (428 without, 412
+                                            `prompts-stale` + current ETag
+                                            when stale); a no-op bumps and
+                                            emits nothing [terminal]
+DELETE /api/term-prompts/{project}/{item}   remove an item, answer the queue;
+                                            If-Match honoured when sent
+                                            (412 when stale) [terminal]
 
 # admin
 GET    /api/kb/{kb}/quarantine              parser-quarantined artifacts
