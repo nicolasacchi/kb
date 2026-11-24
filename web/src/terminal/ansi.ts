@@ -33,6 +33,12 @@ const REPAIR_MAX_STEPS = 40;
 const FALLBACK_HUE = { red: 25, green: 145, blue: 250 } as const;
 const DERIVED_HUE = { yellow: 85, cyan: 200, magenta: 320 } as const;
 const FALLBACK_C = 0.13;
+const MIN_HUE_GAP = 25;
+
+function hueGap(a: number, b: number): number {
+  const d = Math.abs(a - b) % 360;
+  return d > 180 ? 360 - d : d;
+}
 
 function tryParse(value: string): Rgb | null {
   try {
@@ -85,20 +91,39 @@ export function deriveAnsi(css: TokenSource, bg: string, fg: string): AnsiColors
   if (!bgRgb || !fgRgb) return null;
   const light = toOklch(bgRgb).l > 0.6;
   const fbL = light ? 0.5 : 0.72;
+  // A theme may reuse one colour for two roles (a palette with no green, say);
+  // a base hue within MIN_HUE_GAP of one already taken falls back to its fixed
+  // hue so red/green/blue stay tellable apart.
+  const taken: number[] = [];
   const base = (name: keyof typeof FALLBACK_HUE): Oklch => {
     const rgb = tryParse(css.getPropertyValue(`--${name}`).trim());
-    return rgb ? toOklch(rgb) : { l: fbL, c: FALLBACK_C, h: FALLBACK_HUE[name] };
+    const o = rgb ? toOklch(rgb) : null;
+    const picked =
+      o && o.c > 0.01 && taken.every((h) => hueGap(h, o.h) >= MIN_HUE_GAP)
+        ? o
+        : { l: o?.l ?? fbL, c: o && o.c > 0.01 ? o.c : FALLBACK_C, h: FALLBACK_HUE[name] };
+    taken.push(picked.h);
+    return picked;
   };
   const red = base("red");
   const green = base("green");
   const blue = base("blue");
+  // Yellow sits near 85 degrees; slide it off any base hue that is too close.
+  let yellowHue: number = DERIVED_HUE.yellow;
+  for (const off of [0, 10, -10, 20, -20, 30, -30, 40, -40]) {
+    const h = DERIVED_HUE.yellow + off;
+    if (taken.every((t) => hueGap(t, h) >= MIN_HUE_GAP)) {
+      yellowHue = h;
+      break;
+    }
+  }
   const meanL = (red.l + green.l + blue.l) / 3;
   const meanC = (red.c + green.c + blue.c) / 3;
   const chroma: Record<"red" | "green" | "blue" | "yellow" | "magenta" | "cyan", Oklch> = {
     red,
     green,
     blue,
-    yellow: { l: meanL, c: meanC, h: DERIVED_HUE.yellow },
+    yellow: { l: meanL, c: meanC, h: yellowHue },
     magenta: { l: meanL, c: meanC, h: DERIVED_HUE.magenta },
     cyan: { l: meanL, c: meanC, h: DERIVED_HUE.cyan },
   };
