@@ -7,6 +7,7 @@
 // `TerminalSlot.dom.test.tsx` pins the chunk evaluation).
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { TerminalSlot, shouldRenderTerminal } from "./TerminalSlot";
 
 afterEach(cleanup);
@@ -18,22 +19,27 @@ describe("TerminalSlot", () => {
       { available: true, term_id: "abc123", admitted: false },
     ] as const) {
       const { container, unmount } = render(
-        <TerminalSlot sid="sid-1" harness="claude" lane={lane} />,
+        <MemoryRouter>
+          <TerminalSlot sid="sid-1" harness="claude" lane={lane} />
+        </MemoryRouter>,
       );
       expect(container.firstChild).toBeNull();
       unmount();
     }
   });
 
-  it("renders the Open terminal button for an available+admitted lane", () => {
+  it("renders the Open terminal link for an available+admitted lane", () => {
     render(
-      <TerminalSlot
-        sid="sid-1"
-        harness="claude"
-        lane={{ available: true, term_id: "abc123", admitted: true }}
-      />,
+      <MemoryRouter>
+        <TerminalSlot
+          sid="sid-1"
+          harness="claude"
+          lane={{ available: true, term_id: "abc123", admitted: true }}
+        />
+      </MemoryRouter>,
     );
     expect(screen.getByTestId("kb-term-open").textContent).toBe("Open terminal");
+    expect(screen.getByTestId("kb-term-open").getAttribute("href")).toBe("/term/abc123");
   });
   it("shouldRenderTerminal is true only for an available+admitted lane", () => {
     expect(shouldRenderTerminal({ available: true, admitted: true })).toBe(true);
