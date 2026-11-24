@@ -3173,6 +3173,10 @@ pub const CONV_MAX_LIMIT: usize = 200;
 const CONV_OPTION_CAP: usize = 60;
 const CONV_MAX_OPTIONS: usize = 4;
 const CONV_MAX_PENDING_QUESTIONS: usize = 4;
+/// Per-row cap on answered/decided asks and on commit shas; a row is thus
+/// bounded by `CONV_MAX_ROW_ASKS + CONV_MAX_PENDING_QUESTIONS` asks.
+pub const CONV_MAX_ROW_ASKS: usize = 8;
+pub const CONV_MAX_ROW_COMMITS: usize = 8;
 
 /// Window + cursor options for [`conversation`].
 #[derive(Debug, Clone, Default)]
@@ -3382,13 +3386,15 @@ fn conv_row(anchor: &Turn, prompt: &str, span: &[&Turn], is_last_row: bool) -> C
                     } else {
                         "ask"
                     };
-                    asks.push(ConvAsk {
-                        kind: kind.to_string(),
-                        q: conv_preview(prompt, CONV_ANSWER_CAP),
-                        options: Vec::new(),
-                        answer: answer.as_deref().map(|a| conv_preview(a, CONV_ANSWER_CAP)),
-                        pending: false,
-                    });
+                    if asks.len() < CONV_MAX_ROW_ASKS {
+                        asks.push(ConvAsk {
+                            kind: kind.to_string(),
+                            q: conv_preview(prompt, CONV_ANSWER_CAP),
+                            options: Vec::new(),
+                            answer: answer.as_deref().map(|a| conv_preview(a, CONV_ANSWER_CAP)),
+                            pending: false,
+                        });
+                    }
                 }
                 Item::ToolCall {
                     name,
@@ -3416,7 +3422,9 @@ fn conv_row(anchor: &Turn, prompt: &str, span: &[&Turn], is_last_row: bool) -> C
                             {
                                 if let Some(sha) = super::parse_git_sha(&r.raw) {
                                     let short: String = sha.chars().take(7).collect();
-                                    if !commits.contains(&short) {
+                                    if commits.len() < CONV_MAX_ROW_COMMITS
+                                        && !commits.contains(&short)
+                                    {
                                         commits.push(short);
                                     }
                                 }
@@ -5973,6 +5981,111 @@ mod conversation_tests {
         assert_eq!(r.subagents, ConvSubagents { n: 1, errors: 1 });
         assert_eq!(r.errors, 0, "child errors are never summed into the parent");
         assert_eq!(r.answer.as_deref(), Some("wrapped up"));
+    }
+
+    /// Re-label every sidechain turn of `v` with the given agent ids, in
+    /// order of appearance (the JSONL builder leaves `agent_id` unset; the
+    /// sidecar join sets it in production).
+    fn label_sidechains(v: &mut SessionView, ids: &[Option<&str>]) {
+        let mut k = 0;
+        for t in v.turns.iter_mut().filter(|t| t.sidechain) {
+            t.agent_id = ids[k].map(str::to_string);
+            k += 1;
+        }
+        assert_eq!(k, ids.len());
+    }
+
+    fn side_lines() -> Vec<String> {
+        vec![
+            user(1, "delegate"),
+            asst_tool(2, "Read", json!({"file_path":"/s.rs"}), true),
+            result(2, "ok", false, true),
+            asst_text(3, "main between", false),
+            asst_tool(4, "Read", json!({"file_path":"/s.rs"}), true),
+            result(4, "ok", false, true),
+            asst_text(5, "main again", false),
+            asst_tool(6, "Read", json!({"file_path":"/t.rs"}), true),
+            result(6, "ok", false, true),
+        ]
+    }
+
+    #[test]
+    fn conversation_named_agent_in_two_runs_is_one_subagent() {
+        let mut v = build(&side_lines());
+        let n_side = v.turns.iter().filter(|t| t.sidechain).count();
+        assert_eq!(n_side, 3, "three separated sidechain turns");
+        label_sidechains(&mut v, &[Some("a1"), Some("a1"), Some("a2")]);
+        let c = conversation(&v, &opts());
+        assert_eq!(c.rows[0].subagents.n, 2, "a1 twice + a2 = two agents");
+    }
+
+    #[test]
+    fn conversation_separated_unnamed_runs_count_separately() {
+        let mut v = build(&side_lines());
+        label_sidechains(&mut v, &[None, None, None]);
+        let c = conversation(&v, &opts());
+        assert_eq!(
+            c.rows[0].subagents.n, 3,
+            "each separated unnamed run counts"
+        );
+    }
+
+    #[test]
+    fn conversation_row_asks_and_commits_are_capped() {
+        let mut lines = vec![user(1, "burst")];
+        for i in 0..12u32 {
+            let n = 10 + 2 * i;
+            lines.push(asst_tool(
+                n,
+                "Bash",
+                json!({"command":"git commit -m x"}),
+                false,
+            ));
+            lines.push(result(
+                n,
+                &format!("[main {:07x}] x\n 1 file changed", 0xabc0000 + i),
+                false,
+                false,
+            ));
+        }
+        for i in 0..12u32 {
+            let n = 100 + 2 * i;
+            lines.push(asst_tool(n, "ExitPlanMode", json!({}), false));
+            lines.push(result(
+                n,
+                "User has approved your plan. You can now start coding.",
+                false,
+                false,
+            ));
+        }
+        let c = conv(&lines);
+        let r = &c.rows[0];
+        assert_eq!(r.commits.len(), CONV_MAX_ROW_COMMITS);
+        assert_eq!(r.commits[0], "abc0000");
+        assert_eq!(r.asks.len(), CONV_MAX_ROW_ASKS);
+    }
+
+    #[test]
+    fn conversation_rejected_plan_is_an_ask_row_by_documented_limitation() {
+        // The shared decision detector replaces the call with a Decision
+        // whose prompt is the generic "tool use rejected": the originating
+        // tool name is gone, so a rejected ExitPlanMode cannot be told from
+        // any other rejection and classifies as "ask". Pinned so a future
+        // IR change that carries the tool name flips this knowingly.
+        let c = conv(&[
+            user(1, "go"),
+            asst_tool(2, "ExitPlanMode", json!({}), false),
+            result(
+                2,
+                "The user doesn't want to proceed with this tool use. The tool use was rejected.",
+                true,
+                false,
+            ),
+        ]);
+        let asks = &c.rows[0].asks;
+        assert_eq!(asks.len(), 1, "{asks:?}");
+        assert_eq!(asks[0].kind, "ask");
+        assert_eq!(asks[0].q, "tool use rejected");
     }
 
     fn big_session() -> SessionView {

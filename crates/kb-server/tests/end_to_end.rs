@@ -27501,6 +27501,35 @@ async fn conv_get_text(addr: std::net::SocketAddr, path: &str) -> String {
         .unwrap()
 }
 
+/// Top-level object keys of a JSON text in document order (serde_json's
+/// default map sorts, so scan the raw bytes with a depth counter).
+fn conv_top_level_keys(body: &str) -> Vec<String> {
+    let b = body.as_bytes();
+    let (mut depth, mut i, mut keys) = (0i32, 0usize, Vec::new());
+    while i < b.len() {
+        match b[i] {
+            b'{' | b'[' => depth += 1,
+            b'}' | b']' => depth -= 1,
+            b'"' => {
+                let start = i + 1;
+                i += 1;
+                while b[i] != b'"' {
+                    if b[i] == b'\\' {
+                        i += 1;
+                    }
+                    i += 1;
+                }
+                if depth == 1 && b.get(i + 1) == Some(&b':') {
+                    keys.push(body[start..i].to_string());
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    keys
+}
+
 /// The default and every explicit non-conversation projection carry no
 /// `conversation` key, and the no-param body is byte-identical to the
 /// explicit all-sections request (so adding the opt-in field changed nothing
@@ -27518,6 +27547,45 @@ async fn view_route_without_conversation_field_is_byte_identical() {
     assert_eq!(default, explicit);
     let some = conv_get_text(addr, "/api/sessions/conv-e2e/view?fields=header,turns").await;
     assert!(!some.contains("\"conversation\""), "{some}");
+
+    // Key-order goldens (the pre-CONVPROJ wire order, `conversation` sits
+    // between `stats` and `turns_total` only when asked for): reordering a
+    // field or adding a different key fails here.
+    let meta_tail = ["turns_total", "turns_returned", "scrubbed", "redactions"];
+    let head = ["grammar", "session_id", "kb", "artifact_id"];
+    let expect = |mid: &[&str]| -> Vec<String> {
+        head.iter()
+            .chain(mid.iter())
+            .chain(meta_tail.iter())
+            .map(|k| k.to_string())
+            .collect()
+    };
+    assert_eq!(
+        conv_top_level_keys(&default),
+        expect(&[
+            "header",
+            "turns",
+            "side_lanes",
+            "outline",
+            "tasks",
+            "subagents",
+            "minimap",
+            "stats"
+        ]),
+        "{default}"
+    );
+    assert_eq!(
+        conv_top_level_keys(&some),
+        expect(&["header", "turns", "side_lanes"]),
+        "{some}"
+    );
+    let none = conv_get_text(addr, "/api/sessions/conv-e2e/view?fields=x").await;
+    assert_eq!(conv_top_level_keys(&none), expect(&[]), "{none}");
+    assert!(none.starts_with("{\"grammar\":\"session-view/1\",\"session_id\":\"conv-e2e\","));
+    assert!(
+        none.ends_with("\"scrubbed\":false,\"redactions\":0}"),
+        "{none}"
+    );
     let on = conv_get_text(addr, "/api/sessions/conv-e2e/view?fields=conversation").await;
     assert!(on.contains("\"conversation\""), "{on}");
 }
