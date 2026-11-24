@@ -6,7 +6,7 @@
 // offers only resumable rows, and the layout follows the phone predicate.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToString } from "react-dom/server";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { LaunchDialog, type LaunchDialogProps } from "./LaunchDialog";
 import { toast } from "../../lib/toast";
@@ -403,5 +403,127 @@ describe("prefill type contract", () => {
     // @ts-expect-error prefill carries nothing but resumeSid
     const bad: NonNullable<LaunchDialogProps["prefill"]> = { resumeSid: "s", harness: "claude" };
     expect(bad.resumeSid).toBe("s");
+  });
+});
+
+function pendingPost() {
+  const sig: { s?: AbortSignal; n: number } = { n: 0 };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((_i: string | URL, init?: RequestInit) => {
+      if ((init?.method ?? "GET") === "POST") {
+        sig.n++;
+        sig.s = init?.signal ?? undefined;
+        return new Promise<Response>(() => {});
+      }
+      return Promise.resolve(new Response(JSON.stringify({ terms: [], sessions: [] }), { status: 200 }));
+    }),
+  );
+  return sig;
+}
+
+describe("busy guard", () => {
+  it("two clicks inside one act (before any re-render) send one POST", async () => {
+    const sig = pendingPost();
+    mount();
+    type("/tmp/x");
+    review();
+    const btn = screen.getByTestId("launch-confirm");
+    act(() => {
+      btn.click();
+      btn.click();
+    });
+    await waitFor(() => expect(sig.n).toBeGreaterThan(0));
+    expect(sig.n).toBe(1);
+  });
+});
+
+describe("close paths", () => {
+  it("Esc (the dialog cancel event) aborts, closes, and uses the latest onClose", async () => {
+    const sig = pendingPost();
+    const qc = new QueryClient();
+    const first = vi.fn();
+    const second = vi.fn();
+    const ui = (cb: () => void) => (
+      <QueryClientProvider client={qc}>
+        <LaunchDialog open admitted onClose={cb} onLaunched={vi.fn()} />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(ui(first));
+    rerender(ui(second));
+    type("/tmp/x");
+    review();
+    confirm();
+    await waitFor(() => expect(sig.s).toBeDefined());
+    const ev = new Event("cancel", { cancelable: true });
+    screen.getByTestId("launch-modal").dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
+    expect(sig.s?.aborted).toBe(true);
+    expect(second).toHaveBeenCalled();
+    expect(first).not.toHaveBeenCalled();
+  });
+
+  it("unmount aborts the in-flight launch", async () => {
+    const sig = pendingPost();
+    const { unmount } = mount();
+    type("/tmp/x");
+    review();
+    confirm();
+    await waitFor(() => expect(sig.s).toBeDefined());
+    unmount();
+    expect(sig.s?.aborted).toBe(true);
+  });
+
+  it("returns focus to the opener on close", () => {
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    opener.focus();
+    const { unmount } = mount();
+    unmount();
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
+  });
+
+  it("phone Sheet: Cancel aborts the in-flight launch", async () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: true,
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }));
+    const sig = pendingPost();
+    const { onClose } = mount();
+    type("/tmp/x");
+    review();
+    confirm();
+    await waitFor(() => expect(sig.s).toBeDefined());
+    fireEvent.click(screen.getByTestId("launch-back"));
+    expect(sig.s?.aborted).toBe(true);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+describe("prefill server error", () => {
+  it("a prefill for a known-missing sid cannot launch", async () => {
+    mount({ prefill: { resumeSid: "nope" } });
+    await screen.findByTestId("launch-prefill-error");
+    expect((screen.getByTestId("launch-review") as HTMLButtonElement).disabled).toBe(true);
+    expect(posts()).toHaveLength(0);
+  });
+});
+
+describe("aria patterns", () => {
+  it("harness chips use roving tabindex and arrow keys; tabs link to panels", () => {
+    mount();
+    const chips = screen.getAllByRole("radio");
+    expect(chips.filter((c) => c.tabIndex === 0)).toHaveLength(1);
+    const checked = chips.findIndex((c) => c.getAttribute("aria-checked") === "true");
+    fireEvent.keyDown(chips[checked], { key: "ArrowRight" });
+    const after = screen.getAllByRole("radio").findIndex((c) => c.getAttribute("aria-checked") === "true");
+    expect(after).toBe((checked + 1) % chips.length);
+    const tab = screen.getByTestId("launch-tab-new");
+    const panel = document.getElementById(tab.getAttribute("aria-controls") as string);
+    expect(panel?.getAttribute("role")).toBe("tabpanel");
+    expect(panel?.getAttribute("aria-labelledby")).toBe(tab.id);
   });
 });

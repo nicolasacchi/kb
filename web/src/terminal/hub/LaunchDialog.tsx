@@ -13,7 +13,7 @@
 // ConfirmModal), so the single confirm host rule (#32) stays intact. Server
 // state is TanStack Query with finite staleTime and no bridge entry (#23).
 
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Icon } from "@kb/ui/icons";
 import { Sheet } from "@kb/ui/Sheet";
@@ -79,7 +79,6 @@ function LaunchBody({ onClose, onLaunched, prefill }: LaunchDialogProps) {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [q, setQ] = useState("");
-  const [detent, setDetent] = useState<"peek" | "full">("full");
   const listId = useId();
   const inflight = useRef<AbortController | null>(null);
   const busy = useRef(false);
@@ -131,7 +130,7 @@ function LaunchBody({ onClose, onLaunched, prefill }: LaunchDialogProps) {
   let prefillLoading = false;
   if (prefillSid !== undefined) {
     if (prefillQ.isPending) prefillLoading = true;
-    else if (prefillQ.isError) prefillError = "Could not load that session.";
+    else if (prefillQ.isError && !prefillQ.data) prefillError = "Could not load that session.";
     else if (!prefillQ.data || prefillQ.data.session_id !== prefillSid) {
       prefillError = "Unknown session: nothing to resume.";
     } else {
@@ -166,6 +165,10 @@ function LaunchBody({ onClose, onLaunched, prefill }: LaunchDialogProps) {
     onClose();
   };
 
+  // The cancel listener is bound once; it calls the latest close/onClose.
+  const closeRef = useRef(close);
+  closeRef.current = close;
+
   // Desktop: native <dialog> (focus trap, ::backdrop, Esc), like ConfirmModal.
   useEffect(() => {
     if (phone) return;
@@ -177,7 +180,7 @@ function LaunchBody({ onClose, onLaunched, prefill }: LaunchDialogProps) {
     }
     const onCancel = (e: Event) => {
       e.preventDefault();
-      close();
+      closeRef.current();
     };
     el?.addEventListener("cancel", onCancel);
     return () => {
@@ -231,6 +234,18 @@ function LaunchBody({ onClose, onLaunched, prefill }: LaunchDialogProps) {
         setLaunching(false);
       },
     );
+  };
+
+  const onChipKey = (e: ReactKeyboardEvent<HTMLButtonElement>, id: string) => {
+    const dir = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
+    if (!dir) return;
+    e.preventDefault();
+    const n = LAUNCH_HARNESSES.length;
+    const i = LAUNCH_HARNESSES.findIndex((h) => h.id === id);
+    const nx = LAUNCH_HARNESSES[(i + dir + n) % n];
+    setHarness(nx.id);
+    const group = e.currentTarget.parentElement;
+    queueMicrotask(() => group?.querySelector<HTMLElement>(`[data-testid="launch-harness-${nx.id}"]`)?.focus());
   };
 
   const switchTab = (next: "new" | "resume") => {
@@ -351,7 +366,8 @@ function LaunchBody({ onClose, onLaunched, prefill }: LaunchDialogProps) {
       className="kb-launch__form"
       data-testid="launch-new-form"
       role="tabpanel"
-      aria-label="New terminal"
+      id={`${listId}-p-new`}
+      aria-labelledby={`${listId}-tab-new`}
       onSubmit={(e) => {
         e.preventDefault();
         review();
@@ -392,6 +408,8 @@ function LaunchBody({ onClose, onLaunched, prefill }: LaunchDialogProps) {
               type="button"
               role="radio"
               aria-checked={harness === h.id}
+              tabIndex={harness === h.id ? 0 : -1}
+              onKeyDown={(e) => onChipKey(e, h.id)}
               className="kb-launch__chip"
               data-testid={`launch-harness-${h.id}`}
               onClick={() => setHarness(h.id)}
@@ -414,7 +432,7 @@ function LaunchBody({ onClose, onLaunched, prefill }: LaunchDialogProps) {
   );
 
   const resumeTab = (
-    <div className="kb-launch__resume" role="tabpanel" aria-label="Resume a session" data-testid="launch-resume-panel">
+    <div className="kb-launch__resume" role="tabpanel" id={`${listId}-p-resume`} aria-labelledby={`${listId}-tab-resume`} data-testid="launch-resume-panel">
       <input
         type="search"
         className="kb-launch__search"
@@ -473,6 +491,17 @@ function LaunchBody({ onClose, onLaunched, prefill }: LaunchDialogProps) {
                 type="button"
                 role="tab"
                 aria-selected={tab === t}
+                aria-controls={`${listId}-p-${t}`}
+                id={`${listId}-tab-${t}`}
+                tabIndex={tab === t ? 0 : -1}
+                onKeyDown={(e) => {
+                  if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+                    e.preventDefault();
+                    const o = t === "new" ? "resume" : "new";
+                    switchTab(o);
+                    queueMicrotask(() => document.getElementById(`${listId}-tab-${o}`)?.focus());
+                  }
+                }}
                 className="kb-launch__tab"
                 data-testid={`launch-tab-${t}`}
                 onClick={() => switchTab(t)}
@@ -491,8 +520,10 @@ function LaunchBody({ onClose, onLaunched, prefill }: LaunchDialogProps) {
     return (
       <Sheet
         open
-        detent={detent}
-        onDetentChange={(d) => setDetent(d === "peek" ? "peek" : "full")}
+        detent="full"
+        onDetentChange={(d) => {
+          if (d === "closed") close();
+        }}
         onClose={close}
         title={title}
         id="kb-launch-sheet"
