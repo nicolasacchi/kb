@@ -2146,23 +2146,19 @@ async fn term_prompts_refuse_token_callers_and_loopback_without_origin() {
     let (tmp, addr) = boot(enabled_terminal(), &fake, true).await;
     let c = client();
     for (m, suffix, body) in pq_routes() {
-        // The shared (legacy) token, as Authorization and as X-Kb-Token:
+        // The shared (legacy) bearer token (a registry token takes the same
+        // `Token` class in the gate's caller-class step):
         // the SPA-shaped request is otherwise perfect.
-        for (name, value) in [
-            ("Authorization", format!("Bearer {FIXTURE_TOKEN}")),
-            ("X-Kb-Token", FIXTURE_TOKEN.to_string()),
-        ] {
-            let mut req = pq_req(&c, m.clone(), addr, &suffix)
-                .header("If-Match", "\"0\"")
-                .header(name, value);
-            if let Some(b) = body {
-                req = req.body(b.to_string());
-            }
-            let resp = req.send().await.unwrap();
-            assert_eq!(resp.status().as_u16(), 403, "{m} {suffix} via {name}");
-            let (_s, text) = body_text(resp).await;
-            assert_problem(&text, "terminal-token-refused");
+        let mut req = pq_req(&c, m.clone(), addr, &suffix)
+            .header("If-Match", "\"0\"")
+            .header("Authorization", format!("Bearer {FIXTURE_TOKEN}"));
+        if let Some(b) = body {
+            req = req.body(b.to_string());
         }
+        let resp = req.send().await.unwrap();
+        assert_eq!(resp.status().as_u16(), 403, "{m} {suffix} via bearer");
+        let (_s, text) = body_text(resp).await;
+        assert_problem(&text, "terminal-token-refused");
         // A loopback caller (this process) with neither Origin nor
         // intent: the auth bypass admits it, the gate must not.
         let mut req = c.request(m.clone(), pq_url(addr, &suffix));
