@@ -973,3 +973,41 @@ fn doctor_reads_the_real_taps_version_line_into_the_comparison() {
         CheckStatus::Warn
     );
 }
+
+// ---- FUHARNESSPATH: the version probe follows the runner -------------
+
+#[test]
+fn doctor_probe_target_prefers_the_runner_resolution() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner_bin = dir.path().join("runner-bin");
+    let shell_bin = dir.path().join("shell-bin");
+    std::fs::create_dir_all(&runner_bin).unwrap();
+    std::fs::create_dir_all(&shell_bin).unwrap();
+    let stale = fake_exe(&runner_bin, "omp", "#!/bin/sh\n");
+    let fresh = fake_exe(&shell_bin, "omp", "#!/bin/sh\n");
+    let rp = runner_bin.to_str().unwrap();
+    // Runner PATH readable and resolving: probe the runner's copy.
+    let (p, src) = doctor::select_probe_target("omp", Some(rp), Some(fresh.clone())).unwrap();
+    assert_eq!((p, src), (stale, doctor::ProbeSource::Runner));
+    // Runner environment unreadable: today's shell resolution.
+    let (p, src) = doctor::select_probe_target("omp", None, Some(fresh.clone())).unwrap();
+    assert_eq!((p, src), (fresh.clone(), doctor::ProbeSource::Shell));
+    // Runner PATH does not hold it: fall back to the shell.
+    let (p, src) = doctor::select_probe_target("grok", Some(rp), Some(fresh.clone())).unwrap();
+    assert_eq!((p, src), (fresh, doctor::ProbeSource::Shell));
+    // Nowhere: nothing to probe.
+    assert!(doctor::select_probe_target("grok", Some(rp), None).is_none());
+}
+
+#[test]
+fn doctor_probe_source_is_named_in_the_detail() {
+    let ok = doctor::decide_harness("omp", Some("omp 1.2.3"), None, false);
+    let c = doctor::with_probe_source(ok, doctor::ProbeSource::Runner);
+    assert!(c.detail.contains("probed via runner PATH"), "{}", c.detail);
+    let ok = doctor::decide_harness("omp", Some("omp 1.2.3"), None, false);
+    let c = doctor::with_probe_source(ok, doctor::ProbeSource::Shell);
+    assert!(c.detail.contains("probed via your shell"), "{}", c.detail);
+    let skip = doctor::decide_harness("omp", None, None, false);
+    let c = doctor::with_probe_source(skip, doctor::ProbeSource::Shell);
+    assert!(!c.detail.contains("probed via"), "{}", c.detail);
+}
