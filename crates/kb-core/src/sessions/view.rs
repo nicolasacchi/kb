@@ -3153,6 +3153,387 @@ pub fn derive_memory_recalls(view: &SessionView) -> DerivedRecalls {
     out
 }
 
+// ─── conversation projection (CONVPROJ) ─────────────────────────────────
+//
+// A derived, deterministic, LLM-free per-human-turn digest over the
+// already-built (and, for a non-loopback caller, already scrubbed) view.
+// It walks `view.turns` — no JSONL re-parse, no second interpretation —
+// and is computed per request, never stored or cached. Surfaced, never
+// scored: nothing here reaches a ranking module.
+
+/// Wire grammar tag of [`Conversation`].
+pub const CONVERSATION_SCHEMA: &str = "kb-conversation/1";
+/// Row prompt preview cap (chars).
+pub const CONV_PROMPT_CAP: usize = 160;
+/// Row answer / question / answer-text preview cap (chars).
+pub const CONV_ANSWER_CAP: usize = 240;
+/// Default and maximum page size of the window.
+pub const CONV_DEFAULT_LIMIT: usize = 100;
+pub const CONV_MAX_LIMIT: usize = 200;
+const CONV_OPTION_CAP: usize = 60;
+const CONV_MAX_OPTIONS: usize = 4;
+const CONV_MAX_PENDING_QUESTIONS: usize = 4;
+
+/// Window + cursor options for [`conversation`].
+#[derive(Debug, Clone, Default)]
+pub struct ConvOpts {
+    /// Return rows with `n >= from`, oldest first. `None` = the LAST
+    /// `limit` rows.
+    pub from: Option<u32>,
+    /// Page size; clamped to `1..=CONV_MAX_LIMIT`.
+    pub limit: usize,
+    /// The capture generation the caller computed (`"{mtime}-{turns}"`).
+    pub capture_gen: String,
+    /// The generation the client already holds; equal to `capture_gen`
+    /// short-circuits to `unchanged: true` with no rows.
+    pub client_gen: Option<String>,
+}
+
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConvSubagents {
+    pub n: u32,
+    pub errors: u32,
+}
+
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConvAsk {
+    /// `"ask"` or `"plan"`.
+    pub kind: String,
+    pub q: String,
+    pub options: Vec<String>,
+    pub answer: Option<String>,
+    pub pending: bool,
+}
+
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConvRow {
+    pub n: u32,
+    pub id: String,
+    pub ts: Option<String>,
+    pub prompt: String,
+    pub answer: Option<String>,
+    pub asks: Vec<ConvAsk>,
+    pub commits: Vec<String>,
+    pub files_touched: u32,
+    pub errors: u32,
+    pub subagents: ConvSubagents,
+}
+
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Conversation {
+    pub schema: String,
+    pub total: u32,
+    pub from: Option<u32>,
+    pub next_cursor: Option<u32>,
+    pub capture_gen: String,
+    pub unchanged: bool,
+    pub rows: Vec<ConvRow>,
+}
+
+/// A row anchor: a non-sidechain Human turn with a primary prose item (the
+/// same turns [`build_outline`] lists, minus sidechain).
+fn conv_anchor_prompt(t: &Turn) -> Option<&str> {
+    if t.role != Role::Human || t.sidechain {
+        return None;
+    }
+    t.items.iter().find_map(|i| match i {
+        Item::Prose { text } => Some(text.as_str()),
+        _ => None,
+    })
+}
+
+/// Collapse all whitespace runs to single spaces, then cut to `cap` chars.
+fn conv_preview(s: &str, cap: usize) -> String {
+    let collapsed = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    truncate_chars(&collapsed, cap)
+}
+
+/// The shell command of a Bash tool call: the input's `command` when the
+/// input stayed small, else the (truncated) headline.
+fn conv_bash_command(input_view: &InputView, headline: &str) -> String {
+    if let InputView::Small { pretty } = input_view {
+        if let Some(c) = serde_json::from_str::<Value>(pretty).ok().and_then(|v| {
+            v.get("command")
+                .and_then(|c| c.as_str())
+                .map(str::to_string)
+        }) {
+            return c;
+        }
+    }
+    headline.to_string()
+}
+
+/// Pending asks from an unanswered `AskUserQuestion`/`ExitPlanMode` call.
+/// Text comes from the call's own small input; an oversize input yields an
+/// honest empty question, never an invented one.
+fn conv_pending_asks(name: &str, input_view: &InputView) -> Vec<ConvAsk> {
+    let kind = if name == "ExitPlanMode" {
+        "plan"
+    } else {
+        "ask"
+    };
+    let empty = || ConvAsk {
+        kind: kind.to_string(),
+        q: String::new(),
+        options: Vec::new(),
+        answer: None,
+        pending: true,
+    };
+    let InputView::Small { pretty } = input_view else {
+        return vec![empty()];
+    };
+    let Ok(v) = serde_json::from_str::<Value>(pretty) else {
+        return vec![empty()];
+    };
+    if name == "ExitPlanMode" {
+        let q = v
+            .get("plan")
+            .and_then(|p| p.as_str())
+            .map(|p| conv_preview(p, CONV_ANSWER_CAP))
+            .unwrap_or_default();
+        return vec![ConvAsk { q, ..empty() }];
+    }
+    let mut out = Vec::new();
+    if let Some(qs) = v.get("questions").and_then(|q| q.as_array()) {
+        for q in qs.iter().take(CONV_MAX_PENDING_QUESTIONS) {
+            let text = q
+                .get("question")
+                .and_then(|x| x.as_str())
+                .map(|s| conv_preview(s, CONV_ANSWER_CAP))
+                .unwrap_or_default();
+            let options = q
+                .get("options")
+                .and_then(|o| o.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|o| o.get("label").and_then(|l| l.as_str()))
+                        .take(CONV_MAX_OPTIONS)
+                        .map(|l| conv_preview(l, CONV_OPTION_CAP))
+                        .collect()
+                })
+                .unwrap_or_default();
+            out.push(ConvAsk {
+                q: text,
+                options,
+                ..empty()
+            });
+        }
+    }
+    if out.is_empty() {
+        out.push(empty());
+    }
+    out
+}
+
+/// Fold one row's span of turns into a [`ConvRow`].
+fn conv_row(anchor: &Turn, prompt: &str, span: &[&Turn], is_last_row: bool) -> ConvRow {
+    let mut answer: Option<String> = None;
+    let mut asks: Vec<ConvAsk> = Vec::new();
+    let mut commits: Vec<String> = Vec::new();
+    let mut files: HashSet<&str> = HashSet::new();
+    let mut errors = 0u32;
+    // Subagents = distinct sidechain RUNS (the `build_side_lanes` grouping:
+    // consecutive sidechain turns of one agent). A named agent id seen again
+    // in a later run is still one subagent.
+    let mut sub_n = 0u32;
+    let mut seen_agents: HashSet<&str> = HashSet::new();
+    let mut prev_side: Option<Option<&str>> = None;
+    let mut sub_errors = 0u32;
+
+    for t in span {
+        if t.sidechain {
+            let agent = t.agent_id.as_deref();
+            if prev_side != Some(agent) {
+                match agent {
+                    Some(a) => {
+                        if seen_agents.insert(a) {
+                            sub_n += 1;
+                        }
+                    }
+                    None => sub_n += 1,
+                }
+            }
+            prev_side = Some(agent);
+            for item in &t.items {
+                if let Item::ToolCall {
+                    result: Some(r), ..
+                } = item
+                {
+                    if r.is_error {
+                        sub_errors += 1;
+                    }
+                }
+            }
+            continue;
+        }
+        prev_side = None;
+        for item in &t.items {
+            match item {
+                Item::Prose { text } if t.role == Role::Assistant => {
+                    answer = Some(conv_preview(text, CONV_ANSWER_CAP));
+                }
+                Item::Decision { prompt, answer } => {
+                    let kind = if prompt == "plan approved" {
+                        "plan"
+                    } else {
+                        "ask"
+                    };
+                    asks.push(ConvAsk {
+                        kind: kind.to_string(),
+                        q: conv_preview(prompt, CONV_ANSWER_CAP),
+                        options: Vec::new(),
+                        answer: answer.as_deref().map(|a| conv_preview(a, CONV_ANSWER_CAP)),
+                        pending: false,
+                    });
+                }
+                Item::ToolCall {
+                    name,
+                    kind,
+                    headline,
+                    input_view,
+                    result,
+                    path_for_link,
+                    ..
+                } => {
+                    if matches!(kind, ToolClass::File) {
+                        if let Some(p) = path_for_link {
+                            files.insert(p.as_str());
+                        }
+                    }
+                    if let Some(r) = result {
+                        if r.is_error {
+                            errors += 1;
+                        }
+                        if name == "Bash" {
+                            let cmd = conv_bash_command(input_view, headline);
+                            if super::git_action_of(&cmd)
+                                .iter()
+                                .any(|(k, _)| k == "commit")
+                            {
+                                if let Some(sha) = super::parse_git_sha(&r.raw) {
+                                    let short: String = sha.chars().take(7).collect();
+                                    if !commits.contains(&short) {
+                                        commits.push(short);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // A trailing unanswered ask/plan: only on the LAST row, only in that
+    // row's final non-sidechain turn, only a call still without a result.
+    if is_last_row {
+        if let Some(last) = span.iter().rev().find(|t| !t.sidechain) {
+            for item in &last.items {
+                if let Item::ToolCall {
+                    name,
+                    input_view,
+                    result: None,
+                    ..
+                } = item
+                {
+                    if name == "AskUserQuestion" || name == "ExitPlanMode" {
+                        asks.extend(conv_pending_asks(name, input_view));
+                    }
+                }
+            }
+        }
+    }
+
+    ConvRow {
+        n: anchor.ordinal,
+        id: anchor.id.clone(),
+        ts: anchor.ts.clone(),
+        prompt: conv_preview(prompt, CONV_PROMPT_CAP),
+        answer,
+        asks,
+        commits,
+        files_touched: files.len() as u32,
+        errors,
+        subagents: ConvSubagents {
+            n: sub_n,
+            errors: sub_errors,
+        },
+    }
+}
+
+/// Every conversation row of `view`, oldest first. A row spans from its
+/// anchor turn to just before the next anchor; wrapper-only human turns
+/// (no primary prose) fold into the preceding row; turns before the first
+/// anchor belong to no row.
+fn conv_all_rows(view: &SessionView) -> Vec<ConvRow> {
+    let turns = &view.turns;
+    let anchors: Vec<usize> = (0..turns.len())
+        .filter(|&i| conv_anchor_prompt(&turns[i]).is_some())
+        .collect();
+    let mut rows = Vec::with_capacity(anchors.len());
+    for (k, &start) in anchors.iter().enumerate() {
+        let end = anchors.get(k + 1).copied().unwrap_or(turns.len());
+        let span: Vec<&Turn> = turns[start..end].iter().collect();
+        let prompt = conv_anchor_prompt(&turns[start]).unwrap_or_default();
+        rows.push(conv_row(
+            &turns[start],
+            prompt,
+            &span,
+            k + 1 == anchors.len(),
+        ));
+    }
+    rows
+}
+
+/// The conversation projection with its window and since-cursor applied.
+/// Pure and deterministic: two calls over one view and options are equal.
+pub fn conversation(view: &SessionView, opts: &ConvOpts) -> Conversation {
+    let limit = opts.limit.clamp(1, CONV_MAX_LIMIT);
+    let mut out = Conversation {
+        schema: CONVERSATION_SCHEMA.to_string(),
+        total: 0,
+        from: None,
+        next_cursor: None,
+        capture_gen: opts.capture_gen.clone(),
+        unchanged: false,
+        rows: Vec::new(),
+    };
+    if opts.client_gen.as_deref() == Some(opts.capture_gen.as_str()) && !opts.capture_gen.is_empty()
+    {
+        out.total = view
+            .turns
+            .iter()
+            .filter(|t| conv_anchor_prompt(t).is_some())
+            .count() as u32;
+        out.unchanged = true;
+        return out;
+    }
+    let rows = conv_all_rows(view);
+    out.total = rows.len() as u32;
+    let (start, end) = match opts.from {
+        Some(f) => {
+            let s = rows.partition_point(|r| r.n < f);
+            (s, (s + limit).min(rows.len()))
+        }
+        None => (rows.len().saturating_sub(limit), rows.len()),
+    };
+    out.next_cursor = match opts.from {
+        // Forward paging: the first row after this window.
+        Some(_) => rows.get(end).map(|r| r.n),
+        // Tail window: the start of the previous (older) page.
+        None if start > 0 => rows.get(start.saturating_sub(limit)).map(|r| r.n),
+        None => None,
+    };
+    out.rows = rows[start..end].to_vec();
+    out.from = out.rows.first().map(|r| r.n);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5364,5 +5745,391 @@ mod tests {
         s.replace('&', "&amp;")
             .replace('<', "&lt;")
             .replace('>', "&gt;")
+    }
+}
+
+#[cfg(test)]
+mod conversation_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn uu(n: u32) -> String {
+        format!("{n:08x}-0000-4000-8000-000000000000")
+    }
+    fn ts(n: u32) -> String {
+        format!("2026-01-01T{:02}:{:02}:00Z", (n / 60) % 24, n % 60)
+    }
+    fn user(n: u32, text: &str) -> String {
+        json!({"type":"user","uuid":uu(n),"timestamp":ts(n),
+            "message":{"role":"user","content":text}})
+        .to_string()
+    }
+    fn asst_text(n: u32, text: &str, sidechain: bool) -> String {
+        json!({"type":"assistant","uuid":uu(n),"timestamp":ts(n),"requestId":format!("r{n}"),
+            "isSidechain":sidechain,
+            "message":{"role":"assistant","content":[{"type":"text","text":text}]}})
+        .to_string()
+    }
+    fn asst_tool(n: u32, name: &str, input: Value, sidechain: bool) -> String {
+        json!({"type":"assistant","uuid":uu(n),"timestamp":ts(n),"requestId":format!("r{n}"),
+            "isSidechain":sidechain,
+            "message":{"role":"assistant","content":[{"type":"tool_use","id":format!("tu{n}"),
+                "name":name,"input":input}]}})
+        .to_string()
+    }
+    fn result(n: u32, content: &str, is_error: bool, sidechain: bool) -> String {
+        json!({"type":"user","timestamp":ts(n),"isSidechain":sidechain,
+            "message":{"role":"user","content":[{"type":"tool_result",
+                "tool_use_id":format!("tu{n}"),"content":content,"is_error":is_error}]}})
+        .to_string()
+    }
+    fn build(lines: &[String]) -> SessionView {
+        session_view(
+            &lines.join("\n"),
+            &TailBlocks::default(),
+            &ViewOptions::default(),
+        )
+    }
+    fn opts() -> ConvOpts {
+        ConvOpts {
+            from: None,
+            limit: CONV_DEFAULT_LIMIT,
+            capture_gen: "g".into(),
+            client_gen: None,
+        }
+    }
+    fn conv(lines: &[String]) -> Conversation {
+        conversation(&build(lines), &opts())
+    }
+
+    #[test]
+    fn conversation_row_carries_prompt_answer_counts() {
+        let long = "x".repeat(300);
+        let c = conv(&[
+            user(1, &format!("  hello\n   world {long}")),
+            asst_tool(2, "Read", json!({"file_path":"/a.rs"}), false),
+            result(2, "ok", false, false),
+            asst_tool(3, "Read", json!({"file_path":"/a.rs"}), false),
+            result(3, "ok", false, false),
+            asst_tool(4, "Edit", json!({"file_path":"/b.rs"}), false),
+            result(4, "done", false, false),
+            asst_tool(5, "Bash", json!({"command":"false"}), false),
+            result(5, "boom", true, false),
+            asst_text(6, &format!("final {long}"), false),
+        ]);
+        assert_eq!(c.schema, "kb-conversation/1");
+        assert_eq!(c.total, 1);
+        let r = &c.rows[0];
+        assert_eq!(r.n, 1);
+        assert!(r.prompt.starts_with("hello world x"));
+        assert!(!r.prompt.contains('\n'));
+        assert_eq!(r.prompt.chars().count(), CONV_PROMPT_CAP);
+        let a = r.answer.as_deref().unwrap();
+        assert!(a.starts_with("final x"));
+        assert_eq!(a.chars().count(), CONV_ANSWER_CAP);
+        assert_eq!(r.files_touched, 2);
+        assert_eq!(r.errors, 1);
+        assert!(r.asks.is_empty() && r.commits.is_empty());
+        assert_eq!(r.subagents, ConvSubagents { n: 0, errors: 0 });
+    }
+
+    #[test]
+    fn conversation_answered_ask_and_plan_are_not_pending() {
+        let c = conv(&[
+            user(1, "go"),
+            asst_tool(2, "AskUserQuestion", json!({}), false),
+            json!({"type":"user","timestamp":ts(2),
+                "toolUseResult":{"answers":{"Pick one":"Option B"},"questions":[{"question":"Pick one"}]},
+                "message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu2",
+                    "content":"Your questions have been answered: \"Pick one\"=\"Option B\"."}]}})
+            .to_string(),
+            asst_tool(3, "ExitPlanMode", json!({}), false),
+            result(3, "User has approved your plan. You can now start coding.", false, false),
+        ]);
+        let asks = &c.rows[0].asks;
+        assert_eq!(asks.len(), 2, "{asks:?}");
+        assert_eq!(asks[0].kind, "ask");
+        assert_eq!(asks[0].q, "Pick one");
+        assert_eq!(asks[0].answer.as_deref(), Some("Option B"));
+        assert_eq!(asks[1].kind, "plan");
+        assert!(asks.iter().all(|a| !a.pending));
+    }
+
+    #[test]
+    fn conversation_trailing_unanswered_ask_is_pending_with_options() {
+        let c = conv(&[
+            user(1, "go"),
+            asst_tool(
+                2,
+                "AskUserQuestion",
+                json!({"questions":[{"question":"Which db?","header":"DB","multiSelect":false,
+                    "options":[{"label":"Postgres","description":"d"},{"label":"SQLite"}]}]}),
+                false,
+            ),
+        ]);
+        let asks = &c.rows[0].asks;
+        assert_eq!(asks.len(), 1, "{asks:?}");
+        assert!(asks[0].pending);
+        assert_eq!(asks[0].kind, "ask");
+        assert_eq!(asks[0].q, "Which db?");
+        assert_eq!(asks[0].options, vec!["Postgres", "SQLite"]);
+        assert_eq!(asks[0].answer, None);
+    }
+
+    #[test]
+    fn conversation_trailing_unanswered_plan_is_pending() {
+        let c = conv(&[
+            user(1, "go"),
+            asst_tool(
+                2,
+                "ExitPlanMode",
+                json!({"plan":"Step one\nStep two"}),
+                false,
+            ),
+        ]);
+        let asks = &c.rows[0].asks;
+        assert_eq!(asks.len(), 1, "{asks:?}");
+        assert!(asks[0].pending);
+        assert_eq!(asks[0].kind, "plan");
+        assert_eq!(asks[0].q, "Step one Step two");
+    }
+
+    #[test]
+    fn conversation_oversize_input_pending_has_empty_q() {
+        let big = "q".repeat(4000);
+        let c = conv(&[
+            user(1, "go"),
+            asst_tool(
+                2,
+                "AskUserQuestion",
+                json!({"questions":[{"question":big,"options":[]}]}),
+                false,
+            ),
+        ]);
+        let asks = &c.rows[0].asks;
+        assert_eq!(asks.len(), 1, "{asks:?}");
+        assert!(asks[0].pending);
+        assert_eq!(asks[0].q, "");
+        assert!(asks[0].options.is_empty());
+    }
+
+    #[test]
+    fn conversation_pending_never_on_non_last_row() {
+        let c = conv(&[
+            user(1, "first"),
+            asst_tool(
+                2,
+                "AskUserQuestion",
+                json!({"questions":[{"question":"Q?"}]}),
+                false,
+            ),
+            user(3, "second"),
+            asst_text(4, "answer", false),
+        ]);
+        assert_eq!(c.rows.len(), 2);
+        assert!(c.rows[0].asks.is_empty(), "{:?}", c.rows[0].asks);
+        assert!(c.rows[1].asks.is_empty());
+    }
+
+    #[test]
+    fn conversation_commits_from_bash_results() {
+        let c = conv(&[
+            user(1, "ship"),
+            asst_tool(
+                2,
+                "Bash",
+                json!({"command":"git add . && git commit -m \"feat: x\""}),
+                false,
+            ),
+            result(
+                2,
+                "[main abc1234] feat: x\n 1 file changed, 2 insertions(+)",
+                false,
+                false,
+            ),
+            // a commit whose output yields no sha is omitted
+            asst_tool(3, "Bash", json!({"command":"git commit -m y"}), false),
+            result(3, "nothing to commit, working tree clean", false, false),
+            // not a commit: a sha-looking token in other output never counts
+            asst_tool(4, "Bash", json!({"command":"git log --oneline -1"}), false),
+            result(4, "deadbee old commit", false, false),
+        ]);
+        assert_eq!(c.rows[0].commits, vec!["abc1234".to_string()]);
+    }
+
+    #[test]
+    fn conversation_subagents_counted_not_summed_into_errors() {
+        let v = build(&[
+            user(1, "delegate"),
+            asst_text(2, "starting", false),
+            asst_tool(3, "Read", json!({"file_path":"/s.rs"}), true),
+            result(3, "bad", true, true),
+            asst_text(4, "wrapped up", false),
+        ]);
+        let c = conversation(&v, &opts());
+        // Sidechain turns never produce rows.
+        assert_eq!(c.rows.len(), 1);
+        let r = &c.rows[0];
+        assert_eq!(r.subagents, ConvSubagents { n: 1, errors: 1 });
+        assert_eq!(r.errors, 0, "child errors are never summed into the parent");
+        assert_eq!(r.answer.as_deref(), Some("wrapped up"));
+    }
+
+    fn big_session() -> SessionView {
+        let mut lines = Vec::new();
+        for i in 0..500u32 {
+            lines.push(user(2 * i + 1, &format!("prompt {i}")));
+            lines.push(asst_text(2 * i + 2, &format!("answer {i}"), false));
+        }
+        build(&lines)
+    }
+
+    #[test]
+    fn conversation_window_limit_from_and_next_cursor() {
+        let v = big_session();
+        // Default window = the last 100 rows; the cursor points at the older page.
+        let c = conversation(&v, &opts());
+        assert_eq!(c.total, 500);
+        assert_eq!(c.rows.len(), 100);
+        assert_eq!(c.from, Some(801));
+        assert_eq!(c.rows.last().unwrap().n, 999);
+        assert_eq!(c.next_cursor, Some(601));
+        // Forward paging from that cursor lands exactly before the tail window.
+        let page = conversation(
+            &v,
+            &ConvOpts {
+                from: c.next_cursor,
+                ..opts()
+            },
+        );
+        assert_eq!(page.from, Some(601));
+        assert_eq!(page.rows.last().unwrap().n, 799);
+        assert_eq!(page.next_cursor, Some(801));
+        // The end of the list has no next cursor.
+        let end = conversation(
+            &v,
+            &ConvOpts {
+                from: Some(999),
+                ..opts()
+            },
+        );
+        assert_eq!(end.rows.len(), 1);
+        assert_eq!(end.next_cursor, None);
+        // `from` between row anchors starts at the next row.
+        let mid = conversation(
+            &v,
+            &ConvOpts {
+                from: Some(2),
+                limit: 3,
+                ..opts()
+            },
+        );
+        assert_eq!(
+            mid.rows.iter().map(|r| r.n).collect::<Vec<_>>(),
+            vec![3, 5, 7]
+        );
+        assert_eq!(mid.next_cursor, Some(9));
+        // Limits clamp to 1..=200.
+        let one = conversation(&v, &ConvOpts { limit: 0, ..opts() });
+        assert_eq!(one.rows.len(), 1);
+        let max = conversation(
+            &v,
+            &ConvOpts {
+                limit: 100_000,
+                ..opts()
+            },
+        );
+        assert_eq!(max.rows.len(), CONV_MAX_LIMIT);
+        // A short session is one page with no cursor.
+        let short = conv(&[user(1, "a"), asst_text(2, "b", false)]);
+        assert_eq!(
+            (short.total, short.next_cursor, short.from),
+            (1, None, Some(1))
+        );
+    }
+
+    #[test]
+    fn conversation_unchanged_when_gen_matches() {
+        let v = big_session();
+        let same = conversation(
+            &v,
+            &ConvOpts {
+                capture_gen: "42-1000".into(),
+                client_gen: Some("42-1000".into()),
+                ..opts()
+            },
+        );
+        assert!(same.unchanged);
+        assert!(same.rows.is_empty());
+        assert_eq!(same.total, 500);
+        assert_eq!(same.capture_gen, "42-1000");
+        let stale = conversation(
+            &v,
+            &ConvOpts {
+                capture_gen: "43-1002".into(),
+                client_gen: Some("42-1000".into()),
+                from: Some(997),
+                ..opts()
+            },
+        );
+        assert!(!stale.unchanged);
+        assert_eq!(
+            stale.rows.iter().map(|r| r.n).collect::<Vec<_>>(),
+            vec![997, 999]
+        );
+    }
+
+    #[test]
+    fn conversation_is_deterministic() {
+        let v = big_session();
+        assert_eq!(conversation(&v, &opts()), conversation(&v, &opts()));
+    }
+
+    #[test]
+    fn conversation_rewound_branch_does_not_panic() {
+        let c = conv(&[
+            json!({"type":"user","uuid":uu(1),"parentUuid":null,"timestamp":ts(1),
+                "message":{"role":"user","content":"one"}})
+            .to_string(),
+            json!({"type":"user","uuid":uu(3),"parentUuid":uu(1),"timestamp":ts(3),
+                "message":{"role":"user","content":"abandoned"}})
+            .to_string(),
+            json!({"type":"user","uuid":uu(5),"parentUuid":uu(1),"timestamp":ts(5),
+                "message":{"role":"user","content":"kept"}})
+            .to_string(),
+        ]);
+        assert_eq!(c.rows.len(), 3);
+    }
+
+    #[test]
+    fn conversation_previews_come_from_scrubbed_text_before_truncation() {
+        // The secret straddles the 160-char prompt cut: truncating FIRST would
+        // leave a recognisable `sk-…` prefix behind.
+        let secret = "sk-ABCDEFGHIJ0123456789abcdefghij";
+        let line = user(1, &format!("{}{secret} tail", "a".repeat(150)));
+        let raw = [line, asst_text(2, "ok", false)].join("\n");
+        let plain = conversation(
+            &session_view(&raw, &TailBlocks::default(), &ViewOptions::default()),
+            &opts(),
+        );
+        assert!(
+            plain.rows[0].prompt.contains("sk-ABC"),
+            "the control must show the prefix: {}",
+            plain.rows[0].prompt
+        );
+        let (scrubbed, report) = crate::session_scrub::scrub_transcript(
+            &raw,
+            &crate::session_scrub::ScrubOptions {
+                secrets: true,
+                ..Default::default()
+            },
+        );
+        assert!(report.total > 0);
+        let c = conversation(
+            &session_view(&scrubbed, &TailBlocks::default(), &ViewOptions::default()),
+            &opts(),
+        );
+        assert!(!c.rows[0].prompt.contains("sk-"), "{}", c.rows[0].prompt);
+        assert!(!c.rows[0].prompt.contains("ABCDEF"));
     }
 }
