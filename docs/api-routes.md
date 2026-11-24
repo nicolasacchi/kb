@@ -246,6 +246,10 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | POST | `/api/slates/{slug}/reopen` | `routes::slates::reopen` |
 | POST | `/api/slates/{slug}/rotate` | `routes::slates::rotate` |
 | GET | `/api/stats` | `routes::stats::cross` |
+| GET | `/api/term-prompts/{project}` | `terminal::prompts::list` |
+| POST | `/api/term-prompts/{project}` | `terminal::prompts::add` |
+| DELETE | `/api/term-prompts/{project}/{item}` | `terminal::prompts::delete` |
+| PATCH | `/api/term-prompts/{project}/{item}` | `terminal::prompts::patch` |
 | GET | `/api/terms` | `routes::terms::list` |
 | POST | `/api/terms` | `routes::terms::launch` |
 | GET | `/api/terms/media/{sha256}` | `terminal::media::serve` |
@@ -267,4 +271,4 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | GET | `/api/users` | `routes::users::list` |
 | GET | `/api/why` | `routes::sessions::why` |
 
-_257 routes._
+_261 routes._
