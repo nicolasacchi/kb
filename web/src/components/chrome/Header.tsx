@@ -10,7 +10,9 @@ import { useSavedQueries } from "../../hooks/useSavedQueries";
 import { useUrl } from "../../hooks/useUrl";
 import { cycleTheme, loadPrefs } from "../../api/prefs";
 import { Icon } from "@kb/ui/icons";
-import { NAV_ITEMS, withKb } from "../../lib/navItems";
+import { withKb } from "../../lib/navItems";
+import { useNavItems } from "../../hooks/useNavState";
+import DoorStrip from "./DoorStrip";
 import WaitingChip from "./WaitingChip";
 import DeskPill from "./DeskPill";
 import DaemonStatus from "./DaemonStatus";
@@ -61,6 +63,7 @@ export default function Header({
   // unscoped view stays kb-less.
   const activeKb = useActiveKb() || "";
   const explicitKb = useExplicitKb();
+  const navItems = useNavItems();
   // The reader (/a/:kb/*) and list detail (/lists/:kb/:id) own their kb in
   // the path, so switching the workspace there must LEAVE to the gallery —
   // the open item belongs to the old kb. Everywhere else we re-scope the
@@ -89,24 +92,11 @@ export default function Header({
                 else set("kb", name);
               }}
             />
-            <nav className="kb-doors" aria-label="Primary">
-              {NAV_ITEMS.map((item) => {
-                const active = item.isActive(loc.pathname);
-                return (
-                  <Link
-                    key={item.id}
-                    to={item.href({ kb: explicitKb })}
-                    className={"kb-door" + (active ? " is-active" : "")}
-                    aria-current={active ? "page" : undefined}
-                    title={item.label}
-                    data-testid={item.testid}
-                  >
-                    <item.Glyph />
-                    <span className="kb-door__label">{item.label}</span>
-                  </Link>
-                );
-              })}
-            </nav>
+            <DoorStrip
+              items={navItems}
+              pathname={loc.pathname}
+              kb={explicitKb}
+            />
           </>
         }
         search={

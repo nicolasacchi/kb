@@ -16,6 +16,7 @@ pub mod events;
 pub mod gate;
 pub mod keys_allow;
 pub mod media;
+pub mod prompts;
 pub mod runner_client;
 pub mod ticket;
 pub mod upload;
@@ -40,4 +41,8 @@ pub struct TerminalState {
     /// only (LF-7).
     pub(crate) sockets: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     pub(crate) ended: events::EndedSet,
+    /// kbt2 PQSTORE — the ONE daemon-wide lock around every prompt-queue
+    /// load-modify-write (`prompts::mutate`). Held across nothing but the
+    /// synchronous file work and the event emit.
+    pub(crate) prompts_lock: tokio::sync::Mutex<()>,
 }
