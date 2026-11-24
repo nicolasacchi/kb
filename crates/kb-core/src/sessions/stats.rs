@@ -237,13 +237,16 @@ mod tests {
     use crate::sessions::view::{session_view, TailBlocks, ViewOptions};
 
     fn rec(id: Option<&str>, req: Option<&str>, out: u64, extra: &str) -> String {
+        // A unique uuid per record: the engine's seen-uuid ring would
+        // otherwise drop block repeats before the ledger ever saw them.
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let id = id.map(|i| format!(r#""id":"{i}","#)).unwrap_or_default();
         let req = req
             .map(|r| format!(r#""requestId":"{r}","#))
             .unwrap_or_default();
         format!(
-            r#"{{"type":"assistant",{req}"uuid":"u-{out}-{n}","timestamp":"2026-01-01T00:00:00Z","message":{{{id}"role":"assistant","model":"m-1","content":[{{"type":"text","text":"x"}}],"usage":{{"input_tokens":10,"output_tokens":{out},"cache_read_input_tokens":100,"cache_creation_input_tokens":5}}{extra}}}}}"#,
-            n = extra.len()
+            r#"{{"type":"assistant",{req}"uuid":"u-{n}","timestamp":"2026-01-01T00:00:00Z","message":{{{id}"role":"assistant","model":"m-1","content":[{{"type":"text","text":"x"}}],"usage":{{"input_tokens":10,"output_tokens":{out},"cache_read_input_tokens":100,"cache_creation_input_tokens":5}}{extra}}}}}"#,
         )
     }
 
@@ -318,7 +321,8 @@ mod tests {
 
     #[test]
     fn compaction_non_monotonic_usage_sums_not_max() {
-        let big = rec(Some("m1"), None, 50, "").replace("\"input_tokens\":10", "\"input_tokens\":900");
+        let big =
+            rec(Some("m1"), None, 50, "").replace("\"input_tokens\":10", "\"input_tokens\":900");
         let j = join(&[big, rec(Some("m2"), None, 4, "")]);
         let s = session_stats_for_jsonl(&j);
         assert_eq!(s.input_tokens, 910);
@@ -388,15 +392,20 @@ mod tests {
 
     #[test]
     fn omp_harness_usage_uses_raw_fields_and_response_id() {
-        let line = |inp: u64| {
+        let line = |inp: u64, n: u32| {
             format!(
-                r#"{{"type":"assistant","uuid":"o{inp}","message":{{"role":"assistant","model":"m-1","content":[{{"type":"text","text":"x"}}],"usage":{{"input_tokens":9999,"output_tokens":6}},"harness_usage":{{"schema":"omp-usage/1","response_id":"resp_1","input":{inp},"output":6,"cache_read":40,"cache_write":2}}}}}}"#
+                r#"{{"type":"assistant","uuid":"o{n}","message":{{"role":"assistant","model":"m-1","content":[{{"type":"text","text":"x"}}],"usage":{{"input_tokens":9999,"output_tokens":6}},"harness_usage":{{"schema":"omp-usage/1","response_id":"resp_1","input":{inp},"output":6,"cache_read":40,"cache_write":2}}}}}}"#
             )
         };
-        let j = join(&[line(11), line(11)]);
+        let j = join(&[line(11, 1), line(11, 2)]);
         let s = session_stats_for_jsonl(&j);
         assert_eq!(
-            (s.input_tokens, s.output_tokens, s.cache_read_tokens, s.cache_write_tokens),
+            (
+                s.input_tokens,
+                s.output_tokens,
+                s.cache_read_tokens,
+                s.cache_write_tokens
+            ),
             (11, 6, 40, 2)
         );
         assert_eq!(s.assistant_messages, 1);
