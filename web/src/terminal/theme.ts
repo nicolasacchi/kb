@@ -5,6 +5,7 @@
 // (`THEME_APPLIED_EVENT`), since the tokens it reads are per-theme.
 
 import type { ITheme } from "@xterm/xterm";
+import { deriveAnsi } from "./ansi";
 
 export type TokenSource = Pick<CSSStyleDeclaration, "getPropertyValue">;
 
@@ -31,6 +32,13 @@ export function readTheme(profileTheme: unknown, css: TokenSource = getComputedS
       if (typeof v === "string") out[key] = v;
     }
     if (typeof slots.background === "string") out.cursorAccent = slots.background;
+  }
+  // BANSI — the ANSI 16 follow the theme, judged against the EFFECTIVE
+  // background (a Profile palette may override it). No ansi keys unless both
+  // colours are known and parseable.
+  if (out.background && out.foreground) {
+    const ansi = deriveAnsi(css, out.background, out.foreground);
+    if (ansi) Object.assign(out, ansi);
   }
   return out;
 }

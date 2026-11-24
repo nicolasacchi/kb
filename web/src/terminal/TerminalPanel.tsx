@@ -307,6 +307,11 @@ export function TerminalPanel(props: TerminalPanelProps) {
             ),
         fontFamily: TERM_FONT_FAMILY,
         theme: readTheme(profile.theme),
+        // BANSI — nothing illegible whatever a programme paints; bold stays
+        // bold (the bright slots are explicit); box/block glyphs are drawn.
+        minimumContrastRatio: 4.5,
+        drawBoldTextInBrightColors: false,
+        customGlyphs: true,
       });
       profileThemeRef.current = profile.theme;
       // The host paints the terminal's own background (no second black).

@@ -502,3 +502,37 @@ test.describe("FUMINLIST — live-only card to full card on a real capture", () 
     });
   });
 });
+
+test.describe("BANSI — theme-derived ANSI palette", () => {
+  test("the xterm theme carries a token-derived ANSI 16 and follows a theme switch", async ({ page }) => {
+    await installFakeTerminal(page, { total: 50, seedLines: 50 });
+    await openTerminal(page);
+    type Snap = { mcr: unknown; theme: Record<string, string> };
+    const snap = (): Promise<Snap> =>
+      page.evaluate(() => {
+        const el = document.querySelector("[data-kb-term]") as unknown as {
+          __kbTerm: { options: { minimumContrastRatio: unknown; theme: Record<string, string> } };
+        };
+        const o = el.__kbTerm.options;
+        return { mcr: o.minimumContrastRatio, theme: { ...o.theme } };
+      });
+    const before = await snap();
+    expect(before.mcr).toBe(4.5);
+    expect(before.theme.red).toMatch(/^#[0-9a-f]{6}$/);
+    expect(before.theme.brightWhite).toMatch(/^#[0-9a-f]{6}$/);
+
+    await page.evaluate(() => {
+      const root = document.documentElement;
+      root.setAttribute("data-theme", "light");
+      root.setAttribute("data-kbc-theme", "flexoki-light");
+      window.dispatchEvent(new Event("kb:theme-applied"));
+    });
+    await expect
+      .poll(async () => (await snap()).theme.background, { timeout: 10_000 })
+      .not.toBe(before.theme.background);
+    const after = await snap();
+    expect(after.theme.red).toMatch(/^#[0-9a-f]{6}$/);
+    expect(after.theme.red).not.toBe(before.theme.red);
+    expect(after.theme.brightWhite).not.toBe(before.theme.brightWhite);
+  });
+});
