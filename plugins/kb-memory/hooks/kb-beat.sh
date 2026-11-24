@@ -472,6 +472,28 @@ if [ "$_beat_inferred" -eq 1 ] && [ "$event" = "blocked" ] && [ -n "$beat_marker
   fi
 fi
 
+# CONVLIVE: a Claude blocked beat that passed the Notification filter above
+# also asks for ONE interval-bypassing, debounced capture (kb-capture-throttle.sh
+# --blocked) so the pending question reaches kb. Opt-in via KB_CAPTURE_LIVE
+# (no fork otherwise); fully detached like the curl; also in DRYRUN so tests
+# observe it. codex/grok/other harnesses never capture here.
+if [ "$harness" = "claude" ] && [ "$event" = "blocked" ]; then
+  case "${KB_CAPTURE_LIVE:-}" in
+    1 | true | TRUE | yes | YES)
+      _cap_sh="${KB_CAPTURE_THROTTLE_SH:-$_beat_dir/kb-capture-throttle.sh}"
+      _cap_delay="${KB_CAPTURE_BLOCKED_DELAY_SECS:-1}"
+      case "$_cap_delay" in '' | *[!0-9]*) _cap_delay=1 ;; esac
+      if [ -n "$_beat_dir" ] && [ -f "$_cap_sh" ]; then
+        (
+          [ "$_cap_delay" -eq 0 ] || sleep "$_cap_delay"
+          printf '%s' "$input" | bash "$_cap_sh" --blocked
+        ) </dev/null >/dev/null 2>&1 &
+        disown 2>/dev/null || true
+      fi
+      ;;
+  esac
+fi
+
 if [ "${KB_BEAT_DRYRUN:-}" = "1" ]; then
   printf '%s\n' "$body"
   exit 0

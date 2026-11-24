@@ -1038,6 +1038,87 @@ else
   bad "KB_TERM_ID_present_on_turn_end_and_tool (got: $g1 / $g2)"
 fi
 
+echo "== CONVLIVE: a blocked beat triggers one detached --blocked capture =="
+CL_STUB="$TMPROOT/cl-stub.sh"
+CL_LOG="$TMPROOT/cl-calls.log"
+cat >"$CL_STUB" <<'STUB'
+#!/usr/bin/env bash
+printf 'CALL %s %s\n' "$*" "$(cat | tr -d '\n')" >>"$CL_LOG"
+STUB
+chmod +x "$CL_STUB"
+export CL_LOG
+cl_count() { grep -c '^CALL' "$CL_LOG" 2>/dev/null || true; }
+cl_wait() { # wait up to 3 s for the count to reach $1
+  local i
+  for i in $(seq 1 30); do [ "$(cl_count)" -ge "$1" ] && return 0; sleep 0.1; done
+  return 1
+}
+cl_run() { # cl_run <harness> <event> <payload> [env...]
+  local h="$1" e="$2" p="$3"; shift 3
+  printf '%s' "$p" | env KB_BEAT_DRYRUN=1 KB_CAPTURE_THROTTLE_SH="$CL_STUB" \
+    KB_CAPTURE_BLOCKED_DELAY_SECS=0 "$@" "$BEAT" "$h" "$e" 2>/dev/null
+}
+PERM='{"session_id":"s-cl-1","cwd":"/tmp/p","transcript_path":"/tmp/t.jsonl","notification_type":"permission_prompt","message":"Claude needs your permission to use Bash"}'
+
+: >"$CL_LOG"
+out="$(cl_run claude blocked "$PERM" KB_CAPTURE_LIVE=1)"
+cl_wait 1
+sleep 0.4
+if [ "$(jget "$out" '.event')" = "blocked" ] && [ "$(cl_count)" = 1 ] \
+   && grep -q -- '--blocked' "$CL_LOG" && grep -q '"session_id":"s-cl-1"' "$CL_LOG"; then
+  ok "claude permission_prompt + KB_CAPTURE_LIVE=1 -> beat and exactly one --blocked capture with the payload"
+else
+  bad "claude permission_prompt capture (count=$(cl_count), log: $(cat "$CL_LOG"))"
+fi
+
+: >"$CL_LOG"
+IDLE='{"session_id":"s-cl-2","cwd":"/tmp/p","notification_type":"idle_prompt","message":"Claude is waiting for your input"}'
+out="$(cl_run claude blocked "$IDLE" KB_CAPTURE_LIVE=1)"
+sleep 0.6
+if [ -z "$out" ] && [ "$(cl_count)" = 0 ]; then
+  ok "claude idle_prompt -> no beat and no capture"
+else
+  bad "claude idle_prompt (out=$out count=$(cl_count))"
+fi
+
+: >"$CL_LOG"
+out="$(cl_run claude blocked "$PERM" KB_CAPTURE_LIVE=)"
+sleep 0.6
+if [ "$(jget "$out" '.event')" = "blocked" ] && [ "$(cl_count)" = 0 ]; then
+  ok "KB_CAPTURE_LIVE unset -> the beat is sent and no capture is spawned"
+else
+  bad "flag unset (count=$(cl_count))"
+fi
+
+: >"$CL_LOG"
+out="$(cl_run claude blocked "$PERM" KB_CAPTURE_LIVE=1 KB_BEAT=0)"
+sleep 0.6
+if [ -z "$out" ] && [ "$(cl_count)" = 0 ]; then
+  ok "KB_BEAT=0 -> neither beat nor capture"
+else
+  bad "KB_BEAT=0 (out=$out count=$(cl_count))"
+fi
+
+: >"$CL_LOG"
+cl_run codex blocked '{"session_id":"s-cl-3","cwd":"/tmp/p","tool_name":"Bash"}' KB_CAPTURE_LIVE=1 >/dev/null
+cl_run grok blocked '{"sessionId":"s-cl-4","cwd":"/tmp/p","notificationType":"permission_prompt"}' KB_CAPTURE_LIVE=1 >/dev/null
+sleep 0.6
+if [ "$(cl_count)" = 0 ]; then
+  ok "codex and grok blocked beats never capture"
+else
+  bad "codex/grok blocked captured (count=$(cl_count))"
+fi
+
+: >"$CL_LOG"
+cl_run claude turn_end '{"session_id":"s-cl-5","cwd":"/tmp/p"}' KB_CAPTURE_LIVE=1 >/dev/null
+cl_run claude tool '{"session_id":"s-cl-5","cwd":"/tmp/p","tool_name":"Bash"}' KB_CAPTURE_LIVE=1 >/dev/null
+sleep 0.6
+if [ "$(cl_count)" = 0 ]; then
+  ok "turn_end and tool beats never spawn a capture"
+else
+  bad "turn_end/tool spawned a capture (count=$(cl_count))"
+fi
+
 echo
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]
