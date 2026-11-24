@@ -54,6 +54,8 @@ use crate::terminal::binding::{is_valid_term_id, pick_session_hint, HintCandidat
 
 /// CONVBIND — rows read per kb by the hint's capture scan (the same bound
 /// live-status Tier-0 uses).
+// Mirrors sessions.rs's private TIER0_SCAN_LIMIT (not this unit's file); a
+// per-daemon memo of the scan is a tracked follow-up.
 const HINT_SCAN_LIMIT: u32 = 500;
 
 /// The maximum request body the relay parses before a 413.
@@ -400,10 +402,10 @@ fn enrich_terms(state: &KbHandles, items: &mut [TermItem], now_unix: i64) {
     }
 }
 
-/// CONVBIND — the unbound rows that may get a hint: `(index, harness, cwd,
-/// started_unix)`. A verified binding, a dead pane, a stale row or a row
+/// CONVBIND — the unbound rows that may get a hint: `(index, id, harness,
+/// cwd, started_unix)`. A verified binding, a dead pane, a stale row or a row
 /// without a harness/cwd never qualifies.
-fn hint_wanted(items: &[TermItem]) -> Vec<(usize, String, String, Option<i64>)> {
+fn hint_wanted(items: &[TermItem]) -> Vec<(usize, String, String, String, Option<i64>)> {
     items
         .iter()
         .enumerate()
@@ -414,7 +416,7 @@ fn hint_wanted(items: &[TermItem]) -> Vec<(usize, String, String, Option<i64>)> 
             let harness = i.extra.get("harness")?.as_str()?.to_string();
             let cwd = i.extra.get("cwd")?.as_str()?.to_string();
             let started = i.extra.get("started_unix").and_then(|v| v.as_i64());
-            Some((n, harness, cwd, started))
+            Some((n, i.id.clone(), harness, cwd, started))
         })
         .collect()
 }
@@ -429,6 +431,7 @@ fn registry_hint_candidates(state: &KbHandles, now_unix: i64) -> Vec<(HintCandid
         .into_iter()
         .map(|(r, _, _)| {
             let ended = r.holder == kb_core::sessions::live::Holder::Ended;
+            let verified = r.term_bound_unix.is_some();
             (
                 HintCandidate {
                     session_id: r.session_id,
@@ -436,7 +439,7 @@ fn registry_hint_candidates(state: &KbHandles, now_unix: i64) -> Vec<(HintCandid
                     cwd: r.cwd,
                     last_activity_unix: r.last_activity_unix,
                     is_subagent_child: false,
-                    bound_to_other_term: r.term.is_some() && r.term_bound_unix.is_some(),
+                    bound_term: r.term.filter(|_| verified),
                 },
                 ended,
             )
@@ -505,7 +508,7 @@ async fn attach_session_hints(state: &KbHandles, items: &mut [TermItem], now_uni
                         cwd: row.cwd,
                         last_activity_unix: last,
                         is_subagent_child,
-                        bound_to_other_term: false,
+                        bound_term: None,
                     })
                 })
                 .collect()
@@ -515,11 +518,13 @@ async fn attach_session_hints(state: &KbHandles, items: &mut [TermItem], now_uni
         candidates.extend(part);
     }
 
-    for (n, harness, cwd, started) in wanted {
+    for (n, id, harness, cwd, started) in wanted {
         items[n].session_hint =
-            pick_session_hint(&harness, &cwd, started, &candidates).map(|session_id| SessionHint {
-                session_id,
-                via: HintVia::Cwd,
+            pick_session_hint(&id, &harness, &cwd, started, &candidates).map(|session_id| {
+                SessionHint {
+                    session_id,
+                    via: HintVia::Cwd,
+                }
             });
     }
 }

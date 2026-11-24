@@ -127,8 +127,10 @@ pub struct HintCandidate {
     pub last_activity_unix: i64,
     /// A subagent child (its root differs from its own id).
     pub is_subagent_child: bool,
-    /// A verified binding to a DIFFERENT terminal already exists.
-    pub bound_to_other_term: bool,
+    /// The terminal id this session holds a VERIFIED binding to, if any. The
+    /// picker excludes the session only when that id differs from the row
+    /// being hinted; a binding to this very terminal never excludes.
+    pub bound_term: Option<String>,
 }
 
 /// The derived, unverified folder-match guess for an unbound terminal row:
@@ -138,6 +140,7 @@ pub struct HintCandidate {
 /// distinct sessions tied on the newest activity are ambiguous: no hint.
 /// Pure; never consulted by any gate.
 pub fn pick_session_hint(
+    term_id: &str,
     term_harness: &str,
     term_cwd: &str,
     term_started_unix: Option<i64>,
@@ -149,7 +152,7 @@ pub fn pick_session_hint(
         if c.harness != term_harness
             || c.cwd.as_deref() != Some(term_cwd)
             || c.is_subagent_child
-            || c.bound_to_other_term
+            || c.bound_term.as_deref().is_some_and(|t| t != term_id)
             || term_started_unix.is_some_and(|t| c.last_activity_unix < t)
         {
             continue;
@@ -187,11 +190,11 @@ mod tests {
             cwd: Some("/work/demo/repo".into()),
             last_activity_unix: at,
             is_subagent_child: false,
-            bound_to_other_term: false,
+            bound_term: None,
         }
     }
     fn pick(c: &[HintCandidate]) -> Option<String> {
-        pick_session_hint("claude", "/work/demo/repo", Some(100), c)
+        pick_session_hint("t1", "claude", "/work/demo/repo", Some(100), c)
     }
 
     #[test]
@@ -242,7 +245,7 @@ mod tests {
         assert_eq!(pick(&[cand("a", 100)]), Some("a".into()));
         // Unknown start: the requirement is skipped, the hint kept.
         assert_eq!(
-            pick_session_hint("claude", "/work/demo/repo", None, &[cand("a", 1)]),
+            pick_session_hint("t1", "claude", "/work/demo/repo", None, &[cand("a", 1)]),
             Some("a".into())
         );
     }
@@ -255,8 +258,14 @@ mod tests {
     #[test]
     fn hint_skips_session_bound_to_another_term() {
         let mut c = cand("other", 300);
-        c.bound_to_other_term = true;
+        c.bound_term = Some("t2".into());
         assert_eq!(pick(&[c]), None);
+    }
+    #[test]
+    fn hint_keeps_session_bound_to_this_same_term() {
+        let mut c = cand("mine", 300);
+        c.bound_term = Some("t1".into());
+        assert_eq!(pick(&[c]), Some("mine".into()));
     }
     #[test]
     fn hint_candidate_without_cwd_never_matches() {

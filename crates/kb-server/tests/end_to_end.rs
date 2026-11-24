@@ -28055,21 +28055,39 @@ async fn term_hint_never_unblocks_enter() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status().as_u16(), 200, "{:?}", resp.text().await);
-    let resp = client
-        .post(url(addr, "/api/terms/abc123/enter"))
-        .header("Origin", term_origin(addr))
-        .header("x-kb-intent", "terminal")
-        .json(&serde_json::json!({}))
-        .send()
-        .await
-        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
     assert_eq!(
         resp.headers()
             .get("x-kb-term-state")
             .and_then(|v| v.to_str().ok()),
-        Some("unbound")
+        Some("unbound"),
+        "the first enter already takes the unbound path"
     );
+    // Control: an identical terminal with NO hint (no beats) answers the
+    // same state header, so the hint changed nothing about the gate.
+    {
+        let cdir = tempfile::tempdir().unwrap();
+        let cfake = hint_fake_runner(cdir.path(), "claude", HINT_CWD);
+        let (_ctmp, caddr, _cp) = hint_boot(&cfake).await;
+        let crow = hint_term_row(&client, caddr).await;
+        assert!(crow["session_hint"].is_null(), "{crow}");
+        let cresp = client
+            .post(url(caddr, "/api/terms/abc123/enter"))
+            .header("Origin", term_origin(caddr))
+            .header("x-kb-intent", "terminal")
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(cresp.status().as_u16(), 200);
+        assert_eq!(
+            cresp
+                .headers()
+                .get("x-kb-term-state")
+                .and_then(|v| v.to_str().ok()),
+            Some("unbound")
+        );
+    }
     // Paste is unaffected too.
     let resp = client
         .post(url(addr, "/api/terms/abc123/paste"))
