@@ -4,7 +4,7 @@
 // collapse, persistence) and the phone's non-modal bottom layer (collapsed by
 // default, content mounted only while expanded).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { TermShell, RAIL_OPEN_KEY, RAIL_TAB_KEY } from "./TermShell";
 import { registerRailTab, resetRailTabs } from "./rail/registry";
 
@@ -149,5 +149,34 @@ describe("TermShell phone layer", () => {
     (document.activeElement as HTMLElement).blur();
     fireEvent.keyDown(screen.getByTestId("term-sheet"), { key: "Escape" });
     expect(screen.getByTestId("term-sheet-handle").getAttribute("aria-expanded")).toBe("true");
+  });
+});
+
+describe("TermShell layout switch", () => {
+  it("crossing the phone breakpoint keeps the pane mounted (same node, no remount)", () => {
+    let narrow = false;
+    const listeners: Array<() => void> = [];
+    vi.stubGlobal(
+      "matchMedia",
+      (q: string) =>
+        ({
+          get matches() {
+            return narrow;
+          },
+          media: q,
+          addEventListener: (_: string, l: () => void) => listeners.push(l),
+          removeEventListener() {},
+          addListener() {},
+          removeListener() {},
+        }) as unknown as MediaQueryList,
+    );
+    render(shell());
+    const pane = screen.getByTestId("pane");
+    expect(screen.getByTestId("term-shell").getAttribute("data-kb-term-layout")).toBe("desktop");
+    narrow = true;
+    act(() => listeners.forEach((l) => l()));
+    expect(screen.getByTestId("term-shell").getAttribute("data-kb-term-layout")).toBe("phone");
+    expect(screen.getByTestId("pane")).toBe(pane);
+    expect(pane.isConnected).toBe(true);
   });
 });

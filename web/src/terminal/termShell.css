@@ -103,34 +103,61 @@
 .kb-termshell__chip[data-tone="err"] {
   color: var(--danger);
 }
-/* Phone: a non-modal fixed layer above the panel's own sheet (--z-drawer). */
+/* Phone: the pane (the panel's own sheet) owns the screen; the shell's layer is
+ * a non-modal fixed layer above it (z-modal > the sheet's z-drawer). Collapsed it
+ * is only a small grip on the right edge, so it never covers the panel's header
+ * or its dock; expanded it is a bottom sheet with the tabs. */
+.kb-termshell[data-kb-term-layout="phone"] {
+  min-height: 0;
+  padding: 0;
+}
+.kb-termshell[data-kb-term-layout="phone"] .kb-termshell__body {
+  display: block;
+}
 .kb-termshell__sheet {
   position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
   z-index: var(--z-modal);
   display: flex;
   flex-direction: column;
   background: var(--bg-panel);
-  border-top: 1px solid var(--rule-hi);
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  border: 1px solid var(--rule-hi);
+}
+.kb-termshell__sheet[data-open="0"] {
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  border-right: 0;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+}
+.kb-termshell__sheet[data-open="1"] {
+  left: 0;
+  right: 0;
+  bottom: 0;
   max-height: 50dvh;
+  border-bottom: 0;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
 }
 .kb-termshell__handle {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: var(--pad-2);
-  min-height: 44px;
   border: 0;
   background: transparent;
+  min-height: 44px;
+  min-width: 28px;
+}
+.kb-termshell__sheet[data-open="1"] .kb-termshell__handle {
+  width: 100%;
 }
 .kb-termshell__grip {
-  width: 36px;
-  height: 4px;
+  width: 4px;
+  height: 28px;
   border-radius: var(--radius-pill);
   background: var(--rule-hi);
+}
+.kb-termshell__sheet[data-open="1"] .kb-termshell__grip {
+  width: 36px;
+  height: 4px;
 }
 .kb-termshell__sheet-body {
   overflow: auto;

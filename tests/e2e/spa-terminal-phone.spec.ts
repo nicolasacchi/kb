@@ -672,10 +672,9 @@ test.describe("FUWEBLAUNCH phone launch controls @phone", () => {
     await page.locator('[data-testid="new-terminal-launch"]').click();
     await expect.poll(() => posted.length).toBe(1);
     expect(posted[0]).toEqual({ harness: "codex", cwd: "/synthetic" });
+    // BSHELL: a launch lands on the terminal's own page.
+    await expect(page).toHaveURL(new RegExp(`/term/${TERM_ID}$`), { timeout: 15_000 });
     await expect(page.locator(VP)).toBeVisible({ timeout: 30_000 });
-    // The fake terms list already carries the bound session id.
-    const link = page.locator('[data-testid="launched-terminal-bound"] a');
-    await expect(link).toHaveAttribute("href", `/sessions/${SID}#sec-terminal`, { timeout: 15_000 });
     await noHorizontalScroll(page);
   });
 

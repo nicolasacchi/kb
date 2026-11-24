@@ -8,7 +8,7 @@ import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { StateCard } from "@kb/ui/StateCard";
 import { useIdentity } from "../hooks/useArtifactHost";
-import { usePhonePanel } from "../hooks/useIsMobile";
+import { useIsMobile } from "../hooks/useIsMobile";
 import { openTermParam } from "../components/TermList";
 import { TerminalControls, cwdBase } from "../components/TermControls";
 import { TermShell } from "../terminal/TermShell";
@@ -34,7 +34,9 @@ export default function TermPageRoute(): ReactElement {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const location = useLocation();
-  const phone = usePhonePanel();
+  // The panel owns the phone/desktop choice; the End/switcher placement keeps the
+  // width predicate the hosts always used (a landscape phone keeps the dock tall).
+  const narrow = useIsMobile();
   const row = termId ? terms.find((t) => t.id === termId) : undefined;
   const seen = useRef(false);
   if (row) seen.current = true;
@@ -97,8 +99,8 @@ export default function TermPageRoute(): ReactElement {
   const controls = (
     <TerminalControls
       target={{ termId, harness, cwd: row?.cwd, stale: row?.stale === true }}
-      onSwitch={phone ? (to) => navigate(`/term/${encodeURIComponent(to)}`) : undefined}
-      className={phone ? "kb-term-phone__btn" : undefined}
+      onSwitch={narrow ? (to) => navigate(`/term/${encodeURIComponent(to)}`) : undefined}
+      className={narrow ? "kb-term-phone__btn" : undefined}
       onEnded={retry}
     />
   );
@@ -107,14 +109,14 @@ export default function TermPageRoute(): ReactElement {
   };
 
   return (
-    <TermShell key={termId} termId={termId} harness={harness} sid={sessionId} header={phone ? undefined : controls}>
+    <TermShell key={termId} termId={termId} harness={harness} sid={sessionId} header={narrow ? undefined : controls}>
       <Suspense fallback={<StateCard kind="loading" title="Loading terminal" reason={harness} />}>
         <TerminalPanel
           termId={termId}
           sid={sessionId ?? ""}
           harness={harness}
           onClose={close}
-          headerExtra={phone ? controls : undefined}
+          headerExtra={narrow ? controls : undefined}
         />
       </Suspense>
     </TermShell>

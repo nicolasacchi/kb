@@ -196,12 +196,36 @@ export function TermShell(props: TermShellProps): ReactElement {
     "data-harness": props.harness,
   } as const;
 
-  if (phone) {
-    return (
-      <section {...rootProps}>
-        {props.header ? <div className="kb-termshell__head">{props.header}</div> : null}
+  // ONE tree for both layouts: the pane child keeps its position (bar, body >
+  // pane, then the layout's own extra), so crossing the phone breakpoint never
+  // remounts the panel (one socket survives a rotation).
+  return (
+    <section {...rootProps} data-rail={phone ? undefined : open ? "open" : "closed"}>
+      <div className="kb-termshell__bar">
+        <div className="kb-termshell__head">{props.header}</div>
         <Chips chips={props.statusChips} />
+        {phone ? null : (
+          <button
+            type="button"
+            className="kb-termshell__toggle"
+            data-testid="term-rail-toggle"
+            aria-expanded={open}
+            aria-controls={`${idBase}-rail`}
+            onClick={toggleRail}
+          >
+            {open ? "Hide panels" : "Show panels"}
+          </button>
+        )}
+      </div>
+      <div className="kb-termshell__body">
         <div className="kb-termshell__pane">{props.children}</div>
+        {phone ? null : (
+          <aside className="kb-termshell__rail" id={`${idBase}-rail`} hidden={!open} aria-label="Terminal panels">
+            {open ? <TabSet tabs={tabs} active={tab} onSelect={selectTab} idBase={idBase} /> : null}
+          </aside>
+        )}
+      </div>
+      {phone ? (
         <div
           ref={layerRef}
           className="kb-termshell__sheet"
@@ -220,10 +244,10 @@ export function TermShell(props: TermShellProps): ReactElement {
             data-testid="term-sheet-handle"
             aria-expanded={sheetOpen}
             aria-controls={`${idBase}-sheet`}
+            aria-label={sheetOpen ? "Hide panels" : "Show panels"}
             onClick={() => setSheetOpen((o) => !o)}
           >
             <span className="kb-termshell__grip" aria-hidden="true" />
-            <span>{sheetOpen ? "Hide panels" : "Panels"}</span>
           </button>
           {sheetOpen ? (
             <div className="kb-termshell__sheet-body" id={`${idBase}-sheet`}>
@@ -232,33 +256,9 @@ export function TermShell(props: TermShellProps): ReactElement {
           ) : null}
           {props.keyRow}
         </div>
-      </section>
-    );
-  }
-
-  return (
-    <section {...rootProps} data-rail={open ? "open" : "closed"}>
-      <div className="kb-termshell__bar">
-        <div className="kb-termshell__head">{props.header}</div>
-        <Chips chips={props.statusChips} />
-        <button
-          type="button"
-          className="kb-termshell__toggle"
-          data-testid="term-rail-toggle"
-          aria-expanded={open}
-          aria-controls={`${idBase}-rail`}
-          onClick={toggleRail}
-        >
-          {open ? "Hide panels" : "Show panels"}
-        </button>
-      </div>
-      <div className="kb-termshell__body">
-        <div className="kb-termshell__pane">{props.children}</div>
-        <aside className="kb-termshell__rail" id={`${idBase}-rail`} hidden={!open} aria-label="Terminal panels">
-          {open ? <TabSet tabs={tabs} active={tab} onSelect={selectTab} idBase={idBase} /> : null}
-        </aside>
-      </div>
-      {props.keyRow}
+      ) : (
+        props.keyRow
+      )}
     </section>
   );
 }

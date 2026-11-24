@@ -262,6 +262,12 @@ export class GfxFake {
 
   async install(page: Page): Promise<void> {
     const card = fixtureCard();
+    // BSHELL: /term/:id gates on the identity's terminal admission.
+    await page.route("**/api/identity", async (route) => {
+      const res = await route.fetch();
+      const j = (await res.json()) as Record<string, unknown>;
+      await route.fulfill({ response: res, json: { ...j, terminal_admitted: true } });
+    });
     await page.route("**/api/sessions/*/card", (route) =>
       route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(card) }),
     );
