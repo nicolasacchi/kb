@@ -38,6 +38,7 @@ export interface TermShellProps {
   /** The pane. */
   children: ReactNode;
   statusChips?: Chip[];
+  /** BPHONE's key row: always a sibling of the pane (never inside the fixed grip layer). */
   keyRow?: ReactNode;
 }
 
@@ -254,11 +255,9 @@ export function TermShell(props: TermShellProps): ReactElement {
               <TabSet tabs={tabs} active={tab} onSelect={selectTab} idBase={idBase} />
             </div>
           ) : null}
-          {props.keyRow}
         </div>
-      ) : (
-        props.keyRow
-      )}
+      ) : null}
+      {props.keyRow}
     </section>
   );
 }

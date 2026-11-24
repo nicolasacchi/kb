@@ -40,8 +40,17 @@ export default function TermPageRoute(): ReactElement {
   const row = termId ? terms.find((t) => t.id === termId) : undefined;
   const seen = useRef(false);
   if (row) seen.current = true;
-  const hint = launchHint(location.state);
+  // The launch hint is consumed once: remembered here, then cleared from
+  // history.state so a reload cannot resurrect a panel for a dead id.
+  const hintRef = useRef<LaunchHint | undefined>(undefined);
+  const stateHint = launchHint(location.state);
+  if (stateHint) hintRef.current = stateHint;
+  const hint = hintRef.current;
   const hinted = termId !== null && hint?.id === termId && !seen.current ? hint : undefined;
+  const hasStateHint = stateHint !== undefined;
+  useEffect(() => {
+    if (hasStateHint) void navigate({ pathname: location.pathname, search: location.search }, { replace: true, state: null });
+  }, [hasStateHint, navigate, location.pathname, location.search]);
   const harness = row?.harness ?? hinted?.harness ?? "terminal";
   const base = row ? cwdBase(row.cwd) : "";
 

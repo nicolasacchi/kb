@@ -6,6 +6,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { TermShell, RAIL_OPEN_KEY, RAIL_TAB_KEY } from "./TermShell";
+const closeReq = vi.hoisted(() => vi.fn());
+vi.mock("@kb/ui/useCloseRequest", () => ({ useCloseRequest: closeReq }));
 import { registerRailTab, resetRailTabs } from "./rail/registry";
 
 function media(matches: boolean) {
@@ -124,6 +126,17 @@ describe("TermShell phone layer", () => {
     expect(screen.getByTestId("term-sheet-handle").getAttribute("aria-expanded")).toBe("false");
     expect(screen.queryByRole("tablist")).toBeNull();
     expect(screen.queryByTestId("rail-placeholder-conversation")).toBeNull();
+  });
+
+  it("registers a close request only while expanded, and invoking it collapses", () => {
+    render(shell());
+    const last = () => closeReq.mock.calls[closeReq.mock.calls.length - 1];
+    expect(last()[0]).toBe(false);
+    fireEvent.click(screen.getByTestId("term-sheet-handle"));
+    expect(last()[0]).toBe(true);
+    act(() => last()[1]());
+    expect(screen.getByTestId("term-sheet-handle").getAttribute("aria-expanded")).toBe("false");
+    expect(last()[0]).toBe(false);
   });
 
   it("expanding mounts the tab content; collapsing unmounts it again", () => {

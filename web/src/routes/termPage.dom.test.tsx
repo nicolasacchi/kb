@@ -21,8 +21,9 @@ vi.mock("../components/ConfirmProvider", () => ({
 }));
 vi.mock("../terminal/TerminalPanel.lazy", () => ({
   __esModule: true,
-  default: (p: { termId: string; sid: string; harness: string; onClose?: () => void }) => (
+  default: (p: { termId: string; sid: string; harness: string; onClose?: () => void; headerExtra?: React.ReactNode }) => (
     <div data-testid="mock-panel" data-term={p.termId} data-sid={p.sid} data-harness={p.harness}>
+      <div data-testid="mock-panel-extra">{p.headerExtra}</div>
       <button type="button" data-testid="mock-panel-close" onClick={() => p.onClose?.()}>
         Close
       </button>
@@ -56,6 +57,11 @@ let listRows: object[] = [ROW];
 function Where() {
   const l = useLocation();
   return <div data-testid="where">{l.pathname}</div>;
+}
+
+function StateProbe() {
+  const l = useLocation();
+  return <div data-testid="state-probe">{JSON.stringify(l.state)}</div>;
 }
 
 function mountAt(path: string) {
@@ -139,6 +145,46 @@ describe("/term/:id", () => {
     expect(document.title).toContain("alpha");
     unmount();
     expect(document.title).toBe(prev);
+  });
+
+  it("desktop: exactly one End, in the shell header, none in the panel's headerExtra", async () => {
+    mountAt("/term/t1");
+    await screen.findByTestId("mock-panel");
+    const ends = screen.getAllByTestId("kb-term-end");
+    expect(ends).toHaveLength(1);
+    expect(ends[0].closest(".kb-termshell__head")).toBeTruthy();
+    expect(screen.getByTestId("mock-panel-extra").querySelector('[data-testid="kb-term-end"]')).toBeNull();
+  });
+
+  it("phone: exactly one End, in the panel's headerExtra, none in the shell header", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      (q: string) =>
+        ({ matches: true, media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} }) as unknown as MediaQueryList,
+    );
+    mountAt("/term/t1");
+    await screen.findByTestId("mock-panel");
+    const ends = screen.getAllByTestId("kb-term-end");
+    expect(ends).toHaveLength(1);
+    expect(screen.getByTestId("mock-panel-extra").contains(ends[0])).toBe(true);
+    expect(document.querySelector(".kb-termshell__head")?.querySelector('[data-testid="kb-term-end"]') ?? null).toBeNull();
+  });
+
+  it("a launch hint is consumed: it mounts the panel once, then history.state is cleared", async () => {
+    listRows = [];
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={[{ pathname: "/term/t9", state: { launched: { id: "t9", harness: "omp" } } }]}>
+          <Routes>
+            <Route path="/term/:id" element={<><TermPageRoute /><StateProbe /></>} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByTestId("mock-panel")).toBeTruthy();
+    await waitFor(() => expect(screen.getByTestId("state-probe").textContent).toBe("null"));
+    expect(screen.getByTestId("mock-panel")).toBeTruthy();
   });
 
   it("Close goes to the bound session, else to /sessions", async () => {
