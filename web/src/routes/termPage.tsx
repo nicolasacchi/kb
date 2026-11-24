@@ -1,0 +1,121 @@
+// BSHELL — /term/:id, the terminal's own page. A thin route over `TermShell`:
+// it reads the id (`openTermParam`), the `["terms"]` row (`useTerms`) and the
+// admission bit, then wraps the lazy `TerminalPanel` (the same seam the slot
+// and the launched-terminal host use, so xterm stays out of the main chunk).
+
+import { Suspense, lazy, useEffect, useRef, type ReactElement } from "react";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
+import { StateCard } from "@kb/ui/StateCard";
+import { useIdentity } from "../hooks/useArtifactHost";
+import { usePhonePanel } from "../hooks/useIsMobile";
+import { openTermParam } from "../components/TermList";
+import { TerminalControls, cwdBase } from "../components/TermControls";
+import { TermShell } from "../terminal/TermShell";
+import { useTerms } from "../terminal/useTerms";
+
+const TerminalPanel = lazy(() => import("../terminal/TerminalPanel.lazy"));
+
+/** A just-launched term whose row may not be listed yet (navigation state). */
+type LaunchHint = { id: string; harness: string };
+
+function launchHint(state: unknown): LaunchHint | undefined {
+  const l = (state as { launched?: { id?: unknown; harness?: unknown } } | null)?.launched;
+  return l && typeof l.id === "string" && typeof l.harness === "string"
+    ? { id: l.id, harness: l.harness }
+    : undefined;
+}
+
+export default function TermPageRoute(): ReactElement {
+  const { id } = useParams();
+  const termId = openTermParam(id ?? null);
+  const identity = useIdentity();
+  const { terms, isLoading, isError } = useTerms();
+  const qc = useQueryClient();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const phone = usePhonePanel();
+  const row = termId ? terms.find((t) => t.id === termId) : undefined;
+  const seen = useRef(false);
+  if (row) seen.current = true;
+  const hint = launchHint(location.state);
+  const hinted = termId !== null && hint?.id === termId && !seen.current ? hint : undefined;
+  const harness = row?.harness ?? hinted?.harness ?? "terminal";
+  const base = row ? cwdBase(row.cwd) : "";
+
+  // The tab title names the terminal while it is open; restored on unmount.
+  useEffect(() => {
+    if (!row && !hinted) return;
+    const prev = document.title;
+    document.title = base ? `${harness} · ${base} — terminal` : `${harness} — terminal`;
+    return () => {
+      document.title = prev;
+    };
+  }, [row, hinted, harness, base]);
+
+  const retry = (): void => void qc.invalidateQueries({ queryKey: ["terms"] });
+
+  if (identity === null) {
+    return <StateCard kind="loading" title="Loading terminal" />;
+  }
+  if (identity.terminal_admitted !== true) {
+    return (
+      <StateCard
+        kind="refused"
+        title="Terminals are not enabled"
+        reason="This daemon does not admit terminal access for this caller."
+      />
+    );
+  }
+  const notFound = (title: string): ReactElement => (
+    <div data-testid="term-not-found">
+      <StateCard kind="empty" title={title} reason="It may have ended." />
+      <p>
+        <Link to="/sessions">Back to sessions</Link>
+      </p>
+    </div>
+  );
+  if (termId === null) return notFound("Not a terminal id");
+  if (!row && !hinted) {
+    if (isLoading) return <StateCard kind="loading" title="Loading terminal" reason={termId} />;
+    if (isError) {
+      return (
+        <div data-testid="term-list-error">
+          <StateCard
+            kind="degraded"
+            title="Cannot read the terminal list"
+            reason={`Terminal ${termId} cannot be opened yet.`}
+            actions={[{ label: "Retry", onClick: retry, key: "retry" }]}
+          />
+        </div>
+      );
+    }
+    return notFound("Terminal not found");
+  }
+
+  const sessionId = row?.session_id ?? undefined;
+  const controls = (
+    <TerminalControls
+      target={{ termId, harness, cwd: row?.cwd, stale: row?.stale === true }}
+      onSwitch={phone ? (to) => navigate(`/term/${encodeURIComponent(to)}`) : undefined}
+      className={phone ? "kb-term-phone__btn" : undefined}
+      onEnded={retry}
+    />
+  );
+  const close = (): void =>
+    navigate(sessionId ? `/sessions/${encodeURIComponent(sessionId)}` : "/sessions", { replace: true });
+
+  return (
+    <TermShell key={termId} termId={termId} harness={harness} sid={sessionId} header={phone ? undefined : controls}>
+      <Suspense fallback={<StateCard kind="loading" title="Loading terminal" reason={harness} />}>
+        <TerminalPanel
+          termId={termId}
+          sid={sessionId ?? ""}
+          harness={harness}
+          onClose={close}
+          headerExtra={phone ? controls : undefined}
+        />
+      </Suspense>
+    </TermShell>
+  );
+}

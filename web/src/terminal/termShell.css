@@ -1,0 +1,138 @@
+/* BSHELL — the terminal workspace host. Tokens only. */
+.kb-termshell {
+  --term-rail-w: 280px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+  min-width: 0;
+  min-height: 70dvh;
+  padding: var(--pad-2) var(--pad-3);
+}
+.kb-termshell__bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--pad-2);
+}
+.kb-termshell__head {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-2);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.kb-termshell__body {
+  display: grid;
+  grid-template-columns: 1fr minmax(var(--term-rail-w), 360px);
+  gap: var(--pad-3);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.kb-termshell[data-rail="closed"] .kb-termshell__body {
+  grid-template-columns: 1fr 0;
+  gap: 0;
+}
+.kb-termshell__pane {
+  min-width: 0;
+}
+.kb-termshell__rail {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+}
+.kb-termshell__rail[hidden] {
+  display: none;
+}
+.kb-termshell__tabs {
+  display: flex;
+  gap: var(--pad-1);
+  padding: var(--pad-1);
+  border-bottom: 1px solid var(--rule);
+}
+.kb-termshell__tab,
+.kb-termshell__toggle,
+.kb-termshell__handle {
+  background: var(--bg-card);
+  color: var(--ink);
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  padding: var(--pad-1) var(--pad-2);
+  cursor: pointer;
+}
+.kb-termshell__tab[aria-selected="true"] {
+  border-color: var(--accent);
+}
+.kb-termshell__tab:hover,
+.kb-termshell__toggle:hover,
+.kb-termshell__handle:hover {
+  border-color: var(--accent);
+}
+.kb-termshell__badge {
+  margin-left: var(--pad-1);
+  color: var(--warn);
+}
+.kb-termshell__panel {
+  padding: var(--pad-3);
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
+}
+.kb-termshell__soon {
+  margin: 0;
+}
+.kb-termshell__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pad-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.kb-termshell__chip {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-pill);
+  padding: 0 var(--pad-2);
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+}
+.kb-termshell__chip[data-tone="warn"] {
+  color: var(--warn);
+}
+.kb-termshell__chip[data-tone="err"] {
+  color: var(--danger);
+}
+/* Phone: a non-modal fixed layer above the panel's own sheet (--z-drawer). */
+.kb-termshell__sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--rule-hi);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  max-height: 50dvh;
+}
+.kb-termshell__handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--pad-2);
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+}
+.kb-termshell__grip {
+  width: 36px;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--rule-hi);
+}
+.kb-termshell__sheet-body {
+  overflow: auto;
+  min-height: 0;
+}
