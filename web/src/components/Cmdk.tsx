@@ -37,6 +37,8 @@ import {
 } from "./cmdkRows";
 import { artifactHref } from "../lib/artifactHref";
 import { withKb } from "../lib/navItems";
+import { useNavItems } from "../hooks/useNavState";
+import { navCommands } from "../lib/navCommands";
 import { cycleTheme } from "../api/prefs";
 import { useIdentity } from "../hooks/useArtifactHost";
 import UserChip from "./UserChip";
@@ -329,6 +331,7 @@ export default function Cmdk({
   // jump from a reader keeps that artifact's space and an unscoped view
   // stays kb-less. `kb` above (resolved) still scopes search + result links.
   const explicitKb = useExplicitKb();
+  const navItems = useNavItems();
   const result = useSearch(q, mode, kb);
   // OL S1 — ONE "Search code" row when the active kb links a kb-code
   // (`[kb.*] code_url`). A link, not a fetch: kb-code's CORS stays pinned to
@@ -481,13 +484,15 @@ export default function Cmdk({
   // query → show all.
   const visibleCommands = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    if (!needle) return COMMANDS;
-    return COMMANDS.filter(
+    // Door rows (badge/visible-aware) append AFTER the static rows.
+    const all: Command[] = [...COMMANDS, ...navCommands(navItems)];
+    if (!needle) return all;
+    return all.filter(
       (c) =>
         c.label.toLowerCase().includes(needle) ||
         c.hint.toLowerCase().includes(needle),
     );
-  }, [q]);
+  }, [q, navItems]);
 
   // G8 — Recent shows only when the user has typed nothing. Excludes
   // the currently-open artifact (same kb + source_relative). The list

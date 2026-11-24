@@ -43,10 +43,14 @@ describe("no static xterm imports", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("TerminalSlot.tsx contains lazy( and no @xterm import", () => {
+  it("TerminalSlot.tsx is a door: no @xterm import, no panel seam; termPage.tsx holds the lazy( seam", () => {
     const slot = nodeFs.readFileSync(here("../components/TerminalSlot.tsx"), "utf8");
-    expect(slot).toContain("lazy(");
     expect(findXtermImports(slot)).toEqual([]);
+    expect(slot).not.toContain("TerminalPanel");
+    const page = nodeFs.readFileSync(here("../routes/termPage.tsx"), "utf8");
+    expect(page).toContain("lazy(");
+    expect(page).toContain("TerminalPanel.lazy");
+    expect(findXtermImports(page)).toEqual([]);
   });
 
   it("within terminal/, only TerminalPanel.lazy.ts references ./TerminalPanel, and never wraps it in another lazy(", () => {

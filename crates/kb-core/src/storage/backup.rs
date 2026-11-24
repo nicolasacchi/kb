@@ -1395,6 +1395,10 @@ mod tests {
         write(paths.kb_attachment_manifest(&kb, "art1"), b"{}");
         write(paths.kb_proposal_file(&kb, "p_abc"), b"{\"p\":1}");
         write(paths.state.join("slates/proj/ledger.jsonl"), b"{}\n");
+        write(
+            paths.term_prompts_file(&crate::slate::SlateSlug::new("proj").unwrap()),
+            b"{\"schema\":\"kb-term-prompts/1\",\"project\":\"proj\",\"rev\":1,\"items\":[]}",
+        );
         write(paths.saved_queries_file(), b"[]");
         write(paths.memory_policy_file(), b"{}");
         write(paths.tombstone_era_file(), b"{\"era\":1}");
@@ -1427,6 +1431,7 @@ mod tests {
             "notes/.attachments/art1/_manifest.json",
             "notes/.proposals/p_abc.json",
             "slates/proj/ledger.jsonl",
+            "term-prompts/proj.json",
             "saved-queries.json",
             "memory-policy.json",
             "tombstone-era.json",
@@ -1457,6 +1462,12 @@ mod tests {
         assert_eq!(
             std::fs::read(extract.join("notes/.attachments/art1/a_0123456789ab")).unwrap(),
             b"PNGBYTES"
+        );
+        // kbt2 PQSTORE: the prompt-queue ledger round-trips byte for byte.
+        assert_eq!(
+            std::fs::read(extract.join("term-prompts/proj.json")).unwrap(),
+            std::fs::read(paths.term_prompts_file(&crate::slate::SlateSlug::new("proj").unwrap()))
+                .unwrap()
         );
     }
 

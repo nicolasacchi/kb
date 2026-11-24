@@ -1473,10 +1473,7 @@ test("FUTERMFULL: the overlay maximises the panel, shows the whole 120x40 grid, 
   await expect.poll(async () => (await fullState(page)).overlay).toBe(true);
   expect(await page.evaluate(() => document.querySelector(".kb-term--max") !== null)).toBe(true);
   await page.reload();
-  await expect(page.locator('[data-testid="kb-term-open"]')).toBeVisible({ timeout: 30_000 });
-  expect(await page.evaluate(() => document.querySelector(".kb-term--max") === null && document.fullscreenElement === null)).toBe(true);
-  // Non-vacuous: the panel that opens after the reload is NOT maximised (no state survived).
-  await page.locator('[data-testid="kb-term-open"]').click();
+  // Non-vacuous: /term/:id remounts the panel after the reload, and it is NOT maximised (no state survived).
   await expect(page.locator("[data-kb-term]")).toBeVisible({ timeout: 30_000 });
   expect((await fullState(page)).overlay).toBe(false);
   expect(await page.evaluate(() => document.querySelector(".kb-term--max") === null && document.fullscreenElement === null)).toBe(true);

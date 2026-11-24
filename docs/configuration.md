@@ -368,6 +368,7 @@ copy of the file instead.
 | `runner_socket` | path | `/run/kb-term/runner/runner.sock` | The `kb-termd` runner socket. `~`/`~/rest` is tilde-expanded at read time; anything else is used verbatim. Almost never set (the socket lives under the `/run/kb-term` bind mount the runner owns) except in tests and split deployments. |
 | `ticket_ttl_secs` | u64 | `30` | Single-use WebSocket ticket lifetime in seconds, clamped into `1..=120`. |
 | `refuse_token_callers` | bool | `true` | Refuse `Token`/`Legacy` identity callers on terminal routes (see Security posture below). |
+| `files` | table | absent | The `[terminal.files]` sub-table (below): which kb receives uploaded files. Absent = off. |
 | `runner_timeout_secs` | u64 | `5` | Base runner RPC deadline (connect+write+read) in seconds, clamped into `1..=60`. Per-op budgets are floors over this base: input ops (paste/keys) use it directly, `list` gets at least 30 s, `enter` at least 15 s, and `launch`/`kill`/`read`/`history` at least 60 s. |
 
 ```toml
@@ -384,6 +385,24 @@ interval before `enter` presses Enter, 400 ms by default, and its 5 s
 give-up; the default grid; the cell pixel size) are `kb-termd` flags with
 built-in defaults, and the 16-socket cap, the 32 KiB paste cap and the
 8 MiB upload cap are fixed constants.
+
+### `[terminal.files]`
+
+Where the terminal Files feature stores uploaded files. Each file is
+written as a verbatim `.kbblob` original (never indexed or served as an
+artifact) plus a small stub artifact beside it that carries the metadata
+and, for text-like content the operator opts to index, an HTML-escaped
+copy. Absent the table (or with a blank `kb`), the feature has no corpus
+and is off.
+
+| key | type | default | meaning |
+|---|---|---|---|
+| `kb` | string | unset (off) | Name of the `[kb.<name>]` corpus that receives the files. It must exist (a missing name is a hard config error) and its source directory must be a writable mount. |
+
+```toml
+[terminal.files]
+kb = "files"
+```
 
 **Security posture** (the full model is in
 [`docs/kb-term.md`](kb-term.md#security-model)). Terminal routes are
