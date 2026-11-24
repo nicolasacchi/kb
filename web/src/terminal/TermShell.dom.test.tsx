@@ -146,7 +146,7 @@ describe("TermShell phone layer", () => {
     fireEvent.keyDown(handle, { key: "Escape" });
     expect(handle.getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(handle);
-    (screen.getByTestId("pane") as HTMLElement).focus();
+    (document.activeElement as HTMLElement).blur();
     fireEvent.keyDown(screen.getByTestId("term-sheet"), { key: "Escape" });
     expect(screen.getByTestId("term-sheet-handle").getAttribute("aria-expanded")).toBe("true");
   });
