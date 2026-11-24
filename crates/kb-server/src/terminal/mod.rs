@@ -12,6 +12,7 @@
 //! serde mirror of the runner JSON types.
 
 pub mod binding;
+pub mod commands;
 pub mod events;
 pub mod gate;
 pub mod keys_allow;
@@ -21,7 +22,6 @@ pub mod ticket;
 pub mod upload;
 pub mod wire;
 pub mod ws;
-pub mod commands;
 
 /// The in-memory terminal relay state on [`KbHandles`](crate::state::KbHandles).
 /// One field here, not on `KbHandles`, so T12/T13 extend this struct
