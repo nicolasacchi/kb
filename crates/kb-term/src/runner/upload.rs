@@ -435,7 +435,6 @@ struct PartialMeta {
 struct Partial {
     token: String,
     size: u64,
-    received: u64,
 }
 
 /// A runner-minted token: exactly 32 lowercase hex chars.
@@ -486,16 +485,12 @@ fn list_partials(up: &Path) -> Vec<Partial> {
         let Some(token) = token_of(&name) else {
             continue;
         };
-        let Ok(meta) = std::fs::symlink_metadata(entry.path()) else {
-            continue;
-        };
         let Some(m) = read_meta(up, token) else {
             continue;
         };
         out.push(Partial {
             token: token.to_string(),
             size: m.size,
-            received: meta.len(),
         });
     }
     out
