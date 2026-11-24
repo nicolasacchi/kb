@@ -227,6 +227,9 @@ const V0_0_1_TYPES: &[&str] = &[
     // busy fleet would flood every browser, invariant #24). Daemon-wide
     // (no `{kb}` scope — see `routes::sessions::beat`).
     "session.state",
+    // STATREG — a `status` beat fires this ONLY when the merged typed status
+    // changed (never per beat); the payload names the session, never values.
+    "session.status",
     // SL2 (`docs/research/kb-slate-design-2026-09.html` §9 "SSE") — the
     // per-project blackboard. `slate.updated` fires ONCE PER APPEND, never
     // per read (#24); `kind` is the post's own kind, or the lifecycle verb
@@ -452,6 +455,7 @@ pub async fn per_type(Path((kind, version)): Path<(String, String)>) -> Response
         }
         "slate.deleted" => json!({"type": kind, "payload": ["slug"]}),
         "session.state" => json!({"type": kind, "payload": SESSION_STATE_KEYS}),
+        "session.status" => json!({"type": kind, "payload": SESSION_STATUS_KEYS}),
         "term.created" => json!({"type": kind, "payload": TERM_CREATED_KEYS}),
         "term.ended" => json!({"type": kind, "payload": TERM_ENDED_KEYS}),
         "term.state" => json!({"type": kind, "payload": TERM_STATE_KEYS}),
@@ -474,6 +478,11 @@ pub const SESSION_STATE_KEYS: [&str; 8] = [
     "blocked",
     "blocked_tool?",
 ];
+
+/// The declared payload keys of `session.status` (emitted by
+/// `routes::sessions::beat` on a changed status). Values stay behind the
+/// live-status scrub floor, so none ride the event.
+pub const SESSION_STATUS_KEYS: [&str; 2] = ["session_id", "harness"];
 
 /// The declared payload keys of `term.created` (emitted by
 /// `terminal::events::emit_created` on a confirmed launch). A `?`

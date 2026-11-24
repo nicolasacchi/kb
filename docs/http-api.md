@@ -1388,6 +1388,19 @@ POST /api/sessions/beat                     LSC-2/3 (live-sessions cockpit
                                             ignored unless `[terminal] enabled`
                                             and the beat's `pid` equals the
                                             runner's pane pid — never a 400.
+                                            STATREG — `event:"status"` is not a lifecycle event: it
+                                            carries an optional `status:{model?, context_pct?,
+                                            cost_usd?, permission_mode?, branch?}` merged per field
+                                            into an EXISTING registry row (unknown session or
+                                            harness mismatch -> `applied:false`; no row is created).
+                                            model/branch 1..64 chars, context_pct 0..100, cost_usd
+                                            0..100000, permission_mode `default|plan|accept|bypass|
+                                            other`; an invalid field is dropped, never a 400. It never
+                                            changes holder, state or lease, is never persisted, and
+                                            answers `{ok, session_id, applied, changed}`. Fires
+                                            `session.status` `{session_id, harness}` only when the
+                                            merged status changed. Rides `live-status` as `status`,
+                                            re-validated under the non-loopback scrub floor.
                                             Daemon-wide, NOT `{kb}`-scoped (a
                                             beat arrives before any capture
                                             exists to attribute it to).
