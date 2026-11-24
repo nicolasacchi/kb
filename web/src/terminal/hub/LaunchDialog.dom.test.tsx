@@ -172,7 +172,7 @@ describe("nothing is sent before the Launch click", () => {
 
   it("a launch failure toasts, shows an alert and stays on the confirm view", async () => {
     launchReply = { status: 500, body: { title: "boom", detail: "no runner" } };
-    const err = vi.spyOn(toast, "err").mockImplementation(() => {});
+    const err = vi.spyOn(toast, "err").mockImplementation(() => 0);
     const { onLaunched, onClose } = mount();
     type("/tmp/x");
     review();
@@ -189,7 +189,7 @@ describe("nothing is sent before the Launch click", () => {
     let signal: AbortSignal | undefined;
     vi.stubGlobal(
       "fetch",
-      vi.fn((input: string | URL, init?: RequestInit) => {
+      vi.fn((_input: string | URL, init?: RequestInit) => {
         if ((init?.method ?? "GET") === "POST") {
           signal = init?.signal ?? undefined;
           return new Promise<Response>(() => {});
