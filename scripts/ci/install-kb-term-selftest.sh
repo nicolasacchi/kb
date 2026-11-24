@@ -360,6 +360,41 @@ if grep 'Environment="PATH=' "$work/out" | grep -qF "$work/nl"; then
 fi
 say_ok "4d an unprintable PATH dir is skipped with a stderr warning"
 
+# 4e. the printed drop-in PATH keeps the shell's precedence: with the shell
+# PATH `$hdir2:$kbdir2:...`, `$hdir2` holds `omp` and `$kbdir2` holds `kb`
+# AND a different (stale) `omp`, every listed binary must resolve under the
+# printed PATH to the same file the installer's shell resolves. Resolution is
+# done by walking the parsed PATH parts in Python, never by `command -v`.
+hdir2="$work/e-harness"
+kbdir2="$work/e-kb"
+mkdir -p "$hdir2" "$kbdir2"
+printf '#!/bin/sh\n' > "$hdir2/omp"; chmod 755 "$hdir2/omp"
+printf '#!/bin/sh\n' > "$kbdir2/kb"; chmod 755 "$kbdir2/kb"
+printf '#!/bin/sh\necho stale\n' > "$kbdir2/omp"; chmod 755 "$kbdir2/omp"
+run "$work/p4e" PATH="$hdir2:$kbdir2:$PATH" KB_SESSIONS_DIR=/tmp/sessions-fixture \
+  || fail "install with a shadowing kb dir should succeed"
+python3 -I - "$work/out" "$hdir2" "$kbdir2" <<'PYEOF' || fail "printed PATH shadows a harness the shell resolves elsewhere"
+import os, sys
+out, hdir, kbdir = sys.argv[1:4]
+path = None
+for line in open(out, encoding="utf-8"):
+    line = line.strip()
+    if line.startswith('Environment="PATH='):
+        path = line[len('Environment="PATH='):-1]
+assert path is not None, "no PATH line"
+parts = path.split(":")
+def resolve(name):
+    for d in parts:
+        f = os.path.join(d, name)
+        if os.path.isfile(f) and os.access(f, os.X_OK):
+            return f
+    return None
+assert resolve("omp") == os.path.join(hdir, "omp"), (resolve("omp"), parts)
+assert resolve("kb") == os.path.join(kbdir, "kb"), (resolve("kb"), parts)
+assert parts[-2:] == ["/usr/local/bin", "/usr/bin"], parts
+PYEOF
+say_ok "4e drop-in PATH keeps the shell's precedence"
+
 # 5. gh attestation fails -> abort with nothing installed; override proceeds
 if run "$work/p5" PATH="$work/gh-bin:$PATH" FAKE_GH_VERIFY=1; then fail "failed attestation must abort"; fi
 [ ! -e "$work/p5/bin/kb-termd" ] || fail "installed despite failed attestation"
