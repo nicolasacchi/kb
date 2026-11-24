@@ -395,6 +395,31 @@ assert parts[-2:] == ["/usr/local/bin", "/usr/bin"], parts
 PYEOF
 say_ok "4e drop-in PATH keeps the shell's precedence"
 
+# 4e2. a trailing-slash / doubled-slash $PATH entry (dirname strips both) must
+# not defeat the ordering match: the harness dir still comes first.
+run "$work/p4e2" PATH="$hdir2/:$kbdir2//:$PATH" KB_SESSIONS_DIR=/tmp/sessions-fixture \
+  || fail "install with slash-variant PATH entries should succeed"
+python3 -I - "$work/out" "$hdir2" "$kbdir2" <<'PYEOF' || fail "slash-variant PATH entry fell back to binary-list order"
+import os, sys
+out, hdir, kbdir = sys.argv[1:4]
+path = None
+for line in open(out, encoding="utf-8"):
+    line = line.strip()
+    if line.startswith('Environment="PATH='):
+        path = line[len('Environment="PATH='):-1]
+assert path is not None, "no PATH line"
+parts = path.split(":")
+def resolve(name):
+    for d in parts:
+        f = os.path.join(d, name)
+        if os.path.isfile(f) and os.access(f, os.X_OK):
+            return f
+    return None
+assert resolve("omp") == os.path.join(hdir, "omp"), (resolve("omp"), parts)
+assert resolve("kb") == os.path.join(kbdir, "kb"), (resolve("kb"), parts)
+PYEOF
+say_ok "4e2 slash-variant PATH entries keep the shell's precedence"
+
 # 5. gh attestation fails -> abort with nothing installed; override proceeds
 if run "$work/p5" PATH="$work/gh-bin:$PATH" FAKE_GH_VERIFY=1; then fail "failed attestation must abort"; fi
 [ ! -e "$work/p5/bin/kb-termd" ] || fail "installed despite failed attestation"

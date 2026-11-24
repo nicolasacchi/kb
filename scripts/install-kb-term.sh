@@ -257,14 +257,22 @@ print_env_dropin() {
   # (the operator's shell precedence), not in the order of the binary list:
   # an earlier dir shadows a later one, so every binary must resolve under the
   # printed PATH to the file `command -v` resolved here. A needed dir that is
-  # not a $PATH entry (cannot happen for a `command -v` hit, kept as a guard)
-  # is appended last.
+  # not a $PATH entry (only after normalisation: `dirname` strips trailing and
+  # doubled slashes, a $PATH entry may carry them, so each entry is normalised
+  # the same way before the membership test) is appended last.
   ordered=""
   old_ifs="$IFS"
   IFS=":"
   set -f
   for d in $PATH; do
     case "$d" in /*) ;; *) continue ;; esac
+    while :; do
+      case "$d" in
+        *//*) d="${d%%//*}/${d#*//}" ;;
+        ?*/) d="${d%/}" ;;
+        *) break ;;
+      esac
+    done
     case ":${dirs}:" in *":${d}:"*) ;; *) continue ;; esac
     case ":${ordered}:" in *":${d}:"*) continue ;; esac
     ordered="${ordered:+${ordered}:}${d}"
