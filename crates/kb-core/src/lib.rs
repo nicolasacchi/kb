@@ -22,6 +22,7 @@ pub mod error;
 pub mod events;
 pub mod exclusions;
 pub mod extmap;
+pub mod filestore;
 pub mod fsx;
 pub mod fusion;
 pub mod graph_report;

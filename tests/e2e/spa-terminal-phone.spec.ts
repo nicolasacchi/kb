@@ -257,9 +257,8 @@ test.describe("T17 phone terminal: layout and gestures @phone", () => {
     expect(bad).toEqual([]);
     expect(await page.evaluate(() => localStorage.getItem("kb-term-phone-font"))).toBe("8");
     // The persisted step survives a reload.
+    // /term/:id reopens the panel by itself after a reload.
     await page.reload();
-    await page.locator('[data-testid="session-sec-terminal"] > summary').click();
-    await page.locator('[data-testid="kb-term-open"]').click();
     await expect(page.locator(VP)).toHaveAttribute("data-kb-term-font", "8", { timeout: 30_000 });
   });
 
@@ -432,15 +431,9 @@ test.describe("T17 phone terminal: host and lifecycle @phone", () => {
     await expect(page.locator("[data-kb-term]")).toBeVisible();
     await expect(page.locator("[data-kb-term] .xterm")).toHaveCount(1);
     await page.setViewportSize(size);
-    // The session page closes its collapsible section below the breakpoint; the
-    // sheet is portaled, so it stays visible without anyone reopening it.
-    await expect
-      .poll(() =>
-        page.evaluate(
-          () => (document.querySelector('[data-testid="session-sec-terminal"]') as HTMLDetailsElement).open,
-        ),
-      )
-      .toBe(false);
+    // Back below the breakpoint the shell is on its phone layout again, and the
+    // sheet (portaled) stays visible without anyone reopening it.
+    await expect(page.locator('[data-testid="term-shell"]')).toHaveAttribute("data-kb-term-layout", "phone");
     await expect(page.locator("[data-kb-sheet]")).toBeAttached();
     await expect(page.locator(VP)).toBeVisible();
     await expect(page.locator(`${VP} .xterm`)).toHaveCount(1);
@@ -679,10 +672,9 @@ test.describe("FUWEBLAUNCH phone launch controls @phone", () => {
     await page.locator('[data-testid="new-terminal-launch"]').click();
     await expect.poll(() => posted.length).toBe(1);
     expect(posted[0]).toEqual({ harness: "codex", cwd: "/synthetic" });
+    // BSHELL: a launch lands on the terminal's own page.
+    await expect(page).toHaveURL(new RegExp(`/term/${TERM_ID}$`), { timeout: 15_000 });
     await expect(page.locator(VP)).toBeVisible({ timeout: 30_000 });
-    // The fake terms list already carries the bound session id.
-    const link = page.locator('[data-testid="launched-terminal-bound"] a');
-    await expect(link).toHaveAttribute("href", `/sessions/${SID}#sec-terminal`, { timeout: 15_000 });
     await noHorizontalScroll(page);
   });
 
@@ -780,11 +772,12 @@ test.describe("FUPHONEMODE landscape phone and iOS Back @phone", () => {
     const before = await page.evaluate(() => history.length);
     await page.locator('[data-testid="kb-term-open"]').click();
     await expect(page.locator("[data-kb-sheet]")).toBeAttached({ timeout: 15_000 });
-    expect(await page.evaluate(() => history.length)).toBe(before + 1);
-    const path = new URL(page.url()).pathname;
+    // One entry for the /term/:id page, one for the sheet.
+    expect(await page.evaluate(() => history.length)).toBe(before + 2);
     await page.evaluate(() => history.back());
     await expect(page.locator("[data-kb-sheet]")).toHaveCount(0);
-    expect(new URL(page.url()).pathname).toBe(path);
+    // Back closes the sheet and the terminal page hands over to the session page.
+    await expect(page).toHaveURL(new RegExp(`/sessions/${SID}$`));
     await expect(page.locator('[data-testid="kb-terminal-slot"]')).toBeAttached();
   });
 
@@ -851,7 +844,7 @@ test.describe("FUTERMLIST terminals list @phone", () => {
     return kills;
   }
 
-  test("from /sessions, tap a running unbound terminal: the sheet opens with ?term= in the URL, and a reload reopens it", async ({ page }) => {
+  test("from /sessions, tap a running unbound terminal: the sheet opens at /term/<id>, and a reload reopens it", async ({ page }) => {
     await installFakeTerminal(page, {});
     await admitWithUnboundRow(page);
     await page.goto(`${BASE}/sessions`);
@@ -860,10 +853,10 @@ test.describe("FUTERMLIST terminals list @phone", () => {
     await expect(row.locator('[data-testid="term-row-unbound"]')).toBeVisible();
     await row.locator('[data-testid="term-row-open"]').click();
     await expect(page.locator(VP)).toBeVisible({ timeout: 30_000 });
-    await expect(page).toHaveURL(new RegExp(`[?&]term=${TERM_ID}(&|$)`));
+    await expect(page).toHaveURL(new RegExp(`/term/${TERM_ID}$`));
     await page.reload();
     await expect(page.locator(VP)).toBeVisible({ timeout: 30_000 });
-    await expect(page).toHaveURL(new RegExp(`[?&]term=${TERM_ID}(&|$)`));
+    await expect(page).toHaveURL(new RegExp(`/term/${TERM_ID}$`));
   });
 
   test("End in the sheet: Cancel sends nothing, Confirm sends exactly one kill with the intent header, and the sheet stays until the stream ends it", async ({ page }) => {
@@ -1086,9 +1079,9 @@ test.describe("POLISH2 landscape phone dock @phone", () => {
 });
 
 // FUMINLIST - the phone sheet's terminal switcher with two listed terminals:
-// switching in the sheet moves `?term=` to the other id. Switching PUSHES a
-// history entry (openTerm is replace:false), so Back first returns to the
-// previous terminal and a second Back closes the sheet.
+// switching in the sheet moves /term/<id> to the other id. Switching PUSHES a
+// history entry, so Back first returns to the previous terminal and a second
+// Back leaves the terminal page.
 test.describe("FUMINLIST two-terminal switcher @phone", () => {
   const OTHER_ID = "t-e2f";
   const termRow = (id: string, cwd: string) => ({
@@ -1112,7 +1105,7 @@ test.describe("FUMINLIST two-terminal switcher @phone", () => {
     blocked: false,
   });
 
-  test("switching terminals in the sheet makes ?term= follow", async ({ page }) => {
+  test("switching terminals in the sheet makes /term/<id> follow", async ({ page }) => {
     await installFakeTerminal(page, { total: 300, seedLines: 300 });
     await page.route("**/api/identity", async (route) => {
       const res = await route.fetch();
@@ -1133,26 +1126,58 @@ test.describe("FUMINLIST two-terminal switcher @phone", () => {
     await expect(first).toBeVisible({ timeout: 20_000 });
     await first.click();
     await expect(page.locator("[data-kb-sheet]")).toBeAttached({ timeout: 15_000 });
-    await expect.poll(() => new URL(page.url()).searchParams.get("term")).toBe(TERM_ID);
+    const at = () => new URL(page.url()).pathname;
+    await expect.poll(at).toBe(`/term/${TERM_ID}`);
 
     const sw = page.locator('[data-testid="kb-term-switch"]');
     await expect(sw).toBeVisible({ timeout: 15_000 });
     // The switcher offers only the OTHER live terminal.
     await expect(sw.locator("option")).toHaveCount(2);
     await sw.selectOption(OTHER_ID);
-    await expect.poll(() => new URL(page.url()).searchParams.get("term")).toBe(OTHER_ID);
+    await expect.poll(at).toBe(`/term/${OTHER_ID}`);
     await expect(page.locator("[data-kb-sheet]")).toBeAttached();
-    await expect(page.locator('[data-testid="launched-terminal"]')).toHaveAttribute("data-term", OTHER_ID);
+    await expect(page.locator('[data-testid="term-shell"]')).toHaveAttribute("data-term", OTHER_ID);
 
     // Back #1 undoes the switch (the switch pushed an entry): same sheet, first terminal.
     await page.goBack();
-    await expect.poll(() => new URL(page.url()).searchParams.get("term")).toBe(TERM_ID);
+    await expect.poll(at).toBe(`/term/${TERM_ID}`);
     await expect(page.locator("[data-kb-sheet]")).toBeAttached();
-    await expect(page.locator('[data-testid="launched-terminal"]')).toHaveAttribute("data-term", TERM_ID);
-    // Back #2 closes the sheet and drops ?term=.
+    await expect(page.locator('[data-testid="term-shell"]')).toHaveAttribute("data-term", TERM_ID);
+    // Back #2 leaves the terminal page.
     await page.goBack();
-    await expect.poll(() => new URL(page.url()).searchParams.get("term")).toBeNull();
+    await expect.poll(at).toBe("/sessions");
     await expect(page.locator("[data-kb-sheet]")).toHaveCount(0);
-    await expect(page.locator('[data-testid="launched-terminal"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="term-shell"]')).toHaveCount(0);
+  });
+});
+
+// BSHELL — the phone layer of /term/:id: the panel keeps its own full-bleed
+// sheet, the shell adds ONE non-modal bottom layer whose tabs mount only while
+// it is expanded, and leaving the page goes back to the session.
+test.describe("BSHELL phone tab sheet @phone", () => {
+  test("the handle expands to tabs and collapses; Back leaves the pane", async ({ page }) => {
+    await installFakeTerminal(page, { total: 300, seedLines: 300 });
+    await page.route("**/api/identity", async (route) => {
+      const res = await route.fetch();
+      const j = (await res.json()) as Record<string, unknown>;
+      await route.fulfill({ response: res, json: { ...j, terminal_admitted: true } });
+    });
+    await page.goto(`${BASE}/sessions/${SID}`);
+    await page.locator('[data-testid="session-sec-terminal"] > summary').click();
+    await page.locator('[data-testid="kb-term-open"]').click();
+    await expect(page.locator('[data-testid="term-shell"]')).toHaveAttribute("data-kb-term-layout", "phone", { timeout: 15_000 });
+    await expect(page.locator("[data-kb-sheet]")).toBeAttached({ timeout: 15_000 });
+    const handle = page.locator('[data-testid="term-sheet-handle"]');
+    await expect(handle).toHaveAttribute("aria-expanded", "false");
+    await expect(page.locator('[data-testid="rail-placeholder-conversation"]')).toHaveCount(0);
+    await handle.click();
+    await expect(handle).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator('[data-testid="term-sheet"] [role="tab"]')).toHaveCount(3);
+    await expect(page.locator('[data-testid="rail-placeholder-conversation"]')).toBeVisible();
+    await handle.click();
+    await expect(page.locator('[data-testid="rail-placeholder-conversation"]')).toHaveCount(0);
+    await page.goBack();
+    await expect(page).toHaveURL(new RegExp(`/sessions/${SID}$`));
+    await expect(page.locator('[data-testid="term-shell"]')).toHaveCount(0);
   });
 });

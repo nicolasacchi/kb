@@ -97,36 +97,13 @@ const wrap = (ui: ReactNode) => (
 );
 const lane = { available: true, term_id: "t1", harness: "claude", state: "working", admitted: true } as const;
 
-describe("TerminalSlot", () => {
-  it("shows no End before the panel is open", () => {
+describe("TerminalSlot (BSHELL: a door, End lives on the /term page)", () => {
+  it("renders no End and no panel, only the link", () => {
     phone(false);
     render(wrap(<TerminalSlot sid="s" harness="claude" lane={lane} />));
     expect(screen.queryByTestId("kb-term-end")).toBeNull();
-  });
-
-  it("desktop: one End above the panel, none inside it; confirm then one kill; Close sends nothing", async () => {
-    phone(false);
-    render(wrap(<TerminalSlot sid="s" harness="claude" lane={lane} />));
-    fireEvent.click(screen.getByTestId("kb-term-open"));
-    await screen.findByTestId("mock-panel");
-    expect(screen.getAllByTestId("kb-term-end")).toHaveLength(1);
-    expect(screen.getByTestId("kb-term-slot-ctl").querySelector('[data-testid="kb-term-end"]')).toBeTruthy();
-    expect(screen.getByTestId("mock-header-extra").innerHTML).toBe("");
-    fireEvent.click(screen.getByTestId("kb-term-end"));
-    await waitFor(() => expect(posts).toEqual(["/api/terms/t1/kill"]));
-    expect(confirmMock).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByTestId("mock-panel-close"));
-    expect(posts).toHaveLength(1);
-  });
-
-  it("phone: the one End rides the sheet's header row, not a second copy above it", async () => {
-    phone(true);
-    render(wrap(<TerminalSlot sid="s" harness="claude" lane={lane} />));
-    fireEvent.click(screen.getByTestId("kb-term-open"));
-    await screen.findByTestId("mock-panel");
-    expect(screen.getAllByTestId("kb-term-end")).toHaveLength(1);
-    expect(screen.queryByTestId("kb-term-slot-ctl")).toBeNull();
-    expect(screen.getByTestId("mock-header-extra").querySelector('[data-testid="kb-term-end"]')).toBeTruthy();
+    expect(screen.queryByTestId("mock-panel")).toBeNull();
+    expect(screen.getByTestId("kb-term-open").getAttribute("href")).toBe("/term/t1");
   });
 });
 
