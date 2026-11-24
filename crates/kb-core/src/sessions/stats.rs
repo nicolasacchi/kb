@@ -111,15 +111,15 @@ impl UsageLedger {
     /// wins) and bumps the conflict census. Totals never double count a key.
     pub fn record(&mut self, key: Option<&str>, usage: Usage) {
         if let Some(k) = key {
-            if let Some(old) = self.seen.get_mut(k) {
-                if *old != usage {
+            if let Some(&old) = self.seen.get(k) {
+                if old != usage {
                     self.totals.input = self.totals.input.saturating_sub(old.input);
                     self.totals.output = self.totals.output.saturating_sub(old.output);
                     self.totals.cache_read = self.totals.cache_read.saturating_sub(old.cache_read);
                     self.totals.cache_write =
                         self.totals.cache_write.saturating_sub(old.cache_write);
                     self.add(usage);
-                    *old = usage;
+                    self.seen.insert(k.to_string(), usage);
                     self.conflicts = self.conflicts.saturating_add(1);
                 }
                 return;
