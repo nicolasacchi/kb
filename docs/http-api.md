@@ -1601,6 +1601,11 @@ GET  /api/terms                             SPA-only terminal relays
                                             docs/kb-term.md.
 GET    /api/terms                           Relay the runner's session
                                             list as `{"terms":[...]}`.
+                                            `session_hint {session_id,
+                                            via:"cwd"}` is a derived
+                                            folder-match guess on unbound
+                                            rows, never verified, never
+                                            persisted.
 POST   /api/terms                           Launch: body `{harness,
                                             resume_sid?, handoff_from?,
                                             cwd?, cols?, rows?}`.
