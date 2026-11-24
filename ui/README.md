@@ -53,7 +53,7 @@ built-in `kbc` family painted from its own tokens.css.
 
 ## Primitives
 
-**Icons** (`@kb/ui/icons`): one set of 75 names for both apps. `Icon.Name`
+**Icons** (`@kb/ui/icons`): one set of 76 names for both apps. `Icon.Name`
 keeps the component-map shape; `createIconSet(overrides)` builds a set with
 per-app default sizes (kb-code overrides Search, Folder and X). Glyphs share one
 16x16 viewBox, 1.4 stroke, `currentColor`.
