@@ -1942,3 +1942,624 @@ async fn kb_dev_origin_any_does_not_open_a_terminal_get() {
     }
     assert_eq!(fake.conns.load(Ordering::SeqCst), 0);
 }
+
+// ---------------------------------------------------------------------------
+// kbt2 PQSTORE — `/api/term-prompts/{project}[/{item}]`, the daemon-owned
+// per-project prompt queue. Same gate as every terminal route; the fake
+// runner is only here so `boot` has a socket, and no prompt route may ever
+// dial it.
+// ---------------------------------------------------------------------------
+
+const PQ_SENTINEL: &str = "synthetic-queue-sentinel-5d1e";
+const PQ_ITEM: &str = "q_0123456789ab";
+
+fn pq_url(addr: std::net::SocketAddr, suffix: &str) -> String {
+    format!("{}/api/term-prompts{suffix}", base_url(addr))
+}
+
+/// A browser-shaped mutation: own Origin + intent + JSON.
+fn pq_req(
+    c: &reqwest::Client,
+    method: reqwest::Method,
+    addr: std::net::SocketAddr,
+    suffix: &str,
+) -> reqwest::RequestBuilder {
+    c.request(method, pq_url(addr, suffix))
+        .header("Origin", origin_header(addr))
+        .header("x-kb-intent", "terminal")
+        .header("Content-Type", "application/json")
+}
+
+/// A browser-shaped same-origin GET: intent only, no Origin.
+fn pq_get(
+    c: &reqwest::Client,
+    addr: std::net::SocketAddr,
+    suffix: &str,
+) -> reqwest::RequestBuilder {
+    c.get(pq_url(addr, suffix))
+        .header("x-kb-intent", "terminal")
+}
+
+async fn pq_add(
+    c: &reqwest::Client,
+    addr: std::net::SocketAddr,
+    project: &str,
+    text: &str,
+) -> serde_json::Value {
+    let resp = pq_req(c, reqwest::Method::POST, addr, &format!("/{project}"))
+        .body(serde_json::json!({ "text": text }).to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 201);
+    resp.json().await.unwrap()
+}
+
+fn find_file(root: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+    for ent in std::fs::read_dir(root).ok()?.flatten() {
+        let p = ent.path();
+        if p.is_dir() {
+            if let Some(f) = find_file(&p, name) {
+                return Some(f);
+            }
+        } else if p.file_name().is_some_and(|n| n == name) {
+            return Some(p);
+        }
+    }
+    None
+}
+
+fn pq_ledger(tmp: &tempfile::TempDir, project: &str) -> std::path::PathBuf {
+    find_file(tmp.path(), &format!("{project}.json")).expect("ledger file")
+}
+
+/// The four routes as `(method, suffix, body)`; PATCH/DELETE carry a valid
+/// `If-Match` in the gate tests so a refusal can only come from the gate.
+fn pq_routes() -> Vec<(reqwest::Method, String, Option<&'static str>)> {
+    vec![
+        (reqwest::Method::GET, "/demo".to_string(), None),
+        (
+            reqwest::Method::POST,
+            "/demo".to_string(),
+            Some("{\"text\":\"hi\"}"),
+        ),
+        (
+            reqwest::Method::PATCH,
+            format!("/demo/{PQ_ITEM}"),
+            Some("{\"done\":true}"),
+        ),
+        (reqwest::Method::DELETE, format!("/demo/{PQ_ITEM}"), None),
+    ]
+}
+
+#[tokio::test]
+async fn disabled_by_default_returns_bodiless_404_on_every_term_prompts_route() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (_tmp, addr) = boot(TerminalSection::default(), &fake, false).await;
+    let c = client();
+    for (m, suffix, body) in pq_routes() {
+        let mut req = pq_req(&c, m.clone(), addr, &suffix).header("If-Match", "\"0\"");
+        if let Some(b) = body {
+            req = req.body(b.to_string());
+        }
+        let resp = req.send().await.unwrap();
+        assert_eq!(resp.status().as_u16(), 404, "{m} {suffix}");
+        assert!(resp.headers().get("content-type").is_none(), "{m} {suffix}");
+        assert_eq!(
+            resp.headers()
+                .get("cache-control")
+                .and_then(|v| v.to_str().ok()),
+            Some("no-store")
+        );
+        let (_s, text) = body_text(resp).await;
+        assert!(text.is_empty(), "{m} {suffix} must be bodiless, got {text}");
+    }
+    // A disabled tier answers 404 even with no intent and no Origin.
+    let resp = c.get(pq_url(addr, "/demo")).send().await.unwrap();
+    assert_eq!(resp.status().as_u16(), 404);
+    assert_eq!(fake.conns.load(Ordering::SeqCst), 0);
+    assert!(
+        find_file(_tmp.path(), "demo.json").is_none(),
+        "a disabled tier writes nothing"
+    );
+}
+
+#[tokio::test]
+async fn every_term_prompts_route_enforces_intent_and_origin() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    for (m, suffix, body) in pq_routes() {
+        let build = |origin: Option<&str>, intent: Option<&str>| {
+            let mut req = c
+                .request(m.clone(), pq_url(addr, &suffix))
+                .header("Content-Type", "application/json")
+                .header("If-Match", "\"0\"");
+            if let Some(o) = origin {
+                req = req.header("Origin", o);
+            }
+            if let Some(i) = intent {
+                req = req.header("x-kb-intent", i);
+            }
+            if let Some(b) = body {
+                req = req.body(b.to_string());
+            }
+            req
+        };
+        let own = origin_header(addr);
+        // No intent, and a wrong intent, with a good Origin.
+        for intent in [None, Some("nope")] {
+            let resp = build(Some(&own), intent).send().await.unwrap();
+            assert_eq!(
+                resp.status().as_u16(),
+                403,
+                "{m} {suffix} intent {intent:?}"
+            );
+            let (_s, text) = body_text(resp).await;
+            assert_problem(&text, "terminal-intent-required");
+        }
+        // A present wrong Origin (an artifact subdomain, a foreign host).
+        for origin in ["http://x.artifacts.localhost", "https://evil.example"] {
+            let resp = build(Some(origin), Some("terminal")).send().await.unwrap();
+            assert_eq!(resp.status().as_u16(), 403, "{m} {suffix} origin {origin}");
+            let (_s, text) = body_text(resp).await;
+            assert_problem(&text, "terminal-origin-refused");
+        }
+        // No Origin: refused on every mutation; a same-origin GET is the
+        // one shape that legitimately omits it.
+        let resp = build(None, Some("terminal")).send().await.unwrap();
+        if m == reqwest::Method::GET {
+            assert_eq!(
+                resp.status().as_u16(),
+                200,
+                "GET without Origin is admitted"
+            );
+        } else {
+            assert_eq!(resp.status().as_u16(), 403, "{m} {suffix} without Origin");
+            let (_s, text) = body_text(resp).await;
+            assert_problem(&text, "terminal-origin-refused");
+        }
+    }
+    // A cross-site fetch is refused on the GET.
+    let resp = pq_get(&c, addr, "/demo")
+        .header("sec-fetch-site", "cross-site")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 403);
+    assert_eq!(fake.conns.load(Ordering::SeqCst), 0);
+    assert!(
+        find_file(tmp.path(), "demo.json").is_none(),
+        "a refused request must write nothing"
+    );
+}
+
+#[tokio::test]
+async fn term_prompts_refuse_token_callers_and_loopback_without_origin() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (tmp, addr) = boot(enabled_terminal(), &fake, true).await;
+    let c = client();
+    for (m, suffix, body) in pq_routes() {
+        // The shared (legacy) token, as Authorization and as X-Kb-Token:
+        // the SPA-shaped request is otherwise perfect.
+        for (name, value) in [
+            ("Authorization", format!("Bearer {FIXTURE_TOKEN}")),
+            ("X-Kb-Token", FIXTURE_TOKEN.to_string()),
+        ] {
+            let mut req = pq_req(&c, m.clone(), addr, &suffix)
+                .header("If-Match", "\"0\"")
+                .header(name, value);
+            if let Some(b) = body {
+                req = req.body(b.to_string());
+            }
+            let resp = req.send().await.unwrap();
+            assert_eq!(resp.status().as_u16(), 403, "{m} {suffix} via {name}");
+            let (_s, text) = body_text(resp).await;
+            assert_problem(&text, "terminal-token-refused");
+        }
+        // A loopback caller (this process) with neither Origin nor
+        // intent: the auth bypass admits it, the gate must not.
+        let mut req = c.request(m.clone(), pq_url(addr, &suffix));
+        if let Some(b) = body {
+            req = req
+                .header("Content-Type", "application/json")
+                .body(b.to_string());
+        }
+        let resp = req.send().await.unwrap();
+        assert_eq!(resp.status().as_u16(), 403, "{m} {suffix} bare loopback");
+    }
+    assert!(find_file(tmp.path(), "demo.json").is_none());
+    assert_eq!(fake.conns.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn term_prompts_if_match_flow_bounds_and_privacy_over_http() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+
+    // A project with no file: rev 0, no items, an ETag, and nothing on disk.
+    let resp = pq_get(&c, addr, "/demo").send().await.unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    assert_eq!(
+        resp.headers().get("etag").and_then(|v| v.to_str().ok()),
+        Some("\"0\"")
+    );
+    assert_eq!(
+        resp.headers()
+            .get("cache-control")
+            .and_then(|v| v.to_str().ok()),
+        Some("no-store")
+    );
+    let v: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(v["rev"], 0);
+    assert_eq!(v["items"].as_array().unwrap().len(), 0);
+    assert!(
+        find_file(tmp.path(), "demo.json").is_none(),
+        "a GET must not create the ledger"
+    );
+
+    // Two adds: 201, order 0 and 1, ETag follows the rev, no-store.
+    let resp = pq_req(&c, reqwest::Method::POST, addr, "/demo")
+        .body(serde_json::json!({ "text": PQ_SENTINEL }).to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 201);
+    assert_eq!(
+        resp.headers().get("etag").and_then(|v| v.to_str().ok()),
+        Some("\"1\"")
+    );
+    assert_eq!(
+        resp.headers()
+            .get("cache-control")
+            .and_then(|v| v.to_str().ok()),
+        Some("no-store")
+    );
+    let v: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(v["items"][0]["text"], PQ_SENTINEL);
+    let second = pq_add(&c, addr, "demo", "second").await;
+    assert_eq!(second["rev"], 2);
+    assert_eq!(second["items"][1]["order"], 1);
+    let first_id = second["items"][0]["id"].as_str().unwrap().to_string();
+    let item_path = format!("/demo/{first_id}");
+    let ledger = pq_ledger(&tmp, "demo");
+
+    // PATCH without If-Match: 428, nothing written.
+    let before = std::fs::read(&ledger).unwrap();
+    let resp = pq_req(&c, reqwest::Method::PATCH, addr, &item_path)
+        .body("{\"done\":true}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 428);
+    let (_s, text) = body_text(resp).await;
+    assert_problem(&text, "precondition-required");
+    assert_eq!(std::fs::read(&ledger).unwrap(), before);
+
+    // A stale rev: 412 naming the current rev, file byte-identical.
+    let resp = pq_req(&c, reqwest::Method::PATCH, addr, &item_path)
+        .header("If-Match", "\"1\"")
+        .body("{\"done\":true}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 412);
+    assert_eq!(
+        resp.headers().get("etag").and_then(|v| v.to_str().ok()),
+        Some("\"2\"")
+    );
+    let (_s, text) = body_text(resp).await;
+    assert_problem(&text, "prompts-stale");
+    assert!(
+        !text.contains(PQ_SENTINEL),
+        "a problem body must not echo prompt text"
+    );
+    assert_eq!(std::fs::read(&ledger).unwrap(), before);
+
+    // The current rev: 200 and rev + 1.
+    let resp = pq_req(&c, reqwest::Method::PATCH, addr, &item_path)
+        .header("If-Match", "\"2\"")
+        .body("{\"done\":true,\"position\":9999}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    assert_eq!(
+        resp.headers().get("etag").and_then(|v| v.to_str().ok()),
+        Some("\"3\"")
+    );
+    let v: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(v["rev"], 3);
+    assert_eq!(
+        v["items"][1]["id"], first_id,
+        "position clamps to the last slot"
+    );
+    assert!(v["items"][1]["done_at"].is_i64());
+    let after_patch = std::fs::read(&ledger).unwrap();
+
+    // Replaying the same rev: 412.
+    let resp = pq_req(&c, reqwest::Method::PATCH, addr, &item_path)
+        .header("If-Match", "\"2\"")
+        .body("{\"done\":false}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 412);
+    // DELETE with a stale rev: 412, nothing removed.
+    let resp = pq_req(&c, reqwest::Method::DELETE, addr, &item_path)
+        .header("If-Match", "\"2\"")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 412);
+    assert_eq!(std::fs::read(&ledger).unwrap(), after_patch);
+
+    // A no-op PATCH (already done) still needs the rev, bumps nothing.
+    let resp = pq_req(&c, reqwest::Method::PATCH, addr, &item_path)
+        .header("If-Match", "\"3\"")
+        .body("{\"done\":true}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    assert_eq!(
+        resp.headers().get("etag").and_then(|v| v.to_str().ok()),
+        Some("\"3\"")
+    );
+    assert_eq!(std::fs::read(&ledger).unwrap(), after_patch);
+
+    // Validation: empty PATCH, unknown field, bad text, bad ids, bad slug,
+    // oversized body, malformed If-Match.
+    let patch = |body: &'static str, id: &str| {
+        pq_req(&c, reqwest::Method::PATCH, addr, &format!("/demo/{id}"))
+            .header("If-Match", "\"3\"")
+            .body(body)
+            .send()
+    };
+    for (body, want, urn) in [
+        ("{}", 400, "bad-request"),
+        ("{\"nope\":1}", 400, "bad-request"),
+        ("{\"text\":\"  \"}", 400, "bad-text"),
+        ("{\"position\":-1}", 400, "bad-request"),
+    ] {
+        let resp = patch(body, &first_id).await.unwrap();
+        assert_eq!(resp.status().as_u16(), want, "{body}");
+        let (_s, text) = body_text(resp).await;
+        assert_problem(&text, urn);
+    }
+    assert_eq!(
+        patch("{\"done\":false}", "q_000000000000")
+            .await
+            .unwrap()
+            .status()
+            .as_u16(),
+        404
+    );
+    assert_eq!(
+        patch("{\"done\":false}", "not-an-id")
+            .await
+            .unwrap()
+            .status()
+            .as_u16(),
+        400
+    );
+    let resp = pq_req(&c, reqwest::Method::PATCH, addr, &item_path)
+        .header("If-Match", "*")
+        .body("{\"done\":false}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 400);
+    let too_long = "a".repeat(65);
+    for bad in ["A", "..%2fx", too_long.as_str()] {
+        let resp = pq_req(&c, reqwest::Method::POST, addr, &format!("/{bad}"))
+            .body("{\"text\":\"x\"}")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 400, "slug {bad}");
+    }
+    let resp = pq_req(&c, reqwest::Method::POST, addr, "/demo")
+        .body(format!("{{\"text\":\"{}\"}}", "a".repeat(16 * 1024)))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 413);
+    // Text bounds over HTTP: 8192 passes (rev 4), 8193 is bad-text.
+    let resp = pq_req(&c, reqwest::Method::POST, addr, "/demo")
+        .body(format!("{{\"text\":\"{}\"}}", "a".repeat(8192)))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 201);
+    let resp = pq_req(&c, reqwest::Method::POST, addr, "/demo")
+        .body(format!("{{\"text\":\"{}\"}}", "a".repeat(8193)))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 400);
+    let (_s, text) = body_text(resp).await;
+    assert_problem(&text, "bad-text");
+
+    // DELETE: unknown item 404; without If-Match is allowed; the answer is
+    // the queue.
+    let resp = pq_req(&c, reqwest::Method::DELETE, addr, "/demo/q_000000000000")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 404);
+    let resp = pq_req(&c, reqwest::Method::DELETE, addr, &item_path)
+        .header("If-Match", "\"4\"")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let v: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(v["rev"], 5);
+    assert!(v["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|i| i["id"] != first_id));
+
+    // 100 items per project, done included: fill to the cap, then 409.
+    for i in 0..(100 - 2) {
+        let _ = pq_add(&c, addr, "full", &format!("p{i}")).await;
+    }
+    let _ = pq_add(&c, addr, "full", "p98").await;
+    let _ = pq_add(&c, addr, "full", "p99").await;
+    let resp = pq_req(&c, reqwest::Method::POST, addr, "/full")
+        .body("{\"text\":\"over\"}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 409);
+    let (_s, text) = body_text(resp).await;
+    assert_problem(&text, "queue-full");
+    assert_eq!(
+        fake.conns.load(Ordering::SeqCst),
+        0,
+        "the queue never dials the runner"
+    );
+}
+
+#[tokio::test]
+async fn twenty_concurrent_adds_lose_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    let mut tasks = Vec::new();
+    for i in 0..20 {
+        let c = c.clone();
+        tasks.push(tokio::spawn(async move {
+            pq_add(&c, addr, "race", &format!("item {i}")).await
+        }));
+    }
+    for t in tasks {
+        t.await.unwrap();
+    }
+    let v: serde_json::Value = pq_get(&c, addr, "/race")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(v["rev"], 20, "every add bumped the revision exactly once");
+    let items = v["items"].as_array().unwrap();
+    assert_eq!(items.len(), 20);
+    let mut ids: Vec<&str> = items.iter().map(|i| i["id"].as_str().unwrap()).collect();
+    ids.sort();
+    ids.dedup();
+    assert_eq!(ids.len(), 20, "20 distinct ids");
+    let mut texts: Vec<&str> = items.iter().map(|i| i["text"].as_str().unwrap()).collect();
+    texts.sort();
+    texts.dedup();
+    assert_eq!(texts.len(), 20, "no lost write");
+}
+
+/// One SSE frame per durable mutation, `{project, rev}` only, no text; a
+/// 412 and a no-op PATCH emit nothing.
+#[tokio::test]
+async fn term_prompts_emit_exactly_one_text_free_event_per_durable_mutation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    let mut stream = c
+        .get(format!("{}/api/events?types=term.prompts", base_url(addr)))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stream.status().as_u16(), 200);
+    let collector = tokio::spawn(async move {
+        let mut raw = String::new();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(3000);
+        loop {
+            let remain = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remain.is_zero() {
+                break;
+            }
+            match tokio::time::timeout(remain, stream.chunk()).await {
+                Ok(Ok(Some(b))) => raw.push_str(&String::from_utf8_lossy(&b)),
+                _ => break,
+            }
+        }
+        raw
+    });
+
+    let v = pq_add(&c, addr, "demo", PQ_SENTINEL).await; // rev 1
+    let id = v["items"][0]["id"].as_str().unwrap().to_string();
+    let path = format!("/demo/{id}");
+    let ok = pq_req(&c, reqwest::Method::PATCH, addr, &path)
+        .header("If-Match", "\"1\"")
+        .body("{\"done\":true}") // rev 2
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ok.status().as_u16(), 200);
+    let stale = pq_req(&c, reqwest::Method::PATCH, addr, &path)
+        .header("If-Match", "\"1\"")
+        .body("{\"done\":false}") // 412: no event
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stale.status().as_u16(), 412);
+    let noop = pq_req(&c, reqwest::Method::PATCH, addr, &path)
+        .header("If-Match", "\"2\"")
+        .body("{\"done\":true}") // no-op: no event
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(noop.status().as_u16(), 200);
+    let del = pq_req(&c, reqwest::Method::DELETE, addr, &path)
+        .send() // rev 3
+        .await
+        .unwrap();
+    assert_eq!(del.status().as_u16(), 200);
+    let refused = pq_req(&c, reqwest::Method::POST, addr, "/demo")
+        .body("{\"text\":\"\"}") // 400: no event
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status().as_u16(), 400);
+
+    let raw = collector.await.unwrap();
+    assert!(
+        !raw.contains(PQ_SENTINEL),
+        "prompt text must never ride an event: {raw}"
+    );
+    let mut seen = Vec::new();
+    for frame in raw.split("\n\n") {
+        let mut event = "";
+        let mut data = "";
+        for line in frame.lines() {
+            if let Some(v) = line.strip_prefix("event:") {
+                event = v.trim();
+            } else if let Some(v) = line.strip_prefix("data:") {
+                data = v.trim();
+            }
+        }
+        if event != "term.prompts" {
+            continue;
+        }
+        let body: serde_json::Value = serde_json::from_str(data).unwrap();
+        let payload = body["payload"].as_object().expect("payload object");
+        let mut keys: Vec<&str> = payload.keys().map(|k| k.as_str()).collect();
+        keys.sort();
+        assert_eq!(keys, ["project", "rev"]);
+        assert_eq!(payload["project"], "demo");
+        seen.push(payload["rev"].as_u64().unwrap());
+    }
+    assert_eq!(
+        seen,
+        vec![1, 2, 3],
+        "exactly one event per durable mutation: {raw}"
+    );
+}
