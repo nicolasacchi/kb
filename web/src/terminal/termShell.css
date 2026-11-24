@@ -50,6 +50,13 @@
   gap: var(--pad-1);
   padding: var(--pad-1);
   border-bottom: 1px solid var(--rule);
+  /* Seven tabs do not fit the 360px rail: scroll sideways, never wrap or clip. */
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.kb-termshell__tabs > .kb-termshell__tab {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 .kb-termshell__tab,
 .kb-termshell__toggle,

@@ -179,6 +179,7 @@ describe("SSE → TanStack invalidation bridge (invariant #23)", () => {
       ["timeline", "demo"],
       ["sessions", "card"],
       ["session"],
+      ["sessions", "conversation"],
       ["changes"],
     ]);
   });
@@ -190,6 +191,7 @@ describe("SSE → TanStack invalidation bridge (invariant #23)", () => {
       ["timeline"],
       ["sessions", "card"],
       ["session"],
+      ["sessions", "conversation"],
       ["changes"],
     ]);
   });
@@ -254,7 +256,12 @@ describe("SSE → TanStack invalidation bridge (invariant #23)", () => {
   // is enough — no burst gate, unlike the bursty artifact-churn kinds above.
   it("session.state directly invalidates the live-sessions cockpit query", () => {
     emit("session.state", { session_id: "sid-1", kb: "demo" });
-    expect(keys()).toEqual([["sessions", "live"], ["sessions", "card"], ["session"]]);
+    expect(keys()).toEqual([
+      ["sessions", "live"],
+      ["sessions", "card"],
+      ["sessions", "conversation"],
+      ["session"],
+    ]);
   });
 
   // T14 — each term.* lifecycle kind invalidates ["terms"] and nothing
@@ -348,6 +355,28 @@ describe("SSE → TanStack invalidation bridge (invariant #23)", () => {
     expect(queryClient.getQueryState(["sessions", "card", "s1"])?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(["sessions", "card", "other"])?.isInvalidated).toBe(false);
     queryClient.removeQueries({ queryKey: ["sessions", "card"] });
+  });
+
+  // CONVRAIL — the Conversation rail's projection.
+  it("session.state invalidates the conversation prefix", () => {
+    emit("session.state", { session_id: "s1", kb: "demo" });
+    expect(keys()).toContainEqual(["sessions", "conversation"]);
+  });
+
+  it("session.captured with a session_id invalidates only that session's conversation key", () => {
+    emit("session.captured", { kb: "demo", session_id: "s1" });
+    expect(keys()).toContainEqual(["sessions", "conversation", "s1"]);
+    expect(keys()).not.toContainEqual(["sessions", "conversation"]);
+  });
+
+  it("real cache: session.captured leaves another session's conversation entry valid", () => {
+    spy.mockRestore();
+    queryClient.setQueryData(["sessions", "conversation", "s1"], { kind: "none" });
+    queryClient.setQueryData(["sessions", "conversation", "other"], { kind: "none" });
+    emit("session.captured", { kb: "demo", session_id: "s1" });
+    expect(queryClient.getQueryState(["sessions", "conversation", "s1"])?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(["sessions", "conversation", "other"])?.isInvalidated).toBe(false);
+    queryClient.removeQueries({ queryKey: ["sessions", "conversation"] });
   });
 
   it("a cached session card is invalidated by slate.updated", () => {
