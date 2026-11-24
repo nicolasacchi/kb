@@ -90,7 +90,7 @@ pub(crate) const ERR_COMMANDS_IO: &str = "urn:kb:errors:commands-io";
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct CmdArg {
+pub struct OvArg {
     pub name: String,
     pub hint: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -102,7 +102,7 @@ pub struct CmdArg {
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct CmdItem {
+pub struct OvItem {
     pub id: String,
     pub kind: String,
     pub label: String,
@@ -117,7 +117,7 @@ pub struct CmdItem {
     pub mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-export", ts(optional))]
-    pub args: Option<Vec<CmdArg>>,
+    pub args: Option<Vec<OvArg>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-export", ts(optional))]
     pub keys: Option<Vec<String>>,
@@ -130,18 +130,18 @@ pub struct CmdItem {
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct CmdGroup {
+pub struct OvGroup {
     pub id: String,
     pub label: String,
-    pub items: Vec<CmdItem>,
+    pub items: Vec<OvItem>,
 }
 
 // One harness's groups.
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct CmdHarness {
-    pub groups: Vec<CmdGroup>,
+pub struct OvHarness {
+    pub groups: Vec<OvGroup>,
 }
 
 // The `PUT` body, and the shape the overlay is stored in. The server stamps
@@ -151,7 +151,7 @@ pub struct CmdHarness {
 #[serde(deny_unknown_fields)]
 pub struct OverlayPut {
     #[serde(default)]
-    pub harnesses: BTreeMap<String, CmdHarness>,
+    pub harnesses: BTreeMap<String, OvHarness>,
     #[serde(default)]
     pub hidden: BTreeMap<String, Vec<String>>,
 }
@@ -183,7 +183,7 @@ pub struct EffItem {
     pub mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-export", ts(optional))]
-    pub args: Option<Vec<CmdArg>>,
+    pub args: Option<Vec<OvArg>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-export", ts(optional))]
     pub keys: Option<Vec<String>>,
@@ -235,13 +235,13 @@ pub struct TermCommandsEvent {
 #[derive(Deserialize)]
 struct DefaultsDoc {
     schema: String,
-    harnesses: BTreeMap<String, CmdHarness>,
+    harnesses: BTreeMap<String, OvHarness>,
 }
 
 /// The shipped defaults, parsed once. `None` only if the bundled file is
 /// broken, which a unit test rules out.
-fn defaults() -> Option<&'static BTreeMap<String, CmdHarness>> {
-    static CELL: OnceLock<Option<BTreeMap<String, CmdHarness>>> = OnceLock::new();
+fn defaults() -> Option<&'static BTreeMap<String, OvHarness>> {
+    static CELL: OnceLock<Option<BTreeMap<String, OvHarness>>> = OnceLock::new();
     CELL.get_or_init(|| {
         serde_json::from_str::<DefaultsDoc>(DEFAULTS_JSON)
             .ok()
@@ -257,19 +257,19 @@ pub(crate) struct MergedGroup {
     pub id: String,
     pub label: String,
     pub origin: EffOrigin,
-    pub items: Vec<(CmdItem, EffOrigin)>,
+    pub items: Vec<(OvItem, EffOrigin)>,
 }
 
 /// The effective catalogue of every harness named by the defaults or the
 /// overlay (sorted by harness name).
 pub(crate) fn merge(
-    defaults: &BTreeMap<String, CmdHarness>,
+    defaults: &BTreeMap<String, OvHarness>,
     overlay: &OverlayPut,
 ) -> BTreeMap<String, Vec<MergedGroup>> {
     let mut names: Vec<&String> = defaults.keys().chain(overlay.harnesses.keys()).collect();
     names.sort();
     names.dedup();
-    let empty: Vec<CmdGroup> = Vec::new();
+    let empty: Vec<OvGroup> = Vec::new();
     let no_hidden: Vec<String> = Vec::new();
     let mut out = BTreeMap::new();
     for name in names {
@@ -282,7 +282,7 @@ pub(crate) fn merge(
             .iter()
             .map(String::as_str)
             .collect();
-        let mut oitems: HashMap<&str, &CmdItem> = HashMap::new();
+        let mut oitems: HashMap<&str, &OvItem> = HashMap::new();
         for g in ogroups {
             for it in &g.items {
                 oitems.entry(it.id.as_str()).or_insert(it);
@@ -297,7 +297,7 @@ pub(crate) fn merge(
         let mut groups: Vec<MergedGroup> = Vec::new();
         for dg in dgroups {
             let og = ogroups.iter().find(|g| g.id == dg.id);
-            let mut items: Vec<(CmdItem, EffOrigin)> = Vec::new();
+            let mut items: Vec<(OvItem, EffOrigin)> = Vec::new();
             for it in &dg.items {
                 if let Some(o) = oitems.get(it.id.as_str()) {
                     items.push(((*o).clone(), EffOrigin::Overlay));
@@ -329,7 +329,7 @@ pub(crate) fn merge(
             if dgroup_ids.contains(og.id.as_str()) {
                 continue;
             }
-            let items: Vec<(CmdItem, EffOrigin)> = og
+            let items: Vec<(OvItem, EffOrigin)> = og
                 .items
                 .iter()
                 .filter(|i| !default_ids.contains(i.id.as_str()))
@@ -354,10 +354,10 @@ pub(crate) fn merge(
 fn merged_value(merged: &BTreeMap<String, Vec<MergedGroup>>) -> Value {
     let mut hs = Map::new();
     for (name, groups) in merged {
-        let h = CmdHarness {
+        let h = OvHarness {
             groups: groups
                 .iter()
-                .map(|g| CmdGroup {
+                .map(|g| OvGroup {
                     id: g.id.clone(),
                     label: g.label.clone(),
                     items: g.items.iter().map(|(i, _)| i.clone()).collect(),
@@ -375,7 +375,7 @@ fn merged_value(merged: &BTreeMap<String, Vec<MergedGroup>>) -> Value {
     Value::Object(root)
 }
 
-fn to_eff(item: CmdItem, origin: EffOrigin) -> EffItem {
+fn to_eff(item: OvItem, origin: EffOrigin) -> EffItem {
     EffItem {
         id: item.id,
         kind: item.kind,
@@ -489,7 +489,7 @@ fn normalize(mut o: OverlayPut) -> OverlayPut {
 /// Parse and validate a PUT body into a normalized overlay.
 pub(crate) fn parse_put(
     body: &[u8],
-    defaults: &BTreeMap<String, CmdHarness>,
+    defaults: &BTreeMap<String, OvHarness>,
 ) -> Result<OverlayPut, PutError> {
     let v: Value = serde_json::from_slice(body).map_err(|_| PutError::Malformed)?;
     let Some(root) = v.as_object() else {
@@ -550,7 +550,7 @@ struct Doc {
     schema: String,
     rev: u64,
     #[serde(default)]
-    harnesses: BTreeMap<String, CmdHarness>,
+    harnesses: BTreeMap<String, OvHarness>,
     #[serde(default)]
     hidden: BTreeMap<String, Vec<String>>,
 }
@@ -1008,7 +1008,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn defs() -> &'static BTreeMap<String, CmdHarness> {
+    fn defs() -> &'static BTreeMap<String, OvHarness> {
         defaults().expect("bundled defaults parse")
     }
 
@@ -1040,7 +1040,7 @@ mod tests {
         m: &'a BTreeMap<String, Vec<MergedGroup>>,
         h: &str,
         id: &str,
-    ) -> Option<&'a (CmdItem, EffOrigin)> {
+    ) -> Option<&'a (OvItem, EffOrigin)> {
         m.get(h)?
             .iter()
             .flat_map(|g| g.items.iter())
@@ -1065,7 +1065,7 @@ mod tests {
             for (g, w) in groups.iter().zip(want) {
                 assert_eq!(g.id, w.id);
                 assert_eq!(g.origin, EffOrigin::Default);
-                let items: Vec<&CmdItem> = g.items.iter().map(|(i, _)| i).collect();
+                let items: Vec<&OvItem> = g.items.iter().map(|(i, _)| i).collect();
                 assert_eq!(items, w.items.iter().collect::<Vec<_>>());
                 assert!(g.items.iter().all(|(_, o)| *o == EffOrigin::Default));
             }
