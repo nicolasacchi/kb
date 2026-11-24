@@ -2,7 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { BASE } from "./helpers";
 import { installFakeTerminal, SID, TERM_ID } from "./fixtures/fake-tap.mjs";
 
-// BSHELL — the terminal's own page (/term/:id): the Terminals list and the
+// BSHELL — the terminal's own page (/terminals/:id; /term/:id redirects): the Terminals list and the
 // session page both lead to it, the legacy `?term=` link redirects to it, and
 // the rail's collapsed flag survives a reload. CHROMIUM desktop only (the
 // phone layer is in spa-terminal-phone.spec.ts). Transport is the fake tap.
@@ -22,25 +22,25 @@ async function expectLive(page: Page): Promise<void> {
   await expect(page.locator(VIEW)).toHaveAttribute("data-kb-term-phase", "live", { timeout: 30_000 });
 }
 
-test.describe("BSHELL /term/:id", () => {
-  test("(a) /sessions row Open lands on /term/<id> with the shell and a live viewport", async ({ page }) => {
+test.describe("BSHELL /terminals/:id", () => {
+  test("(a) /sessions row Open lands on /terminals/<id> with the shell and a live viewport", async ({ page }) => {
     await installFakeTerminal(page, { total: 300, seedLines: 100 });
     await admit(page);
     await page.goto(`${BASE}/sessions`);
     const row = page.locator(`[data-testid="term-row"][data-term="${TERM_ID}"]`);
     await expect(row).toBeVisible({ timeout: 20_000 });
     await row.locator('[data-testid="term-row-open"]').click();
-    await expect(page).toHaveURL(new RegExp(`/term/${TERM_ID}$`));
+    await expect(page).toHaveURL(new RegExp(`/terminals/${TERM_ID}$`));
     await expect(page.locator('[data-testid="term-shell"]')).toBeVisible();
     await expect(page.locator('[data-testid="term-shell"]')).toHaveAttribute("data-kb-term-layout", "desktop");
     await expectLive(page);
   });
 
-  test("(b) the legacy /sessions?term=<id> link lands on /term/<id>", async ({ page }) => {
+  test("(b) the legacy /sessions?term=<id> link lands on /terminals/<id>", async ({ page }) => {
     await installFakeTerminal(page, { total: 300, seedLines: 100 });
     await admit(page);
     await page.goto(`${BASE}/sessions?term=${TERM_ID}`);
-    await expect(page).toHaveURL(new RegExp(`/term/${TERM_ID}$`));
+    await expect(page).toHaveURL(new RegExp(`/terminals/${TERM_ID}$`));
     await expect(page.locator('[data-testid="term-shell"]')).toBeVisible();
     await expectLive(page);
   });
@@ -52,7 +52,7 @@ test.describe("BSHELL /term/:id", () => {
     await expect(page.locator('[data-testid="kb-terminal-slot"]')).toBeVisible({ timeout: 15_000 });
     await expect(page.locator(VIEW)).toHaveCount(0);
     await page.locator('[data-testid="kb-term-open"]').click();
-    await expect(page).toHaveURL(new RegExp(`/term/${TERM_ID}$`));
+    await expect(page).toHaveURL(new RegExp(`/terminals/${TERM_ID}$`));
     await expectLive(page);
   });
 

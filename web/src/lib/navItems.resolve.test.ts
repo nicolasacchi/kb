@@ -57,11 +57,21 @@ describe("resolveNavItems", () => {
     expect("badge" in input[1]).toBe(false);
   });
 
-  it("leaves the real doors unchanged: five, no badges", () => {
-    const out = resolveNavItems(NAV_ITEMS, S);
-    expect(out.map((i) => i.id)).toEqual(NAV_ITEMS.map((i) => i.id));
-    expect(out).toHaveLength(5);
+  it("not admitted: the five original doors, no badges, no Terminals", () => {
+    const out = resolveNavItems(NAV_ITEMS, { terminalAdmitted: false, blockedTerms: 9 });
+    expect(out.map((i) => i.id)).toEqual(["library", "search", "memory", "worklog", "lists"]);
     expect(out.every((i) => i.badge === 0)).toBe(true);
+  });
+
+  it("admitted: six doors, Terminals right after Worklog, badge = blocked count", () => {
+    const out = resolveNavItems(NAV_ITEMS, S);
+    expect(out.map((i) => i.id)).toEqual([
+      "library", "search", "memory", "worklog", "terminals", "lists",
+    ]);
+    expect(out.find((i) => i.id === "terminals")?.badge).toBe(4);
+    expect(out.filter((i) => i.badge > 0)).toHaveLength(1);
+    expect(matchActiveNavItem("/terminals/t1", out)?.id).toBe("terminals");
+    expect(matchActiveNavItem("/terminals", resolveNavItems(NAV_ITEMS, { ...S, terminalAdmitted: false }))).toBeNull();
   });
 
   it("matchActiveNavItem never returns a hidden item", () => {

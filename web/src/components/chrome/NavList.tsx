@@ -1,6 +1,6 @@
 import { Link, useLocation } from "react-router-dom";
 import { Icon } from "@kb/ui/icons";
-import { withKb } from "../../lib/navItems";
+import { needsAttentionText, withKb } from "../../lib/navItems";
 import { useNavItems } from "../../hooks/useNavState";
 import { useExplicitKb } from "../../hooks/useActiveKb";
 import { useAnchors } from "../../hooks/useAnchors";
@@ -59,12 +59,16 @@ export default function NavList({ onNavigate }: { onNavigate: () => void }) {
               </span>
             ) : (
               item.badge > 0 && (
-                <span
-                  className="kb-navlist__badge kb-navlist__badge--door"
-                  data-testid={`navlist-badge-${item.id}`}
-                >
-                  {item.badge}
-                </span>
+                <>
+                  <span className="kb-navlist__sr">, {needsAttentionText(item.badge)}</span>
+                  <span
+                    className="kb-navlist__badge kb-navlist__badge--door"
+                    data-testid={`navlist-badge-${item.id}`}
+                    aria-hidden="true"
+                  >
+                    {item.badge}
+                  </span>
+                </>
               )
             )}
           </Link>

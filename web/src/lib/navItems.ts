@@ -1,10 +1,10 @@
 import type { FunctionComponent } from "react";
 import { Icon } from "@kb/ui/icons";
 
-// OL-L2 — the ONE destination catalogue for the SPA's primary nav: five
-// labelled DOORS (Library · Search · Memory · Worklog · Lists). Consumed by the
-// desktop Header's door strip and the mobile sheet's NavList so the two never
-// drift. (Settings / theme / saved-queries are chrome-level actions each
+// OL-L2 — the ONE destination catalogue for the SPA's primary nav: six
+// labelled DOORS (Library · Search · Memory · Worklog · Terminals · Lists).
+// Consumed by the desktop Header's door strip and the mobile sheet's NavList
+// so the two never drift. (Settings / theme / saved-queries are chrome-level actions each
 // consumer renders separately.)
 //
 // A door owns a FAMILY of routes: `isActive` lights it on every route of its
@@ -13,7 +13,7 @@ import { Icon } from "@kb/ui/icons";
 // views (grid, list, atlas, press, history, canvas) are not doors; they are
 // chosen with `?view=` (and the `g` chords) inside the Library.
 
-export type NavId = "library" | "search" | "memory" | "worklog" | "lists";
+export type NavId = "library" | "search" | "memory" | "worklog" | "terminals" | "lists";
 
 // Context handed to every href builder: the EXPLICIT active kb — the
 // path/query kb with no first-kb fallback (see useExplicitKb). A non-null kb
@@ -57,6 +57,12 @@ export type NavItem = {
   // Optional Cmd+K row for the door.
   cmdk?: { label: string; hint: string; kbd?: string };
 };
+
+/// The spoken form of a door's attention count ("3 need attention"). Pure and
+/// shared by every nav surface so the strip and the sheet read alike.
+export function needsAttentionText(n: number): string {
+  return n === 1 ? "1 needs attention" : `${n} need attention`;
+}
 
 export type ResolvedNavItem = NavItem & { badge: number };
 
@@ -119,6 +125,19 @@ export const NAV_ITEMS: NavItem[] = [
       underPath(p, "/slates") ||
       underPath(p, "/replay"),
     testid: "header-sessions-tab",
+  },
+  {
+    // HUBDOOR — the hub of kb-term terminals. Daemon-wide (no `?kb=`), shown only
+    // to a terminal-admitted caller; the badge counts blocked terminal rows.
+    id: "terminals",
+    label: "Terminals",
+    Glyph: Icon.TerminalHub,
+    href: () => "/terminals",
+    isActive: (p) => underPath(p, "/terminals") || underPath(p, "/term"),
+    visible: (s) => s.terminalAdmitted,
+    badge: (s) => s.blockedTerms,
+    testid: "header-terminals-tab",
+    cmdk: { label: "Terminals", hint: "Go to terminals" },
   },
   {
     // Reading lists, their boards and Notes.

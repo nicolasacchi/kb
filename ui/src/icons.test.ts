@@ -117,6 +117,18 @@ describe("ui/icons", () => {
     expect(html(Icon.TerminalHub)).not.toBe(html(Icon.Terminal));
   });
 
+  it("TerminalHub draws two stacked windows: a complete front rect and a back window path", () => {
+    const out = renderToString(createElement(Icon.TerminalHub));
+    expect(out).toContain('width="14"');
+    // exactly one complete rounded window (the front one)...
+    expect(out.match(/<rect /g)?.length).toBe(1);
+    // ...plus the back window's visible edges, the chevron and the cursor dash.
+    expect(out.match(/<path /g)?.length).toBe(3);
+    expect(out).toContain("M6 4.5V2.7");
+    // every coordinate stays inside the 16 grid
+    for (const n of out.match(/-?\d+(?:\.\d+)?/g) ?? []) expect(Math.abs(Number(n))).toBeLessThanOrEqual(16);
+  });
+
   it("every size-table name is a real icon", () => {
     for (const name of Object.keys(DEFAULT_ICON_SIZES)) {
       expect(Object.keys(Icon)).toContain(name);

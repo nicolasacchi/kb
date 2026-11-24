@@ -1,0 +1,139 @@
+/* HUBDOOR — the Terminals hub list page. Tokens only. */
+.kb-hub {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-3);
+  max-width: 56rem;
+  margin: 0 auto;
+  padding: var(--pad-3);
+}
+.kb-hub__head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--pad-2) var(--pad-3);
+}
+.kb-hub__title {
+  margin: 0;
+  font-size: var(--fs-title);
+}
+.kb-hub__count {
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
+}
+.kb-hub__count.is-needs {
+  color: var(--warn);
+}
+.kb-hub__filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pad-2);
+}
+.kb-hub__chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--pad-2);
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-pill);
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
+  line-height: 1.8;
+  text-decoration: none;
+}
+.kb-hub__chip:hover {
+  color: var(--ink);
+}
+.kb-hub__chip.is-on {
+  color: var(--ink);
+  border-color: var(--accent-bor);
+  background: var(--accent-bg);
+}
+.kb-hub__chip--needs.is-on {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+.kb-hub__chip:focus-visible,
+.kb-hub__row:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+.kb-hub__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.kb-hub__row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: var(--pad-1) var(--pad-3);
+  padding: var(--pad-2) var(--pad-3);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  color: var(--ink);
+  text-decoration: none;
+}
+.kb-hub__row:hover {
+  background: var(--bg-card-hi);
+}
+.kb-hub__row[data-tier="needs"] {
+  border-color: var(--warn);
+}
+.kb-hub__row[data-tier="ended"] {
+  color: var(--ink-mute);
+}
+.kb-hub__tier {
+  min-width: 5.5em;
+  padding: 0 var(--pad-2);
+  border-radius: var(--radius-pill);
+  background: var(--bg-card-hi);
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
+  text-align: center;
+}
+.kb-hub__tier[data-tier="needs"] {
+  background: color-mix(in oklab, var(--warn) 18%, transparent);
+  color: var(--warn);
+}
+.kb-hub__tier[data-tier="working"] {
+  color: var(--accent-soft);
+}
+.kb-hub__main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.kb-hub__name {
+  overflow: hidden;
+  font-size: var(--fs-md);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-hub__meta,
+.kb-hub__age {
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
+}
+.kb-hub__meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-hub__age {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.kb-hub__ended > summary {
+  color: var(--ink-mute);
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  padding: var(--pad-1) 0;
+}
+.kb-hub__ended .kb-hub__list {
+  margin-top: var(--pad-1);
+}

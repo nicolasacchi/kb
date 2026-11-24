@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import type { ResolvedNavItem } from "../../lib/navItems";
+import { needsAttentionText, type ResolvedNavItem } from "../../lib/navItems";
 
 // The desktop door strip (Spine switcher slot). Renders an already-resolved
 // list, so hidden doors are absent and badges are normalised integers.
@@ -28,13 +28,14 @@ export default function DoorStrip({
             <item.Glyph />
             <span className="kb-door__label">{item.label}</span>
             {item.badge > 0 && (
-              <span
-                className="kb-door__badge"
-                data-testid={`door-badge-${item.id}`}
-                aria-label={`${item.badge} need attention`}
-              >
-                {item.badge}
-              </span>
+              <>
+                {/* The pill is decoration for sighted users; the link's name
+                    carries the count ("Terminals, 3 need attention"). */}
+                <span className="kb-door__badge" data-testid={`door-badge-${item.id}`} aria-hidden="true">
+                  {item.badge}
+                </span>
+                <span className="kb-door__sr">, {needsAttentionText(item.badge)}</span>
+              </>
             )}
           </Link>
         );
