@@ -263,7 +263,7 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
   });
 
   // PHIN1: with direct typing on and the proxy focused, the cursor cell stays visible above the keyboard.
-  useCursorFollow({ term, wrap, viewport, watch, enabled: proxyOn && proxyFocused, gate: followGate });
+  useCursorFollow({ term, wrap, watch, enabled: proxyOn && proxyFocused, gate: followGate });
 
   // Apply the chosen font to the grid (Watch only: a hidden xterm cannot
   // measure its cells) and re-measure the wrapper height.

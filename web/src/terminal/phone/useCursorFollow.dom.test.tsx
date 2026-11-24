@@ -135,7 +135,7 @@ function mount(f: Fake, extra: Partial<CursorFollowArgs> = {}) {
   document.body.appendChild(host);
   root = createRoot(host);
   const gate = extra.gate ?? createFollowGate({ now: () => 0 });
-  const base: CursorFollowArgs = { term: f.term, wrap: f.wrap, viewport: f.viewport, watch: f.watch, enabled: true, gate, ...extra };
+  const base: CursorFollowArgs = { term: f.term, wrap: f.wrap, watch: f.watch, enabled: true, gate, ...extra };
   act(() => root!.render(createElement(Probe, base)));
   return {
     rerender: (over: Partial<CursorFollowArgs>) => act(() => root!.render(createElement(Probe, { ...base, ...over }))),

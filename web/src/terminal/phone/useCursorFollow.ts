@@ -31,7 +31,6 @@ export interface CursorFollowArgs {
   term: FollowTerm | null;
   /** The horizontal pan wrapper. */
   wrap: HTMLElement | null;
-  viewport: HTMLElement | null;
   /** The bottom-anchored Watch box: what the operator sees of the grid. */
   watch: HTMLElement | null;
   enabled: boolean;
@@ -39,10 +38,10 @@ export interface CursorFollowArgs {
 }
 
 export function useCursorFollow(args: CursorFollowArgs): void {
-  const { term, wrap, viewport, watch, enabled, gate } = args;
+  const { term, wrap, watch, enabled, gate } = args;
 
   useEffect(() => {
-    if (!enabled || !term || !wrap || !viewport || !watch) return;
+    if (!enabled || !term || !wrap || !watch) return;
     const vv = typeof window === "undefined" ? null : window.visualViewport;
     let raf = 0;
     /** The vertical offset this hook wrote to the wrapper's margin-bottom (px, positive lifts the grid). */
@@ -107,5 +106,5 @@ export function useCursorFollow(args: CursorFollowArgs): void {
       raf = 0;
       if (off !== 0) wrap.style.marginBottom = "";
     };
-  }, [enabled, term, wrap, viewport, watch, gate]);
+  }, [enabled, term, wrap, watch, gate]);
 }

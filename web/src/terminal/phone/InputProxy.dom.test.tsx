@@ -265,6 +265,27 @@ describe("PHIN1 InputProxy", () => {
     root = createRoot(host!.firstElementChild as HTMLElement);
   });
 
+  it("a variant change while focused re-reports focus (no focus event follows the re-attach)", () => {
+    const seen: boolean[] = [];
+    const { el } = mountWith({ onFocusChange: (f) => seen.push(f) });
+    act(() => el.focus());
+    const viewport = host!.firstElementChild as HTMLElement;
+    act(() =>
+      root!.render(
+        createElement(InputProxy, {
+          term: fakeTerm(),
+          viewport,
+          variant: { ...DEFAULT_VARIANT, send: "deferred" },
+          send: () => true,
+          handleRef: { current: null },
+          onFocusChange: (f: boolean) => seen.push(f),
+        }),
+      ),
+    );
+    expect(document.activeElement).toBe(el);
+    expect(seen[seen.length - 1]).toBe(true);
+  });
+
   it("Enter during a composition flushes the composed text first, then one carriage return", () => {
     const { el, send } = mountWith({ variant: { ...DEFAULT_VARIANT, send: "deferred" } });
     act(() => {

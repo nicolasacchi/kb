@@ -193,6 +193,8 @@ export function InputProxy(props: InputProxyProps) {
       focus: () => el.focus({ preventScroll: true }),
       blur: () => el.blur(),
     };
+    // A variant change re-attaches while the element may still hold focus: no focus event follows.
+    if (document.activeElement === el) focusRef.current?.(true);
     return () => {
       for (const [n, f] of on) el.removeEventListener(n, f);
       handleRef.current = null;
