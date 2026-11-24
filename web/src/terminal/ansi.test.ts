@@ -99,9 +99,44 @@ describe("deriveAnsi", () => {
     expect(toOklch(parseHex(light.brightRed)).l).toBeLessThan(toOklch(parseHex(light.red)).l);
   });
 
-  it("repair is bounded: a mid-grey background still terminates with valid colours", () => {
-    const a = deriveAnsi(tokens({ "--red": "#808080", "--green": "#808080", "--blue": "#808080" }), "#808080", "#808080");
+  it("repair is bounded: a mid-grey background still terminates, at the best reachable contrast", () => {
+    const bg = "#808080";
+    const a = deriveAnsi(tokens({ "--red": "#808080", "--green": "#808080", "--blue": "#808080" }), bg, "#808080");
     expect(a).not.toBeNull();
-    for (const k of KEYS) expect(a?.[k]).toMatch(HEX);
+    if (!a) return;
+    const bgRgb = parseHex(bg);
+    // The walk heads away from the background; its greyscale extreme is the floor the repair may fall back to.
+    const light = toOklch(bgRgb).l > 0.6;
+    const extreme = contrastRatio(parseHex(light ? "#000000" : "#ffffff"), bgRgb);
+    const want = Math.min(4.5, extreme);
+    for (const k of KEYS) {
+      expect(a[k]).toMatch(HEX);
+      if (k === "black") continue;
+      expect(contrastRatio(parseHex(a[k]), bgRgb), `${k} ${a[k]}`).toBeGreaterThanOrEqual(want - 0.01);
+    }
+  });
+
+  it("a theme reusing one colour for red and green keeps them apart, the second from the fixed hue", () => {
+    const same = "#d77a6a";
+    const a = deriveAnsi(tokens({ "--red": same, "--green": same, "--blue": "#7aa2e8" }), "#0c0c0e", "#eeeeee");
+    expect(a).not.toBeNull();
+    if (!a) return;
+    const red = toOklch(parseHex(a.red)).h;
+    const green = toOklch(parseHex(a.green)).h;
+    expect(hueDist(red, green)).toBeGreaterThanOrEqual(20);
+    // red keeps the theme's own hue; green is the fallback (145), not the shared one.
+    expect(hueDist(red, toOklch(parseHex(same)).h)).toBeLessThan(15);
+    expect(hueDist(green, 145)).toBeLessThan(20);
+  });
+
+  it("the palette follows the background: same tokens, different panel colour, repaired each time", () => {
+    const src = tokens({ "--red": "#d77a6a", "--green": "#7fc08a", "--blue": "#7aa2e8" });
+    const a = deriveAnsi(src, "#0c0c0e", "#eeeeee");
+    const b = deriveAnsi(src, "#3a3a46", "#eeeeee");
+    expect(a && b).toBeTruthy();
+    if (!a || !b) return;
+    expect(b).not.toEqual(a);
+    check("slider-low", src, "#0c0c0e", "#eeeeee");
+    check("slider-high", src, "#3a3a46", "#eeeeee");
   });
 });

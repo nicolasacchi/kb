@@ -484,12 +484,6 @@ export class PlaceholderRenderer {
   }
 
   /**
-   * The U+10EEEE glyph (and its diacritics) is painted by xterm in the id
-   * colour and can spill about a pixel past the cell. Recolour exactly the
-   * placeholder runs to the background through the decoration API so nothing
-   * is left to spill. One decoration per (line, contiguous run).
-   */
-  /**
    * xterm's `minimumContrastRatio` also lifts a decoration's foreground
    * override, so a placeholder glyph painted in the background colour would
    * come back visible (and spill a pixel past the cell). Ratio 1 while any
@@ -509,6 +503,12 @@ export class PlaceholderRenderer {
     }
   }
 
+  /**
+   * The U+10EEEE glyph (and its diacritics) is painted by xterm in the id
+   * colour and can spill about a pixel past the cell. Recolour exactly the
+   * placeholder runs to the background through the decoration API so nothing
+   * is left to spill. One decoration per (line, contiguous run).
+   */
   private syncDecorations(cells: readonly ScannedCell[]): void {
     const buf = this.term.buffer.active;
     const base = buf.viewportY;
