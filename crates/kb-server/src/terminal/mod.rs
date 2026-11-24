@@ -12,6 +12,7 @@
 //! serde mirror of the runner JSON types.
 
 pub mod binding;
+pub mod commands;
 pub mod events;
 pub mod gate;
 pub mod keys_allow;

@@ -1,0 +1,350 @@
+{
+  "schema": "kb-term-commands/1",
+  "harnesses": {
+    "claude": {
+      "groups": [
+        {
+          "id": "slash",
+          "label": "Slash commands",
+          "items": [
+            {
+              "id": "help",
+              "kind": "command",
+              "label": "/help",
+              "description": "Show the available commands and shortcuts",
+              "text": "/help",
+              "mode": "paste",
+              "unverified": true
+            },
+            {
+              "id": "compact",
+              "kind": "command",
+              "label": "/compact",
+              "description": "Summarise the conversation to free context",
+              "text": "/compact",
+              "mode": "paste",
+              "unverified": true
+            },
+            {
+              "id": "clear",
+              "kind": "command",
+              "label": "/clear",
+              "description": "Start a fresh conversation",
+              "text": "/clear",
+              "mode": "paste",
+              "unverified": true
+            },
+            {
+              "id": "model",
+              "kind": "command",
+              "label": "/model",
+              "description": "Choose the model",
+              "text": "/model",
+              "mode": "paste",
+              "unverified": true
+            },
+            {
+              "id": "resume",
+              "kind": "command",
+              "label": "/resume",
+              "description": "Resume an earlier conversation",
+              "text": "/resume",
+              "mode": "paste",
+              "unverified": true
+            },
+            {
+              "id": "cost",
+              "kind": "command",
+              "label": "/cost",
+              "description": "Show token usage and cost",
+              "text": "/cost",
+              "mode": "paste",
+              "unverified": true
+            },
+            {
+              "id": "context",
+              "kind": "command",
+              "label": "/context",
+              "description": "Show how the context window is used",
+              "text": "/context",
+              "mode": "paste",
+              "unverified": true
+            },
+            {
+              "id": "memory",
+              "kind": "command",
+              "label": "/memory",
+              "description": "Edit the memory files",
+              "text": "/memory",
+              "mode": "paste",
+              "unverified": true
+            },
+            {
+              "id": "status",
+              "kind": "command",
+              "label": "/status",
+              "description": "Show version, model and account status",
+              "text": "/status",
+              "mode": "paste",
+              "unverified": true
+            },
+            {
+              "id": "config",
+              "kind": "command",
+              "label": "/config",
+              "description": "Open the settings",
+              "text": "/config",
+              "mode": "paste",
+              "unverified": true
+            },
+            {
+              "id": "permissions",
+              "kind": "command",
+              "label": "/permissions",
+              "description": "View or change tool permissions",
+              "text": "/permissions",
+              "mode": "paste",
+              "unverified": true
+            },
+            {
+              "id": "agents",
+              "kind": "command",
+              "label": "/agents",
+              "description": "Manage sub-agents",
+              "text": "/agents",
+              "mode": "paste",
+              "unverified": true
+            },
+            {
+              "id": "review",
+              "kind": "command",
+              "label": "/review",
+              "description": "Review a pull request",
+              "text": "/review",
+              "mode": "paste",
+              "unverified": true
+            },
+            {
+              "id": "init",
+              "kind": "command",
+              "label": "/init",
+              "description": "Create a project guidance file",
+              "text": "/init",
+              "mode": "paste",
+              "unverified": true
+            },
+            {
+              "id": "mcp",
+              "kind": "command",
+              "label": "/mcp",
+              "description": "Manage tool server connections",
+              "text": "/mcp",
+              "mode": "paste",
+              "unverified": true
+            },
+            {
+              "id": "rewind",
+              "kind": "command",
+              "label": "/rewind",
+              "description": "Rewind the conversation or code to an earlier point",
+              "text": "/rewind",
+              "mode": "paste",
+              "unverified": true
+            },
+            {
+              "id": "exit",
+              "kind": "command",
+              "label": "/exit",
+              "description": "End the session",
+              "text": "/exit",
+              "mode": "paste",
+              "unverified": true
+            }
+          ]
+        },
+        {
+          "id": "keys",
+          "label": "Keys",
+          "items": [
+            {
+              "id": "esc",
+              "kind": "chord",
+              "label": "Esc",
+              "description": "Interrupt the current step or close a dialog",
+              "keys": [
+                "Esc"
+              ],
+              "unverified": true
+            },
+            {
+              "id": "esc-esc",
+              "kind": "chord",
+              "label": "Esc Esc",
+              "description": "Press Escape twice, which opens the rewind picker",
+              "keys": [
+                "Esc",
+                "Esc"
+              ],
+              "unverified": true
+            },
+            {
+              "id": "cycle-mode",
+              "kind": "chord",
+              "label": "Cycle mode",
+              "description": "Cycle the permission mode",
+              "keys": [
+                "S-Tab"
+              ],
+              "unverified": true
+            },
+            {
+              "id": "interrupt",
+              "kind": "chord",
+              "label": "Ctrl-C",
+              "description": "Interrupt the running task",
+              "keys": [
+                "C-c"
+              ],
+              "unverified": true
+            }
+          ]
+        },
+        {
+          "id": "replies",
+          "label": "Quick replies",
+          "items": [
+            {
+              "id": "reply-yes-proceed",
+              "kind": "reply",
+              "label": "yes, proceed",
+              "text": "yes, proceed"
+            },
+            {
+              "id": "reply-continue",
+              "kind": "reply",
+              "label": "continue",
+              "text": "continue"
+            },
+            {
+              "id": "reply-run-tests",
+              "kind": "reply",
+              "label": "run the tests",
+              "text": "run the tests"
+            },
+            {
+              "id": "reply-commit-push",
+              "kind": "reply",
+              "label": "commit and push",
+              "text": "commit and push"
+            }
+          ]
+        }
+      ]
+    },
+    "omp": {
+      "groups": [
+        {
+          "id": "kb",
+          "label": "kb commands",
+          "items": [
+            {
+              "id": "kb-context",
+              "kind": "command",
+              "label": "/kb-context",
+              "description": "Budgeted context pack for a task",
+              "text": "/kb-context",
+              "mode": "paste"
+            },
+            {
+              "id": "kb-desk",
+              "kind": "command",
+              "label": "/kb-desk",
+              "description": "List desk drafts across all projects",
+              "text": "/kb-desk",
+              "mode": "paste"
+            },
+            {
+              "id": "kb-slate",
+              "kind": "command",
+              "label": "/kb-slate",
+              "description": "Shared working state of this project",
+              "text": "/kb-slate",
+              "mode": "paste"
+            },
+            {
+              "id": "kb-distill",
+              "kind": "command",
+              "label": "/kb-distill",
+              "description": "Distil this session into durable memories",
+              "text": "/kb-distill",
+              "mode": "paste"
+            }
+          ]
+        },
+        {
+          "id": "slash",
+          "label": "Slash commands",
+          "items": [
+            {
+              "id": "compact",
+              "kind": "command",
+              "label": "/compact",
+              "description": "Summarise the conversation to free context",
+              "text": "/compact",
+              "mode": "paste",
+              "unverified": true
+            },
+            {
+              "id": "shake",
+              "kind": "command",
+              "label": "/shake",
+              "description": "Trim the conversation history",
+              "text": "/shake",
+              "mode": "paste",
+              "unverified": true
+            },
+            {
+              "id": "tree",
+              "kind": "command",
+              "label": "/tree",
+              "description": "Browse the conversation tree",
+              "text": "/tree",
+              "mode": "paste",
+              "unverified": true
+            }
+          ]
+        },
+        {
+          "id": "replies",
+          "label": "Quick replies",
+          "items": [
+            {
+              "id": "reply-yes-proceed",
+              "kind": "reply",
+              "label": "yes, proceed",
+              "text": "yes, proceed"
+            },
+            {
+              "id": "reply-continue",
+              "kind": "reply",
+              "label": "continue",
+              "text": "continue"
+            },
+            {
+              "id": "reply-run-tests",
+              "kind": "reply",
+              "label": "run the tests",
+              "text": "run the tests"
+            },
+            {
+              "id": "reply-commit-push",
+              "kind": "reply",
+              "label": "commit and push",
+              "text": "commit and push"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
