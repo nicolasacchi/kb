@@ -1258,6 +1258,18 @@ GET  /api/sessions/{session_id}/view        W2/R1 — the `session-view/1`
                                             scrub-posture) — the FULL view is
                                             what's cached; `?fields=`/`?turns=`
                                             are response-time projections.
+                                            `?fields=conversation` (opt-in,
+                                            never part of the default) adds
+                                            a derived per-human-turn list
+                                            (`kb-conversation/1`: prompt and
+                                            answer previews, asks with a
+                                            trailing `pending`, commits,
+                                            files, errors, subagent count);
+                                            window it with `&conv_from=<n>`
+                                            `&conv_limit=<1..200>` and poll
+                                            cheaply with `&conv_gen=<the
+                                            capture_gen you hold>`
+                                            (`unchanged: true`, no rows).
                                             CLI: `kb sessions read <id>`
                                             (`--json` prints this wire
                                             verbatim; `--full`/`--tail N`/

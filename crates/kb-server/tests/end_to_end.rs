@@ -27406,3 +27406,278 @@ async fn view_route_rewound_turns_follow_window_fields_and_linearity() {
     let (_, lin) = get("/api/sessions/lin-e2e/view?turns=all".into()).await;
     assert!(lin.get("rewound_turns").is_none(), "{lin}");
 }
+
+// ── CONVPROJ — `?fields=conversation` on GET /api/sessions/{id}/view ───────
+
+/// Synthetic three-prompt transcript: prompt 1 answered an AskUserQuestion,
+/// prompt 2 made a commit, prompt 3 ends on an UNANSWERED AskUserQuestion.
+/// `first_prompt` lets a test plant text in prompt 1.
+fn conv_transcript(sid: &str, first_prompt: &str) -> String {
+    let uu = |n: u32| format!("{n:08x}-0000-4000-8000-000000000000");
+    let ts = |n: u32| format!("2026-05-27T08:00:{n:02}Z");
+    let user = |n: u32, text: &str| {
+        serde_json::json!({"sessionId":sid,"type":"user","uuid":uu(n),"timestamp":ts(n),
+            "message":{"role":"user","content":text}})
+        .to_string()
+    };
+    let asst_tool = |n: u32, name: &str, input: serde_json::Value| {
+        serde_json::json!({"sessionId":sid,"type":"assistant","uuid":uu(n),"timestamp":ts(n),
+            "requestId":format!("r{n}"),
+            "message":{"role":"assistant","content":[{"type":"tool_use","id":format!("tu{n}"),
+                "name":name,"input":input}]}})
+        .to_string()
+    };
+    let asst_text = |n: u32, text: &str| {
+        serde_json::json!({"sessionId":sid,"type":"assistant","uuid":uu(n),"timestamp":ts(n),
+            "requestId":format!("r{n}"),
+            "message":{"role":"assistant","content":[{"type":"text","text":text}]}})
+        .to_string()
+    };
+    let result = |n: u32, content: &str| {
+        serde_json::json!({"sessionId":sid,"type":"user","timestamp":ts(n),
+            "message":{"role":"user","content":[{"type":"tool_result",
+                "tool_use_id":format!("tu{n}"),"content":content}]}})
+        .to_string()
+    };
+    [
+        user(1, first_prompt),
+        asst_tool(2, "AskUserQuestion", serde_json::json!({})),
+        serde_json::json!({"sessionId":sid,"type":"user","timestamp":ts(2),
+            "toolUseResult":{"answers":{"Pick one":"Option B"},"questions":[{"question":"Pick one"}]},
+            "message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu2",
+                "content":"Your questions have been answered: \"Pick one\"=\"Option B\"."}]}})
+        .to_string(),
+        asst_text(3, "picked B"),
+        user(4, "now commit"),
+        asst_tool(5, "Bash", serde_json::json!({"command":"git commit -m \"feat: synth\""})),
+        result(5, "[main cafe123] feat: synth\n 1 file changed"),
+        asst_text(6, "committed"),
+        user(7, "what next"),
+        asst_tool(
+            8,
+            "AskUserQuestion",
+            serde_json::json!({"questions":[{"question":"Ship it?","options":[{"label":"Yes"},{"label":"No"}]}]}),
+        ),
+    ]
+    .join("\n")
+}
+
+async fn conv_boot(sid: &str, first_prompt: &str) -> (tempfile::TempDir, std::net::SocketAddr) {
+    let global = vec![(
+        "session-20260601T100000Z-conv-e2e.html",
+        session_transcript_html(sid, "20260601T100000Z", &conv_transcript(sid, first_prompt)),
+    )];
+    let (tmp, addr) = boot_memory_corpora(&global, &[]).await;
+    let client = reqwest::Client::new();
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let all = client
+            .get(url(addr, "/api/sessions?limit=50"))
+            .send()
+            .await
+            .unwrap()
+            .json::<serde_json::Value>()
+            .await
+            .unwrap_or_default();
+        if all["sessions"].as_array().is_some_and(|a| a.len() == 1) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for the session: {all}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    (tmp, addr)
+}
+
+async fn conv_get_text(addr: std::net::SocketAddr, path: &str) -> String {
+    reqwest::Client::new()
+        .get(url(addr, path))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap()
+}
+
+/// Top-level object keys of a JSON text in document order (serde_json's
+/// default map sorts, so scan the raw bytes with a depth counter).
+fn conv_top_level_keys(body: &str) -> Vec<String> {
+    let b = body.as_bytes();
+    let (mut depth, mut i, mut keys) = (0i32, 0usize, Vec::new());
+    while i < b.len() {
+        match b[i] {
+            b'{' | b'[' => depth += 1,
+            b'}' | b']' => depth -= 1,
+            b'"' => {
+                let start = i + 1;
+                i += 1;
+                while b[i] != b'"' {
+                    if b[i] == b'\\' {
+                        i += 1;
+                    }
+                    i += 1;
+                }
+                if depth == 1 && b.get(i + 1) == Some(&b':') {
+                    keys.push(body[start..i].to_string());
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    keys
+}
+
+/// The default and every explicit non-conversation projection carry no
+/// `conversation` key, and the no-param body is byte-identical to the
+/// explicit all-sections request (so adding the opt-in field changed nothing
+/// for an existing caller).
+#[tokio::test]
+async fn view_route_without_conversation_field_is_byte_identical() {
+    let (_tmp, addr) = conv_boot("conv-e2e", "first prompt").await;
+    let default = conv_get_text(addr, "/api/sessions/conv-e2e/view").await;
+    assert!(!default.contains("\"conversation\""), "{default}");
+    let explicit = conv_get_text(
+        addr,
+        "/api/sessions/conv-e2e/view?fields=header,turns,outline,tasks,subagents,minimap,stats",
+    )
+    .await;
+    assert_eq!(default, explicit);
+    let some = conv_get_text(addr, "/api/sessions/conv-e2e/view?fields=header,turns").await;
+    assert!(!some.contains("\"conversation\""), "{some}");
+
+    // Key-order goldens (the pre-CONVPROJ wire order, `conversation` sits
+    // between `stats` and `turns_total` only when asked for): reordering a
+    // field or adding a different key fails here.
+    let meta_tail = ["turns_total", "turns_returned", "scrubbed", "redactions"];
+    let head = ["grammar", "session_id", "kb", "artifact_id"];
+    let expect = |mid: &[&str]| -> Vec<String> {
+        head.iter()
+            .chain(mid.iter())
+            .chain(meta_tail.iter())
+            .map(|k| k.to_string())
+            .collect()
+    };
+    assert_eq!(
+        conv_top_level_keys(&default),
+        expect(&[
+            "header",
+            "turns",
+            "side_lanes",
+            "outline",
+            "tasks",
+            "subagents",
+            "minimap",
+            "stats"
+        ]),
+        "{default}"
+    );
+    assert_eq!(
+        conv_top_level_keys(&some),
+        expect(&["header", "turns", "side_lanes"]),
+        "{some}"
+    );
+    let none = conv_get_text(addr, "/api/sessions/conv-e2e/view?fields=x").await;
+    assert_eq!(conv_top_level_keys(&none), expect(&[]), "{none}");
+    assert!(none.starts_with("{\"grammar\":\"session-view/1\",\"session_id\":\"conv-e2e\","));
+    assert!(
+        none.ends_with("\"scrubbed\":false,\"redactions\":0}"),
+        "{none}"
+    );
+    let on = conv_get_text(addr, "/api/sessions/conv-e2e/view?fields=conversation").await;
+    assert!(on.contains("\"conversation\""), "{on}");
+}
+
+#[tokio::test]
+async fn view_route_conversation_projection_windows_and_pends() {
+    let (_tmp, addr) = conv_boot("conv-e2e", "first prompt").await;
+    let get = |path: String| async move {
+        let body = conv_get_text(addr, &path).await;
+        serde_json::from_str::<serde_json::Value>(&body).unwrap_or_else(|e| panic!("{e}: {body}"))
+    };
+    let v = get("/api/sessions/conv-e2e/view?fields=conversation".into()).await;
+    // Only the requested section (plus the always-on metadata) is present.
+    assert!(v.get("turns").is_none() && v.get("header").is_none(), "{v}");
+    let c = &v["conversation"];
+    assert_eq!(c["schema"], "kb-conversation/1");
+    assert_eq!(c["total"], 3, "{c}");
+    assert_eq!(c["unchanged"], false);
+    let rows = c["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 3, "{c}");
+    // Row 1: the answered ask; row 2: the commit; row 3: the pending ask.
+    assert_eq!(rows[0]["prompt"], "first prompt");
+    assert_eq!(rows[0]["asks"][0]["q"], "Pick one");
+    assert_eq!(rows[0]["asks"][0]["answer"], "Option B");
+    assert_eq!(rows[0]["asks"][0]["pending"], false);
+    assert_eq!(rows[0]["answer"], "picked B");
+    assert_eq!(rows[1]["commits"], serde_json::json!(["cafe123"]));
+    assert_eq!(rows[1]["answer"], "committed");
+    let pend = &rows[2]["asks"][0];
+    assert_eq!(pend["pending"], true, "{c}");
+    assert_eq!(pend["q"], "Ship it?");
+    assert_eq!(pend["options"], serde_json::json!(["Yes", "No"]));
+    assert!(pend["answer"].is_null());
+
+    // Window: conv_limit=1 returns the tail row and a cursor to the older page.
+    let w = get("/api/sessions/conv-e2e/view?fields=conversation&conv_limit=1".into()).await;
+    let wc = &w["conversation"];
+    assert_eq!(wc["rows"].as_array().unwrap().len(), 1);
+    assert_eq!(wc["rows"][0]["prompt"], "what next");
+    assert_eq!(wc["total"], 3);
+    assert_eq!(wc["next_cursor"], rows[1]["n"]);
+    // Malformed params degrade to defaults, never a 400 and never "all but wrong".
+    let bad =
+        get("/api/sessions/conv-e2e/view?fields=conversation&conv_limit=abc&conv_from=-3".into())
+            .await;
+    assert_eq!(bad["conversation"]["rows"].as_array().unwrap().len(), 3);
+
+    // Since cursor: the current capture_gen answers unchanged with no rows.
+    let gen = c["capture_gen"].as_str().unwrap().to_string();
+    let same = get(format!(
+        "/api/sessions/conv-e2e/view?fields=conversation&conv_gen={gen}"
+    ))
+    .await;
+    assert_eq!(same["conversation"]["unchanged"], true, "{same}");
+    assert!(same["conversation"]["rows"].as_array().unwrap().is_empty());
+    let stale = get(format!(
+        "/api/sessions/conv-e2e/view?fields=conversation&conv_gen=0-0&conv_from={}",
+        rows[2]["n"]
+    ))
+    .await;
+    assert_eq!(stale["conversation"]["unchanged"], false);
+    assert_eq!(stale["conversation"]["rows"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn view_route_conversation_previews_are_scrubbed_before_truncation() {
+    let secret = "sk-ABCDEFGHIJ0123456789abcdefghij";
+    let prompt = format!("{}{secret} tail", "a".repeat(150));
+    let (_tmp, addr) = conv_boot("conv-e2e", &prompt).await;
+    // Control: unscrubbed, the cut leaves the secret's prefix visible.
+    let raw = conv_get_text(addr, "/api/sessions/conv-e2e/view?fields=conversation").await;
+    assert!(raw.contains("sk-ABC"), "{raw}");
+    let scrubbed = conv_get_text(
+        addr,
+        "/api/sessions/conv-e2e/view?fields=conversation&scrub=secrets",
+    )
+    .await;
+    assert!(!scrubbed.contains("sk-ABC"), "{scrubbed}");
+    assert!(!scrubbed.contains("ABCDEFGHIJ"), "{scrubbed}");
+}
+
+#[tokio::test]
+async fn view_route_conversation_cache_hit_equals_cold_build() {
+    let (_tmp, addr) = conv_boot("conv-e2e", "first prompt").await;
+    let path = "/api/sessions/conv-e2e/view?fields=conversation&scrub=secrets";
+    let cold = conv_get_text(addr, path).await;
+    let warm = conv_get_text(addr, path).await;
+    // `redactions` is a build-time-only figure (0 on a cache hit); the
+    // projection itself must not differ.
+    let proj =
+        |s: &str| serde_json::from_str::<serde_json::Value>(s).unwrap()["conversation"].clone();
+    assert_eq!(proj(&cold), proj(&warm));
+    assert!(!proj(&cold)["rows"].as_array().unwrap().is_empty());
+}
