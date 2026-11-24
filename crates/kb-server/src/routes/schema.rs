@@ -249,6 +249,10 @@ const V0_0_1_TYPES: &[&str] = &[
     // durable mutation, payload `{project, rev}` only, never prompt text).
     // Emitter: `terminal::prompts`.
     "term.prompts",
+    // kbt2 CMDSTORE — the command-catalogue overlay changed (one event per
+    // durable change, payload `{rev}` only, never catalogue text).
+    // Emitter: `terminal::command_store`.
+    "term.commands",
 ];
 
 #[derive(Debug, Serialize)]
@@ -460,6 +464,7 @@ pub async fn per_type(Path((kind, version)): Path<(String, String)>) -> Response
         "term.ended" => json!({"type": kind, "payload": TERM_ENDED_KEYS}),
         "term.state" => json!({"type": kind, "payload": TERM_STATE_KEYS}),
         "term.prompts" => json!({"type": kind, "payload": TERM_PROMPTS_KEYS}),
+        "term.commands" => json!({"type": kind, "payload": TERM_COMMANDS_KEYS}),
         _ => unreachable!("contains-check above"),
     };
     Json(schema).into_response()
@@ -500,6 +505,11 @@ pub const TERM_STATE_KEYS: [&str; 5] = ["id", "state", "cols?", "rows?", "grid_o
 /// slug and the new revision, nothing else. The queue's text is
 /// operator-authored content and never rides an event; a client refetches.
 pub const TERM_PROMPTS_KEYS: [&str; 2] = ["project", "rev"];
+
+/// The declared payload keys of `term.commands` (kbt2 CMDSTORE): the new
+/// revision, nothing else. The catalogue is operator-authored content and
+/// never rides an event; a client refetches.
+pub const TERM_COMMANDS_KEYS: [&str; 1] = ["rev"];
 
 /// The declared payload keys of `maintenance.backup.written`.
 pub const BACKUP_WRITTEN_KEYS: [&str; 3] = ["kb", "path", "remote"];

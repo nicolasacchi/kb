@@ -12,6 +12,7 @@
 //! serde mirror of the runner JSON types.
 
 pub mod binding;
+pub mod command_store;
 pub mod commands;
 pub mod events;
 pub mod gate;
@@ -46,4 +47,8 @@ pub struct TerminalState {
     /// load-modify-write (`prompts::mutate`). Held across nothing but the
     /// synchronous file work and the event emit.
     pub(crate) prompts_lock: tokio::sync::Mutex<()>,
+    /// kbt2 CMDSTORE — the ONE daemon-wide lock around every command-overlay
+    /// load-modify-write (`command_store::mutate`). Held across the
+    /// blocking-pool file work and the event emit, and nothing else.
+    pub(crate) commands_lock: tokio::sync::Mutex<()>,
 }
