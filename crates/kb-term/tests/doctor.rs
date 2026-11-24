@@ -586,6 +586,98 @@ fn doctor_runner_env_resolves_against_the_runner_not_the_shell() {
     assert!(checks.iter().all(|c| c.id != "runner_env_harness_grok"));
 }
 
+// ---- FUHARNESSPATH: a shadowed harness is noticed ---------------------
+
+fn shadow_env(runner_dir: &std::path::Path) -> Vec<(String, String)> {
+    env_of(&[
+        ("PATH", runner_dir.to_str().unwrap()),
+        ("KB_SESSIONS_DIR", "/srv/sessions"),
+    ])
+}
+
+#[test]
+fn doctor_runner_env_same_file_for_runner_and_shell_passes() {
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let omp = fake_exe(&bin, "omp", "#!/bin/sh\n");
+    let checks =
+        doctor::decide_runner_env(Some(&shadow_env(&bin)), &[("omp".to_string(), Some(omp))]);
+    assert_eq!(
+        status_of(&checks, "runner_env_harness_omp"),
+        CheckStatus::Pass
+    );
+}
+
+#[test]
+fn doctor_runner_env_symlink_to_the_same_file_passes() {
+    let dir = tempfile::tempdir().unwrap();
+    let real = dir.path().join("real");
+    let link = dir.path().join("link");
+    std::fs::create_dir_all(&real).unwrap();
+    std::fs::create_dir_all(&link).unwrap();
+    let target = fake_exe(&real, "grok", "#!/bin/sh\n");
+    std::os::unix::fs::symlink(&target, link.join("grok")).unwrap();
+    // The runner resolves through the symlink, the shell finds the file.
+    let checks = doctor::decide_runner_env(
+        Some(&shadow_env(&link)),
+        &[("grok".to_string(), Some(target.clone()))],
+    );
+    assert_eq!(
+        status_of(&checks, "runner_env_harness_grok"),
+        CheckStatus::Pass
+    );
+    // And the other way round.
+    let checks = doctor::decide_runner_env(
+        Some(&shadow_env(&real)),
+        &[("grok".to_string(), Some(link.join("grok")))],
+    );
+    assert_eq!(
+        status_of(&checks, "runner_env_harness_grok"),
+        CheckStatus::Pass
+    );
+}
+
+#[test]
+fn doctor_runner_env_warns_when_the_runner_resolves_a_different_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner_bin = dir.path().join("runner-bin");
+    let shell_bin = dir.path().join("shell-bin");
+    std::fs::create_dir_all(&runner_bin).unwrap();
+    std::fs::create_dir_all(&shell_bin).unwrap();
+    let stale = fake_exe(&runner_bin, "omp", "#!/bin/sh\necho stale\n");
+    let fresh = fake_exe(&shell_bin, "omp", "#!/bin/sh\necho fresh\n");
+    let checks = doctor::decide_runner_env(
+        Some(&shadow_env(&runner_bin)),
+        &[("omp".to_string(), Some(fresh.clone()))],
+    );
+    let c = checks
+        .iter()
+        .find(|c| c.id == "runner_env_harness_omp")
+        .unwrap();
+    assert_eq!(c.status, CheckStatus::Warn);
+    assert!(c.detail.contains(stale.to_str().unwrap()), "{}", c.detail);
+    assert!(c.detail.contains(fresh.to_str().unwrap()), "{}", c.detail);
+    assert!(c.detail.contains("different binary"), "{}", c.detail);
+    assert!(c.fix.as_deref().unwrap_or("").contains("first"));
+    assert!(checks.iter().all(|c| c.status != CheckStatus::Fail));
+}
+
+#[test]
+fn doctor_runner_env_runner_only_harness_still_passes() {
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    fake_exe(&bin, "codex", "#!/bin/sh\n");
+    let checks = doctor::decide_runner_env(Some(&shadow_env(&bin)), &[("codex".to_string(), None)]);
+    // `None` = not installed for the shell: there is nothing to compare
+    // against, so the runner resolving it must never WARN.
+    assert!(checks
+        .iter()
+        .filter(|c| c.id == "runner_env_harness_codex")
+        .all(|c| c.status == CheckStatus::Pass));
+}
+
 #[test]
 fn doctor_runner_env_fails_when_sessions_dir_is_unset_or_empty() {
     for env in [
