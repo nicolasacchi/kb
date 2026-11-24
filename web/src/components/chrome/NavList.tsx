@@ -60,7 +60,7 @@ export default function NavList({ onNavigate }: { onNavigate: () => void }) {
             ) : (
               item.badge > 0 && (
                 <>
-                  <span className="kb-navlist__sr">, {needsAttentionText(item.badge)}</span>
+                  <span className="kb-navlist__sr">{`, ${needsAttentionText(item.badge)}`}</span>
                   <span
                     className="kb-navlist__badge kb-navlist__badge--door"
                     data-testid={`navlist-badge-${item.id}`}

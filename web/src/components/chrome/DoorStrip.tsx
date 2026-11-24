@@ -34,7 +34,7 @@ export default function DoorStrip({
                 <span className="kb-door__badge" data-testid={`door-badge-${item.id}`} aria-hidden="true">
                   {item.badge}
                 </span>
-                <span className="kb-door__sr">, {needsAttentionText(item.badge)}</span>
+                <span className="kb-door__sr">{`, ${needsAttentionText(item.badge)}`}</span>
               </>
             )}
           </Link>
