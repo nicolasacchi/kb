@@ -461,6 +461,7 @@ mod tests {
     #[test]
     fn name_policy_table() {
         let long = format!("{}.txt", "a".repeat(300));
+        let slug48 = "a".repeat(48);
         let cases: Vec<(&str, &str, &str)> = vec![
             ("../../etc/passwd", "passwd", "bin"),
             ("..\\..\\win\\x.PNG", "x", "png"),
@@ -471,7 +472,7 @@ mod tests {
             ("Ünï cödé.json", "n-c-d", "json"),
             ("report.toolongext1", "report", "bin"),
             ("weird.t-x", "weird", "bin"),
-            (&long, &"a".repeat(48), "txt"),
+            (&long, &slug48, "txt"),
         ];
         for (name, slug, ext) in cases {
             let (_, s, e) = name_parts(name);
