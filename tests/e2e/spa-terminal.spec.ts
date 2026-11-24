@@ -391,7 +391,7 @@ test.describe("T14 — desktop terminal panel", () => {
     const geo = await page.evaluate(() => {
       const host = document.querySelector("[data-kb-term]") as HTMLElement;
       const screen = host.querySelector(".xterm-screen") as HTMLElement;
-      const sec = document.querySelector('[data-testid="session-sec-terminal"]') as HTMLElement;
+      const sec = document.querySelector('[data-testid="term-shell"]') as HTMLElement;
       const next = sec.nextElementSibling as HTMLElement | null;
       return {
         host: host.getBoundingClientRect().height,

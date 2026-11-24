@@ -24,8 +24,11 @@ use crate::runner::ids::{valid_harness, valid_id};
 use crate::runner::kill;
 use crate::runner::launch;
 use crate::runner::supervisor::Supervisor;
+use crate::runner::upload;
 use crate::runner::{Runner, RunnerError};
-use crate::wire::{EmptyData, GridData, PasteData, Request, Response, ViewerData};
+use crate::wire::{
+    EmptyData, FileData, GridData, PasteData, Request, Response, UploadBeginData, ViewerData,
+};
 
 /// Parse an enveloped request line. The envelope is `{v, id, op, ...}`;
 /// `v`/`id` are stripped before the wire `Request` (deny_unknown_fields)
@@ -52,6 +55,15 @@ pub fn parse_request(line: &[u8]) -> Result<Request, RunnerError> {
         obj.remove("id");
     }
     serde_json::from_value(v).map_err(|e| RunnerError::BadRequest(format!("bad request: {e}")))
+}
+
+/// Run blocking file work off the async workers.
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, RunnerError> + Send + 'static,
+) -> Result<T, RunnerError> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|_| RunnerError::Io("upload task failed".to_string()))?
 }
 
 /// Dispatch one parsed request against the runner.
@@ -340,6 +352,56 @@ async fn dispatch_inner<S: Supervisor>(
         Request::Upload { .. } => Err(RunnerError::BadRequest(
             "upload is streamed by the connection handler".to_string(),
         )),
+        // `upload_append` carries raw bytes after its request line; the
+        // connection handler answers it (`server::respond_upload_append`).
+        Request::UploadAppend { .. } => Err(RunnerError::BadRequest(
+            "upload_append is streamed by the connection handler".to_string(),
+        )),
+        // The other chunked-upload ops are envelope-only. The blocking
+        // file work runs off the async workers.
+        Request::UploadBegin {
+            id,
+            name,
+            mime,
+            size,
+        } => {
+            let (dir, id, name, mime, size) = (
+                runner.sessions_dir(),
+                id.clone(),
+                name.clone(),
+                mime.clone(),
+                *size,
+            );
+            let token = blocking(move || {
+                upload::sweep_orphans(&dir);
+                upload::begin_upload(&dir, &id, &name, &mime, size)
+            })
+            .await?;
+            Ok(serde_json::to_value(&UploadBeginData {
+                upload: token,
+                chunk_max: upload::CHUNK_MAX_BYTES,
+            })
+            .map_err(|e| RunnerError::Internal(e.to_string()))?)
+        }
+        Request::UploadCommit { id, upload: token } => {
+            let (dir, id, token) = (runner.sessions_dir(), id.clone(), token.clone());
+            let c = blocking(move || upload::commit_upload(&dir, &id, &token)).await?;
+            Ok(serde_json::to_value(&FileData {
+                path: c.path.to_string_lossy().into_owned(),
+                bytes: c.bytes,
+                mime: c.mime,
+                kind: c.kind.to_string(),
+                sha256: c.sha256,
+                name: c.name,
+            })
+            .map_err(|e| RunnerError::Internal(e.to_string()))?)
+        }
+        Request::UploadAbort { id, upload: token } => {
+            let (dir, id, token) = (runner.sessions_dir(), id.clone(), token.clone());
+            blocking(move || upload::abort_upload(&dir, &id, &token)).await?;
+            Ok(serde_json::to_value(&EmptyData {})
+                .map_err(|e| RunnerError::Internal(e.to_string()))?)
+        }
         // `media` carries raw bytes after its header line, which the
         // envelope-only dispatch cannot express: the connection handler
         // answers it (`server::respond_media`) before dispatch. Reaching

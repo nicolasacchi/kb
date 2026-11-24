@@ -237,6 +237,84 @@ else
   bad "plain UUID: recent clean capture still throttles (log: $(cat "$KB_CAPTURE_CALL_LOG"))"
 fi
 
+# --- CONVLIVE: --blocked bypasses the interval, debounced per session --------
+blocked_rig() {
+  rig="$TMPROOT/$1"
+  setup_rig "$rig"
+  export KB_SESSIONS_DIR="$rig/sessions"
+  export KB_CAPTURE_CALL_LOG="$rig/calls.log"
+  export KB_CAPTURE_LIVE=1
+  export KB_CAPTURE_MIN_INTERVAL_SECS=3600
+  export XDG_CACHE_HOME="$rig/cache"
+  unset KB_CAPTURE_BLOCKED_DEBOUNCE_SECS
+  : >"$KB_CAPTURE_CALL_LOG"
+}
+run_blocked() {
+  printf '%s' "$2" | "$1/hooks/kb-capture-throttle.sh" --blocked
+}
+BP='{"session_id":"sid-b","transcript_path":"/tmp/x.jsonl"}'
+
+blocked_rig b1
+touch "$rig/sessions/session-20260101T000000Z-sid-b.html"
+run_throttle "$rig" "$BP"
+if [ ! -s "$KB_CAPTURE_CALL_LOG" ]; then
+  ok "blocked(a): without the flag a fresh capture is throttled"
+else
+  bad "blocked(a): without the flag a fresh capture is throttled"
+fi
+run_blocked "$rig" "$BP"
+if [ "$(cat "$KB_CAPTURE_CALL_LOG")" = "sid-b" ]; then
+  ok "blocked(a): --blocked fires despite a fresh capture and the interval"
+else
+  bad "blocked(a): --blocked fires despite a fresh capture (log: $(cat "$KB_CAPTURE_CALL_LOG"))"
+fi
+
+run_blocked "$rig" "$BP"
+if [ "$(wc -l <"$KB_CAPTURE_CALL_LOG" | tr -d ' ')" = 1 ]; then
+  ok "blocked(b): a second --blocked inside the debounce is skipped"
+else
+  bad "blocked(b): second --blocked inside debounce fired (log: $(cat "$KB_CAPTURE_CALL_LOG"))"
+fi
+marker="$(ls "$rig"/cache/kb/capture-blocked-* 2>/dev/null | head -1)"
+if [ -n "$marker" ]; then
+  touch -d "@$(( $(date -u +%s) - 60 ))" "$marker"
+  run_blocked "$rig" "$BP"
+fi
+if [ "$(wc -l <"$KB_CAPTURE_CALL_LOG" | tr -d ' ')" = 2 ]; then
+  ok "blocked(b): after the marker ages past the debounce it fires again"
+else
+  bad "blocked(b): aged marker did not fire again (log: $(cat "$KB_CAPTURE_CALL_LOG"))"
+fi
+
+blocked_rig b2
+unset KB_CAPTURE_LIVE
+run_blocked "$rig" "$BP"
+if [ ! -s "$KB_CAPTURE_CALL_LOG" ]; then
+  ok "blocked(c): KB_CAPTURE_LIVE unset -> never fires"
+else
+  bad "blocked(c): KB_CAPTURE_LIVE unset fired"
+fi
+
+blocked_rig b3
+( unset KB_SESSIONS_DIR; run_blocked "$rig" "$BP" )
+if [ ! -s "$KB_CAPTURE_CALL_LOG" ]; then
+  ok "blocked(d): KB_SESSIONS_DIR unset -> never fires"
+else
+  bad "blocked(d): KB_SESSIONS_DIR unset fired"
+fi
+
+blocked_rig b4
+export KB_CAPTURE_BLOCKED_DEBOUNCE_SECS=0
+run_blocked "$rig" "$BP"
+run_blocked "$rig" "$BP"
+if [ "$(wc -l <"$KB_CAPTURE_CALL_LOG" | tr -d ' ')" = 2 ]; then
+  ok "blocked(e): KB_CAPTURE_BLOCKED_DEBOUNCE_SECS=0 disables the debounce"
+else
+  bad "blocked(e): debounce override ignored (log: $(cat "$KB_CAPTURE_CALL_LOG"))"
+fi
+unset KB_CAPTURE_BLOCKED_DEBOUNCE_SECS
+export KB_CAPTURE_LIVE=1
+
 # --- 10. REAL kb capture, then the throttle on the file it produced ----------
 if [ -n "${KB_BIN_DIR:-}" ] && [ -x "$KB_BIN_DIR/kb" ]; then
   rig="$TMPROOT/t10"

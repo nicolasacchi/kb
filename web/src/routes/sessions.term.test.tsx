@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 //
-// FUMINLIST - the `?term=` history semantics on /sessions: opening a terminal
-// from the list PUSHES one entry (Back closes it), closing REPLACES it (Back
-// never re-opens a closed sheet), and an unknown id is a REPLACE too (no extra
-// entry is left behind for Back to land on).
+// BSHELL - a terminal lives at /term/:id. The Terminals list's Open is a link
+// that PUSHES the page, and the legacy `/sessions?term=<id>` deep link
+// REDIRECTS there with `replace` (Back never lands on the old URL); an invalid
+// `?term=` value is ignored.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -132,6 +132,7 @@ function mountAt(entries: string[], index?: number) {
         <Probe />
         <Routes>
           <Route path="/sessions" element={<SessionsRoute />} />
+          <Route path="/term/:id" element={<div data-testid="term-page" />} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -139,41 +140,32 @@ function mountAt(entries: string[], index?: number) {
 }
 const loc = () => screen.getByTestId("loc").textContent;
 
-describe("/sessions ?term= history (FUMINLIST)", () => {
-  it("Open pushes one entry: the URL gains ?term= and Back closes the sheet", async () => {
+describe("/sessions -> /term/:id (BSHELL)", () => {
+  it("Open pushes /term/<id>; Back returns to the list", async () => {
     stubTerms();
     mountAt(["/sessions"]);
     fireEvent.click(await screen.findByTestId("term-row-open"));
-    await screen.findByTestId("mock-panel");
-    expect(loc()).toBe("/sessions?term=t1");
+    await screen.findByTestId("term-page");
+    expect(loc()).toBe("/term/t1");
     fireEvent.click(screen.getByTestId("back"));
     await waitFor(() => expect(loc()).toBe("/sessions"));
-    await waitFor(() => expect(screen.queryByTestId("mock-panel")).toBeNull());
   });
 
-  it("closing the sheet replaces its entry: Back afterwards does not re-open it", async () => {
+  it("the legacy ?term=<id> link redirects with replace: Back skips it", async () => {
     stubTerms();
-    mountAt(["/sessions?q=prev"]);
-    fireEvent.click(await screen.findByTestId("term-row-open"));
-    await screen.findByTestId("mock-panel");
-    expect(loc()).toBe("/sessions?q=prev&term=t1");
-    fireEvent.click(screen.getByTestId("mock-panel-close"));
-    await waitFor(() => expect(loc()).toBe("/sessions?q=prev"));
+    mountAt(["/sessions?q=before", "/sessions?term=t1"], 1);
+    await screen.findByTestId("term-page");
+    expect(loc()).toBe("/term/t1");
     fireEvent.click(screen.getByTestId("back"));
-    // The pushed entry was replaced by the close, so Back lands on the entry
-    // before it (the page without ?term=), never on ?term=t1 again.
-    await waitFor(() => expect(loc()).toBe("/sessions?q=prev"));
-    expect(screen.queryByTestId("mock-panel")).toBeNull();
-  });
-
-  it("an unknown ?term= id is a replace: no extra entry for Back to land on", async () => {
-    stubTerms();
-    mountAt(["/sessions?q=before", "/sessions?term=zzz9"], 1);
-    await screen.findByTestId("term-not-found");
-    await waitFor(() => expect(loc()).toBe("/sessions"));
-    fireEvent.click(screen.getByTestId("back"));
-    // One Back reaches the entry BEFORE the bad link, not a leftover ?term=zzz9.
+    // One Back reaches the entry BEFORE the legacy link, not a leftover ?term=t1.
     await waitFor(() => expect(loc()).toBe("/sessions?q=before"));
   });
-});
 
+  it("an invalid ?term= value is ignored: no redirect", async () => {
+    stubTerms();
+    mountAt(["/sessions?term=BAD/.."]);
+    await screen.findByTestId("term-row");
+    expect(screen.queryByTestId("term-page")).toBeNull();
+    expect(loc()).toBe("/sessions?term=BAD/..");
+  });
+});

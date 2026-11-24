@@ -25,7 +25,16 @@
 # contract (#11 multi-capture) — every read (list/why/recollect/…) already
 # newest-capture-scopes, so a mid-run capture is invisible to any existing
 # consumer except by making it MORE current.
+#
+# `--blocked` (argv 1; kb-beat.sh passes it for a Claude blocked beat that
+# passed its notification filter): keep every gate above, SKIP the interval
+# check so a pending question/permission text reaches the newest capture, and
+# debounce instead with a per-session marker file (default 20 s,
+# KB_CAPTURE_BLOCKED_DEBOUNCE_SECS). A marker write failure fails open.
 set -u
+
+blocked=0
+[ "${1:-}" = "--blocked" ] && blocked=1
 
 case "${KB_CAPTURE_LIVE:-}" in
   1 | true | TRUE | yes | YES) ;;
@@ -89,6 +98,22 @@ file_sid_literal() {
     | grep -o -m1 '"sessionId": *"\([^"\\]\|\\.\)*"' \
     | head -1 | sed 's/^"sessionId": *//'
 }
+
+if [ "$blocked" -eq 1 ]; then
+  debounce="${KB_CAPTURE_BLOCKED_DEBOUNCE_SECS:-20}"
+  case "$debounce" in '' | *[!0-9]*) debounce=20 ;; esac
+  bmarker="${XDG_CACHE_HOME:-$HOME/.cache}/kb/capture-blocked-$sid"
+  if [ -f "$bmarker" ]; then
+    bnow="$(date -u +%s)"
+    bm="$(stat -c %Y "$bmarker" 2>/dev/null || stat -f %m "$bmarker" 2>/dev/null || echo 0)"
+    [ $((bnow - bm)) -ge "$debounce" ] || exit 0
+  fi
+  if mkdir -p "$(dirname "$bmarker")" 2>/dev/null; then
+    : >"$bmarker" 2>/dev/null || true
+  fi
+  printf '%s' "$input" | "$CAPTURE_SH"
+  exit 0
+fi
 
 out=""
 # Current name: `session-<16-char ts>-<key>.html`, take the newest whose

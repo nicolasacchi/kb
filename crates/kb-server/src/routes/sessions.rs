@@ -7528,6 +7528,16 @@ pub struct ViewQuery {
     turns: Option<String>,
     /// Same comma-separated redaction-layer spec as `/export`/`/replay`.
     scrub: Option<String>,
+    /// CONVPROJ — `fields=conversation` window: rows with `n >= conv_from`
+    /// (the client passes the LAST row it already holds, since that row can
+    /// still grow). Malformed degrades to the default tail window.
+    conv_from: Option<String>,
+    /// CONVPROJ — page size, default 100, clamped 1..=200; malformed
+    /// degrades to the default.
+    conv_limit: Option<String>,
+    /// CONVPROJ — the `capture_gen` the client already holds; equal to the
+    /// current one answers `unchanged: true` with no rows.
+    conv_gen: Option<String>,
 }
 
 /// Which [`kb_core::sessions::view::SessionView`] sections `?fields=` asked
@@ -7541,6 +7551,9 @@ struct ViewFields {
     subagents: bool,
     minimap: bool,
     stats: bool,
+    /// CONVPROJ — opt-in ONLY: excluded from `all()`/the no-param default so
+    /// an un-projected response stays byte-identical.
+    conversation: bool,
 }
 
 impl ViewFields {
@@ -7553,6 +7566,7 @@ impl ViewFields {
             subagents: true,
             minimap: true,
             stats: true,
+            conversation: false,
         }
     }
 
@@ -7565,6 +7579,7 @@ impl ViewFields {
             subagents: false,
             minimap: false,
             stats: false,
+            conversation: false,
         };
         for part in spec.split(',') {
             match part.trim() {
@@ -7575,6 +7590,7 @@ impl ViewFields {
                 "subagents" => f.subagents = true,
                 "minimap" => f.minimap = true,
                 "stats" => f.stats = true,
+                "conversation" => f.conversation = true,
                 _ => {}
             }
         }
@@ -7698,6 +7714,21 @@ mod view_fields_and_turn_window_tests {
         let f = ViewFields::all();
         assert!(f.header && f.turns && f.outline && f.tasks);
         assert!(f.subagents && f.minimap && f.stats);
+    }
+
+    #[test]
+    fn fields_parse_conversation_token() {
+        assert!(ViewFields::parse("conversation").conversation);
+        let f = ViewFields::parse("header, conversation");
+        assert!(f.header && f.conversation && !f.turns);
+        assert!(!ViewFields::parse("header,turns").conversation);
+    }
+
+    #[test]
+    fn fields_all_excludes_conversation() {
+        assert!(!ViewFields::all().conversation);
+        assert!(!ViewFields::from_query(&None).conversation);
+        assert!(!ViewFields::from_query(&Some(String::new())).conversation);
     }
 
     #[test]
@@ -7888,6 +7919,11 @@ pub struct SessionViewResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-export", ts(optional))]
     pub stats: Option<kb_core::sessions::view::ViewStats>,
+    /// CONVPROJ — the derived per-human-turn projection; present only when
+    /// `?fields=` names `conversation`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub conversation: Option<kb_core::sessions::view::Conversation>,
     /// PF-R1 — how many turns the FULL capture has, independent of
     /// whatever `?turns=` this response actually windowed to (mirrors
     /// `SessionReplayResponse::total_beats`).
@@ -8049,6 +8085,21 @@ pub async fn view(
         subagents: fields.subagents.then(|| view.subagents.clone()),
         minimap: fields.minimap.then(|| view.minimap.clone()),
         stats: fields.stats.then(|| view.stats.clone()),
+        conversation: fields.conversation.then(|| {
+            kb_core::sessions::view::conversation(
+                &view,
+                &kb_core::sessions::view::ConvOpts {
+                    from: q.conv_from.as_deref().and_then(|s| s.trim().parse().ok()),
+                    limit: q
+                        .conv_limit
+                        .as_deref()
+                        .and_then(|s| s.trim().parse().ok())
+                        .unwrap_or(kb_core::sessions::view::CONV_DEFAULT_LIMIT),
+                    capture_gen: format!("{mtime_unix}-{turns_total}"),
+                    client_gen: q.conv_gen.clone(),
+                },
+            )
+        }),
         turns_total,
         segment: segment_links(&session_id, &session_chain_parts(&state, &session_id).await),
         turns_returned,

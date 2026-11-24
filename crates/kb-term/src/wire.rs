@@ -778,6 +778,48 @@ pub enum Request {
         /// Number of raw bytes that follow the request line.
         len: u64,
     },
+    /// Open a chunked upload of any file type (FXRUN). Reads no body. The
+    /// runner answers [`UploadBeginData`]; the declared `size` is reserved
+    /// against the session's `up/` quota until commit or abort.
+    UploadBegin {
+        /// Session id.
+        id: String,
+        /// The client's file name (only its slugged stem and extension are used).
+        name: String,
+        /// The mime type the client declared (informational, except that a
+        /// declared `image/*` must agree with the bytes).
+        mime: String,
+        /// Total bytes the upload will carry.
+        size: u64,
+    },
+    /// Append one chunk to an open upload. The request line is followed on
+    /// the same connection by exactly `len` raw bytes; the runner answers
+    /// [`UploadAppendData`]. `offset` must equal the bytes received so far.
+    UploadAppend {
+        /// Session id.
+        id: String,
+        /// The runner-minted upload token (32 lowercase hex).
+        upload: String,
+        /// Bytes received so far (the chunk's start offset).
+        offset: u64,
+        /// Number of raw bytes that follow the request line.
+        len: u64,
+    },
+    /// Finish an upload: hash, classify, name and atomically place the
+    /// file. The runner answers [`FileData`].
+    UploadCommit {
+        /// Session id.
+        id: String,
+        /// The runner-minted upload token.
+        upload: String,
+    },
+    /// Drop an open upload (idempotent; an unknown token is `ok`).
+    UploadAbort {
+        /// Session id.
+        id: String,
+        /// The runner-minted upload token.
+        upload: String,
+    },
     /// Tell the tap that `viewer` just typed (T18). The phone's composer,
     /// key bar and choice bar travel over REST, not the WebSocket, so the
     /// relay reports the typing device here; the tap releases an OSC 52
@@ -892,6 +934,41 @@ pub struct UploadData {
     pub mime: String,
     /// Lowercase hex sha256 of the bytes (also the file stem).
     pub sha256: String,
+}
+
+/// Success payload for `upload_begin` (`{"upload","chunk_max"}`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UploadBeginData {
+    /// The runner-minted token (32 lowercase hex) naming the open upload.
+    pub upload: String,
+    /// Largest chunk one `upload_append` may carry.
+    pub chunk_max: u64,
+}
+
+/// Success payload for `upload_append` (`{"received"}`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UploadAppendData {
+    /// Bytes received so far (the next chunk's offset).
+    pub received: u64,
+}
+
+/// Success payload for `upload_commit`
+/// (`{"path","bytes","mime","kind","sha256","name"}`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileData {
+    /// Absolute path of the stored file (no spaces).
+    pub path: String,
+    /// Number of bytes stored.
+    pub bytes: u64,
+    /// The sniffed mime for a picture, else the declared one (or
+    /// `application/octet-stream`).
+    pub mime: String,
+    /// The sniffed kind: `image`, `pdf`, `text` or `opaque`.
+    pub kind: String,
+    /// Lowercase hex sha256 of the bytes.
+    pub sha256: String,
+    /// The stored file name (`<sha256[..12]>-<stem>.<ext>`).
+    pub name: String,
 }
 
 /// Header payload of a successful `media` reply (`{"len": N}`). The
