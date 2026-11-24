@@ -6,6 +6,7 @@ import {
   PINS_KEY,
   loadPrefs,
   prunePrefs,
+  cleanLabel,
   setLabel,
   togglePin,
   type StorageLike,
@@ -164,5 +165,12 @@ describe("corruption and failure", () => {
   it("no storage at all is empty prefs", () => {
     expect(loadPrefs(null)).toEqual({ labels: {}, pins: new Set() });
     expect(() => setLabel("a", "x", null)).not.toThrow();
+  });
+});
+
+describe("cleanLabel invisibles", () => {
+  it("strips zero-width and bidi characters so an all-invisible label is empty", () => {
+    expect(cleanLabel("\u200B\u202E\u2066")).toBe("");
+    expect(cleanLabel("a\u200Bb\u202Ec")).toBe("abc");
   });
 });

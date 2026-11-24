@@ -48,8 +48,10 @@ function writeJson(store: StorageLike | null, key: string, value: unknown[]): vo
   }
 }
 
+const INVISIBLE_RE = /[\u200B-\u200F\u202A-\u202E\u2066-\u2069]/g;
+
 export function cleanLabel(raw: string): string {
-  const stripped = raw.replace(CONTROL_RE, "").trim();
+  const stripped = raw.replace(CONTROL_RE, "").replace(INVISIBLE_RE, "").trim();
   return Array.from(stripped).slice(0, MAX_LABEL_CHARS).join("").trim();
 }
 

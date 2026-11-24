@@ -113,7 +113,9 @@ export function joinHub(
     const tier = tierOf(term, lv, pinned);
     const title = label ?? lv?.title ?? (sid === null ? "starting…" : project);
     const needsSince =
-      tier === "needs" ? (lv?.blocked_since_unix ?? lv?.since_unix ?? term.started_unix) : null;
+      tier === "needs"
+        ? ((lv?.blocked ? (lv.blocked_since_unix ?? lv.since_unix) : null) ?? term.started_unix)
+        : null;
     return { term, live: lv, tier, label, pinned, title, project, needsSince };
   });
 }
@@ -153,6 +155,11 @@ export function filterHub(rows: readonly HubRow[], f: HubFilter): HubRow[] {
   );
 }
 
+/**
+ * Chips for the filter bar. `harnesses` lists real row values; the URL grammar only
+ * carries LAUNCH_HARNESSES (and a bounded, control-free project), so a consumer must
+ * offer only URL-representable chips or keep the other filters in component state.
+ */
 export function hubFilterOptions(rows: readonly HubRow[]): {
   projects: string[];
   harnesses: string[];

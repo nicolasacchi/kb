@@ -128,6 +128,21 @@ describe("tier table", () => {
           });
         }
 
+  it("live-only working row (term.state null) is working", () => {
+    const [r] = joinHub([term("a", { state: null })], [live("s-a", { state: "working" })], NOPREFS);
+    expect(r.tier).toBe("working");
+  });
+
+  it("term working beats live waiting (disagreement)", () => {
+    const [r] = joinHub([term("a", { state: "working" })], [live("s-a", { state: "waiting" })], NOPREFS);
+    expect(r.tier).toBe("working");
+  });
+
+  it("term-blocked with an unblocked live row uses started_unix, not live since", () => {
+    const [r] = joinHub([term("a", { blocked: true, started_unix: 7 })], [live("s-a")], NOPREFS);
+    expect(r.needsSince).toBe(7);
+  });
+
   it("needsSince falls back blocked_since -> since -> started", () => {
     const t = term("a", { blocked: true, started_unix: 7 });
     expect(joinHub([t], [], NOPREFS)[0].needsSince).toBe(7);
@@ -184,6 +199,24 @@ describe("orderHub", () => {
     permute([...base], base.length);
     expect(perms.length).toBe(40320);
     for (const p of perms) expect(orderHub(p).rows.map((r) => r.term.id)).toEqual(want);
+  });
+
+  it("orders idle and ended newest-first, unlabeled pins first", () => {
+    const rows = joinHub(
+      [
+        term("i-old", { started_unix: 1 }),
+        term("i-new", { started_unix: 2 }),
+        term("e-old", { pane_dead: true, started_unix: 3 }),
+        term("e-new", { pane_dead: true, started_unix: 4 }),
+        term("p-lab", { started_unix: 9 }),
+        term("p-none", { started_unix: 9 }),
+      ],
+      [],
+      prefs({ "p-lab": "Zed" }, ["p-lab", "p-none"]),
+    );
+    const { rows: out, endedStart } = orderHub(rows);
+    expect(out.map((r) => r.term.id)).toEqual(["p-none", "p-lab", "i-new", "i-old", "e-new", "e-old"]);
+    expect(endedStart).toBe(4);
   });
 
   it("endedStart is the length when nothing is ended", () => {
