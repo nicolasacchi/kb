@@ -729,19 +729,21 @@ fn reservations_count_against_the_byte_quota_the_file_quota_and_the_open_cap() {
 }
 
 #[test]
-fn open_partials_count_as_files_against_the_file_quota() {
+fn the_file_limit_is_enforced_at_commit_and_a_refused_commit_removes_its_partial() {
     let tmp = sessions();
     for i in 0..(UPLOAD_MAX_FILES - 1) {
         put(tmp.path(), "n.txt", "", format!("file {i}").as_bytes()).unwrap();
     }
-    let t = begin_upload(tmp.path(), ID, "last.bin", "", 1).unwrap();
+    let a = begin_upload(tmp.path(), ID, "a.bin", "", 1).unwrap();
+    let b = begin_upload(tmp.path(), ID, "b.bin", "", 1).unwrap();
+    append_chunk(tmp.path(), ID, &a, 0, &[0x80]).unwrap();
+    append_chunk(tmp.path(), ID, &b, 0, &[0x81]).unwrap();
+    commit_upload(tmp.path(), ID, &a).expect("takes the 64th slot");
     assert_eq!(
-        begin_upload(tmp.path(), ID, "over.bin", "", 1)
-            .unwrap_err()
-            .code(),
+        commit_upload(tmp.path(), ID, &b).unwrap_err().code(),
         "too-large"
     );
-    abort_upload(tmp.path(), ID, &t).unwrap();
+    assert_eq!(entries(&up_dir(tmp.path(), ID)).len(), UPLOAD_MAX_FILES);
 }
 
 #[test]

@@ -30,8 +30,10 @@
 //! * identical bytes already stored are a success (dedupe) and are checked
 //!   BEFORE the quota, so re-sending a file at the quota still works;
 //! * at most [`UPLOAD_MAX_FILES`] files and [`UPLOAD_MAX_TOTAL_BYTES`]
-//!   bytes per session; an open partial counts as a file and reserves its
-//!   declared size, and at most [`MAX_OPEN_PARTIALS`] are open at once;
+//!   bytes per session; an open partial reserves its declared size against
+//!   the byte quota (refused at begin), the file-count limit is enforced at
+//!   commit after the dedupe check, and at most [`MAX_OPEN_PARTIALS`] are
+//!   open at once;
 //! * a partial idle for [`PARTIAL_TTL`] is swept; stored files never are.
 
 use std::io::Write;
@@ -570,8 +572,10 @@ pub fn begin_upload(
     }
     let (files, total) = usage(&up)?;
     let reserved: u64 = partials.iter().map(|p| p.size).sum();
-    if files + partials.len() >= UPLOAD_MAX_FILES
-        || total + reserved + size > UPLOAD_MAX_TOTAL_BYTES
+    // The file-count limit is enforced at commit, AFTER the dedupe check
+    // (the final name is unknown here, and re-sending a stored file at the
+    // limit must still succeed); only the byte reservation is refused now.
+    if files + partials.len() > UPLOAD_MAX_FILES || total + reserved + size > UPLOAD_MAX_TOTAL_BYTES
     {
         return Err(quota_refusal());
     }
@@ -738,9 +742,7 @@ pub fn commit_upload(sessions_dir: &Path, id: &str, token: &str) -> Result<Commi
             .filter(|p| p.token != token)
             .collect();
         let reserved: u64 = others.iter().map(|p| p.size).sum();
-        if files + others.len() >= UPLOAD_MAX_FILES
-            || total + reserved + done.bytes > UPLOAD_MAX_TOTAL_BYTES
-        {
+        if files >= UPLOAD_MAX_FILES || total + reserved + done.bytes > UPLOAD_MAX_TOTAL_BYTES {
             return Err(quota_refusal());
         }
         std::fs::rename(&part, &final_path)
