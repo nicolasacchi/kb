@@ -21,10 +21,10 @@ executed = 550
 executed = 315
 
 [nextest]
-executed = 5680
+executed = 5730
 
 [web-vitest]
-executed = 2980
+executed = 3035
 
 [web-code-vitest]
 executed = 3570
