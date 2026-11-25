@@ -12,6 +12,16 @@ describe("flattenRef", () => {
     expect(out.length).toBeLessThanOrEqual(REF_MAX);
     expect(out.endsWith("\n")).toBe(false);
   });
+  it("keeps the (kb/path) locator when a long title is cut", () => {
+    const out = flattenRef({ title: "t".repeat(900), kb: "mem", source_relative: "x/y.html" });
+    expect(out.length).toBeLessThanOrEqual(REF_MAX);
+    expect(out.endsWith("] (mem/x/y.html)")).toBe(true);
+  });
+  it("strips C0 and DEL bytes", () => {
+    const out = flattenRef({ title: "a\u001b[31mb\u0007\u007fc", kb: "m" });
+    expect(out).toBe("[a[31mbc] (m)");
+    expect(out).not.toMatch(/[\u0000-\u001f\u007f]/);
+  });
   it("names the kb alone when there is no source path", () => {
     expect(flattenRef({ title: "t", kb: "mem" })).toBe("[t] (mem)");
   });

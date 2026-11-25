@@ -38,6 +38,18 @@ describe("useKnowledge", () => {
     await waitFor(() => expect(f).toHaveBeenCalledTimes(4));
     expect(result.current[0].isError).toBe(false);
   });
+  it("invalidating one sid's lanes leaves another sid's lanes untouched", async () => {
+    const f = vi.fn(async () => ({ ok: true, status: 200, statusText: "", json: async () => ({ recalls: [] }) }));
+    vi.stubGlobal("fetch", f);
+    const { qc, W } = wrap();
+    renderHook(() => [useKnowledgeRecalls("s1"), useKnowledgeRecalls("s2")] as const, { wrapper: W });
+    await waitFor(() => expect(f).toHaveBeenCalledTimes(2));
+    await qc.invalidateQueries({ queryKey: knowledgeKey("recalls", "s1") });
+    await waitFor(() => expect(f).toHaveBeenCalledTimes(3));
+    const urls = (f.mock.calls as unknown as string[][]).map((c) => c[0]);
+    expect(urls.filter((u) => u.includes("/s1/"))).toHaveLength(2);
+    expect(urls.filter((u) => u.includes("/s2/"))).toHaveLength(1);
+  });
   it("does not refetch on its own", async () => {
     const f = vi.fn(async () => ({ ok: true, status: 200, statusText: "", json: async () => ({ recalls: [] }) }));
     vi.stubGlobal("fetch", f);

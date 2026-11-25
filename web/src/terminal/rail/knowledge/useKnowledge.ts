@@ -2,9 +2,10 @@
 // session.captured / session.state invalidation; `["memories"]` receives the
 // memory.* events. No polling, nothing read from terminal bytes.
 
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import type { MemoryScope } from "../../../api/client";
 import {
+  fetchKnowledgeDetail,
   fetchKnowledgeMemories,
   fetchKnowledgeRecalls,
   fetchKnowledgeResearch,
@@ -12,7 +13,7 @@ import {
   knowledgeRecall,
 } from "./knowledgeApi";
 
-export type SessionLane = "recalls" | "memories" | "research" | "similar";
+export type SessionLane = "recalls" | "memories" | "research" | "similar" | "detail";
 
 export const knowledgeKey = (lane: SessionLane, sid: string | undefined) =>
   ["sessions", "knowledge", lane, sid] as const;
@@ -45,6 +46,15 @@ export function useKnowledgeResearch(sid: string | undefined) {
   });
 }
 
+export function useKnowledgeDetail(sid: string | undefined) {
+  return useQuery({
+    queryKey: knowledgeKey("detail", sid),
+    enabled: !!sid,
+    staleTime: Infinity,
+    queryFn: ({ signal }) => fetchKnowledgeDetail(sid as string, signal),
+  });
+}
+
 export function useKnowledgeSimilar(sid: string | undefined, prompt: string | undefined, project: string | undefined) {
   return useQuery({
     queryKey: knowledgeKey("similar", sid),
@@ -57,6 +67,7 @@ export function useKnowledgeSimilar(sid: string | undefined, prompt: string | un
 export function useKnowledgeSearch(scope: MemoryScope, q: string) {
   return useQuery({
     queryKey: knowledgeSearchKey(scope, q),
+    placeholderData: keepPreviousData,
     staleTime: Infinity,
     queryFn: ({ signal }) => knowledgeRecall(q, scope, signal),
   });

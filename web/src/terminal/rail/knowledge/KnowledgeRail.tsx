@@ -7,7 +7,6 @@
 import { useEffect, useState, type ReactElement } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { MemoryScope } from "../../../api/client";
-import { useSessionDetail } from "../../../hooks/useSessions";
 import { useTermRail } from "../context";
 import { LaneFrame, LaneState } from "./Lane";
 import { MemoryRow } from "./MemoryRow";
@@ -20,6 +19,7 @@ import {
 } from "./knowledgeRows";
 import {
   knowledgeKey,
+  useKnowledgeDetail,
   useKnowledgeMemories,
   useKnowledgeRecalls,
   useKnowledgeResearch,
@@ -148,12 +148,21 @@ function SearchLane(): ReactElement {
         onChange={(e) => setText(e.target.value)}
       />
       <div className="kb-knowrail__scopes" role="radiogroup" aria-label="Memory scope">
-        {SCOPES.map((s) => (
+        {SCOPES.map((s, i) => (
           <button
             key={s.id}
             type="button"
             role="radio"
             aria-checked={scope === s.id}
+            tabIndex={scope === s.id ? 0 : -1}
+            onKeyDown={(e) => {
+              const d = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
+              if (d === 0) return;
+              e.preventDefault();
+              const next = SCOPES[(i + d + SCOPES.length) % SCOPES.length];
+              setScope(next.id);
+              (e.currentTarget.parentElement?.querySelector(`[data-testid="kn-scope-${next.id}"]`) as HTMLElement | null)?.focus();
+            }}
             className="kb-knowrail__btn"
             data-testid={`kn-scope-${s.id}`}
             onClick={() => setScope(s.id)}
@@ -169,12 +178,19 @@ function SearchLane(): ReactElement {
 
 function SimilarLane({ sid }: { sid: string | undefined }): ReactElement {
   const qc = useQueryClient();
-  const { detail } = useSessionDetail(sid ?? null);
+  const d = useKnowledgeDetail(sid);
+  const detail = d.data?.kind === "ok" ? d.data.data : undefined;
   const prompt = detail?.first_user_prompt?.trim() || undefined;
   const q = useKnowledgeSimilar(sid, prompt, detail?.project_key ?? undefined);
+  const retry = () => {
+    void qc.invalidateQueries({ queryKey: knowledgeKey("detail", sid) });
+    void qc.invalidateQueries({ queryKey: knowledgeKey("similar", sid) });
+  };
   let body: ReactElement;
   if (!sid) body = <LaneState lane="similar" kind="no-session" />;
-  else if (!detail) body = <LaneState lane="similar" kind="not-captured" />;
+  else if (d.isPending) body = <LaneState lane="similar" kind="loading" />;
+  else if (d.isError) body = <LaneState lane="similar" kind="error" reason={errMsg(d.error)} onRetry={retry} />;
+  else if (d.data?.kind === "not-captured") body = <LaneState lane="similar" kind="not-captured" />;
   else if (!prompt) body = <LaneState lane="similar" kind="empty" reason="No prompt to compare yet" />;
   else if (q.isPending) body = <LaneState lane="similar" kind="loading" />;
   else if (q.isError)
@@ -183,7 +199,7 @@ function SimilarLane({ sid }: { sid: string | undefined }): ReactElement {
         lane="similar"
         kind="error"
         reason={errMsg(q.error)}
-        onRetry={() => void qc.invalidateQueries({ queryKey: knowledgeKey("similar", sid) })}
+        onRetry={retry}
       />
     );
   else {

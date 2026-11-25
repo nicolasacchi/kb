@@ -43,9 +43,16 @@ export function rankLabel(pos: number | undefined): string {
  */
 export function flattenRef(r: Pick<MemoryRowData, "title" | "kb" | "source_relative">): string {
   const where = r.source_relative ? `${r.kb}/${r.source_relative}` : r.kb;
-  const raw = `[${rowTitle(r).replace(/\s+/g, " ").trim()}] (${where})`;
-  const flat = raw.replace(/\s+/g, " ").trim();
-  return flat.length > REF_MAX ? flat.slice(0, REF_MAX).trimEnd() : flat;
+  // Strip C0/DEL first (the runner refuses control bytes), then collapse space.
+  // eslint-disable-next-line no-control-regex
+  const clean = (t: string) => t.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "").replace(/\s+/g, " ").trim();
+  const loc = clean(`(${where})`);
+  let title = clean(rowTitle(r));
+  // `[` + title + `] ` + loc: keep the locator whole, cut only the title.
+  const room = REF_MAX - loc.length - 3;
+  if (title.length > room) title = title.slice(0, Math.max(0, room - 1)).trimEnd() + "\u2026";
+  const out = `[${title}] ${loc}`;
+  return out.length > REF_MAX ? out.slice(0, REF_MAX).trimEnd() : out;
 }
 
 export function openHref(r: Pick<MemoryRowData, "kb" | "source_relative">): string | null {

@@ -12,7 +12,8 @@ const NEVER_CONFIRM = async (): Promise<boolean> => false;
 
 export function MemoryRow({ row }: { row: MemoryRowData }): ReactElement {
   const { termId, harness } = useTermRail();
-  const confirm = useConfirmOptional() ?? NEVER_CONFIRM;
+  const realConfirm = useConfirmOptional();
+  const confirm = realConfirm ?? NEVER_CONFIRM;
   const [busy, setBusy] = useState(false);
   const href = openHref(row);
   const title = rowTitle(row);
@@ -24,6 +25,8 @@ export function MemoryRow({ row }: { row: MemoryRowData }): ReactElement {
       // Paste only: `enter` is never true in this tab.
       const res = await sendText({ termId, harness, viewer: null, confirm }, flattenRef(row), { enter: false });
       if (res.kind === "sent") toast.ok("Pasted without Enter");
+      // An operator cancel is silent; a missing confirm host is not.
+      else if (res.kind === "declined" && !realConfirm) toast.err("Paste needs a confirmation that is unavailable here");
     } catch (e) {
       toast.err(e instanceof DriveError ? e.detail : e instanceof Error ? e.message : "Paste failed");
     } finally {

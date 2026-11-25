@@ -6,8 +6,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 const toastErr = vi.hoisted(() => vi.fn());
 const toastOk = vi.hoisted(() => vi.fn());
 vi.mock("../../../lib/toast", () => ({ toast: { err: toastErr, ok: toastOk, info: vi.fn() } }));
-const detailMock = vi.hoisted(() => vi.fn());
-vi.mock("../../../hooks/useSessions", () => ({ useSessionDetail: detailMock }));
 
 import { KnowledgeRail } from "./KnowledgeRail";
 import { TermRailContext } from "../context";
@@ -19,6 +17,7 @@ interface Routes {
   recalls: Resp;
   memories: Resp;
   research: Resp;
+  detail: Resp;
   recollect: Resp;
   recall: Resp;
   paste: Resp;
@@ -35,6 +34,7 @@ function defaults(): Routes {
     }),
     memories: OK({ memories: [{ id: "w", kb: "mem", title: "written one", path: "/x", source_relative: "m/w.html" }] }),
     research: OK({ research: [{ kind: "web", query: "how to x" }, { kind: "artifact_open", query: "docs/a.md" }] }),
+    detail: OK({ first_user_prompt: "build the thing", project_key: "proj" }),
     recollect: OK({
       ms: 1,
       sessions: [
@@ -57,6 +57,8 @@ function installFetch() {
       calls.push({ url, init });
       const key: keyof Routes = url.includes("/paste")
         ? "paste"
+        : /\/api\/sessions\/[^/?]+$/.test(url)
+          ? "detail"
         : url.includes("/recalls")
           ? "recalls"
           : url.includes("/memories")
@@ -90,7 +92,6 @@ function mount(sid: string | undefined) {
 beforeEach(() => {
   routes = defaults();
   installFetch();
-  detailMock.mockReturnValue({ detail: { first_user_prompt: "build the thing", project_key: "proj" } });
 });
 afterEach(() => {
   cleanup();
@@ -222,5 +223,83 @@ describe("KnowledgeRail rendering and paste", () => {
     await waitFor(() =>
       expect(calls.some((c) => c.url.includes("q=needle") && c.url.includes("scope=global"))).toBe(true),
     );
+  });
+});
+
+describe("KnowledgeRail Similar lane states and misc", () => {
+  it("shows loading (never Not captured) while the detail is in flight", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const base = globalThis.fetch as unknown as (u: string, i?: RequestInit) => Promise<unknown>;
+    vi.stubGlobal("fetch", async (u: string, i?: RequestInit) => {
+      if (/\/api\/sessions\/[^/?]+$/.test(u)) await gate;
+      return base(u, i);
+    });
+    mount("sid-1");
+    expect(screen.getByTestId("kn-state-similar-loading")).toBeTruthy();
+    expect(screen.queryByTestId("kn-state-similar-not-captured")).toBeNull();
+    release();
+    await waitFor(() => expect(screen.getAllByTestId("kn-similar-row")).toHaveLength(1));
+  });
+
+  it("a 404 detail is Not captured yet", async () => {
+    routes.detail = { status: 404 };
+    mount("sid-1");
+    expect(await screen.findByTestId("kn-state-similar-not-captured")).toBeTruthy();
+  });
+
+  it("a 500 detail is an error with Retry, not Not captured, and Retry recovers", async () => {
+    routes.detail = { status: 500 };
+    mount("sid-1");
+    const err = await screen.findByTestId("kn-state-similar-error");
+    expect(screen.queryByTestId("kn-state-similar-not-captured")).toBeNull();
+    routes.detail = defaults().detail;
+    fireEvent.click(within(err).getByText("Retry"));
+    await waitFor(() => expect(screen.getAllByTestId("kn-similar-row")).toHaveLength(1));
+  });
+
+  it("an empty prompt says No prompt to compare yet", async () => {
+    routes.detail = OK({ first_user_prompt: "  ", project_key: "proj" });
+    mount("sid-1");
+    const s = await screen.findByTestId("kn-state-similar-empty");
+    expect(s.textContent).toContain("No prompt to compare yet");
+  });
+
+  it("a recollect failure errors with Retry", async () => {
+    routes.recollect = { status: 500 };
+    mount("sid-1");
+    expect(await screen.findByTestId("kn-state-similar-error")).toBeTruthy();
+  });
+
+  it("freshness captions for similar and research", async () => {
+    mount("sid-1");
+    expect(screen.getByTestId("kn-fresh-similar").textContent).toBe("From last capture · recollect");
+    expect(screen.getByTestId("kn-fresh-research").textContent).toBe("From last capture · session research");
+  });
+
+  it("research cap renders Showing 50 of N", async () => {
+    routes.research = OK({ research: Array.from({ length: 60 }, (_, i) => ({ kind: "web", query: `q${i}` })) });
+    mount("sid-1");
+    const cap = await screen.findByTestId("kn-research-cap");
+    expect(cap.textContent).toBe("Showing 50 of 60");
+  });
+
+  it("a 1-char query lists the top 20 instead of searching", async () => {
+    mount("sid-1");
+    await waitFor(() => expect(calls.some((c) => c.url.includes("/api/memory/recall"))).toBe(true));
+    fireEvent.change(screen.getByTestId("kn-search-input"), { target: { value: "a" } });
+    await new Promise((r) => setTimeout(r, 400));
+    const recalls = calls.filter((c) => c.url.includes("/api/memory/recall"));
+    expect(recalls.every((c) => !c.url.includes("q="))).toBe(true);
+    expect(recalls.every((c) => c.url.includes("limit=20"))).toBe(true);
+  });
+
+  it("scope radios use roving tabindex and arrow keys", () => {
+    mount("sid-1");
+    const project = screen.getByTestId("kn-scope-project");
+    expect(project.getAttribute("tabindex")).toBe("0");
+    expect(screen.getByTestId("kn-scope-global").getAttribute("tabindex")).toBe("-1");
+    fireEvent.keyDown(project, { key: "ArrowRight" });
+    expect(screen.getByTestId("kn-scope-global").getAttribute("aria-checked")).toBe("true");
   });
 });

@@ -48,6 +48,14 @@ export const fetchKnowledgeMemories = (sid: string, signal?: AbortSignal) =>
 export const fetchKnowledgeResearch = (sid: string, signal?: AbortSignal) =>
   getLane<SessionResearchResponse>(sidPath(sid, "research"), signal);
 
+/** The two session-detail fields the Similar lane needs (throwing reader). */
+export interface KnowledgeDetail {
+  first_user_prompt?: string | null;
+  project_key?: string | null;
+}
+export const fetchKnowledgeDetail = (sid: string, signal?: AbortSignal) =>
+  getLane<KnowledgeDetail>(`/api/sessions/${encodeURIComponent(sid)}`, signal);
+
 export async function fetchKnowledgeSimilar(
   q: string,
   project: string | undefined,
