@@ -90,7 +90,7 @@ fn unknown_fields(m: &Map<String, Value>, known: &[&str], base: &str, out: &mut 
 }
 
 /// `^[a-z0-9][a-z0-9-]{0,47}$`
-fn valid_id(s: &str) -> bool {
+pub(crate) fn valid_id(s: &str) -> bool {
     let b = s.as_bytes();
     !b.is_empty()
         && b.len() <= 48

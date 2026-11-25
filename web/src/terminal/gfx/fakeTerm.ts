@@ -42,6 +42,7 @@ export class FakeTerm {
   markers: FakeMarker[] = [];
   decorations: FakeDecoration[] = [];
   selection = false;
+  options = { minimumContrastRatio: 1 };
   private readonly listeners = { render: new Set<() => void>(), scroll: new Set<() => void>(), resize: new Set<() => void>() };
 
   constructor(public cols = 20, public rows = 10) {
@@ -74,6 +75,7 @@ export class FakeTerm {
       get cols() {
         return self.cols;
       },
+      options: self.options,
       buffer: {
         active: {
           get viewportY() {

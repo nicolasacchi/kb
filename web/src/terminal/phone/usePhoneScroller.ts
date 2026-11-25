@@ -51,7 +51,19 @@ export interface PhoneScrollerArgs {
   onActivity?: () => void;
   /** Called with the new size when a pinch changes the font step. */
   onFont?: (px: number) => void;
+  /**
+   * PHIN0 — a still tap that is not on a URL asks for the input to be focused.
+   * Absent = today's behaviour, byte for byte (touch events are fully swallowed).
+   * Present = the touch handler no longer cancels the touch sequence, so the
+   * browser still synthesizes the `click` the soft keyboard needs.
+   */
+  onTapFocus?: () => void;
+  /** Which event calls `onTapFocus`: the synthesized `click` (default) or the pointerup itself. */
+  focusOn?: "click" | "pointerup";
 }
+
+/** A still tap arms the click for this long. */
+export const TAP_FOCUS_WINDOW_MS = 400;
 
 /** `.xterm-screen` height over rows, 0 when not measurable. */
 export function measureCellHeight(term: ScrollTerm): number {
@@ -162,6 +174,10 @@ export function usePhoneScroller(args: PhoneScrollerArgs): void {
   const activityRef = useRef(args.onActivity);
   const fontRef = useRef(args.onFont);
   fontRef.current = args.onFont;
+  const tapFocusRef = useRef(args.onTapFocus);
+  tapFocusRef.current = args.onTapFocus;
+  const tapFocusOn = args.onTapFocus !== undefined;
+  const focusOn = args.focusOn ?? "click";
   longPressRef.current = args.onLongPress;
   activityRef.current = args.onActivity;
 
@@ -174,6 +190,8 @@ export function usePhoneScroller(args: PhoneScrollerArgs): void {
     let raf = 0;
     let pressTimer: ReturnType<typeof setTimeout> | null = null;
     let closeConfirm: (() => void) | null = null;
+    /** When a still tap off any URL armed the click (null = not armed). */
+    let tapArmedAt: number | null = null;
     const dismissConfirm = (): void => {
       closeConfirm?.();
       closeConfirm = null;
@@ -234,6 +252,7 @@ export function usePhoneScroller(args: PhoneScrollerArgs): void {
       stopMomentum();
       clearPress();
       dismissConfirm();
+      tapArmedAt = null;
       if (ptrs.size === 1) {
         drag = {
           x0: e.clientX,
@@ -317,7 +336,10 @@ export function usePhoneScroller(args: PhoneScrollerArgs): void {
         // A browser-cancelled gesture is not a tap and never flings.
         if (e.type === "pointercancel") return;
         if (!d.noTap && d.axis === null && isStillTap(e.clientX - d.x0, e.clientY - d.y0, performance.now() - d.t0)) {
-          tapAt(e.clientX, e.clientY);
+          if (!tapAt(e.clientX, e.clientY) && tapFocusOn) {
+            if (focusOn === "pointerup") tapFocusRef.current?.();
+            else tapArmedAt = performance.now();
+          }
           return;
         }
         if (d.axis === "v") {
@@ -328,27 +350,39 @@ export function usePhoneScroller(args: PhoneScrollerArgs): void {
     };
 
     /** A still tap: open the URL under it (a wrapped one is confirmed whole first). Never sent to the pty. */
-    const tapAt = (x: number, y: number): void => {
+    const tapAt = (x: number, y: number): boolean => {
       const link = linkAtPoint(term, x, y);
-      if (!link) return;
+      if (!link) return false;
       const go = (): void => openExternal(link.url, window);
       if (!linkSpansRows(link)) {
         go();
-        return;
+        return true;
       }
       closeConfirm = showLinkConfirm(wrap.parentElement ?? wrap, link.url, go);
+      return true;
+    };
+
+    // PHIN0: the click that follows a still tap raises the keyboard (Firefox on
+    // Android only grants the IME from a click, not from pointerup).
+    const onClick = (): void => {
+      const at = tapArmedAt;
+      tapArmedAt = null;
+      if (at !== null && performance.now() - at <= TAP_FOCUS_WINDOW_MS) tapFocusRef.current?.();
     };
 
     // xterm 6.0.0 has its own touch path; a real touch must not scroll twice.
+    // With tap-to-focus on, preventDefault is NOT called: it cancels the
+    // synthesized click, and `touch-action:none` already stops browser scrolling.
     const swallow = (e: Event): void => {
       e.stopPropagation();
-      if (e.cancelable) e.preventDefault();
+      if (!tapFocusOn && e.cancelable) e.preventDefault();
     };
 
     viewport.addEventListener("pointerdown", onDown, true);
     viewport.addEventListener("pointermove", onMove, true);
     viewport.addEventListener("pointerup", onUp, true);
     viewport.addEventListener("pointercancel", onUp, true);
+    if (tapFocusOn) viewport.addEventListener("click", onClick, true);
     const touchOpts = { capture: true, passive: false } as const;
     for (const t of ["touchstart", "touchmove", "touchend"]) {
       viewport.addEventListener(t, swallow, touchOpts);
@@ -358,6 +392,7 @@ export function usePhoneScroller(args: PhoneScrollerArgs): void {
       viewport.removeEventListener("pointermove", onMove, true);
       viewport.removeEventListener("pointerup", onUp, true);
       viewport.removeEventListener("pointercancel", onUp, true);
+      viewport.removeEventListener("click", onClick, true);
       for (const t of ["touchstart", "touchmove", "touchend"]) {
         viewport.removeEventListener(t, swallow, touchOpts);
       }
@@ -365,5 +400,5 @@ export function usePhoneScroller(args: PhoneScrollerArgs): void {
       clearPress();
       dismissConfirm();
     };
-  }, [term, wrap, viewport]);
+  }, [term, wrap, viewport, tapFocusOn, focusOn]);
 }

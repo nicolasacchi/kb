@@ -153,6 +153,18 @@ Known limits:
 - The counts are a label on the row, never an input to the state: they cannot
   change `derive_state`, the cold horizon, or a lane other than the split above.
 
+## Status beats
+
+A beat with `event: "status"` carries an optional typed status object (model,
+context percentage, cost in USD, permission mode, branch) for display. It is
+merged into the live registry row in memory only, field by field, and never
+changes the holder, the derived state or the lease. It creates no row: a status
+for an unknown session, or one whose harness does not match, answers
+`applied: false`. Invalid fields are dropped rather than rejected. The row
+shows it as `status` on `live-status`, re-validated for non-loopback readers.
+`session.status` (session id and harness only) fires when the merged status
+changed; repeating an identical status emits nothing. An `end` beat clears it.
+
 ## `kb sessions status`
 
 ```

@@ -1399,6 +1399,10 @@ mod tests {
             paths.term_prompts_file(&crate::slate::SlateSlug::new("proj").unwrap()),
             b"{\"schema\":\"kb-term-prompts/1\",\"project\":\"proj\",\"rev\":1,\"items\":[]}",
         );
+        write(
+            paths.term_commands_file(),
+            b"{\"schema\":\"kb-term-commands/1\",\"rev\":1,\"harnesses\":{},\"hidden\":{\"claude\":[\"help\"]}}",
+        );
         write(paths.saved_queries_file(), b"[]");
         write(paths.memory_policy_file(), b"{}");
         write(paths.tombstone_era_file(), b"{\"era\":1}");
@@ -1432,6 +1436,7 @@ mod tests {
             "notes/.proposals/p_abc.json",
             "slates/proj/ledger.jsonl",
             "term-prompts/proj.json",
+            "term-commands.json",
             "saved-queries.json",
             "memory-policy.json",
             "tombstone-era.json",
@@ -1468,6 +1473,11 @@ mod tests {
             std::fs::read(extract.join("term-prompts/proj.json")).unwrap(),
             std::fs::read(paths.term_prompts_file(&crate::slate::SlateSlug::new("proj").unwrap()))
                 .unwrap()
+        );
+        // kbt2 CMDSTORE: the command overlay round-trips byte for byte.
+        assert_eq!(
+            std::fs::read(extract.join("term-commands.json")).unwrap(),
+            std::fs::read(paths.term_commands_file()).unwrap()
         );
     }
 

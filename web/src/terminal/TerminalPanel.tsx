@@ -307,6 +307,11 @@ export function TerminalPanel(props: TerminalPanelProps) {
             ),
         fontFamily: TERM_FONT_FAMILY,
         theme: readTheme(profile.theme),
+        // BANSI — nothing illegible whatever a programme paints; bold stays
+        // bold (the bright slots are explicit); box/block glyphs are drawn.
+        minimumContrastRatio: 4.5,
+        drawBoldTextInBrightColors: false,
+        customGlyphs: true,
       });
       profileThemeRef.current = profile.theme;
       // The host paints the terminal's own background (no second black).
@@ -761,6 +766,11 @@ export function TerminalPanel(props: TerminalPanelProps) {
           stream={state}
           caption={transient ?? state.caption}
           onClose={closePanel}
+          sendInput={(d) => {
+            const ok = sessionRef.current?.sendInput(d) ?? false;
+            if (ok) lastTypedRef.current = Date.now();
+            return ok;
+          }}
           renderDrive={({ measure, fullscreen }) => (
             <DriveDock
               grid={grid}
