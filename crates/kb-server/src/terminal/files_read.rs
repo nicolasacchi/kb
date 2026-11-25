@@ -80,6 +80,8 @@ pub struct PathQuery {
 
 /// Validate the request-shaped parts shared by both routes. Nothing here
 /// touches the runner: a bad value is a 400 with the runner never dialled.
+// The Err arm IS the ready-to-send refusal response (the gate's own shape).
+#[allow(clippy::result_large_err)]
 fn parse_query(
     query: Result<Query<PathQuery>, QueryRejection>,
     require_path: bool,
