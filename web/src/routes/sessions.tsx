@@ -102,6 +102,7 @@ import IdsGalleryChip from "../components/IdsGalleryChip";
 import CitationText from "../components/CitationText";
 import { HandoffPanel } from "../components/HandoffPanel";
 import { useCodeUrlForKb } from "../hooks/useCodeUrlForKb";
+import { buildHubUrl } from "../terminal/hub/termHub";
 
 // v0.14 S8 — hover-prefetch delay. Long enough that a fast cursor
 // sweep across the list doesn't fire N parallel fetches; short enough
@@ -131,14 +132,14 @@ export default function SessionsRoute() {
   const folder = params.get("folder") ?? "";
   const project = params.get("project") ?? "";
   const query = params.get("q") ?? "";
-  // BSHELL — a terminal lives at /term/:id. The legacy `/sessions?term=<id>`
+  // BSHELL — a terminal lives at /terminals/:id. The legacy `/sessions?term=<id>`
   // deep link redirects there (replace: Back never lands on the old URL); an
   // invalid value is ignored.
   const legacyTermId = openTermParam(params.get("term"));
   const navigate = useNavigate();
   const qc = useQueryClient();
   useEffect(() => {
-    if (legacyTermId !== null) navigate(`/term/${encodeURIComponent(legacyTermId)}`, { replace: true });
+    if (legacyTermId !== null) navigate(buildHubUrl({ id: legacyTermId }), { replace: true });
   }, [legacyTermId, navigate]);
   // W3.A/S1 — substance triage. Per this wave's build order: hiding trivial
   // captures defaults OFF (every session shown, including un-backfilled
@@ -589,7 +590,7 @@ export default function SessionsRoute() {
           sessionCwds={rows.slice(0, 50).map((r) => r.cwd)}
           onLaunched={(id, harness) => {
             void qc.invalidateQueries({ queryKey: ["terms"] });
-            navigate(`/term/${encodeURIComponent(id)}`, { state: { launched: { id, harness } } });
+            navigate(buildHubUrl({ id }), { state: { launched: { id, harness } } });
           }}
         />
         {identity?.terminal_admitted === true && <TermList />}

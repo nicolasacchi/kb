@@ -673,7 +673,7 @@ test.describe("FUWEBLAUNCH phone launch controls @phone", () => {
     await expect.poll(() => posted.length).toBe(1);
     expect(posted[0]).toEqual({ harness: "codex", cwd: "/synthetic" });
     // BSHELL: a launch lands on the terminal's own page.
-    await expect(page).toHaveURL(new RegExp(`/term/${TERM_ID}$`), { timeout: 15_000 });
+    await expect(page).toHaveURL(new RegExp(`/terminals/${TERM_ID}$`), { timeout: 15_000 });
     await expect(page.locator(VP)).toBeVisible({ timeout: 30_000 });
     await noHorizontalScroll(page);
   });
@@ -853,10 +853,10 @@ test.describe("FUTERMLIST terminals list @phone", () => {
     await expect(row.locator('[data-testid="term-row-unbound"]')).toBeVisible();
     await row.locator('[data-testid="term-row-open"]').click();
     await expect(page.locator(VP)).toBeVisible({ timeout: 30_000 });
-    await expect(page).toHaveURL(new RegExp(`/term/${TERM_ID}$`));
+    await expect(page).toHaveURL(new RegExp(`/terminals/${TERM_ID}$`));
     await page.reload();
     await expect(page.locator(VP)).toBeVisible({ timeout: 30_000 });
-    await expect(page).toHaveURL(new RegExp(`/term/${TERM_ID}$`));
+    await expect(page).toHaveURL(new RegExp(`/terminals/${TERM_ID}$`));
   });
 
   test("End in the sheet: Cancel sends nothing, Confirm sends exactly one kill with the intent header, and the sheet stays until the stream ends it", async ({ page }) => {
@@ -1127,20 +1127,20 @@ test.describe("FUMINLIST two-terminal switcher @phone", () => {
     await first.click();
     await expect(page.locator("[data-kb-sheet]")).toBeAttached({ timeout: 15_000 });
     const at = () => new URL(page.url()).pathname;
-    await expect.poll(at).toBe(`/term/${TERM_ID}`);
+    await expect.poll(at).toBe(`/terminals/${TERM_ID}`);
 
     const sw = page.locator('[data-testid="kb-term-switch"]');
     await expect(sw).toBeVisible({ timeout: 15_000 });
     // The switcher offers only the OTHER live terminal.
     await expect(sw.locator("option")).toHaveCount(2);
     await sw.selectOption(OTHER_ID);
-    await expect.poll(at).toBe(`/term/${OTHER_ID}`);
+    await expect.poll(at).toBe(`/terminals/${OTHER_ID}`);
     await expect(page.locator("[data-kb-sheet]")).toBeAttached();
     await expect(page.locator('[data-testid="term-shell"]')).toHaveAttribute("data-term", OTHER_ID);
 
     // Back #1 undoes the switch (the switch pushed an entry): same sheet, first terminal.
     await page.goBack();
-    await expect.poll(at).toBe(`/term/${TERM_ID}`);
+    await expect.poll(at).toBe(`/terminals/${TERM_ID}`);
     await expect(page.locator("[data-kb-sheet]")).toBeAttached();
     await expect(page.locator('[data-testid="term-shell"]')).toHaveAttribute("data-term", TERM_ID);
     // Back #2 leaves the terminal page.

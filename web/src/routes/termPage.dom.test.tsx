@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// BSHELL — /term/:id: admission, unknown id, list error, the found mount and
+// BSHELL — /terminals/:id: admission, unknown id, list error, the found mount and
 // the close navigation.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -70,7 +70,7 @@ function mountAt(path: string) {
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[path]}>
         <Routes>
-          <Route path="/term/:id" element={<TermPageRoute />} />
+          <Route path="/terminals/:id" element={<TermPageRoute />} />
           <Route path="*" element={<Where />} />
         </Routes>
       </MemoryRouter>
@@ -102,22 +102,22 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("/term/:id", () => {
+describe("/terminals/:id", () => {
   it("not admitted: a card, no panel", async () => {
     admitted = false;
-    mountAt("/term/t1");
+    mountAt("/terminals/t1");
     expect(await screen.findByText("Terminals are not enabled")).toBeTruthy();
     expect(screen.queryByTestId("mock-panel")).toBeNull();
   });
 
   it("an invalid id: not-found with a link to /sessions", async () => {
-    mountAt("/term/BAD..");
+    mountAt("/terminals/BAD..");
     const nf = await screen.findByTestId("term-not-found");
     expect(nf.querySelector("a")?.getAttribute("href")).toBe("/sessions");
   });
 
   it("a loaded list without the id: not-found", async () => {
-    mountAt("/term/zzz");
+    mountAt("/terminals/zzz");
     const nf = await screen.findByTestId("term-not-found");
     expect(nf.querySelector("a")?.getAttribute("href")).toBe("/sessions");
     expect(screen.queryByTestId("mock-panel")).toBeNull();
@@ -125,7 +125,7 @@ describe("/term/:id", () => {
 
   it("a list error keeps the id, shows retry, and does not say not found", async () => {
     listStatus = 502;
-    mountAt("/term/t1");
+    mountAt("/terminals/t1");
     const err = await screen.findByTestId("term-list-error");
     expect(err.textContent).toContain("t1");
     expect(screen.queryByTestId("term-not-found")).toBeNull();
@@ -137,7 +137,7 @@ describe("/term/:id", () => {
 
   it("found: the shell wraps the panel, and the title names harness and directory", async () => {
     const prev = document.title;
-    const { unmount } = mountAt("/term/t1");
+    const { unmount } = mountAt("/terminals/t1");
     const p = await screen.findByTestId("mock-panel");
     expect(p.getAttribute("data-harness")).toBe("omp");
     expect(screen.getByTestId("term-shell").contains(p)).toBe(true);
@@ -148,7 +148,7 @@ describe("/term/:id", () => {
   });
 
   it("desktop: exactly one End, in the shell header, none in the panel's headerExtra", async () => {
-    mountAt("/term/t1");
+    mountAt("/terminals/t1");
     await screen.findByTestId("mock-panel");
     const ends = screen.getAllByTestId("kb-term-end");
     expect(ends).toHaveLength(1);
@@ -162,7 +162,7 @@ describe("/term/:id", () => {
       (q: string) =>
         ({ matches: true, media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} }) as unknown as MediaQueryList,
     );
-    mountAt("/term/t1");
+    mountAt("/terminals/t1");
     await screen.findByTestId("mock-panel");
     const ends = screen.getAllByTestId("kb-term-end");
     expect(ends).toHaveLength(1);
@@ -175,9 +175,9 @@ describe("/term/:id", () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={qc}>
-        <MemoryRouter initialEntries={[{ pathname: "/term/t9", state: { launched: { id: "t9", harness: "omp" } } }]}>
+        <MemoryRouter initialEntries={[{ pathname: "/terminals/t9", state: { launched: { id: "t9", harness: "omp" } } }]}>
           <Routes>
-            <Route path="/term/:id" element={<><TermPageRoute /><StateProbe /></>} />
+            <Route path="/terminals/:id" element={<><TermPageRoute /><StateProbe /></>} />
           </Routes>
         </MemoryRouter>
       </QueryClientProvider>,
@@ -189,12 +189,12 @@ describe("/term/:id", () => {
 
   it("Close goes to the bound session, else to /sessions", async () => {
     listRows = [{ ...ROW, session_id: "s-9" }];
-    mountAt("/term/t1");
+    mountAt("/terminals/t1");
     fireEvent.click(await screen.findByTestId("mock-panel-close"));
     await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/sessions/s-9"));
     cleanup();
     listRows = [ROW];
-    mountAt("/term/t1");
+    mountAt("/terminals/t1");
     fireEvent.click(await screen.findByTestId("mock-panel-close"));
     await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/sessions"));
   });

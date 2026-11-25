@@ -52,3 +52,28 @@ describe("DoorStrip", () => {
     expect(out).not.toContain("kb-door__badge");
   });
 });
+
+describe("DoorStrip attention pill (HUBDOOR)", () => {
+  it("hides the pill from AT and names the link with the count", () => {
+    const on = html([extra({ badge: 3 })]);
+    expect(on).toMatch(/<span class="kb-door__badge"[^>]*aria-hidden="true"/);
+    expect(on).not.toContain(`aria-label="3`);
+    expect(on).toContain('<span class="kb-door__sr">, 3 need attention</span>');
+    expect(html([extra({ badge: 1 })])).toContain(", 1 needs attention");
+    expect(html([extra({ badge: 0 })])).not.toContain("kb-door__sr");
+  });
+
+  it("Terminals: absent when not admitted, present with the count when admitted", () => {
+    const strip = (s: { terminalAdmitted: boolean; blockedTerms: number }) =>
+      renderToString(
+        <MemoryRouter initialEntries={["/"]}>
+          <DoorStrip items={resolveNavItems(NAV_ITEMS, s)} pathname="/" kb={null} />
+        </MemoryRouter>,
+      );
+    expect(strip({ terminalAdmitted: false, blockedTerms: 5 })).not.toContain("Terminals");
+    const out = strip({ terminalAdmitted: true, blockedTerms: 3 });
+    expect(out).toContain('data-testid="header-terminals-tab"');
+    expect(out).toContain('data-testid="door-badge-terminals"');
+    expect(out).toContain(", 3 need attention");
+  });
+});
