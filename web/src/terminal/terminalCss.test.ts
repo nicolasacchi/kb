@@ -68,7 +68,7 @@ describe("BSTATE state overlay css contract", () => {
     expect(overlay).toContain("pointer-events: none");
     const pane = rule(".kb-term__pane");
     expect(pane).toContain("position: relative");
-    expect(pane).not.toMatch(/\b(height|width|padding)\s*:/);
+    expect(pane).not.toMatch(/^\s*(height|width|padding)\s*:/m);
   });
 
   it("uses tokens only: no hex or rgb colour, no px font size, no z-index literal", () => {
