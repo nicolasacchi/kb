@@ -44,12 +44,22 @@ export function useCursorFollow(args: CursorFollowArgs): void {
     if (!enabled || !term || !wrap || !watch) return;
     const vv = typeof window === "undefined" ? null : window.visualViewport;
     let raf = 0;
+    /** One-shot re-arm for a frame the suspend gate dropped (nothing else may fire before the operator looks). */
+    let rearm: ReturnType<typeof setTimeout> | null = null;
     /** The vertical offset this hook wrote to the wrapper's margin-bottom (px, positive lifts the grid). */
     let off = 0;
 
     const run = (): void => {
       raf = 0;
-      if (!gate.allowed()) return;
+      if (!gate.allowed()) {
+        if (rearm === null) {
+          rearm = setTimeout(() => {
+            rearm = null;
+            schedule();
+          }, Math.max(1, Math.ceil(gate.remainingMs())));
+        }
+        return;
+      }
       const b = term.buffer.active;
       if (b.viewportY < b.baseY) term.scrollToBottom();
 
@@ -104,6 +114,8 @@ export function useCursorFollow(args: CursorFollowArgs): void {
       vv?.removeEventListener("scroll", schedule);
       if (raf !== 0) cancelAnimationFrame(raf);
       raf = 0;
+      if (rearm !== null) clearTimeout(rearm);
+      rearm = null;
       if (off !== 0) wrap.style.marginBottom = "";
     };
   }, [enabled, term, wrap, watch, gate]);

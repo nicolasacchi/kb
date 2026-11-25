@@ -101,6 +101,8 @@ export interface FollowGate {
   noteManual(): void;
   /** True again exactly `suspendMs` after the LAST `noteManual`. */
   allowed(): boolean;
+  /** Milliseconds until `allowed()` turns true again (0 when it already is). */
+  remainingMs(): number;
   reset(): void;
 }
 
@@ -113,6 +115,9 @@ export function createFollowGate(opts: { now: () => number; suspendMs?: number }
     },
     allowed() {
       return opts.now() - last >= suspend;
+    },
+    remainingMs() {
+      return Math.max(0, suspend - (opts.now() - last));
     },
     reset() {
       last = -Infinity;

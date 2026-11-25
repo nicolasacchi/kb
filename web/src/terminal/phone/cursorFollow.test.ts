@@ -113,6 +113,16 @@ describe("createFollowGate", () => {
     expect(g.allowed()).toBe(true);
   });
 
+  it("remainingMs counts down to zero and is 0 when open", () => {
+    const { clock, g } = gate();
+    expect(g.remainingMs()).toBe(0);
+    g.noteManual();
+    clock.t += 500;
+    expect(g.remainingMs()).toBe(SUSPEND_MS - 500);
+    clock.t += SUSPEND_MS;
+    expect(g.remainingMs()).toBe(0);
+  });
+
   it("a second note restarts the window from the LAST note", () => {
     const { clock, g } = gate();
     g.noteManual();

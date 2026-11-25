@@ -229,6 +229,30 @@ describe("PHIN1 useCursorFollow: the 2 s suspend", () => {
     expect(f.scrollLeftWrites).toHaveLength(1);
   });
 
+  it("a frame the gate dropped is re-armed once at the end of the window, with no further trigger", () => {
+    vi.useFakeTimers();
+    try {
+      installVV();
+      const clock = { t: 0 };
+      const gate = createFollowGate({ now: () => clock.t });
+      const f = fake();
+      f.buf.cursorX = 60;
+      gate.noteManual();
+      mount(f, { gate });
+      flushFrame(); // blocked: nothing written, a timer is armed
+      expect(f.scrollLeftWrites).toEqual([]);
+      vi.advanceTimersByTime(1999);
+      clock.t += 1999;
+      expect(flushFrame()).toBe(0);
+      clock.t += 1;
+      vi.advanceTimersByTime(1);
+      expect(flushFrame()).toBe(1);
+      expect(f.scrollLeftWrites).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("a scrolled-up buffer is brought to the bottom only when the gate allows", () => {
     installVV();
     const clock = { t: 0 };
