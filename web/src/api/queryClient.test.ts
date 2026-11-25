@@ -274,6 +274,12 @@ describe("SSE → TanStack invalidation bridge (invariant #23)", () => {
     },
   );
 
+  // CMDSETTINGS — the overlay event invalidates the catalogue query only.
+  it("term.commands invalidates exactly [\"term\", \"commands\"]", () => {
+    emit("term.commands", { rev: 3 });
+    expect(keys()).toEqual([["term", "commands"]]);
+  });
+
   // SL4 — the slate bridge. These four cases pin the EXACT key set: a fifth
   // key appearing here (or one of these going missing) is the bug the
   // design's "with the ledger comment and the vitest case that pins the
