@@ -23,7 +23,7 @@ export const EDITOR_HARNESSES = ["claude", "omp"] as const;
 export const MAX_HIDDEN = 200;
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,47}$/;
 
-export type Origin = "default" | "changed" | "added";
+export type ItemOrigin = "default" | "changed" | "added";
 
 export const EMPTY_OVERLAY: OverlayPut = { harnesses: {}, hidden: {} };
 
@@ -58,7 +58,7 @@ export function defaultItem(harness: string, id: string): OvItem | undefined {
 }
 
 /** `default` untouched; `changed` an overlay item replacing a shipped id; `added` overlay-only. */
-export function originOf(harness: string, id: string, effectiveOrigin: "default" | "overlay"): Origin {
+export function originOf(harness: string, id: string, effectiveOrigin: "default" | "overlay"): ItemOrigin {
   if (effectiveOrigin === "default") return "default";
   return defaultItemIds(harness).has(id) ? "changed" : "added";
 }

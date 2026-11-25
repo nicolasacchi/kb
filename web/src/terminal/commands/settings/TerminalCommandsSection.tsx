@@ -33,7 +33,7 @@ import {
   unhide,
   upsertItem,
   validateOverlay,
-  type Origin,
+  type ItemOrigin,
 } from "./overlayOps";
 import { TERM_COMMANDS_KEY, useTermCommands } from "./useTermCommands";
 import type { CmdError } from "../schema";
@@ -50,7 +50,7 @@ function preview(i: EffItem): string {
   return t.length > 80 ? `${t.slice(0, 80)}…` : t;
 }
 
-const ORIGIN_TEXT: Record<Origin, string> = { default: "default", changed: "changed", added: "added" };
+const ORIGIN_TEXT: Record<ItemOrigin, string> = { default: "default", changed: "changed", added: "added" };
 
 export function TerminalCommandsSection() {
   const qc = useQueryClient();
