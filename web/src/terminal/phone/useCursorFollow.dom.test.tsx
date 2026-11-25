@@ -100,16 +100,13 @@ function installVV() {
   const remove = target.removeEventListener.bind(target);
   let added = 0;
   let removed = 0;
-  const vv = Object.assign(target, {
-    get offsetTop() {
-      return geo.vvTop;
-    },
-    offsetLeft: 0,
-    width: 400,
-    get height() {
-      return geo.vvHeight;
-    },
-  });
+  // defineProperties, not Object.assign: assign would read the getters once and freeze them.
+  const vv = Object.defineProperties(target, {
+    offsetTop: { get: () => geo.vvTop },
+    offsetLeft: { value: 0 },
+    width: { value: 400 },
+    height: { get: () => geo.vvHeight },
+  }) as EventTarget & { offsetTop: number; offsetLeft: number; width: number; height: number };
   vv.addEventListener = ((t: string, l: EventListenerOrEventListenerObject, o?: boolean | AddEventListenerOptions) => {
     added += 1;
     live.add(t);
