@@ -264,6 +264,7 @@ const PROFILE = {
 };
 
 beforeEach(() => {
+  window.localStorage.clear();
   terms.length = 0;
   lastSession = null;
   sessionStart.mockReset();
@@ -1450,6 +1451,8 @@ describe("BA11Y: accessibility", () => {
     expect(term.options.screenReaderMode).toBe(false);
     const sw = q("kb-term-screen-reader") as HTMLInputElement;
     const fetchesBefore = rig.calls?.length;
+    const resizeSpy = vi.spyOn(term, "resize");
+    const sinkBefore = lastSession!.sink ? Object.keys(lastSession!.sink).length : 0;
     act(() => sw.click());
     expect(term.options.screenReaderMode).toBe(true);
     expect(window.localStorage.getItem("kb-term-screen-reader")).toBe("1");
@@ -1459,6 +1462,8 @@ describe("BA11Y: accessibility", () => {
     expect(terms.length).toBe(1);
     expect(window.localStorage.getItem("kb-term-screen-reader")).toBe("0");
     expect(rig.calls?.length).toBe(fetchesBefore);
+    expect(resizeSpy).not.toHaveBeenCalled();
+    expect(lastSession!.sink ? Object.keys(lastSession!.sink).length : 0).toBe(sinkBefore);
     // A fresh mount reads the stored choice.
     act(() => (q("kb-term-screen-reader") as HTMLInputElement).click());
     act(() => root?.unmount());
@@ -1467,17 +1472,30 @@ describe("BA11Y: accessibility", () => {
     await mountPanel();
     const again = await profile();
     expect(again.options.screenReaderMode).toBe(true);
+    window.localStorage.removeItem("kb-term-screen-reader");
   });
 
-  it("focus that left the overlay before it unmounts is not handed to the terminal; focus still on it is", async () => {
+  it("focus still on the overlay when it unmounts is handed back to the terminal exactly once", async () => {
     await mountPanel();
     const term = await profile();
     set({});
     set({ phase: "reconnecting", caption: "reconnecting" });
     act(() => q("kb-term-overlay-action")!.focus());
-    // Focus moves to a header button (outside the pane): the pane sees a blur.
-    const other = q("kb-term-find-toggle")!;
-    act(() => other.focus());
+    term.focus.mockClear();
+    set({});
+    expect(term.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it("focus that left the overlay to nothing is not handed to the terminal when the overlay unmounts", async () => {
+    await mountPanel();
+    const term = await profile();
+    set({});
+    set({ phase: "reconnecting", caption: "reconnecting" });
+    const btn = q("kb-term-overlay-action")!;
+    act(() => btn.focus());
+    act(() => btn.blur());
+    expect(document.activeElement === document.body || document.activeElement === null).toBe(true);
+    term.focus.mockClear();
     set({});
     expect(term.focus).not.toHaveBeenCalled();
   });
