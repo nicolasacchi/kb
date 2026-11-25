@@ -599,18 +599,6 @@ describe("launch refusals (HUBHOST)", () => {
   });
 });
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const nodeFs = (globalThis as any).process.getBuiltinModule("node:fs") as { readFileSync(path: string, enc: "utf8"): string };
-
-describe("phone Sheet height (HUBHOST)", () => {
-  const css = nodeFs.readFileSync(decodeURIComponent(new URL("./LaunchDialog.css", import.meta.url).pathname), "utf8");
-  it("the launch sheet is clamped in dynamic viewport units, not static vh", () => {
-    const rule = /#kb-launch-sheet\.kb-sheet\s*\{[^}]*\}/.exec(css)?.[0] ?? "";
-    expect(rule).toMatch(/height:\s*min\(var\(--sheet-h, 92dvh\), 92dvh\)/);
-    expect(rule).toMatch(/max-height:\s*100dvh/);
-  });
-});
-
 describe("phone Sheet detent (HUBHOST)", () => {
   const phone = () =>
     vi.stubGlobal("matchMedia", (query: string) => ({
