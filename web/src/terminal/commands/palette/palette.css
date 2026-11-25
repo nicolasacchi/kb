@@ -1,0 +1,204 @@
+/* CMDPALETTE: the command palette dialog and the rail's commands tab.
+ * Existing tokens only (`lint:css-vars`); both themes come from the tokens.
+ * Never a CSS `transform` on the terminal or an ancestor. */
+
+.kb-cmdp__open,
+.kb-cmdp__btn {
+  min-height: var(--pad-4);
+  padding: 0 var(--pad-2);
+  background: var(--bg-card);
+  color: var(--ink);
+  border: var(--pad-1) solid var(--rule-hi);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.kb-cmdp__btn--go {
+  background: var(--accent-fill);
+  color: var(--accent-fill-fg);
+  border-color: var(--accent-bor);
+}
+
+.kb-cmdp__btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.kb-cmdp-dialog {
+  width: min(640px, 92vw);
+  max-height: 80vh;
+  padding: var(--pad-3);
+  background: var(--bg-panel);
+  color: var(--ink);
+  border: var(--pad-1) solid var(--rule-hi);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+}
+
+.kb-cmdp-dialog::backdrop {
+  background: var(--backdrop);
+}
+
+.kb-cmdp-dialog__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--pad-2);
+  margin-bottom: var(--pad-2);
+}
+
+.kb-cmdp-dialog__title {
+  margin: 0;
+  font-size: var(--fs-md);
+}
+
+.kb-cmdp {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+  min-height: 0;
+  color: var(--ink);
+  font-size: var(--fs-sm);
+}
+
+.kb-cmdp__search,
+.kb-cmdp__field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--pad-2);
+  background: var(--bg-card);
+  color: var(--ink);
+  border: var(--pad-1) solid var(--rule-hi);
+  border-radius: var(--radius-sm);
+  font: inherit;
+}
+
+.kb-cmdp__caption,
+.kb-cmdp__hint,
+.kb-cmdp__empty {
+  margin: 0;
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
+}
+
+.kb-cmdp__scroll {
+  overflow-y: auto;
+  min-height: 0;
+  max-height: 55vh;
+}
+
+.kb-cmdp--rail .kb-cmdp__scroll {
+  max-height: none;
+}
+
+.kb-cmdp__ghead {
+  margin: var(--pad-2) 0 var(--pad-1);
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+}
+
+.kb-cmdp__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pad-1) var(--pad-2);
+  min-height: var(--pad-4);
+  padding: var(--pad-1) var(--pad-2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+/* The rail is also the phone sheet: 40 px rows there, and on any coarse pointer. */
+.kb-cmdp--rail .kb-cmdp__row {
+  min-height: var(--touch-min);
+}
+
+@media (pointer: coarse) {
+  .kb-cmdp__row,
+  .kb-cmdp__btn,
+  .kb-cmdp__open {
+    min-height: var(--touch-min);
+  }
+}
+
+.kb-cmdp__row[data-active],
+.kb-cmdp__row:hover {
+  background: var(--bg-card-hi);
+}
+
+.kb-cmdp__label {
+  font-weight: 600;
+}
+
+.kb-cmdp__badge {
+  padding: 0 var(--pad-1);
+  border: var(--pad-1) solid var(--rule);
+  border-radius: var(--radius-pill);
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
+}
+
+.kb-cmdp__badge--run {
+  color: var(--accent);
+  border-color: var(--accent-bor);
+}
+
+.kb-cmdp__badge--unv {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.kb-cmdp__desc {
+  flex: 1 1 100%;
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
+}
+
+.kb-cmdp__preview {
+  flex: 1 1 100%;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+}
+
+.kb-cmdp__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+}
+
+.kb-cmdp__formtitle {
+  margin: 0;
+  font-weight: 600;
+}
+
+.kb-cmdp__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-1);
+}
+
+.kb-cmdp__alert {
+  margin: 0;
+  color: var(--err);
+}
+
+.kb-cmdp__formbtns,
+.kb-cmdp__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--pad-2);
+}
+
+.kb-cmdp__edit {
+  color: var(--accent);
+}

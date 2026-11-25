@@ -14,3 +14,11 @@ registerRailTab({
   badge: undefined,
   node: createElement(ConversationRail),
 });
+
+import { CommandsRail } from "../commands/palette/CommandsRail";
+
+registerRailTab({
+  id: "commands",
+  label: "Commands",
+  node: createElement(CommandsRail),
+});
