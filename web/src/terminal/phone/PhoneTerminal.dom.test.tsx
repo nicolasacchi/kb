@@ -77,6 +77,7 @@ function fakeTerm(opened: boolean): Fake {
 }
 
 let extraProps: Record<string, unknown> = {};
+let streamOver: Record<string, unknown> = {};
 
 function Harness(props: { term: PhoneTerm | null; hostRef: { current: HTMLDivElement | null } }) {
   const [mode, setMode] = useState<PhoneMode>("watch");
@@ -87,7 +88,7 @@ function Harness(props: { term: PhoneTerm | null; hostRef: { current: HTMLDivEle
     hostRef: props.hostRef,
     mode,
     onMode: setMode,
-    stream: { phase: "live", applied: 4242, resets: 1, gaps: 0 },
+    stream: { phase: "live", applied: 4242, resets: 1, gaps: 0, ...streamOver },
     caption: "live",
   });
 }
@@ -103,6 +104,7 @@ function mount(term: PhoneTerm | null) {
 
 afterEach(() => {
   extraProps = {};
+  streamOver = {};
   act(() => root?.unmount());
   host?.remove();
   root = host = null;
@@ -584,5 +586,26 @@ describe("PHIN0 direct typing flag", () => {
     const all = JSON.stringify([...Object.entries(window.localStorage), ...Object.entries(window.sessionStorage)]);
     expect(all).not.toContain("hunter2");
     expect(location.href).not.toContain("hunter2");
+  });
+});
+
+describe("BSTATE: the phone state overlay", () => {
+  it("renders in the watch region while reconnecting, with Reconnect now wired to the prop", () => {
+    const onReconnect = vi.fn();
+    extraProps = { onReconnect, announce: "Reconnecting" };
+    streamOver = { phase: "reconnecting" };
+    mount(fakeTerm(true).term);
+    const watch = q(".kb-term-phone__watch");
+    const overlay = watch.querySelector('[data-testid="kb-term-overlay"]');
+    expect(overlay).not.toBeNull();
+    expect(watch.querySelector('[data-testid="kb-term-announce"]')!.textContent).toBe("Reconnecting");
+    click('[data-testid="kb-term-overlay-action"]');
+    expect(onReconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders no overlay node while live", () => {
+    mount(fakeTerm(true).term);
+    expect(host!.querySelector('[data-testid="kb-term-overlay"]')).toBeNull();
+    expect(host!.querySelectorAll('[data-testid="kb-term-announce"]')).toHaveLength(1);
   });
 });

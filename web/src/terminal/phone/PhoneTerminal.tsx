@@ -28,6 +28,7 @@ import { InputDebugStrip, InputProxy, createDebugLog, type ProxyHandle } from ".
 import { DEFAULT_VARIANT, inputDebugEnabled, phoneDirectEnabled, readVariant, writeVariant, type ProxyVariant } from "./inputProxy";
 import { StatusChips, TermHeader } from "../TermHeader";
 import type { StatusChip } from "../statusChips";
+import { TermStateOverlay } from "../TermStateOverlay";
 import "./phone.css";
 
 const NO_CHIPS: StatusChip[] = [];
@@ -63,6 +64,10 @@ export interface PhoneStream {
   applied: number;
   resets: number;
   gaps: number;
+  /** BSTATE: the state overlay's words (the panel passes its whole session state). */
+  exitCode?: number | null;
+  blockedReason?: string | null;
+  attempt?: number;
 }
 
 export interface PhoneTerminalProps {
@@ -77,6 +82,12 @@ export interface PhoneTerminalProps {
   stream: PhoneStream;
   caption: string;
   onClose?: () => void;
+  /** BSTATE: "Reconnect now" on the state overlay (the session's kick). */
+  onReconnect?: () => void;
+  /** BSTATE: true until the stream has been live once (first connect shows the connecting card). */
+  overlayFirstConnect?: boolean;
+  /** BSTATE: the sentence the one polite status region says (the panel derives it). */
+  announce?: string;
   /** FUTERMLIST: extra title-bar controls (the End button, the terminal switcher). */
   headerExtra?: ReactNode;
   /** BHEAD: controls rendered before `headerExtra` in the extra row (palette, switcher). */
@@ -131,7 +142,7 @@ function setAttr(el: HTMLElement, name: string, value: string | number | undefin
 }
 
 export function PhoneTerminal(props: PhoneTerminalProps) {
-  const { term, profile, hostRef, mode, onMode, stream, caption, onClose, renderDrive, harness, headerExtra, headerActions, project, chips, sendInput } = props;
+  const { term, profile, hostRef, mode, onMode, stream, caption, onClose, renderDrive, harness, headerExtra, headerActions, project, chips, sendInput, onReconnect, overlayFirstConnect, announce } = props;
   const [wrap, setWrap] = useState<HTMLDivElement | null>(null);
   const [viewport, setViewport] = useState<HTMLDivElement | null>(null);
   const [font, setFont] = useState<number>(() => readFont());
@@ -417,6 +428,20 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
             Jump to latest
           </button>
         ) : null}
+        <div className="kb-term__announce" role="status" aria-live="polite" data-testid="kb-term-announce">
+          {announce ?? ""}
+        </div>
+        <TermStateOverlay
+          phase={stream.phase}
+          caption={caption}
+          exitCode={stream.exitCode ?? null}
+          blockedReason={stream.blockedReason ?? null}
+          attempt={stream.attempt ?? 0}
+          firstConnect={overlayFirstConnect ?? true}
+          onReconnect={onReconnect}
+          onBack={onClose}
+          compact
+        />
       </div>
       {proxyOn && debugLog ? (
         <InputDebugStrip
