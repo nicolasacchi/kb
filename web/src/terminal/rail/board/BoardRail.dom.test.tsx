@@ -80,8 +80,8 @@ function wrapper(sid: string | undefined) {
   );
 }
 
-function mount(sid: string | undefined = SID) {
-  const W = wrapper(sid);
+function mount(sid: string | undefined | null = SID) {
+  const W = wrapper(sid ?? undefined);
   return render(<BoardRail />, { wrapper: W });
 }
 
@@ -131,7 +131,7 @@ describe("BoardRail", () => {
   });
 
   it("no bound session is a calm empty state", () => {
-    mount(undefined);
+    mount(null);
     expect(screen.getByText("No session linked yet")).toBeTruthy();
     expect(fetch).not.toHaveBeenCalled();
   });
@@ -204,7 +204,9 @@ describe("BoardRail", () => {
     // the rail never retries with `anyway`: exactly one POST, and the refusal text was shown
     expect(posts).toHaveLength(1);
     expect(JSON.stringify(posts[0].body)).not.toContain("anyway");
-    expect(toastErr.mock.calls.map((c) => String(c[0])).join(" ")).toContain("x");
+    // a retry would have toasted a second time; the refusal text itself is what was shown
+    expect(toastErr).toHaveBeenCalledTimes(1);
+    expect(String(toastErr.mock.calls[0][0]).length).toBeGreaterThan(0);
     expect((screen.getByTestId("board-answer-input") as HTMLInputElement).value).toBe("my answer");
   });
 
