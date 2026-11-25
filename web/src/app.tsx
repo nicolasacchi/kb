@@ -36,6 +36,7 @@ import {
 import { verifyAgainstIdentity } from "./lib/artifactHost";
 import { parseCapturedParam } from "./lib/capturedParam";
 import { toast } from "./lib/toast";
+import TermRedirect from "./components/TermRedirect";
 
 // Route views are code-split (React.lazy): each loads its own chunk on first
 // navigation, so CodeMirror (detail/notes editors), the markdown renderer, and
@@ -54,6 +55,8 @@ const SessionsRoute = lazy(() => import("./routes/sessions"));
 const SessionPageRoute = lazy(() => import("./routes/sessionPage"));
 // BSHELL — the terminal's own page; xterm stays behind TerminalPanel.lazy.
 const TermPageRoute = lazy(() => import("./routes/termPage"));
+// HUBDOOR — the Terminals hub list page and the legacy /term/:id redirect.
+const TerminalsPageRoute = lazy(() => import("./routes/terminalsPage"));
 const NotesRoute = lazy(() => import("./routes/notes"));
 const SearchRoute = lazy(() => import("./routes/search"));
 const InboxRoute = lazy(() => import("./routes/inbox"));
@@ -337,15 +340,25 @@ export default function App() {
             </RailShell>
           }
         />
-        {/* BSHELL — one terminal's own page (TermShell wraps the lazy panel). */}
+        {/* HUBDOOR — the Terminals hub (list) and one terminal's own page
+            (TermShell wraps the lazy panel). /term/:id only redirects. */}
         <Route
-          path="/term/:id"
+          path="/terminals"
+          element={
+            <RailShell rail={false}>
+              <TerminalsPageRoute />
+            </RailShell>
+          }
+        />
+        <Route
+          path="/terminals/:id"
           element={
             <RailShell rail={false}>
               <TermPageRoute />
             </RailShell>
           }
         />
+        <Route path="/term/:id" element={<TermRedirect />} />
         {/* A4 — one session's page (`kb-session-card/1`). Full page, not a
             sheet; no hotkey — `g s` stays on /sessions. */}
         <Route

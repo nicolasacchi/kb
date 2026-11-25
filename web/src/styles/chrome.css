@@ -400,8 +400,10 @@
  * launcher drops its key hint and ellipsizes, and the identity chip is
  * narrower, so the 44px bar fits the window with the Now chip showing. */
 @media (min-width: 861px) and (max-width: 1200px) {
+  /* HUBDOOR - six doors (Terminals, when admitted) must still fit at 861px:
+   * tighter side padding recovers the width the sixth icon takes. */
   .kb-door {
-    padding: 0 var(--pad-2);
+    padding: 0 var(--pad-1);
   }
   .kb-door__label {
     position: absolute;
@@ -7185,10 +7187,28 @@ a.proposal-row__chip:hover {
   white-space: nowrap;
 }
 
-/* HUBNAV - attention pill on a door; stays visible when the label collapses. */
+/* HUBNAV/HUBDOOR - attention pill on a door; stays visible when the label
+ * collapses. A real pill: tinted wash, warn ink, token padding and radius. The
+ * count is decoration (aria-hidden); the sr span carries the spoken form. */
 .kb-door__badge {
+  display: inline-block;
+  min-width: 1.6em;
+  padding: 0 var(--pad-1);
+  border-radius: var(--radius-pill);
+  background: color-mix(in oklab, var(--warn) 18%, transparent);
+  color: var(--warn);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   font-variant-numeric: tabular-nums;
-  color: var(--warn);
+  line-height: 1.5;
+  text-align: center;
+}
+.kb-door__sr,
+.kb-navlist__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }

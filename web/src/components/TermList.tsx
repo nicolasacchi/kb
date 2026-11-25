@@ -4,7 +4,7 @@
 //
 // * Rows come from the existing `["terms"]` query (`useTerms`); the SSE bridge
 //   invalidates it, nothing here polls (#23). Terminal bytes never enter it.
-// * Open is a link to the terminal's own page (`/term/<id>`, `TermShell`);
+// * Open is a link to the terminal's own page (`/terminals/<id>`, `TermShell`);
 //   the legacy `?term=` deep link redirects there (sessions.tsx).
 // * End/Remove, the End button and the phone switcher live in `TermControls`.
 
@@ -15,6 +15,7 @@ import type { TermRow } from "../api/terms";
 import { useTerms } from "../terminal/useTerms";
 import { ownerLabel } from "../terminal/gridOwner";
 import { EndTerminalButton, cwdBase, isLive } from "./TermControls";
+import { buildHubUrl } from "../terminal/hub/termHub";
 
 /**
  * The `?term=` value as an open terminal id: a plain lowercase token (letters,
@@ -78,7 +79,7 @@ export function TermList(): ReactElement | null {
               <Link
                 className="kb-ses__newterm-btn"
                 data-testid="term-row-open"
-                to={`/term/${encodeURIComponent(r.id)}`}
+                to={buildHubUrl({ id: r.id })}
               >
                 Open
               </Link>

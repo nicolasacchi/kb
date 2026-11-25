@@ -3,7 +3,7 @@
 // Contract:
 //   * lane `available: false` (or unadmitted) → nothing.
 //   * `available: true` with a term → the state word plus a link to the
-//     terminal's own page (`/term/<id>`, `TermShell`); no panel mounts here.
+//     terminal's own page (`/terminals/<id>`, `TermShell`); no panel mounts here.
 //   * a child (subagent) session whose lane resolves to the ROOT's
 //     term (`via: "root"`) shows a link to the session and no panel.
 // The slot imports nothing from the terminal engine packages.
@@ -11,6 +11,7 @@
 import type { ReactElement } from "react";
 import { Link } from "react-router-dom";
 import type { TerminalLane } from "../api/sessions";
+import { buildHubUrl } from "../terminal/hub/termHub";
 
 export type TerminalSlotProps = {
   sid: string;
@@ -52,7 +53,7 @@ export function TerminalSlot(props: TerminalSlotProps): ReactElement | null {
         <Link
           className="kb-term__btn kb-term-slot__open"
           data-testid="kb-term-open"
-          to={`/term/${encodeURIComponent(termId)}`}
+          to={buildHubUrl({ id: termId })}
         >
           Open terminal
         </Link>

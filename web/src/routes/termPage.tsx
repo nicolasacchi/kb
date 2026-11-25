@@ -1,4 +1,4 @@
-// BSHELL — /term/:id, the terminal's own page. A thin route over `TermShell`:
+// BSHELL — /terminals/:id (HUBDOOR; /term/:id redirects here), the terminal's own page. A thin route over `TermShell`:
 // it reads the id (`openTermParam`), the `["terms"]` row (`useTerms`) and the
 // admission bit, then wraps the lazy `TerminalPanel` (the same seam the slot
 // and the launched-terminal host use, so xterm stays out of the main chunk).
@@ -13,6 +13,7 @@ import { openTermParam } from "../components/TermList";
 import { TerminalControls, cwdBase } from "../components/TermControls";
 import { TermShell } from "../terminal/TermShell";
 import { useTerms } from "../terminal/useTerms";
+import { buildHubUrl } from "../terminal/hub/termHub";
 
 const TerminalPanel = lazy(() => import("../terminal/TerminalPanel.lazy"));
 
@@ -49,8 +50,8 @@ export default function TermPageRoute(): ReactElement {
   const hinted = termId !== null && hint?.id === termId && !seen.current ? hint : undefined;
   const hasStateHint = stateHint !== undefined;
   useEffect(() => {
-    if (hasStateHint) void navigate({ pathname: location.pathname, search: location.search }, { replace: true, state: null });
-  }, [hasStateHint, navigate, location.pathname, location.search]);
+    if (hasStateHint) void navigate({ pathname: location.pathname, search: location.search, hash: location.hash }, { replace: true, state: null });
+  }, [hasStateHint, navigate, location.pathname, location.search, location.hash]);
   const harness = row?.harness ?? hinted?.harness ?? "terminal";
   const base = row ? cwdBase(row.cwd) : "";
 
@@ -108,7 +109,7 @@ export default function TermPageRoute(): ReactElement {
   const controls = (
     <TerminalControls
       target={{ termId, harness, cwd: row?.cwd, stale: row?.stale === true }}
-      onSwitch={narrow ? (to) => navigate(`/term/${encodeURIComponent(to)}`) : undefined}
+      onSwitch={narrow ? (to) => navigate(buildHubUrl({ id: to })) : undefined}
       className={narrow ? "kb-term-phone__btn" : undefined}
       onEnded={retry}
     />
