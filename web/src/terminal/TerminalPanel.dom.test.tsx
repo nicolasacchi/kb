@@ -1451,8 +1451,8 @@ describe("BA11Y: accessibility", () => {
     expect(term.options.screenReaderMode).toBe(false);
     const sw = q("kb-term-screen-reader") as HTMLInputElement;
     const fetchesBefore = rig.calls?.length;
-    const resizeSpy = vi.spyOn(term, "resize");
-    const sinkBefore = lastSession!.sink ? Object.keys(lastSession!.sink).length : 0;
+    const geomBefore = [term.cols, term.rows];
+    const sentBefore = sendInputMock.mock.calls.length;
     act(() => sw.click());
     expect(term.options.screenReaderMode).toBe(true);
     expect(window.localStorage.getItem("kb-term-screen-reader")).toBe("1");
@@ -1462,8 +1462,8 @@ describe("BA11Y: accessibility", () => {
     expect(terms.length).toBe(1);
     expect(window.localStorage.getItem("kb-term-screen-reader")).toBe("0");
     expect(rig.calls?.length).toBe(fetchesBefore);
-    expect(resizeSpy).not.toHaveBeenCalled();
-    expect(lastSession!.sink ? Object.keys(lastSession!.sink).length : 0).toBe(sinkBefore);
+    expect([term.cols, term.rows]).toEqual(geomBefore);
+    expect(sendInputMock.mock.calls.length).toBe(sentBefore);
     // A fresh mount reads the stored choice.
     act(() => (q("kb-term-screen-reader") as HTMLInputElement).click());
     act(() => root?.unmount());
