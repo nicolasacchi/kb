@@ -386,3 +386,135 @@ describe("core: typed text is never persisted", () => {
     }
   });
 });
+
+// PHIN1 - the two PHIN0 review carries in the pure core.
+/** A core with a live element value, a selection flag and a copy spy. */
+function rig1(variant: ProxyVariant = DEFAULT_VARIANT, selection = false) {
+  const sent: string[] = [];
+  const log: DebugEvent[] = [];
+  const el = { value: variant.sentinel === "zwsp" ? SENTINEL : "" };
+  const copy = vi.fn();
+  let clock = 0;
+  const core = createProxyCore({
+    send: (d) => {
+      sent.push(d);
+      return true;
+    },
+    variant,
+    log: (e) => log.push(e),
+    setValue: (v) => {
+      el.value = v;
+    },
+    getValue: () => el.value,
+    hasSelection: () => selection,
+    copy,
+    now: () => clock,
+  });
+  const rest = el.value;
+  const input = (text: string, isComposing = true) => {
+    el.value = rest + text;
+    core.onInput({ value: el.value, inputType: "insertCompositionText", data: null, isComposing });
+  };
+  const key = (k: string, extra: Partial<{ ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }> = {}) =>
+    core.onKeyDown({ key: k, keyCode: 0, ctrlKey: false, altKey: false, metaKey: false, isComposing: false, ...extra });
+  return { core, sent, log, el, rest, copy, input, key, tick: (ms: number) => (clock += ms) };
+}
+
+describe("PHIN1 core: Enter during a composition", () => {
+  const combos: ProxyVariant[] = [];
+  for (const send of ["every", "deferred"] as const) {
+    for (const sentinel of ["none", "zwsp"] as const) combos.push({ send, sentinel, attrs: "textarea" });
+  }
+  for (const v of combos) {
+    it(`${v.send} / ${v.sentinel}: the composed text goes out before the carriage return, and compositionend adds nothing`, () => {
+      const r = rig1(v);
+      r.core.onCompositionStart();
+      r.input("world");
+      const handled = r.core.onBeforeInput({ inputType: "insertLineBreak", data: null, isComposing: true });
+      expect(handled).toBe(true);
+      expect(r.sent).toEqual(["world", "\r"]);
+      r.core.onCompositionEnd({ data: "world", value: r.el.value });
+      expect(r.sent).toEqual(["world", "\r"]);
+      expect(r.core.composing).toBe(false);
+    });
+  }
+
+  it("Enter outside a composition is unchanged: one carriage return, nothing flushed", () => {
+    const r = rig1();
+    r.input("ab", false);
+    expect(r.sent).toEqual(["ab"]);
+    r.core.onBeforeInput({ inputType: "insertParagraph", data: null, isComposing: false });
+    expect(r.sent).toEqual(["ab", "\r"]);
+  });
+
+  it("the keydown + beforeinput Enter pair still sends a single carriage return", () => {
+    const r = rig1();
+    expect(r.key("Enter")).toBe(true);
+    r.tick(10);
+    r.core.onBeforeInput({ inputType: "insertLineBreak", data: null, isComposing: false });
+    expect(r.sent).toEqual(["\r"]);
+  });
+
+  it("without getValue the old behaviour holds (the carriage return alone)", () => {
+    const sent: string[] = [];
+    const core = createProxyCore({
+      send: (d) => {
+        sent.push(d);
+        return true;
+      },
+      variant: { ...DEFAULT_VARIANT, send: "deferred" },
+    });
+    core.onCompositionStart();
+    core.onInput({ value: "hi", inputType: "insertCompositionText", data: null, isComposing: true });
+    core.onBeforeInput({ inputType: "insertLineBreak", data: null, isComposing: true });
+    expect(sent).toEqual(["\r"]);
+  });
+});
+
+describe("PHIN1 core: physical Ctrl/Cmd+C and +V", () => {
+  it("Ctrl+C with no selection stays ^C", () => {
+    const r = rig1(DEFAULT_VARIANT, false);
+    expect(r.key("c", { ctrlKey: true })).toBe(true);
+    expect(r.sent).toEqual(["\x03"]);
+    expect(r.copy).not.toHaveBeenCalled();
+  });
+
+  it("Ctrl+C with a selection copies, sends nothing and consumes the key", () => {
+    const r = rig1(DEFAULT_VARIANT, true);
+    expect(r.key("c", { ctrlKey: true })).toBe(true);
+    expect(r.sent).toEqual([]);
+    expect(r.copy).toHaveBeenCalledTimes(1);
+  });
+
+  it("Cmd+C with a selection and Ctrl+Shift+C always copy", () => {
+    const r = rig1(DEFAULT_VARIANT, true);
+    expect(r.key("c", { metaKey: true })).toBe(true);
+    const r2 = rig1(DEFAULT_VARIANT, false);
+    expect(r2.key("C", { ctrlKey: true, shiftKey: true })).toBe(true);
+    expect(r.copy).toHaveBeenCalledTimes(1);
+    expect(r2.copy).toHaveBeenCalledTimes(1);
+    expect(r.sent).toEqual([]);
+    expect(r2.sent).toEqual([]);
+  });
+
+  for (const [name, k, mods] of [
+    ["Ctrl+V", "v", { ctrlKey: true }],
+    ["Cmd+V", "v", { metaKey: true }],
+    ["Ctrl+Shift+V", "V", { ctrlKey: true, shiftKey: true }],
+  ] as const) {
+    it(`${name} sends nothing and is NOT consumed, so the paste event still reaches onPaste`, () => {
+      const r = rig1();
+      expect(r.key(k, mods)).toBe(false);
+      expect(r.sent).toEqual([]);
+      expect(r.core.onPaste("pasted", false)).toBe(true);
+      expect(r.sent).toEqual(["pasted"]);
+    });
+  }
+
+  it("other Ctrl letters still map to their control bytes", () => {
+    const r = rig1();
+    r.key("d", { ctrlKey: true });
+    r.key("a", { ctrlKey: true });
+    expect(r.sent).toEqual(["\x04", "\x01"]);
+  });
+});

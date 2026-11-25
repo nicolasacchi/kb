@@ -7,10 +7,18 @@
 import { createElement } from "react";
 import { registerRailTab } from "./registry";
 import { ConversationRail } from "./ConversationRail";
+import { ChangesRail } from "./changes/ChangesRail";
 
 registerRailTab({
   id: "conversation",
   label: "Conversation",
   badge: undefined,
   node: createElement(ConversationRail),
+});
+
+registerRailTab({
+  id: "changes",
+  label: "Changes",
+  badge: undefined,
+  node: createElement(ChangesRail),
 });

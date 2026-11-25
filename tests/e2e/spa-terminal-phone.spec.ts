@@ -1274,3 +1274,77 @@ test.describe("PHIN0 phone direct typing @phone", () => {
     expect(stats.inputs).toEqual([]);
   });
 });
+
+// PHIN1 - cursor-follow for direct typing. Android Chrome only (Playwright cannot raise a real
+// soft keyboard; a shorter viewport is the layout-resize variant Android Firefox produces, and the
+// visual-resize variant is covered by the jsdom geometry tables). Real timers throughout: the
+// fixture's stream and the sheet run on timers a paused page.clock would freeze.
+test.describe("PHIN1 phone cursor-follow @phone", () => {
+  const PROXY = "[data-kb-term-input]";
+  const WATCH = ".kb-term-phone__watch";
+
+  async function directWith(page: Page, tailText: string): Promise<Stats> {
+    await page.addInitScript(() => window.localStorage.setItem("kb.term.phoneDirect", "1"));
+    return openPhone(page, { total: 500, seedLines: 500, tailText });
+  }
+  async function tapGrid(page: Page): Promise<void> {
+    const vis = (await page.locator(WATCH).boundingBox())!;
+    await page.touchscreen.tap(vis.x + 60, vis.y + 60);
+    await expect(page.locator(PROXY)).toBeFocused();
+  }
+  const visualViewportResize = (page: Page): Promise<void> =>
+    page.evaluate(() => void window.visualViewport?.dispatchEvent(new Event("resize")));
+
+  test.beforeEach(({}, info) => {
+    test.skip(info.project.name !== "chromium-pixel7", "Android Chrome only");
+  });
+
+  test("a shorter viewport keeps the typing cursor inside the Watch box", async ({ page }) => {
+    // The cursor is parked on screen row 5, which a short viewport clips off the top.
+    await directWith(page, "\x1b[5;1Hab");
+    await tapGrid(page);
+    await page.setViewportSize({ width: 412, height: 640 }) // the page chrome alone needs ~420: shorter collapses the Watch box to 0;
+    await page.keyboard.insertText("x");
+    await expect
+      .poll(async () => {
+        const p = await page.locator(PROXY).boundingBox();
+        const w = await page.locator(WATCH).boundingBox();
+        const diag = await page.evaluate(() => ({
+          mb: (document.querySelector(".kb-term-phone__wrap") as HTMLElement | null)?.style.marginBottom ?? null,
+          wrapH: document.querySelector(".kb-term-phone__wrap")?.getBoundingClientRect().height ?? null,
+          vv: window.visualViewport ? [window.visualViewport.offsetTop, window.visualViewport.height] : null,
+          inner: window.innerHeight,
+          focused: document.activeElement?.hasAttribute("data-kb-term-input") ?? false,
+        }));
+        if (!p || !w) return `missing p=${JSON.stringify(p)} w=${JSON.stringify(w)} ${JSON.stringify(diag)}`;
+        const ok = w.height > 40 && p.y >= w.y - 1 && p.y + p.height <= w.y + w.height + 1;
+        return ok ? "inside" : `outside p=${JSON.stringify(p)} w=${JSON.stringify(w)} ${JSON.stringify(diag)}`;
+      })
+      .toBe("inside");
+  });
+
+  test("a cursor at a far column pans the grid to it", async ({ page }) => {
+    await directWith(page, "x".repeat(110));
+    expect(await num(page, "sl")).toBe(0);
+    await tapGrid(page);
+    await expect.poll(() => num(page, "sl")).toBeGreaterThan(100);
+  });
+
+  test("a manual pan suspends follow for 2 s", async ({ page }) => {
+    await directWith(page, "x".repeat(110));
+    await tapGrid(page);
+    await expect.poll(() => num(page, "sl")).toBeGreaterThan(300);
+    const followed = await num(page, "sl");
+    await drag(page, { x0: 100, y0: 300, x1: 300, y1: 300 });
+    const panned = await num(page, "sl");
+    expect(panned).toBeLessThan(followed);
+    // Right after the pan: a viewport event must not pull the grid back to the cursor.
+    await visualViewportResize(page);
+    await page.waitForTimeout(150);
+    expect(await num(page, "sl")).toBe(panned);
+    // After the window the same event follows again.
+    await page.waitForTimeout(2100);
+    await visualViewportResize(page);
+    await expect.poll(() => num(page, "sl")).toBeGreaterThan(panned);
+  });
+});
