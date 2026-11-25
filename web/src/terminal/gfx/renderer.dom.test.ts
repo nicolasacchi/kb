@@ -50,6 +50,22 @@ afterEach(() => {
 });
 
 describe("PlaceholderRenderer", () => {
+  it("suspends the terminal's minimum contrast while placeholder runs are on screen and restores it after", () => {
+    const { fake, renderer } = setup();
+    fake.options.minimumContrastRatio = 4.5;
+    fake.picture(ID, 0, 0, 2, 2);
+    renderer.render();
+    expect(fake.options.minimumContrastRatio).toBe(1);
+    fake.clearAll();
+    renderer.render();
+    expect(fake.options.minimumContrastRatio).toBe(4.5);
+    fake.picture(ID, 0, 0, 2, 2);
+    renderer.render();
+    expect(fake.options.minimumContrastRatio).toBe(1);
+    renderer.dispose();
+    expect(fake.options.minimumContrastRatio).toBe(4.5);
+  });
+
   it("clip rect is the snapped visible cell bounds", () => {
     const { fake, renderer } = setup({ cw: 8.25, ch: 17.5, dpr: 2 });
     fake.picture(ID, 1, 2, 4, 3);

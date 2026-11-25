@@ -1181,3 +1181,82 @@ test.describe("BSHELL phone tab sheet @phone", () => {
     await expect(page.locator('[data-testid="term-shell"]')).toHaveCount(0);
   });
 });
+
+// PHIN0 - direct typing behind the hidden pref (`kb.term.phoneDirect`). The pref is
+// seeded by an init script (the same storage `?direct=1` writes). Android Chrome only:
+// the IME behaviour of Android Firefox is measured by hand with `?inputdebug=1`.
+test.describe("PHIN0 phone direct typing @phone", () => {
+  const PROXY = "[data-kb-term-input]";
+  const typed = (stats: Stats): string =>
+    stats.inputs
+      .map((f) => JSON.parse(f) as { t: string; data?: string })
+      .filter((m) => m.t === "input")
+      .map((m) => m.data ?? "")
+      .join("");
+
+  async function direct(page: Page, on: boolean): Promise<Stats> {
+    if (on) await page.addInitScript(() => window.localStorage.setItem("kb.term.phoneDirect", "1"));
+    return openPhone(page, { total: 500, seedLines: 500 });
+  }
+  async function tapGrid(page: Page): Promise<void> {
+    const vis = (await page.locator(".kb-term-phone__watch").boundingBox())!;
+    await page.touchscreen.tap(vis.x + 60, vis.y + 60);
+  }
+
+  test.beforeEach(({}, info) => {
+    test.skip(info.project.name !== "chromium-pixel7", "Android Chrome only");
+  });
+
+  test("a real tap on the grid focuses the input proxy (the touch sequence is not cancelled)", async ({ page }) => {
+    const stats = await direct(page, true);
+    await expect(page.locator(PROXY)).toHaveCount(1);
+    await tapGrid(page);
+    await expect.poll(() => page.evaluate(() => document.activeElement?.hasAttribute("data-kb-term-input") ?? false)).toBe(true);
+    expect(stats.inputs).toEqual([]);
+  });
+
+  test("inserted text reaches the pty as input frames", async ({ page }) => {
+    const stats = await direct(page, true);
+    await tapGrid(page);
+    await expect(page.locator(PROXY)).toBeFocused();
+    await page.keyboard.insertText("hello");
+    await expect.poll(() => typed(stats)).toBe("hello");
+  });
+
+  test("a composition wor -> world is sent without duplicated text", async ({ page }) => {
+    const stats = await direct(page, true);
+    await tapGrid(page);
+    await expect(page.locator(PROXY)).toBeFocused();
+    await page.evaluate(() => {
+      const el = document.querySelector("[data-kb-term-input]") as HTMLTextAreaElement;
+      const input = (v: string) => {
+        el.value = v;
+        el.dispatchEvent(new InputEvent("input", { inputType: "insertCompositionText", isComposing: true, bubbles: true }));
+      };
+      el.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      input("wor");
+      input("world");
+      el.dispatchEvent(new CompositionEvent("compositionend", { data: "world", bubbles: true }));
+    });
+    await expect.poll(() => typed(stats)).toBe("world");
+    // and nothing more arrives afterwards
+    await page.waitForTimeout(300);
+    expect(typed(stats)).toBe("world");
+  });
+
+  test("Backspace is a DEL byte", async ({ page }) => {
+    const stats = await direct(page, true);
+    await tapGrid(page);
+    await expect(page.locator(PROXY)).toBeFocused();
+    await page.keyboard.press("Backspace");
+    await expect.poll(() => typed(stats)).toBe("\x7f");
+  });
+
+  test("flag off: a tap leaves no proxy and sends nothing", async ({ page }) => {
+    const stats = await direct(page, false);
+    await tapGrid(page);
+    await page.waitForTimeout(300);
+    await expect(page.locator(PROXY)).toHaveCount(0);
+    expect(stats.inputs).toEqual([]);
+  });
+});

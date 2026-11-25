@@ -136,9 +136,10 @@ pub fn run(config_path: Option<&PathBuf>, kb: &str, tarball: &Path, force: bool)
 
 /// Daemon-scope members a tarball can carry at its root, from
 /// `KbPaths::state_members` (`StateScope::Daemon`, persistent).
-const DAEMON_MEMBERS: [&str; 5] = [
+const DAEMON_MEMBERS: [&str; 6] = [
     "slates",
     "term-prompts",
+    "term-commands.json",
     "saved-queries.json",
     "memory-policy.json",
     "tombstone-era.json",
@@ -216,6 +217,7 @@ mod tests {
             "slates/proj/ledger.jsonl",
             "term-prompts",
             "term-prompts/proj.json",
+            "term-commands.json",
             "saved-queries.json",
             "tombstone-era.json",
         ]);
@@ -224,6 +226,7 @@ mod tests {
             vec![
                 "slates",
                 "term-prompts",
+                "term-commands.json",
                 "saved-queries.json",
                 "tombstone-era.json"
             ]

@@ -17,7 +17,14 @@ import type { TermRow } from "../api/terms";
 interface FakeTermInst {
   cols: number;
   rows: number;
-  options: { fontSize: number; fontFamily: string; theme?: { background?: string } };
+  options: {
+    fontSize: number;
+    fontFamily: string;
+    theme?: { background?: string };
+    minimumContrastRatio?: number;
+    drawBoldTextInBrightColors?: boolean;
+    customGlyphs?: boolean;
+  };
   element?: HTMLElement;
   clearTextureAtlas: ReturnType<typeof vi.fn>;
   keyHandler?: (ev: Record<string, unknown>) => boolean;
@@ -93,10 +100,26 @@ vi.mock("@xterm/xterm", () => ({
       this.titleCbs.push(cb);
     }
     scrollLines(): void {}
-    constructor(o: { cols: number; rows: number; fontSize: number; fontFamily: string; theme?: { background?: string } }) {
+    constructor(o: {
+      cols: number;
+      rows: number;
+      fontSize: number;
+      fontFamily: string;
+      theme?: { background?: string };
+      minimumContrastRatio?: number;
+      drawBoldTextInBrightColors?: boolean;
+      customGlyphs?: boolean;
+    }) {
       this.cols = o.cols;
       this.rows = o.rows;
-      this.options = { fontSize: o.fontSize, fontFamily: o.fontFamily, theme: o.theme };
+      this.options = {
+        fontSize: o.fontSize,
+        fontFamily: o.fontFamily,
+        theme: o.theme,
+        minimumContrastRatio: o.minimumContrastRatio,
+        drawBoldTextInBrightColors: o.drawBoldTextInBrightColors,
+        customGlyphs: o.customGlyphs,
+      };
       terms.push(this as unknown as FakeTermInst);
     }
     open(host: HTMLElement): void {
@@ -474,6 +497,14 @@ describe("chip and controls", () => {
 });
 
 describe("theme", () => {
+  it("constructs the terminal with a minimum contrast ratio, explicit bright colours and custom glyphs", async () => {
+    await mountPanel();
+    const term = await profile();
+    expect(term.options.minimumContrastRatio).toBe(4.5);
+    expect(term.options.drawBoldTextInBrightColors).toBe(false);
+    expect(term.options.customGlyphs).toBe(true);
+  });
+
   it("re-reads the theme when the SPA theme changes, repainting the host and the picture layer", async () => {
     await mountPanel();
     const term = await profile();
