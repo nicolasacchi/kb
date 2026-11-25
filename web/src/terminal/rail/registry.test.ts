@@ -44,6 +44,12 @@ describe("rail registry", () => {
     expect(railTabs().map((t) => t.label)).toEqual(["now", "Conversation", "changes", "Files", "knowledge", "board", "Commands"]);
   });
 
+  it("a tab may carry a useBadge hook", () => {
+    const hook = () => 2;
+    registerRailTab({ id: "board", label: "Board", useBadge: hook, node: null });
+    expect(railTabs().find((t) => t.id === "board")?.useBadge).toBe(hook);
+  });
+
   it("an unknown id throws", () => {
     expect(() => registerRailTab({ id: "nope", label: "x", node: null } as unknown as RailTab)).toThrow(/unknown rail tab/);
   });
