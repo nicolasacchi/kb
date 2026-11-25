@@ -14,8 +14,8 @@ const state = vi.hoisted(() => ({
 vi.mock("../../hooks/useArtifactHost", () => ({
   useIdentity: () => (state.admitted ? { terminal_admitted: true } : { terminal_admitted: false }),
 }));
-vi.mock("../useTerms", () => ({
-  useTerms: () => ({ terms: state.terms, isLoading: state.isLoading, isError: state.isError }),
+vi.mock("./useNotifyTerms", () => ({
+  useNotifyTerms: () => ({ terms: state.terms, isLoading: state.isLoading, isError: state.isError }),
 }));
 vi.mock("../../hooks/useLiveSessions", () => ({
   useLiveSessions: () => ({ rows: state.live, loading: state.liveLoading }),
@@ -214,5 +214,84 @@ describe("NotifyHost browser Notification", () => {
     }
     expect(Fake.made).toHaveLength(0);
     expect(Fake.requestPermission).not.toHaveBeenCalled();
+  });
+});
+
+describe("NotifyHost extra", () => {
+  it("legacy /term/<id> path counts as the viewed terminal", () => {
+    const r = render(ui("/term/b"));
+    change(r, "/term/b", [lv("a"), lv("b", { blocked: true })]);
+    expect(toastInfo).not.toHaveBeenCalled();
+  });
+
+  it("asks mark clears when the row unblocks", () => {
+    const r = render(ui("/terminals/a"));
+    change(r, "/terminals/a", [lv("a"), lv("b", { blocked: true })]);
+    expect(peekMarks().b?.asks).toBe(true);
+    change(r, "/terminals/a", [lv("a"), lv("b", { blocked: false })]);
+    expect(peekMarks().b).toBeUndefined();
+  });
+
+  it("finished events folded into a summary still set marks", () => {
+    const ids = ["a", "b", "c", "d", "e"];
+    state.terms = ids.map((i) => term(i));
+    state.live = ids.map((i) => lv(i));
+    const r = render(ui("/terminals/a"));
+    change(r, "/terminals/a", ids.map((i) => lv(i, { state: "waiting" })));
+    expect(toastInfo.mock.calls[0][0]).toBe("4 terminals finished");
+    expect(peekMarks().e).toEqual({ asks: false, finishedUnseen: true });
+    expect(peekMarks().a).toBeUndefined();
+  });
+
+  it("becoming visible clears the viewed terminal's finished mark without a data change", () => {
+    setHidden(true);
+    const r = render(ui("/terminals/b"));
+    change(r, "/terminals/b", [lv("a"), lv("b", { state: "waiting" })]);
+    expect(peekMarks().b?.finishedUnseen).toBe(true);
+    setHidden(false);
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(peekMarks().b).toBeUndefined();
+  });
+});
+
+describe("NotifyHost Notification click and summary", () => {
+  const made: { onclick: (() => void) | null; opts: { tag: string; body: string } }[] = [];
+  class Fake {
+    static permission = "granted";
+    onclick: (() => void) | null = null;
+    opts: { tag: string; body: string };
+    constructor(_t: string, opts: { tag: string; body: string }) {
+      this.opts = opts;
+      made.push(this);
+    }
+    close() {}
+  }
+  beforeEach(() => {
+    made.length = 0;
+    vi.stubGlobal("Notification", Fake);
+    localStorage.setItem(NOTIFY_KEY, "1");
+    setHidden(true);
+  });
+
+  it("onclick focuses and navigates to the Go URL", () => {
+    const focus = vi.spyOn(window, "focus").mockImplementation(() => {});
+    const r = render(ui("/terminals/a"));
+    change(r, "/terminals/a", [lv("a"), lv("b", { blocked: true })]);
+    expect(made).toHaveLength(1);
+    act(() => made[0].onclick!());
+    expect(focus).toHaveBeenCalled();
+    expect(loc).toBe("/terminals/b");
+  });
+
+  it("a summary raises exactly one OS notification tagged kb-term-summary", () => {
+    const ids = ["a", "b", "c", "d", "e"];
+    state.terms = ids.map((i) => term(i));
+    state.live = ids.map((i) => lv(i));
+    const r = render(ui("/terminals/a"));
+    change(r, "/terminals/a", ids.map((i) => lv(i, { blocked: i !== "a" })));
+    expect(made).toHaveLength(1);
+    expect(made[0].opts.tag).toBe("kb-term-summary");
   });
 });

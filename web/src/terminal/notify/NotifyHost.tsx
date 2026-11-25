@@ -3,11 +3,11 @@
 // derives attention events with the pure core and raises toasts (and, when the
 // operator opted in and the tab is hidden, a browser Notification).
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useIdentity } from "../../hooks/useArtifactHost";
 import { useLiveSessions } from "../../hooks/useLiveSessions";
-import { useTerms } from "../useTerms";
+import { useNotifyTerms } from "./useNotifyTerms";
 import { toast } from "../../lib/toast";
 import { joinHub, parseHubUrl } from "../hub/termHub";
 import { deriveAttention, transitions, type AttnEvent, type AttnRow } from "./derive";
@@ -23,10 +23,16 @@ function hidden(): boolean {
 
 export default function NotifyHost(): null {
   const admitted = useIdentity()?.terminal_admitted === true;
-  const { terms, isLoading, isError } = useTerms();
+  const { terms, isLoading, isError } = useNotifyTerms(admitted);
   const { rows: live, loading: liveLoading } = useLiveSessions();
   const { pathname } = useLocation();
   const navigate = useNavigate();
+  const [vis, setVis] = useState(0);
+  useEffect(() => {
+    const on = () => setVis((n) => n + 1);
+    document.addEventListener("visibilitychange", on);
+    return () => document.removeEventListener("visibilitychange", on);
+  }, []);
   const prevRef = useRef<AttnRow[] | null>(null);
   const finishedRef = useRef<Set<string>>(new Set());
   const navRef = useRef(navigate);
@@ -80,7 +86,7 @@ export default function NotifyHost(): null {
       toast.info(text, { label: eventLabel(e), onClick: () => navRef.current(url) });
       if (wantOs) osNotify(e, text, () => navRef.current(url));
     }
-  }, [ready, terms, live, viewed]);
+  }, [ready, terms, live, viewed, vis]);
 
   return null;
 }
