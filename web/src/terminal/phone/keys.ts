@@ -90,3 +90,52 @@ export const CHOICE_ACTIONS: readonly KeyBarKey[] = [
   { name: "Up", label: "↑", aria: "Up" },
   { name: "Down", label: "↓", aria: "Down" },
 ];
+
+/**
+ * PHIN2 - the bytes the runner writes for a key NAME (`named_key_bytes` in
+ * `crates/kb-term/src/runner/keys.rs`), for the direct-typing path that sends
+ * raw bytes over the WS instead of names over REST. `keys.test.ts` reads the
+ * Rust table and fails on drift. The arrows follow the terminal's cursor-keys
+ * mode (`ESC O x` in application mode, `ESC [ x` otherwise); the runner's table
+ * is the normal-mode form.
+ */
+const KEY_BYTES: Readonly<Record<KeyName, string>> = {
+  Esc: "\x1b",
+  Tab: "\x09",
+  "S-Tab": "\x1b[Z",
+  Enter: "\x0d",
+  Up: "\x1b[A",
+  Down: "\x1b[B",
+  Right: "\x1b[C",
+  Left: "\x1b[D",
+  "C-c": "\x03",
+  "C-d": "\x04",
+  "C-u": "\x15",
+  BSpace: "\x7f",
+  Slash: "/",
+  "1": "1",
+  "2": "2",
+  "3": "3",
+  "4": "4",
+  "5": "5",
+  "6": "6",
+  "7": "7",
+  "8": "8",
+  "9": "9",
+  y: "y",
+  n: "n",
+};
+
+const ARROW_FINAL: Readonly<Partial<Record<KeyName, string>>> = { Up: "A", Down: "B", Right: "C", Left: "D" };
+
+export function keyBytes(name: KeyName, appCursor: boolean): string {
+  const f = ARROW_FINAL[name];
+  if (f !== undefined) return `${appCursor ? "\x1bO" : "\x1b["}${f}`;
+  return KEY_BYTES[name];
+}
+
+/** Ctrl+arrow (`ESC [ 1 ; 5 x`); null for any other key (Ctrl does not change it). */
+export function ctrlArrowBytes(name: KeyName): string | null {
+  const f = ARROW_FINAL[name];
+  return f === undefined ? null : `\x1b[1;5${f}`;
+}

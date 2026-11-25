@@ -19,6 +19,9 @@ import {
   type DebugEvent,
   type ProxyVariant,
 } from "./inputProxy";
+import { createStickyMods } from "./stickyMods";
+import { createDirectLine } from "./directLine";
+import type { ConfirmFn } from "./driveApi";
 
 describe("diffValue / encodeDiff golden table", () => {
   const rows: Array<[string, string, string, number, string]> = [
@@ -516,5 +519,174 @@ describe("PHIN1 core: physical Ctrl/Cmd+C and +V", () => {
     r.key("d", { ctrlKey: true });
     r.key("a", { ctrlKey: true });
     expect(r.sent).toEqual(["\x04", "\x01"]);
+  });
+});
+
+// PHIN2 - sticky Ctrl on the soft keyboard path and the typed /bg guard.
+function rig2(opts: { harness?: string; confirm?: ConfirmFn | null } = {}) {
+  const sent: string[] = [];
+  let clock = 0;
+  const mods = createStickyMods(() => clock);
+  const line = createDirectLine();
+  line.configure(opts.harness ?? "omp", opts.confirm ?? null);
+  const core = createProxyCore({
+    send: (d) => {
+      sent.push(d);
+      return true;
+    },
+    variant: DEFAULT_VARIANT,
+    setValue: () => undefined,
+    now: () => clock,
+    mods,
+    line,
+  });
+  const type = (value: string, inputType = "insertText", isComposing = false) =>
+    core.onInput({ value, inputType, data: null, isComposing });
+  const key = (k: string) =>
+    core.onKeyDown({ key: k, keyCode: 0, ctrlKey: false, altKey: false, metaKey: false, isComposing: false });
+  return { core, sent, mods, line, type, key, tick: (ms: number) => (clock += ms) };
+}
+
+describe("PHIN2 core: sticky Ctrl", () => {
+  it("armed + c sends ^C and the latch is off afterwards", () => {
+    const r = rig2();
+    r.mods.tap();
+    r.type("c");
+    expect(r.sent).toEqual(["\x03"]);
+    expect(r.mods.getState()).toBe("off");
+    r.type("c");
+    expect(r.sent).toEqual(["\x03", "c"]);
+  });
+
+  it("locked persists across three characters", () => {
+    const r = rig2();
+    r.mods.tap();
+    r.tick(100);
+    r.mods.tap();
+    for (const ch of ["a", "e", "k"]) r.type(ch);
+    expect(r.sent).toEqual(["\x01", "\x05", "\x0b"]);
+    expect(r.mods.getState()).toBe("locked");
+  });
+
+  it("armed + composition: the composed text goes out plain FIRST, the latch stays armed, compositionend sends no control byte", () => {
+    const r = rig2();
+    r.mods.tap();
+    r.core.onCompositionStart();
+    r.type("ab", "insertCompositionText", true);
+    expect(r.sent).toEqual(["ab"]);
+    expect(r.mods.getState()).toBe("armed");
+    r.core.onCompositionEnd({ data: "ab", value: "ab" });
+    expect(r.sent).toEqual(["ab"]);
+    expect(r.mods.getState()).toBe("armed");
+    r.type("c");
+    expect(r.sent).toEqual(["ab", "\x03"]);
+    expect(r.mods.getState()).toBe("off");
+  });
+
+  it("a character with no control form still consumes the latch", () => {
+    const r = rig2();
+    r.mods.tap();
+    r.type("5");
+    expect(r.sent).toEqual(["5"]);
+    expect(r.mods.getState()).toBe("off");
+  });
+
+  it("a deletion alone does not consume the latch", () => {
+    const r = rig2();
+    r.mods.tap();
+    r.core.onBeforeInput({ inputType: "deleteContentBackward", data: null, isComposing: false });
+    expect(r.mods.getState()).toBe("armed");
+  });
+
+  it("armed + a hardware arrow sends the Ctrl+arrow form", () => {
+    const r = rig2();
+    r.mods.tap();
+    r.key("ArrowUp");
+    expect(r.sent).toEqual(["\x1b[1;5A"]);
+    expect(r.mods.getState()).toBe("off");
+  });
+});
+
+describe("PHIN2 core: the typed /bg guard", () => {
+  const defer = () => {
+    let resolve!: (v: boolean) => void;
+    const p = new Promise<boolean>((res) => (resolve = res));
+    return { p, resolve };
+  };
+  const flushP = async () => {
+    for (let i = 0; i < 4; i += 1) await Promise.resolve();
+  };
+
+  it("claude: /bg + Enter holds the CR until confirmed, ignores a second Enter while pending", async () => {
+    const d = defer();
+    const confirm = vi.fn(() => d.p);
+    const r = rig2({ harness: "claude", confirm });
+    r.type("/bg");
+    expect(r.sent).toEqual(["/bg"]);
+    r.key("Enter");
+    r.key("Enter");
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(r.sent).toEqual(["/bg"]);
+    d.resolve(true);
+    await flushP();
+    expect(r.sent).toEqual(["/bg", "\r"]);
+    expect(r.line.text()).toBe("");
+  });
+
+  it("declined or no confirm host drops the CR and keeps the typed text", async () => {
+    const no = rig2({ harness: "claude", confirm: vi.fn(async () => false) });
+    no.type("/bg");
+    no.key("Enter");
+    await flushP();
+    expect(no.sent).toEqual(["/bg"]);
+    expect(no.line.text()).toBe("/bg");
+    const none = rig2({ harness: "claude", confirm: null });
+    none.type("/bg");
+    none.key("Enter");
+    await flushP();
+    expect(none.sent).toEqual(["/bg"]);
+  });
+
+  it("omp sends the CR at once and an ordinary claude line is not asked", () => {
+    const confirm = vi.fn(async () => true);
+    const omp = rig2({ harness: "omp", confirm });
+    omp.type("/bg");
+    omp.key("Enter");
+    expect(omp.sent).toEqual(["/bg", "\r"]);
+    const cl = rig2({ harness: "claude", confirm });
+    cl.type("hello");
+    cl.key("Enter");
+    expect(cl.sent).toEqual(["hello", "\r"]);
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("the mirror follows Backspace and Ctrl-C resets it", () => {
+    const confirm = vi.fn(async () => true);
+    const r = rig2({ harness: "claude", confirm });
+    r.type("/bgx");
+    r.core.onBeforeInput({ inputType: "deleteContentBackward", data: null, isComposing: false });
+    // the element is empty again, so the backspace is ours to send
+    expect(r.line.text()).toBe("/bg");
+    r.key("Backspace");
+    expect(r.line.text()).toBe("/b");
+    r.type("g");
+    expect(r.line.text()).toBe("/bg");
+    r.core.onKeyDown({ key: "c", keyCode: 0, ctrlKey: true, altKey: false, metaKey: false, isComposing: false });
+    expect(r.line.text()).toBe("");
+  });
+
+  it("a blur reset clears the mirror, but not while a confirm is pending", async () => {
+    const d = defer();
+    const r = rig2({ harness: "claude", confirm: vi.fn(() => d.p) });
+    r.type("/bg");
+    r.core.reset();
+    expect(r.line.text()).toBe("");
+    r.type("/bg");
+    r.key("Enter");
+    r.core.reset();
+    expect(r.line.text()).toBe("/bg");
+    d.resolve(false);
+    await flushP();
+    expect(r.line.text()).toBe("/bg");
   });
 });
