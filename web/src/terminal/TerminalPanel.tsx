@@ -69,6 +69,7 @@ import { useLiveSessions } from "../hooks/useLiveSessions";
 import { cwdBase } from "../components/TermControls";
 import { statusChips } from "./statusChips";
 import { TermHeader } from "./TermHeader";
+import { TermStateOverlay, announceText, overlayKind } from "./TermStateOverlay";
 import { initialInputDelivered, initialInputText, markInitialInputDelivered } from "./initialInput";
 import type { ImageDefFrame, ProfileFrame } from "./wire";
 import type { TerminalPanelProps } from "./TerminalPanel.lazy";
@@ -201,6 +202,51 @@ export function TerminalPanel(props: TerminalPanelProps) {
   useEffect(() => setOwnerHint(null), [listOwner]);
   const gridOwner: string | null | undefined = ownerHint ? ownerHint.owner : vouchedOwner;
   const onOwner = useCallback((owner: string | null): void => setOwnerHint({ owner }), []);
+
+  // BSTATE — a hint names the owner of ONE grid on ONE connection: a new grid
+  // size or a connection that is no longer live retires it, and while the
+  // stream is not live the chip says the size only (the owner is unknown).
+  const everLiveRef = useRef(false);
+  if (state.phase === "live") everLiveRef.current = true;
+  const firstConnect = !everLiveRef.current;
+  const ownerStale = ["reconnecting", "ended", "expired", "blocked", "sleeping"].includes(state.phase);
+  const gridCols = grid?.cols;
+  const gridRows = grid?.rows;
+  useEffect(() => setOwnerHint(null), [gridCols, gridRows]);
+  useEffect(() => {
+    if (ownerStale) setOwnerHint(null);
+  }, [ownerStale]);
+  const chipOwner: string | null | undefined = ownerStale ? undefined : gridOwner;
+
+  // BSTATE — the ONE polite region: a short sentence per state change.
+  const [announce, setAnnounce] = useState("");
+  const reconnectedRef = useRef(false);
+  useEffect(() => {
+    if (state.phase === "live") {
+      setAnnounce(reconnectedRef.current ? "Reconnected" : "");
+      reconnectedRef.current = false;
+      return;
+    }
+    if (state.phase === "sleeping") {
+      setAnnounce("");
+      return;
+    }
+    if (overlayKind(state.phase, firstConnect) === "reconnecting" || state.phase === "expired") {
+      reconnectedRef.current = true;
+    }
+    setAnnounce(announceText(state.phase, firstConnect, state.exitCode, state.blockedReason));
+  }, [state.phase, state.exitCode, state.blockedReason, firstConnect]);
+
+  // BSTATE — the overlay never takes focus. Only when the reader had focus ON
+  // the overlay (its button) as it went away does the terminal get it back.
+  const overlayFocusRef = useRef(false);
+  const overlayOn = !isMobile && overlayKind(state.phase, firstConnect) !== null;
+  useEffect(() => {
+    if (overlayOn || !overlayFocusRef.current) return;
+    overlayFocusRef.current = false;
+    const active = document.activeElement;
+    if (!active || active === document.body) termRef.current?.focus();
+  }, [overlayOn]);
 
   // Fit the live terminal into the desktop host (font only; never a take-size).
   // The fitter plans a new grid or box from scratch and verifies after the
@@ -798,6 +844,9 @@ export function TerminalPanel(props: TerminalPanelProps) {
           stream={state}
           caption={transient ?? state.caption}
           onClose={closePanel}
+          onReconnect={() => sessionRef.current?.kick()}
+          overlayFirstConnect={firstConnect}
+          announce={announce}
           sendInput={(d) => {
             const ok = sessionRef.current?.sendInput(d) ?? false;
             if (ok) lastTypedRef.current = Date.now();
@@ -851,7 +900,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
             </span>
             {grid ? (
               <span className="kb-term__grid" data-testid="kb-term-grid">
-                {chipText(grid, gridOwner)}
+                {chipText(grid, chipOwner)}
               </span>
             ) : null}
             {fit ? (
@@ -934,17 +983,38 @@ export function TerminalPanel(props: TerminalPanelProps) {
           </span>
         </div>
       ) : null}
+      <div className="kb-term__announce" role="status" aria-live="polite" data-testid="kb-term-announce">
+        {announce}
+      </div>
       <div
-        className="kb-term__view"
-        data-kb-term=""
-        data-kb-term-phase={state.phase}
-        data-kb-term-offset={state.applied}
-        data-kb-term-resets={state.resets}
-        data-kb-term-gaps={state.gaps}
-        data-kb-term-width={widthActive ? "unicode-graphemes" : undefined}
-        data-kb-term-scrollback={scrollback > 0 ? scrollback : undefined}
-        ref={hostRef}
-      />
+        className="kb-term__pane"
+        onFocus={(e) => {
+          overlayFocusRef.current = !!(e.target as Element).closest?.(".kb-term-state-overlay");
+        }}
+      >
+        <div
+          className="kb-term__view"
+          data-kb-term=""
+          data-kb-term-phase={state.phase}
+          data-kb-term-offset={state.applied}
+          data-kb-term-resets={state.resets}
+          data-kb-term-gaps={state.gaps}
+          data-kb-term-width={widthActive ? "unicode-graphemes" : undefined}
+          data-kb-term-scrollback={scrollback > 0 ? scrollback : undefined}
+          ref={hostRef}
+        />
+        <TermStateOverlay
+          phase={state.phase}
+          caption={state.caption}
+          exitCode={state.exitCode}
+          blockedReason={state.blockedReason}
+          attempt={state.attempt}
+          firstConnect={firstConnect}
+          onReconnect={() => sessionRef.current?.kick()}
+          onBack={closePanel}
+          compact={false}
+        />
+      </div>
       {behind ? (
         <button
           type="button"
