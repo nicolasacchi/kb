@@ -78,6 +78,7 @@ import { PhoneTerminal, attachTerm, type PhoneMode } from "./phone/PhoneTerminal
 import { DriveDock } from "./phone/DriveDock";
 import { terminalOwnsEscape } from "./phone/escape";
 import { readFont } from "./phone/fontSteps";
+import { readScreenReader, writeScreenReader } from "./screenReaderPref";
 import { scrollbackFor } from "./phone/scrollback";
 import { bindNetworkKicks } from "./networkKicks";
 import { bellNeedsAttention, sanitizeOscTitle } from "../lib/termAttention";
@@ -240,6 +241,13 @@ export function TerminalPanel(props: TerminalPanelProps) {
   // BSTATE — the overlay never takes focus. Only when the reader had focus ON
   // the overlay (its button) as it went away does the terminal get it back.
   const overlayFocusRef = useRef(false);
+  const [screenReader, setScreenReader] = useState<boolean>(() => readScreenReader());
+  const onScreenReader = useCallback((on: boolean) => {
+    setScreenReader(on);
+    writeScreenReader(on);
+    // Live: the same Terminal, no remount, no geometry message.
+    if (termRef.current) termRef.current.options.screenReaderMode = on;
+  }, []);
   const overlayOn = !isMobile && overlayKind(state.phase, firstConnect) !== null;
   useEffect(() => {
     if (overlayOn || !overlayFocusRef.current) return;
@@ -387,6 +395,8 @@ export function TerminalPanel(props: TerminalPanelProps) {
         minimumContrastRatio: 4.5,
         drawBoldTextInBrightColors: false,
         customGlyphs: true,
+        // BA11Y — xterm's own accessibility tree, a browser-local choice.
+        screenReaderMode: readScreenReader(),
       });
       profileThemeRef.current = profile.theme;
       // The host paints the terminal's own background (no second black).
@@ -908,6 +918,15 @@ export function TerminalPanel(props: TerminalPanelProps) {
                 font {fit.fontSize}px
               </span>
             ) : null}
+            <label className="kb-term__sr" data-testid="kb-term-screen-reader-label">
+              <input
+                type="checkbox"
+                data-testid="kb-term-screen-reader"
+                checked={screenReader}
+                onChange={(e) => onScreenReader(e.target.checked)}
+              />
+              Screen reader mode
+            </label>
             {fit && (fit.cropped.x || fit.cropped.y) ? (
               <span className="kb-term__hint" data-testid="kb-term-cropped" title={CROPPED_DESKTOP_HINT}>
                 {CROPPED_LABEL}
@@ -988,8 +1007,17 @@ export function TerminalPanel(props: TerminalPanelProps) {
       </div>
       <div
         className="kb-term__pane"
+        role="region"
+        aria-label={`${props.harness} terminal${project ? ` in ${project}` : ""}`}
         onFocus={(e) => {
           overlayFocusRef.current = !!(e.target as Element).closest?.(".kb-term-state-overlay");
+        }}
+        onBlur={(e) => {
+          // Focus left the overlay: the terminal is not owed it back. An
+          // element removed while focused (the overlay unmounting) keeps its flag.
+          const to = e.relatedTarget as Element | null;
+          if (!(e.target as Element).isConnected) return;
+          if (!to || !to.closest?.(".kb-term-state-overlay")) overlayFocusRef.current = false;
         }}
       >
         <div
@@ -1008,7 +1036,6 @@ export function TerminalPanel(props: TerminalPanelProps) {
           caption={state.caption}
           exitCode={state.exitCode}
           blockedReason={state.blockedReason}
-          attempt={state.attempt}
           firstConnect={firstConnect}
           onReconnect={() => sessionRef.current?.kick()}
           onBack={closePanel}

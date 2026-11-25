@@ -24,6 +24,7 @@ interface FakeTermInst {
     minimumContrastRatio?: number;
     drawBoldTextInBrightColors?: boolean;
     customGlyphs?: boolean;
+    screenReaderMode?: boolean;
   };
   element?: HTMLElement;
   clearTextureAtlas: ReturnType<typeof vi.fn>;
@@ -111,6 +112,7 @@ vi.mock("@xterm/xterm", () => ({
       minimumContrastRatio?: number;
       drawBoldTextInBrightColors?: boolean;
       customGlyphs?: boolean;
+      screenReaderMode?: boolean;
     }) {
       this.cols = o.cols;
       this.rows = o.rows;
@@ -121,6 +123,7 @@ vi.mock("@xterm/xterm", () => ({
         minimumContrastRatio: o.minimumContrastRatio,
         drawBoldTextInBrightColors: o.drawBoldTextInBrightColors,
         customGlyphs: o.customGlyphs,
+        screenReaderMode: o.screenReaderMode,
       };
       terms.push(this as unknown as FakeTermInst);
     }
@@ -1419,5 +1422,71 @@ describe("BSTATE: the state overlay", () => {
     expect(text("kb-term-grid")).toBe("201x48 · web");
     act(() => lastSession!.sink.resize(100, 30));
     expect(text("kb-term-grid")).toBe("100x30");
+  });
+});
+
+describe("BA11Y: accessibility", () => {
+  const ST = { phase: "live", epoch: null, applied: 0, resets: 0, gaps: 0, attempt: 0, caption: "live", exitCode: null, blockedReason: null };
+  const set = (o: Record<string, unknown>): void => act(() => lastSession!.callbacks.onState({ ...ST, ...o }));
+
+  it("the pane is a region named by harness and project, stable across phase and title changes", async () => {
+    rows = [{ id: "abcd1234", state: "working", cols: 201, rows: 48, grid_owner: null, cwd: "/work/demo" }] as typeof rows;
+    await mountPanel();
+    const term = await profile();
+    const pane = (): HTMLElement => host!.querySelector<HTMLElement>(".kb-term__pane")!;
+    expect(pane().getAttribute("role")).toBe("region");
+    expect(pane().getAttribute("aria-label")).toBe("omp terminal in demo");
+    set({});
+    act(() => term.titleCbs.forEach((cb) => cb("build running")));
+    set({ phase: "reconnecting", caption: "reconnecting in 3s" });
+    expect(pane().getAttribute("aria-label")).toBe("omp terminal in demo");
+  });
+
+  it("the More switch flips screenReaderMode on the same Terminal, persists, and a fresh mount starts with it", async () => {
+    window.localStorage.removeItem("kb-term-screen-reader");
+    await mountPanel();
+    const term = await profile();
+    set({});
+    expect(term.options.screenReaderMode).toBe(false);
+    const sw = q("kb-term-screen-reader") as HTMLInputElement;
+    const fetchesBefore = rig.calls?.length;
+    act(() => sw.click());
+    expect(term.options.screenReaderMode).toBe(true);
+    expect(window.localStorage.getItem("kb-term-screen-reader")).toBe("1");
+    expect(terms.length).toBe(1);
+    act(() => (q("kb-term-screen-reader") as HTMLInputElement).click());
+    expect(term.options.screenReaderMode).toBe(false);
+    expect(terms.length).toBe(1);
+    expect(window.localStorage.getItem("kb-term-screen-reader")).toBe("0");
+    expect(rig.calls?.length).toBe(fetchesBefore);
+    // A fresh mount reads the stored choice.
+    act(() => (q("kb-term-screen-reader") as HTMLInputElement).click());
+    act(() => root?.unmount());
+    host?.remove();
+    terms.length = 0;
+    await mountPanel();
+    const again = await profile();
+    expect(again.options.screenReaderMode).toBe(true);
+  });
+
+  it("focus that left the overlay before it unmounts is not handed to the terminal; focus still on it is", async () => {
+    await mountPanel();
+    const term = await profile();
+    set({});
+    set({ phase: "reconnecting", caption: "reconnecting" });
+    act(() => q("kb-term-overlay-action")!.focus());
+    // Focus moves to a header button (outside the pane): the pane sees a blur.
+    const other = q("kb-term-find-toggle")!;
+    act(() => other.focus());
+    set({});
+    expect(term.focus).not.toHaveBeenCalled();
+  });
+
+  it("the overlay detail is the session caption, not a transient status", async () => {
+    await mountPanel();
+    await profile();
+    set({});
+    set({ phase: "reconnecting", caption: "reconnecting in 4s (offline)" });
+    expect(text("kb-term-overlay-detail")).toBe("reconnecting in 4s (offline)");
   });
 });

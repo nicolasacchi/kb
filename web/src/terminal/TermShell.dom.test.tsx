@@ -218,3 +218,46 @@ describe("TermShell layout switch", () => {
     expect(pane.isConnected).toBe(true);
   });
 });
+
+describe("BA11Y: rail tabs follow the WAI-ARIA tabs pattern", () => {
+  const stops = (): string[] => screen.getAllByRole("tab").map((t) => t.getAttribute("tabindex") ?? "");
+  const active = (): number => screen.getAllByRole("tab").findIndex((t) => t.getAttribute("aria-selected") === "true");
+
+  it("key table: Left/Right wrap, Home/End jump, Up/Down and modified arrows are ignored, one tab stop always", () => {
+    render(shell());
+    const tab = (i: number): HTMLElement => screen.getAllByRole("tab")[i];
+    expect(active()).toBe(1);
+    fireEvent.keyDown(tab(1), { key: "ArrowDown" });
+    fireEvent.keyDown(tab(1), { key: "ArrowUp" });
+    fireEvent.keyDown(tab(1), { key: "ArrowRight", ctrlKey: true });
+    fireEvent.keyDown(tab(1), { key: "ArrowRight", shiftKey: true });
+    expect(active()).toBe(1);
+    fireEvent.keyDown(tab(1), { key: "Home" });
+    expect(active()).toBe(0);
+    expect(stops().filter((s) => s === "0")).toHaveLength(1);
+    fireEvent.keyDown(tab(0), { key: "ArrowLeft" });
+    expect(active()).toBe(6);
+    fireEvent.keyDown(tab(6), { key: "ArrowRight" });
+    expect(active()).toBe(0);
+    fireEvent.keyDown(tab(0), { key: "End" });
+    expect(active()).toBe(6);
+    expect(stops().filter((s) => s === "0")).toHaveLength(1);
+    expect(stops()[6]).toBe("0");
+  });
+
+  it("keys from a non-tab target in the tablist are not taken", () => {
+    render(shell());
+    fireEvent.keyDown(screen.getByRole("tablist"), { key: "End" });
+    expect(active()).toBe(1);
+  });
+
+  it("wires orientation, aria-controls and a labelled focusable tabpanel", () => {
+    render(shell());
+    expect(screen.getByRole("tablist").getAttribute("aria-orientation")).toBe("horizontal");
+    const panel = screen.getByRole("tabpanel");
+    const on = screen.getAllByRole("tab")[active()];
+    expect(on.getAttribute("aria-controls")).toBe(panel.id);
+    expect(panel.getAttribute("aria-labelledby")).toBe(on.id);
+    expect(panel.getAttribute("tabindex")).toBe("0");
+  });
+});

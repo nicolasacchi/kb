@@ -436,7 +436,6 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
           caption={caption}
           exitCode={stream.exitCode ?? null}
           blockedReason={stream.blockedReason ?? null}
-          attempt={stream.attempt ?? 0}
           firstConnect={overlayFirstConnect ?? true}
           onReconnect={onReconnect}
           onBack={onClose}
