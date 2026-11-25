@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { WorklogTabs } from "../components/nav/SectionTabs";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useScrollRestoration } from "../hooks/useScrollRestoration";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
   useSessionPresence,
   useSessions,
@@ -25,8 +25,9 @@ import { useIdentity } from "../hooks/useArtifactHost";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "@kb/ui/icons";
 import { useCloseRequest } from "@kb/ui/useCloseRequest";
-import { NewTerminalPanel } from "../components/NewTerminalPanel";
-import { TermList, openTermParam } from "../components/TermList";
+import { openTermParam } from "../components/TermList";
+import { ContinueInTerminal } from "../components/ContinueInTerminal";
+import { useTerms } from "../terminal/useTerms";
 import { ViewBar, type Cluster, type Control } from "@kb/ui/ViewBar";
 import {
   fetchResearchRollup,
@@ -109,6 +110,23 @@ import { buildHubUrl } from "../terminal/hub/termHub";
 // that a deliberate hover-then-click feels instant.
 const PREFETCH_DELAY_MS = 300;
 
+// HUBHOST — the ONE terminals affordance left on /sessions: a compact link to
+// the hub with live counts from the shared `["terms"]` rows. Plain
+// "Terminals" while there are none.
+function TerminalsLink() {
+  const { terms } = useTerms();
+  const running = terms.filter((t) => !t.pane_dead).length;
+  const needs = terms.filter((t) => !t.pane_dead && t.blocked === true).length;
+  const label = running === 0 ? "Terminals" : `Terminals (${running} running, ${needs} need you)`;
+  return (
+    <div className="kb-ses__terminals-link">
+      <Link to={buildHubUrl({})} data-testid="sessions-terminals-link">
+        {label}
+      </Link>
+    </div>
+  );
+}
+
 // v0.14 S5 — /sessions view. Mirrors /memory's three-column shell but
 // swaps the salience-ranked table for a chronological list; sessions
 // are inherently time-ordered, not rank-ordered. The right rail shows
@@ -137,7 +155,6 @@ export default function SessionsRoute() {
   // invalid value is ignored.
   const legacyTermId = openTermParam(params.get("term"));
   const navigate = useNavigate();
-  const qc = useQueryClient();
   useEffect(() => {
     if (legacyTermId !== null) navigate(buildHubUrl({ id: legacyTermId }), { replace: true });
   }, [legacyTermId, navigate]);
@@ -584,16 +601,8 @@ export default function SessionsRoute() {
             </button>
           )}
         </div>
-        {/* FUWEBLAUNCH — start a kb-term session (admitted callers only). */}
-        <NewTerminalPanel
-          admitted={identity?.terminal_admitted === true}
-          sessionCwds={rows.slice(0, 50).map((r) => r.cwd)}
-          onLaunched={(id, harness) => {
-            void qc.invalidateQueries({ queryKey: ["terms"] });
-            navigate(buildHubUrl({ id }), { state: { launched: { id, harness } } });
-          }}
-        />
-        {identity?.terminal_admitted === true && <TermList />}
+        {/* HUBHOST — terminals live in the hub; one compact door here. */}
+        {identity?.terminal_admitted === true && <TerminalsLink />}
         {/* OL R4 — ONE control row: View · Filters · Find, then the funnel as
             a single muted line. The View buttons are toggles (not a segment)
             so each keeps its own data-testid. */}
@@ -1492,6 +1501,15 @@ export function SessionListRow({
           </span>
         )}
       </button>
+      {/* HUBHOST — a door into the hub's launcher (a link, never a launch). It
+          is a sibling of the select button, so a click never selects the row. */}
+      <ContinueInTerminal
+        sessionId={row.session_id}
+        harness={row.harness}
+        cwd={row.cwd}
+        className="kb-ses__row-continue"
+        onClick={(e) => e.stopPropagation()}
+      />
     </li>
   );
 }

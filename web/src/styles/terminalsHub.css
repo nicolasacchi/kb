@@ -137,3 +137,47 @@
 .kb-hub__ended .kb-hub__list {
   margin-top: var(--pad-1);
 }
+
+/* HUBHOST - the primary New session action, in the page header. */
+.kb-hub__new {
+  margin-left: auto;
+  min-height: 36px;
+  padding: 0 var(--pad-4);
+  border: 1px solid var(--accent-fill);
+  border-radius: var(--radius-sm);
+  background: var(--accent-fill);
+  color: var(--accent-fill-fg);
+  font-size: var(--fs-md);
+  cursor: pointer;
+}
+@media (pointer: coarse), (max-width: 860px) {
+  .kb-hub__new {
+    min-height: 44px;
+  }
+}
+
+/* HUBHOST - a row is the open link plus the End action beside it. */
+.kb-hub__item {
+  display: flex;
+  align-items: stretch;
+  gap: var(--pad-2);
+}
+.kb-hub__item > .kb-hub__row {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.kb-hub__end {
+  flex: none;
+  min-height: 36px;
+  padding: 0 var(--pad-3);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--ink);
+  cursor: pointer;
+}
+@media (pointer: coarse), (max-width: 860px) {
+  .kb-hub__end {
+    min-height: 44px;
+  }
+}

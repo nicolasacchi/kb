@@ -91,6 +91,7 @@ test.describe("HUBDOOR Terminals door and hub", () => {
     await expect(page.locator(DOOR)).toHaveCount(0);
     await page.goto(`${BASE}/terminals`);
     await expect(page.getByText("Terminals are not enabled")).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-testid="hub-new"]')).toHaveCount(0);
   });
 
   test("at 1000px the label collapses and the pill stays", async ({ page }) => {
@@ -119,4 +120,140 @@ test.describe("HUBDOOR Terminals door and hub", () => {
       expect(fit.right, "last door right edge").toBeLessThanOrEqual(fit.inner);
     });
   }
+});
+
+// HUBHOST - launching is an action of the hub: the New session button, the
+// ?launch=1&resume=<sid> deep link (opens, never launches), the strip-once rule.
+const SID = "sid-e2e-resume";
+
+async function mockLaunch(page: Page): Promise<Array<Record<string, unknown>>> {
+  const posted: Array<Record<string, unknown>> = [];
+  await page.route("**/api/terms", (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    posted.push(JSON.parse(route.request().postData() ?? "{}") as Record<string, unknown>);
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ id: TERM_ID }) });
+  });
+  return posted;
+}
+
+async function mockSession(page: Page): Promise<void> {
+  await page.route(`**/api/sessions/${SID}`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: "d1",
+        kb: "mem",
+        artifact_id: "a1",
+        session_id: SID,
+        started_at: 1760000000,
+        ended_at: 1760000010,
+        duration_ms: 10000,
+        message_count: 1,
+        memory_count: 0,
+        source_relative: "t.html",
+        display_name: "Synthetic resume session",
+        harness: "codex",
+        cwd: "/synthetic/resume",
+        checks: [],
+        unnamed_edits: [],
+        unnamed_edits_total: 0,
+        memory_ids: [],
+      }),
+    }),
+  );
+}
+
+const VIEWPORTS = [
+  { name: "desktop", width: 1280, height: 720 },
+  { name: "phone", width: 390, height: 844 },
+];
+
+test.describe("HUBHOST launcher in the hub", () => {
+  for (const vp of VIEWPORTS) {
+    test(`New session at ${vp.name}: confirm shows cwd and harness, one POST, lands on /terminals/<id>`, async ({ page }) => {
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await installFakeTerminal(page, { total: 300, seedLines: 100 });
+      const posted = await mockLaunch(page);
+      await page.goto(`${BASE}/terminals`);
+      const btn = page.locator('[data-testid="hub-new"]');
+      await expect(btn).toBeVisible({ timeout: 20_000 });
+      expect((await btn.boundingBox())!.height).toBeGreaterThanOrEqual(vp.name === "phone" ? 43 : 30);
+      await btn.click();
+      await expect(page.locator('[data-testid="launch-dialog"]')).toBeVisible();
+      if (vp.name === "phone") await expect(page.locator("[data-kb-sheet]")).toHaveAttribute("data-detent", "full");
+      await page.locator('[data-testid="launch-cwd"]').fill("/synthetic/new");
+      await page.locator('[data-testid="launch-harness-claude"]').click();
+      await page.locator('[data-testid="launch-review"]').click();
+      await expect(page.locator('[data-testid="launch-confirm-cwd"]')).toContainText("/synthetic/new");
+      await expect(page.locator('[data-testid="launch-confirm-harness"]')).toContainText("Claude");
+      expect(posted).toEqual([]);
+      await page.locator('[data-testid="launch-confirm"]').click();
+      await expect.poll(() => posted.length).toBe(1);
+      expect(posted[0]).toEqual({ harness: "claude", cwd: "/synthetic/new" });
+      await expect(page).toHaveURL(new RegExp(`/terminals/${TERM_ID}$`), { timeout: 15_000 });
+    });
+
+    test(`deep link at ${vp.name}: opens prefilled from the session row, strips the URL, never launches, reload does not reopen`, async ({ page }) => {
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await installFakeTerminal(page, { total: 300, seedLines: 100 });
+      const posted = await mockLaunch(page);
+      await mockSession(page);
+      await page.goto(`${BASE}/terminals?launch=1&resume=${SID}&harness=grok&cwd=/evil`);
+      await expect(page.locator('[data-testid="launch-dialog"]')).toBeVisible({ timeout: 20_000 });
+      await expect(page).toHaveURL(/\/terminals$/);
+      await expect(page.locator('[data-testid="launch-review"]')).toBeEnabled({ timeout: 15_000 });
+      await page.locator('[data-testid="launch-review"]').click();
+      await expect(page.locator('[data-testid="launch-confirm-cwd"]')).toContainText("/synthetic/resume");
+      await expect(page.locator('[data-testid="launch-confirm-harness"]')).toContainText("Codex");
+      expect(posted).toEqual([]);
+      await page.reload();
+      await expect(page.locator('[data-testid="hub-new"]')).toBeVisible({ timeout: 20_000 });
+      await expect(page.locator('[data-testid="launch-dialog"]')).toHaveCount(0);
+      expect(posted).toEqual([]);
+    });
+  }
+
+  test("deep link with an unknown session shows the error and no launch path", async ({ page }) => {
+    await installFakeTerminal(page, { total: 300, seedLines: 100 });
+    const posted = await mockLaunch(page);
+    await page.route("**/api/sessions/sid-e2e-unknown", (route) =>
+      route.fulfill({ status: 404, contentType: "application/json", body: "{}" }),
+    );
+    await page.goto(`${BASE}/terminals?launch=1&resume=sid-e2e-unknown`);
+    await expect(page.locator('[data-testid="launch-prefill-error"]')).toContainText("Unknown session", { timeout: 20_000 });
+    await expect(page.locator('[data-testid="launch-review"]')).toBeDisabled();
+    expect(posted).toEqual([]);
+  });
+
+  test("deep link with a failing session read is an error with Retry, not Unknown", async ({ page }) => {
+    await installFakeTerminal(page, { total: 300, seedLines: 100 });
+    await page.route("**/api/sessions/sid-e2e-500", (route) =>
+      route.fulfill({ status: 500, contentType: "application/json", body: "{}" }),
+    );
+    await page.goto(`${BASE}/terminals?launch=1&resume=sid-e2e-500`);
+    const err = page.locator('[data-testid="launch-prefill-error"]');
+    await expect(err).toContainText("Could not load that session", { timeout: 20_000 });
+    await expect(err).not.toContainText("Unknown");
+    await expect(page.locator('[data-testid="launch-prefill-retry"]')).toBeVisible();
+  });
+
+  test("a problem+json refusal from the launch route is shown by its title and detail", async ({ page }) => {
+    await installFakeTerminal(page, { total: 300, seedLines: 100 });
+    await page.route("**/api/terms", (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      return route.fulfill({
+        status: 429,
+        contentType: "application/problem+json",
+        body: JSON.stringify({ type: "urn:example:refused", title: "Too many terminals", detail: "limit is 3" }),
+      });
+    });
+    await page.goto(`${BASE}/terminals`);
+    await page.locator('[data-testid="hub-new"]').click();
+    await page.locator('[data-testid="launch-cwd"]').fill("/synthetic/new");
+    await page.locator('[data-testid="launch-review"]').click();
+    await page.locator('[data-testid="launch-confirm"]').click();
+    await expect(page.locator('[data-testid="launch-error"]')).toHaveText("Too many terminals: limit is 3");
+    await expect(page.locator('[data-testid="launch-confirm-view"]')).toBeVisible();
+  });
 });

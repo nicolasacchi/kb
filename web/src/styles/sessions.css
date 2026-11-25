@@ -1758,3 +1758,32 @@
   margin: 0;
   white-space: pre-wrap;
 }
+
+/* HUBHOST - the compact Terminals link and the row's Continue door. */
+.kb-ses__terminals-link {
+  padding: 4px 16px;
+  font: 400 var(--fs-sm)/1.4 var(--font-sans, system-ui);
+}
+.kb-ses__row-continue {
+  display: inline-block;
+  margin: 0 16px 8px;
+  color: var(--ink-mute, #999);
+  font: 400 var(--fs-xs)/1.4 var(--font-sans, system-ui);
+  text-decoration: none;
+}
+.kb-ses__row-continue:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+@media (pointer: coarse), (max-width: 860px) {
+  .kb-ses__row-continue {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+  }
+}
+.kb-ses__handoff a.kb-ses__resume-copy {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}

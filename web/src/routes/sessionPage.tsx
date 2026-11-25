@@ -739,7 +739,6 @@ export default function SessionPage() {
           sessionId={sid}
           harness={sum.harness}
           cwd={detail?.cwd}
-          terminalAdmitted={card.terminal.admitted && card.terminal.reason !== "terminal disabled"}
           hasLiveTerminal={card.terminal.available}
         />
       </Section>

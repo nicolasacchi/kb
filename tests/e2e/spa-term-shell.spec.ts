@@ -23,13 +23,13 @@ async function expectLive(page: Page): Promise<void> {
 }
 
 test.describe("BSHELL /terminals/:id", () => {
-  test("(a) /sessions row Open lands on /terminals/<id> with the shell and a live viewport", async ({ page }) => {
+  test("(a) a /terminals hub row lands on /terminals/<id> with the shell and a live viewport", async ({ page }) => {
     await installFakeTerminal(page, { total: 300, seedLines: 100 });
     await admit(page);
-    await page.goto(`${BASE}/sessions`);
-    const row = page.locator(`[data-testid="term-row"][data-term="${TERM_ID}"]`);
+    await page.goto(`${BASE}/terminals`);
+    const row = page.locator(`[data-testid="hub-row"][data-term="${TERM_ID}"]`);
     await expect(row).toBeVisible({ timeout: 20_000 });
-    await row.locator('[data-testid="term-row-open"]').click();
+    await row.click();
     await expect(page).toHaveURL(new RegExp(`/terminals/${TERM_ID}$`));
     await expect(page.locator('[data-testid="term-shell"]')).toBeVisible();
     await expect(page.locator('[data-testid="term-shell"]')).toHaveAttribute("data-kb-term-layout", "desktop");

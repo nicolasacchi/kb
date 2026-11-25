@@ -2,8 +2,8 @@
 //
 // HUBDOOR — /terminals, the hub list page, through the real page with mocked
 // data hooks.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import type { TermRow } from "../api/terms";
@@ -57,7 +57,12 @@ const liveRow = (sid: string, o: Partial<LiveStatusRow> = {}): LiveStatusRow =>
 
 function Where() {
   const l = useLocation();
-  return <div data-testid="where">{l.pathname + l.search}</div>;
+  return (
+    <>
+      <div data-testid="where">{l.pathname + l.search}</div>
+      <div data-testid="where-state">{JSON.stringify(l.state)}</div>
+    </>
+  );
 }
 
 function mount(url = "/terminals") {
@@ -78,12 +83,48 @@ function mount(url = "/terminals") {
 
 const ids = () => screen.queryAllByTestId("hub-row").map((r) => r.getAttribute("data-term"));
 
+type Call = { method: string; url: string; body: unknown };
+let calls: Call[];
+let details: Record<string, { status: number; body: unknown }>;
+const posts = () => calls.filter((c) => c.method === "POST");
+
+beforeAll(() => {
+  if (!HTMLDialogElement.prototype.showModal) {
+    HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) {
+      this.open = true;
+    };
+  }
+});
+
 beforeEach(() => {
+  calls = [];
+  details = {};
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : null });
+      const json = (status: number, body: unknown) =>
+        new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+      if (method === "POST") return json(200, { id: "t9" });
+      const d = /^\/api\/sessions\/([^/?]+)$/.exec(url);
+      if (d) {
+        const hit = details[decodeURIComponent(d[1])];
+        return hit ? json(hit.status, hit.body) : json(404, {});
+      }
+      if (url.startsWith("/api/sessions")) return json(200, { sessions: [] });
+      return json(200, { terms: [] });
+    }),
+  );
   m.identity = { terminal_admitted: true };
   m.terms = { terms: [], isLoading: false, isError: false };
   m.live = { rows: [], loading: false };
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 describe("/terminals", () => {
   it("identity loading -> loading card; not admitted -> refused card", () => {
@@ -204,5 +245,137 @@ describe("/terminals", () => {
     mount();
     expect(ids()).toEqual(["a", "b"]);
     expect(screen.getByTestId("hub-needs-count").textContent).toBe("1 need you");
+  });
+});
+
+const sessionRow = (o: Record<string, unknown> = {}) => ({
+  id: "i",
+  session_id: "sid1",
+  harness: "codex",
+  cwd: "/p/x",
+  started_at: 1_700_000_000,
+  display_name: "Fix it",
+  project_key: "proj",
+  ...o,
+});
+
+describe("New session (HUBHOST)", () => {
+  it("is in the header and opens the launcher in the empty state", () => {
+    mount();
+    expect(screen.getByTestId("hub-empty")).toBeTruthy();
+    expect(screen.queryByTestId("launch-modal")).toBeNull();
+    fireEvent.click(screen.getByTestId("hub-new"));
+    expect(screen.getByTestId("launch-modal")).toBeTruthy();
+    expect(posts()).toHaveLength(0);
+  });
+
+  it("also works while loading, on a list error and with rows", () => {
+    m.terms = { terms: [], isLoading: true, isError: false };
+    mount();
+    fireEvent.click(screen.getByTestId("hub-new"));
+    expect(screen.getByTestId("launch-modal")).toBeTruthy();
+    cleanup();
+    m.terms = { terms: [], isLoading: false, isError: true };
+    mount();
+    fireEvent.click(screen.getByTestId("hub-new"));
+    expect(screen.getByTestId("launch-modal")).toBeTruthy();
+    cleanup();
+    m.terms = { isLoading: false, isError: false, terms: [term("a")] };
+    mount();
+    fireEvent.click(screen.getByTestId("hub-new"));
+    expect(screen.getByTestId("launch-modal")).toBeTruthy();
+  });
+
+  it("a not-admitted caller has no button", () => {
+    m.identity = { terminal_admitted: false };
+    mount();
+    expect(screen.queryByTestId("hub-new")).toBeNull();
+  });
+
+  it("one POST on the Launch click, then lands on /terminals/<id> with the launch hint and invalidates [terms]", async () => {
+    const { spy } = mount();
+    fireEvent.click(screen.getByTestId("hub-new"));
+    fireEvent.change(screen.getByTestId("launch-cwd"), { target: { value: "/tmp/x" } });
+    fireEvent.click(screen.getByTestId("launch-review"));
+    expect(screen.getByTestId("launch-confirm-cwd").textContent).toBe("Directory: /tmp/x");
+    expect(posts()).toHaveLength(0);
+    fireEvent.click(screen.getByTestId("launch-confirm"));
+    await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/terminals/t9"));
+    expect(posts()).toHaveLength(1);
+    expect(posts()[0].body).toMatchObject({ cwd: "/tmp/x" });
+    expect(JSON.parse(screen.getByTestId("where-state").textContent!)).toEqual({
+      launched: { id: "t9", harness: (posts()[0].body as { harness: string }).harness },
+    });
+    expect(spy).toHaveBeenCalledWith({ queryKey: ["terms"] });
+  });
+});
+
+describe("deep link ?launch=1&resume= (HUBHOST, H4)", () => {
+  it("opens the dialog prefilled from the fetched row, strips the params with replace, and never POSTs on load", async () => {
+    details.sid1 = { status: 200, body: sessionRow() };
+    mount("/terminals?project=alpha&launch=1&resume=sid1");
+    expect(screen.getByTestId("launch-modal")).toBeTruthy();
+    await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/terminals?project=alpha"));
+    // The dialog survives the strip.
+    expect(screen.getByTestId("launch-modal")).toBeTruthy();
+    await waitFor(() =>
+      expect((screen.getByTestId("launch-review") as HTMLButtonElement).disabled).toBe(false),
+    );
+    fireEvent.click(screen.getByTestId("launch-review"));
+    expect(screen.getByTestId("launch-confirm-cwd").textContent).toBe("Directory: /p/x");
+    expect(screen.getByTestId("launch-confirm-harness").textContent).toBe("Harness: Codex");
+    expect(posts()).toHaveLength(0);
+    fireEvent.click(screen.getByTestId("launch-confirm"));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0].body).toEqual({ harness: "codex", cwd: "/p/x", resume_sid: "sid1" });
+  });
+
+  it("remounting at the stripped URL does not reopen it", async () => {
+    details.sid1 = { status: 200, body: sessionRow() };
+    mount("/terminals?launch=1&resume=sid1");
+    await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/terminals"));
+    cleanup();
+    mount("/terminals");
+    expect(screen.queryByTestId("launch-modal")).toBeNull();
+  });
+
+  it("resume without launch is dropped by the grammar: nothing opens", () => {
+    mount("/terminals?resume=sid1");
+    expect(screen.queryByTestId("launch-modal")).toBeNull();
+    expect(calls.filter((c) => c.url.startsWith("/api/sessions/sid1"))).toHaveLength(0);
+  });
+
+  it("launch=1 alone opens a blank dialog; harness and cwd in the URL are ignored", async () => {
+    mount("/terminals?launch=1&harness=grok&cwd=/evil");
+    expect(screen.getByTestId("launch-modal")).toBeTruthy();
+    expect(screen.getByTestId("launch-new-form")).toBeTruthy();
+    expect((screen.getByTestId("launch-cwd") as HTMLInputElement).value).toBe("");
+    await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/terminals"));
+    expect(posts()).toHaveLength(0);
+  });
+
+  it("a harness/cwd smuggled next to resume never reaches the confirm", async () => {
+    details.sid1 = { status: 200, body: sessionRow() };
+    mount("/terminals?launch=1&resume=sid1&harness=grok&cwd=/evil");
+    await waitFor(() =>
+      expect((screen.getByTestId("launch-review") as HTMLButtonElement).disabled).toBe(false),
+    );
+    fireEvent.click(screen.getByTestId("launch-review"));
+    expect(screen.getByTestId("launch-confirm-cwd").textContent).toBe("Directory: /p/x");
+    expect(screen.getByTestId("launch-confirm-harness").textContent).toBe("Harness: Codex");
+  });
+
+  it("an unknown sid shows the error and offers no launch", async () => {
+    mount("/terminals?launch=1&resume=nope");
+    await waitFor(() => expect(screen.getByTestId("launch-prefill-error")).toBeTruthy());
+    expect((screen.getByTestId("launch-review") as HTMLButtonElement).disabled).toBe(true);
+    expect(posts()).toHaveLength(0);
+  });
+
+  it("not admitted: no dialog and the URL is left alone", () => {
+    m.identity = { terminal_admitted: false };
+    mount("/terminals?launch=1&resume=sid1");
+    expect(screen.queryByTestId("launch-modal")).toBeNull();
+    expect(posts()).toHaveLength(0);
   });
 });

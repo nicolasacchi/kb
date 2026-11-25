@@ -645,31 +645,35 @@ test.describe("FUWEBLAUNCH phone launch controls @phone", () => {
     expect(over).toBeLessThanOrEqual(1);
   }
 
-  test("New terminal: form fits the phone, a bad path sends nothing, a good one launches and links the session", async ({
+  test("New session: the hub button and the launcher sheet fit the phone, a bad path sends nothing, a good one launches", async ({
     page,
   }) => {
     await installFakeTerminal(page, {});
     const posted = await admitAndMockLaunch(page);
-    await page.goto(`${BASE}/sessions`);
-    const open = page.locator('[data-testid="new-terminal-open"]');
+    await page.goto(`${BASE}/terminals`);
+    const open = page.locator('[data-testid="hub-new"]');
     await expect(open).toBeVisible({ timeout: 20_000 });
     expect((await open.boundingBox())!.height).toBeGreaterThanOrEqual(43);
     await open.click();
-    await expect(page.locator('[data-testid="new-terminal-form"]')).toBeVisible();
+    await expect(page.locator('[data-testid="launch-dialog"]')).toBeVisible();
+    await expect(page.locator("[data-kb-sheet]")).toHaveAttribute("data-detent", "full");
     await noHorizontalScroll(page);
     const vw = page.viewportSize()!.width;
-    const field = (await page.locator('[data-testid="new-terminal-cwd"]').boundingBox())!;
+    const field = (await page.locator('[data-testid="launch-cwd"]').boundingBox())!;
     expect(field.x + field.width).toBeLessThanOrEqual(vw + 1);
     expect(field.height).toBeGreaterThanOrEqual(43);
 
-    await page.locator('[data-testid="new-terminal-cwd"]').fill("relative/dir");
-    await page.locator('[data-testid="new-terminal-launch"]').click();
-    await expect(page.locator('[data-testid="new-terminal-invalid"]')).toBeVisible();
+    await page.locator('[data-testid="launch-cwd"]').fill("relative/dir");
+    await page.locator('[data-testid="launch-review"]').click();
+    await expect(page.locator('[data-testid="launch-cwd-error"]')).toBeVisible();
     expect(posted).toEqual([]);
 
-    await page.locator('[data-testid="new-terminal-harness"]').selectOption("codex");
-    await page.locator('[data-testid="new-terminal-cwd"]').fill("/synthetic");
-    await page.locator('[data-testid="new-terminal-launch"]').click();
+    await page.locator('[data-testid="launch-harness-codex"]').click();
+    await page.locator('[data-testid="launch-cwd"]').fill("/synthetic");
+    await page.locator('[data-testid="launch-review"]').click();
+    await expect(page.locator('[data-testid="launch-confirm-cwd"]')).toContainText("/synthetic");
+    expect(posted).toEqual([]);
+    await page.locator('[data-testid="launch-confirm"]').click();
     await expect.poll(() => posted.length).toBe(1);
     expect(posted[0]).toEqual({ harness: "codex", cwd: "/synthetic" });
     // BSHELL: a launch lands on the terminal's own page.
@@ -678,7 +682,7 @@ test.describe("FUWEBLAUNCH phone launch controls @phone", () => {
     await noHorizontalScroll(page);
   });
 
-  test("Resume in a kb terminal: launches with resume_sid and shows the panel", async ({ page }) => {
+  test("Continue in terminal: the door opens the prefilled launcher, and only the confirm launches with resume_sid", async ({ page }) => {
     await installFakeTerminal(page, {});
     const posted = await admitAndMockLaunch(page);
     const card: Record<string, unknown> = fixtureCard();
@@ -714,10 +718,19 @@ test.describe("FUWEBLAUNCH phone launch controls @phone", () => {
     await page.goto(`${BASE}/sessions/${SID}`);
     // Under the 860 px breakpoint the sections start collapsed.
     await page.locator('[data-testid="session-sec-resume"] > summary').click();
-    const go = page.locator('[data-testid="session-resume-term-go"]');
+    const go = page.locator('[data-testid="continue-in-terminal"]');
     await expect(go).toBeVisible({ timeout: 20_000 });
     expect((await go.boundingBox())!.height).toBeGreaterThanOrEqual(43);
     await go.click();
+    await expect(page.locator('[data-testid="launch-dialog"]')).toBeVisible({ timeout: 15_000 });
+    // The deep link was consumed: the URL is the bare hub and nothing was sent.
+    await expect(page).toHaveURL(/\/terminals$/);
+    expect(posted).toEqual([]);
+    await expect(page.locator('[data-testid="launch-review"]')).toBeEnabled({ timeout: 15_000 });
+    await page.locator('[data-testid="launch-review"]').click();
+    await expect(page.locator('[data-testid="launch-confirm-cwd"]')).toContainText("/synthetic");
+    expect(posted).toEqual([]);
+    await page.locator('[data-testid="launch-confirm"]').click();
     await expect.poll(() => posted.length).toBe(1);
     expect(posted[0]).toEqual({ harness: "omp", cwd: "/synthetic", resume_sid: SID });
     await expect(page.locator(VP)).toBeVisible({ timeout: 30_000 });
@@ -844,14 +857,13 @@ test.describe("FUTERMLIST terminals list @phone", () => {
     return kills;
   }
 
-  test("from /sessions, tap a running unbound terminal: the sheet opens at /term/<id>, and a reload reopens it", async ({ page }) => {
+  test("from /terminals, tap a running unbound terminal: the sheet opens at /terminals/<id>, and a reload reopens it", async ({ page }) => {
     await installFakeTerminal(page, {});
     await admitWithUnboundRow(page);
-    await page.goto(`${BASE}/sessions`);
-    const row = page.locator(`[data-testid="term-row"][data-term="${TERM_ID}"]`);
+    await page.goto(`${BASE}/terminals`);
+    const row = page.locator(`[data-testid="hub-row"][data-term="${TERM_ID}"]`);
     await expect(row).toBeVisible({ timeout: 20_000 });
-    await expect(row.locator('[data-testid="term-row-unbound"]')).toBeVisible();
-    await row.locator('[data-testid="term-row-open"]').click();
+    await row.click();
     await expect(page.locator(VP)).toBeVisible({ timeout: 30_000 });
     await expect(page).toHaveURL(new RegExp(`/terminals/${TERM_ID}$`));
     await page.reload();
@@ -959,11 +971,11 @@ test.describe("FUMINPHONE full screen button @phone", () => {
   });
 });
 
-// POLISH1 — the /sessions Terminals list keeps the page's horizontal inset on a
-// phone: its heading and rows must not touch the screen's left edge, and sit no
-// further left than the New terminal control above them.
+// POLISH1 — the /terminals hub keeps the page's horizontal inset on a phone:
+// its heading and rows must not touch the screen's left edge, and the New
+// session button must stay inside the viewport.
 test.describe("POLISH1 terminals list inset @phone", () => {
-  test("the Terminals list and its rows start at the same inset as the New terminal button", async ({ page }) => {
+  test("the hub heading and rows start at the page inset and the New session button fits", async ({ page }) => {
     await installFakeTerminal(page, {});
     await page.route("**/api/identity", async (route) => {
       const res = await route.fetch();
@@ -1001,24 +1013,25 @@ test.describe("POLISH1 terminals list inset @phone", () => {
         }),
       });
     });
-    await page.goto(`${BASE}/sessions`);
-    const list = page.locator('[data-testid="term-list"]');
-    const row = page.locator(`[data-testid="term-row"][data-term="${TERM_ID}"]`);
-    const open = page.locator('[data-testid="new-terminal-open"]');
+    await page.goto(`${BASE}/terminals`);
+    const row = page.locator(`[data-testid="hub-row"][data-term="${TERM_ID}"]`);
+    const open = page.locator('[data-testid="hub-new"]');
     await expect(row).toBeVisible({ timeout: 20_000 });
     await expect(open).toBeVisible();
-    const heading = list.locator(".kb-ses__terms-h");
-    const left = async (l: import("@playwright/test").Locator) => (await l.evaluate((el) => el.getBoundingClientRect().left));
-    const openLeft = await left(open);
-    // The list's content (heading text and row) starts at the page inset, not at x=0.
-    const contentLeft = await list.evaluate((el) => {
-      const cs = getComputedStyle(el);
-      return el.getBoundingClientRect().left + parseFloat(cs.paddingLeft);
-    });
-    expect(openLeft).toBeGreaterThan(0);
-    expect(contentLeft).toBeGreaterThanOrEqual(openLeft - 1);
-    expect(await left(row)).toBeGreaterThanOrEqual(openLeft - 1);
-    expect(await left(heading)).toBeGreaterThanOrEqual(openLeft - 1);
+    const heading = page.locator(".kb-hub__title");
+    const edge = async (l: import("@playwright/test").Locator) =>
+      await l.evaluate((el) => {
+        const b = el.getBoundingClientRect();
+        return { left: b.left, right: b.right, height: b.height };
+      });
+    const vw = page.viewportSize()!.width;
+    const h = await edge(heading);
+    const r = await edge(row);
+    const n = await edge(open);
+    expect(h.left).toBeGreaterThan(0);
+    expect(r.left).toBeGreaterThanOrEqual(h.left - 1);
+    expect(n.right).toBeLessThanOrEqual(vw);
+    expect(n.height).toBeGreaterThanOrEqual(43);
   });
 });
 
@@ -1121,8 +1134,8 @@ test.describe("FUMINLIST two-terminal switcher @phone", () => {
         body: JSON.stringify({ terms: [termRow(TERM_ID, "/synthetic/one"), termRow(OTHER_ID, "/synthetic/two")] }),
       });
     });
-    await page.goto(`${BASE}/sessions`);
-    const first = page.locator(`[data-testid="term-row"][data-term="${TERM_ID}"] [data-testid="term-row-open"]`);
+    await page.goto(`${BASE}/terminals`);
+    const first = page.locator(`[data-testid="hub-row"][data-term="${TERM_ID}"]`);
     await expect(first).toBeVisible({ timeout: 20_000 });
     await first.click();
     await expect(page.locator("[data-kb-sheet]")).toBeAttached({ timeout: 15_000 });
