@@ -129,6 +129,14 @@
   color: var(--ink-mute);
 }
 
+.kb-term__pane {
+  /* BSTATE: the box the state overlay is positioned over. It adds no size of
+   * its own: the view keeps its height in every phase. */
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+}
+
 .kb-term__view {
   /* The host is a bounded box: the font is fitted so the whole grid shows
    * inside it (both axes); below the font floor the cropped axis scrolls
@@ -217,6 +225,14 @@
   border: 0;
 }
 
+.kb-term:fullscreen .kb-term__pane,
+.kb-term--max .kb-term__pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .kb-term:fullscreen .kb-term__view,
 .kb-term--max .kb-term__view {
   height: auto;
@@ -292,6 +308,19 @@
   .kb-term__state .kb-term__dot {
     animation: none;
   }
+
+  .kb-term-state-overlay__dot {
+    animation: none;
+  }
+}
+
+.kb-term__announce {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .kb-term__sr {
@@ -387,5 +416,95 @@
   .kb-term__more > summary {
     min-height: 40px;
     min-width: 40px;
+  }
+}
+
+/* BSTATE — the state overlay: first connect, reconnecting, ended, expired,
+ * blocked. Absolute over the pane box (the pane keeps its size); the scrim
+ * lets the frozen grid show through and takes no pointer events, only the
+ * card does. Tokens only. */
+.kb-term-state-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-float);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--pad-3);
+  pointer-events: none;
+  background: color-mix(in srgb, var(--bg-panel-2) 45%, transparent);
+}
+
+.kb-term-state-overlay--connecting {
+  background: transparent;
+}
+
+.kb-term-state-overlay--dim {
+  background: color-mix(in srgb, var(--bg-panel-2) 70%, transparent);
+}
+
+.kb-term-state-overlay__card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--pad-2);
+  max-width: 100%;
+  padding: var(--pad-3) var(--pad-4);
+  text-align: center;
+  color: var(--ink);
+  background: var(--bg-card);
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-md);
+  pointer-events: none;
+}
+
+.kb-term-state-overlay__card--action {
+  pointer-events: auto;
+}
+
+.kb-term-state-overlay__title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pad-2);
+  font-size: var(--fs-lg);
+  line-height: var(--lh-tight);
+}
+
+.kb-term-state-overlay__detail {
+  max-width: 100%;
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+  overflow-wrap: anywhere;
+}
+
+.kb-term-state-overlay__dot {
+  width: var(--pad-2);
+  height: var(--pad-2);
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  animation: kb-term-pulse 1.2s ease-in-out infinite;
+}
+
+.kb-term-state-overlay__action {
+  font-size: var(--fs-sm);
+  border-color: var(--accent);
+}
+
+.kb-term-state-overlay--compact {
+  padding: var(--pad-2);
+}
+
+.kb-term-state-overlay--compact .kb-term-state-overlay__card {
+  padding: var(--pad-2) var(--pad-3);
+}
+
+.kb-term-state-overlay--compact .kb-term-state-overlay__title {
+  font-size: var(--fs-md);
+}
+
+@media (pointer: coarse) {
+  .kb-term-state-overlay__action {
+    min-height: 44px;
+    min-width: 44px;
   }
 }

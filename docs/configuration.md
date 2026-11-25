@@ -369,6 +369,7 @@ copy of the file instead.
 | `ticket_ttl_secs` | u64 | `30` | Single-use WebSocket ticket lifetime in seconds, clamped into `1..=120`. |
 | `refuse_token_callers` | bool | `true` | Refuse `Token`/`Legacy` identity callers on terminal routes (see Security posture below). |
 | `files` | table | absent | The `[terminal.files]` sub-table (below): which kb receives uploaded files. Absent = off. |
+| `max_terms` | u64 | `8` | The most live terminals a launch may leave running. A launch that would exceed it is refused with `429` and problem type `urn:kb:errors:terminal-cap`. The count is the runner's own `list`, excluding terminals whose pane has ended; the check and the spawn run under one daemon-side lock, so concurrent launches cannot both pass. `0` refuses every launch (it is not "unlimited"); a runner error fails the launch closed. Read per request, so an edit applies to the next launch. Each launch attempt writes one audit log line (harness, last cwd component, resume sid, identity, outcome; never prompt text or the full path). |
 | `runner_timeout_secs` | u64 | `5` | Base runner RPC deadline (connect+write+read) in seconds, clamped into `1..=60`. Per-op budgets are floors over this base: input ops (paste/keys) use it directly, `list` gets at least 30 s, `enter` at least 15 s, and `launch`/`kill`/`read`/`history` at least 60 s. |
 
 ```toml
@@ -378,6 +379,7 @@ enabled = true
 # ticket_ttl_secs = 30     # default; 1..=120
 # refuse_token_callers = true
 # runner_timeout_secs = 5  # default; 1..=60
+# max_terms = 8            # default; 0 refuses every launch
 ```
 
 Limits that are not `kb.toml` keys: the runner's own settings (the quiet

@@ -1542,6 +1542,10 @@ async fn created_without_any_dims_states_the_runner_default_120x40() {
     let tmp = tempfile::tempdir().unwrap();
     let mut replies = HashMap::new();
     replies.insert(
+        "list".to_string(),
+        "{\"status\":\"ok\",\"data\":[]}".to_string(),
+    );
+    replies.insert(
         "launch".to_string(),
         "{\"status\":\"ok\",\"data\":{\"id\":\"abcd1234\"}}".to_string(),
     );
@@ -1582,6 +1586,10 @@ async fn created_without_any_dims_states_the_runner_default_120x40() {
 async fn terminal_emits_created_and_ended_once() {
     let tmp = tempfile::tempdir().unwrap();
     let mut replies = HashMap::new();
+    replies.insert(
+        "list".to_string(),
+        "{\"status\":\"ok\",\"data\":[]}".to_string(),
+    );
     replies.insert(
         "launch".to_string(),
         "{\"status\":\"ok\",\"data\":{\"id\":\"abcd1234\",\"harness\":\"omp\",\"cols\":100,\"rows\":30}}"
