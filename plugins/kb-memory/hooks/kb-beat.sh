@@ -83,6 +83,25 @@
 #                                 beats `blocked`; any other type sends nothing.
 #   (tool start) KB_BEAT_TOOLS / KB_BEAT_TOOLS_MIN_INTERVAL_SECS are read by
 #                                 kb-beat-pretool.sh, not here.
+#   (status) `kb-beat.sh <harness> status` is the ONE producer entry for the typed
+#                                 `status` beat (model, context_pct, cost_usd,
+#                                 permission_mode, branch). stdin is
+#                                 {session_id, cwd?, status:{...}}; the
+#                                 statusLine tee (kb-status-tee.sh) and the omp
+#                                 extension both call it. Sends are floored and
+#                                 deduped through a per-session marker: a status
+#                                 whose fields already match what was last sent
+#                                 is skipped (resent after
+#                                 KB_STATUS_REFRESH_SECS, default 120), and a
+#                                 change inside KB_STATUS_MIN_INTERVAL_SECS
+#                                 (default 5) is held for the next call.
+#                                 KB_STATUS_NOW overrides the epoch (tests).
+#                                 Claude prompt / turn_end beats whose hook
+#                                 input carries `permission_mode` also send ONE
+#                                 companion status {permission_mode, branch}
+#                                 through the same marker (KB_BEAT_COMPANION_LOG
+#                                 receives its dry-run body, never stdout).
+#   KB_BEAT_STATUS=0             disable every status send (tee, companion, omp).
 #   KB_BEAT_DRYRUN=1             print the JSON body to stdout INSTEAD of
 #                                 posting; no backgrounding, no curl. The
 #                                 test harness's only hook into this
@@ -408,6 +427,107 @@ if [ "$event" = "tool" ] && [ "$phase_arg" = "start" ]; then
   fi
 fi
 
+# --- typed status beat (event=status) and the claude companion -----------------
+# beat_status_normalise <json-with-.status> - prints the compact, validated
+# status object (fields the daemon's grammar accepts; permission_mode mapped by
+# THE one mapping below), or nothing when no field survives.
+beat_status_normalise() {
+  printf '%s' "$1" | jq -c '
+    def pm: if type != "string" or . == "" then null
+      elif . == "default" then "default"
+      elif . == "plan" then "plan"
+      elif . == "acceptEdits" or . == "accept" then "accept"
+      elif . == "bypassPermissions" or . == "bypass" then "bypass"
+      else "other" end;
+    def txt: if type != "string" then null
+      else (gsub("^\\s+|\\s+$"; "") | .[0:64]
+            | if length > 0 and (test("[\u0001-\u001f\u007f]") | not) then . else null end) end;
+    (.status // {}) as $s
+    | { model: ($s.model | txt),
+        context_pct: ($s.context_pct
+          | if type == "number" and . >= 0 and . <= 100 then round else null end),
+        cost_usd: ($s.cost_usd
+          | if type == "number" and . >= 0 and . <= 100000 then ((. * 100 | round) / 100) else null end),
+        permission_mode: ($s.permission_mode | pm),
+        branch: ($s.branch | txt) }
+    | with_entries(select(.value != null))
+    | select(length > 0)' 2>/dev/null
+}
+
+# beat_status_gate <status-json> - exit 0 = send. Floor + dedupe against the
+# per-session marker (line 1 = epoch of the last send, line 2 = the merged
+# object of every field sent so far). A change inside the floor is NOT
+# recorded, so the next call after the floor sends it; an unchanged object is
+# resent only after the refresh interval. The marker write fails open.
+beat_status_gate() {
+  local st="$1" now min refresh f last_ts last_obj changed merged age
+  command -v hook_sid_key >/dev/null 2>&1 || return 0
+  now="${KB_STATUS_NOW:-$(date +%s 2>/dev/null)}"
+  case "$now" in '' | *[!0-9]*) return 0 ;; esac
+  min="${KB_STATUS_MIN_INTERVAL_SECS:-5}"
+  case "$min" in '' | *[!0-9]*) min=5 ;; esac
+  refresh="${KB_STATUS_REFRESH_SECS:-120}"
+  case "$refresh" in '' | *[!0-9]*) refresh=120 ;; esac
+  f="${XDG_CACHE_HOME:-$HOME/.cache}/kb/status-$(hook_sid_key "$session_id")"
+  last_ts=""
+  last_obj=""
+  if [ -r "$f" ]; then
+    { IFS= read -r last_ts; IFS= read -r last_obj; } <"$f" 2>/dev/null || true
+  fi
+  case "$last_ts" in '' | *[!0-9]*) last_ts="" ;; esac
+  [ -n "$last_obj" ] || last_obj='{}'
+  changed="$(jq -n --argjson last "$last_obj" --argjson next "$st" \
+    '[$next | to_entries[] | select($last[.key] != .value)] | length' 2>/dev/null)" || changed=1
+  case "$changed" in '' | *[!0-9]*) changed=1 ;; esac
+  if [ -n "$last_ts" ]; then
+    age=$((now - last_ts))
+    [ "$age" -ge 0 ] || age=999999999 # clock stepped back: treat the marker as expired
+    if [ "$changed" -gt 0 ]; then
+      [ "$age" -ge "$min" ] || return 1
+    else
+      [ "$age" -ge "$refresh" ] || return 1
+    fi
+  fi
+  merged="$(jq -cnS --argjson last "$last_obj" --argjson next "$st" '$last + $next' 2>/dev/null)" || merged="$st"
+  if mkdir -p "$(dirname "$f")" 2>/dev/null; then
+    printf '%s\n%s\n' "$now" "$merged" >"$f.$$" 2>/dev/null && mv -f "$f.$$" "$f" 2>/dev/null
+    rm -f "$f.$$" 2>/dev/null
+  fi
+  return 0
+}
+
+status_json=null
+if [ "$event" = "status" ]; then
+  [ "${KB_BEAT_STATUS:-}" != "0" ] || exit 0
+  st="$(beat_status_normalise "$input")"
+  [ -n "$st" ] || exit 0
+  beat_status_gate "$st" || exit 0
+  status_json="$st"
+fi
+
+# beat_companion - claude prompt / turn_end whose hook input names the
+# permission mode: ONE detached `status` beat {permission_mode, branch}, after
+# the main beat, deduped through the same marker. Never on any other event.
+beat_companion() {
+  [ "$harness" = "claude" ] || return 0
+  case "$event" in prompt | turn_end) ;; *) return 0 ;; esac
+  [ "${KB_BEAT_STATUS:-}" != "0" ] || return 0
+  local pmode cbranch cin
+  pmode="$(jq_field '.permission_mode // empty | strings' "$input")"
+  [ -n "$pmode" ] || return 0
+  cbranch=""
+  if [ -n "$cwd" ] && command -v git >/dev/null 2>&1; then
+    cbranch="$(_beat_t1 git -C "$cwd" branch --show-current 2>/dev/null)" || cbranch=""
+  fi
+  cin="$(jq -cn --arg sid "$session_id" --arg cwd "$cwd" --arg pm "$pmode" --arg br "$cbranch" \
+    '{session_id: $sid, status: ({permission_mode: $pm} + (if $br != "" then {branch: $br} else {} end))}
+     + (if $cwd != "" then {cwd: $cwd} else {} end)' 2>/dev/null)" || return 0
+  (
+    printf '%s' "$cin" | "$_beat_dir/kb-beat.sh" claude status >>"${KB_BEAT_COMPANION_LOG:-/dev/null}" 2>/dev/null
+  ) </dev/null >/dev/null 2>&1 &
+  disown 2>/dev/null || true
+}
+
 host="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo unknown)"
 pid="${PPID:-0}"
 case "$pid" in '' | *[!0-9]*) pid=0 ;; esac
@@ -443,6 +563,7 @@ body="$(jq -n \
   --arg detail_root "$detail_root" \
   --arg detail_project "$detail_project" \
   --arg detail_worktree "$detail_worktree" \
+  --argjson status_json "$status_json" \
   '{v: 1, session_id: $session_id, harness: $harness, event: $event, at: $at}
    + (if $host != "" then {host: $host} else {} end)
    + (if $pid > 0 then {pid: $pid} else {} end)
@@ -460,6 +581,7 @@ body="$(jq -n \
                + (if $detail_worktree != "" then {worktree: $detail_worktree} else {} end)
           else {} end) ) as $d
      | if ($d | length) > 0 then {detail: $d} else {} end )
+   + (if $status_json != null then {status: $status_json} else {} end)
   ' 2>/dev/null)"
 [ -n "$body" ] || exit 0
 
@@ -496,6 +618,7 @@ fi
 
 if [ "${KB_BEAT_DRYRUN:-}" = "1" ]; then
   printf '%s\n' "$body"
+  beat_companion
   exit 0
 fi
 
@@ -527,5 +650,7 @@ token_file="${XDG_CONFIG_HOME:-$HOME/.config}/kb/token"
   fi
 ) </dev/null >/dev/null 2>&1 &
 disown 2>/dev/null || true
+
+beat_companion
 
 exit 0
