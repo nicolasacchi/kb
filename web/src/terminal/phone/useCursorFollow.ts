@@ -107,11 +107,18 @@ export function useCursorFollow(args: CursorFollowArgs): void {
     const subs = [term.onWriteParsed?.(schedule), term.onCursorMove?.(schedule)];
     vv?.addEventListener("resize", schedule);
     vv?.addEventListener("scroll", schedule);
+    // The Watch box itself changing size (Firefox layout-resize, rotation, a sheet re-fit) is the
+    // most direct signal; a visualViewport event is not guaranteed to accompany it.
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule);
+    ro?.observe(watch);
+    window.addEventListener("resize", schedule);
     schedule();
     return () => {
       for (const sub of subs) sub?.dispose();
       vv?.removeEventListener("resize", schedule);
       vv?.removeEventListener("scroll", schedule);
+      ro?.disconnect();
+      window.removeEventListener("resize", schedule);
       if (raf !== 0) cancelAnimationFrame(raf);
       raf = 0;
       if (rearm !== null) clearTimeout(rearm);

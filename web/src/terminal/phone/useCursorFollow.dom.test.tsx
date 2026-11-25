@@ -230,7 +230,7 @@ describe("PHIN1 useCursorFollow: the 2 s suspend", () => {
   });
 
   it("a frame the gate dropped is re-armed once at the end of the window, with no further trigger", () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }); // the manual rAF stays ours
     try {
       installVV();
       const clock = { t: 0 };
@@ -306,6 +306,44 @@ describe("PHIN1 useCursorFollow: vertical follow", () => {
     flushFrame();
     // 100 - one row of margin = 80, 220 above the band top 300
     expect(f.wrap.style.marginBottom).toBe("-220px");
+  });
+
+  it("a Watch box resize alone (no visualViewport event) re-follows, and unmount disconnects", () => {
+    installVV();
+    const made: Array<{ cb: () => void; observed: Element[]; disconnected: boolean }> = [];
+    class FakeRO {
+      rec = { cb: () => undefined as void, observed: [] as Element[], disconnected: false };
+      constructor(cb: () => void) {
+        this.rec.cb = cb;
+        made.push(this.rec);
+      }
+      observe(el: Element) {
+        this.rec.observed.push(el);
+      }
+      disconnect() {
+        this.rec.disconnected = true;
+      }
+    }
+    vi.stubGlobal("ResizeObserver", FakeRO);
+    try {
+      const f = fake();
+      f.watch.getBoundingClientRect = rectOf(0, 300, 400, 500);
+      f.buf.cursorY = 0;
+      mount(f);
+      flushFrame();
+      expect(made).toHaveLength(1);
+      expect(made[0]!.observed).toEqual([f.watch]);
+      expect(f.wrap.style.marginBottom).toBe("-220px");
+      expect(queue).toHaveLength(0);
+      made[0]!.cb(); // the box changed size: one coalesced frame, no visualViewport event involved
+      made[0]!.cb();
+      expect(flushFrame()).toBe(1);
+      act(() => root!.unmount());
+      expect(made[0]!.disconnected).toBe(true);
+      root = null;
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("works without a visualViewport (the Watch box is the band)", () => {
