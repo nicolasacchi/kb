@@ -682,7 +682,7 @@ mod tests {
             declared_mime(&headers(Some("Application/PDF; charset=x"))),
             "application/pdf"
         );
-        for bad in ["text/html\r\nx: y", "a b/c", "noslash", "a/b/c", ""] {
+        for bad in ["a b/c", "noslash", "a/b/c", "te*xt/html", ""] {
             assert_eq!(
                 declared_mime(&headers(Some(bad))),
                 "application/octet-stream"
