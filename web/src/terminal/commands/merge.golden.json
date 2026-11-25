@@ -1,0 +1,2070 @@
+{
+ "cases": [
+  {
+   "name": "empty_overlay_is_all_default",
+   "defaults": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "overlay": {
+    "harnesses": {},
+    "hidden": {}
+   },
+   "effective": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "origin": "default",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first",
+          "origin": "default"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b",
+          "origin": "default"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "origin": "default",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c",
+          "origin": "default"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "name": "same_id_replaces_in_place",
+   "defaults": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "overlay": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "items": [
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B replaced",
+          "text": "b"
+         }
+        ]
+       }
+      ]
+     }
+    },
+    "hidden": {}
+   },
+   "effective": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "origin": "overlay",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first",
+          "origin": "default"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B replaced",
+          "text": "b",
+          "origin": "overlay"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "origin": "default",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c",
+          "origin": "default"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "name": "replace_drops_fields_it_does_not_carry",
+   "defaults": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "overlay": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A bare",
+          "text": "a"
+         }
+        ]
+       }
+      ]
+     }
+    },
+    "hidden": {}
+   },
+   "effective": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "origin": "overlay",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A bare",
+          "text": "a",
+          "origin": "overlay"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b",
+          "origin": "default"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "origin": "default",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c",
+          "origin": "default"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "name": "replace_listed_in_a_different_overlay_group",
+   "defaults": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "overlay": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "x",
+        "label": "Extra",
+        "items": [
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B moved?",
+          "text": "b"
+         }
+        ]
+       }
+      ]
+     }
+    },
+    "hidden": {}
+   },
+   "effective": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "origin": "default",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first",
+          "origin": "default"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B moved?",
+          "text": "b",
+          "origin": "overlay"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "origin": "default",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c",
+          "origin": "default"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "name": "hidden_default_is_dropped",
+   "defaults": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "overlay": {
+    "harnesses": {},
+    "hidden": {
+     "claude": [
+      "a"
+     ]
+    }
+   },
+   "effective": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "origin": "default",
+        "items": [
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b",
+          "origin": "default"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "origin": "default",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c",
+          "origin": "default"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "name": "hidden_unknown_id_is_ignored",
+   "defaults": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "overlay": {
+    "harnesses": {},
+    "hidden": {
+     "claude": [
+      "nope"
+     ]
+    }
+   },
+   "effective": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "origin": "default",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first",
+          "origin": "default"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b",
+          "origin": "default"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "origin": "default",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c",
+          "origin": "default"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "name": "overlay_replacement_of_a_hidden_id_stays_visible",
+   "defaults": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "overlay": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "x",
+        "label": "Extra",
+        "items": [
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B back",
+          "text": "b"
+         }
+        ]
+       }
+      ]
+     }
+    },
+    "hidden": {
+     "claude": [
+      "b"
+     ]
+    }
+   },
+   "effective": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "origin": "default",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first",
+          "origin": "default"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B back",
+          "text": "b",
+          "origin": "overlay"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "origin": "default",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c",
+          "origin": "default"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "name": "hiding_every_item_of_a_group_drops_the_group",
+   "defaults": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "overlay": {
+    "harnesses": {},
+    "hidden": {
+     "claude": [
+      "c"
+     ]
+    }
+   },
+   "effective": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "origin": "default",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first",
+          "origin": "default"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b",
+          "origin": "default"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "name": "overlay_only_item_appended_to_a_default_group",
+   "defaults": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "overlay": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Mine",
+        "items": [
+         {
+          "id": "n",
+          "kind": "reply",
+          "label": "New",
+          "text": "n"
+         }
+        ]
+       }
+      ]
+     }
+    },
+    "hidden": {}
+   },
+   "effective": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Mine",
+        "origin": "overlay",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first",
+          "origin": "default"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b",
+          "origin": "default"
+         },
+         {
+          "id": "n",
+          "kind": "reply",
+          "label": "New",
+          "text": "n",
+          "origin": "overlay"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "origin": "default",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c",
+          "origin": "default"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "name": "overlay_only_group_goes_after_the_default_groups",
+   "defaults": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "overlay": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "mine",
+        "label": "Mine",
+        "items": [
+         {
+          "id": "n",
+          "kind": "reply",
+          "label": "N",
+          "text": "n"
+         }
+        ]
+       }
+      ]
+     }
+    },
+    "hidden": {}
+   },
+   "effective": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "origin": "default",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first",
+          "origin": "default"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b",
+          "origin": "default"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "origin": "default",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c",
+          "origin": "default"
+         }
+        ]
+       },
+       {
+        "id": "mine",
+        "label": "Mine",
+        "origin": "overlay",
+        "items": [
+         {
+          "id": "n",
+          "kind": "reply",
+          "label": "N",
+          "text": "n",
+          "origin": "overlay"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "name": "overlay_group_of_only_default_ids_is_dropped",
+   "defaults": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "overlay": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "y",
+        "label": "Y",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A same",
+          "text": "a"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B same",
+          "text": "b"
+         }
+        ]
+       }
+      ]
+     }
+    },
+    "hidden": {}
+   },
+   "effective": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "origin": "default",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A same",
+          "text": "a",
+          "origin": "overlay"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B same",
+          "text": "b",
+          "origin": "overlay"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "origin": "default",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c",
+          "origin": "default"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "name": "duplicate_overlay_id_first_wins",
+   "defaults": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "overlay": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "x",
+        "label": "X",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "First",
+          "text": "a"
+         }
+        ]
+       },
+       {
+        "id": "y",
+        "label": "Y",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "Second",
+          "text": "a"
+         }
+        ]
+       }
+      ]
+     }
+    },
+    "hidden": {}
+   },
+   "effective": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "origin": "default",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "First",
+          "text": "a",
+          "origin": "overlay"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b",
+          "origin": "default"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "origin": "default",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c",
+          "origin": "default"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "name": "duplicate_non_default_ids_are_kept_in_each_group",
+   "defaults": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "overlay": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "x",
+        "label": "X",
+        "items": [
+         {
+          "id": "n",
+          "kind": "reply",
+          "label": "First",
+          "text": "n"
+         }
+        ]
+       },
+       {
+        "id": "y",
+        "label": "Y",
+        "items": [
+         {
+          "id": "n",
+          "kind": "reply",
+          "label": "Second",
+          "text": "n"
+         }
+        ]
+       }
+      ]
+     }
+    },
+    "hidden": {}
+   },
+   "effective": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "origin": "default",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first",
+          "origin": "default"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b",
+          "origin": "default"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "origin": "default",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c",
+          "origin": "default"
+         }
+        ]
+       },
+       {
+        "id": "x",
+        "label": "X",
+        "origin": "overlay",
+        "items": [
+         {
+          "id": "n",
+          "kind": "reply",
+          "label": "First",
+          "text": "n",
+          "origin": "overlay"
+         }
+        ]
+       },
+       {
+        "id": "y",
+        "label": "Y",
+        "origin": "overlay",
+        "items": [
+         {
+          "id": "n",
+          "kind": "reply",
+          "label": "Second",
+          "text": "n",
+          "origin": "overlay"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "validates": false
+  },
+  {
+   "name": "harness_only_in_overlay",
+   "defaults": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "overlay": {
+    "harnesses": {
+     "omp": {
+      "groups": [
+       {
+        "id": "mine",
+        "label": "Mine",
+        "items": [
+         {
+          "id": "n",
+          "kind": "reply",
+          "label": "N",
+          "text": "n"
+         }
+        ]
+       }
+      ]
+     }
+    },
+    "hidden": {}
+   },
+   "effective": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "origin": "default",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first",
+          "origin": "default"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b",
+          "origin": "default"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "origin": "default",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c",
+          "origin": "default"
+         }
+        ]
+       }
+      ]
+     },
+     "omp": {
+      "groups": [
+       {
+        "id": "mine",
+        "label": "Mine",
+        "origin": "overlay",
+        "items": [
+         {
+          "id": "n",
+          "kind": "reply",
+          "label": "N",
+          "text": "n",
+          "origin": "overlay"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "name": "harness_only_in_defaults_is_untouched_by_an_overlay_for_another",
+   "defaults": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c"
+         }
+        ]
+       }
+      ]
+     },
+     "omp": {
+      "groups": [
+       {
+        "id": "o1",
+        "label": "Omp",
+        "items": [
+         {
+          "id": "z",
+          "kind": "reply",
+          "label": "Z",
+          "text": "z"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "overlay": {
+    "harnesses": {
+     "omp": {
+      "groups": [
+       {
+        "id": "o1",
+        "label": "Omp",
+        "items": [
+         {
+          "id": "z",
+          "kind": "reply",
+          "label": "Z new",
+          "text": "z"
+         }
+        ]
+       }
+      ]
+     }
+    },
+    "hidden": {}
+   },
+   "effective": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "origin": "default",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first",
+          "origin": "default"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b",
+          "origin": "default"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "origin": "default",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c",
+          "origin": "default"
+         }
+        ]
+       }
+      ]
+     },
+     "omp": {
+      "groups": [
+       {
+        "id": "o1",
+        "label": "Omp",
+        "origin": "overlay",
+        "items": [
+         {
+          "id": "z",
+          "kind": "reply",
+          "label": "Z new",
+          "text": "z",
+          "origin": "overlay"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "name": "hidden_for_an_unknown_harness_is_ignored",
+   "defaults": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "overlay": {
+    "harnesses": {},
+    "hidden": {
+     "codex": [
+      "a"
+     ]
+    }
+   },
+   "effective": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "origin": "default",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first",
+          "origin": "default"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b",
+          "origin": "default"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "origin": "default",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c",
+          "origin": "default"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "name": "astral_label_survives_byte_for_byte",
+   "defaults": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "overlay": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "🦀 Crab 𝔘",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "🦀 𝔘 label",
+          "text": "a"
+         }
+        ]
+       }
+      ]
+     }
+    },
+    "hidden": {}
+   },
+   "effective": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "🦀 Crab 𝔘",
+        "origin": "overlay",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "🦀 𝔘 label",
+          "text": "a",
+          "origin": "overlay"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b",
+          "origin": "default"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "origin": "default",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c",
+          "origin": "default"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "name": "hiding_everything_leaves_the_harness_with_no_groups",
+   "defaults": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "overlay": {
+    "harnesses": {},
+    "hidden": {
+     "claude": [
+      "a",
+      "b",
+      "c"
+     ]
+    }
+   },
+   "effective": {
+    "harnesses": {
+     "claude": {
+      "groups": []
+     }
+    }
+   }
+  },
+  {
+   "name": "new_overlay_groups_keep_overlay_order",
+   "defaults": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "overlay": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "z",
+        "label": "Z",
+        "items": [
+         {
+          "id": "n1",
+          "kind": "reply",
+          "label": "N1",
+          "text": "n1"
+         }
+        ]
+       },
+       {
+        "id": "m",
+        "label": "M",
+        "items": [
+         {
+          "id": "n2",
+          "kind": "reply",
+          "label": "N2",
+          "text": "n2"
+         }
+        ]
+       }
+      ]
+     }
+    },
+    "hidden": {}
+   },
+   "effective": {
+    "harnesses": {
+     "claude": {
+      "groups": [
+       {
+        "id": "g1",
+        "label": "Group 1",
+        "origin": "default",
+        "items": [
+         {
+          "id": "a",
+          "kind": "reply",
+          "label": "A",
+          "text": "a",
+          "description": "first",
+          "origin": "default"
+         },
+         {
+          "id": "b",
+          "kind": "reply",
+          "label": "B",
+          "text": "b",
+          "origin": "default"
+         }
+        ]
+       },
+       {
+        "id": "g2",
+        "label": "Group 2",
+        "origin": "default",
+        "items": [
+         {
+          "id": "c",
+          "kind": "reply",
+          "label": "C",
+          "text": "c",
+          "origin": "default"
+         }
+        ]
+       },
+       {
+        "id": "z",
+        "label": "Z",
+        "origin": "overlay",
+        "items": [
+         {
+          "id": "n1",
+          "kind": "reply",
+          "label": "N1",
+          "text": "n1",
+          "origin": "overlay"
+         }
+        ]
+       },
+       {
+        "id": "m",
+        "label": "M",
+        "origin": "overlay",
+        "items": [
+         {
+          "id": "n2",
+          "kind": "reply",
+          "label": "N2",
+          "text": "n2",
+          "origin": "overlay"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   }
+  }
+ ]
+}
