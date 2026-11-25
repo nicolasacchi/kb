@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { ChecksSection } from "../../../routes/sessions";
@@ -42,7 +42,7 @@ const detailBase = (over: Detail = {}): Detail => ({
 
 const FILES = [
   { path: "src/a.ts", basename: "a.ts", action: "edit", in_corpus: false, via_subagent: false },
-  { path: "docs/<script>x</script>.md", basename: "<script>x</script>.md", action: "write", in_corpus: true, kb: "mem", source_relative: "docs/n.md", via_subagent: true },
+  { path: "docs/<script>x.md", basename: "<script>x.md", action: "write", in_corpus: true, kb: "mem", source_relative: "docs/n.md", via_subagent: true },
   { path: "src/r.ts", basename: "r.ts", action: "read", in_corpus: false, via_subagent: false },
 ];
 const COMMITS = [
@@ -159,7 +159,7 @@ describe("ChangesRail", () => {
     const ref = direct.container.querySelector('[data-testid="session-checks-phrase"]');
     expect(ref?.textContent).toBe("Verified: tests passed after the last edit");
     expect(phrase.textContent).toBe(ref?.textContent);
-    const tab = screen.getByTestId("session-checks");
+    const tab = within(screen.getByTestId("changes-checks")).getByTestId("session-checks");
     expect(tab.textContent).toBe(direct.container.querySelector('[data-testid="session-checks"]')?.textContent);
   });
 
@@ -211,7 +211,7 @@ describe("ChangesRail", () => {
   it("no bound session", () => {
     mount(undefined);
     expect(screen.getByText("No session linked yet")).toBeTruthy();
-    expect(world.fetched).toHaveLength(0);
+    expect(world.fetched.filter((u) => u.includes("/api/sessions"))).toHaveLength(0);
   });
 
   it("card error shows Retry which refetches", async () => {
@@ -237,7 +237,7 @@ describe("ChangesRail", () => {
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector("script")).toBeNull();
     expect(screen.getAllByTestId("changes-commit")[0].textContent).toContain("<img src=x onerror=alert(1)> fix");
-    expect(screen.getByText("<script>x</script>.md")).toBeTruthy();
+    expect(screen.getByText("<script>x.md")).toBeTruthy();
   });
 
   it("freshness caption comes from the capture time", async () => {

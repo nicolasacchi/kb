@@ -59,9 +59,10 @@ export function ChangesRail(): ReactElement {
   const qc = useQueryClient();
   const { card, loading, error } = useSessionCard(sid ?? "");
   const pending = !!card?.capture_pending;
-  // A live-only session has no capture: hold the detail bundle off (it would
-  // only 404); the bridge's session.captured handler refetches both keys.
-  const { detail, files, commits, loading: detailLoading } = useSessionDetail(pending ? null : (sid ?? null));
+  // Hold the detail bundle off until the card says the session is captured (a
+  // live-only session would only 404); the bridge's session.captured handler
+  // refetches both keys.
+  const { detail, files, commits, loading: detailLoading } = useSessionDetail(card && !pending ? (sid ?? null) : null);
   const codeUrl = httpCodeUrl(useCodeUrlForKb(detail?.kb || undefined));
   const lane = useCodeLane(codeUrl, sid ?? "");
   const laneItems = lane.data?.commits.available ? lane.data.commits.items : undefined;
