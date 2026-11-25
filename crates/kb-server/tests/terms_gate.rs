@@ -768,6 +768,7 @@ async fn terminal_id_charset_is_enforced_before_the_runner() {
 #[tokio::test]
 async fn launch_rejects_unknown_harness_and_bad_cwd() {
     let mut replies = std::collections::HashMap::new();
+    replies.insert("list".to_string(), list_reply(&[]));
     replies.insert(
         "launch".to_string(),
         ok_reply("{\"id\":\"abcd1234\",\"harness\":\"omp\"}"),
@@ -832,6 +833,7 @@ async fn post_launch(
 #[tokio::test]
 async fn handoff_launch_forwards_handoff_from_to_the_runner() {
     let mut replies = std::collections::HashMap::new();
+    replies.insert("list".to_string(), list_reply(&[]));
     replies.insert(
         "launch".to_string(),
         ok_reply("{\"id\":\"abcd1234\",\"harness\":\"claude\"}"),
@@ -847,7 +849,15 @@ async fn handoff_launch_forwards_handoff_from_to_the_runner() {
     )
     .await;
     assert_eq!(resp.status().as_u16(), 201);
-    let reqs = fake.reqs.lock().unwrap().clone();
+    // HUBGUARD: the cap pre-check `list` precedes the launch.
+    let reqs: Vec<serde_json::Value> = fake
+        .reqs
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|r| r["op"] == "launch")
+        .cloned()
+        .collect();
     assert_eq!(reqs.len(), 1, "{reqs:?}");
     assert_eq!(
         reqs[0],
@@ -870,6 +880,7 @@ async fn handoff_launch_forwards_handoff_from_to_the_runner() {
 #[tokio::test]
 async fn handoff_launch_without_handoff_from_forwards_no_key() {
     let mut replies = std::collections::HashMap::new();
+    replies.insert("list".to_string(), list_reply(&[]));
     replies.insert(
         "launch".to_string(),
         ok_reply("{\"id\":\"abcd1234\",\"harness\":\"claude\"}"),
@@ -880,7 +891,14 @@ async fn handoff_launch_without_handoff_from_forwards_no_key() {
     let c = client();
     let resp = post_launch(&c, addr, "{\"harness\":\"claude\",\"cwd\":\"/work/proj\"}").await;
     assert_eq!(resp.status().as_u16(), 201);
-    let reqs = fake.reqs.lock().unwrap().clone();
+    let reqs: Vec<serde_json::Value> = fake
+        .reqs
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|r| r["op"] == "launch")
+        .cloned()
+        .collect();
     assert_eq!(reqs.len(), 1, "{reqs:?}");
     assert!(
         reqs[0].get("handoff_from").is_none(),
@@ -1300,6 +1318,7 @@ async fn paste_with_enter_keeps_pasted_not_sent_distinct_from_a_failed_paste() {
 #[tokio::test]
 async fn relay_payloads_carry_the_requested_fields() {
     let mut replies = std::collections::HashMap::new();
+    replies.insert("list".to_string(), list_reply(&[]));
     replies.insert("launch".to_string(), ok_reply("{\"id\":\"abcd1234\"}"));
     replies.insert(
         "take_size".to_string(),
@@ -1432,11 +1451,15 @@ async fn every_relay_carries_the_exact_runner_request() {
             "{\"harness\":\"omp\",\"cwd\":\"/work/proj\"}"
         )
         .await,
-        vec![serde_json::json!({
-            "op": "launch", "harness": "omp", "argv": null, "resume_sid": null,
-            "cwd": "/work/proj", "cols": null, "rows": null, "env": null,
-            "exit_keys": null,
-        })]
+        vec![
+            // HUBGUARD: the cap pre-check precedes the launch.
+            serde_json::json!({"op": "list"}),
+            serde_json::json!({
+                "op": "launch", "harness": "omp", "argv": null, "resume_sid": null,
+                "cwd": "/work/proj", "cols": null, "rows": null, "env": null,
+                "exit_keys": null,
+            }),
+        ]
     );
     assert_eq!(
         drive(&fake, addr, "POST", &format!("/{id}/ticket"), "{}").await,
