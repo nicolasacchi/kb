@@ -576,15 +576,6 @@
   flex: none;
 }
 
-/* FUWEBLAUNCH — "New terminal" (components/NewTerminalPanel.tsx) and the
- * inline launched terminal. Mobile sizing lives in mobile.css (860px block). */
-.kb-ses__newterm {
-  padding: 0 var(--pad-3);
-  margin: var(--pad-2) 0;
-}
-.kb-ses__newterm .kb-ses__resume-copy {
-  float: none;
-}
 /* FUTERMPOLISH — Launch / Cancel are ordinary buttons (primary + secondary), not
  * pill links: existing button tokens only. */
 .kb-ses__newterm-btn {
@@ -608,30 +599,6 @@
   color: var(--accent-fg);
   background: var(--accent);
   border-color: var(--accent-bor);
-}
-.kb-ses__newterm-form {
-  display: flex;
-  flex-direction: column;
-  gap: var(--pad-2);
-  margin-top: var(--pad-2);
-  max-width: 640px;
-}
-.kb-ses__newterm-field {
-  display: flex;
-  flex-direction: column;
-  gap: var(--pad-1);
-  color: var(--ink-mute);
-  font-size: var(--fs-sm);
-}
-.kb-ses__newterm-field select,
-.kb-ses__newterm-field input {
-  font: inherit;
-  color: var(--ink);
-  background: var(--bg-panel);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius-sm);
-  padding: var(--pad-1) var(--pad-2);
-  min-width: 0;
 }
 .kb-ses__launched {
   margin: var(--pad-2) 0;

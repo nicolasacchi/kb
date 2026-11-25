@@ -3,9 +3,9 @@
 // HUBDOOR — /terminals, the hub list page, through the real page with mocked
 // data hooks.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import type { TermRow } from "../api/terms";
 import type { LiveStatusRow } from "../api/generated/LiveStatusRow";
 
@@ -13,6 +13,11 @@ const m = vi.hoisted(() => ({
   identity: { terminal_admitted: true } as { terminal_admitted: boolean } | null,
   terms: { terms: [] as unknown[], isLoading: false, isError: false },
   live: { rows: [] as unknown[], loading: false },
+}));
+const confirmMock = vi.hoisted(() => vi.fn(async () => false));
+vi.mock("../components/ConfirmProvider", () => ({
+  useConfirm: () => confirmMock,
+  useConfirmOptional: () => confirmMock,
 }));
 vi.mock("../hooks/useArtifactHost", () => ({ useIdentity: () => m.identity }));
 vi.mock("../terminal/useTerms", () => ({ useTerms: () => m.terms }));
@@ -260,6 +265,27 @@ const sessionRow = (o: Record<string, unknown> = {}) => ({
 });
 
 describe("New session (HUBHOST)", () => {
+  it("closing the dialog returns focus to the New session button", async () => {
+    mount();
+    const btn = screen.getByTestId("hub-new");
+    fireEvent.click(btn);
+    fireEvent.click(screen.getByTestId("launch-close"));
+    await waitFor(() => expect(document.activeElement).toBe(btn));
+  });
+
+  it("each row has an End/Remove button that does not navigate", () => {
+    m.terms = {
+      isLoading: false,
+      isError: false,
+      terms: [term("a"), term("dead", { pane_dead: true })],
+    };
+    mount();
+    const btns = screen.getAllByTestId("kb-term-end");
+    expect(btns.map((b) => b.textContent).sort()).toEqual(["End", "Remove"]);
+    fireEvent.click(btns[0]);
+    expect(screen.getByTestId("where").textContent).toBe("/terminals");
+  });
+
   it("is in the header and opens the launcher in the empty state", () => {
     mount();
     expect(screen.getByTestId("hub-empty")).toBeTruthy();
@@ -337,6 +363,54 @@ describe("deep link ?launch=1&resume= (HUBHOST, H4)", () => {
     cleanup();
     mount("/terminals");
     expect(screen.queryByTestId("launch-modal")).toBeNull();
+  });
+
+  it("Back after the strip does not land on the launch URL or reopen the dialog (replace, not push)", async () => {
+    details.sid1 = { status: 200, body: sessionRow() };
+    let nav: ReturnType<typeof useNavigate> | null = null;
+    function Grab() {
+      nav = useNavigate();
+      return null;
+    }
+    const qc = new QueryClient();
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={["/terminals?x=1", "/terminals?launch=1&resume=sid1"]} initialIndex={1}>
+          <Routes>
+            <Route path="/terminals" element={<><TerminalsPageRoute /><Where /><Grab /></>} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/terminals"));
+    fireEvent.click(screen.getByTestId("launch-close"));
+    act(() => nav!(-1));
+    expect(screen.getByTestId("where").textContent).toBe("/terminals?x=1");
+    expect(screen.queryByTestId("launch-modal")).toBeNull();
+  });
+
+  it("in-page navigation to ?launch=1&resume= opens it once and strips it", async () => {
+    details.sid1 = { status: 200, body: sessionRow() };
+    let nav: ReturnType<typeof useNavigate> | null = null;
+    function Grab() {
+      nav = useNavigate();
+      return null;
+    }
+    const qc = new QueryClient();
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={["/terminals"]}>
+          <Routes>
+            <Route path="/terminals" element={<><TerminalsPageRoute /><Where /><Grab /></>} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(screen.queryByTestId("launch-modal")).toBeNull();
+    act(() => nav!("/terminals?launch=1&resume=sid1"));
+    await waitFor(() => expect(screen.getByTestId("launch-modal")).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/terminals"));
+    expect(posts()).toHaveLength(0);
   });
 
   it("resume without launch is dropped by the grammar: nothing opens", () => {

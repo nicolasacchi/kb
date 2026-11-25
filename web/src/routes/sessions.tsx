@@ -28,6 +28,8 @@ import { useCloseRequest } from "@kb/ui/useCloseRequest";
 import { openTermParam } from "../components/TermList";
 import { ContinueInTerminal } from "../components/ContinueInTerminal";
 import { useTerms } from "../terminal/useTerms";
+import { joinHub } from "../terminal/hub/termHub";
+import { loadPrefs } from "../terminal/hub/termPrefs";
 import { ViewBar, type Cluster, type Control } from "@kb/ui/ViewBar";
 import {
   fetchResearchRollup,
@@ -115,8 +117,11 @@ const PREFETCH_DELAY_MS = 300;
 // "Terminals" while there are none.
 function TerminalsLink() {
   const { terms } = useTerms();
-  const running = terms.filter((t) => !t.pane_dead).length;
-  const needs = terms.filter((t) => !t.pane_dead && t.blocked === true).length;
+  const { rows: liveRows } = useLiveSessions();
+  // Same join + tiering as the hub header, so the two counts cannot disagree.
+  const hub = useMemo(() => joinHub(terms, liveRows, loadPrefs()), [terms, liveRows]);
+  const running = hub.filter((r) => r.tier !== "ended").length;
+  const needs = hub.filter((r) => r.tier === "needs").length;
   const label = running === 0 ? "Terminals" : `Terminals (${running} running, ${needs} need you)`;
   return (
     <div className="kb-ses__terminals-link">

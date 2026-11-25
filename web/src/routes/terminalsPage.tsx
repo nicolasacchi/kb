@@ -99,11 +99,20 @@ function HubList(): ReactElement {
     deep?.resume ? { resumeSid: deep.resume } : undefined,
   );
   const newBtn = useRef<HTMLButtonElement | null>(null);
+  // Keyed on the navigation entry: the mount-time latch covers first paint, and
+  // an in-page navigation to `?launch=1&resume=` (a later Continue door) is
+  // consumed the same way, once per entry.
+  const consumedKey = useRef<string | null>(null);
   useEffect(() => {
-    if (deep !== null) navigate(buildHubUrl({ filter }), { replace: true });
-    // Mount-only: the latch above already holds the values.
+    if (consumedKey.current === loc.key) return;
+    const u = parseHubUrl(loc.pathname, loc.search);
+    if (!u.launch) return;
+    consumedKey.current = loc.key;
+    setPrefill(u.resume ? { resumeSid: u.resume } : undefined);
+    setLaunchOpen(true);
+    navigate(buildHubUrl({ filter }), { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [loc.key]);
   const refresh = useCallback(() => void qc.invalidateQueries({ queryKey: ["terms"] }), [qc]);
   const openLaunch = useCallback(() => {
     setPrefill(undefined);

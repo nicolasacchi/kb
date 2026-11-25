@@ -599,6 +599,16 @@ describe("launch refusals (HUBHOST)", () => {
   });
 });
 
+describe("phone Sheet height (HUBHOST)", () => {
+  it("the launch sheet is clamped in dynamic viewport units, not static vh", async () => {
+    const { readFileSync } = await import("node:fs");
+    const css = readFileSync(new URL("./LaunchDialog.css", import.meta.url), "utf8");
+    const rule = /#kb-launch-sheet\.kb-sheet\s*\{[^}]*\}/.exec(css)?.[0] ?? "";
+    expect(rule).toMatch(/height:\s*min\(var\(--sheet-h, 92dvh\), 92dvh\)/);
+    expect(rule).toMatch(/max-height:\s*100dvh/);
+  });
+});
+
 describe("phone Sheet detent (HUBHOST)", () => {
   const phone = () =>
     vi.stubGlobal("matchMedia", (query: string) => ({
