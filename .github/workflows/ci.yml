@@ -1632,6 +1632,7 @@ jobs:
           bash plugins/kb-memory/hooks/tests/test-beat.sh
           # OL PRES4 - kb-omp.ts's tool_call path hand-off and blocked/unblocked beats.
           bash plugins/kb-memory/hooks/tests/test-omp-beats.sh
+          bash plugins/kb-memory/hooks/tests/test-status-tee.sh
           # A6: the commit-trailer matrix was never run in CI
           bash plugins/kb-memory/hooks/tests/test-git-trailer.sh
 

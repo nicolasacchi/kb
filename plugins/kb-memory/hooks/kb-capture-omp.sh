@@ -52,6 +52,11 @@
 #     write→Write, …; Write/Edit arguments.path aliased as file_path — the key
 #     parse_session_activity reads for the edited-set). usage{input,output,
 #     cacheRead,cacheWrite} → usage{input_tokens,output_tokens} per line.
+#     STATSX3: a sibling message.harness_usage{schema:"omp-usage/1",
+#     response_id,input,output,cache_read,cache_write,cost{…},duration_ms,
+#     ttft_ms,completed_at,stop_reason,context{…}} rides beside the UNCHANGED
+#     usage (raw, cache not folded), once per responseId (first leaf-chain
+#     entry wins); present only when the message carries one of those fields.
 #   message role=toolResult                 → user tool_result line
 #     (content texts joined, capped at 2000 chars like codex; isError →
 #     is_error). OK4: prefixed with a `[intent] <text>` line (cap 500 chars,
@@ -141,6 +146,9 @@ TRANSLATE='
     {bash:"Bash", read:"Read", write:"Write", edit:"Edit", grep:"Grep",
      glob:"Glob", task:"Task", web_search:"WebSearch"}[ascii_downcase]
     // ((.[0:1] | ascii_upcase) + .[1:]);
+  # STATSX3 - numeric-only, non-negative coercion for harness_usage fields.
+  def hnum: if type == "number" and . >= 0 then . else empty end;
+  def hopt($k; $v): ([$v | hnum] | .[0]) as $x | if $x == null then {} else {($k): $x} end;
   def ju: (($ENV.KB_JOB_ULID // "") | if test("^[A-Za-z0-9_-]{1,64}$") then . else "" end);
   def blobsha: if type == "string" then (capture("^blob:sha256:(?<h>[0-9a-f]{64})$")? | .h) // null else null end;
   def imgblock:
@@ -178,6 +186,13 @@ TRANSLATE='
    | last // -1) as $rb |
   ($chain[$rb + 1:]) as $live |
   ($live | map(select(.type == "model_change") | .model) | last // "omp") as $dmodel |
+  # STATSX3 - first leaf-chain entry per responseId (first chain entry wins;
+  # from_entries keeps the last duplicate key, so feed it reversed).
+  ([$live[] | select(.type == "message" and ((.message // {}) | type) == "object"
+                     and .message.role == "assistant"
+                     and ((.message.responseId // null) | type) == "string"
+                     and .message.responseId != "")
+    | {key: .message.responseId, value: .id}] | reverse | from_entries) as $firstresp |
   # OK4 — per-tool intent index: tool_execution_start.data.toolCallId ->
   # data.intent (leaf-chain-scoped — keyed off $live), so the matching
   # toolResult line below can carry why the call happened.
@@ -219,13 +234,46 @@ TRANSLATE='
             else $a end) as $args |
            {type: "tool_use", id: (.id // ""), name: $tn, input: $args}
          else empty end]) as $blocks |
+       (($m.usage // null) | if type == "object" then . else {} end) as $u |
+       (if (($m.responseId // null) | type) == "string" and $m.responseId != ""
+        then $m.responseId else ("entry:" + ((.id // "") | tostring)) end) as $rid |
+       (if (($m.responseId // null) | type) == "string" and $m.responseId != ""
+        then ($firstresp[$m.responseId] == .id) else true end) as $isfirst |
+       ((($u.cost // null) | if type == "object" then . else {} end) as $c |
+        (hopt("input"; $c.input) + hopt("output"; $c.output)
+         + hopt("cache_read"; $c.cacheRead) + hopt("cache_write"; $c.cacheWrite)
+         + hopt("total"; $c.total))) as $cost |
+       ((($m.contextSnapshot // null) | if type == "object" then . else {} end) as $cs |
+        (hopt("prompt_tokens"; $cs.promptTokens)
+         + hopt("non_message_tokens"; $cs.nonMessageTokens)
+         + hopt("tool_schema_tokens"; $cs.toolSchemaTokens)
+         + hopt("compaction_epoch"; $cs.compactionEpoch))) as $ctx |
+       (if $isfirst and
+           ((($u.cost // null) | type) == "object"
+            or ($m.duration // null) != null
+            or ($m.responseId // null) != null
+            or ($m.contextSnapshot // null) != null
+            or ((($u.cacheRead // null) | hnum // 0) > 0)
+            or ((($u.cacheWrite // null) | hnum // 0) > 0))
+        then
+          ({schema: "omp-usage/1", response_id: $rid}
+           + hopt("input"; $u.input) + hopt("output"; $u.output)
+           + {cache_read: (($u.cacheRead // null) | hnum // 0),
+              cache_write: (($u.cacheWrite // null) | hnum // 0)}
+           + (if $cost != {} then {cost: $cost} else {} end)
+           + hopt("duration_ms"; $m.duration) + hopt("ttft_ms"; $m.ttft)
+           + hopt("completed_at"; $m.completedAt)
+           + (if ($m.stopReason | type) == "string" then {stop_reason: $m.stopReason} else {} end)
+           + (if $ctx != {} then {context: $ctx} else {} end))
+        else null end) as $hu |
        ({role: "assistant", model: ($m.model // $dmodel), content: $blocks}
         + (if ($m.usage // null) != null then
             {usage: {input_tokens: (($m.usage.input // 0)
                                     + ($m.usage.cacheRead // 0)
                                     + ($m.usage.cacheWrite // 0)),
                      output_tokens: ($m.usage.output // 0)}}
-           else {} end)) as $am |
+           else {} end)
+        + (if $hu != null then {harness_usage: $hu} else {} end)) as $am |
        {sessionId: $sid, timestamp: $ts, cwd: $cwd, type: "assistant",
         message: $am}
      elif $m.role == "toolResult" then

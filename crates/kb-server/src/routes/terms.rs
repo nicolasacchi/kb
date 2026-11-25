@@ -50,7 +50,13 @@ use kb_core::sessions::live::LiveState;
 // `binding.rs`. Only the runner mints/validates 8..=12; an id inside this
 // grammar that the runner does not know comes back as a mapped 4xx
 // (`invalid-id` 400 / `not-found` 404), never a 502.
-use crate::terminal::binding::is_valid_term_id;
+use crate::terminal::binding::{is_valid_term_id, pick_session_hint, HintCandidate};
+
+/// CONVBIND — rows read per kb by the hint's capture scan (the same bound
+/// live-status Tier-0 uses).
+// Mirrors sessions.rs's private TIER0_SCAN_LIMIT (not this unit's file); a
+// per-daemon memo of the scan is a tracked follow-up.
+const HINT_SCAN_LIMIT: u32 = 500;
 
 /// The maximum request body the relay parses before a 413.
 const MAX_BODY_BYTES: usize = 256 * 1024;
@@ -113,6 +119,25 @@ struct TermItem {
     state: Option<LiveState>,
     #[serde(default)]
     blocked: bool,
+    // CONVBIND — a derived folder-match guess on an UNBOUND row; always
+    // serialized (`null` when absent), computed per request, never stored,
+    // never read by any gate.
+    #[serde(default)]
+    session_hint: Option<SessionHint>,
+}
+
+/// CONVBIND — the label on a guessed session link.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum HintVia {
+    Cwd,
+}
+
+/// CONVBIND — `{session_id, via:"cwd"}`: unverified, derived, not persisted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct SessionHint {
+    session_id: String,
+    via: HintVia,
 }
 
 /// Parse a runner `list` reply `data` into typed items, tolerating the bare
@@ -372,6 +397,135 @@ fn enrich_terms(state: &KbHandles, items: &mut [TermItem], now_unix: i64) {
         item.session_id = gate.bound;
         item.state = gate.state;
         item.blocked = gate.blocked;
+        // The hint is never carried over from the runner's reply.
+        item.session_hint = None;
+    }
+}
+
+/// CONVBIND — the unbound rows that may get a hint: `(index, id, harness,
+/// cwd, started_unix)`. A verified binding, a dead pane, a stale row or a row
+/// without a harness/cwd never qualifies.
+fn hint_wanted(items: &[TermItem]) -> Vec<(usize, String, String, String, Option<i64>)> {
+    items
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| i.session_id.is_none())
+        .filter(|(_, i)| i.extra.get("pane_dead").and_then(|v| v.as_bool()) != Some(true))
+        .filter(|(_, i)| i.extra.get("stale").and_then(|v| v.as_bool()) != Some(true))
+        .filter_map(|(n, i)| {
+            let harness = i.extra.get("harness")?.as_str()?.to_string();
+            let cwd = i.extra.get("cwd")?.as_str()?.to_string();
+            let started = i.extra.get("started_unix").and_then(|v| v.as_i64());
+            Some((n, i.id.clone(), harness, cwd, started))
+        })
+        .collect()
+}
+
+/// CONVBIND — the live registry's rows as hint candidates (a registry row
+/// wins over a capture of the same session; an ended row stays in the list
+/// as excluded so its capture cannot resurrect it).
+fn registry_hint_candidates(state: &KbHandles, now_unix: i64) -> Vec<(HintCandidate, bool)> {
+    state
+        .live_registry
+        .snapshot(now_unix)
+        .into_iter()
+        .map(|(r, _, _)| {
+            let ended = r.holder == kb_core::sessions::live::Holder::Ended;
+            let verified = r.term_bound_unix.is_some();
+            (
+                HintCandidate {
+                    session_id: r.session_id,
+                    harness: r.harness,
+                    cwd: r.cwd,
+                    last_activity_unix: r.last_activity_unix,
+                    is_subagent_child: false,
+                    bound_term: r.term.filter(|_| verified),
+                },
+                ended,
+            )
+        })
+        .collect()
+}
+
+/// CONVBIND — fill `session_hint` on unbound rows from the live registry
+/// plus recent captures (the live-status Tier-0 source, so a restarted
+/// daemon with an empty registry still guesses). No registry guard is held
+/// across an await (#15); the capture scan fans out through `buffered_join`
+/// (#28) and only runs when at least one row qualifies.
+async fn attach_session_hints(state: &KbHandles, items: &mut [TermItem], now_unix: i64) {
+    let wanted = hint_wanted(items);
+    if wanted.is_empty() {
+        return;
+    }
+    let registry = registry_hint_candidates(state, now_unix);
+    let known: std::collections::HashSet<String> =
+        registry.iter().map(|(c, _)| c.session_id.clone()).collect();
+    let mut candidates: Vec<HintCandidate> = registry
+        .into_iter()
+        .filter(|(_, ended)| !ended)
+        .map(|(c, _)| c)
+        .collect();
+
+    let known = &known;
+    let mut futs: Vec<super::CorpusFut<'_, Vec<HintCandidate>>> = Vec::new();
+    for (kb_name, ctx) in state.kbs.iter() {
+        futs.push(Box::pin(async move {
+            let list = match ctx
+                .storage
+                .sessions_list(
+                    HINT_SCAN_LIMIT,
+                    None,
+                    None,
+                    None,
+                    None,
+                    kb_core::sessions::ProjectFilter::default(),
+                    Vec::new(),
+                    Vec::new(),
+                )
+                .await
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(kb = %kb_name, error = %e, "sessions_list failed in terms session-hint scan");
+                    return Vec::new();
+                }
+            };
+            super::sessions::group_tier0_rows(list)
+                .into_iter()
+                .filter(|row| !known.contains(&row.session_id))
+                .filter_map(|row| {
+                    let last = row.started_at.max(row.ended_at);
+                    if now_unix - last > kb_core::sessions::ACTIVE_WINDOW_SECS {
+                        return None;
+                    }
+                    let is_subagent_child = row
+                        .root_session_id
+                        .as_deref()
+                        .is_some_and(|root| root != row.session_id);
+                    Some(HintCandidate {
+                        session_id: row.session_id,
+                        harness: row.harness,
+                        cwd: row.cwd,
+                        last_activity_unix: last,
+                        is_subagent_child,
+                        bound_term: None,
+                    })
+                })
+                .collect()
+        }));
+    }
+    for part in super::buffered_join(futs, state.fanout_cap).await {
+        candidates.extend(part);
+    }
+
+    for (n, id, harness, cwd, started) in wanted {
+        items[n].session_hint =
+            pick_session_hint(&id, &harness, &cwd, started, &candidates).map(|session_id| {
+                SessionHint {
+                    session_id,
+                    via: HintVia::Cwd,
+                }
+            });
     }
 }
 
@@ -411,6 +565,7 @@ pub async fn list(
                 Some(mut items) => {
                     refresh_directory(&state, &data, now_unix);
                     enrich_terms(&state, &mut items, now_unix);
+                    attach_session_hints(&state, &mut items, now_unix).await;
                     serialize_items(&items, &data)
                 }
                 None => data,
@@ -1220,10 +1375,58 @@ mod tests {
         assert_eq!(item["session_id"], serde_json::Value::Null);
         assert_eq!(item["state"], serde_json::Value::Null);
         assert_eq!(item["blocked"], false);
+        assert_eq!(item["session_hint"], serde_json::Value::Null);
         // Envelope shape is preserved.
         let wrapped = serialize_items(&items, &serde_json::json!({"terms": []}));
         assert!(wrapped.get("terms").is_some(), "{wrapped}");
         assert_eq!(wrapped["terms"][0]["id"], "abc123");
+    }
+
+    #[test]
+    fn serialized_item_always_carries_session_hint_null_by_default() {
+        let items = parse_term_items(&serde_json::json!([one_item()])).unwrap();
+        let out = serialize_items(&items, &serde_json::json!([]));
+        assert!(out[0].as_object().unwrap().contains_key("session_hint"));
+        assert_eq!(out[0]["session_hint"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn hint_serializes_as_session_id_and_via_cwd() {
+        let mut items = parse_term_items(&serde_json::json!([one_item()])).unwrap();
+        items[0].session_hint = Some(SessionHint {
+            session_id: "sid-a".into(),
+            via: HintVia::Cwd,
+        });
+        let out = serialize_items(&items, &serde_json::json!([]));
+        assert_eq!(
+            out[0]["session_hint"],
+            serde_json::json!({"session_id": "sid-a", "via": "cwd"})
+        );
+    }
+
+    #[test]
+    fn bound_row_has_no_hint() {
+        let mut items = parse_term_items(&serde_json::json!([one_item()])).unwrap();
+        assert_eq!(hint_wanted(&items).len(), 1);
+        items[0].session_id = Some("sid-v".into());
+        assert!(hint_wanted(&items).is_empty(), "a verified binding wins");
+    }
+
+    #[test]
+    fn dead_stale_or_unlocated_rows_are_not_hinted() {
+        for patch in [
+            serde_json::json!({"pane_dead": true}),
+            serde_json::json!({"stale": true}),
+            serde_json::json!({"cwd": null}),
+            serde_json::json!({"harness": null}),
+        ] {
+            let mut v = one_item();
+            for (k, val) in patch.as_object().unwrap() {
+                v[k] = val.clone();
+            }
+            let items = parse_term_items(&serde_json::json!([v])).unwrap();
+            assert!(hint_wanted(&items).is_empty(), "{patch}");
+        }
     }
 
     #[test]

@@ -33,3 +33,30 @@ describe("PhoneTerminal headerExtra", () => {
     expect(container.querySelector('[data-testid="kb-term-phone-extra"]')).toBeNull();
   });
 });
+
+describe("PhoneTerminal BHEAD header slots", () => {
+  it("renders the project, the actions before End, the state dot and the chips; still exactly one End", () => {
+    const { container } = render(
+      <PhoneTerminal
+        {...base}
+        harness="claude"
+        project="demo"
+        chips={[{ id: "model", label: "opus", title: "Model, reported by the harness hook" }]}
+        headerActions={<button data-testid="x-palette">Cmd</button>}
+        headerExtra={<button data-testid="x-end">End</button>}
+      />,
+    );
+    const extra = container.querySelector('[data-testid="kb-term-phone-extra"]')!;
+    const order = Array.from(extra.querySelectorAll("button")).map((b) => b.dataset.testid);
+    expect(order).toEqual(["x-palette", "x-end"]);
+    expect(container.querySelectorAll('[data-testid="x-end"]')).toHaveLength(1);
+    expect(container.querySelector('[data-testid="kb-term-project"]')!.textContent).toBe("demo");
+    expect(container.querySelector('[data-testid="kb-term-state"]')!.getAttribute("data-phase")).toBe("live");
+    expect(container.querySelector('[data-testid="kb-term-status-chips"] li')!.textContent).toBe("opus");
+  });
+
+  it("shows no chips element without chips", () => {
+    const { container } = render(<PhoneTerminal {...base} />);
+    expect(container.querySelector('[data-testid="kb-term-status-chips"]')).toBeNull();
+  });
+});

@@ -79,6 +79,18 @@ export interface TermRow {
   session_id?: string | null;
   state?: LiveState | null;
   blocked?: boolean;
+  /**
+   * Derived folder-match guess for a row with no verified binding (null
+   * when absent). Never verified, never persisted, never a gate input; a
+   * later verified beat replaces it with `session_id`.
+   */
+  session_hint?: TermSessionHint | null;
+}
+
+/** A guessed session link: same harness and exactly the same cwd. */
+export interface TermSessionHint {
+  session_id: string;
+  via: "cwd";
 }
 
 async function termsError(res: Response): Promise<TermsApiError> {

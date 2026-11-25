@@ -371,10 +371,13 @@ export function createIconSet(overrides: IconSizeOverrides = {}) {
     ),
     TerminalHub: (p: P) => (
       <svg {...base(sz("TerminalHub"))} {...p} strokeLinecap="round" strokeLinejoin="round">
-        <rect x="4.5" y="1.5" width="10" height="8" rx="1.2" />
-        <path d="M1.5 5v7.3a1.2 1.2 0 0 0 1.2 1.2H11" />
-        <path d="M7 4.2l1.6 1.3L7 6.8" />
-        <path d="M10 7h2.4" />
+        {/* back window: only its visible top + right edges (the front one occludes
+            the rest), with a >=1.5 unit gap to the front stroke */}
+        <path d="M6 4.5V2.7A1.2 1.2 0 0 1 7.2 1.5h6.1a1.2 1.2 0 0 1 1.2 1.2v4.6a1.2 1.2 0 0 1-1.2 1.2H11.7" />
+        {/* front window, complete, with the prompt chevron and cursor dash */}
+        <rect x="1.5" y="6.5" width="8.5" height="8" rx="1.2" />
+        <path d="M3.7 9.6l1.7 1.3-1.7 1.3" />
+        <path d="M7 12.2h1.8" />
       </svg>
     ),
     Comment: (p: P) => (

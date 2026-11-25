@@ -737,7 +737,7 @@ pub struct ViewCarry {
     harness: Option<String>,
     started_at: Option<String>,
     ended_at: Option<String>,
-    tokens: TokenLine,
+    usage: super::stats::UsageLedger,
     tool_calls: u32,
     error_count: u32,
     stop_reason: Option<String>,
@@ -763,6 +763,13 @@ const SEEN_UUID_CAP: usize = 512;
 impl ViewCarry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Deterministic session stats over everything this carry has ingested.
+    /// `turns_human` is the caller's closed human-turn count (the carry holds
+    /// only the still-open turn). Surfaced, never scored.
+    pub fn session_stats(&self, turns_human: u32) -> super::stats::SessionStats {
+        super::stats::SessionStats::from_parts(&self.usage, turns_human, self.tool_calls)
     }
 
     /// W7/LF-3b — the honesty counters accumulated so far (cumulative since
@@ -1144,26 +1151,9 @@ impl ViewCarry {
                 self.model = Some(m.to_string());
             }
         }
-        if let Some(u) = v.get("message").and_then(|m| m.get("usage")) {
-            self.tokens.input = self
-                .tokens
-                .input
-                .saturating_add(u.get("input_tokens").and_then(|x| x.as_u64()).unwrap_or(0));
-            self.tokens.output = self
-                .tokens
-                .output
-                .saturating_add(u.get("output_tokens").and_then(|x| x.as_u64()).unwrap_or(0));
-            self.tokens.cache_write = self.tokens.cache_write.saturating_add(
-                u.get("cache_creation_input_tokens")
-                    .and_then(|x| x.as_u64())
-                    .unwrap_or(0),
-            );
-            self.tokens.cache_read = self.tokens.cache_read.saturating_add(
-                u.get("cache_read_input_tokens")
-                    .and_then(|x| x.as_u64())
-                    .unwrap_or(0),
-            );
-        }
+        // Usage is repeated on every content-block record of one message:
+        // the ledger counts each message once (see `stats`).
+        self.usage.record_record(v);
 
         let Some(blocks) = v
             .get("message")
@@ -2424,7 +2414,7 @@ pub fn session_view(jsonl: &str, tail: &TailBlocks, _opts: &ViewOptions) -> Sess
         turns_assistant: turns.iter().filter(|t| t.role == Role::Assistant).count() as u32,
         tool_calls: carry.tool_calls,
         error_count: carry.error_count,
-        tokens: carry.tokens.clone(),
+        tokens: carry.usage.token_line(),
         opening,
         outcome,
     };

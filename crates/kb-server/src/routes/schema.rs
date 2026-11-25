@@ -227,6 +227,9 @@ const V0_0_1_TYPES: &[&str] = &[
     // busy fleet would flood every browser, invariant #24). Daemon-wide
     // (no `{kb}` scope — see `routes::sessions::beat`).
     "session.state",
+    // STATREG — a `status` beat fires this ONLY when the merged typed status
+    // changed (never per beat); the payload names the session, never values.
+    "session.status",
     // SL2 (`docs/research/kb-slate-design-2026-09.html` §9 "SSE") — the
     // per-project blackboard. `slate.updated` fires ONCE PER APPEND, never
     // per read (#24); `kind` is the post's own kind, or the lifecycle verb
@@ -249,6 +252,10 @@ const V0_0_1_TYPES: &[&str] = &[
     // durable mutation, payload `{project, rev}` only, never prompt text).
     // Emitter: `terminal::prompts`.
     "term.prompts",
+    // kbt2 CMDSTORE — the command-catalogue overlay changed (one event per
+    // durable change, payload `{rev}` only, never catalogue text).
+    // Emitter: `terminal::command_store`.
+    "term.commands",
 ];
 
 #[derive(Debug, Serialize)]
@@ -456,10 +463,12 @@ pub async fn per_type(Path((kind, version)): Path<(String, String)>) -> Response
         }
         "slate.deleted" => json!({"type": kind, "payload": ["slug"]}),
         "session.state" => json!({"type": kind, "payload": SESSION_STATE_KEYS}),
+        "session.status" => json!({"type": kind, "payload": SESSION_STATUS_KEYS}),
         "term.created" => json!({"type": kind, "payload": TERM_CREATED_KEYS}),
         "term.ended" => json!({"type": kind, "payload": TERM_ENDED_KEYS}),
         "term.state" => json!({"type": kind, "payload": TERM_STATE_KEYS}),
         "term.prompts" => json!({"type": kind, "payload": TERM_PROMPTS_KEYS}),
+        "term.commands" => json!({"type": kind, "payload": TERM_COMMANDS_KEYS}),
         _ => unreachable!("contains-check above"),
     };
     Json(schema).into_response()
@@ -479,6 +488,11 @@ pub const SESSION_STATE_KEYS: [&str; 8] = [
     "blocked",
     "blocked_tool?",
 ];
+
+/// The declared payload keys of `session.status` (emitted by
+/// `routes::sessions::beat` on a changed status). Values stay behind the
+/// live-status scrub floor, so none ride the event.
+pub const SESSION_STATUS_KEYS: [&str; 2] = ["session_id", "harness"];
 
 /// The declared payload keys of `term.created` (emitted by
 /// `terminal::events::emit_created` on a confirmed launch). A `?`
@@ -500,6 +514,11 @@ pub const TERM_STATE_KEYS: [&str; 5] = ["id", "state", "cols?", "rows?", "grid_o
 /// slug and the new revision, nothing else. The queue's text is
 /// operator-authored content and never rides an event; a client refetches.
 pub const TERM_PROMPTS_KEYS: [&str; 2] = ["project", "rev"];
+
+/// The declared payload keys of `term.commands` (kbt2 CMDSTORE): the new
+/// revision, nothing else. The catalogue is operator-authored content and
+/// never rides an event; a client refetches.
+pub const TERM_COMMANDS_KEYS: [&str; 1] = ["rev"];
 
 /// The declared payload keys of `maintenance.backup.written`.
 pub const BACKUP_WRITTEN_KEYS: [&str; 3] = ["kb", "path", "remote"];

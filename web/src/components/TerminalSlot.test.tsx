@@ -39,7 +39,7 @@ describe("TerminalSlot", () => {
       </MemoryRouter>,
     );
     expect(screen.getByTestId("kb-term-open").textContent).toBe("Open terminal");
-    expect(screen.getByTestId("kb-term-open").getAttribute("href")).toBe("/term/abc123");
+    expect(screen.getByTestId("kb-term-open").getAttribute("href")).toBe("/terminals/abc123");
   });
   it("shouldRenderTerminal is true only for an available+admitted lane", () => {
     expect(shouldRenderTerminal({ available: true, admitted: true })).toBe(true);

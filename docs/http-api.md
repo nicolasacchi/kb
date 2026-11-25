@@ -1400,6 +1400,19 @@ POST /api/sessions/beat                     LSC-2/3 (live-sessions cockpit
                                             ignored unless `[terminal] enabled`
                                             and the beat's `pid` equals the
                                             runner's pane pid — never a 400.
+                                            STATREG — `event:"status"` is not a lifecycle event: it
+                                            carries an optional `status:{model?, context_pct?,
+                                            cost_usd?, permission_mode?, branch?}` merged per field
+                                            into an EXISTING registry row (unknown session or
+                                            harness mismatch -> `applied:false`; no row is created).
+                                            model/branch 1..64 chars, context_pct 0..100, cost_usd
+                                            0..100000, permission_mode `default|plan|accept|bypass|
+                                            other`; an invalid field is dropped, never a 400. It never
+                                            changes holder, state or lease, is never persisted, and
+                                            answers `{ok, session_id, applied, changed}`. Fires
+                                            `session.status` `{session_id, harness}` only when the
+                                            merged status changed. Rides `live-status` as `status`,
+                                            re-validated under the non-loopback scrub floor.
                                             Daemon-wide, NOT `{kb}`-scoped (a
                                             beat arrives before any capture
                                             exists to attribute it to).
@@ -1601,6 +1614,11 @@ GET  /api/terms                             SPA-only terminal relays
                                             docs/kb-term.md.
 GET    /api/terms                           Relay the runner's session
                                             list as `{"terms":[...]}`.
+                                            `session_hint {session_id,
+                                            via:"cwd"}` is a derived
+                                            folder-match guess on unbound
+                                            rows, never verified, never
+                                            persisted.
 POST   /api/terms                           Launch: body `{harness,
                                             resume_sid?, handoff_from?,
                                             cwd?, cols?, rows?}`.
@@ -3379,6 +3397,30 @@ PATCH  /api/term-prompts/{project}/{item}   {text?, done?, position?} (>=1,
 DELETE /api/term-prompts/{project}/{item}   remove an item, answer the queue;
                                             If-Match honoured when sent
                                             (412 when stale) [terminal]
+GET    /api/terms/commands                  the effective command catalogue
+                                            (shipped defaults + the operator
+                                            overlay): {rev, harnesses:{<h>:
+                                            {groups:[{id, label, origin,
+                                            items:[{..., origin}]}]}}}, origin
+                                            `default|overlay`; ETag "<rev>",
+                                            rev 0 on a fresh daemon [terminal]
+PUT    /api/terms/commands                  replace the overlay {harnesses?,
+                                            hidden?} (64 KiB cap, 413 above):
+                                            If-Match REQUIRED (428 without,
+                                            412 `commands-stale` + current
+                                            `rev` when stale); invalid -> 400
+                                            `bad-catalogue` + ordered
+                                            `errors:[{code,path}]`; a merge
+                                            over a cap -> 409
+                                            `catalogue-too-large`; an
+                                            identical overlay is a no-op (no
+                                            bump, no event); emits
+                                            `term.commands` `{rev}` [terminal]
+DELETE /api/terms/commands                  reset to the defaults (an empty
+                                            overlay at rev+1, ETags never
+                                            repeat); If-Match honoured when
+                                            sent; a no-op when already empty
+                                            [terminal]
 
 # admin
 GET    /api/kb/{kb}/quarantine              parser-quarantined artifacts

@@ -248,6 +248,14 @@ impl KbPaths {
             .join(format!("{}.json", slug.as_str()))
     }
 
+    /// `<state>/term-commands.json` — the kbt2 CMDSTORE command-catalogue
+    /// overlay (`kb-term-commands/1`): ONE daemon-wide file, outside every
+    /// kb's state dir and source root, so `kb reset` and the indexer never
+    /// touch it.
+    pub fn term_commands_file(&self) -> PathBuf {
+        self.state.join("term-commands.json")
+    }
+
     /// `<state>/tombstone-era.json` — MI-W2.4c EPOCH HONESTY marker.
     /// Written ONCE, the first time this daemon process observes it's
     /// absent (`kb_server::state::ensure_tombstone_era`, called at
@@ -414,6 +422,12 @@ impl KbPaths {
             member(
                 "term-prompts",
                 self.term_prompts_dir(),
+                Daemon,
+                Persistent(Copy),
+            ),
+            member(
+                "term-commands.json",
+                self.term_commands_file(),
                 Daemon,
                 Persistent(Copy),
             ),
@@ -773,6 +787,31 @@ mod tests {
         // Nor does it sit under a kb source root (the indexer cannot see it).
         assert!(!paths
             .term_prompts_dir()
+            .starts_with(tmp.path().join("corpus")));
+    }
+
+    /// kbt2 CMDSTORE: the command overlay is ONE daemon-wide file in the
+    /// state dir, registered like `term-prompts`, outside every kb dir.
+    #[test]
+    fn term_commands_member_is_daemon_persistent_and_outside_every_kb_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = KbPaths::rooted_at(tmp.path(), "smoke");
+        let kb = KbName::new("canon").unwrap();
+        assert_eq!(
+            paths.term_commands_file(),
+            tmp.path().join("state/smoke/term-commands.json")
+        );
+        let members = paths.state_members(&kb);
+        let m = members
+            .iter()
+            .find(|m| m.name == "term-commands.json")
+            .expect("term-commands.json must be registered");
+        assert_eq!(m.scope, StateScope::Daemon);
+        assert!(m.is_persistent());
+        assert_eq!(m.path, paths.term_commands_file());
+        assert!(!paths.term_commands_file().starts_with(paths.kb_state(&kb)));
+        assert!(!paths
+            .term_commands_file()
             .starts_with(tmp.path().join("corpus")));
     }
 

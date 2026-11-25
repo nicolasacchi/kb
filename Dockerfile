@@ -146,6 +146,9 @@ COPY crates ./crates
 # `kb validate` embeds the protocol registry (include_str! of schemas/*.json
 # from crates/kb-cli/src/commands/validate.rs), so the build needs it too.
 COPY schemas ./schemas
+# kb-server embeds the shipped terminal command catalogue
+# (include_str! of the SPA's defaults.json, one source for both sides).
+COPY web/src/terminal/commands/defaults.json ./web/src/terminal/commands/defaults.json
 
 # --- kb builder stage ---------------------------------------------------
 #

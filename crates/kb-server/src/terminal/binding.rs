@@ -114,9 +114,165 @@ impl TermDirectory {
     }
 }
 
+/// One session a terminal row might be linked to by folder. Built by the
+/// route from the live registry and from landed captures; the picker below
+/// never sees I/O types.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HintCandidate {
+    pub session_id: String,
+    pub harness: String,
+    /// The session's working folder; `None` never matches.
+    pub cwd: Option<String>,
+    /// Unix seconds of the session's latest activity.
+    pub last_activity_unix: i64,
+    /// A subagent child (its root differs from its own id).
+    pub is_subagent_child: bool,
+    /// The terminal id this session holds a VERIFIED binding to, if any. The
+    /// picker excludes the session only when that id differs from the row
+    /// being hinted; a binding to this very terminal never excludes.
+    pub bound_term: Option<String>,
+}
+
+/// The derived, unverified folder-match guess for an unbound terminal row:
+/// the newest candidate with the same harness and exactly the same cwd
+/// (byte equality), active at or after the terminal's start (when known),
+/// not a subagent child and not bound to another terminal. Two or more
+/// distinct sessions tied on the newest activity are ambiguous: no hint.
+/// Pure; never consulted by any gate.
+pub fn pick_session_hint(
+    term_id: &str,
+    term_harness: &str,
+    term_cwd: &str,
+    term_started_unix: Option<i64>,
+    candidates: &[HintCandidate],
+) -> Option<String> {
+    let mut best: Option<(i64, &str)> = None;
+    let mut tied = false;
+    for c in candidates {
+        if c.harness != term_harness
+            || c.cwd.as_deref() != Some(term_cwd)
+            || c.is_subagent_child
+            || c.bound_term.as_deref().is_some_and(|t| t != term_id)
+            || term_started_unix.is_some_and(|t| c.last_activity_unix < t)
+        {
+            continue;
+        }
+        match best {
+            None => best = Some((c.last_activity_unix, c.session_id.as_str())),
+            Some((_, sid)) if sid == c.session_id => {
+                if c.last_activity_unix > best.map_or(i64::MIN, |b| b.0) {
+                    best = Some((c.last_activity_unix, sid));
+                    tied = false;
+                }
+            }
+            Some((at, _)) if c.last_activity_unix > at => {
+                best = Some((c.last_activity_unix, c.session_id.as_str()));
+                tied = false;
+            }
+            Some((at, _)) if c.last_activity_unix == at => tied = true,
+            Some(_) => {}
+        }
+    }
+    if tied {
+        return None;
+    }
+    best.map(|(_, sid)| sid.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cand(sid: &str, at: i64) -> HintCandidate {
+        HintCandidate {
+            session_id: sid.into(),
+            harness: "claude".into(),
+            cwd: Some("/work/demo/repo".into()),
+            last_activity_unix: at,
+            is_subagent_child: false,
+            bound_term: None,
+        }
+    }
+    fn pick(c: &[HintCandidate]) -> Option<String> {
+        pick_session_hint("t1", "claude", "/work/demo/repo", Some(100), c)
+    }
+
+    #[test]
+    fn hint_matches_same_harness_and_exact_cwd() {
+        assert_eq!(pick(&[cand("a", 200)]), Some("a".into()));
+    }
+    #[test]
+    fn hint_wrong_harness_is_none() {
+        let mut c = cand("a", 200);
+        c.harness = "omp".into();
+        assert_eq!(pick(&[c]), None);
+    }
+    #[test]
+    fn hint_wrong_cwd_is_none() {
+        for bad in [
+            "/work/demo/repo/",
+            "/Work/demo/repo",
+            "/work/demo",
+            "/work/demo/repo/sub",
+            "/work/demo/rep",
+        ] {
+            let mut c = cand("a", 200);
+            c.cwd = Some(bad.into());
+            assert_eq!(pick(&[c]), None, "{bad}");
+        }
+    }
+    #[test]
+    fn hint_ambiguous_equal_recency_is_none() {
+        assert_eq!(pick(&[cand("a", 200), cand("b", 200)]), None);
+        // A tie on a LOWER recency does not make the newest ambiguous.
+        assert_eq!(
+            pick(&[cand("a", 300), cand("b", 200), cand("c", 200)]),
+            Some("a".into())
+        );
+        // The same session listed twice is not a tie with itself.
+        assert_eq!(pick(&[cand("a", 200), cand("a", 200)]), Some("a".into()));
+    }
+    #[test]
+    fn hint_newest_wins_when_recency_differs() {
+        assert_eq!(
+            pick(&[cand("a", 200), cand("b", 300), cand("c", 250)]),
+            Some("b".into())
+        );
+    }
+    #[test]
+    fn hint_older_than_term_start_is_none() {
+        assert_eq!(pick(&[cand("a", 99)]), None);
+        assert_eq!(pick(&[cand("a", 100)]), Some("a".into()));
+        // Unknown start: the requirement is skipped, the hint kept.
+        assert_eq!(
+            pick_session_hint("t1", "claude", "/work/demo/repo", None, &[cand("a", 1)]),
+            Some("a".into())
+        );
+    }
+    #[test]
+    fn hint_skips_subagent_children() {
+        let mut c = cand("child", 300);
+        c.is_subagent_child = true;
+        assert_eq!(pick(&[c, cand("a", 200)]), Some("a".into()));
+    }
+    #[test]
+    fn hint_skips_session_bound_to_another_term() {
+        let mut c = cand("other", 300);
+        c.bound_term = Some("t2".into());
+        assert_eq!(pick(&[c]), None);
+    }
+    #[test]
+    fn hint_keeps_session_bound_to_this_same_term() {
+        let mut c = cand("mine", 300);
+        c.bound_term = Some("t1".into());
+        assert_eq!(pick(&[c]), Some("mine".into()));
+    }
+    #[test]
+    fn hint_candidate_without_cwd_never_matches() {
+        let mut c = cand("a", 200);
+        c.cwd = None;
+        assert_eq!(pick(&[c]), None);
+    }
 
     #[test]
     fn term_id_grammar_is_the_one_grammar() {
