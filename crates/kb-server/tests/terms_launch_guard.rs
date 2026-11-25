@@ -441,7 +441,9 @@ async fn gate_unchanged_for_launch() {
             post()
                 .header("Origin", "https://evil.example")
                 .header("x-kb-intent", "terminal"),
-            "terminal-origin-refused",
+            // A foreign Origin may be refused by the daemon-wide origin
+            // layer before the terminal gate; either way it is a 403.
+            "origin-refused",
         ),
         (
             "no intent",
