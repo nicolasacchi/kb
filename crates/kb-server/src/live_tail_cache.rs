@@ -43,7 +43,10 @@ struct CacheKey {
 
 struct Entry {
     offset: u64,
-    carry: ViewCarry,
+    /// `None` after a `get` moved the carry out: the slot keeps its LRU
+    /// position and offset until the caller's `put` replaces it, but there is
+    /// nothing left to hand out.
+    carry: Option<ViewCarry>,
     last_hit: Instant,
 }
 
@@ -69,6 +72,13 @@ impl LiveTailCache {
     /// that raced a client's still-in-flight poll), and the caller must
     /// fall back to a stateless bootstrap rather than feed lines into a
     /// carry that doesn't start where the client thinks it does.
+    ///
+    /// The carry is MOVED out, not cloned: it holds the usage ledger (up to
+    /// 50k keys) and every event time, and the one caller feeds it to
+    /// `view_append` and `put`s the result back, so a clone per poll would
+    /// copy all of that for nothing. The slot stays (promoted to most
+    /// recently used) until that `put`; a second `get` at the same offset
+    /// before it misses and falls back to the stateless bootstrap.
     pub fn get(&self, sid: &str, inode: u64, from: u64) -> Option<ViewCarry> {
         let key = CacheKey {
             sid: sid.to_string(),
@@ -81,7 +91,7 @@ impl LiveTailCache {
             g.remove(pos);
             return None;
         }
-        if g[pos].1.offset != from {
+        if g[pos].1.offset != from || g[pos].1.carry.is_none() {
             // A `from` that doesn't match this entry's offset is a miss for
             // THIS query, but the entry itself is still fresh — leave it in
             // place (a later query at the RIGHT offset must still hit).
@@ -90,9 +100,9 @@ impl LiveTailCache {
         }
         let mut entry = g.remove(pos).expect("position just located");
         entry.1.last_hit = Instant::now();
-        let carry = entry.1.carry.clone();
+        let carry = entry.1.carry.take();
         g.push_front(entry);
-        Some(carry)
+        carry
     }
 
     /// Record `carry`'s state as of `offset` (the position a SUBSEQUENT
@@ -113,7 +123,7 @@ impl LiveTailCache {
             key,
             Entry {
                 offset,
-                carry,
+                carry: Some(carry),
                 last_hit: Instant::now(),
             },
         ));
@@ -210,8 +220,29 @@ mod tests {
         c.put("b", 1, 10, carry());
         let _ = c.get("a", 1, 10);
         c.put("c", 1, 10, carry());
-        assert!(c.get("a", 1, 10).is_some(), "'a' survived as MRU");
-        assert!(c.get("b", 1, 10).is_none(), "'b' was evicted");
+        assert_eq!(c.len(), 2);
+        assert!(
+            c.get("b", 1, 10).is_none(),
+            "'b' was evicted, 'a' kept its slot"
+        );
+        // 'a' kept its MRU slot, so a put for it replaces rather than evicts.
+        c.put("a", 1, 20, carry());
+        assert_eq!(c.len(), 2);
+        assert!(c.get("a", 1, 20).is_some());
+    }
+
+    #[test]
+    fn get_moves_the_carry_out_so_a_second_get_misses_until_put_back() {
+        let c = LiveTailCache::default();
+        c.put("sid-1", 42, 100, carry());
+        assert!(c.get("sid-1", 42, 100).is_some());
+        assert!(
+            c.get("sid-1", 42, 100).is_none(),
+            "the carry was moved out, not cloned"
+        );
+        c.put("sid-1", 42, 150, carry());
+        assert!(c.get("sid-1", 42, 150).is_some());
+        assert_eq!(c.len(), 1);
     }
 
     #[test]

@@ -738,6 +738,8 @@ pub struct ViewCarry {
     started_at: Option<String>,
     ended_at: Option<String>,
     usage: super::stats::UsageLedger,
+    /// Time model accumulator (surfaced, never scored); see `stats`.
+    time: super::stats::TimeAcc,
     tool_calls: u32,
     error_count: u32,
     stop_reason: Option<String>,
@@ -769,7 +771,21 @@ impl ViewCarry {
     /// `turns_human` is the caller's closed human-turn count (the carry holds
     /// only the still-open turn). Surfaced, never scored.
     pub fn session_stats(&self, turns_human: u32) -> super::stats::SessionStats {
-        super::stats::SessionStats::from_parts(&self.usage, turns_human, self.tool_calls)
+        let two_stamps = self.event_times.len() >= 2;
+        let wall = match (&self.started_at, &self.ended_at) {
+            (Some(a), Some(b)) if two_stamps => match (parse_iso_utc(a), parse_iso_utc(b)) {
+                (Some(a), Some(b)) => Some((b - a).max(0)),
+                _ => None,
+            },
+            _ => None,
+        };
+        let active = two_stamps.then(|| active_secs(&self.event_times));
+        super::stats::SessionStats::from_parts(
+            &self.usage,
+            turns_human,
+            self.tool_calls,
+            self.time.finish(wall, active),
+        )
     }
 
     /// W7/LF-3b — the honesty counters accumulated so far (cumulative since
@@ -904,6 +920,9 @@ impl ViewCarry {
                     if let Some(r) = v.get("stopReason").and_then(|x| x.as_str()) {
                         self.stop_reason = Some(r.to_string());
                     }
+                    if v.get("subtype").and_then(|x| x.as_str()) == Some("turn_duration") {
+                        self.time.on_turn_duration(v);
+                    }
                 }
                 "attachment" => self.ingest_attachment(v),
                 _ => {} // ai-title/cwd/etc already absorbed; mode/queue/snapshot: no item
@@ -944,8 +963,13 @@ impl ViewCarry {
                 }
             }
         }
+        let parsed_ts = v
+            .get("timestamp")
+            .and_then(|x| x.as_str())
+            .and_then(parse_iso_utc);
+        self.time.on_record_ts(parsed_ts);
         if let Some(ts) = v.get("timestamp").and_then(|x| x.as_str()) {
-            if let Some(unix) = parse_iso_utc(ts) {
+            if let Some(unix) = parsed_ts {
                 self.event_times.push(unix);
             }
             if self.started_at.is_none() {
@@ -1154,6 +1178,7 @@ impl ViewCarry {
         // Usage is repeated on every content-block record of one message:
         // the ledger counts each message once (see `stats`).
         self.usage.record_record(v);
+        self.time.on_assistant(v, is_sidechain);
 
         let Some(blocks) = v
             .get("message")
@@ -1352,6 +1377,13 @@ impl ViewCarry {
             for b in &blocks {
                 if b.get("type").and_then(|x| x.as_str()) != Some("tool_result") {
                     continue;
+                }
+                if let Some(id) = b.get("tool_use_id").and_then(|x| x.as_str()) {
+                    let sc = v
+                        .get("isSidechain")
+                        .and_then(|x| x.as_bool())
+                        .unwrap_or(false);
+                    self.time.on_tool_result(id, sc);
                 }
                 self.fold_tool_result(b, event_tul);
             }
@@ -1557,6 +1589,9 @@ impl ViewCarry {
             }
             UserTextClass::Real => {
                 self.flush_pending_command(out);
+                if !is_sidechain {
+                    self.time.on_real_prompt();
+                }
                 self.ordinal += 1;
                 let id = uuid
                     .map(turn_id_from_uuid)
