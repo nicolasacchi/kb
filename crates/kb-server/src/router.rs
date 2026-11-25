@@ -975,6 +975,12 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
     let terminal_upload_routes = Router::new()
         .route("/terms/{id}/upload", post(terminal::upload::terms_upload))
         .layer(DefaultBodyLimit::max(terminal::upload::UPLOAD_BODY_LIMIT));
+    // FXUP — the any-file door: the handler takes the raw `Body` stream, so
+    // the extractor limit below is advisory only; the enforcement is the
+    // handler's Content-Length cap (32 MiB) plus its running byte count.
+    let terminal_files_routes = Router::new()
+        .route("/terms/{id}/files", post(terminal::upload::terms_files))
+        .layer(DefaultBodyLimit::max(terminal::upload::FILE_BODY_LIMIT));
     let review_routes = Router::new()
         // R8 — the whole-document write POST is retired; the CLI (R6) and
         // SPA (R7) both mutate through the fine-grained endpoints below.
@@ -1085,6 +1091,7 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
         .merge(attachment_routes)
         .merge(capture_routes)
         .merge(terminal_upload_routes)
+        .merge(terminal_files_routes)
         .merge(history_routes)
         // v0.4 A2 — bearer-token auth on matched /api routes.
         // Loopback bypass keeps local CLI/TUI/SPA flows working without

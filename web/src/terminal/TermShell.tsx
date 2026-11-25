@@ -17,6 +17,7 @@
 import {
   useCallback,
   useId,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent,
@@ -26,6 +27,8 @@ import {
 import { useCloseRequest } from "@kb/ui/useCloseRequest";
 import { usePhonePanel } from "../hooks/useIsMobile";
 import { isRailTabId, railTabs, type RailTab, type RailTabId } from "./rail/registry";
+import { TermRailContext, type TermRailContextValue } from "./rail/context";
+import "./rail/registerTabs";
 import "./termShell.css";
 
 export type Chip = { id: string; label: string; tone?: "ok" | "warn" | "err" };
@@ -173,6 +176,10 @@ export function TermShell(props: TermShellProps): ReactElement {
   const [sheetOpen, setSheetOpen] = useState(false);
   const layerRef = useRef<HTMLDivElement | null>(null);
   const tabs = railTabs();
+  const railCtx = useMemo<TermRailContextValue>(
+    () => ({ termId: props.termId, harness: props.harness, sid: props.sid }),
+    [props.termId, props.harness, props.sid],
+  );
 
   const selectTab = useCallback((id: RailTabId) => {
     setTab(id);
@@ -201,63 +208,65 @@ export function TermShell(props: TermShellProps): ReactElement {
   // pane, then the layout's own extra), so crossing the phone breakpoint never
   // remounts the panel (one socket survives a rotation).
   return (
-    <section {...rootProps} data-rail={phone ? undefined : open ? "open" : "closed"}>
-      <div className="kb-termshell__bar">
-        <div className="kb-termshell__head">{props.header}</div>
-        <Chips chips={props.statusChips} />
-        {phone ? null : (
-          <button
-            type="button"
-            className="kb-termshell__toggle"
-            data-testid="term-rail-toggle"
-            aria-expanded={open}
-            aria-controls={`${idBase}-rail`}
-            onClick={toggleRail}
-          >
-            {open ? "Hide panels" : "Show panels"}
-          </button>
-        )}
-      </div>
-      <div className="kb-termshell__body">
-        <div className="kb-termshell__pane">{props.children}</div>
-        {phone ? null : (
-          <aside className="kb-termshell__rail" id={`${idBase}-rail`} hidden={!open} aria-label="Terminal panels">
-            {open ? <TabSet tabs={tabs} active={tab} onSelect={selectTab} idBase={idBase} /> : null}
-          </aside>
-        )}
-      </div>
-      {phone ? (
-        <div
-          ref={layerRef}
-          className="kb-termshell__sheet"
-          data-testid="term-sheet"
-          data-open={sheetOpen ? "1" : "0"}
-          onKeyDown={(e) => {
-            // Esc only when focus is inside this layer: never the terminal's own.
-            if (e.key === "Escape" && sheetOpen && layerRef.current?.contains(document.activeElement)) {
-              setSheetOpen(false);
-            }
-          }}
-        >
-          <button
-            type="button"
-            className="kb-termshell__handle"
-            data-testid="term-sheet-handle"
-            aria-expanded={sheetOpen}
-            aria-controls={`${idBase}-sheet`}
-            aria-label={sheetOpen ? "Hide panels" : "Show panels"}
-            onClick={() => setSheetOpen((o) => !o)}
-          >
-            <span className="kb-termshell__grip" aria-hidden="true" />
-          </button>
-          {sheetOpen ? (
-            <div className="kb-termshell__sheet-body" id={`${idBase}-sheet`}>
-              <TabSet tabs={tabs} active={tab} onSelect={selectTab} idBase={idBase} />
-            </div>
-          ) : null}
+    <TermRailContext.Provider value={railCtx}>
+      <section {...rootProps} data-rail={phone ? undefined : open ? "open" : "closed"}>
+        <div className="kb-termshell__bar">
+          <div className="kb-termshell__head">{props.header}</div>
+          <Chips chips={props.statusChips} />
+          {phone ? null : (
+            <button
+              type="button"
+              className="kb-termshell__toggle"
+              data-testid="term-rail-toggle"
+              aria-expanded={open}
+              aria-controls={`${idBase}-rail`}
+              onClick={toggleRail}
+            >
+              {open ? "Hide panels" : "Show panels"}
+            </button>
+          )}
         </div>
-      ) : null}
-      {props.keyRow}
-    </section>
+        <div className="kb-termshell__body">
+          <div className="kb-termshell__pane">{props.children}</div>
+          {phone ? null : (
+            <aside className="kb-termshell__rail" id={`${idBase}-rail`} hidden={!open} aria-label="Terminal panels">
+              {open ? <TabSet tabs={tabs} active={tab} onSelect={selectTab} idBase={idBase} /> : null}
+            </aside>
+          )}
+        </div>
+        {phone ? (
+          <div
+            ref={layerRef}
+            className="kb-termshell__sheet"
+            data-testid="term-sheet"
+            data-open={sheetOpen ? "1" : "0"}
+            onKeyDown={(e) => {
+              // Esc only when focus is inside this layer: never the terminal's own.
+              if (e.key === "Escape" && sheetOpen && layerRef.current?.contains(document.activeElement)) {
+                setSheetOpen(false);
+              }
+            }}
+          >
+            <button
+              type="button"
+              className="kb-termshell__handle"
+              data-testid="term-sheet-handle"
+              aria-expanded={sheetOpen}
+              aria-controls={`${idBase}-sheet`}
+              aria-label={sheetOpen ? "Hide panels" : "Show panels"}
+              onClick={() => setSheetOpen((o) => !o)}
+            >
+              <span className="kb-termshell__grip" aria-hidden="true" />
+            </button>
+            {sheetOpen ? (
+              <div className="kb-termshell__sheet-body" id={`${idBase}-sheet`}>
+                <TabSet tabs={tabs} active={tab} onSelect={selectTab} idBase={idBase} />
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        {props.keyRow}
+      </section>
+    </TermRailContext.Provider>
   );
 }

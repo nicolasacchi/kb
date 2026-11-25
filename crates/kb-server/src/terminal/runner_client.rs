@@ -62,6 +62,7 @@ pub(crate) enum RunnerError {
 
 /// A per-request runner client. Cheap: a path plus a timeout, so the
 /// handler builds one from the current config for every call.
+#[derive(Clone)]
 pub(crate) struct UnixRunner {
     path: PathBuf,
     timeout: Duration,
@@ -89,6 +90,11 @@ fn op_budget(req: &RunnerRequest, base: Duration) -> Duration {
         // The runner reads the body under its own 10 s deadline; the
         // relay's must not be the shorter of the two.
         RunnerRequest::Upload { .. } => Duration::from_secs(10),
+        // FXUP — chunked uploads: an 8 MiB chunk body is written then read
+        // by the runner under its own deadline; commit hashes up to 32 MiB.
+        RunnerRequest::UploadAppend { .. } | RunnerRequest::UploadCommit { .. } => {
+            Duration::from_secs(30)
+        }
         RunnerRequest::List {} => Duration::from_secs(30),
         _ => base,
     };
@@ -807,6 +813,24 @@ mod tests {
             exit_keys: None,
         };
         assert!(op_budget(&launch, base) >= Duration::from_secs(60));
+        // FXUP: the chunk ops get a 30 s floor, begin/abort stay on the base.
+        let append = RunnerRequest::UploadAppend {
+            id: "abcd1234".to_string(),
+            upload: "0".repeat(32),
+            offset: 0,
+            len: 1,
+        };
+        assert_eq!(op_budget(&append, base), Duration::from_secs(30));
+        let commit = RunnerRequest::UploadCommit {
+            id: "abcd1234".to_string(),
+            upload: "0".repeat(32),
+        };
+        assert_eq!(op_budget(&commit, base), Duration::from_secs(30));
+        let abort = RunnerRequest::UploadAbort {
+            id: "abcd1234".to_string(),
+            upload: "0".repeat(32),
+        };
+        assert_eq!(op_budget(&abort, base), base);
         assert!(
             op_budget(
                 &RunnerRequest::Kill {

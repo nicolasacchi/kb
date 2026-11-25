@@ -58,6 +58,7 @@ import type { ResearchRollupFolderOut } from "./generated/ResearchRollupFolderOu
 import type { ResearchRollupOut } from "./generated/ResearchRollupOut";
 // W3.A — the projects facet + the by-artifact join + two-lane search.
 import type { ProjectOut } from "./generated/ProjectOut";
+import type { Conversation } from "./generated/Conversation";
 import type { SessionsProjectsResponse } from "./generated/SessionsProjectsResponse";
 import type { ByArtifactResponse } from "./generated/ByArtifactResponse";
 import type { RecollectSessionOut } from "./generated/RecollectSessionOut";
@@ -597,6 +598,32 @@ export async function fetchSessionOutline(
   );
   const body = await jsonOrEmpty<Partial<SessionViewResponse>>(r, {});
   return body.outline ?? [];
+}
+
+// CONVRAIL — the conversation projection of `/view` (`?fields=conversation`):
+// one row per human turn. A derived, capture-scoped read (never live). The
+// server is stateless: `gen` is the `capture_gen` the caller already holds and
+// a matching answer comes back `unchanged:true` with no rows. A 404 (a session
+// with no capture yet) is NOT an error: it resolves to `{ kind: "none" }`.
+export type ConversationResult =
+  | { kind: "ok"; kb: string; conversation: Conversation }
+  | { kind: "none" };
+
+export async function fetchConversation(
+  sessionId: string,
+  opts: { gen?: string; signal?: AbortSignal } = {},
+): Promise<ConversationResult> {
+  const params = new URLSearchParams({ fields: "conversation", conv_limit: "100" });
+  if (opts.gen) params.set("conv_gen", opts.gen);
+  const r = await fetch(
+    `${currentDaemonBase()}/api/sessions/${encodeURIComponent(sessionId)}/view?${params.toString()}`,
+    { headers: { Accept: "application/json" }, signal: opts.signal },
+  );
+  if (r.status === 404) return { kind: "none" };
+  if (!r.ok) throw new Error(`conversation fetch failed: ${r.status}`);
+  const body = (await r.json()) as Partial<SessionViewResponse>;
+  if (!body.conversation) return { kind: "none" };
+  return { kind: "ok", kb: body.kb ?? "", conversation: body.conversation };
 }
 
 // W3.C/P5 — lane B of the two-lane sessions search: semantic "has this been
