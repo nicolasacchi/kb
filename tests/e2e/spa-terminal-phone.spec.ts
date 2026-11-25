@@ -1158,7 +1158,8 @@ test.describe("FUMINLIST two-terminal switcher @phone", () => {
     await expect(page.locator('[data-testid="term-shell"]')).toHaveAttribute("data-term", TERM_ID);
     // Back #2 leaves the terminal page.
     await page.goBack();
-    await expect.poll(at).toBe("/sessions");
+    // The hub is where this test entered (the list moved off /sessions).
+    await expect.poll(at).toBe("/terminals");
     await expect(page.locator("[data-kb-sheet]")).toHaveCount(0);
     await expect(page.locator('[data-testid="term-shell"]')).toHaveCount(0);
   });

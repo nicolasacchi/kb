@@ -201,7 +201,9 @@ test.describe("HUBHOST launcher in the hub", () => {
       await mockSession(page);
       await page.goto(`${BASE}/terminals?launch=1&resume=${SID}&harness=grok&cwd=/evil`);
       await expect(page.locator('[data-testid="launch-dialog"]')).toBeVisible({ timeout: 20_000 });
-      await expect(page).toHaveURL(/\/terminals$/);
+      // launch/resume are consumed and `cwd` is not a hub param; `harness` is a
+      // hub FILTER param so it is kept (and never reaches the dialog).
+      await expect(page).toHaveURL(/\/terminals\?harness=grok$/);
       await expect(page.locator('[data-testid="launch-review"]')).toBeEnabled({ timeout: 15_000 });
       await page.locator('[data-testid="launch-review"]').click();
       await expect(page.locator('[data-testid="launch-confirm-cwd"]')).toContainText("/synthetic/resume");

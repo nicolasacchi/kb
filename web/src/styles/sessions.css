@@ -1734,7 +1734,7 @@
 .kb-ses__row-continue {
   display: inline-block;
   margin: 0 16px 8px;
-  color: var(--ink-mute, #999);
+  color: var(--ink-mute);
   font: 400 var(--fs-xs)/1.4 var(--font-sans, system-ui);
   text-decoration: none;
 }
@@ -1753,4 +1753,10 @@
   display: inline-flex;
   align-items: center;
   text-decoration: none;
+}
+@media (pointer: coarse), (max-width: 860px) {
+  .kb-ses__handoff a.kb-ses__resume-copy {
+    min-height: 44px;
+    padding: 2px 14px;
+  }
 }
