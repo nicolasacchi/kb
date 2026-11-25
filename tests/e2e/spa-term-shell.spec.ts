@@ -144,7 +144,9 @@ test.describe("BHEAD terminal header", () => {
       await route(page, () => true);
       await admit(page);
       await page.goto(`${BASE}/term/${TERM_ID}`);
-      await expectLive(page);
+      const vp = page.locator("[data-kb-term-viewport]");
+      await expect(vp).toBeVisible({ timeout: 15_000 });
+      await expect(vp).toHaveAttribute("data-kb-term-phase", "live", { timeout: 30_000 });
       const bar = page.locator(".kb-term-phone__bar");
       await expect(bar).toBeVisible({ timeout: 15_000 });
       await expect(bar.locator('[data-testid="kb-term-state"]')).toHaveAttribute("data-phase", "live");
