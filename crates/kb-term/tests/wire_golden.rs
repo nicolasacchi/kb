@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use kb_term::wire::{
     decode_binary, decode_text_frame, encode_binary, encode_envelope, is_valid_sha256_hex,
     is_valid_term_id, parse_s2c_body, s2c_body, ClientFrame, ControlMessage, EnvelopeDecoder,
-    FileData, Harness, Profile, Request, Response, ResumeInfo, ServerFrame, SessionInfo, TextFrame,
-    UploadData, WireError, MAX_ENVELOPE_LEN,
+    FileData, FsGetData, FsLsData, Harness, Profile, Request, Response, ResumeInfo, ServerFrame,
+    SessionInfo, TextFrame, UploadData, WireError, MAX_ENVELOPE_LEN,
 };
 
 fn golden_dir() -> PathBuf {
@@ -83,6 +83,8 @@ fn request_goldens() -> Vec<&'static str> {
         "req_upload_append.json",
         "req_upload_commit.json",
         "req_upload_abort.json",
+        "req_fs_ls.json",
+        "req_fs_get.json",
         "req_typed.json",
     ]
 }
@@ -417,6 +419,8 @@ fn golden_files_are_complete() {
             "session_info.json",
             "upload_data.json",
             "file_data.json",
+            "fs_ls_data.json",
+            "fs_get_data.json",
         ])
         .map(str::to_string)
         .collect();
@@ -538,6 +542,36 @@ fn file_data_matches_golden() {
     let data: FileData = serde_json::from_slice(&bytes).expect("deserialize file_data.json");
     let out = serde_json::to_vec(&data).expect("serialize file_data.json");
     assert_eq!(out, bytes, "file_data golden");
+}
+
+#[test]
+fn fs_ls_data_matches_golden() {
+    let bytes = read_golden("fs_ls_data.json");
+    let data: FsLsData = serde_json::from_slice(&bytes).expect("deserialize fs_ls_data.json");
+    let out = serde_json::to_vec(&data).expect("serialize fs_ls_data.json");
+    assert_eq!(out, bytes, "fs_ls_data golden");
+}
+
+#[test]
+fn fs_get_data_matches_golden() {
+    let bytes = read_golden("fs_get_data.json");
+    let data: FsGetData = serde_json::from_slice(&bytes).expect("deserialize fs_get_data.json");
+    let out = serde_json::to_vec(&data).expect("serialize fs_get_data.json");
+    assert_eq!(out, bytes, "fs_get_data golden");
+}
+
+#[test]
+fn fs_requests_reject_unknown_fields() {
+    for bad in [
+        r#"{"op":"fs_ls","id":"abcd1234","root":"cwd","path":"","extra":1}"#,
+        r#"{"op":"fs_get","id":"abcd1234","root":"cwd","path":"a","offset":0,"len":1,"extra":1}"#,
+        // A missing field is refused too: no silent default for a root or an offset.
+        r#"{"op":"fs_ls","id":"abcd1234","path":""}"#,
+        r#"{"op":"fs_get","id":"abcd1234","root":"cwd","path":"a","len":1}"#,
+    ] {
+        let r: Result<Request, _> = serde_json::from_str(bad);
+        assert!(r.is_err(), "must be rejected: {bad}");
+    }
 }
 
 #[test]

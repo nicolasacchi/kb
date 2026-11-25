@@ -20,6 +20,7 @@ use serde_json::{json, Value};
 
 use crate::runner::discovery;
 use crate::runner::enter::QuietSource;
+use crate::runner::files;
 use crate::runner::ids::{valid_harness, valid_id};
 use crate::runner::kill;
 use crate::runner::launch;
@@ -64,6 +65,25 @@ async fn blocking<T: Send + 'static>(
     tokio::task::spawn_blocking(f)
         .await
         .map_err(|_| RunnerError::Io("upload task failed".to_string()))?
+}
+
+/// Resolve the directory a `root` names for session `id`: the id grammar
+/// and the session's presence are checked first, then `up` is the session's
+/// upload dir and `cwd` the launch-recorded working directory (FXLS).
+pub(crate) async fn fs_root<S: Supervisor>(
+    runner: &Runner<S>,
+    id: &str,
+    root: &str,
+) -> Result<(std::path::PathBuf, files::Root), RunnerError> {
+    let which = files::Root::parse(root)?;
+    upload::check_target(&runner.sessions_dir(), id)?;
+    let dir = match which {
+        files::Root::Up => upload::up_dir(&runner.sessions_dir(), id),
+        files::Root::Cwd => discovery::launch_cwd(runner, id)
+            .await
+            .ok_or_else(|| RunnerError::NotFound("no working directory recorded".to_string()))?,
+    };
+    Ok((dir, which))
 }
 
 /// Dispatch one parsed request against the runner.
@@ -402,6 +422,20 @@ async fn dispatch_inner<S: Supervisor>(
             Ok(serde_json::to_value(&EmptyData {})
                 .map_err(|e| RunnerError::Internal(e.to_string()))?)
         }
+        // FXLS: a listing is an ordinary envelope reply. The blocking
+        // directory walk runs off the async workers.
+        Request::FsLs { id, root, path } => {
+            let (root_dir, which) = fs_root(runner, id, root).await?;
+            let (root_name, path) = (which.as_str(), path.clone());
+            let data = blocking(move || files::fs_ls(&root_dir, root_name, &path)).await?;
+            Ok(serde_json::to_value(&data).map_err(|e| RunnerError::Internal(e.to_string()))?)
+        }
+        // `fs_get` carries raw bytes after its header line (the `media`
+        // framing); the connection handler answers it
+        // (`server::respond_fs_get`) before dispatch.
+        Request::FsGet { .. } => Err(RunnerError::BadRequest(
+            "fs_get is streamed by the connection handler".to_string(),
+        )),
         // `media` carries raw bytes after its header line, which the
         // envelope-only dispatch cannot express: the connection handler
         // answers it (`server::respond_media`) before dispatch. Reaching
