@@ -8,7 +8,11 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { TermShell, RAIL_OPEN_KEY, RAIL_TAB_KEY } from "./TermShell";
 const closeReq = vi.hoisted(() => vi.fn());
 vi.mock("@kb/ui/useCloseRequest", () => ({ useCloseRequest: closeReq }));
+// The real Conversation tab needs a query client; these tests pin the shell
+// itself against the placeholders (the tab has its own tests).
+vi.mock("./rail/registerTabs", () => ({}));
 import { registerRailTab, resetRailTabs } from "./rail/registry";
+import { useTermRail } from "./rail/context";
 
 function media(matches: boolean) {
   vi.stubGlobal(
@@ -56,25 +60,46 @@ describe("TermShell slots", () => {
 });
 
 describe("TermShell desktop rail", () => {
-  it("has three tabs with the placeholder panel and roving arrow keys", () => {
+  it("has seven tabs with the placeholder panel and roving arrow keys", () => {
     render(shell());
     const tabs = screen.getAllByRole("tab");
-    expect(tabs.map((t) => t.textContent)).toEqual(["Conversation", "Files", "Commands"]);
+    expect(tabs.map((t) => t.textContent)).toEqual([
+      "Now",
+      "Conversation",
+      "Changes",
+      "Files",
+      "Knowledge",
+      "Board",
+      "Commands",
+    ]);
     expect(screen.getByRole("tablist")).toBeTruthy();
     expect(screen.getByTestId("rail-placeholder-conversation").textContent).toBe("Coming soon");
-    expect(tabs.map((t) => t.getAttribute("tabindex"))).toEqual(["0", "-1", "-1"]);
-    fireEvent.keyDown(tabs[0], { key: "ArrowRight" });
-    expect(screen.getByTestId("rail-placeholder-files")).toBeTruthy();
-    expect(screen.getAllByRole("tab")[1].getAttribute("aria-selected")).toBe("true");
-    expect(document.activeElement).toBe(screen.getAllByRole("tab")[1]);
-    fireEvent.keyDown(screen.getAllByRole("tab")[1], { key: "End" });
+    expect(tabs.map((t) => t.getAttribute("tabindex"))).toEqual(["-1", "0", "-1", "-1", "-1", "-1", "-1"]);
+    fireEvent.keyDown(tabs[1], { key: "ArrowRight" });
+    expect(screen.getByTestId("rail-placeholder-changes")).toBeTruthy();
+    expect(screen.getAllByRole("tab")[2].getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(screen.getAllByRole("tab")[2]);
+    fireEvent.keyDown(screen.getAllByRole("tab")[2], { key: "End" });
     expect(screen.getByTestId("rail-placeholder-commands")).toBeTruthy();
-    fireEvent.keyDown(screen.getAllByRole("tab")[2], { key: "ArrowRight" });
-    expect(screen.getByTestId("rail-placeholder-conversation")).toBeTruthy();
+    fireEvent.keyDown(screen.getAllByRole("tab")[6], { key: "ArrowRight" });
+    expect(screen.getByTestId("rail-placeholder-now")).toBeTruthy();
     fireEvent.keyDown(screen.getAllByRole("tab")[0], { key: "ArrowLeft" });
     expect(screen.getByTestId("rail-placeholder-commands")).toBeTruthy();
-    fireEvent.keyDown(screen.getAllByRole("tab")[2], { key: "Home" });
-    expect(screen.getByTestId("rail-placeholder-conversation")).toBeTruthy();
+    fireEvent.keyDown(screen.getAllByRole("tab")[6], { key: "Home" });
+    expect(screen.getByTestId("rail-placeholder-now")).toBeTruthy();
+  });
+
+  it("the rail context carries the terminal id, harness and bound session id", () => {
+    function Probe() {
+      const c = useTermRail();
+      return <div data-testid="ctx">{`${c.termId}|${c.harness}|${c.sid ?? "-"}`}</div>;
+    }
+    registerRailTab({ id: "conversation", label: "Conversation", node: <Probe /> });
+    render(shell({ sid: "sid-9" }));
+    expect(screen.getByTestId("ctx").textContent).toBe("t1|claude|sid-9");
+    cleanup();
+    render(shell());
+    expect(screen.getByTestId("ctx").textContent).toBe("t1|claude|-");
   });
 
   it("a registered tab replaces its placeholder", () => {
@@ -144,7 +169,7 @@ describe("TermShell phone layer", () => {
     const handle = screen.getByTestId("term-sheet-handle");
     fireEvent.click(handle);
     expect(handle.getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getAllByRole("tab")).toHaveLength(3);
+    expect(screen.getAllByRole("tab")).toHaveLength(7);
     expect(screen.getByTestId("rail-placeholder-conversation")).toBeTruthy();
     fireEvent.click(handle);
     expect(handle.getAttribute("aria-expanded")).toBe("false");

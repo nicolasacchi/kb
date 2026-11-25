@@ -1169,13 +1169,13 @@ test.describe("BSHELL phone tab sheet @phone", () => {
     await expect(page.locator("[data-kb-sheet]")).toBeAttached({ timeout: 15_000 });
     const handle = page.locator('[data-testid="term-sheet-handle"]');
     await expect(handle).toHaveAttribute("aria-expanded", "false");
-    await expect(page.locator('[data-testid="rail-placeholder-conversation"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="conv-rail"]')).toHaveCount(0);
     await handle.click();
     await expect(handle).toHaveAttribute("aria-expanded", "true");
-    await expect(page.locator('[data-testid="term-sheet"] [role="tab"]')).toHaveCount(3);
-    await expect(page.locator('[data-testid="rail-placeholder-conversation"]')).toBeVisible();
+    await expect(page.locator('[data-testid="term-sheet"] [role="tab"]')).toHaveCount(7);
+    await expect(page.locator('[data-testid="conv-rail"]')).toBeVisible();
     await handle.click();
-    await expect(page.locator('[data-testid="rail-placeholder-conversation"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="conv-rail"]')).toHaveCount(0);
     await page.goBack();
     await expect(page).toHaveURL(new RegExp(`/sessions/${SID}$`));
     await expect(page.locator('[data-testid="term-shell"]')).toHaveCount(0);
