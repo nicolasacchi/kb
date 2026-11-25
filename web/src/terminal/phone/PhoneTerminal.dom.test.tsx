@@ -77,6 +77,7 @@ function fakeTerm(opened: boolean): Fake {
 }
 
 let extraProps: Record<string, unknown> = {};
+let streamOver: Record<string, unknown> = {};
 
 function Harness(props: { term: PhoneTerm | null; hostRef: { current: HTMLDivElement | null } }) {
   const [mode, setMode] = useState<PhoneMode>("watch");
@@ -87,7 +88,7 @@ function Harness(props: { term: PhoneTerm | null; hostRef: { current: HTMLDivEle
     hostRef: props.hostRef,
     mode,
     onMode: setMode,
-    stream: { phase: "live", applied: 4242, resets: 1, gaps: 0 },
+    stream: { phase: "live", applied: 4242, resets: 1, gaps: 0, ...streamOver },
     caption: "live",
   });
 }
@@ -103,6 +104,7 @@ function mount(term: PhoneTerm | null) {
 
 afterEach(() => {
   extraProps = {};
+  streamOver = {};
   act(() => root?.unmount());
   host?.remove();
   root = host = null;
@@ -584,5 +586,99 @@ describe("PHIN0 direct typing flag", () => {
     const all = JSON.stringify([...Object.entries(window.localStorage), ...Object.entries(window.sessionStorage)]);
     expect(all).not.toContain("hunter2");
     expect(location.href).not.toContain("hunter2");
+  });
+});
+
+// PHIN1 - cursor-follow rides the direct-typing pref and the proxy's focus; off = no footprint.
+describe("PHIN1 cursor-follow wiring", () => {
+  const setSearch = (s: string): void => window.history.replaceState(null, "", `/${s}`);
+  const proxy = (): HTMLTextAreaElement | null => host!.querySelector("[data-kb-term-input]");
+  const added: string[] = [];
+  const removed: string[] = [];
+
+  function installVV(): void {
+    added.length = 0;
+    removed.length = 0;
+    const vv = {
+      height: 600,
+      width: 400,
+      offsetTop: 0,
+      offsetLeft: 0,
+      addEventListener: (t: string) => void added.push(t),
+      removeEventListener: (t: string) => void removed.push(t),
+    };
+    Object.defineProperty(window, "visualViewport", { configurable: true, value: vv });
+  }
+
+  afterEach(() => {
+    setSearch("");
+    Reflect.deleteProperty(window, "visualViewport");
+    window.sessionStorage.clear();
+  });
+
+  it("flag off: only the existing keyboard-height sync listens to the visual viewport, and the wrapper gets no offset", () => {
+    installVV();
+    extraProps = { sendInput: vi.fn(() => true) };
+    mount(fakeTerm(false).term);
+    expect(added).toEqual(["resize", "scroll"]);
+    expect(q(".kb-term-phone__wrap").style.marginBottom).toBe("");
+    expect(proxy()).toBeNull();
+  });
+
+  it("flag on, proxy not focused: still no follow listener", () => {
+    installVV();
+    setSearch("?direct=1");
+    extraProps = { sendInput: vi.fn(() => true) };
+    mount(fakeTerm(false).term);
+    expect(proxy()).not.toBeNull();
+    expect(added).toEqual(["resize", "scroll"]);
+  });
+
+  it("flag on + proxy focus enables the follow (its own resize + scroll listeners); blur removes them", () => {
+    installVV();
+    setSearch("?direct=1");
+    extraProps = { sendInput: vi.fn(() => true) };
+    mount(fakeTerm(false).term);
+    act(() => proxy()!.focus());
+    expect(added).toEqual(["resize", "scroll", "resize", "scroll"]);
+    expect(removed).toEqual([]);
+    act(() => proxy()!.blur());
+    expect(removed).toEqual(["resize", "scroll"]);
+    expect(q(".kb-term-phone__wrap").style.marginBottom).toBe("");
+  });
+
+  it("entering Read while the proxy is focused tears the follow down", () => {
+    installVV();
+    setSearch("?direct=1");
+    extraProps = { sendInput: vi.fn(() => true) };
+    mount(fakeTerm(false).term);
+    act(() => proxy()!.focus());
+    expect(added).toHaveLength(4);
+    click('[data-testid="kb-term-phone-mode"]');
+    expect(removed).toEqual(["resize", "scroll"]);
+    // back in Watch the proxy is a fresh, unfocused element: no stale follow
+    click('[data-testid="kb-term-phone-mode"]');
+    expect(added).toHaveLength(4);
+  });
+});
+
+describe("BSTATE: the phone state overlay", () => {
+  it("renders in the watch region while reconnecting, with Reconnect now wired to the prop", () => {
+    const onReconnect = vi.fn();
+    extraProps = { onReconnect, announce: "Reconnecting" };
+    streamOver = { phase: "reconnecting" };
+    mount(fakeTerm(true).term);
+    const watch = q(".kb-term-phone__watch");
+    const overlay = watch.querySelector('[data-testid="kb-term-overlay"]');
+    expect(overlay).not.toBeNull();
+    expect(watch.querySelector('[data-testid="kb-term-announce"]')!.textContent).toBe("Reconnecting");
+    click('[data-testid="kb-term-overlay-action"]');
+    expect(onReconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders no overlay node while live", () => {
+    mount(fakeTerm(true).term);
+    expect(host!.querySelector('[data-testid="kb-term-overlay"]')).toBeNull();
+    expect(host!.querySelectorAll('[data-testid="kb-term-announce"]')).toHaveLength(1);
   });
 });

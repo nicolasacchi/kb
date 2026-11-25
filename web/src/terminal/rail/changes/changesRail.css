@@ -1,0 +1,115 @@
+/* RAILCHANGES — the Changes tab. Tokens only. */
+.kb-chgrail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-3);
+  min-width: 0;
+  color: var(--ink);
+}
+.kb-chgrail__bar,
+.kb-chgrail__section,
+.kb-chgrail__checks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-1);
+  min-width: 0;
+}
+.kb-chgrail__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--pad-2);
+}
+.kb-chgrail__h {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--ink);
+}
+.kb-chgrail__fresh,
+.kb-chgrail__hint {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+}
+.kb-chgrail__btn {
+  align-self: flex-start;
+  background: var(--bg-card);
+  color: var(--ink);
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  padding: var(--pad-1) var(--pad-2);
+  cursor: pointer;
+  text-decoration: none;
+}
+.kb-chgrail__btn:hover {
+  border-color: var(--accent);
+}
+.kb-chgrail__dir {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-1);
+  min-width: 0;
+}
+.kb-chgrail__dirname {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+.kb-chgrail__count {
+  color: var(--ink-mute);
+}
+.kb-chgrail__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.kb-chgrail__file,
+.kb-chgrail__commit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--pad-1);
+  padding: var(--pad-1) var(--pad-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  min-width: 0;
+  font-size: var(--fs-sm);
+}
+.kb-chgrail__name,
+.kb-chgrail__subject {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.kb-chgrail__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pad-1);
+}
+.kb-chgrail__chip {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-pill);
+  padding: 0 var(--pad-2);
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+}
+.kb-chgrail__chip--warn {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+.kb-chgrail__sha {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+}
+.kb-chgrail__door {
+  font-size: var(--fs-xs);
+  color: var(--accent);
+}
