@@ -8,6 +8,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { renderToString } from "react-dom/server";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import css from "./LaunchDialog.css?raw";
 import { LaunchDialog, type LaunchDialogProps } from "./LaunchDialog";
 import { toast } from "../../lib/toast";
 import {
@@ -600,9 +601,7 @@ describe("launch refusals (HUBHOST)", () => {
 });
 
 describe("phone Sheet height (HUBHOST)", () => {
-  it("the launch sheet is clamped in dynamic viewport units, not static vh", async () => {
-    const { readFileSync } = await import("node:fs");
-    const css = readFileSync(new URL("./LaunchDialog.css", import.meta.url), "utf8");
+  it("the launch sheet is clamped in dynamic viewport units, not static vh", () => {
     const rule = /#kb-launch-sheet\.kb-sheet\s*\{[^}]*\}/.exec(css)?.[0] ?? "";
     expect(rule).toMatch(/height:\s*min\(var\(--sheet-h, 92dvh\), 92dvh\)/);
     expect(rule).toMatch(/max-height:\s*100dvh/);
