@@ -30,7 +30,7 @@
 // cap and the persisted phone font; it stays that way if the viewport
 // later grows (no mid-session addon load).
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Sheet, type Detent } from "@kb/ui/Sheet";
 import { usePhonePanel } from "../hooks/useIsMobile";
@@ -65,6 +65,11 @@ import { useTerminalPaste } from "./useTerminalPaste";
 import { clipboardAction, inputLabel, scrolledUp } from "./input";
 import { linksAtRow, openExternal, isMacLike, linkHint } from "./links";
 import { useTerms } from "./useTerms";
+import { useLiveSessions } from "../hooks/useLiveSessions";
+import { cwdBase } from "../components/TermControls";
+import { statusChips } from "./statusChips";
+import { TermHeader } from "./TermHeader";
+import { initialInputDelivered, initialInputText, markInitialInputDelivered } from "./initialInput";
 import type { ImageDefFrame, ProfileFrame } from "./wire";
 import type { TerminalPanelProps } from "./TerminalPanel.lazy";
 import { osc52ClipboardText, tryWriteClipboardText, writeClipboardText } from "./clipboard";
@@ -176,7 +181,12 @@ export function TerminalPanel(props: TerminalPanelProps) {
   const queryClient = useQueryClient();
   const termsTimerRef = useRef<number | null>(null);
   const termRow = terms.find((t) => t.id === props.termId);
-  const rowState = termRow?.state ?? null;
+  const project = termRow?.cwd ? cwdBase(termRow.cwd) : undefined;
+  // BHEAD: the typed status of the bound session, from the shared live-status
+  // query (never from terminal bytes). An unbound sid ("") has no chips.
+  const { rows: liveRows } = useLiveSessions();
+  const liveStatus = props.sid ? liveRows.find((r) => r.session_id === props.sid)?.status : undefined;
+  const chips = useMemo(() => statusChips(liveStatus), [liveStatus]);
   // The row's owner as the list states it (null = free). It retires the hint
   // below whenever it changes.
   const listOwner: string | null | undefined = termRow ? (termRow.grid_owner ?? null) : undefined;
@@ -247,6 +257,25 @@ export function TerminalPanel(props: TerminalPanelProps) {
   useEffect(() => {
     if (state.phase !== "live") setProgTitle("");
   }, [state.phase]);
+  // BHEAD: `initialInput` is delivered ONCE per (terminal, text), when the
+  // connection first reaches live, through the paste path and WITHOUT Enter
+  // (one trailing newline is stripped). The delivered set is module-level, so a
+  // reconnect, a breakpoint remount or a prop re-render never sends it again.
+  const initialInput = props.initialInput;
+  useEffect(() => {
+    if (state.phase !== "live" || !termInst || !initialInput) return;
+    const text = initialInputText(initialInput);
+    if (text === "" || initialInputDelivered(props.termId, initialInput)) return;
+    if (isMobileRef.current) {
+      // The phone's xterm has stdin disabled: send the paste to the session directly.
+      const bracketed = (termInst as { modes?: { bracketedPasteMode?: boolean } }).modes?.bracketedPasteMode === true;
+      const body = text.replace(/\r?\n/g, "\r");
+      if (!(sessionRef.current?.sendInput(bracketed ? `\u001b[200~${body}\u001b[201~` : body) ?? false)) return;
+    } else {
+      termInst.paste(text);
+    }
+    markInitialInputDelivered(props.termId, initialInput);
+  }, [state.phase, termInst, initialInput, props.termId]);
   // FUTERMPASTE: a picture paste or drop on the desktop host uploads and pastes its path.
   const pastePath = useCallback((text: string): void => termRef.current?.paste(text), []);
   useTerminalPaste({
@@ -307,6 +336,11 @@ export function TerminalPanel(props: TerminalPanelProps) {
             ),
         fontFamily: TERM_FONT_FAMILY,
         theme: readTheme(profile.theme),
+        // BANSI — nothing illegible whatever a programme paints; bold stays
+        // bold (the bright slots are explicit); box/block glyphs are drawn.
+        minimumContrastRatio: 4.5,
+        drawBoldTextInBrightColors: false,
+        customGlyphs: true,
       });
       profileThemeRef.current = profile.theme;
       // The host paints the terminal's own background (no second black).
@@ -753,6 +787,9 @@ export function TerminalPanel(props: TerminalPanelProps) {
         <PhoneTerminal
           harness={props.harness}
           headerExtra={props.headerExtra}
+          headerActions={props.headerActions}
+          project={project}
+          chips={chips}
           term={termInst}
           profile={grid}
           hostRef={phoneHostRef}
@@ -795,44 +832,41 @@ export function TerminalPanel(props: TerminalPanelProps) {
       data-kb-term-fullscreen={fs.on ? "" : undefined}
       ref={setPanelEl}
     >
-      <div className="kb-term__bar">
-        <span className="kb-term__harness" data-testid="kb-term-harness">
-          {props.harness}
-        </span>
-        {progTitle ? (
-          <span className="kb-term__progtitle" data-testid="kb-term-title" title={progTitle}>
-            {progTitle}
-          </span>
-        ) : null}
-        <span
-          className={`kb-term__chip kb-term__input${focused ? " kb-term__input--on" : ""}`}
-          data-testid="kb-term-input"
-        >
-          {inputLabel(focused)}
-        </span>
-        {rowState ? (
-          <span className="kb-term__chip" data-testid="kb-term-state">
-            {rowState}
-          </span>
-        ) : null}
-        {grid ? (
-          <span className="kb-term__grid" data-testid="kb-term-grid">
-            {chipText(grid, gridOwner)}
-          </span>
-        ) : null}
-        {fit ? (
-          <span className="kb-term__grid" data-testid="kb-term-font">
-            font {fit.fontSize}px
-          </span>
-        ) : null}
-        {fit && (fit.cropped.x || fit.cropped.y) ? (
-          <span className="kb-term__hint" data-testid="kb-term-cropped" title={CROPPED_DESKTOP_HINT}>
-            {CROPPED_LABEL}
-          </span>
-        ) : null}
-        <span className="kb-term__caption" data-testid="kb-term-caption">
-          {transient ?? state.caption}
-        </span>
+      <TermHeader
+        harness={props.harness}
+        project={project}
+        phase={state.phase}
+        caption={transient ?? state.caption}
+        progTitle={progTitle}
+        chips={chips}
+        actions={props.headerActions}
+        compact={false}
+        more={
+          <>
+            <span
+              className={`kb-term__chip kb-term__input${focused ? " kb-term__input--on" : ""}`}
+              data-testid="kb-term-input"
+            >
+              {inputLabel(focused)}
+            </span>
+            {grid ? (
+              <span className="kb-term__grid" data-testid="kb-term-grid">
+                {chipText(grid, gridOwner)}
+              </span>
+            ) : null}
+            {fit ? (
+              <span className="kb-term__grid" data-testid="kb-term-font">
+                font {fit.fontSize}px
+              </span>
+            ) : null}
+            {fit && (fit.cropped.x || fit.cropped.y) ? (
+              <span className="kb-term__hint" data-testid="kb-term-cropped" title={CROPPED_DESKTOP_HINT}>
+                {CROPPED_LABEL}
+              </span>
+            ) : null}
+          </>
+        }
+      >
         <GridControls
           termId={props.termId}
           harness={props.harness}
@@ -871,7 +905,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
         >
           Close
         </button>
-      </div>
+      </TermHeader>
       <div className="kb-term__status" role="status" aria-live="polite" data-testid="kb-term-status">
         {status}
       </div>

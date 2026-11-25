@@ -111,6 +111,43 @@ export function shouldLiveCapture(
   return nowMs - lastMs >= (blocked ? debounceMs : intervalMs);
 }
 
+/** The typed status object a `status` beat carries (grammar owner: the daemon). */
+export type OmpStatus = { model?: string; context_pct?: number; branch?: string };
+
+/**
+ * Whether a status beat should be sent now (the claude tee's rule, kept pure):
+ * nothing to send never sends; the first send always goes; inside the floor
+ * (`minMs` since the last send) nothing goes; past it a CHANGED object goes at
+ * once and an unchanged one only after `refreshMs`.
+ */
+export function statusDecision(
+  lastSent: OmpStatus | undefined,
+  next: OmpStatus,
+  lastMs: number | undefined,
+  nowMs: number,
+  minMs: number,
+  refreshMs: number,
+): boolean {
+  if (Object.keys(next).length === 0) return false;
+  if (lastSent === undefined || lastMs === undefined) return true;
+  const age = nowMs - lastMs;
+  if (age < minMs) return false;
+  if (JSON.stringify(lastSent) !== JSON.stringify(next)) return true;
+  return age >= refreshMs;
+}
+
+/** A context-usage reading as a whole 0..100 percent, or undefined when unusable. */
+export function contextPct(raw: unknown): number | undefined {
+  const v =
+    typeof raw === "number"
+      ? raw
+      : raw && typeof raw === "object" && typeof (raw as any).percent === "number"
+        ? (raw as any).percent
+        : undefined;
+  if (v === undefined || !Number.isFinite(v) || v < 0 || v > 100) return undefined;
+  return Math.round(v);
+}
+
 /** EXACT customType — a downstream capture-phase reader is built against it. */
 const RECALL_LEDGER_TYPE = "kb.recall";
 
@@ -762,6 +799,63 @@ export default function kbMemoryOmp(pi: {
       input: { session_id: info.sid, cwd: info.cwd, model: info.model, ...(extra ?? {}) },
       timeoutMs: 5_000,
     }).catch(() => {});
+  }
+
+  // Last status beat per main session: what was sent and when (the floor +
+  // dedupe state; cleared with the live-capture map at session_shutdown).
+  const statusSent = new Map<string, { status: OmpStatus; ms: number }>();
+  // One status build in flight per session: the floor can only be judged after
+  // the (async, bounded) branch probe, so overlapping calls must not race it.
+  const statusInflight = new Set<string>();
+
+  /**
+   * One typed `status` beat (model, branch, context % when omp exposes it) via
+   * `kb-beat.sh omp status`. Main agent only, never awaited, errors swallowed.
+   * `force` skips the floor (start, session_stop) but never the empty check.
+   */
+  function statusBeat(
+    info: Awaited<ReturnType<typeof sessionInfo>>,
+    ctx: any,
+    force: boolean,
+  ) {
+    if (info.isSub || !HOOKS || !info.sid) return;
+    if ((process.env.KB_BEAT_STATUS ?? "") === "0") return;
+    if (statusInflight.has(info.sid)) return;
+    statusInflight.add(info.sid);
+    void (async () => {
+      try {
+        const next: OmpStatus = {};
+        if (info.model) next.model = info.model;
+        try {
+          const pct = contextPct(ctx?.getContextUsage?.());
+          if (pct !== undefined) next.context_pct = pct;
+        } catch {}
+        try {
+          const g = await run("git", ["-C", info.cwd, "branch", "--show-current"], {
+            timeoutMs: 1_000,
+          });
+          const b = g.code === 0 ? g.stdout.trim() : "";
+          if (b) next.branch = b;
+        } catch {}
+        const now = Date.now();
+        const last = statusSent.get(info.sid);
+        const minMs = envSecs("KB_STATUS_MIN_INTERVAL_SECS", 5) * 1000;
+        const refreshMs = envSecs("KB_STATUS_REFRESH_SECS", 120) * 1000;
+        const ok = force
+          ? Object.keys(next).length > 0
+          : statusDecision(last?.status, next, last?.ms, now, minMs, refreshMs);
+        if (!ok) return;
+        statusSent.set(info.sid, { status: next, ms: now });
+        statusInflight.delete(info.sid);
+        await run(join(HOOKS, "kb-beat.sh"), ["omp", "status"], {
+          input: { session_id: info.sid, cwd: info.cwd, status: next },
+          timeoutMs: 5_000,
+        });
+      } catch {
+      } finally {
+        statusInflight.delete(info.sid);
+      }
+    })();
   }
 
   /**
@@ -2009,6 +2103,10 @@ export default function kbMemoryOmp(pi: {
       latestCtx = ctx;
       const info = await sessionInfo(ctx);
       beat("start", info);
+      // The registry row only exists once the start beat lands: let it.
+      const startDelay = envSecs("KB_STATUS_START_DELAY_MS", 1500);
+      const t = setTimeout(() => statusBeat(info, ctx, true), startDelay);
+      (t as any)?.unref?.();
       // D26 — the push child lives for the whole session. Idempotent, so
       // the `before_agent_start` call below is a harmless second attempt for
       // a harness that gives us no usable session id until the first prompt.
@@ -2120,6 +2218,7 @@ export default function kbMemoryOmp(pi: {
       // paths inside a text `input`, which is not read: those calls beat
       // without a path.
       liveCapture(info, false);
+      statusBeat(info, ctx, false);
       const toolName = typeof event?.toolName === "string" ? event.toolName : "";
       const rawPath = (event?.input as Record<string, unknown> | undefined)?.path;
       void run(join(HOOKS, "kb-beat-throttle.sh"), ["omp"], {
@@ -2167,6 +2266,7 @@ export default function kbMemoryOmp(pi: {
       if (!info.sid) return;
 
       beat("turn_end", info);
+      statusBeat(info, ctx, true);
 
       // Capture and the distill nudge run CONCURRENTLY. The nudge is two
       // greps over the omp session JSONL named by `.session_file` — it
@@ -2309,6 +2409,7 @@ export default function kbMemoryOmp(pi: {
         distilled.delete(info.sid);
         waked.delete(info.sid);
         liveCapturedAt.delete(info.sid);
+        statusSent.delete(info.sid);
       }
       await capture(info);
     } catch {}

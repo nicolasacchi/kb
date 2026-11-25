@@ -193,7 +193,12 @@
   color: var(--warn);
 }
 .kb-navlist__badge--door {
+  min-width: 1.6em;
+  padding: 0 var(--pad-1);
+  border-radius: var(--radius-pill);
+  background: color-mix(in oklab, var(--warn) 18%, transparent);
   color: var(--warn);
+  text-align: center;
 }
 
 /* ── compact header + collapsed layout at ≤860px ─────────────────────── */

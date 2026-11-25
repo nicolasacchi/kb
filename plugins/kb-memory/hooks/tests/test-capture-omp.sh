@@ -690,5 +690,87 @@ else
 fi
 
 echo
+echo "== STATSX3: harness_usage (cache, cost, duration, context) =="
+
+SX_SESSION="$TMPROOT/statsx.jsonl"
+{
+  title='{"type":"title","v":1,"title":"statsx"}'
+  pad_len=$((256 - ${#title} - 1))
+  printf '%s%*s\n' "$title" "$pad_len" ''
+  cat "$SCRIPT_DIR/fixtures/statsx-omp-session.jsonl"
+} >"$SX_SESSION"
+rm -f "$KB_SESSIONS_DIR"/session-*.html
+"$CAPTURE" "$SX_SESSION" >/dev/null 2>&1
+sx_out="$(find "$KB_SESSIONS_DIR" -name 'session-*-statsx01.html' | head -1)"
+sx_body="$(sed -n '/<pre>/,/<\/pre>/p' "$sx_out" 2>/dev/null | sed '1d;$s|</pre>$||')"
+if [ -n "$sx_out" ]; then ok "statsx fixture captured"; else bad "statsx fixture produced no capture"; fi
+sx_line() { printf '%s\n' "$sx_body" | jq -c "select(.type == \"assistant\" and (.message.content[0].text == \"$1\"))" 2>/dev/null; }
+sxq() { sx_line "$1" | jq -r "$2" 2>/dev/null; }
+
+if [ "$(sxq ok '.message.harness_usage.response_id')" = "R1" ] \
+  && [ "$(sxq ok '.message.harness_usage.schema')" = "omp-usage/1" ] \
+  && [ "$(sxq ok '.message.harness_usage | [.cache_read, .cache_write, .cost.total, .duration_ms, .ttft_ms, .completed_at, .stop_reason, .context.prompt_tokens, .context.compaction_epoch, .input, .output] | map(tostring) | join(",")')" = "900,40,0.0123,4200,310,1793527320000,toolUse,1040,2,100,50" ]; then
+  ok "R1 line carries cache, cost, duration, ttft, completion, stop reason, context (raw input, cache not folded)"
+else
+  bad "R1 harness_usage wrong: $(sx_line ok)"
+fi
+if sx_line ok | grep -q '"usage":{"input_tokens":1040,"output_tokens":50}'; then
+  ok "R1 legacy usage unchanged (input folds cacheRead+cacheWrite)"
+else
+  bad "R1 legacy usage changed"
+fi
+if [ -n "$(sx_line dup)" ] && [ "$(sxq dup '.message.harness_usage // "none"')" = "none" ] \
+  && sx_line dup | grep -q '"usage":{"input_tokens":1040,"output_tokens":50}'; then
+  ok "duplicate responseId: no harness_usage, legacy usage kept"
+else
+  bad "duplicate responseId not deduped: $(sx_line dup)"
+fi
+sx_dedup="$(printf '%s\n' "$sx_body" | jq -s '[.[] | .message.harness_usage?.output // empty] | add')"
+sx_naive="$(printf '%s\n' "$sx_body" | jq -s '[.[] | select(.type == "assistant") | .message.usage.output_tokens // 0] | add')"
+# deduped = R1 50 + R5(R6) 7 = 57 ; naive legacy sum = 50+50+5+1?no (abandoned excluded)+0+7 = 112
+if [ "$sx_dedup" = "57" ] && [ "$sx_naive" = "112" ] && [ "$sx_dedup" != "$sx_naive" ]; then
+  ok "sum of harness_usage.output is the deduped total (57), a naive per-line sum differs (112)"
+else
+  bad "dedupe sums wrong: dedup=$sx_dedup naive=$sx_naive"
+fi
+want_r3='{"sessionId":"statsx01","timestamp":"2026-11-01T10:04:00.000Z","cwd":"/tmp/statsx-fixture","type":"assistant","message":{"role":"assistant","model":"synthetic/model-x","content":[{"type":"text","text":"plain"}],"usage":{"input_tokens":10,"output_tokens":5}}}'
+if [ "$(sx_line plain | jq -c .)" = "$want_r3" ] && ! printf '%s' "$(sx_line plain)" | grep -q harness_usage; then
+  ok "response without responseId or new data is byte-identical to the pre-STATSX3 line"
+else
+  bad "plain line changed: $(sx_line plain)"
+fi
+if [ "$(sxq junk '.message.harness_usage | [has("input"), has("output"), has("cost"), has("duration_ms"), has("ttft_ms"), has("context"), .cache_read, .cache_write] | map(tostring) | join(",")')" = "true,false,false,false,false,false,0,0" ] \
+  && [ "$(sxq junk '.message.harness_usage.response_id')" = "R4" ]; then
+  ok "junk numerics / non-object cost and context translate and are omitted"
+else
+  bad "junk line wrong: $(sx_line junk)"
+fi
+if [ "$(sxq 'live R6' '.message.harness_usage.response_id')" = "R6" ] \
+  && ! printf '%s\n' "$sx_body" | grep -q '"text":"abandoned"'; then
+  ok "abandoned-branch duplicate responseId does not suppress the live entry"
+else
+  bad "leaf-chain-only dedupe broken: $(sx_line 'live R6')"
+fi
+
+# zero-cache, no cost, no responseId (omp-subagent.jsonl shape): no harness_usage
+rm -f "$KB_SESSIONS_DIR"/session-*.html
+SX_SUB="$TMPROOT/statsx-sub.jsonl"
+{
+  title='{"type":"title","v":1,"title":"sub"}'
+  pad_len=$((256 - ${#title} - 1))
+  printf '%s%*s\n' "$title" "$pad_len" ''
+  cat "$SCRIPT_DIR/fixtures/omp-subagent.jsonl"
+} >"$SX_SUB"
+"$CAPTURE" "$SX_SUB" >/dev/null 2>&1
+sub_out="$(find "$KB_SESSIONS_DIR" -name 'session-*.html' | head -1)"
+sub_body="$(sed -n '/<pre>/,/<\/pre>/p' "$sub_out" 2>/dev/null | sed '1d;$s|</pre>$||')"
+if [ -n "$sub_out" ] && printf '%s\n' "$sub_body" | grep -q '"usage"' \
+  && ! printf '%s\n' "$sub_body" | grep -q harness_usage; then
+  ok "zero-cache usage without cost/responseId emits no harness_usage"
+else
+  bad "subagent-shaped capture gained harness_usage or failed"
+fi
+
+echo
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -18,6 +18,10 @@ const ROUTES: [string, string | null][] = [
   ["/slates", "worklog"],
   ["/slates/kb", "worklog"],
   ["/replay/mem/abc", "worklog"],
+  ["/terminals", "terminals"],
+  ["/terminals/t1", "terminals"],
+  ["/term/t1", "terminals"],
+  ["/terminalsx", null],
   ["/lists", "lists"],
   ["/lists/mem/abc", "lists"],
   ["/board/mem/abc", "lists"],
@@ -33,13 +37,14 @@ const ROUTES: [string, string | null][] = [
   ["/sessionsfoo", null],
 ];
 
-describe("NAV_ITEMS (OL-L2: five doors)", () => {
-  it("is exactly Library, Search, Memory, Worklog, Lists", () => {
+describe("NAV_ITEMS (OL-L2 + HUBDOOR: six doors)", () => {
+  it("is exactly Library, Search, Memory, Worklog, Terminals, Lists", () => {
     expect(NAV_ITEMS.map((i) => i.label)).toEqual([
       "Library",
       "Search",
       "Memory",
       "Worklog",
+      "Terminals",
       "Lists",
     ]);
   });
@@ -63,6 +68,7 @@ describe("NAV_ITEMS (OL-L2: five doors)", () => {
       search: "/search?kb=mem",
       memory: "/memory?kb=mem",
       worklog: "/sessions?kb=mem",
+      terminals: "/terminals",
       lists: "/lists?kb=mem",
     });
     expect(NAV_ITEMS.find((i) => i.id === "library")!.href({ kb: null })).toBe("/");
@@ -72,6 +78,7 @@ describe("NAV_ITEMS (OL-L2: five doors)", () => {
     const t = Object.fromEntries(NAV_ITEMS.map((i) => [i.id, i.testid]));
     expect(t.search).toBe("header-search-tab");
     expect(t.worklog).toBe("header-sessions-tab");
+    expect(t.terminals).toBe("header-terminals-tab");
   });
 });
 

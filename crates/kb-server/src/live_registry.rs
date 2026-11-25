@@ -461,7 +461,12 @@ impl LiveRegistry {
         status: LiveStatusInfo,
     ) -> StatusOutcome {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(row) = g.get_mut(session_id).filter(|r| r.harness == harness) else {
+        // An ended row keeps no status (a late status beat must not
+        // resurrect one); a later `start` re-opens the row.
+        let Some(row) = g
+            .get_mut(session_id)
+            .filter(|r| r.harness == harness && r.holder != Holder::Ended)
+        else {
             return StatusOutcome {
                 applied: false,
                 changed: false,
@@ -1522,6 +1527,30 @@ mod tests {
         assert_eq!(stored(&reg, 120).status, Some(st(Some("m"), Some(5))));
         reg.record_beat(row("a", Holder::Ended, 130, 130), 130);
         assert!(stored(&reg, 130).status.is_none());
+    }
+
+    #[test]
+    fn status_after_end_is_not_applied() {
+        let reg = LiveRegistry::new();
+        reg.record_beat(row("a", Holder::Agent, 100, 100), 100);
+        assert!(
+            reg.record_status("a", "claude", st(Some("m"), Some(5)))
+                .applied
+        );
+        reg.record_beat(row("a", Holder::Ended, 130, 130), 130);
+        let before = reg.snapshot(130);
+        let out = reg.record_status("a", "claude", st(Some("late"), Some(9)));
+        assert!(!out.applied && !out.changed);
+        assert!(stored(&reg, 130).status.is_none());
+        let after = reg.snapshot(130);
+        assert_eq!(before.len(), after.len());
+        assert_eq!(before[0].1, after[0].1);
+        // a later start accepts status again
+        reg.record_beat(row("a", Holder::Agent, 140, 140), 140);
+        assert!(
+            reg.record_status("a", "claude", st(Some("m2"), None))
+                .applied
+        );
     }
 
     #[test]

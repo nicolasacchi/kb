@@ -546,9 +546,87 @@ test("live capture clock is cleared on shutdown (next tool_call fires again)", a
     expect(await captureCount()).toBe(3);
   });
 });
+// ---- STATHOOK: the typed `status` beat ------------------------------------
+function modelCtx(sid: string, extra: Record<string, unknown> = {}, kind = "main"): any {
+  return {
+    cwd: process.env.KB_TEST_CWD!,
+    hasUI: false,
+    agent: { kind, id: "m", name: kind, depth: kind === "main" ? 0 : 1 },
+    model: { id: "synthetic-model-1" },
+    sessionManager: { getSessionId: () => sid, getCwd: () => process.env.KB_TEST_CWD!, getSessionFile: () => "" },
+    ...extra,
+  };
+}
+async function statusLines(sid: string): Promise<any[]> {
+  return (await calls())
+    .filter((l) => l.includes("kb-beat.sh omp status"))
+    .map(payload)
+    .filter((p) => p.session_id === sid);
+}
+
+test("statusDecision: first send, floor, change, refresh, empty", () => {
+  const a = { model: "m" };
+  const b = { model: "m", context_pct: 5 };
+  expect(M.statusDecision(undefined, a, undefined, 1000, 5000, 120000)).toBe(true);
+  expect(M.statusDecision(a, {}, 0, 999999, 5000, 120000)).toBe(false);
+  expect(M.statusDecision(a, b, 0, 4999, 5000, 120000)).toBe(false); // held by the floor
+  expect(M.statusDecision(a, b, 0, 5000, 5000, 120000)).toBe(true); // changed past the floor
+  expect(M.statusDecision(a, { ...a }, 0, 60000, 5000, 120000)).toBe(false); // unchanged
+  expect(M.statusDecision(a, { ...a }, 0, 120000, 5000, 120000)).toBe(true); // refresh
+});
+
+test("contextPct accepts a number or {percent} in 0..100 and nothing else", () => {
+  expect(M.contextPct(41.6)).toBe(42);
+  expect(M.contextPct({ percent: 7 })).toBe(7);
+  for (const bad of [undefined, null, "9", -1, 101, NaN, {}, { percent: "3" }]) {
+    expect(M.contextPct(bad)).toBeUndefined();
+  }
+});
+
+test("session_stop emits one omp status with the model; a sub emits none", async () => {
+  await Bun.sleep(600);
+  writeFileSync(CALLS, "");
+  const h = makePi();
+  await h.get("session_stop")({ session_file: "" }, modelCtx("omp-stat-1"));
+  await h.get("session_stop")({ session_file: "" }, modelCtx("omp-stat-sub", {}, "sub"));
+  const own = await statusLines("omp-stat-1");
+  expect(own.length).toBe(1);
+  expect(own[0].status.model).toBe("synthetic-model-1");
+  expect("context_pct" in own[0].status).toBe(false);
+  expect((await statusLines("omp-stat-sub")).length).toBe(0);
+});
+
+test("context probe: present is sent, throwing and absent are omitted", async () => {
+  await Bun.sleep(600);
+  writeFileSync(CALLS, "");
+  const h = makePi();
+  await h.get("session_stop")({ session_file: "" }, modelCtx("omp-ctx-1", { getContextUsage: () => ({ percent: 33.2 }) }));
+  await h.get("session_stop")({ session_file: "" }, modelCtx("omp-ctx-2", { getContextUsage: () => { throw new Error("boom"); } }));
+  await h.get("session_stop")({ session_file: "" }, modelCtx("omp-ctx-3", { getContextUsage: () => "junk" }));
+  expect((await statusLines("omp-ctx-1"))[0].status.context_pct).toBe(33);
+  const two = await statusLines("omp-ctx-2");
+  expect(two.length).toBe(1);
+  expect("context_pct" in two[0].status).toBe(false);
+  expect("context_pct" in (await statusLines("omp-ctx-3"))[0].status).toBe(false);
+});
+
+test("tool_call status beats are throttled per session", async () => {
+  await Bun.sleep(600);
+  writeFileSync(CALLS, "");
+  process.env.KB_STATUS_MIN_INTERVAL_SECS = "3600";
+  try {
+    const h = makePi();
+    const c = modelCtx("omp-thr-1");
+    for (let i = 0; i < 4; i++) await h.get("tool_call")({ type: "tool_call", toolName: "read", input: {} }, c);
+    expect((await statusLines("omp-thr-1")).length).toBe(1);
+  } finally {
+    delete process.env.KB_STATUS_MIN_INTERVAL_SECS;
+  }
+});
+
 TS
 
-if ( cd "$TMPROOT" && HOME="$TMPROOT" PATH="$TMPROOT/bin:$PATH" KB_OMP_TS="$OMP_TS" \
+if ( cd "$TMPROOT" && HOME="$TMPROOT" PATH="$TMPROOT/bin:$PATH" KB_OMP_TS="$OMP_TS" KB_STATUS_START_DELAY_MS=0 \
        bun test "$TMPROOT/omp-beats.test.ts" ) >"$TMPROOT/bun.log" 2>&1; then
   ok "bun test: tool_call path hand-off, blocked/unblocked beats"
 else

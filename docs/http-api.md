@@ -1614,6 +1614,11 @@ GET  /api/terms                             SPA-only terminal relays
                                             docs/kb-term.md.
 GET    /api/terms                           Relay the runner's session
                                             list as `{"terms":[...]}`.
+                                            `session_hint {session_id,
+                                            via:"cwd"}` is a derived
+                                            folder-match guess on unbound
+                                            rows, never verified, never
+                                            persisted.
 POST   /api/terms                           Launch: body `{harness,
                                             resume_sid?, handoff_from?,
                                             cwd?, cols?, rows?}`.
@@ -3392,6 +3397,30 @@ PATCH  /api/term-prompts/{project}/{item}   {text?, done?, position?} (>=1,
 DELETE /api/term-prompts/{project}/{item}   remove an item, answer the queue;
                                             If-Match honoured when sent
                                             (412 when stale) [terminal]
+GET    /api/terms/commands                  the effective command catalogue
+                                            (shipped defaults + the operator
+                                            overlay): {rev, harnesses:{<h>:
+                                            {groups:[{id, label, origin,
+                                            items:[{..., origin}]}]}}}, origin
+                                            `default|overlay`; ETag "<rev>",
+                                            rev 0 on a fresh daemon [terminal]
+PUT    /api/terms/commands                  replace the overlay {harnesses?,
+                                            hidden?} (64 KiB cap, 413 above):
+                                            If-Match REQUIRED (428 without,
+                                            412 `commands-stale` + current
+                                            `rev` when stale); invalid -> 400
+                                            `bad-catalogue` + ordered
+                                            `errors:[{code,path}]`; a merge
+                                            over a cap -> 409
+                                            `catalogue-too-large`; an
+                                            identical overlay is a no-op (no
+                                            bump, no event); emits
+                                            `term.commands` `{rev}` [terminal]
+DELETE /api/terms/commands                  reset to the defaults (an empty
+                                            overlay at rev+1, ETags never
+                                            repeat); If-Match honoured when
+                                            sent; a no-op when already empty
+                                            [terminal]
 
 # admin
 GET    /api/kb/{kb}/quarantine              parser-quarantined artifacts

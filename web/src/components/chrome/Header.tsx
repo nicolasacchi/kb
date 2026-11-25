@@ -28,7 +28,7 @@ export function spineHasSearch(pathname: string): boolean {
 
 // kb2 redesign — Band-1 command bar, recomposed on the shared Spine (OL-L1).
 //
-// switcher = workspace pill + the five doors (OL-L2) · scope = empty (L7) ·
+// switcher = workspace pill + the doors (OL-L2, six since HUBDOOR) · scope = empty (L7) ·
 // search = the launcher · right = identity/pills/capture/saved/keys/theme/
 // settings/daemon status. The old footer StatusBar lives in `DaemonStatus`.
 //

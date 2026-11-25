@@ -92,6 +92,9 @@ pub mod narrative;
 /// commands a session ran, their outcomes, and the read-time verdict "was the
 /// code checked after its last edit". Pure; SURFACED, never scored.
 pub mod checks;
+/// Deterministic per-session stats + the ONE usage dedupe rule (surfaced,
+/// never scored; invariant #11).
+pub mod stats;
 /// kb-session-work/1 — the pure, unscored grouping of sessions into pieces
 /// of work by a fixed ladder of named terms (#11: surfaced, never scored).
 pub mod work;
@@ -806,6 +809,7 @@ fn parse_session_activity_lines<S: AsRef<str>>(
     let mut research_seen: std::collections::HashSet<Research> = std::collections::HashSet::new();
     // OL IDEA3 -- check-run / edit tracking (main transcript only).
     let mut check_tracker = checks::Tracker::new();
+    let mut usage_ledger = stats::UsageLedger::default();
 
     for line in lines {
         let line = line.as_ref().trim();
@@ -1082,17 +1086,10 @@ fn parse_session_activity_lines<S: AsRef<str>>(
                     act.model = Some(m.to_string());
                 }
             }
-            if let Some(usage) = v.get("message").and_then(|m| m.get("usage")) {
-                let inp = usage
-                    .get("input_tokens")
-                    .and_then(|x| x.as_u64())
-                    .unwrap_or(0);
-                let out = usage
-                    .get("output_tokens")
-                    .and_then(|x| x.as_u64())
-                    .unwrap_or(0);
-                act.token_total = act.token_total.saturating_add(inp).saturating_add(out);
-            }
+            // Usage repeats on every content-block record of one message:
+            // dedupe through the shared ledger (input + output, cache excluded).
+            usage_ledger.record_record(&v);
+            act.token_total = usage_ledger.input_plus_output();
             // R3/V0029 — closure tracking: same last-wins substantial/any
             // pair as the standalone `closing_assistant_text`.
             if let Some(text) = closing_candidate_text(&v) {

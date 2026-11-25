@@ -111,7 +111,7 @@ describe("the list rows", () => {
     // BSHELL: Open is a link to the terminal's own page, not a button.
     const open = screen.getByTestId("term-row-open");
     expect(open.tagName).toBe("A");
-    expect(open.getAttribute("href")).toBe("/term/t1");
+    expect(open.getAttribute("href")).toBe("/terminals/t1");
   });
 
   it("renders nothing when there is no terminal", async () => {

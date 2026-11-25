@@ -27876,3 +27876,421 @@ async fn view_route_conversation_cache_hit_equals_cold_build() {
     assert_eq!(proj(&cold), proj(&warm));
     assert!(!proj(&cold)["rows"].as_array().unwrap().is_empty());
 }
+
+// ===== CONVBIND: `session_hint` (via cwd) on unbound terminal rows ==========
+
+const HINT_CWD: &str = "/work/demo/repo";
+
+fn hint_now() -> i64 {
+    chrono::Utc::now().timestamp()
+}
+
+/// A runner `list` reply with one claude terminal in `HINT_CWD`, started an
+/// hour ago so any fresh beat is "at or after the terminal's start".
+fn hint_runner_list(id: &str, harness: &str, cwd: &str) -> String {
+    let item = serde_json::json!({
+        "id": id,
+        "harness": harness,
+        "cwd": cwd,
+        "started_unix": hint_now() - 3600,
+        "resume_sid": null,
+        "pane_pid": 4242,
+        "cols": 120,
+        "rows": 40,
+        "bracket_paste_flag": true,
+        "pane_dead": false,
+        "exit_code": null,
+        "grid_owner": null,
+    });
+    serde_json::json!({"status":"ok","data":[item]}).to_string()
+}
+
+fn hint_fake_runner(dir: &std::path::Path, harness: &str, cwd: &str) -> FakeRunner {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("list".to_string(), hint_runner_list("abc123", harness, cwd));
+    replies.insert(
+        "paste".to_string(),
+        "{\"status\":\"ok\",\"data\":{\"paste_only\":false,\"bracketed\":true}}".to_string(),
+    );
+    replies.insert(
+        "enter".to_string(),
+        "{\"status\":\"ok\",\"data\":{}}".to_string(),
+    );
+    spawn_fake_runner(dir, replies)
+}
+
+/// `boot_with_terminal`, but also returns the daemon's paths so a test can
+/// seed a capture row.
+async fn hint_boot(fake: &FakeRunner) -> (tempfile::TempDir, std::net::SocketAddr, KbPaths) {
+    let (tmp, mut cfg, paths) = fixture_corpus();
+    cfg.terminal = TerminalSection {
+        enabled: Some(true),
+        runner_socket: Some(fake.socket.clone()),
+        ticket_ttl_secs: None,
+        refuse_token_callers: None,
+        runner_timeout_secs: None,
+        files: None,
+    };
+    std::fs::create_dir_all(&paths.config).unwrap();
+    std::fs::write(paths.token_file(), FIXTURE_TOKEN).unwrap();
+    let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths.clone())
+        .await
+        .expect("serve");
+    common::wait_docs_listed(addr, "smoke", 4).await;
+    (tmp, addr, paths)
+}
+
+/// A beat that carries a cwd and an explicit `at`, with an optional terminal
+/// claim.
+#[allow(clippy::too_many_arguments)]
+async fn post_hint_beat(
+    client: &reqwest::Client,
+    addr: std::net::SocketAddr,
+    sid: &str,
+    harness: &str,
+    cwd: &str,
+    event: &str,
+    at_unix: i64,
+    claim: Option<(&str, i64)>,
+    detail: serde_json::Value,
+) {
+    let at = chrono::DateTime::from_timestamp(at_unix, 0)
+        .unwrap()
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mut body = serde_json::json!({
+        "v": 1,
+        "session_id": sid,
+        "harness": harness,
+        "event": event,
+        "at": at,
+        "cwd": cwd,
+        "detail": detail,
+    });
+    if let Some((term, pid)) = claim {
+        body["term"] = serde_json::json!(term);
+        body["pid"] = serde_json::json!(pid);
+    }
+    let resp = client
+        .post(url(addr, "/api/sessions/beat"))
+        .header("Origin", ORIGIN)
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "beat {event}: {:?}",
+        resp.text().await
+    );
+}
+
+async fn hint_term_row(client: &reqwest::Client, addr: std::net::SocketAddr) -> serde_json::Value {
+    let resp = get_terms_list(client, addr).await;
+    assert_eq!(resp.status().as_u16(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    body["terms"][0].clone()
+}
+
+async fn hint_start(client: &reqwest::Client, addr: std::net::SocketAddr, sid: &str, at: i64) {
+    post_hint_beat(
+        client,
+        addr,
+        sid,
+        "claude",
+        HINT_CWD,
+        "start",
+        at,
+        None,
+        serde_json::json!({}),
+    )
+    .await
+}
+
+/// Seed a landed capture row (the live-status Tier-0 source) into `smoke`.
+fn hint_seed_capture(paths: &KbPaths, sid: &str, harness: &str, cwd: &str, ended_at: i64) {
+    let sm = KbName::new("smoke").unwrap();
+    let mut db = kb_core::storage::sqlite::Db::open(&paths.kb_sqlite(&sm)).unwrap();
+    let row = kb_core::storage::sqlite::SessionRow {
+        artifact_id: format!("art-{sid}"),
+        session_id: sid.into(),
+        started_at: ended_at - 60,
+        ended_at,
+        message_count: 4,
+        first_user_prompt: Some("synthetic prompt".into()),
+        source_relative: format!("sessions/session-{sid}.html"),
+        title: Some("synthetic title".into()),
+        cwd: Some(cwd.into()),
+        git_branch: None,
+        files_read_count: 0,
+        files_edited_count: 0,
+        token_total: 10,
+        tool_calls: 0,
+        model: None,
+        error_count: 0,
+        subagent_count: 0,
+        subagent_tokens: 0,
+        subagent_tool_calls: 0,
+        subagent_files_edited: 0,
+        subagent_launched_unstatted: 0,
+        project_key: None,
+        repo_root: None,
+        harness: harness.into(),
+        cc_version: None,
+        last_assistant_text: None,
+        all_cwds: None,
+        commit_count: 0,
+        user_turns: 1,
+        active_secs: 30,
+        substance: None,
+        segment_of: None,
+        segment_idx: None,
+        evidence_json: None,
+        parent_session_id: None,
+        root_session_id: None,
+        project_slug: None,
+        continued_from_harness: None,
+        continued_from_session_id: None,
+    };
+    db.sessions_upsert(&row).unwrap();
+}
+
+#[tokio::test]
+async fn term_hint_restart_simulation() {
+    let fake_dir = tempfile::tempdir().unwrap();
+    let fake = hint_fake_runner(fake_dir.path(), "claude", HINT_CWD);
+    let (_tmp, addr, _paths) = hint_boot(&fake).await;
+    let client = reqwest::Client::new();
+    // Nothing known yet: unbound, no hint.
+    let row = hint_term_row(&client, addr).await;
+    assert_eq!(row["session_id"], serde_json::Value::Null, "{row}");
+    assert_eq!(row["session_hint"], serde_json::Value::Null, "{row}");
+    // A beat WITHOUT a terminal claim (what a restarted registry holds
+    // before the next verified beat): the row stays unbound but is hinted.
+    hint_start(&client, addr, "sid-a", hint_now()).await;
+    let row = hint_term_row(&client, addr).await;
+    assert_eq!(row["session_id"], serde_json::Value::Null, "{row}");
+    assert_eq!(
+        row["session_hint"],
+        serde_json::json!({"session_id": "sid-a", "via": "cwd"}),
+        "{row}"
+    );
+    // A verified beat replaces the guess with the binding.
+    post_hint_beat(
+        &client,
+        addr,
+        "sid-a",
+        "claude",
+        HINT_CWD,
+        "prompt",
+        hint_now(),
+        Some(("abc123", 4242)),
+        serde_json::json!({}),
+    )
+    .await;
+    let row = hint_term_row(&client, addr).await;
+    assert_eq!(row["session_id"], "sid-a", "{row}");
+    assert_eq!(row["session_hint"], serde_json::Value::Null, "{row}");
+
+    // A second daemon (empty registry) on the same runner guesses from the
+    // landed capture row.
+    let (_tmp2, addr2, paths2) = hint_boot(&fake).await;
+    let row = hint_term_row(&client, addr2).await;
+    assert_eq!(row["session_hint"], serde_json::Value::Null, "{row}");
+    hint_seed_capture(&paths2, "sid-cap", "claude", HINT_CWD, hint_now() - 30);
+    let row = hint_term_row(&client, addr2).await;
+    assert_eq!(row["session_id"], serde_json::Value::Null, "{row}");
+    assert_eq!(
+        row["session_hint"],
+        serde_json::json!({"session_id": "sid-cap", "via": "cwd"}),
+        "{row}"
+    );
+    // A capture of another harness or folder is never offered.
+    let (_tmp3, addr3, paths3) = hint_boot(&fake).await;
+    hint_seed_capture(&paths3, "sid-omp", "omp", HINT_CWD, hint_now() - 30);
+    hint_seed_capture(
+        &paths3,
+        "sid-else",
+        "claude",
+        "/work/demo/other",
+        hint_now() - 30,
+    );
+    let row = hint_term_row(&client, addr3).await;
+    assert_eq!(row["session_hint"], serde_json::Value::Null, "{row}");
+}
+
+#[tokio::test]
+async fn term_hint_wrong_harness_negative() {
+    let fake_dir = tempfile::tempdir().unwrap();
+    let fake = hint_fake_runner(fake_dir.path(), "claude", HINT_CWD);
+    let (_tmp, addr, _paths) = hint_boot(&fake).await;
+    let client = reqwest::Client::new();
+    post_hint_beat(
+        &client,
+        addr,
+        "sid-omp",
+        "omp",
+        HINT_CWD,
+        "start",
+        hint_now(),
+        None,
+        serde_json::json!({}),
+    )
+    .await;
+    let row = hint_term_row(&client, addr).await;
+    assert_eq!(row["session_hint"], serde_json::Value::Null, "{row}");
+}
+
+#[tokio::test]
+async fn term_hint_wrong_cwd_negative() {
+    let fake_dir = tempfile::tempdir().unwrap();
+    let fake = hint_fake_runner(fake_dir.path(), "claude", HINT_CWD);
+    let (_tmp, addr, _paths) = hint_boot(&fake).await;
+    let client = reqwest::Client::new();
+    for (n, cwd) in ["/work/demo/repo/", "/work/demo", "/work/demo/repo/sub"]
+        .into_iter()
+        .enumerate()
+    {
+        post_hint_beat(
+            &client,
+            addr,
+            &format!("sid-{n}"),
+            "claude",
+            cwd,
+            "start",
+            hint_now(),
+            None,
+            serde_json::json!({}),
+        )
+        .await;
+    }
+    let row = hint_term_row(&client, addr).await;
+    assert_eq!(row["session_hint"], serde_json::Value::Null, "{row}");
+}
+
+#[tokio::test]
+async fn term_hint_ambiguity_negative() {
+    let fake_dir = tempfile::tempdir().unwrap();
+    let fake = hint_fake_runner(fake_dir.path(), "claude", HINT_CWD);
+    let (_tmp, addr, _paths) = hint_boot(&fake).await;
+    let client = reqwest::Client::new();
+    let at = hint_now();
+    hint_start(&client, addr, "sid-a", at).await;
+    hint_start(&client, addr, "sid-b", at).await;
+    let row = hint_term_row(&client, addr).await;
+    assert_eq!(row["session_hint"], serde_json::Value::Null, "{row}");
+    // A strictly newer session breaks the tie.
+    hint_start(&client, addr, "sid-c", at + 5).await;
+    let row = hint_term_row(&client, addr).await;
+    assert_eq!(
+        row["session_hint"],
+        serde_json::json!({"session_id": "sid-c", "via": "cwd"}),
+        "{row}"
+    );
+}
+
+#[tokio::test]
+async fn term_hint_verified_beat_overwrites() {
+    let fake_dir = tempfile::tempdir().unwrap();
+    let fake = hint_fake_runner(fake_dir.path(), "claude", HINT_CWD);
+    let (_tmp, addr, _paths) = hint_boot(&fake).await;
+    let client = reqwest::Client::new();
+    let at = hint_now();
+    hint_start(&client, addr, "sid-a", at).await;
+    let row = hint_term_row(&client, addr).await;
+    assert_eq!(row["session_hint"]["session_id"], "sid-a", "{row}");
+    // A DIFFERENT session's verified beat wins outright: the hint is gone
+    // and the binding names the verified session.
+    post_hint_beat(
+        &client,
+        addr,
+        "sid-b",
+        "claude",
+        HINT_CWD,
+        "start",
+        at,
+        Some(("abc123", 4242)),
+        serde_json::json!({}),
+    )
+    .await;
+    let row = hint_term_row(&client, addr).await;
+    assert_eq!(row["session_id"], "sid-b", "{row}");
+    assert_eq!(row["session_hint"], serde_json::Value::Null, "{row}");
+}
+
+#[tokio::test]
+async fn term_hint_never_unblocks_enter() {
+    let fake_dir = tempfile::tempdir().unwrap();
+    let fake = hint_fake_runner(fake_dir.path(), "claude", HINT_CWD);
+    let (_tmp, addr, _paths) = hint_boot(&fake).await;
+    let client = reqwest::Client::new();
+    hint_start(&client, addr, "sid-a", hint_now()).await;
+    post_hint_beat(
+        &client,
+        addr,
+        "sid-a",
+        "claude",
+        HINT_CWD,
+        "blocked",
+        hint_now(),
+        None,
+        serde_json::json!({"reason": "needs approval", "tool": "Bash"}),
+    )
+    .await;
+    let row = hint_term_row(&client, addr).await;
+    assert_eq!(row["session_hint"]["session_id"], "sid-a", "{row}");
+    assert_eq!(row["blocked"], false, "a hint is not a binding: {row}");
+    // Enter on the hinted-but-unbound terminal takes the unbound path
+    // unchanged: relayed, with the unbound header, never a term-blocked 409.
+    let resp = client
+        .post(url(addr, "/api/terms/abc123/enter"))
+        .header("Origin", term_origin(addr))
+        .header("x-kb-intent", "terminal")
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    assert_eq!(
+        resp.headers()
+            .get("x-kb-term-state")
+            .and_then(|v| v.to_str().ok()),
+        Some("unbound"),
+        "the first enter already takes the unbound path"
+    );
+    // Control: an identical terminal with NO hint (no beats) answers the
+    // same state header, so the hint changed nothing about the gate.
+    {
+        let cdir = tempfile::tempdir().unwrap();
+        let cfake = hint_fake_runner(cdir.path(), "claude", HINT_CWD);
+        let (_ctmp, caddr, _cp) = hint_boot(&cfake).await;
+        let crow = hint_term_row(&client, caddr).await;
+        assert!(crow["session_hint"].is_null(), "{crow}");
+        let cresp = client
+            .post(url(caddr, "/api/terms/abc123/enter"))
+            .header("Origin", term_origin(caddr))
+            .header("x-kb-intent", "terminal")
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(cresp.status().as_u16(), 200);
+        assert_eq!(
+            cresp
+                .headers()
+                .get("x-kb-term-state")
+                .and_then(|v| v.to_str().ok()),
+            Some("unbound")
+        );
+    }
+    // Paste is unaffected too.
+    let resp = client
+        .post(url(addr, "/api/terms/abc123/paste"))
+        .header("Origin", term_origin(addr))
+        .header("x-kb-intent", "terminal")
+        .json(&serde_json::json!({"text": "hello"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200, "{:?}", resp.text().await);
+}
