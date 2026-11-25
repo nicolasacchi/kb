@@ -11,7 +11,10 @@
 //! first, so token callers are refused and loopback does not bypass. The file
 //! is mutated ONLY here, under ONE daemon-wide async lock held across the
 //! load-modify-write; the file IO itself runs on the blocking pool, and no
-//! other `.await` happens while the guard is held. The write is tmp file ->
+//! other `.await` happens while the guard is held. The whole mutation (lock,
+//! apply, emit) runs in ONE detached task the handler only awaits, so a client
+//! that disconnects mid-request cannot leave the file written without its event.
+//! The write is tmp file ->
 //! fsync -> rename -> directory fsync, so a crash leaves the old or the new
 //! file, never a torn one.
 //!
@@ -217,6 +220,11 @@ pub struct EffectiveCatalogue {
     #[cfg_attr(feature = "ts-export", ts(type = "number"))]
     pub rev: u64,
     pub harnesses: BTreeMap<String, EffHarness>,
+    // The stored overlay verbatim, so an editor can tell default / changed /
+    // added / hidden apart without re-deriving it from the effective list.
+    pub overlay: OverlayPut,
+    // The overlay's hidden list (the same data as `overlay.hidden`).
+    pub hidden: BTreeMap<String, Vec<String>>,
 }
 
 // The `term.commands` SSE payload: the new revision, never any content. A
@@ -390,7 +398,11 @@ fn to_eff(item: OvItem, origin: EffOrigin) -> EffItem {
     }
 }
 
-fn effective(rev: u64, merged: BTreeMap<String, Vec<MergedGroup>>) -> EffectiveCatalogue {
+fn effective(
+    rev: u64,
+    merged: BTreeMap<String, Vec<MergedGroup>>,
+    overlay: &OverlayPut,
+) -> EffectiveCatalogue {
     EffectiveCatalogue {
         rev,
         harnesses: merged
@@ -412,6 +424,8 @@ fn effective(rev: u64, merged: BTreeMap<String, Vec<MergedGroup>>) -> EffectiveC
                 )
             })
             .collect(),
+        overlay: overlay.clone(),
+        hidden: overlay.hidden.clone(),
     }
 }
 
@@ -864,7 +878,7 @@ fn catalogue_response(status: StatusCode, rev: u64, overlay: &OverlayPut) -> Res
     let Some(defaults) = defaults() else {
         return store_error_response(StoreError::Corrupt);
     };
-    let eff = effective(rev, merge(defaults, overlay));
+    let eff = effective(rev, merge(defaults, overlay), overlay);
     match serde_json::to_vec(&eff) {
         Ok(bytes) => {
             let resp =
@@ -898,24 +912,54 @@ fn parse_if_match(headers: &HeaderMap) -> IfMatch {
     }
 }
 
-/// Run one mutation under the daemon-wide lock and finish the response. The
-/// file IO runs on the blocking pool; the guard is taken before and dropped
-/// after the emit, with the blocking join the only `.await` in between.
-async fn mutate(state: &KbHandles, if_match: Option<u64>, op: Op) -> Response<Body> {
-    let guard = state.terminals.commands_lock.lock().await;
-    let paths = Arc::clone(&state.paths);
-    let joined = tokio::task::spawn_blocking(move || apply(&paths, if_match, op)).await;
-    let out = joined.unwrap_or(Err(StoreError::Io));
-    if let Ok(applied) = &out {
-        if applied.changed {
-            let ev = TermCommandsEvent { rev: applied.rev };
-            state.bus.emit(
-                "term.commands",
-                serde_json::to_value(&ev).unwrap_or(Value::Null),
-            );
+/// Run one mutation to completion in ONE detached task: take the daemon-wide
+/// lock, apply on the blocking pool, emit, release. The caller only awaits the
+/// task's `JoinHandle`, so dropping the caller (a client that disconnects
+/// mid-request) can never leave the file written but the event unsent, or the
+/// lock half-released: the task runs to the end regardless. A panicked or
+/// cancelled task is an `Io` refusal.
+async fn run_detached<S: Send + Sync + 'static>(
+    owner: Arc<S>,
+    lock_of: fn(&S) -> &tokio::sync::Mutex<()>,
+    paths: Arc<KbPaths>,
+    bus: Arc<kb_core::events::EventBus>,
+    if_match: Option<u64>,
+    op: Op,
+) -> Result<Applied, StoreError> {
+    let task = tokio::spawn(async move {
+        let guard = lock_of(&owner).lock().await;
+        let joined = tokio::task::spawn_blocking(move || apply(&paths, if_match, op)).await;
+        let out = joined.unwrap_or(Err(StoreError::Io));
+        if let Ok(applied) = &out {
+            if applied.changed {
+                let ev = TermCommandsEvent { rev: applied.rev };
+                bus.emit(
+                    "term.commands",
+                    serde_json::to_value(&ev).unwrap_or(Value::Null),
+                );
+            }
         }
-    }
-    drop(guard);
+        drop(guard);
+        out
+    });
+    task.await.unwrap_or(Err(StoreError::Io))
+}
+
+fn commands_lock(s: &KbHandles) -> &tokio::sync::Mutex<()> {
+    &s.terminals.commands_lock
+}
+
+/// Run one mutation and finish the response (see [`run_detached`]).
+async fn mutate(state: &Arc<KbHandles>, if_match: Option<u64>, op: Op) -> Response<Body> {
+    let out = run_detached(
+        Arc::clone(state),
+        commands_lock,
+        Arc::clone(&state.paths),
+        Arc::clone(&state.bus),
+        if_match,
+        op,
+    )
+    .await;
     match out {
         Ok(applied) => catalogue_response(StatusCode::OK, applied.rev, &applied.overlay),
         Err(e) => store_error_response(e),
@@ -1329,7 +1373,11 @@ mod tests {
 
     #[test]
     fn effective_wire_shape_carries_origin_and_skips_absent_fields() {
-        let eff = effective(0, merge(defs(), &OverlayPut::default()));
+        let eff = effective(
+            0,
+            merge(defs(), &OverlayPut::default()),
+            &OverlayPut::default(),
+        );
         let v = serde_json::to_value(&eff).unwrap();
         let first = &v["harnesses"]["claude"]["groups"][0];
         assert_eq!(first["origin"], "default");
@@ -1352,9 +1400,97 @@ mod tests {
                     .unwrap_or_else(|e| panic!("{name}: defaults: {e}"));
             let overlay: OverlayPut = serde_json::from_value(c["overlay"].clone())
                 .unwrap_or_else(|e| panic!("{name}: overlay: {e}"));
-            let got = serde_json::to_value(effective(0, merge(&defaults, &overlay))).unwrap();
+            let got =
+                serde_json::to_value(effective(0, merge(&defaults, &overlay), &overlay)).unwrap();
             assert_eq!(got["harnesses"], c["effective"]["harnesses"], "{name}");
         }
+    }
+
+    struct Owner {
+        lock: tokio::sync::Mutex<()>,
+    }
+
+    fn owner_lock(o: &Owner) -> &tokio::sync::Mutex<()> {
+        &o.lock
+    }
+
+    #[test]
+    fn get_returns_raw_overlay_and_hidden_beside_effective() {
+        let o = put(json!({
+            "harnesses": {"claude": {"groups": [
+                {"id": "slash", "label": "Slash commands", "items": [item("help", "Mine", "mine")]}]}},
+            "hidden": {"claude": ["compact"]}
+        }))
+        .unwrap();
+        let v = serde_json::to_value(effective(3, merge(defs(), &o), &o)).unwrap();
+        assert_eq!(v["overlay"], serde_json::to_value(&o).unwrap());
+        assert_eq!(v["hidden"], json!({"claude": ["compact"]}));
+        assert_eq!(v["overlay"]["hidden"], v["hidden"]);
+        assert_eq!(
+            v["overlay"]["harnesses"]["claude"]["groups"][0]["items"][0]["label"],
+            "Mine"
+        );
+        // A fresh daemon: both empty, effective unchanged.
+        let e = OverlayPut::default();
+        let fresh = serde_json::to_value(effective(0, merge(defs(), &e), &e)).unwrap();
+        assert_eq!(fresh["overlay"], json!({"harnesses": {}, "hidden": {}}));
+        assert_eq!(fresh["hidden"], json!({}));
+        assert_eq!(
+            fresh["harnesses"]["claude"]["groups"][0]["origin"],
+            "default"
+        );
+        let keys: Vec<&String> = fresh.as_object().unwrap().keys().collect();
+        assert!(keys.contains(&&"rev".to_string()) && keys.contains(&&"harnesses".to_string()));
+    }
+
+    #[tokio::test]
+    async fn mutate_survives_handler_future_drop() {
+        let (_t, paths) = fixture();
+        let paths = Arc::new(paths);
+        let bus = Arc::new(kb_core::events::EventBus::new(64, 64));
+        let mut rx = bus.subscribe();
+        let owner = Arc::new(Owner {
+            lock: tokio::sync::Mutex::new(()),
+        });
+        let o = put(json!({"hidden": {"claude": ["help"]}})).unwrap();
+        // Poll the handler future once, then drop it (a client disconnect).
+        let fut = run_detached(
+            Arc::clone(&owner),
+            owner_lock,
+            Arc::clone(&paths),
+            Arc::clone(&bus),
+            Some(0),
+            Op::Put(o.clone()),
+        );
+        let raced = tokio::time::timeout(std::time::Duration::ZERO, fut).await;
+        assert!(raced.is_err(), "the handler future was dropped mid-flight");
+        // The detached task still finishes: exactly one frame.
+        let env = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .expect("event arrives")
+            .unwrap();
+        assert_eq!(env.type_, "term.commands");
+        assert_eq!(env.payload["rev"], 1);
+        assert_eq!(read_overlay(&paths).unwrap(), (1, o));
+        // The lock was released: the next PUT at the new rev succeeds.
+        let next = put(json!({"hidden": {"claude": ["compact"]}})).unwrap();
+        let applied = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            run_detached(
+                Arc::clone(&owner),
+                owner_lock,
+                Arc::clone(&paths),
+                Arc::clone(&bus),
+                Some(1),
+                Op::Put(next),
+            ),
+        )
+        .await
+        .expect("lock is free")
+        .unwrap();
+        assert_eq!(applied.rev, 2);
+        // Two durable changes, two frames, never a duplicate.
+        assert_eq!(bus.ring_len(), 2);
     }
 
     #[test]

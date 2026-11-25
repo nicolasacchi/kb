@@ -3450,8 +3450,13 @@ GET    /api/terms/commands                  the effective command catalogue
                                             (shipped defaults + the operator
                                             overlay): {rev, harnesses:{<h>:
                                             {groups:[{id, label, origin,
-                                            items:[{..., origin}]}]}}}, origin
-                                            `default|overlay`; ETag "<rev>",
+                                            items:[{..., origin}]}]}},
+                                            overlay:{harnesses, hidden},
+                                            hidden:{<h>:[id]}}, origin
+                                            `default|overlay`; `overlay` and
+                                            `hidden` are the stored overlay
+                                            verbatim (`hidden` repeats
+                                            `overlay.hidden`); ETag "<rev>",
                                             rev 0 on a fresh daemon [terminal]
 PUT    /api/terms/commands                  replace the overlay {harnesses?,
                                             hidden?} (64 KiB cap, 413 above):
