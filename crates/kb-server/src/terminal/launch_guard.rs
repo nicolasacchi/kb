@@ -26,9 +26,6 @@ use crate::terminal::gate::Problem;
 /// keys on this type, never the status or the detail text.
 pub(crate) const ERR_TERMINAL_CAP: &str = "urn:kb:errors:terminal-cap";
 
-/// The tracing target of the audit line.
-pub(crate) const AUDIT_TARGET: &str = "kb_server::terminal::launch_audit";
-
 /// Longest value (in chars) any audit field carries.
 const AUDIT_FIELD_CAP: usize = 64;
 
