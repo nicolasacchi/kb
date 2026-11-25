@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
-import { MemoryRouter, useLocation } from "react-router-dom";
+import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 
 const state = vi.hoisted(() => ({
   admitted: true,
@@ -45,8 +45,10 @@ const lv = (id: string, p: Record<string, unknown> = {}) => ({
 });
 
 let loc = "";
+let go: (to: string) => void = () => {};
 function Probe() {
   loc = useLocation().pathname;
+  go = useNavigate();
   return null;
 }
 function ui(path: string) {
@@ -108,6 +110,7 @@ describe("NotifyHost", () => {
     expect(toastInfo.mock.calls[0][0]).toBe("Title b (proj) finished");
     expect(peekMarks().b).toEqual({ asks: false, finishedUnseen: true });
     // viewing b clears the unseen mark
+    act(() => go("/terminals/b"));
     change(r, "/terminals/b", [lv("a"), lv("b", { state: "waiting" })]);
     expect(peekMarks().b).toBeUndefined();
   });
