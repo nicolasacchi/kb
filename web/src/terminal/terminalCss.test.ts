@@ -57,3 +57,33 @@ describe("BHEAD header css contract", () => {
     expect(block).toContain("min-width: 40px");
   });
 });
+
+describe("BSTATE state overlay css contract", () => {
+  const region = css.slice(css.indexOf("/* BSTATE — the state overlay"));
+
+  it("sits over the pane box, takes no pointer events itself, and the pane adds no size", () => {
+    const overlay = rule(".kb-term-state-overlay");
+    expect(overlay).toContain("position: absolute");
+    expect(overlay).toContain("inset: 0");
+    expect(overlay).toContain("pointer-events: none");
+    const pane = rule(".kb-term__pane");
+    expect(pane).toContain("position: relative");
+    expect(pane).not.toMatch(/\b(height|width|padding)\s*:/);
+  });
+
+  it("uses tokens only: no hex or rgb colour, no px font size, no z-index literal", () => {
+    expect(region).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
+    expect(region).not.toMatch(/rgba?\(/);
+    expect(region).not.toMatch(/font-size:\s*[0-9.]+(px|rem|em)/);
+    for (const m of region.matchAll(/font-size:\s*([^;]+);/g)) expect(m[1]).toMatch(/^var\(--fs-/);
+    for (const m of region.matchAll(/z-index:\s*([^;]+);/g)) expect(m[1]).toMatch(/^var\(--z-/);
+  });
+
+  it("the overlay pulse is switched off under prefers-reduced-motion", () => {
+    expect(css).toMatch(/prefers-reduced-motion: reduce\) \{[^@]*\.kb-term-state-overlay__dot \{\s*animation: none/);
+  });
+
+  it("the action is a 44px target on coarse pointers", () => {
+    expect(css).toMatch(/pointer: coarse\) \{\s*\.kb-term-state-overlay__action \{\s*min-height: 44px/);
+  });
+});

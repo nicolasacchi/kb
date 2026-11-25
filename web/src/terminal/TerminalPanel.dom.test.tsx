@@ -198,6 +198,7 @@ interface SessionOpts {
 }
 let lastSession: SessionOpts | null = null;
 const sessionStart = vi.fn();
+const kickMock = vi.fn();
 const sendInputMock = vi.fn();
 const setHiddenMock = vi.fn();
 vi.mock("./session", () => ({
@@ -207,7 +208,9 @@ vi.mock("./session", () => ({
     }
     start = sessionStart;
     dispose(): void {}
-    kick(): void {}
+    kick(): void {
+      kickMock();
+    }
     sendInput(d: string): boolean {
       sendInputMock(d);
       return true;
@@ -261,6 +264,7 @@ beforeEach(() => {
   terms.length = 0;
   lastSession = null;
   sessionStart.mockReset();
+  kickMock.mockReset();
   sendInputMock.mockReset();
   setGfxTheme.mockReset();
   gfxMetrics.mockReset();
@@ -1251,5 +1255,169 @@ describe("BHEAD: the header", () => {
     const term = await mountWith();
     act(() => lastSession!.callbacks.onState(LIVE));
     expect(term.paste).not.toHaveBeenCalled();
+  });
+});
+
+describe("BSTATE: the state overlay", () => {
+  const ST = { phase: "live", epoch: null, applied: 0, resets: 0, gaps: 0, attempt: 0, caption: "live", exitCode: null, blockedReason: null };
+  const set = (o: Record<string, unknown>): void => act(() => lastSession!.callbacks.onState({ ...ST, ...o }));
+  const overlay = (): HTMLElement | null => q("kb-term-overlay");
+  const view = (): HTMLElement => host!.querySelector<HTMLElement>("[data-kb-term]")!;
+  const announce = (): string => text("kb-term-announce");
+
+  it("first connect shows the connecting card; live removes the node", async () => {
+    await mountPanel();
+    expect(overlay()?.dataset.overlay).toBe("connecting");
+    expect(overlay()!.textContent).toContain("Connecting");
+    expect(q("kb-term-overlay-action")).toBeNull();
+    set({});
+    expect(overlay()).toBeNull();
+  });
+
+  it("reconnecting shows the scrim, the caption and Reconnect now, which kicks the session once", async () => {
+    await mountPanel();
+    await profile();
+    set({});
+    set({ phase: "reconnecting", caption: "reconnecting in 2s (offline)" });
+    expect(overlay()?.dataset.overlay).toBe("reconnecting");
+    expect(text("kb-term-overlay-detail")).toBe("reconnecting in 2s (offline)");
+    act(() => q("kb-term-overlay-action")!.click());
+    expect(kickMock).toHaveBeenCalledTimes(1);
+    // The header keeps the raw phase word.
+    expect(text("kb-term-state")).toBe("reconnecting");
+  });
+
+  it("a connecting phase after the stream was live is the reconnecting treatment, not the first-connect card", async () => {
+    await mountPanel();
+    set({});
+    set({ phase: "connecting", caption: "connecting" });
+    expect(overlay()?.dataset.overlay).toBe("reconnecting");
+    expect(q("kb-term-overlay-action")).toBeNull();
+  });
+
+  it("reconnecting then live removes the overlay and never focuses the terminal", async () => {
+    await mountPanel();
+    const term = await profile();
+    set({});
+    set({ phase: "reconnecting", caption: "reconnecting" });
+    set({});
+    expect(overlay()).toBeNull();
+    expect(term.focus).not.toHaveBeenCalled();
+  });
+
+  it("focus that sat on the overlay's button goes back to the terminal when the overlay goes away", async () => {
+    await mountPanel();
+    const term = await profile();
+    set({});
+    set({ phase: "reconnecting", caption: "reconnecting" });
+    act(() => q("kb-term-overlay-action")!.focus());
+    expect(term.focus).not.toHaveBeenCalled();
+    set({});
+    expect(term.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it("ended shows the exit text and Back to terminals calls onClose", async () => {
+    const onClose = vi.fn();
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    act(() =>
+      root!.render(
+        <QueryClientProvider client={new QueryClient()}>
+          <TerminalPanel termId="abcd1234" sid="s1" harness="omp" onClose={onClose} />
+        </QueryClientProvider>,
+      ),
+    );
+    await settle(4);
+    set({});
+    set({ phase: "ended", caption: "exited (code 4)", exitCode: 4 });
+    expect(overlay()?.dataset.overlay).toBe("ended");
+    expect(overlay()!.textContent).toContain("Session ended");
+    expect(text("kb-term-overlay-detail")).toBe("exited (code 4)");
+    expect(q("kb-term-overlay-action")!.textContent).toBe("Back to terminals");
+    act(() => q("kb-term-overlay-action")!.click());
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocked shows the reason; sleeping shows no overlay", async () => {
+    await mountPanel();
+    set({ phase: "blocked", caption: "blocked: width table unavailable", blockedReason: "width table unavailable" });
+    expect(text("kb-term-overlay-detail")).toBe("width table unavailable");
+    set({ phase: "sleeping", caption: "asleep" });
+    expect(overlay()).toBeNull();
+  });
+
+  it("one polite announce region, mounted always, with a sentence per phase and Reconnected on recovery", async () => {
+    await mountPanel();
+    const region = q("kb-term-announce")!;
+    expect(host!.querySelectorAll('[data-testid="kb-term-announce"]')).toHaveLength(1);
+    expect(region.getAttribute("role")).toBe("status");
+    expect(region.getAttribute("aria-live")).toBe("polite");
+    expect(announce()).toBe("Connecting");
+    set({});
+    expect(q("kb-term-announce")).toBe(region);
+    expect(announce()).toBe("");
+    set({ phase: "reconnecting", caption: "reconnecting" });
+    expect(announce()).toBe("Reconnecting");
+    set({});
+    expect(announce()).toBe("Reconnected");
+    set({ phase: "ended", caption: "exited (code 1)", exitCode: 1 });
+    expect(announce()).toBe("Session ended, exited (code 1)");
+    // The overlay itself carries no live region.
+    expect(overlay()!.querySelector("[aria-live]")).toBeNull();
+  });
+
+  it("the pane's view is the same element with the same inline style in every phase (no remount, no resize)", async () => {
+    await mountPanel();
+    await profile();
+    set({});
+    const el = view();
+    const style = el.getAttribute("style");
+    for (const o of [
+      { phase: "reconnecting", caption: "reconnecting" },
+      { phase: "ended", caption: "exited", exitCode: 0 },
+      {},
+    ]) {
+      set(o);
+      expect(view()).toBe(el);
+      expect(view().getAttribute("style")).toBe(style);
+      expect(view().parentElement!.className).toBe("kb-term__pane");
+      expect(view().hidden).toBe(false);
+    }
+  });
+
+  it("the overlay sits inside the pane, beside the view, never inside the xterm host", async () => {
+    await mountPanel();
+    set({ phase: "reconnecting", caption: "reconnecting" });
+    expect(overlay()!.parentElement).toBe(view().parentElement);
+    expect(view().contains(overlay())).toBe(false);
+  });
+
+  it("the chip drops a stale owner when the stream leaves live", async () => {
+    rows = [];
+    await mountPanel();
+    await profile();
+    set({});
+    rig.reply(200, { cols: 166, rows: 43, owner: "kb-term" });
+    act(() => q("kb-term-fit")!.click());
+    await settle(10);
+    expect(text("kb-term-grid")).toBe("201x48 · web");
+    set({ phase: "reconnecting", caption: "reconnecting" });
+    expect(text("kb-term-grid")).toBe("201x48");
+    set({});
+    expect(text("kb-term-grid")).toBe("201x48");
+  });
+
+  it("the chip drops a hinted owner when the grid size changes", async () => {
+    rows = [];
+    await mountPanel();
+    await profile();
+    set({});
+    rig.reply(200, { cols: 166, rows: 43, owner: "kb-term" });
+    act(() => q("kb-term-fit")!.click());
+    await settle(10);
+    expect(text("kb-term-grid")).toBe("201x48 · web");
+    act(() => lastSession!.sink.resize(100, 30));
+    expect(text("kb-term-grid")).toBe("100x30");
   });
 });
