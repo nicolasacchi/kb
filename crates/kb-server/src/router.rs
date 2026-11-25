@@ -511,6 +511,12 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
             "/term-prompts/{project}/{item}",
             delete(terminal::prompts::delete),
         )
+        // kbt2 CMDSTORE — the command-catalogue overlay (terminal tier; the gate
+        // runs in each handler). A static path: no bare `/terms/{id}` route
+        // exists, so `commands` is never read as a terminal id.
+        .route("/terms/commands", get(terminal::command_store::get))
+        .route("/terms/commands", put(terminal::command_store::put))
+        .route("/terms/commands", delete(terminal::command_store::delete))
         .route("/sessions/beat", post(routes::sessions::beat))
         .route("/sessions/live-status", get(routes::sessions::live_status))
         // OL PRES1 — which files live agent sessions are touching. Same

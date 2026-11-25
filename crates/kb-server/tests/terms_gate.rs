@@ -2562,3 +2562,613 @@ async fn term_prompts_emit_exactly_one_text_free_event_per_durable_mutation() {
         "exactly one event per durable mutation: {raw}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// kbt2 CMDSTORE — `/api/terms/commands`, the daemon-owned command-catalogue
+// overlay. Same gate as every terminal route; the fake runner is only here so
+// `boot` has a socket, and no catalogue route may ever dial it.
+// ---------------------------------------------------------------------------
+
+const CM_DEFAULTS: &str = include_str!("../../../web/src/terminal/commands/defaults.json");
+const CM_SENTINEL: &str = "synthetic-catalogue-sentinel-9c2f";
+
+fn cm_url(addr: std::net::SocketAddr) -> String {
+    format!("{}/api/terms/commands", base_url(addr))
+}
+
+/// A browser-shaped mutation: own Origin + intent + JSON.
+fn cm_req(
+    c: &reqwest::Client,
+    method: reqwest::Method,
+    addr: std::net::SocketAddr,
+) -> reqwest::RequestBuilder {
+    c.request(method, cm_url(addr))
+        .header("Origin", origin_header(addr))
+        .header("x-kb-intent", "terminal")
+        .header("Content-Type", "application/json")
+}
+
+/// A browser-shaped same-origin GET: intent only, no Origin.
+fn cm_get(c: &reqwest::Client, addr: std::net::SocketAddr) -> reqwest::RequestBuilder {
+    c.get(cm_url(addr)).header("x-kb-intent", "terminal")
+}
+
+fn cm_put(
+    c: &reqwest::Client,
+    addr: std::net::SocketAddr,
+    if_match: &str,
+    body: &str,
+) -> reqwest::RequestBuilder {
+    cm_req(c, reqwest::Method::PUT, addr)
+        .header("If-Match", if_match)
+        .body(body.to_string())
+}
+
+fn cm_file(tmp: &tempfile::TempDir) -> Option<std::path::PathBuf> {
+    find_file(tmp.path(), "term-commands.json")
+}
+
+fn cm_routes() -> Vec<(reqwest::Method, Option<&'static str>)> {
+    vec![
+        (reqwest::Method::GET, None),
+        (
+            reqwest::Method::PUT,
+            Some("{\"hidden\":{\"claude\":[\"help\"]}}"),
+        ),
+        (reqwest::Method::DELETE, None),
+    ]
+}
+
+fn cm_etag(resp: &reqwest::Response) -> Option<String> {
+    resp.headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from)
+}
+
+fn cm_no_store(resp: &reqwest::Response) -> bool {
+    resp.headers()
+        .get("cache-control")
+        .and_then(|v| v.to_str().ok())
+        == Some("no-store")
+}
+
+fn cm_item_ids(v: &serde_json::Value) -> Vec<String> {
+    let mut out = Vec::new();
+    for (h, hv) in v["harnesses"].as_object().unwrap() {
+        for g in hv["groups"].as_array().unwrap() {
+            for it in g["items"].as_array().unwrap() {
+                out.push(format!("{h}/{}", it["id"].as_str().unwrap()));
+            }
+        }
+    }
+    out
+}
+
+#[tokio::test]
+async fn disabled_by_default_returns_bodiless_404_on_every_term_commands_route() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (tmp, addr) = boot(TerminalSection::default(), &fake, false).await;
+    let c = client();
+    for (m, body) in cm_routes() {
+        let mut req = cm_req(&c, m.clone(), addr).header("If-Match", "\"0\"");
+        if let Some(b) = body {
+            req = req.body(b.to_string());
+        }
+        let resp = req.send().await.unwrap();
+        assert_eq!(resp.status().as_u16(), 404, "{m}");
+        assert!(resp.headers().get("content-type").is_none(), "{m}");
+        assert!(cm_no_store(&resp), "{m}");
+        let (_s, text) = body_text(resp).await;
+        assert!(text.is_empty(), "{m} must be bodiless, got {text}");
+    }
+    // A disabled tier answers 404 even with no intent and no Origin, and
+    // even for an oversize body.
+    let resp = c.get(cm_url(addr)).send().await.unwrap();
+    assert_eq!(resp.status().as_u16(), 404);
+    let resp = cm_put(&c, addr, "\"0\"", &" ".repeat(70_000))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 404);
+    assert_eq!(fake.conns.load(Ordering::SeqCst), 0);
+    assert!(cm_file(&tmp).is_none(), "a disabled tier writes nothing");
+}
+
+#[tokio::test]
+async fn every_term_commands_route_enforces_intent_and_origin() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    for (m, body) in cm_routes() {
+        let build = |origin: Option<&str>, intent: Option<&str>| {
+            let mut req = c
+                .request(m.clone(), cm_url(addr))
+                .header("Content-Type", "application/json")
+                .header("If-Match", "\"0\"");
+            if let Some(o) = origin {
+                req = req.header("Origin", o);
+            }
+            if let Some(i) = intent {
+                req = req.header("x-kb-intent", i);
+            }
+            if let Some(b) = body {
+                req = req.body(b.to_string());
+            }
+            req
+        };
+        let own = origin_header(addr);
+        for intent in [None, Some("nope")] {
+            let resp = build(Some(&own), intent).send().await.unwrap();
+            assert_eq!(resp.status().as_u16(), 403, "{m} intent {intent:?}");
+            let (_s, text) = body_text(resp).await;
+            assert_problem(&text, "terminal-intent-required");
+        }
+        for origin in ["http://x.artifacts.localhost", "https://evil.example"] {
+            let resp = build(Some(origin), Some("terminal")).send().await.unwrap();
+            assert_eq!(resp.status().as_u16(), 403, "{m} origin {origin}");
+            let (_s, text) = body_text(resp).await;
+            assert_problem(&text, "origin-refused");
+        }
+        let resp = build(None, Some("terminal")).send().await.unwrap();
+        if m == reqwest::Method::GET {
+            assert_eq!(
+                resp.status().as_u16(),
+                200,
+                "GET without Origin is admitted"
+            );
+        } else {
+            assert_eq!(resp.status().as_u16(), 403, "{m} without Origin");
+            let (_s, text) = body_text(resp).await;
+            assert_problem(&text, "terminal-origin-refused");
+        }
+    }
+    let resp = cm_get(&c, addr)
+        .header("sec-fetch-site", "cross-site")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 403);
+    assert_eq!(fake.conns.load(Ordering::SeqCst), 0);
+    assert!(
+        cm_file(&tmp).is_none(),
+        "a refused request must write nothing"
+    );
+}
+
+#[tokio::test]
+async fn term_commands_refuse_token_callers_and_loopback_without_origin() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (tmp, addr) = boot(enabled_terminal(), &fake, true).await;
+    let c = client();
+    for (m, body) in cm_routes() {
+        let mut req = cm_req(&c, m.clone(), addr)
+            .header("If-Match", "\"0\"")
+            .header("Authorization", format!("Bearer {FIXTURE_TOKEN}"));
+        if let Some(b) = body {
+            req = req.body(b.to_string());
+        }
+        let resp = req.send().await.unwrap();
+        assert_eq!(resp.status().as_u16(), 403, "{m} via bearer");
+        let (_s, text) = body_text(resp).await;
+        assert_problem(&text, "terminal-token-refused");
+        let mut req = c.request(m.clone(), cm_url(addr));
+        if let Some(b) = body {
+            req = req
+                .header("Content-Type", "application/json")
+                .body(b.to_string());
+        }
+        let resp = req.send().await.unwrap();
+        assert_eq!(resp.status().as_u16(), 403, "{m} bare loopback");
+    }
+    assert!(cm_file(&tmp).is_none());
+    assert_eq!(fake.conns.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn term_commands_fresh_get_is_the_defaults_at_rev_zero() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    let resp = cm_get(&c, addr).send().await.unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    assert_eq!(cm_etag(&resp).as_deref(), Some("\"0\""));
+    assert!(cm_no_store(&resp));
+    let v: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(v["rev"], 0);
+    let defaults: serde_json::Value = serde_json::from_str(CM_DEFAULTS).unwrap();
+    let mut want = Vec::new();
+    for (h, hv) in defaults["harnesses"].as_object().unwrap() {
+        for g in hv["groups"].as_array().unwrap() {
+            for it in g["items"].as_array().unwrap() {
+                want.push(format!("{h}/{}", it["id"].as_str().unwrap()));
+            }
+        }
+    }
+    assert_eq!(cm_item_ids(&v), want, "the shipped item ids, in order");
+    for (_, hv) in v["harnesses"].as_object().unwrap() {
+        for g in hv["groups"].as_array().unwrap() {
+            assert_eq!(g["origin"], "default");
+            for it in g["items"].as_array().unwrap() {
+                assert_eq!(it["origin"], "default");
+            }
+        }
+    }
+    assert!(cm_file(&tmp).is_none(), "a GET must not create the file");
+    assert_eq!(fake.conns.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn term_commands_if_match_flow_validation_and_reset_over_http() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    let edit = serde_json::json!({
+        "harnesses": {"claude": {"groups": [{"id": "slash", "label": "Slash commands", "items": [
+            {"id": "help", "kind": "command", "label": CM_SENTINEL, "text": "/help", "mode": "paste"},
+            {"id": "reply-new", "kind": "reply", "label": "Mine", "text": "go on"}
+        ]}]}}
+    })
+    .to_string();
+
+    // PUT without If-Match: 428, nothing written.
+    let resp = cm_req(&c, reqwest::Method::PUT, addr)
+        .body(edit.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 428);
+    assert!(cm_no_store(&resp));
+    let (_s, text) = body_text(resp).await;
+    assert_problem(&text, "precondition-required");
+    assert!(cm_file(&tmp).is_none());
+    // A malformed If-Match: 400.
+    let resp = cm_put(&c, addr, "banana", &edit).send().await.unwrap();
+    assert_eq!(resp.status().as_u16(), 400);
+
+    // The current rev: 200, rev 1, `help` is now an overlay entry.
+    let resp = cm_put(&c, addr, "\"0\"", &edit).send().await.unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    assert_eq!(cm_etag(&resp).as_deref(), Some("\"1\""));
+    assert!(cm_no_store(&resp));
+    let v: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(v["rev"], 1);
+    let slash = v["harnesses"]["claude"]["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["id"] == "slash")
+        .unwrap();
+    let help = slash["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["id"] == "help")
+        .unwrap();
+    assert_eq!(help["origin"], "overlay");
+    assert_eq!(help["label"], CM_SENTINEL);
+    let compact = slash["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["id"] == "compact")
+        .unwrap();
+    assert_eq!(compact["origin"], "default");
+    let file = cm_file(&tmp).expect("overlay file");
+    let after_put = std::fs::read(&file).unwrap();
+    assert!(!file.with_extension("json.tmp").exists());
+
+    // The same rev again: 412 naming the current rev, file byte-identical.
+    let resp = cm_put(&c, addr, "\"0\"", &edit).send().await.unwrap();
+    assert_eq!(resp.status().as_u16(), 412);
+    assert_eq!(cm_etag(&resp).as_deref(), Some("\"1\""));
+    let text = resp.text().await.unwrap();
+    assert_problem(&text, "commands-stale");
+    let body: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(body["rev"], 1, "a typed rev in the 412 body");
+    assert!(
+        !text.contains(CM_SENTINEL),
+        "a problem must not echo content"
+    );
+    assert_eq!(std::fs::read(&file).unwrap(), after_put);
+    // A stale DELETE: 412, nothing removed.
+    let resp = cm_req(&c, reqwest::Method::DELETE, addr)
+        .header("If-Match", "\"0\"")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 412);
+    assert_eq!(std::fs::read(&file).unwrap(), after_put);
+
+    // An identical overlay with the current rev is a no-op: rev stays 1.
+    let resp = cm_put(&c, addr, "\"1\"", &edit).send().await.unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    assert_eq!(cm_etag(&resp).as_deref(), Some("\"1\""));
+    assert_eq!(std::fs::read(&file).unwrap(), after_put);
+
+    // An invalid item: 400 `bad-catalogue` with the ordered defect list.
+    let bad = serde_json::json!({"harnesses": {"claude": {"groups": [
+        {"id": "g", "label": "G", "items": [
+            {"id": "x", "kind": "command", "label": "X", "text": "a\nb", "mode": "run"}]}]}}})
+    .to_string();
+    let resp = cm_put(&c, addr, "\"1\"", &bad).send().await.unwrap();
+    assert_eq!(resp.status().as_u16(), 400);
+    let (_s, text) = body_text(resp).await;
+    assert_problem(&text, "bad-catalogue");
+    let body: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(body["errors"][0]["code"], "run-multiline");
+    assert_eq!(
+        body["errors"][0]["path"],
+        "/harnesses/claude/groups/0/items/0/text"
+    );
+    // Not JSON, an unknown top-level key, a bad hidden id.
+    let resp = cm_put(&c, addr, "\"1\"", "not json").send().await.unwrap();
+    assert_eq!(resp.status().as_u16(), 400);
+    let resp = cm_put(&c, addr, "\"1\"", "{\"rev\":9}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 400);
+    let resp = cm_put(&c, addr, "\"1\"", "{\"hidden\":{\"claude\":[\"BAD ID\"]}}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 400);
+    // A merge that breaks the item cap: 409, not a stored overlay.
+    let items: Vec<serde_json::Value> = (0..200)
+        .map(|i| serde_json::json!({"id": format!("n{i}"), "kind": "reply", "label": "n", "text": "n"}))
+        .collect();
+    let big = serde_json::json!({"harnesses": {"claude": {"groups": [
+        {"id": "big", "label": "Big", "items": items}]}}})
+    .to_string();
+    let resp = cm_put(&c, addr, "\"1\"", &big).send().await.unwrap();
+    assert_eq!(resp.status().as_u16(), 409);
+    let (_s, text) = body_text(resp).await;
+    assert_problem(&text, "catalogue-too-large");
+    assert_eq!(
+        std::fs::read(&file).unwrap(),
+        after_put,
+        "every refusal leaves the file"
+    );
+
+    // DELETE: defaults only, and the rev keeps climbing (never back to 0).
+    let resp = cm_req(&c, reqwest::Method::DELETE, addr)
+        .header("If-Match", "\"1\"")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    assert_eq!(cm_etag(&resp).as_deref(), Some("\"2\""));
+    let v: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(v["rev"], 2);
+    for (_, hv) in v["harnesses"].as_object().unwrap() {
+        for g in hv["groups"].as_array().unwrap() {
+            assert_eq!(g["origin"], "default");
+            for it in g["items"].as_array().unwrap() {
+                assert_eq!(it["origin"], "default");
+            }
+        }
+    }
+    let after_reset = std::fs::read(&file).unwrap();
+    // A second DELETE is a no-op: rev stays 2, bytes unchanged.
+    let resp = cm_req(&c, reqwest::Method::DELETE, addr)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    assert_eq!(cm_etag(&resp).as_deref(), Some("\"2\""));
+    assert_eq!(std::fs::read(&file).unwrap(), after_reset);
+    // A GET agrees.
+    let resp = cm_get(&c, addr).send().await.unwrap();
+    assert_eq!(cm_etag(&resp).as_deref(), Some("\"2\""));
+    assert_eq!(
+        fake.conns.load(Ordering::SeqCst),
+        0,
+        "never dials the runner"
+    );
+}
+
+#[tokio::test]
+async fn term_commands_body_cap_is_exactly_64_kib() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    let pad = |n: usize| format!("{{}}{}", " ".repeat(n - 2));
+    let resp = cm_put(&c, addr, "\"0\"", &pad(65_536))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200, "exactly the cap is accepted");
+    let resp = cm_put(&c, addr, "\"0\"", &pad(65_537))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 413);
+    assert!(cm_no_store(&resp));
+    let (_s, text) = body_text(resp).await;
+    assert_problem(&text, "payload-too-large");
+    assert!(
+        cm_file(&tmp).is_none(),
+        "an empty overlay and a 413 write nothing"
+    );
+}
+
+#[tokio::test]
+async fn term_commands_corrupt_file_is_a_typed_500_and_left_untouched() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    // Land a real file first, then corrupt it in place.
+    let resp = cm_put(&c, addr, "\"0\"", "{\"hidden\":{\"claude\":[\"help\"]}}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let file = cm_file(&tmp).unwrap();
+    std::fs::write(&file, b"{\"schema\":\"kb-term-commands/9\",\"rev\":3}").unwrap();
+    let before = std::fs::read(&file).unwrap();
+    let resp = cm_get(&c, addr).send().await.unwrap();
+    assert_eq!(resp.status().as_u16(), 500);
+    let (_s, text) = body_text(resp).await;
+    assert_problem(&text, "commands-corrupt");
+    let resp = cm_put(&c, addr, "\"3\"", "{\"hidden\":{\"claude\":[\"compact\"]}}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 500);
+    let resp = cm_req(&c, reqwest::Method::DELETE, addr)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 500);
+    assert_eq!(std::fs::read(&file).unwrap(), before, "never reset");
+}
+
+/// 20 writers, each carrying the rev it read: exactly one wins a round, the
+/// other 19 get 412, the final rev counts the winners and the file is valid.
+#[tokio::test]
+async fn twenty_concurrent_term_commands_puts_exactly_one_wins_per_round() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    let mut wins = 0u64;
+    for round in 0..3u64 {
+        let rev = cm_get(&c, addr)
+            .send()
+            .await
+            .unwrap()
+            .json::<serde_json::Value>()
+            .await
+            .unwrap()["rev"]
+            .as_u64()
+            .unwrap();
+        assert_eq!(rev, wins);
+        let mut tasks = Vec::new();
+        for i in 0..20 {
+            let c = c.clone();
+            tasks.push(tokio::spawn(async move {
+                let body = serde_json::json!({"hidden": {"claude": [format!("r{round}w{i}")]}})
+                    .to_string();
+                cm_put(&c, addr, &format!("\"{rev}\""), &body)
+                    .send()
+                    .await
+                    .unwrap()
+                    .status()
+                    .as_u16()
+            }));
+        }
+        let mut ok = 0;
+        let mut stale = 0;
+        for t in tasks {
+            match t.await.unwrap() {
+                200 => ok += 1,
+                412 => stale += 1,
+                other => panic!("unexpected status {other}"),
+            }
+        }
+        assert_eq!((ok, stale), (1, 19), "round {round}");
+        wins += 1;
+    }
+    let v: serde_json::Value = cm_get(&c, addr).send().await.unwrap().json().await.unwrap();
+    assert_eq!(v["rev"], wins);
+    let doc: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(cm_file(&tmp).unwrap()).unwrap()).unwrap();
+    assert_eq!(doc["schema"], "kb-term-commands/1");
+    assert_eq!(doc["rev"], wins);
+}
+
+/// One SSE frame per durable change, `{rev}` only and no catalogue text; a
+/// 412, a 400, a no-op PUT and a no-op DELETE emit nothing.
+#[tokio::test]
+async fn term_commands_emit_exactly_one_content_free_event_per_durable_change() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+    let mut stream = c
+        .get(format!("{}/api/events?types=term.commands", base_url(addr)))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stream.status().as_u16(), 200);
+    let collector = tokio::spawn(async move {
+        let mut raw = String::new();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(3000);
+        loop {
+            let remain = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remain.is_zero() {
+                break;
+            }
+            match tokio::time::timeout(remain, stream.chunk()).await {
+                Ok(Ok(Some(b))) => raw.push_str(&String::from_utf8_lossy(&b)),
+                _ => break,
+            }
+        }
+        raw
+    });
+
+    let edit = serde_json::json!({"harnesses": {"omp": {"groups": [
+        {"id": "mine", "label": CM_SENTINEL, "items": [
+            {"id": "m1", "kind": "reply", "label": CM_SENTINEL, "text": CM_SENTINEL}]}]}}})
+    .to_string();
+    let ok = cm_put(&c, addr, "\"0\"", &edit).send().await.unwrap(); // rev 1
+    assert_eq!(ok.status().as_u16(), 200);
+    let stale = cm_put(&c, addr, "\"0\"", &edit).send().await.unwrap(); // 412
+    assert_eq!(stale.status().as_u16(), 412);
+    let noop = cm_put(&c, addr, "\"1\"", &edit).send().await.unwrap(); // no-op
+    assert_eq!(noop.status().as_u16(), 200);
+    let bad = cm_put(&c, addr, "\"1\"", "{\"rev\":1}")
+        .send()
+        .await
+        .unwrap(); // 400
+    assert_eq!(bad.status().as_u16(), 400);
+    let del = cm_req(&c, reqwest::Method::DELETE, addr)
+        .send()
+        .await
+        .unwrap(); // rev 2
+    assert_eq!(del.status().as_u16(), 200);
+    let noop_del = cm_req(&c, reqwest::Method::DELETE, addr)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(noop_del.status().as_u16(), 200);
+
+    let raw = collector.await.unwrap();
+    assert!(
+        !raw.contains(CM_SENTINEL),
+        "catalogue text must never ride an event: {raw}"
+    );
+    let mut seen = Vec::new();
+    for frame in raw.split("\n\n") {
+        let mut event = "";
+        let mut data = "";
+        for line in frame.lines() {
+            if let Some(v) = line.strip_prefix("event:") {
+                event = v.trim();
+            } else if let Some(v) = line.strip_prefix("data:") {
+                data = v.trim();
+            }
+        }
+        if event != "term.commands" {
+            continue;
+        }
+        let body: serde_json::Value = serde_json::from_str(data).unwrap();
+        let payload = body["payload"].as_object().expect("payload object");
+        let keys: Vec<&str> = payload.keys().map(|k| k.as_str()).collect();
+        assert_eq!(keys, ["rev"]);
+        seen.push(payload["rev"].as_u64().unwrap());
+    }
+    assert_eq!(
+        seen,
+        vec![1, 2],
+        "exactly one event per durable change: {raw}"
+    );
+}

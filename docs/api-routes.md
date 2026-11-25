@@ -252,6 +252,9 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | PATCH | `/api/term-prompts/{project}/{item}` | `terminal::prompts::patch` |
 | GET | `/api/terms` | `routes::terms::list` |
 | POST | `/api/terms` | `routes::terms::launch` |
+| DELETE | `/api/terms/commands` | `terminal::command_store::delete` |
+| GET | `/api/terms/commands` | `terminal::command_store::get` |
+| PUT | `/api/terms/commands` | `terminal::command_store::put` |
 | GET | `/api/terms/media/{sha256}` | `terminal::media::serve` |
 | POST | `/api/terms/{id}/enter` | `routes::terms::enter` |
 | GET | `/api/terms/{id}/grid` | `routes::terms::grid` |
@@ -271,4 +274,4 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | GET | `/api/users` | `routes::users::list` |
 | GET | `/api/why` | `routes::sessions::why` |
 
-_261 routes._
+_264 routes._
