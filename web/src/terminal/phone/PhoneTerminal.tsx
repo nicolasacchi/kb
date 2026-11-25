@@ -14,7 +14,7 @@
 // The renderer is the DOM one on a phone (the panel skips the WebGL addon
 // when it creates the terminal on a phone-sized viewport).
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Terminal } from "@xterm/xterm";
 import { ReadView } from "./ReadView";
 import { phoneFullscreenAvailable } from "../fullscreen";
@@ -27,6 +27,10 @@ import type { PhoneMeasure } from "./fitPhone";
 import { InputDebugStrip, InputProxy, createDebugLog, type ProxyHandle } from "./InputProxy";
 import { DEFAULT_VARIANT, inputDebugEnabled, phoneDirectEnabled, readVariant, writeVariant, type ProxyVariant } from "./inputProxy";
 import { createFollowGate } from "./cursorFollow";
+import { useConfirmOptional } from "../../components/ConfirmProvider";
+import { DirectInputContext, type DirectInput } from "./directInput";
+import { createDirectLine } from "./directLine";
+import { createStickyMods } from "./stickyMods";
 import { useCursorFollow } from "./useCursorFollow";
 import { StatusChips, TermHeader } from "../TermHeader";
 import type { StatusChip } from "../statusChips";
@@ -48,7 +52,7 @@ export type PhoneTerm = ScrollTerm & {
   readonly buffer: Terminal["buffer"];
   readonly options: { fontSize?: number; disableStdin?: boolean; scrollback?: number };
   /** PHIN0: the terminal's private modes (xterm 6); absent in a fake. */
-  readonly modes?: { readonly bracketedPasteMode?: boolean };
+  readonly modes?: { readonly bracketedPasteMode?: boolean; readonly applicationCursorKeysMode?: boolean };
   open(parent: HTMLElement): void;
   scrollToBottom(): void;
   onScroll?(cb: () => void): { dispose(): void };
@@ -168,6 +172,41 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
   );
   const [variant, setVariant] = useState<ProxyVariant>(() => (directPref ? readVariant(safeLocalStorage()) : DEFAULT_VARIANT));
   const proxyHandle = useRef<ProxyHandle | null>(null);
+  // PHIN2: the sticky Ctrl latch and the typed-line mirror live as long as the view and are shared by
+  // the proxy and the key bar (through the context below), so both feed ONE ordered input path.
+  const confirm = useConfirmOptional();
+  const [mods] = useState(() => createStickyMods());
+  const [line] = useState(() => createDirectLine());
+  line.configure(harness || "", confirm);
+  const sendRef = useRef(sendInput);
+  sendRef.current = sendInput;
+  const send = useCallback(
+    (d: string): boolean => {
+      const ok = sendRef.current?.(d) ?? false;
+      if (!ok) mods.release();
+      return ok;
+    },
+    [mods],
+  );
+  const direct = useMemo<DirectInput | null>(
+    () =>
+      proxyOn
+        ? {
+            send,
+            mods,
+            appCursor: () => termRef.current?.modes?.applicationCursorKeysMode === true,
+            harness: harness || "",
+            confirm,
+            line,
+          }
+        : null,
+    [proxyOn, send, mods, harness, confirm, line],
+  );
+  // The latch never outlives what it was armed for: Read mode, a stream that is not live, unmount.
+  useEffect(() => {
+    if (!proxyOn || stream.phase !== "live") mods.release();
+  }, [proxyOn, stream.phase, mods]);
+  useEffect(() => () => mods.release(), [mods]);
   // PHIN1: the Watch box (what cursor-follow keeps the cursor inside), the proxy's focus
   // and the 2 s "the operator is panning" gate shared by the scroller and the follow.
   const [watch, setWatch] = useState<HTMLDivElement | null>(null);
@@ -423,7 +462,11 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
                 term={term}
                 viewport={viewport}
                 variant={variant}
-                send={sendInput}
+                send={send}
+                mods={mods}
+                line={line}
+                harness={harness || ""}
+                confirm={confirm}
                 handleRef={proxyHandle}
                 onFocusChange={setProxyFocused}
                 log={debugLog ?? undefined}
@@ -477,7 +520,11 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
           onWatch={() => onMode("watch")}
         />
       ) : null}
-      {renderDrive ? <div hidden={mode === "read"}>{renderDrive({ measure, fullscreen: fs.on })}</div> : null}
+      {renderDrive ? (
+        <div hidden={mode === "read"}>
+          <DirectInputContext.Provider value={direct}>{renderDrive({ measure, fullscreen: fs.on })}</DirectInputContext.Provider>
+        </div>
+      ) : null}
     </div>
   );
 }

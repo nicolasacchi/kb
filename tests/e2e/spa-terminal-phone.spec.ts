@@ -1334,3 +1334,62 @@ test.describe("PHIN1 phone cursor-follow @phone", () => {
     await expect.poll(() => num(page, "sl")).toBeGreaterThan(panned);
   });
 });
+
+// PHIN2 - the key bar rides the proxy's WS input path (sticky Ctrl, typed /bg guard) while direct
+// typing is on. Android Chrome only, like PHIN0; the pref is seeded the way PHIN0 seeds it.
+test.describe("PHIN2 phone key bar over WS @phone", () => {
+  const PROXY = "[data-kb-term-input]";
+  const typed = (stats: Stats): string =>
+    stats.inputs
+      .map((f) => JSON.parse(f) as { t: string; data?: string })
+      .filter((m) => m.t === "input")
+      .map((m) => m.data ?? "")
+      .join("");
+
+  async function directBar(page: Page, harness?: string): Promise<{ stats: Stats; keysPosts: string[] }> {
+    await page.addInitScript(() => window.localStorage.setItem("kb.term.phoneDirect", "1"));
+    const keysPosts: string[] = [];
+    page.on("request", (r) => {
+      if (r.method() === "POST" && /\/api\/terms\/[^/]+\/(keys|enter)$/.test(new URL(r.url()).pathname)) keysPosts.push(r.url());
+    });
+    const stats = await openPhone(page, { total: 500, seedLines: 500, ...(harness ? { harness } : {}) });
+    const vis = (await page.locator(".kb-term-phone__watch").boundingBox())!;
+    await page.touchscreen.tap(vis.x + 60, vis.y + 60);
+    await expect(page.locator(PROXY)).toBeFocused();
+    return { stats, keysPosts };
+  }
+
+  test.beforeEach(({}, info) => {
+    test.skip(info.project.name !== "chromium-pixel7", "Android Chrome only");
+  });
+
+  test("Ctrl latched on the bar turns the next soft-keyboard c into ^C, with no REST key call", async ({ page }) => {
+    const { stats, keysPosts } = await directBar(page);
+    const ctrl = page.locator('[data-testid="kb-drive-key-ctrl"]');
+    await ctrl.tap();
+    await expect(ctrl).toHaveAttribute("aria-pressed", "true");
+    await page.keyboard.insertText("c");
+    await expect.poll(() => typed(stats)).toBe("\x03");
+    await expect(ctrl).toHaveAttribute("aria-pressed", "false");
+    expect(keysPosts).toEqual([]);
+  });
+
+  test("Esc on the bar is a WS frame and the proxy keeps focus", async ({ page }) => {
+    const { stats, keysPosts } = await directBar(page);
+    await page.locator('[data-testid="kb-drive-key-Esc"]').tap();
+    await expect.poll(() => typed(stats)).toBe("\x1b");
+    await expect(page.locator(PROXY)).toBeFocused();
+    expect(keysPosts).toEqual([]);
+  });
+
+  test("a typed /bg then Enter on claude asks first and sends no CR until confirmed", async ({ page }) => {
+    const { stats } = await directBar(page, "claude");
+    await page.keyboard.insertText("/bg");
+    await expect.poll(() => typed(stats)).toBe("/bg");
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".confirm__go")).toBeVisible();
+    expect(typed(stats)).toBe("/bg");
+    await page.locator(".confirm__go").click();
+    await expect.poll(() => typed(stats)).toBe("/bg\r");
+  });
+});
