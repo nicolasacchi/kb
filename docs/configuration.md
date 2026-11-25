@@ -395,6 +395,10 @@ and, for text-like content the operator opts to index, an HTML-escaped
 copy. Absent the table (or with a blank `kb`), the feature has no corpus
 and is off.
 
+A file uploaded through `POST /api/terms/{id}/files` is also stored here when
+`kb` is set (a `skipped` answer says why when it is not); the upload itself
+still succeeds without it.
+
 | key | type | default | meaning |
 |---|---|---|---|
 | `kb` | string | unset (off) | Name of the `[kb.<name>]` corpus that receives the files. It must exist (a missing name is a hard config error) and its source directory must be a writable mount. |
