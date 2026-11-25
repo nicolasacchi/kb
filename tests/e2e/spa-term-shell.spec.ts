@@ -209,7 +209,7 @@ test.describe("BSTATE terminal state overlays", () => {
 
 test.describe("CMDPALETTE command palette", () => {
   test("the header Commands button opens the palette and a paste-mode entry issues exactly one paste, no Enter", async ({ page }) => {
-    const stats = await installFakeTerminal(page, { total: 300, seedLines: 100, drive: true });
+    const stats = await installFakeTerminal(page, { total: 300, seedLines: 100, drive: true, harness: "claude" });
     await admit(page);
     await page.route("**/api/terms/commands", async (route) => {
       await route.fulfill({
