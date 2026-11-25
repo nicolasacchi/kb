@@ -14,3 +14,12 @@ registerRailTab({
   badge: undefined,
   node: createElement(ConversationRail),
 });
+
+import { KnowledgeRail } from "./knowledge/KnowledgeRail";
+
+registerRailTab({
+  id: "knowledge",
+  label: "Knowledge",
+  badge: undefined,
+  node: createElement(KnowledgeRail),
+});
