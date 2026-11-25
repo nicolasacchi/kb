@@ -27407,6 +27407,201 @@ async fn view_route_rewound_turns_follow_window_fields_and_linearity() {
     assert!(lin.get("rewound_turns").is_none(), "{lin}");
 }
 
+// --- STATREG: typed `status` beats -------------------------------------------
+
+async fn post_status_beat(
+    client: &reqwest::Client,
+    addr: std::net::SocketAddr,
+    sid: &str,
+    status: serde_json::Value,
+) -> serde_json::Value {
+    let resp = client
+        .post(url(addr, "/api/sessions/beat"))
+        .header("Origin", ORIGIN)
+        .json(&serde_json::json!({
+            "v": 1, "session_id": sid, "harness": "claude", "event": "status",
+            "at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "status": status,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200, "status beat");
+    resp.json().await.unwrap()
+}
+
+async fn status_live_row(
+    client: &reqwest::Client,
+    addr: std::net::SocketAddr,
+    sid: &str,
+    bearer: bool,
+) -> Option<serde_json::Value> {
+    let mut req = client.get(url(addr, "/api/sessions/live-status"));
+    if bearer {
+        req = req
+            .header("X-Forwarded-For", "8.8.8.8")
+            .header("Authorization", format!("Bearer {FIXTURE_TOKEN}"));
+    }
+    let resp = req.send().await.unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    body["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["session_id"] == sid)
+        .cloned()
+}
+
+fn event_frames(buf: &str, kind: &str) -> usize {
+    buf.lines()
+        .filter(|l| l.strip_prefix("event:").map(str::trim) == Some(kind))
+        .count()
+}
+
+async fn events_text(client: &reqwest::Client, addr: std::net::SocketAddr) -> String {
+    use futures::StreamExt;
+    let resp = client.get(url(addr, "/api/events")).send().await.unwrap();
+    let mut buf = String::new();
+    let mut stream = resp.bytes_stream();
+    let _ = tokio::time::timeout(Duration::from_millis(800), async {
+        while let Some(chunk) = stream.next().await {
+            if let Ok(bytes) = chunk {
+                buf.push_str(&String::from_utf8_lossy(&bytes));
+            }
+        }
+    })
+    .await;
+    buf
+}
+
+#[tokio::test]
+async fn status_beat_rides_live_status_and_never_moves_state() {
+    let (_tmp, addr) = boot_with_token().await;
+    let client = reqwest::Client::new();
+    let sid = "sid-statreg-1";
+    post_beat(&client, addr, sid, "start", serde_json::json!({})).await;
+    let before = status_live_row(&client, addr, sid, false).await.unwrap();
+    assert!(before.get("status").is_none(), "{before}");
+
+    let r = post_status_beat(
+        &client,
+        addr,
+        sid,
+        serde_json::json!({
+            "model": "Sonnet 5.5", "context_pct": 42.4, "cost_usd": 1.234,
+            "permission_mode": "plan", "branch": "feat/x"
+        }),
+    )
+    .await;
+    assert_eq!(r["applied"], true, "{r}");
+    assert_eq!(r["changed"], true, "{r}");
+    assert!(r.get("state").is_none() && r.get("holder").is_none(), "{r}");
+
+    let after = status_live_row(&client, addr, sid, false).await.unwrap();
+    assert_eq!(
+        after["status"],
+        serde_json::json!({
+            "model": "Sonnet 5.5", "context_pct": 42, "cost_usd": 1.23,
+            "permission_mode": "plan", "branch": "feat/x"
+        })
+    );
+    assert_eq!(after["since_unix"], before["since_unix"]);
+    assert_eq!(after["state"], before["state"]);
+    assert_eq!(after["holder"], before["holder"]);
+
+    let buf = events_text(&client, addr).await;
+    assert_eq!(event_frames(&buf, "session.state"), 1, "{buf}");
+    assert_eq!(event_frames(&buf, "session.status"), 1, "{buf}");
+    assert!(!buf.contains("Sonnet 5.5"), "values never ride the event");
+}
+
+#[tokio::test]
+async fn status_beat_is_scrubbed_for_bearer_peers() {
+    let (_tmp, addr) = boot_with_token().await;
+    let client = reqwest::Client::new();
+    let sid = "sid-statreg-2";
+    post_beat(&client, addr, sid, "start", serde_json::json!({})).await;
+    post_status_beat(
+        &client,
+        addr,
+        sid,
+        serde_json::json!({"model": "m\u{7}bad", "context_pct": 12, "permission_mode": "bypass"}),
+    )
+    .await;
+    let row = status_live_row(&client, addr, sid, true).await.unwrap();
+    assert_eq!(
+        row["status"],
+        serde_json::json!({"context_pct": 12, "permission_mode": "bypass"}),
+        "{row}"
+    );
+}
+
+#[tokio::test]
+async fn identical_status_beat_emits_no_second_session_status_event() {
+    let (_tmp, addr) = boot_with_token().await;
+    let client = reqwest::Client::new();
+    let sid = "sid-statreg-3";
+    post_beat(&client, addr, sid, "start", serde_json::json!({})).await;
+    let st = serde_json::json!({"context_pct": 10, "branch": "main"});
+    let a = post_status_beat(&client, addr, sid, st.clone()).await;
+    let b = post_status_beat(&client, addr, sid, st).await;
+    assert_eq!(
+        (a["changed"].as_bool(), b["changed"].as_bool()),
+        (Some(true), Some(false))
+    );
+    assert_eq!(b["applied"], true);
+    let buf = events_text(&client, addr).await;
+    assert_eq!(event_frames(&buf, "session.status"), 1, "{buf}");
+}
+
+#[tokio::test]
+async fn status_beat_with_garbage_fields_is_200_and_drops_them() {
+    let (_tmp, addr) = boot_with_token().await;
+    let client = reqwest::Client::new();
+    let sid = "sid-statreg-4";
+    post_beat(&client, addr, sid, "start", serde_json::json!({})).await;
+    let r = post_status_beat(
+        &client,
+        addr,
+        sid,
+        serde_json::json!({
+            "model": "x".repeat(200), "permission_mode": "yolo", "context_pct": 7,
+            "cost_usd": "free", "branch": ["a"]
+        }),
+    )
+    .await;
+    assert_eq!(r["applied"], true, "{r}");
+    let row = status_live_row(&client, addr, sid, false).await.unwrap();
+    assert_eq!(
+        row["status"],
+        serde_json::json!({"context_pct": 7}),
+        "{row}"
+    );
+    // A non-object status is a 200 no-op.
+    let r = post_status_beat(&client, addr, sid, serde_json::json!("nope")).await;
+    assert_eq!(r["applied"], false, "{r}");
+    assert_eq!(r["changed"], false, "{r}");
+}
+
+#[tokio::test]
+async fn status_beat_for_unknown_session_is_applied_false_and_creates_no_row() {
+    let (_tmp, addr) = boot_with_token().await;
+    let client = reqwest::Client::new();
+    let r = post_status_beat(
+        &client,
+        addr,
+        "sid-statreg-ghost",
+        serde_json::json!({"context_pct": 3}),
+    )
+    .await;
+    assert_eq!(r["applied"], false, "{r}");
+    assert_eq!(r["changed"], false, "{r}");
+    assert!(status_live_row(&client, addr, "sid-statreg-ghost", false)
+        .await
+        .is_none());
+}
+
 // ── CONVPROJ — `?fields=conversation` on GET /api/sessions/{id}/view ───────
 
 /// Synthetic three-prompt transcript: prompt 1 answered an AskUserQuestion,

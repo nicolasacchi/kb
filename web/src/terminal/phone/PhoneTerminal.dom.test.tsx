@@ -465,3 +465,124 @@ describe("PhoneTerminal", () => {
     });
   });
 });
+
+// PHIN0 - direct typing behind the hidden pref. Off = the read-only view, no new DOM.
+describe("PHIN0 direct typing flag", () => {
+  const setSearch = (s: string): void => window.history.replaceState(null, "", `/${s}`);
+  afterEach(() => {
+    setSearch("");
+    window.sessionStorage.clear();
+  });
+  const proxy = (): HTMLElement | null => host!.querySelector("[data-kb-term-input]");
+  const strip = (): HTMLElement | null => host!.querySelector('[data-testid="kb-term-input-debug"]');
+
+  it("flag off: no proxy, no strip, xterm stays read-only, nothing written to storage", () => {
+    const send = vi.fn(() => true);
+    extraProps = { sendInput: send };
+    const f = fakeTerm(false);
+    mount(f.term);
+    expect(proxy()).toBeNull();
+    expect(strip()).toBeNull();
+    expect(f.term.options.disableStdin).toBe(true);
+    expect(f.textarea.readOnly).toBe(true);
+    expect(window.localStorage.getItem("kb.term.phoneDirect")).toBeNull();
+    expect(window.localStorage.getItem("kb.term.phoneVariant")).toBeNull();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("flag off: a still tap + click focuses nothing", () => {
+    extraProps = { sendInput: vi.fn(() => true) };
+    mount(fakeTerm(false).term);
+    ptr("pointerdown", 1, 20, 20);
+    ptr("pointerup", 1, 20, 20);
+    act(() => {
+      q("[data-kb-term-viewport]").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(document.activeElement?.tagName).toBe("BODY");
+  });
+
+  it("flag on without a sendInput renders nothing new", () => {
+    setSearch("?direct=1");
+    mount(fakeTerm(false).term);
+    expect(proxy()).toBeNull();
+  });
+
+  it("flag on: the proxy lives inside the viewport, xterm stays read-only, unmount removes it", () => {
+    setSearch("?direct=1");
+    extraProps = { sendInput: vi.fn(() => true) };
+    const f = fakeTerm(false);
+    mount(f.term);
+    const p = proxy();
+    expect(p).not.toBeNull();
+    expect(q("[data-kb-term-viewport]").contains(p)).toBe(true);
+    expect(f.term.options.disableStdin).toBe(true);
+    expect(f.textarea.readOnly).toBe(true);
+    expect(f.textarea.inputMode).toBe("none");
+    expect(window.localStorage.getItem("kb.term.phoneDirect")).toBe("1");
+    expect(strip()).toBeNull();
+    act(() => root!.unmount());
+    expect(document.querySelector("[data-kb-term-input]")).toBeNull();
+    root = createRoot(host!);
+  });
+
+  it("flag on: a still tap + click focuses the proxy; typing reaches sendInput", () => {
+    setSearch("?direct=1");
+    const send = vi.fn(() => true);
+    extraProps = { sendInput: send };
+    mount(fakeTerm(false).term);
+    ptr("pointerdown", 1, 20, 20);
+    ptr("pointerup", 1, 20, 20);
+    expect(document.activeElement).not.toBe(proxy());
+    act(() => {
+      q("[data-kb-term-viewport]").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(document.activeElement).toBe(proxy());
+    const el = proxy() as HTMLTextAreaElement;
+    act(() => {
+      el.value = "ok";
+      el.dispatchEvent(new InputEvent("input", { inputType: "insertText", bubbles: true }));
+    });
+    expect(send).toHaveBeenCalledWith("ok");
+  });
+
+  it("flag on: entering Read takes the proxy (and the keyboard) away", () => {
+    setSearch("?direct=1");
+    extraProps = { sendInput: vi.fn(() => true) };
+    mount(fakeTerm(false).term);
+    const el = proxy() as HTMLTextAreaElement;
+    act(() => el.focus());
+    expect(document.activeElement).toBe(el);
+    click('[data-testid="kb-term-phone-mode"]');
+    expect(proxy()).toBeNull();
+    expect(document.activeElement).not.toBe(el);
+    click('[data-testid="kb-term-phone-mode"]');
+    expect(proxy()).not.toBeNull();
+  });
+
+  it("?inputdebug=1 shows the strip; changing a variant axis remounts the proxy and remembers only the variant", () => {
+    setSearch("?direct=1&inputdebug=1");
+    const send = vi.fn(() => true);
+    extraProps = { sendInput: send };
+    mount(fakeTerm(false).term);
+    expect(strip()).not.toBeNull();
+    const before = proxy();
+    const el = before as HTMLTextAreaElement;
+    act(() => {
+      el.value = "hunter2";
+      el.dispatchEvent(new InputEvent("input", { inputType: "insertText", bubbles: true }));
+    });
+    expect(q('[data-testid="kb-term-input-debug-log"]').textContent).toContain("hunter2");
+    const sel = q('[data-testid="kb-term-input-variant-attrs"]') as HTMLSelectElement;
+    act(() => {
+      sel.value = "input-url";
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    const after = proxy();
+    expect(after).not.toBe(before);
+    expect(after?.getAttribute("type")).toBe("url");
+    expect(JSON.parse(window.localStorage.getItem("kb.term.phoneVariant")!)).toEqual({ send: "every", sentinel: "none", attrs: "input-url" });
+    const all = JSON.stringify([...Object.entries(window.localStorage), ...Object.entries(window.sessionStorage)]);
+    expect(all).not.toContain("hunter2");
+    expect(location.href).not.toContain("hunter2");
+  });
+});

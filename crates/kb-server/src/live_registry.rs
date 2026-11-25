@@ -23,7 +23,7 @@
 //! explained, and corrected" principle (§5) demands.
 
 use kb_core::sessions::live::{
-    derive_state, BackgroundCounts, Confidence, Holder, LivePolicy, LiveState,
+    derive_state, BackgroundCounts, Confidence, Holder, LivePolicy, LiveState, LiveStatusInfo,
 };
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
@@ -172,6 +172,21 @@ pub struct LiveRow {
     pub term: Option<String>,
     /// T13 — when this row became the binding for `term` (see `terminal::binding::bound_at`).
     pub term_bound_unix: Option<i64>,
+    /// STATREG — the last typed status a `status` beat merged into this row.
+    /// Display only, never a `derive_state` input. On input to a `record_beat*`
+    /// call it is ignored: the stored value is carried forward under the lock
+    /// (cleared by an `end` beat), and only [`LiveRegistry::record_status`]
+    /// writes it.
+    pub status: Option<LiveStatusInfo>,
+}
+
+/// What [`LiveRegistry::record_status`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StatusOutcome {
+    /// An existing row of the same harness took the status.
+    pub applied: bool,
+    /// The merged status differs from the previous one.
+    pub changed: bool,
 }
 
 /// The outcome of one [`LiveRegistry::record_beat`] call: the row as
@@ -379,6 +394,14 @@ impl LiveRegistry {
             row.background = None;
         }
 
+        // STATREG: the stored status is carried forward (the input value is
+        // ignored); an `end` beat clears it. Never a derive_state input.
+        row.status = if row.holder == Holder::Ended {
+            None
+        } else {
+            g.get(&row.session_id).and_then(|old| old.status.clone())
+        };
+
         // T13 — the terminal binding, inside the one lock, before the final
         // insert: a verified claim on `row.term` resolves through bound_at.
         // The event string is "start" when is_start, "end" when ended.
@@ -423,6 +446,49 @@ impl LiveRegistry {
             confidence,
             previous_state,
             previous_blocked,
+        }
+    }
+
+    /// STATREG — merge a typed status into an EXISTING row, per field (an
+    /// absent field keeps the old value). Creates no row, requires the same
+    /// harness, and touches nothing else on the row (holder, activity, lease,
+    /// `touched_unix`, blocked, touches, tool, background, term), so it can
+    /// never move the derived state. One lock, no await (#15).
+    pub fn record_status(
+        &self,
+        session_id: &str,
+        harness: &str,
+        status: LiveStatusInfo,
+    ) -> StatusOutcome {
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(row) = g.get_mut(session_id).filter(|r| r.harness == harness) else {
+            return StatusOutcome {
+                applied: false,
+                changed: false,
+            };
+        };
+        let prev = row.status.clone();
+        let mut merged = prev.clone().unwrap_or_default();
+        if status.model.is_some() {
+            merged.model = status.model;
+        }
+        if status.context_pct.is_some() {
+            merged.context_pct = status.context_pct;
+        }
+        if status.cost_usd.is_some() {
+            merged.cost_usd = status.cost_usd;
+        }
+        if status.permission_mode.is_some() {
+            merged.permission_mode = status.permission_mode;
+        }
+        if status.branch.is_some() {
+            merged.branch = status.branch;
+        }
+        let changed = prev.as_ref() != Some(&merged);
+        row.status = Some(merged);
+        StatusOutcome {
+            applied: true,
+            changed,
         }
     }
 
@@ -593,6 +659,7 @@ mod tests {
             background: None,
             term: None,
             term_bound_unix: None,
+            status: None,
         }
     }
 
@@ -1366,5 +1433,104 @@ mod tests {
         assert_eq!(out.row.term_bound_unix, None);
         assert!(reg.session_for_term("abc123", now).is_none());
         assert_eq!(reg.term_for_session("plain", now), None);
+    }
+
+    fn st(model: Option<&str>, pct: Option<u8>) -> LiveStatusInfo {
+        LiveStatusInfo {
+            model: model.map(str::to_string),
+            context_pct: pct,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn status_beat_never_changes_the_derived_state_or_lease() {
+        let with = LiveRegistry::new();
+        let without = LiveRegistry::new();
+        let t = 1_000_000;
+        let seq: Vec<(Holder, i64)> = vec![
+            (Holder::Agent, t),
+            (Holder::Human, t + 10),
+            (Holder::Agent, t + 3000),
+            (Holder::Human, t + 3010),
+            (Holder::Ended, t + 3020),
+        ];
+        for (n, (holder, at)) in seq.into_iter().enumerate() {
+            let a = with.record_beat(row("s", holder, at, at), at);
+            let b = without.record_beat(row("s", holder, at, at), at);
+            assert_eq!(a.state, b.state);
+            assert_eq!(a.confidence, b.confidence);
+            assert_eq!(a.previous_state, b.previous_state);
+            with.record_status("s", "claude", st(Some("m"), Some(n as u8)));
+            for off in [5, 5000, 100_000] {
+                let (wr, ws, wc) = with.snapshot(at + off).remove(0);
+                let (br, bs, bc) = without.snapshot(at + off).remove(0);
+                assert_eq!((ws, wc), (bs, bc));
+                assert_eq!(wr.last_activity_unix, br.last_activity_unix);
+                assert_eq!(wr.lease_secs, br.lease_secs);
+                assert_eq!(wr.touched_unix, br.touched_unix);
+                assert_eq!(wr.holder, br.holder);
+            }
+        }
+    }
+
+    #[test]
+    fn status_for_unknown_session_creates_no_row() {
+        let reg = LiveRegistry::new();
+        let o = reg.record_status("ghost", "claude", st(Some("m"), None));
+        assert_eq!(
+            o,
+            StatusOutcome {
+                applied: false,
+                changed: false
+            }
+        );
+        assert_eq!(reg.len(), 0);
+    }
+
+    #[test]
+    fn status_with_wrong_harness_is_not_applied() {
+        let reg = LiveRegistry::new();
+        reg.record_beat(row("a", Holder::Agent, 100, 100), 100);
+        let o = reg.record_status("a", "codex", st(Some("m"), None));
+        assert!(!o.applied && !o.changed);
+        assert!(stored(&reg, 100).status.is_none());
+    }
+
+    #[test]
+    fn status_merges_per_field_and_reports_changed() {
+        let reg = LiveRegistry::new();
+        reg.record_beat(row("a", Holder::Agent, 100, 100), 100);
+        let o = reg.record_status("a", "claude", st(Some("m1"), Some(10)));
+        assert!(o.applied && o.changed);
+        let o = reg.record_status("a", "claude", st(Some("m1"), Some(10)));
+        assert!(o.applied && !o.changed);
+        let o = reg.record_status("a", "claude", st(None, Some(20)));
+        assert!(o.applied && o.changed);
+        let s = stored(&reg, 100).status.unwrap();
+        assert_eq!(s.model.as_deref(), Some("m1"));
+        assert_eq!(s.context_pct, Some(20));
+    }
+
+    #[test]
+    fn status_survives_ordinary_beats_and_clears_on_end() {
+        let reg = LiveRegistry::new();
+        reg.record_beat(row("a", Holder::Agent, 100, 100), 100);
+        reg.record_status("a", "claude", st(Some("m"), Some(5)));
+        reg.record_beat(row("a", Holder::Human, 110, 110), 110);
+        reg.record_beat(row("a", Holder::Agent, 120, 120), 120);
+        assert_eq!(stored(&reg, 120).status, Some(st(Some("m"), Some(5))));
+        reg.record_beat(row("a", Holder::Ended, 130, 130), 130);
+        assert!(stored(&reg, 130).status.is_none());
+    }
+
+    #[test]
+    fn status_is_not_a_record_beat_input() {
+        let reg = LiveRegistry::new();
+        let mut r = row("a", Holder::Agent, 100, 100);
+        r.status = Some(st(Some("smuggled"), None));
+        let out = reg.record_beat(r, 100);
+        assert!(out.row.status.is_none());
+        assert!(stored(&reg, 100).status.is_none());
     }
 }
