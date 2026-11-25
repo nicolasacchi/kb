@@ -1295,10 +1295,18 @@ test.describe("PHIN1 phone cursor-follow @phone", () => {
       .poll(async () => {
         const p = await page.locator(PROXY).boundingBox();
         const w = await page.locator(WATCH).boundingBox();
-        if (!p || !w) return false;
-        return p.y >= w.y - 1 && p.y + p.height <= w.y + w.height + 1;
+        const diag = await page.evaluate(() => ({
+          mb: (document.querySelector(".kb-term-phone__wrap") as HTMLElement | null)?.style.marginBottom ?? null,
+          wrapH: document.querySelector(".kb-term-phone__wrap")?.getBoundingClientRect().height ?? null,
+          vv: window.visualViewport ? [window.visualViewport.offsetTop, window.visualViewport.height] : null,
+          inner: window.innerHeight,
+          focused: document.activeElement?.hasAttribute("data-kb-term-input") ?? false,
+        }));
+        if (!p || !w) return `missing p=${JSON.stringify(p)} w=${JSON.stringify(w)} ${JSON.stringify(diag)}`;
+        const ok = p.y >= w.y - 1 && p.y + p.height <= w.y + w.height + 1;
+        return ok ? "inside" : `outside p=${JSON.stringify(p)} w=${JSON.stringify(w)} ${JSON.stringify(diag)}`;
       })
-      .toBe(true);
+      .toBe("inside");
   });
 
   test("a cursor at a far column pans the grid to it", async ({ page }) => {
