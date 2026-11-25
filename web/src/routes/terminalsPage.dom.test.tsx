@@ -419,12 +419,14 @@ describe("deep link ?launch=1&resume= (HUBHOST, H4)", () => {
     expect(calls.filter((c) => c.url.startsWith("/api/sessions/sid1"))).toHaveLength(0);
   });
 
+  // launch/resume are consumed and `cwd` is not a hub param; `harness` is a hub
+  // FILTER param, so it is kept in the URL (and never reaches the dialog).
   it("launch=1 alone opens a blank dialog; harness and cwd in the URL are ignored", async () => {
     mount("/terminals?launch=1&harness=grok&cwd=/evil");
     expect(screen.getByTestId("launch-modal")).toBeTruthy();
     expect(screen.getByTestId("launch-new-form")).toBeTruthy();
     expect((screen.getByTestId("launch-cwd") as HTMLInputElement).value).toBe("");
-    await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/terminals"));
+    await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/terminals?harness=grok"));
     expect(posts()).toHaveLength(0);
   });
 
