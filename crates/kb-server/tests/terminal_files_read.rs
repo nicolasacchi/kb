@@ -335,7 +335,7 @@ async fn the_download_file_name_is_sanitised_whatever_the_runner_or_the_path_say
         ),
         (
             "ctl\u{1}\u{7f}x\ny.txt",
-            "attachment; filename=\"xy.txt\"; filename*=UTF-8''xy.txt",
+            "attachment; filename=\"ctlxy.txt\"; filename*=UTF-8''ctlxy.txt",
         ),
         (
             "..",
