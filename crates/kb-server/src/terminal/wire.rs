@@ -214,6 +214,46 @@ pub enum RunnerRequest {
         /// Number of raw bytes that follow the request line.
         len: u64,
     },
+    /// Open a chunked upload of any file type (FXUP). Reads no body; the
+    /// runner answers [`UploadBeginData`] and reserves `size` against the
+    /// session's `up/` quota until commit or abort.
+    UploadBegin {
+        /// Session id.
+        id: String,
+        /// The sender's file name (the runner slugs it).
+        name: String,
+        /// The mime type the client declared (informational).
+        mime: String,
+        /// Total bytes the upload will carry.
+        size: u64,
+    },
+    /// Append one chunk to an open upload. The request line is followed on
+    /// the same connection by exactly `len` raw bytes; the runner answers
+    /// [`UploadAppendData`].
+    UploadAppend {
+        /// Session id.
+        id: String,
+        /// The runner-minted upload token.
+        upload: String,
+        /// Bytes received so far (the chunk's start offset).
+        offset: u64,
+        /// Number of raw bytes that follow the request line.
+        len: u64,
+    },
+    /// Finish an upload; the runner answers [`FileData`].
+    UploadCommit {
+        /// Session id.
+        id: String,
+        /// The runner-minted upload token.
+        upload: String,
+    },
+    /// Drop an open upload (idempotent).
+    UploadAbort {
+        /// Session id.
+        id: String,
+        /// The runner-minted upload token.
+        upload: String,
+    },
     /// Tell the tap that `viewer` just typed (T18), so an OSC 52
     /// clipboard write reaches only the device that typed.
     Typed {
@@ -254,6 +294,39 @@ pub struct UploadData {
     pub mime: String,
     /// Lowercase hex sha256 of the bytes.
     pub sha256: String,
+}
+
+/// Success payload for `upload_begin`. Mirrors `kb-term`'s type.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UploadBeginData {
+    /// The runner-minted token naming the open upload.
+    pub upload: String,
+    /// Largest chunk one `upload_append` may carry.
+    pub chunk_max: u64,
+}
+
+/// Success payload for `upload_append`. Mirrors `kb-term`'s type.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UploadAppendData {
+    /// Bytes received so far.
+    pub received: u64,
+}
+
+/// Success payload for `upload_commit`. Mirrors `kb-term`'s `FileData`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileData {
+    /// Absolute path of the stored file (no spaces).
+    pub path: String,
+    /// Number of bytes stored.
+    pub bytes: u64,
+    /// The sniffed mime for a picture, else the declared one.
+    pub mime: String,
+    /// The sniffed kind: `image`, `pdf`, `text` or `opaque`.
+    pub kind: String,
+    /// Lowercase hex sha256 of the bytes.
+    pub sha256: String,
+    /// The stored file name.
+    pub name: String,
 }
 
 /// Key input for the `keys` RPC (kind-tagged; unknown fields rejected).
@@ -422,6 +495,22 @@ mod tests {
                 include_str!("../../../kb-term/tests/golden/req_upload.json"),
             ),
             (
+                "req_upload_begin",
+                include_str!("../../../kb-term/tests/golden/req_upload_begin.json"),
+            ),
+            (
+                "req_upload_append",
+                include_str!("../../../kb-term/tests/golden/req_upload_append.json"),
+            ),
+            (
+                "req_upload_commit",
+                include_str!("../../../kb-term/tests/golden/req_upload_commit.json"),
+            ),
+            (
+                "req_upload_abort",
+                include_str!("../../../kb-term/tests/golden/req_upload_abort.json"),
+            ),
+            (
                 "req_typed",
                 include_str!("../../../kb-term/tests/golden/req_typed.json"),
             ),
@@ -486,6 +575,24 @@ mod tests {
         let golden = include_str!("../../../kb-term/tests/golden/upload_data.json").trim_end();
         let data: UploadData = serde_json::from_str(golden).expect("upload_data golden");
         assert_eq!(serde_json::to_string(&data).unwrap(), golden);
+    }
+
+    #[test]
+    fn file_data_matches_the_runner_golden() {
+        let golden = include_str!("../../../kb-term/tests/golden/file_data.json").trim_end();
+        let data: FileData = serde_json::from_str(golden).expect("file_data golden");
+        assert_eq!(serde_json::to_string(&data).unwrap(), golden);
+    }
+
+    #[test]
+    fn upload_begin_and_append_data_parse_the_runner_shapes() {
+        let b: UploadBeginData = serde_json::from_str(
+            r#"{"upload":"0123456789abcdef0123456789abcdef","chunk_max":8388608}"#,
+        )
+        .unwrap();
+        assert_eq!(b.chunk_max, 8 * 1024 * 1024);
+        let a: UploadAppendData = serde_json::from_str(r#"{"received":4}"#).unwrap();
+        assert_eq!(a.received, 4);
     }
 
     #[test]

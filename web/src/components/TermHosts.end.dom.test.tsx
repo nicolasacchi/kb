@@ -103,7 +103,7 @@ describe("TerminalSlot (BSHELL: a door, End lives on the /term page)", () => {
     render(wrap(<TerminalSlot sid="s" harness="claude" lane={lane} />));
     expect(screen.queryByTestId("kb-term-end")).toBeNull();
     expect(screen.queryByTestId("mock-panel")).toBeNull();
-    expect(screen.getByTestId("kb-term-open").getAttribute("href")).toBe("/term/t1");
+    expect(screen.getByTestId("kb-term-open").getAttribute("href")).toBe("/terminals/t1");
   });
 });
 

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// BSHELL - a terminal lives at /term/:id. The Terminals list's Open is a link
+// BSHELL - a terminal lives at /terminals/:id. The Terminals list's Open is a link
 // that PUSHES the page, and the legacy `/sessions?term=<id>` deep link
 // REDIRECTS there with `replace` (Back never lands on the old URL); an invalid
 // `?term=` value is ignored.
@@ -132,7 +132,7 @@ function mountAt(entries: string[], index?: number) {
         <Probe />
         <Routes>
           <Route path="/sessions" element={<SessionsRoute />} />
-          <Route path="/term/:id" element={<div data-testid="term-page" />} />
+          <Route path="/terminals/:id" element={<div data-testid="term-page" />} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -140,13 +140,13 @@ function mountAt(entries: string[], index?: number) {
 }
 const loc = () => screen.getByTestId("loc").textContent;
 
-describe("/sessions -> /term/:id (BSHELL)", () => {
-  it("Open pushes /term/<id>; Back returns to the list", async () => {
+describe("/sessions -> /terminals/:id (BSHELL)", () => {
+  it("Open pushes /terminals/<id>; Back returns to the list", async () => {
     stubTerms();
     mountAt(["/sessions"]);
     fireEvent.click(await screen.findByTestId("term-row-open"));
     await screen.findByTestId("term-page");
-    expect(loc()).toBe("/term/t1");
+    expect(loc()).toBe("/terminals/t1");
     fireEvent.click(screen.getByTestId("back"));
     await waitFor(() => expect(loc()).toBe("/sessions"));
   });
@@ -155,7 +155,7 @@ describe("/sessions -> /term/:id (BSHELL)", () => {
     stubTerms();
     mountAt(["/sessions?q=before", "/sessions?term=t1"], 1);
     await screen.findByTestId("term-page");
-    expect(loc()).toBe("/term/t1");
+    expect(loc()).toBe("/terminals/t1");
     fireEvent.click(screen.getByTestId("back"));
     // One Back reaches the entry BEFORE the legacy link, not a leftover ?term=t1.
     await waitFor(() => expect(loc()).toBe("/sessions?q=before"));

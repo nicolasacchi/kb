@@ -3195,3 +3195,118 @@ async fn term_commands_emit_exactly_one_content_free_event_per_durable_change() 
         "exactly one event per durable change: {raw}"
     );
 }
+
+// ---------------------------------------------------------------- FXUP
+// `POST /api/terms/{id}/files` runs the same handler gate as every other
+// terminal POST, before any id, query, size or length handling.
+
+fn files_url(addr: std::net::SocketAddr, id: &str) -> String {
+    format!("{}/api/terms/{id}/files?name=a.pdf", base_url(addr))
+}
+
+#[tokio::test]
+async fn files_route_disabled_is_a_bodiless_404_even_for_an_oversize_length() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (_tmp, addr) = boot(TerminalSection::default(), &fake, false).await;
+    for len in [64usize, 33 * 1024 * 1024] {
+        let resp = client()
+            .post(files_url(addr, TERM_ID))
+            .header("Origin", origin_header(addr))
+            .header("x-kb-intent", "terminal")
+            .header("Content-Length", len.to_string())
+            .body(vec![0u8; 64])
+            .send()
+            .await;
+        // An oversize declared length with a short body may be cut by the
+        // client; only the answered case carries assertions.
+        if let Ok(resp) = resp {
+            assert_eq!(resp.status().as_u16(), 404, "len {len}");
+            assert!(resp.headers().get("content-type").is_none());
+            let (_s, text) = body_text(resp).await;
+            assert!(text.is_empty(), "bodiless, got: {text}");
+        }
+    }
+    assert_eq!(fake.conns.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn files_route_gate_matrix_refuses_before_the_runner_is_dialled() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, true).await;
+    let c = client();
+    let url = files_url(addr, TERM_ID);
+
+    // No Origin (loopback does not bypass), with and without intent.
+    let resp = c
+        .post(&url)
+        .header("x-kb-intent", "terminal")
+        .body(vec![1u8; 16])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 403);
+    let (_s, text) = body_text(resp).await;
+    assert_problem(&text, "terminal-origin-refused");
+
+    // A wrong Origin: refused (daemon allowlist or terminal gate, both end
+    // in `origin-refused`).
+    let resp = c
+        .post(&url)
+        .header("Origin", "https://evil.example")
+        .header("x-kb-intent", "terminal")
+        .body(vec![1u8; 16])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 403);
+    let (_s, text) = body_text(resp).await;
+    assert_problem(&text, "origin-refused");
+
+    // Missing and wrong intent.
+    for intent in [None, Some("nope")] {
+        let mut req = c
+            .post(&url)
+            .header("Origin", origin_header(addr))
+            .body(vec![1u8; 16]);
+        if let Some(v) = intent {
+            req = req.header("x-kb-intent", v);
+        }
+        let resp = req.send().await.unwrap();
+        assert_eq!(resp.status().as_u16(), 403, "intent {intent:?}");
+        let (_s, text) = body_text(resp).await;
+        assert_problem(&text, "terminal-intent-required");
+    }
+
+    // A token caller is refused by default.
+    let resp = c
+        .post(&url)
+        .header("Origin", origin_header(addr))
+        .header("x-kb-intent", "terminal")
+        .header("Authorization", format!("Bearer {FIXTURE_TOKEN}"))
+        .body(vec![1u8; 16])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 403);
+    let (_s, text) = body_text(resp).await;
+    assert_problem(&text, "terminal-token-refused");
+
+    // The gate runs before the id check: a refused caller never learns
+    // whether the id was valid.
+    let resp = c
+        .post(files_url(addr, "BAD_ID"))
+        .header("x-kb-intent", "terminal")
+        .body(vec![1u8; 16])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 403);
+
+    assert_eq!(
+        fake.conns.load(Ordering::SeqCst),
+        0,
+        "a refused request must never dial the runner"
+    );
+}

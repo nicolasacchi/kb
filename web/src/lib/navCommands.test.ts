@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { navCommands } from "./navCommands";
-import { resolveNavItems, type NavItem } from "./navItems";
+import { NAV_ITEMS, resolveNavItems, type NavItem } from "./navItems";
 
 const G = (() => null) as unknown as NavItem["Glyph"];
 const item = (id: string, extra: Partial<NavItem> = {}): NavItem => ({
@@ -30,5 +30,18 @@ describe("navCommands", () => {
     cmds[0].run({ navigate, onClose, kb: "k" });
     expect(navigate).toHaveBeenCalledWith("/a?kb=k");
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("Terminals has a Cmd+K row only for an admitted caller", () => {
+    const rows = (terminalAdmitted: boolean) =>
+      navCommands(resolveNavItems(NAV_ITEMS, { terminalAdmitted, blockedTerms: 0 })).map((c) => c.id);
+    expect(rows(true)).toContain("go-nav-terminals");
+    expect(rows(false)).not.toContain("go-nav-terminals");
+    const navigate = vi.fn();
+    const cmd = navCommands(resolveNavItems(NAV_ITEMS, { terminalAdmitted: true, blockedTerms: 0 })).find(
+      (c) => c.id === "go-nav-terminals",
+    )!;
+    cmd.run({ navigate, onClose: vi.fn(), kb: "k" });
+    expect(navigate).toHaveBeenCalledWith("/terminals");
   });
 });

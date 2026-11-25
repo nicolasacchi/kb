@@ -23,4 +23,15 @@ export interface TerminalPanelProps {
   onBell?: () => void;
   /** Phone sheet only: extra controls in the title bar (End, terminal switcher). */
   headerExtra?: ReactNode;
+  /**
+   * BHEAD: controls rendered immediately left of the pane verbs (the command
+   * palette button, the terminal switcher). Desktop header and phone extra row.
+   */
+  headerActions?: ReactNode;
+  /**
+   * BHEAD: text pasted ONCE into the terminal when it first reaches live, via the
+   * paste path and without Enter (one trailing newline is stripped). Never
+   * re-sent on reconnect, remount or re-render with the same text.
+   */
+  initialInput?: string;
 }

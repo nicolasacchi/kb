@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// T14/BSHELL — the slot seam (jsdom): a door to /term/<id>, never a host. The
+// T14/BSHELL — the slot seam (jsdom): a door to /terminals/<id>, never a host. The
 // mocked panel factory increments a counter when EVALUATED, so counter == 0
 // after render and click proves the slot mounts no panel and loads no chunk.
 // A child row (`via: "root"`) shows link text and no door.
@@ -43,7 +43,7 @@ describe("TerminalSlot (BSHELL door)", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("available → a link to /term/<id> beside the state word; no panel mounts and no chunk loads", () => {
+  it("available → a link to /terminals/<id> beside the state word; no panel mounts and no chunk loads", () => {
     render(
       <MemoryRouter>
         <TerminalSlot
@@ -55,7 +55,7 @@ describe("TerminalSlot (BSHELL door)", () => {
     );
     const link = screen.getByTestId("kb-term-open");
     expect(link.tagName).toBe("A");
-    expect(link.getAttribute("href")).toBe("/term/t1");
+    expect(link.getAttribute("href")).toBe("/terminals/t1");
     expect(link.textContent).toBe("Open terminal");
     expect(screen.getByTestId("kb-term-slot-state").textContent).toBe("working");
     expect(screen.getByTestId("kb-terminal-slot")).toBeTruthy();
@@ -78,12 +78,12 @@ describe("TerminalSlot (BSHELL door)", () => {
               />
             }
           />
-          <Route path="/term/:id" element={<Where />} />
+          <Route path="/terminals/:id" element={<Where />} />
         </Routes>
       </MemoryRouter>,
     );
     fireEvent.click(screen.getByTestId("kb-term-open"));
-    expect(screen.getByTestId("where").textContent).toBe("/term/t1");
+    expect(screen.getByTestId("where").textContent).toBe("/terminals/t1");
   });
 
   it("child row (via root) → link text, no door, no panel", () => {
