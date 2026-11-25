@@ -131,6 +131,7 @@ describe("BoardRail", () => {
   });
 
   it("no bound session is a calm empty state", () => {
+    detailMock.mockReturnValue({ detail: null, loading: false }); // the real hook yields no detail for a null sid
     mount(null);
     expect(screen.getByText("No session linked yet")).toBeTruthy();
     expect(fetch).not.toHaveBeenCalled();
