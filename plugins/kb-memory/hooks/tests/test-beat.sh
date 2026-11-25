@@ -1119,6 +1119,112 @@ else
   bad "turn_end/tool spawned a capture (count=$(cl_count))"
 fi
 
+# ===========================================================================
+# STATHOOK: the typed `status` event and the claude companion status.
+# ===========================================================================
+echo
+echo "== status beat (STATHOOK) =="
+st_dry() { # st_dry <stdin> [env...] -> body on stdout
+  local stdin="$1"
+  shift
+  printf '%s' "$stdin" | env KB_BEAT_DRYRUN=1 "$@" "$BEAT" claude status 2>/dev/null
+}
+S1='{"session_id":"s-st-1","cwd":"/work/demo","status":{"model":"Sonnet 5.5","context_pct":42,"cost_usd":1.234,"permission_mode":"acceptEdits","branch":"feat/x"}}'
+o="$(st_dry "$S1" KB_STATUS_NOW=1000)"
+if [ "$(jget "$o" '.event')" = status ] && [ "$(jget "$o" '.harness')" = claude ] \
+   && [ "$(jget "$o" '.session_id')" = s-st-1 ] && [ "$(jget "$o" '.v')" = 1 ] \
+   && [ "$(jget "$o" '.status | keys | join(",")')" = "branch,context_pct,cost_usd,model,permission_mode" ] \
+   && [ "$(jget "$o" '.status.permission_mode')" = accept ] && [ "$(jget "$o" '.status.cost_usd')" = 1.23 ] \
+   && [ "$(jget "$o" '.status.context_pct')" = 42 ] \
+   && [ "$(jget "$o" 'has("last_line") or has("detail") or has("model")')" = false ]; then
+  ok "claude status: body carries the typed status object only (mode mapped)"
+else
+  bad "claude status body: $o"
+fi
+
+o="$(st_dry "$S1" KB_STATUS_NOW=1002)"
+[ -z "$o" ] && ok "the same status inside the floor sends nothing (deduped)" || bad "duplicate status not deduped: $o"
+
+o="$(st_dry '{"session_id":"s-st-1","status":{"model":"Other"}}' KB_STATUS_NOW=1003)"
+[ -z "$o" ] && ok "a change inside the 5 s floor is held" || bad "change inside the floor sent: $o"
+o="$(st_dry '{"session_id":"s-st-1","status":{"model":"Other"}}' KB_STATUS_NOW=1010)"
+[ "$(jget "$o" '.status | tostring')" = '{"model":"Other"}' ] && ok "the held change goes out after the floor, carrying only the changed fields" || bad "held change: $o"
+
+o="$(st_dry "$S1" KB_BEAT_STATUS=0 KB_STATUS_NOW=9000)"
+[ -z "$o" ] && ok "KB_BEAT_STATUS=0 disables status sends" || bad "KB_BEAT_STATUS=0 still sent: $o"
+
+for mode in "default:default" "plan:plan" "bypassPermissions:bypass" "dontAsk:other" ":NONE"; do
+  raw="${mode%%:*}"
+  want="${mode##*:}"
+  o="$(st_dry "$(jq -cn --arg m "$raw" --arg s "s-pm-${raw:-empty}" '{session_id:$s,status:({model:"M"}+(if $m=="" then {permission_mode:""} else {permission_mode:$m} end))}')" KB_STATUS_NOW=1000)"
+  got="$(jget "$o" '.status.permission_mode // "NONE"')"
+  [ "$got" = "$want" ] && ok "permission_mode '${raw:-<empty>}' -> $want" || bad "permission_mode '$raw' -> $got (want $want)"
+done
+
+o="$(st_dry '{"session_id":"s-st-bad","status":{"model":"","context_pct":101,"cost_usd":-1,"branch":"   "}}' KB_STATUS_NOW=1000)"
+[ -z "$o" ] && ok "out-of-grammar fields are dropped; an emptied status sends nothing" || bad "invalid status sent: $o"
+
+# the pre-existing bodies carry no status key
+o="$(beat_dryrun claude start '{"session_id":"s-st-2","cwd":"/tmp/x"}')"
+[ "$(jget "$o" 'has("status")')" = false ] && ok "ordinary beats never carry a status key" || bad "start body has status: $o"
+
+# --- companion status on prompt / turn_end -----------------------------------
+CREPO="$TMPROOT/crepo"
+git init -q -b feat/c "$CREPO" 2>/dev/null
+export KB_BEAT_COMPANION_LOG="$TMPROOT/companion.log"
+: >"$KB_BEAT_COMPANION_LOG"
+# the log holds concatenated (pretty-printed) bodies: count/read them with jq -s
+cp_n() { jq -s 'length' "$KB_BEAT_COMPANION_LOG" 2>/dev/null || echo 0; }
+cp_wait() { local i; for i in $(seq 1 40); do [ "$(cp_n)" -ge "$1" ] && return 0; sleep 0.1; done; return 1; }
+cin() { jq -cn --arg s "$1" --arg c "$CREPO" --arg m "$2" '{session_id:$s,cwd:$c,permission_mode:$m,prompt:"p"}'; }
+
+main_out="$(beat_dryrun claude prompt "$(cin s-cp-1 plan)" KB_STATUS_NOW=1000)"
+cp_wait 1
+if [ "$(printf '%s\n' "$main_out" | jq -s 'length')" = 1 ] && [ "$(jget "$main_out" '.event')" = prompt ] \
+   && [ "$(jget "$main_out" 'has("status")')" = false ]; then
+  ok "prompt with permission_mode: stdout still carries exactly the one unchanged prompt body"
+else
+  bad "prompt body changed by the companion: $main_out"
+fi
+c1="$(jq -c -s '.[0]' "$KB_BEAT_COMPANION_LOG" 2>/dev/null)"
+if [ "$(jget "$c1" '.event')" = status ] && [ "$(jget "$c1" '.status.permission_mode')" = plan ] \
+   && [ "$(jget "$c1" '.status.branch')" = feat/c ]; then
+  ok "prompt sends one companion status {permission_mode, branch}"
+else
+  bad "companion status: $c1"
+fi
+
+: >"$KB_BEAT_COMPANION_LOG"
+beat_dryrun claude turn_end "$(cin s-cp-1 plan)" KB_STATUS_NOW=1010 >/dev/null
+sleep 0.8
+[ ! -s "$KB_BEAT_COMPANION_LOG" ] && ok "an unchanged companion is deduped through the shared marker" || bad "companion not deduped: $(cat "$KB_BEAT_COMPANION_LOG")"
+
+: >"$KB_BEAT_COMPANION_LOG"
+beat_dryrun claude turn_end "$(cin s-cp-1 acceptEdits)" KB_STATUS_NOW=1600 >/dev/null
+cp_wait 1
+[ "$(jq -r -s '.[0].status.permission_mode' "$KB_BEAT_COMPANION_LOG" 2>/dev/null)" = accept ] \
+  && ok "turn_end sends a companion when the mode changed" || bad "turn_end companion: $(cat "$KB_BEAT_COMPANION_LOG")"
+
+# the tee's marker and the companion's are ONE marker
+printf '%s' '{"session_id":"s-cp-2","status":{"model":"M","permission_mode":"plan","branch":"feat/c"}}' \
+  | env KB_BEAT_DRYRUN=1 KB_STATUS_NOW=2000 "$BEAT" claude status >/dev/null 2>&1
+: >"$KB_BEAT_COMPANION_LOG"
+beat_dryrun claude prompt "$(cin s-cp-2 plan)" KB_STATUS_NOW=2010 >/dev/null
+sleep 0.8
+[ ! -s "$KB_BEAT_COMPANION_LOG" ] && ok "a companion matching the tee's last status is skipped" || bad "companion ignored the tee marker"
+
+: >"$KB_BEAT_COMPANION_LOG"
+for ev in tool blocked unblocked end start; do
+  beat_dryrun claude "$ev" "$(cin s-cp-3 plan)" KB_STATUS_NOW=3000 >/dev/null
+done
+beat_dryrun claude prompt '{"session_id":"s-cp-4","cwd":"/tmp","prompt":"p"}' KB_STATUS_NOW=3000 >/dev/null
+beat_dryrun claude prompt "$(cin s-cp-5 plan)" KB_BEAT_STATUS=0 KB_STATUS_NOW=3000 >/dev/null
+sleep 0.8
+[ ! -s "$KB_BEAT_COMPANION_LOG" ] \
+  && ok "no companion on tool/blocked/unblocked/end/start, without a mode, or with KB_BEAT_STATUS=0" \
+  || bad "unexpected companion: $(cat "$KB_BEAT_COMPANION_LOG")"
+unset KB_BEAT_COMPANION_LOG
+
 echo
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]
