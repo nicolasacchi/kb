@@ -63,6 +63,8 @@ export interface GfxTerm {
   readonly rows: number;
   readonly cols: number;
   readonly buffer: { readonly active: GfxBuffer };
+  /** The live option bag (xterm's `options`); only the contrast ratio is touched. */
+  readonly options?: { minimumContrastRatio?: number };
   onRender(cb: () => void): GfxDisposable;
   onScroll(cb: () => void): GfxDisposable;
   onResize(cb: () => void): GfxDisposable;
@@ -177,6 +179,8 @@ export class PlaceholderRenderer {
   private readonly groups = new Map<string, GroupEl>();
   /** marker -> (run key -> decoration) */
   private readonly decos = new Map<GfxMarker, Map<string, GfxDisposable>>();
+  /** The terminal's `minimumContrastRatio` while it is suspended for placeholder runs. */
+  private contrastBase: number | undefined;
   private bg: string;
   private raf = 0;
   private verifyRaf = 0;
@@ -432,6 +436,7 @@ export class PlaceholderRenderer {
     for (const s of this.subs) s.dispose();
     this.subs.length = 0;
     this.disposeAllDecorations();
+    this.suspendContrast(false);
     this.groups.clear();
     this.overlay.remove();
   }
@@ -479,6 +484,26 @@ export class PlaceholderRenderer {
   }
 
   /**
+   * xterm's `minimumContrastRatio` also lifts a decoration's foreground
+   * override, so a placeholder glyph painted in the background colour would
+   * come back visible (and spill a pixel past the cell). Ratio 1 while any
+   * placeholder run is on screen, the configured ratio again otherwise.
+   */
+  private suspendContrast(on: boolean): void {
+    const o = this.term.options;
+    if (o === undefined) return;
+    if (on) {
+      if (this.contrastBase === undefined && o.minimumContrastRatio !== undefined && o.minimumContrastRatio !== 1) {
+        this.contrastBase = o.minimumContrastRatio;
+        o.minimumContrastRatio = 1;
+      }
+    } else if (this.contrastBase !== undefined) {
+      o.minimumContrastRatio = this.contrastBase;
+      this.contrastBase = undefined;
+    }
+  }
+
+  /**
    * The U+10EEEE glyph (and its diacritics) is painted by xterm in the id
    * colour and can spill about a pixel past the cell. Recolour exactly the
    * placeholder runs to the background through the decoration API so nothing
@@ -494,6 +519,7 @@ export class PlaceholderRenderer {
       if (last !== undefined && last.abs === c.abs && last.x0 + last.n === c.x) last.n += 1;
       else runs.push({ abs: c.abs, x0: c.x, n: 1 });
     }
+    this.suspendContrast(runs.length > 0);
     const wanted = new Map<number, Set<string>>();
     for (const r of runs) {
       let s = wanted.get(r.abs);
