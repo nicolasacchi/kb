@@ -43,7 +43,7 @@ export function rankLabel(pos: number | undefined): string {
  */
 export function flattenRef(r: Pick<MemoryRowData, "title" | "kb" | "source_relative">): string {
   const where = r.source_relative ? `${r.kb}/${r.source_relative}` : r.kb;
-  const raw = `[${rowTitle(r)}] (${where})`;
+  const raw = `[${rowTitle(r).replace(/\s+/g, " ").trim()}] (${where})`;
   const flat = raw.replace(/\s+/g, " ").trim();
   return flat.length > REF_MAX ? flat.slice(0, REF_MAX).trimEnd() : flat;
 }
