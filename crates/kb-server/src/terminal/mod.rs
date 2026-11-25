@@ -15,6 +15,7 @@ pub mod binding;
 pub mod command_store;
 pub mod commands;
 pub mod events;
+pub mod files_read;
 pub mod gate;
 pub mod keys_allow;
 pub mod media;

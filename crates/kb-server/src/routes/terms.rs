@@ -15,7 +15,8 @@
 //! `runner_err_maps_every_dash_code`): `not-found`/`no-session`/
 //! `no-viewer` → 404, `blocked`/`grid-owned`/`paste-only`/`busy`/
 //! `busy-pty`/`too-many-viewers` → 409 (with the reply's message),
-//! `multi-line-refused` → 422, `invalid-id`/`invalid-harness`/
+//! `multi-line-refused`/`not-a-file` → 422, `outside-root` → 403,
+//! `invalid-id`/`invalid-harness`/
 //! `bad-request`/`bad-viewer`/`bad-input`/`bad-key`/`bad-text`/
 //! `bad-size` → 400, `too-large` → 413, `bad-image` → 415, `tap-timeout`/`tmux-version`
 //! → 503, `tmux-failed`/`internal`/anything else → 502.
@@ -212,6 +213,16 @@ fn runner_err_parts(code: &str, message: &str) -> (StatusCode, &'static str, Str
             (StatusCode::CONFLICT, ERR_TERMINAL_CONFLICT)
         }
         "multi-line-refused" => (StatusCode::UNPROCESSABLE_ENTITY, ERR_TERMINAL_REFUSED),
+        // FXLS: a file read or listing that names something that is not a
+        // regular file / directory, or a place outside the working area.
+        "not-a-file" => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            crate::terminal::files_read::ERR_TERMINAL_NOT_A_FILE,
+        ),
+        "outside-root" => (
+            StatusCode::FORBIDDEN,
+            crate::terminal::files_read::ERR_TERMINAL_OUTSIDE_ROOT,
+        ),
         "tap-timeout" | "tmux-version" => (
             StatusCode::SERVICE_UNAVAILABLE,
             ERR_TERMINAL_RUNNER_UNAVAILABLE,
@@ -1487,6 +1498,9 @@ mod tests {
             assert_eq!(status(code), 409, "{code}");
         }
         assert_eq!(status("multi-line-refused"), 422);
+        // FXLS: a non-file path is 422, a path outside the working area 403.
+        assert_eq!(status("not-a-file"), 422);
+        assert_eq!(status("outside-root"), 403);
         assert_eq!(status("tap-timeout"), 503);
         assert_eq!(status("tmux-version"), 503);
         assert_eq!(status("tmux-failed"), 502);
