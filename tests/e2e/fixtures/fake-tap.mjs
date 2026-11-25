@@ -230,6 +230,13 @@ export async function installFakeTerminal(page, opts = {}) {
   const card = fixtureCard();
   card.summary.harness = harness;
   card.terminal.harness = harness;
+  // BSHELL: the terminal page (/term/:id) gates on the identity's terminal
+  // admission, which the card lane alone no longer stands in for.
+  await page.route("**/api/identity", async (route) => {
+    const res = await route.fetch();
+    const j = await res.json();
+    await route.fulfill({ response: res, json: { ...j, terminal_admitted: true } });
+  });
   await page.route("**/api/sessions/*/card", (route) =>
     route.fulfill({
       status: 200,

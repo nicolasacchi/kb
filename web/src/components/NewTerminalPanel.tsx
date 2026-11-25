@@ -46,7 +46,7 @@ export function NewTerminalPanel({
   pollMs?: number;
   deadlineMs?: number;
   /// FUTERMLIST: when set, a 2xx hands the new terminal to the page (which opens
-  /// it through the Terminals list and `?term=`) instead of mounting one inline.
+  /// it at `/term/<id>`) instead of mounting one inline.
   onLaunched?: (termId: string, harness: string) => void;
 }) {
   const [phase, setPhase] = useState<Phase>({ kind: "closed" });

@@ -26,7 +26,7 @@ import EmptyState from "../components/EmptyState";
 import { Icon } from "@kb/ui/icons";
 import { useCloseRequest } from "@kb/ui/useCloseRequest";
 import { NewTerminalPanel } from "../components/NewTerminalPanel";
-import { TermList, openTermParam, withTermParam } from "../components/TermList";
+import { TermList, openTermParam } from "../components/TermList";
 import { ViewBar, type Cluster, type Control } from "@kb/ui/ViewBar";
 import {
   fetchResearchRollup,
@@ -131,14 +131,15 @@ export default function SessionsRoute() {
   const folder = params.get("folder") ?? "";
   const project = params.get("project") ?? "";
   const query = params.get("q") ?? "";
-  // FUTERMLIST — the open terminal sheet is URL state (`?term=<id>`): a reload,
-  // a share and Back land on it. Opening pushes an entry (Back closes it);
-  // closing replaces it so Back never re-opens a closed sheet.
-  const openTermId = openTermParam(params.get("term"));
-  const [launched, setLaunched] = useState<{ id: string; harness: string } | undefined>(undefined);
+  // BSHELL — a terminal lives at /term/:id. The legacy `/sessions?term=<id>`
+  // deep link redirects there (replace: Back never lands on the old URL); an
+  // invalid value is ignored.
+  const legacyTermId = openTermParam(params.get("term"));
+  const navigate = useNavigate();
   const qc = useQueryClient();
-  const openTerm = (id: string) => setParams((p) => withTermParam(p, id), { replace: false });
-  const closeTerm = () => setParams((p) => withTermParam(p, null), { replace: true });
+  useEffect(() => {
+    if (legacyTermId !== null) navigate(`/term/${encodeURIComponent(legacyTermId)}`, { replace: true });
+  }, [legacyTermId, navigate]);
   // W3.A/S1 — substance triage. Per this wave's build order: hiding trivial
   // captures defaults OFF (every session shown, including un-backfilled
   // NULL-substance rows — never hidden by omission); the control below
@@ -587,19 +588,11 @@ export default function SessionsRoute() {
           admitted={identity?.terminal_admitted === true}
           sessionCwds={rows.slice(0, 50).map((r) => r.cwd)}
           onLaunched={(id, harness) => {
-            setLaunched({ id, harness });
             void qc.invalidateQueries({ queryKey: ["terms"] });
-            openTerm(id);
+            navigate(`/term/${encodeURIComponent(id)}`, { state: { launched: { id, harness } } });
           }}
         />
-        {identity?.terminal_admitted === true && (
-          <TermList
-            openId={openTermId}
-            onOpen={openTerm}
-            onCloseOpen={closeTerm}
-            launched={launched}
-          />
-        )}
+        {identity?.terminal_admitted === true && <TermList />}
         {/* OL R4 — ONE control row: View · Filters · Find, then the funnel as
             a single muted line. The View buttons are toggles (not a segment)
             so each keeps its own data-testid. */}
