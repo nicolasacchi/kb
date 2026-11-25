@@ -38,6 +38,7 @@ interface FakeTermInst {
   scrollToBottom: ReturnType<typeof vi.fn>;
   focus: ReturnType<typeof vi.fn>;
   select: ReturnType<typeof vi.fn>;
+  paste: ReturnType<typeof vi.fn>;
 }
 const terms: FakeTermInst[] = [];
 
@@ -61,6 +62,7 @@ vi.mock("@xterm/xterm", () => ({
     scrollToBottom = vi.fn();
     focus = vi.fn();
     select = vi.fn();
+    paste = vi.fn();
     get buffer() {
       const b = this.buf;
       return {
@@ -218,6 +220,9 @@ vi.mock("./session", () => ({
   },
 }));
 
+let liveRows: Array<Record<string, unknown>> = [];
+vi.mock("../hooks/useLiveSessions", () => ({ useLiveSessions: () => ({ rows: liveRows, loading: false }) }));
+
 let rows: Partial<TermRow>[] = [];
 vi.mock("./useTerms", () => ({ useTerms: () => ({ terms: rows, isLoading: false }) }));
 
@@ -236,6 +241,7 @@ vi.mock("../lib/toast", () => ({ toast: { err: vi.fn(), ok: vi.fn(), info: vi.fn
 
 import { THEME_APPLIED_EVENT } from "@kb/ui/themes/apply";
 import { TerminalPanel } from "./TerminalPanel";
+import { resetInitialInput } from "./initialInput";
 import { rigFetch, settle, type FetchRig } from "./phone/driveTestkit";
 
 // ---------------------------------------------------------------- harness
@@ -265,6 +271,8 @@ beforeEach(() => {
   probe.cellW = 0.6;
   probe.cellH = 1.32;
   rows = [{ id: "abcd1234", state: "working", cols: 201, rows: 48, grid_owner: null }];
+  liveRows = [];
+  resetInitialInput();
   readThemeMock.mockReset();
   readThemeMock.mockReturnValue({ background: "#111111" });
   roCallbacks = [];
@@ -1124,5 +1132,124 @@ describe("FUMINPANEL: the full-screen font bounds", () => {
     await settle(2);
     expect(term.options.fontSize).toBe(8);
     expect(q("kb-term-cropped")).not.toBeNull();
+  });
+});
+
+// ------------------------------------------------------------------ BHEAD
+
+describe("BHEAD: the header", () => {
+  const status = { model: "opus", context_pct: 42, branch: "feat/x", permission_mode: "plan" };
+  const liveRow = (over: Record<string, unknown> = {}) => ({ session_id: "s1", status, ...over });
+  let props: Record<string, unknown> = {};
+
+  function renderPanel(extra: Record<string, unknown> = {}): void {
+    props = { ...props, ...extra };
+    act(() =>
+      root!.render(
+        <QueryClientProvider client={new QueryClient()}>
+          <TerminalPanel termId="abcd1234" sid="s1" harness="omp" {...props} />
+        </QueryClientProvider>,
+      ),
+    );
+  }
+  async function mountWith(extra: Record<string, unknown> = {}): Promise<FakeTermInst> {
+    props = {};
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    renderPanel(extra);
+    await settle(4);
+    return profile();
+  }
+  const chipIds = (): string[] =>
+    Array.from(host!.querySelectorAll<HTMLElement>("[data-testid='kb-term-status-chips'] li")).map((e) => e.dataset.chip!);
+
+  it("title is harness plus the cwd basename; state is a dot and the phase word", async () => {
+    rows = [{ id: "abcd1234", state: "working", cols: 201, rows: 48, grid_owner: null, cwd: "/work/demo" }];
+    await mountWith();
+    expect(text("kb-term-harness")).toBe("omp");
+    expect(text("kb-term-project")).toBe("demo");
+    expect(q("kb-term-state")!.dataset.phase).toBe("connecting");
+    act(() => lastSession!.callbacks.onState(LIVE));
+    expect(q("kb-term-state")!.dataset.phase).toBe("live");
+    expect(text("kb-term-state")).toBe("live");
+  });
+
+  it("chips render from the bound session's status and vanish when it is absent", async () => {
+    liveRows = [liveRow()];
+    await mountWith();
+    expect(chipIds()).toEqual(["model", "context", "mode", "branch"]);
+    expect(text("kb-term-status-chips")).toContain("ctx 42%");
+    liveRows = [liveRow({ status: undefined })];
+    renderPanel();
+    expect(q("kb-term-status-chips")).toBeNull();
+    liveRows = [liveRow({ status: { model: "opus" } })];
+    renderPanel();
+    expect(chipIds()).toEqual(["model"]);
+  });
+
+  it("an unbound sid or another session's row shows no chips", async () => {
+    liveRows = [liveRow({ session_id: "other" })];
+    await mountWith();
+    expect(q("kb-term-status-chips")).toBeNull();
+    liveRows = [liveRow()];
+    renderPanel({ sid: "" });
+    expect(q("kb-term-status-chips")).toBeNull();
+  });
+
+  it("headerActions sit in their own slot before the pane verbs, in the bar", async () => {
+    await mountWith({ headerActions: <button data-testid="x-palette">Cmd</button> });
+    const actions = q("kb-term-actions")!;
+    expect(actions.querySelector('[data-testid="x-palette"]')).not.toBeNull();
+    const bar = q("kb-term-bar")!;
+    expect(bar.contains(actions)).toBe(true);
+    const find = q("kb-term-find-toggle")!;
+    expect(actions.compareDocumentPosition(find) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(actions.compareDocumentPosition(q("kb-term-close")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("no actions slot without headerActions; secondary readouts live in More", async () => {
+    await mountWith();
+    expect(q("kb-term-actions")).toBeNull();
+    const more = q("kb-term-more")!;
+    expect(more.contains(q("kb-term-grid"))).toBe(true);
+    expect(more.contains(q("kb-term-input"))).toBe(true);
+    expect(more.contains(q("kb-term-find-toggle"))).toBe(false);
+  });
+
+  it("initialInput is pasted once, without Enter, only after live", async () => {
+    const term = await mountWith({ initialInput: "hello\n" });
+    expect(term.paste).not.toHaveBeenCalled();
+    act(() => lastSession!.callbacks.onState(LIVE));
+    expect(term.paste).toHaveBeenCalledTimes(1);
+    expect(term.paste).toHaveBeenCalledWith("hello");
+  });
+
+  it("initialInput is never re-sent on reconnect, a re-render or a prop-identity change", async () => {
+    const term = await mountWith({ initialInput: "hello" });
+    act(() => lastSession!.callbacks.onState(LIVE));
+    act(() => lastSession!.callbacks.onState({ ...LIVE, phase: "reconnecting", caption: "reconnecting" }));
+    act(() => lastSession!.callbacks.onState(LIVE));
+    renderPanel();
+    renderPanel({ initialInput: "hel" + "lo", headerActions: <i /> });
+    expect(term.paste).toHaveBeenCalledTimes(1);
+  });
+
+  it("an unmount and a fresh mount of the same terminal does not re-send it either", async () => {
+    const term = await mountWith({ initialInput: "once" });
+    act(() => lastSession!.callbacks.onState(LIVE));
+    expect(term.paste).toHaveBeenCalledTimes(1);
+    act(() => root!.unmount());
+    host!.remove();
+    terms.length = 0;
+    const again = await mountWith({ initialInput: "once" });
+    act(() => lastSession!.callbacks.onState(LIVE));
+    expect(again.paste).not.toHaveBeenCalled();
+  });
+
+  it("no initialInput means no paste", async () => {
+    const term = await mountWith();
+    act(() => lastSession!.callbacks.onState(LIVE));
+    expect(term.paste).not.toHaveBeenCalled();
   });
 });

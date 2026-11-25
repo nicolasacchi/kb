@@ -26,7 +26,11 @@ import { applyFont, measureCellHeight, usePhoneScroller, type ScrollTerm } from 
 import type { PhoneMeasure } from "./fitPhone";
 import { InputDebugStrip, InputProxy, createDebugLog, type ProxyHandle } from "./InputProxy";
 import { DEFAULT_VARIANT, inputDebugEnabled, phoneDirectEnabled, readVariant, writeVariant, type ProxyVariant } from "./inputProxy";
+import { StatusChips, TermHeader } from "../TermHeader";
+import type { StatusChip } from "../statusChips";
 import "./phone.css";
+
+const NO_CHIPS: StatusChip[] = [];
 
 /** How long a Full tap waits for the browser to enter full screen before saying it did not. */
 const FULLSCREEN_GRACE_MS = 1500;
@@ -75,6 +79,12 @@ export interface PhoneTerminalProps {
   onClose?: () => void;
   /** FUTERMLIST: extra title-bar controls (the End button, the terminal switcher). */
   headerExtra?: ReactNode;
+  /** BHEAD: controls rendered before `headerExtra` in the extra row (palette, switcher). */
+  headerActions?: ReactNode;
+  /** BHEAD: the terminal's working-directory basename, shown beside the harness. */
+  project?: string;
+  /** BHEAD: the typed live status chips (the panel header's single home, D7). */
+  chips?: StatusChip[];
   /**
    * T18 — the Drive dock, rendered below the Watch grid (kept mounted, only
    * hidden, in Read mode so a half-typed message survives a mode switch).
@@ -121,7 +131,7 @@ function setAttr(el: HTMLElement, name: string, value: string | number | undefin
 }
 
 export function PhoneTerminal(props: PhoneTerminalProps) {
-  const { term, profile, hostRef, mode, onMode, stream, caption, onClose, renderDrive, harness, headerExtra, sendInput } = props;
+  const { term, profile, hostRef, mode, onMode, stream, caption, onClose, renderDrive, harness, headerExtra, headerActions, project, chips, sendInput } = props;
   const [wrap, setWrap] = useState<HTMLDivElement | null>(null);
   const [viewport, setViewport] = useState<HTMLDivElement | null>(null);
   const [font, setFont] = useState<number>(() => readFont());
@@ -297,11 +307,15 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
   const fontIdx = FONT_STEPS.indexOf(font as (typeof FONT_STEPS)[number]);
   return (
     <div className="kb-term-phone" data-kb-term-root="" data-testid="kb-terminal" ref={setRoot}>
-      <div className="kb-term-phone__bar">
-        <span className="kb-term-phone__title" data-testid="kb-term-phone-title">
-          {harness || "Terminal"}
-        </span>
-        <span className="kb-term-phone__spacer" />
+      <TermHeader
+        compact
+        harness={harness || "Terminal"}
+        project={project}
+        phase={stream.phase}
+        chips={chips ?? NO_CHIPS}
+        actions={headerActions}
+        extra={headerExtra}
+      >
         <button
           type="button"
           className="kb-term-phone__btn"
@@ -348,16 +362,12 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
             Close
           </button>
         ) : null}
-      </div>
-      {headerExtra ? (
-        <div className="kb-term-phone__extra" data-testid="kb-term-phone-extra">
-          {headerExtra}
-        </div>
-      ) : null}
+      </TermHeader>
       <div className="kb-term-phone__sub">
         <span className="kb-term-phone__caption" data-testid="kb-term-caption">
           {caption}
         </span>
+        <StatusChips chips={chips ?? NO_CHIPS} />
         {fsNote !== null ? (
           <span className="kb-term-phone__crop" data-testid="kb-term-phone-fs-note" role="status">
             {fsNote}
