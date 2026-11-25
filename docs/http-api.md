@@ -1702,9 +1702,57 @@ POST   /api/terms/{id}/upload               Phone Drive: store one
                                             "bytes","mime","sha256"}`,
                                             an absolute path with no
                                             spaces. kb persists no
-                                            pixels. The SPA pastes the
+                                            pixels on this door (any
+                                            file: see `/files`). The SPA pastes the
                                             path, never Enter. Unknown
                                             session 404.
+POST   /api/terms/{id}/files                Upload ANY file into the
+                                            terminal's working area (and
+                                            into kb when `[terminal.files]
+                                            kb` is set). Raw body (NOT
+                                            multipart); query
+                                            `?name=<url-encoded file name>`
+                                            (required, 1-255 bytes, no NUL)
+                                            and optional `&index=1` (inline
+                                            text content into the kb
+                                            stub). `Content-Length` is
+                                            required (400 without it,
+                                            400 for 0 bytes); more than
+                                            32 MiB is 413 before any body
+                                            byte is read. The request
+                                            `Content-Type` is only a hint
+                                            forwarded to the runner and is
+                                            never echoed or served. The body
+                                            is streamed to the runner in
+                                            chunks of at most 8 MiB (never
+                                            buffered whole); a short or
+                                            long body, a client abort or
+                                            any runner error aborts the
+                                            runner upload and stores
+                                            nothing. The session's `up/`
+                                            area holds at most 128 MiB:
+                                            over it is 413
+                                            `urn:kb:errors:terminal-upload-quota`.
+                                            Runner down 503, unreadable
+                                            reply 502. Same terminal-tier
+                                            gate as every POST above
+                                            (no loopback bypass). Answers
+                                            (`Cache-Control: no-store`,
+                                            `X-Content-Type-Options:
+                                            nosniff`) `{"path","name",
+                                            "bytes","kind","sha256",
+                                            "mime","kb"}`: `path` is the
+                                            runner's absolute path to
+                                            paste; `mime` is the runner's
+                                            sniffed type for a picture and
+                                            null otherwise; `kb` is
+                                            `{"status":"stored"|"skipped"|
+                                            "failed","reason","id",
+                                            "stub_rel","created",
+                                            "inlined"}` (`skipped`
+                                            reasons `not-configured` and
+                                            `quota`; a kb-side failure
+                                            never fails the upload).
 POST   /api/terms/{id}/paste                Body `{text, enter?, viewer?}`; decoded
                                             text over 32 KiB is 413
                                             (the cap counts bytes, so
@@ -3366,6 +3414,7 @@ GET    /api/terms                           SPA-only terminal list [terminal]
 POST   /api/terms                           SPA-only terminal launch [terminal]
 POST   /api/terms/{id}/ticket               mint single-use WS ticket [terminal]
 POST   /api/terms/{id}/upload               store a picture, answer its path [terminal]
+POST   /api/terms/{id}/files                upload any file, answer its path + kb id [terminal]
 POST   /api/terms/{id}/paste                paste text [terminal]
 POST   /api/terms/{id}/enter                mark entered [terminal]
 POST   /api/terms/{id}/keys                 send keys [terminal]
