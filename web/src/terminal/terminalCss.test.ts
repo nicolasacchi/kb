@@ -35,3 +35,25 @@ describe("terminal.css", () => {
     expect(css).not.toMatch(/\.kb-term--typing \.kb-term__view \{/);
   });
 });
+
+describe("BHEAD header css contract", () => {
+  it("the chips track shrinks and clips instead of wrapping or growing the row", () => {
+    const chips = rule(".kb-term__chips");
+    expect(chips).toContain("flex-wrap: nowrap");
+    expect(chips).toContain("overflow: hidden");
+    expect(chips).toContain("min-width: 0");
+    expect(rule(".kb-term__bar")).toContain("flex-wrap: nowrap");
+  });
+
+  it("the pulse is removed under prefers-reduced-motion", () => {
+    expect(css).toMatch(/prefers-reduced-motion: reduce\) \{\s*\.kb-term__state \.kb-term__dot \{\s*animation: none/);
+  });
+
+  it("coarse pointers get 40px header targets", () => {
+    const i = css.indexOf("@media (pointer: coarse)");
+    expect(i).toBeGreaterThan(0);
+    const block = css.slice(i);
+    expect(block).toContain("min-height: 40px");
+    expect(block).toContain("min-width: 40px");
+  });
+});

@@ -23,6 +23,7 @@ vi.mock("./session", () => ({
     kick(): void {}
   },
 }));
+vi.mock("../hooks/useLiveSessions", () => ({ useLiveSessions: () => ({ rows: [], loading: false }) }));
 vi.mock("./useTerms", () => ({ useTerms: () => ({ terms: [], isLoading: false }) }));
 vi.mock("./phone/PhoneTerminal", () => ({
   PhoneTerminal: (p: { onClose?: () => void }) => (
