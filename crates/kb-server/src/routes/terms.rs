@@ -40,6 +40,7 @@ use crate::terminal::gate::{
 use crate::terminal::keys_allow::{
     is_named_key, is_valid_viewer_id, ERR_TERMINAL_BAD_KEY, MAX_KEYS_PER_REQUEST,
 };
+use crate::terminal::launch_guard::{audit_fields, cap_refusal, count_live, emit_audit, Outcome};
 use crate::terminal::runner_client::{RunnerError, UnixRunner};
 use crate::terminal::wire::{Harness, RunnerReply, RunnerRequest};
 use axum::Extension;
@@ -108,11 +109,11 @@ fn not_found(detail: impl Into<String>) -> Response<Body> {
 /// fields — never `obj.insert` on an opaque value — and always serialize
 /// (`None` as `null`, `blocked` as `bool`), never skipped.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct TermItem {
+pub(crate) struct TermItem {
     id: String,
     pane_pid: Option<i64>,
     #[serde(flatten)]
-    extra: serde_json::Map<String, serde_json::Value>,
+    pub(crate) extra: serde_json::Map<String, serde_json::Value>,
     #[serde(default)]
     session_id: Option<String>,
     #[serde(default)]
@@ -537,7 +538,7 @@ fn free_text(value: &str) -> bool {
 /// A `handoff_from` value: non-empty, ≤ 128 bytes, first char ASCII
 /// alphanumeric, the rest alphanumeric or `.` `_` `:` `-` (a plain
 /// token; the runner and the plan re-validate it).
-fn plain_token(value: &str) -> bool {
+pub(crate) fn plain_token(value: &str) -> bool {
     let mut chars = value.chars();
     value.len() <= 128
         && chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
@@ -599,43 +600,82 @@ pub async fn launch(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Response<Body> {
+    // The gate first and unchanged: a gate refusal logs no launch audit
+    // line and never reaches the lock or the runner.
     if let Err(e) = gate(&state, &headers, &identity).await {
         return e;
     }
+    // From here every exit path writes exactly one audit line.
+    let mut facts = LaunchFacts::default();
+    let (resp, outcome) = launch_admitted(&state, &body, &mut facts).await;
+    emit_audit(&audit_fields(
+        facts.harness,
+        facts.cwd.as_deref(),
+        facts.resume_sid.as_deref(),
+        &identity.user,
+        outcome,
+    ));
+    resp
+}
+
+/// What the audit line may know about a launch request (reduced further by
+/// `audit_fields`). Prompt/handoff text is deliberately not recorded here.
+#[derive(Default)]
+struct LaunchFacts {
+    harness: Option<&'static str>,
+    cwd: Option<String>,
+    resume_sid: Option<String>,
+}
+
+async fn launch_admitted(
+    state: &Arc<KbHandles>,
+    body: &axum::body::Bytes,
+    facts: &mut LaunchFacts,
+) -> (Response<Body>, Outcome) {
+    let bad = |resp: Response<Body>| (resp, Outcome::BadRequest);
     if body.len() > MAX_BODY_BYTES {
-        return payload_too_large("request body over 256 KiB");
+        return bad(payload_too_large("request body over 256 KiB"));
     }
-    let parsed: LaunchBody = match serde_json::from_slice(&body) {
+    let parsed: LaunchBody = match serde_json::from_slice(body) {
         Ok(v) => v,
-        Err(_) => return bad_request("malformed launch body"),
+        Err(_) => return bad(bad_request("malformed launch body")),
     };
+    facts.cwd = parsed.cwd.clone();
+    facts.resume_sid = parsed.resume_sid.clone();
     let harness = match parse_harness(&parsed.harness) {
         Some(h) => h,
-        None => return bad_request("unknown harness"),
+        None => return bad(bad_request("unknown harness")),
     };
+    facts.harness = Some(harness.as_str());
     if let Some(sid) = &parsed.resume_sid {
         if !free_text(sid) {
-            return bad_request("invalid resume_sid");
+            return bad(bad_request("invalid resume_sid"));
         }
     }
     if let Some(cwd) = &parsed.cwd {
         if !free_text(cwd) || !std::path::Path::new(cwd).is_absolute() {
-            return bad_request("cwd must be an absolute path");
+            return bad(bad_request("cwd must be an absolute path"));
         }
     }
     if let Some(sid) = &parsed.handoff_from {
         if !plain_token(sid) {
-            return bad_request("invalid handoff_from");
+            return bad(bad_request("invalid handoff_from"));
         }
         if !matches!(harness, Harness::Claude | Harness::Omp) {
-            return bad_request("handoff targets claude or omp");
+            return bad(bad_request("handoff targets claude or omp"));
         }
         if parsed.resume_sid.is_some() {
-            return bad_request("handoff_from excludes resume_sid");
+            return bad(bad_request("handoff_from excludes resume_sid"));
         }
         if parsed.cwd.is_none() {
-            return bad_request("handoff_from requires an absolute cwd");
+            return bad(bad_request("handoff_from requires an absolute cwd"));
         }
+    }
+    // HUBGUARD: `max_terms = 0` refuses every launch before the lock or the
+    // runner is touched.
+    let cap = state.config.read().await.terminal.max_terms();
+    if cap == 0 {
+        return (cap_refusal(0, 0), Outcome::RefusedCap);
     }
     // `cols`/`rows` pass through as `None` when the client omits them,
     // so the runner's own defaults (120x40) apply — the relay must not
@@ -653,8 +693,28 @@ pub async fn launch(
         env: None,
         exit_keys: None,
     };
-    match call(&state, &req).await {
-        Err(e) => e,
+    // HUBGUARD: list -> count -> launch under ONE async lock, dropped before
+    // the event and the response. A runner problem on the pre-check fails
+    // closed: the launch is never attempted.
+    let launched = {
+        let _guard = state.terminals.launch_lock.lock().await;
+        let live = match call(state, &RunnerRequest::List {}).await {
+            Err(e) => return (e, Outcome::RunnerError),
+            Ok(RunnerReply::Err { code, message }) => {
+                return (runner_err(&code, &message), Outcome::RunnerError)
+            }
+            Ok(RunnerReply::Ok { data }) => match parse_term_items(&data) {
+                Some(items) => count_live(&items),
+                None => return (runner_bad_reply(), Outcome::RunnerError),
+            },
+        };
+        if live >= cap {
+            return (cap_refusal(live, cap), Outcome::RefusedCap);
+        }
+        call(state, &req).await
+    };
+    match launched {
+        Err(e) => (e, Outcome::RunnerError),
         Ok(RunnerReply::Ok { data }) => {
             // T12: the runner confirmed the launch — the SPA's
             // `term.created`. The id is the runner's; cols/rows prefer
@@ -670,7 +730,10 @@ pub async fn launch(
                 .map(str::to_string)
                 .unwrap_or_default();
             if new_id.is_empty() {
-                return runner_err("bad-reply", "runner launch confirm has no id");
+                return (
+                    runner_err("bad-reply", "runner launch confirm has no id"),
+                    Outcome::RunnerError,
+                );
             }
             // Last resort: the runner's own built-in default (120x40),
             // reached only when a confirm omits its dims and the body
@@ -683,15 +746,25 @@ pub async fn launch(
                     .unwrap_or(default)
             };
             crate::terminal::events::emit_created(
-                &state,
+                state,
                 &new_id,
                 &parsed.harness,
                 dim("cols", parsed.cols, 120),
                 dim("rows", parsed.rows, 40),
             );
-            no_store((StatusCode::CREATED, axum::Json(data)).into_response())
+            (
+                no_store((StatusCode::CREATED, axum::Json(data)).into_response()),
+                Outcome::Accepted,
+            )
         }
-        Ok(RunnerReply::Err { code, message }) => runner_err(&code, &message),
+        Ok(RunnerReply::Err { code, message }) => {
+            let outcome = if code == "bad-request" || code == "invalid-harness" {
+                Outcome::BadRequest
+            } else {
+                Outcome::RunnerError
+            };
+            (runner_err(&code, &message), outcome)
+        }
     }
 }
 

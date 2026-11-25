@@ -231,6 +231,12 @@ pub struct TerminalSection {
     /// uploads. Absent = the feature has no corpus (off).
     #[serde(default)]
     pub files: Option<TerminalFilesSection>,
+
+    /// kbt2 HUBGUARD — the most live (not-ended) terminals a launch may
+    /// leave behind. `None` = 8; `Some(0)` refuses every launch (never
+    /// "unlimited"). Read live per request.
+    #[serde(default)]
+    pub max_terms: Option<u64>,
 }
 
 /// `[terminal.files]` — the Files feature's corpus binding.
@@ -267,6 +273,15 @@ impl TerminalSection {
 
     /// Default runner RPC deadline, in seconds.
     pub const DEFAULT_RUNNER_TIMEOUT_SECS: u64 = 5;
+
+    /// Default `max_terms`: live terminals a launch may not exceed.
+    pub const DEFAULT_MAX_TERMS: u64 = 8;
+
+    /// The launch cap: configured value, 8 when unset. `Some(0)` stays 0
+    /// (every launch refused), never "unlimited".
+    pub fn max_terms(&self) -> u64 {
+        self.max_terms.unwrap_or(Self::DEFAULT_MAX_TERMS)
+    }
 
     /// Whether the terminal API answers at all. `unwrap_or(false)` — the
     /// terminal tier exists only when the operator opts in.
@@ -5108,6 +5123,23 @@ mod tests {
         assert_eq!(back.ticket_ttl_secs(), 45);
         assert_eq!(back.runner_timeout_secs(), 9);
         assert!(!back.refuse_token_callers());
+    }
+
+    #[test]
+    fn max_terms_defaults_to_eight_and_zero_is_not_unlimited() {
+        assert_eq!(TerminalSection::default().max_terms(), 8);
+        assert_eq!(TerminalSection::DEFAULT_MAX_TERMS, 8);
+        let zero = TerminalSection {
+            max_terms: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(zero.max_terms(), 0);
+        let c: KbConfig = toml::from_str("[terminal]\nmax_terms = 3\n").unwrap();
+        assert_eq!(c.terminal.max_terms(), 3);
+        let back: TerminalSection = toml::from_str(&toml::to_string(&c.terminal).unwrap()).unwrap();
+        assert_eq!(back.max_terms(), 3);
+        let absent: KbConfig = toml::from_str("[terminal]\nenabled = true\n").unwrap();
+        assert_eq!(absent.terminal.max_terms(), 8);
     }
 
     #[test]
