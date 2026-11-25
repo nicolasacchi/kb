@@ -1289,7 +1289,7 @@ test.describe("PHIN1 phone cursor-follow @phone", () => {
     // The cursor is parked on screen row 5, which a short viewport clips off the top.
     await directWith(page, "\x1b[5;1Hab");
     await tapGrid(page);
-    await page.setViewportSize({ width: 412, height: 420 });
+    await page.setViewportSize({ width: 412, height: 640 }) // the page chrome alone needs ~420: shorter collapses the Watch box to 0;
     await page.keyboard.insertText("x");
     await expect
       .poll(async () => {
@@ -1303,7 +1303,7 @@ test.describe("PHIN1 phone cursor-follow @phone", () => {
           focused: document.activeElement?.hasAttribute("data-kb-term-input") ?? false,
         }));
         if (!p || !w) return `missing p=${JSON.stringify(p)} w=${JSON.stringify(w)} ${JSON.stringify(diag)}`;
-        const ok = p.y >= w.y - 1 && p.y + p.height <= w.y + w.height + 1;
+        const ok = w.height > 40 && p.y >= w.y - 1 && p.y + p.height <= w.y + w.height + 1;
         return ok ? "inside" : `outside p=${JSON.stringify(p)} w=${JSON.stringify(w)} ${JSON.stringify(diag)}`;
       })
       .toBe("inside");
