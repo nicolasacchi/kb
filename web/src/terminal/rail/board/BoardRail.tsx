@@ -101,7 +101,7 @@ function Section({
 
 export function BoardRail(): ReactElement {
   const { sid } = useTermRail();
-  const { detail } = useSessionDetail(sid ?? null);
+  const { detail, loading: detailLoading } = useSessionDetail(sid ?? null);
   const slug = detail?.project_slug ?? "";
   const { board, loading, error } = useSlateBoard(slug);
   const phone = usePhonePanel();
@@ -129,6 +129,8 @@ export function BoardRail(): ReactElement {
     wrap(<StateCard kind="empty" size="inline" title={title} reason={reason} />);
 
   if (!sid) return empty("No session linked yet", "This terminal has no bound session; it links on the first harness beat.");
+  if (detailLoading) return wrap(<StateCard kind="loading" size="inline" title="Loading the session" />);
+  if (!detail) return wrap(<StateCard kind="degraded" size="inline" title="Could not load the session" reason="The board needs the session's project." />);
   if (!slug) return empty("No slate for this project");
   if (loading) return wrap(<StateCard kind="loading" size="inline" title="Loading the board" />);
   if (!board) {

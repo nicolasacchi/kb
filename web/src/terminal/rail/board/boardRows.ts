@@ -84,14 +84,14 @@ export function freshness(cards: readonly SlateBoardCard[]): string {
   if (cards.length === 0) return "no posts";
   const age = Math.min(...cards.map((c) => c.age_secs));
   const label = ageLabel(age);
-  return label ? `newest ${label} ago` : "no posts";
+  return label ? `newest ${label} ago` : "age unknown";
 }
 
 export function boardAsOf(board: SlateBoardResponse): string {
   return `board as of seq ${board.head_seq}`;
 }
 
-/** True when a slate read failed because the slate does not exist (the 404 problem), not because the daemon is unreachable. */
+/** True when a slate read failed because the slate does not exist (the server's `slate-unknown` 404 problem; a bare 404 or any other text is a failure, not an empty slate), not because the daemon is unreachable. */
 export function isNoSlate(error: string | null): boolean {
-  return error !== null && /slate-unknown|\b404\b|not found/i.test(error);
+  return error !== null && /slate-unknown/.test(error);
 }

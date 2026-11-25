@@ -68,6 +68,7 @@ describe("freshness words", () => {
     expect(freshness([])).toBe("no posts");
     expect(freshness([card(1, "take", { age_secs: 600 }), card(2, "take", { age_secs: 240 })])).toBe("newest 4m ago");
     expect(freshness([card(1, "take", { age_secs: 30 })])).toBe("newest 30s ago");
+    expect(freshness([card(1, "take", { age_secs: -5 })])).toBe("age unknown");
   });
   it("words the head seq", () => {
     expect(boardAsOf(board({}, 42))).toBe("board as of seq 42");
@@ -77,7 +78,9 @@ describe("freshness words", () => {
 describe("isNoSlate", () => {
   it("recognises the 404 problem and nothing else", () => {
     expect(isNoSlate("SlateApiError: Not Found: slate-unknown: no slate \"x\"")).toBe(true);
-    expect(isNoSlate("404 Not Found")).toBe(true);
+    expect(isNoSlate("404 Not Found")).toBe(false);
+    expect(isNoSlate("Error: upstream said 404 for slate-unknownish")).toBe(true);
+    expect(isNoSlate("Bad Gateway: proxy returned 404")).toBe(false);
     expect(isNoSlate("TypeError: Failed to fetch")).toBe(false);
     expect(isNoSlate(null)).toBe(false);
   });

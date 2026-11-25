@@ -147,6 +147,19 @@ describe("BoardRail", () => {
     expect(await screen.findByText("No slate for this project")).toBeTruthy();
   });
 
+  it("while the session detail loads or failed, no empty-slate card is shown", async () => {
+    detailMock.mockReturnValue({ detail: null, loading: true });
+    mount();
+    expect(screen.getByText("Loading the session")).toBeTruthy();
+    expect(screen.queryByText("No slate for this project")).toBeNull();
+    cleanup();
+    detailMock.mockReturnValue({ detail: null, loading: false });
+    mount();
+    expect(screen.getByText("Could not load the session")).toBeTruthy();
+    expect(screen.queryByText("No slate for this project")).toBeNull();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("a daemon failure is not dressed up as an empty slate", async () => {
     boardReply = problem(500, "x", "Internal Server Error");
     mount();
@@ -188,6 +201,10 @@ describe("BoardRail", () => {
     fireEvent.change(screen.getByTestId("board-answer-input"), { target: { value: "my answer" } });
     fireEvent.click(screen.getByTestId("board-answer-send"));
     await waitFor(() => expect(toastErr).toHaveBeenCalled());
+    // the rail never retries with `anyway`: exactly one POST, and the refusal text was shown
+    expect(posts).toHaveLength(1);
+    expect(JSON.stringify(posts[0].body)).not.toContain("anyway");
+    expect(toastErr.mock.calls.map((c) => String(c[0])).join(" ")).toContain("x");
     expect((screen.getByTestId("board-answer-input") as HTMLInputElement).value).toBe("my answer");
   });
 
