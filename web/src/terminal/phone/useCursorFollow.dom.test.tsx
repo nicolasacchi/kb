@@ -25,8 +25,6 @@ function flushFrame(): number {
 }
 
 // 100 columns x 20 rows of 10 x 20 px cells, drawn at (0, 100); the Watch box is (0,100)-(400,500).
-const CELL_W = 10;
-const CELL_H = 20;
 function geometry() {
   return { cursorX: 5, cursorY: 2, vvHeight: 400, vvTop: 0 };
 }
