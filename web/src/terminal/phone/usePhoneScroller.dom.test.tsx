@@ -392,3 +392,85 @@ describe("PHIN0 tap to focus", () => {
     expect(focus).toHaveBeenCalledTimes(1);
   });
 });
+
+// PHIN1 - onManual tells the cursor-follow that the operator is moving the view by hand.
+describe("PHIN1 onManual", () => {
+  function ManualHarness(p: { term: ScrollTerm; onManual?: () => void }) {
+    const [wrap, setWrap] = useState<HTMLDivElement | null>(null);
+    const [vp, setVp] = useState<HTMLDivElement | null>(null);
+    usePhoneScroller({ term: p.term, wrap, viewport: vp, onLongPress: () => {}, ...(p.onManual ? { onManual: p.onManual } : {}) });
+    return createElement(
+      "div",
+      { className: "watch" },
+      createElement("div", { ref: setWrap }, createElement("div", { "data-kb-term-viewport": "", ref: setVp })),
+    );
+  }
+
+  function mountManual(onManual?: () => void) {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    act(() => root!.render(createElement(ManualHarness, { term: fakeTerm().term, ...(onManual ? { onManual } : {}) })));
+  }
+
+  it("a vertical drag calls it once the axis locks, not before", () => {
+    const manual = vi.fn();
+    mountManual(manual);
+    ptr("pointerdown", 1, px(3), py(5));
+    ptr("pointermove", 1, px(3), py(5) + 2);
+    expect(manual).not.toHaveBeenCalled();
+    ptr("pointermove", 1, px(3), py(5) + 40);
+    expect(manual).toHaveBeenCalled();
+  });
+
+  it("a horizontal drag calls it", () => {
+    const manual = vi.fn();
+    mountManual(manual);
+    ptr("pointerdown", 1, px(3), py(5));
+    ptr("pointermove", 1, px(3) + 40, py(5));
+    expect(manual).toHaveBeenCalled();
+  });
+
+  it("a pinch calls it", () => {
+    const manual = vi.fn();
+    mountManual(manual);
+    ptr("pointerdown", 1, px(7), py(0));
+    ptr("pointerdown", 2, px(9), py(0));
+    expect(manual).not.toHaveBeenCalled();
+    ptr("pointermove", 2, px(30), py(0));
+    expect(manual).toHaveBeenCalled();
+  });
+
+  it("a still tap never calls it", () => {
+    const manual = vi.fn();
+    mountManual(manual);
+    tap(3, 1);
+    tap(3, 1, 300);
+    expect(manual).not.toHaveBeenCalled();
+  });
+
+  it("a long press never calls it", () => {
+    vi.useFakeTimers();
+    const manual = vi.fn();
+    mountManual(manual);
+    ptr("pointerdown", 1, px(3), py(1));
+    act(() => {
+      vi.advanceTimersByTime(700);
+    });
+    clock += 700;
+    ptr("pointerup", 1, px(3), py(1));
+    expect(manual).not.toHaveBeenCalled();
+  });
+
+  it("without onManual a drag and a pinch still work (the scroller is unchanged)", () => {
+    mountManual();
+    ptr("pointerdown", 1, px(3), py(5));
+    ptr("pointermove", 1, px(3), py(5) + 40);
+    ptr("pointerup", 1, px(3), py(5) + 40);
+    ptr("pointerdown", 1, px(7), py(0));
+    ptr("pointerdown", 2, px(9), py(0));
+    ptr("pointermove", 2, px(30), py(0));
+    ptr("pointerup", 2, px(30), py(0));
+    ptr("pointerup", 1, px(7), py(0));
+  });
+});

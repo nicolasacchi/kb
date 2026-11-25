@@ -26,8 +26,11 @@ import { applyFont, measureCellHeight, usePhoneScroller, type ScrollTerm } from 
 import type { PhoneMeasure } from "./fitPhone";
 import { InputDebugStrip, InputProxy, createDebugLog, type ProxyHandle } from "./InputProxy";
 import { DEFAULT_VARIANT, inputDebugEnabled, phoneDirectEnabled, readVariant, writeVariant, type ProxyVariant } from "./inputProxy";
+import { createFollowGate } from "./cursorFollow";
+import { useCursorFollow } from "./useCursorFollow";
 import { StatusChips, TermHeader } from "../TermHeader";
 import type { StatusChip } from "../statusChips";
+import { TermStateOverlay } from "../TermStateOverlay";
 import "./phone.css";
 
 const NO_CHIPS: StatusChip[] = [];
@@ -51,6 +54,11 @@ export type PhoneTerm = ScrollTerm & {
   onScroll?(cb: () => void): { dispose(): void };
   onWriteParsed?(cb: () => void): { dispose(): void };
   refresh?(start: number, end: number): void;
+  /** PHIN1: cursor-follow also listens to the cursor moving (xterm 6 has it; a fake may not). */
+  onCursorMove?(cb: () => void): { dispose(): void };
+  /** PHIN1: the terminal's own selection, for the proxy's Ctrl/Cmd+C. */
+  hasSelection?(): boolean;
+  getSelection?(): string;
 };
 
 export interface PhoneProfile {
@@ -63,6 +71,10 @@ export interface PhoneStream {
   applied: number;
   resets: number;
   gaps: number;
+  /** BSTATE: the state overlay's words (the panel passes its whole session state). */
+  exitCode?: number | null;
+  blockedReason?: string | null;
+  attempt?: number;
 }
 
 export interface PhoneTerminalProps {
@@ -77,6 +89,12 @@ export interface PhoneTerminalProps {
   stream: PhoneStream;
   caption: string;
   onClose?: () => void;
+  /** BSTATE: "Reconnect now" on the state overlay (the session's kick). */
+  onReconnect?: () => void;
+  /** BSTATE: true until the stream has been live once (first connect shows the connecting card). */
+  overlayFirstConnect?: boolean;
+  /** BSTATE: the sentence the one polite status region says (the panel derives it). */
+  announce?: string;
   /** FUTERMLIST: extra title-bar controls (the End button, the terminal switcher). */
   headerExtra?: ReactNode;
   /** BHEAD: controls rendered before `headerExtra` in the extra row (palette, switcher). */
@@ -131,7 +149,7 @@ function setAttr(el: HTMLElement, name: string, value: string | number | undefin
 }
 
 export function PhoneTerminal(props: PhoneTerminalProps) {
-  const { term, profile, hostRef, mode, onMode, stream, caption, onClose, renderDrive, harness, headerExtra, headerActions, project, chips, sendInput } = props;
+  const { term, profile, hostRef, mode, onMode, stream, caption, onClose, renderDrive, harness, headerExtra, headerActions, project, chips, sendInput, onReconnect, overlayFirstConnect, announce } = props;
   const [wrap, setWrap] = useState<HTMLDivElement | null>(null);
   const [viewport, setViewport] = useState<HTMLDivElement | null>(null);
   const [font, setFont] = useState<number>(() => readFont());
@@ -150,6 +168,11 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
   );
   const [variant, setVariant] = useState<ProxyVariant>(() => (directPref ? readVariant(safeLocalStorage()) : DEFAULT_VARIANT));
   const proxyHandle = useRef<ProxyHandle | null>(null);
+  // PHIN1: the Watch box (what cursor-follow keeps the cursor inside), the proxy's focus
+  // and the 2 s "the operator is panning" gate shared by the scroller and the follow.
+  const [watch, setWatch] = useState<HTMLDivElement | null>(null);
+  const [proxyFocused, setProxyFocused] = useState(false);
+  const [followGate] = useState(() => createFollowGate({ now: () => performance.now() }));
   // FUTERMFULL — element fullscreen of the sheet's root, only where the browser
   // has it (Android Chrome). No overlay here (the 100dvh sheet is the maximum)
   // and no Escape lock (the phone has no Esc key to hold).
@@ -257,8 +280,11 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
     onLongPress: () => onMode("read"),
     onActivity: refresh,
     onFont: setFont,
-    ...(proxyOn ? { onTapFocus: () => proxyHandle.current?.focus() } : {}),
+    ...(proxyOn ? { onTapFocus: () => proxyHandle.current?.focus(), onManual: () => followGate.noteManual() } : {}),
   });
+
+  // PHIN1: with direct typing on and the proxy focused, the cursor cell stays visible above the keyboard.
+  useCursorFollow({ term, wrap, watch, enabled: proxyOn && proxyFocused, gate: followGate });
 
   // Apply the chosen font to the grid (Watch only: a hidden xterm cannot
   // measure its cells) and re-measure the wrapper height.
@@ -379,7 +405,7 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
           </span>
         ) : null}
       </div>
-      <div className="kb-term-phone__watch" hidden={mode === "read"}>
+      <div className="kb-term-phone__watch" hidden={mode === "read"} ref={setWatch}>
         <div className="kb-term-phone__wrap" ref={setWrap}>
           <div
             className="kb-term-phone__viewport"
@@ -399,6 +425,7 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
                 variant={variant}
                 send={sendInput}
                 handleRef={proxyHandle}
+                onFocusChange={setProxyFocused}
                 log={debugLog ?? undefined}
               />
             ) : null}
@@ -417,6 +444,20 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
             Jump to latest
           </button>
         ) : null}
+        <div className="kb-term__announce" role="status" aria-live="polite" data-testid="kb-term-announce">
+          {announce ?? ""}
+        </div>
+        <TermStateOverlay
+          phase={stream.phase}
+          caption={caption}
+          exitCode={stream.exitCode ?? null}
+          blockedReason={stream.blockedReason ?? null}
+          attempt={stream.attempt ?? 0}
+          firstConnect={overlayFirstConnect ?? true}
+          onReconnect={onReconnect}
+          onBack={onClose}
+          compact
+        />
       </div>
       {proxyOn && debugLog ? (
         <InputDebugStrip

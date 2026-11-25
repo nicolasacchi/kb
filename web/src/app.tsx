@@ -21,6 +21,7 @@ import StatusPill from "./components/StatusPill";
 import Cmdk from "./components/Cmdk";
 import CaptureSheet from "./components/CaptureSheet";
 import Toasts from "./components/Toasts";
+import NotifyHost from "./terminal/notify/NotifyHost";
 import ConfirmProvider from "./components/ConfirmProvider";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { useIdentity } from "./hooks/useArtifactHost";
@@ -484,6 +485,7 @@ export default function App() {
         )}
       </NavSheet>
       <Toasts />
+      <NotifyHost />
     </div>
     </ConfirmProvider>
     </QueryStatsProvider>

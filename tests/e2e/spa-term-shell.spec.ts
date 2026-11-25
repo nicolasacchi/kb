@@ -162,3 +162,47 @@ test.describe("BHEAD terminal header", () => {
     });
   });
 });
+
+test.describe("BSTATE terminal state overlays", () => {
+  test("reconnecting shows a card over an unchanged pane box, announces politely and clears on recovery", async ({ page }) => {
+    const stats = await installFakeTerminal(page, { total: 300, seedLines: 100 });
+    await admit(page);
+    await page.goto(`${BASE}/term/${TERM_ID}`);
+    await expectLive(page);
+    const view = page.locator(VIEW);
+    const announce = page.locator('[data-testid="kb-term-announce"]');
+    await expect(page.locator('[data-testid="kb-term-overlay"]')).toHaveCount(0);
+    await expect(announce).toHaveAttribute("aria-live", "polite");
+    const before = (await view.boundingBox())!;
+    stats.refuse(503);
+    stats.dropNow();
+    const card = page.locator('[data-testid="kb-term-overlay"][data-overlay="reconnecting"]');
+    await expect(card).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('[data-testid="kb-term-overlay-action"]')).toHaveText("Reconnect now");
+    await expect(announce).toHaveText("Reconnecting");
+    const during = (await view.boundingBox())!;
+    expect(during).toEqual(before);
+    // The card sits inside the pane's box, not outside it.
+    const box = (await card.boundingBox())!;
+    expect(box.x).toBeGreaterThanOrEqual(before.x - 1);
+    expect(box.y).toBeGreaterThanOrEqual(before.y - 1);
+    expect(box.x + box.width).toBeLessThanOrEqual(before.x + before.width + 1);
+    expect(box.y + box.height).toBeLessThanOrEqual(before.y + before.height + 1);
+    stats.refuse(null);
+    await page.locator('[data-testid="kb-term-overlay-action"]').click();
+    await expect(view).toHaveAttribute("data-kb-term-phase", "live", { timeout: 30_000 });
+    await expect(page.locator('[data-testid="kb-term-overlay"]')).toHaveCount(0);
+    expect(await view.boundingBox()).toEqual(before);
+  });
+
+  test("an ended session shows the exit card and Back to terminals leaves the terminal page", async ({ page }) => {
+    await installFakeTerminal(page, { total: 200, seedLines: 100, exitCode: 3 });
+    await admit(page);
+    await page.goto(`${BASE}/term/${TERM_ID}`);
+    const card = page.locator('[data-testid="kb-term-overlay"][data-overlay="ended"]');
+    await expect(card).toBeVisible({ timeout: 30_000 });
+    await expect(card).toContainText("exited (code 3)");
+    await page.locator('[data-testid="kb-term-overlay-action"]').click();
+    await expect(page).not.toHaveURL(new RegExp(`/term/${TERM_ID}$`));
+  });
+});

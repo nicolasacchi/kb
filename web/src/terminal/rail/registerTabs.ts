@@ -7,6 +7,8 @@
 import { createElement } from "react";
 import { registerRailTab } from "./registry";
 import { ConversationRail } from "./ConversationRail";
+import { ChangesRail } from "./changes/ChangesRail";
+import { KnowledgeRail } from "./knowledge/KnowledgeRail";
 
 registerRailTab({
   id: "conversation",
@@ -15,7 +17,12 @@ registerRailTab({
   node: createElement(ConversationRail),
 });
 
-import { KnowledgeRail } from "./knowledge/KnowledgeRail";
+registerRailTab({
+  id: "changes",
+  label: "Changes",
+  badge: undefined,
+  node: createElement(ChangesRail),
+});
 
 registerRailTab({
   id: "knowledge",
