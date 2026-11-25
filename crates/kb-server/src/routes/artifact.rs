@@ -943,6 +943,13 @@ pub async fn serve(
         let err = kb_core::Error::BadRequest("path traversal".into());
         return error_to_problem_json(&err);
     }
+    // FXUP — a stored terminal-upload original (`*.kbblob`) is operator
+    // bytes with a sender-controlled type: never serve it on an artifact
+    // origin, via the entry or the sibling-asset walk. The same 404 body as
+    // a missing file, so there is no existence oracle.
+    if is_kbblob(&resolved) {
+        return (StatusCode::NOT_FOUND, "artifact not found").into_response();
+    }
 
     // OL TIME2 — `?at=<unix>` on the ENTRY file serves the body as it stood
     // (nearest-prior through the same `memento_for` the versions route uses),
@@ -1639,6 +1646,13 @@ async fn resolve_by_id(
     Some(resolved)
 }
 
+/// True when `p` is a stored file-upload original (`*.kbblob`, any case).
+fn is_kbblob(p: &Path) -> bool {
+    p.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case(kb_core::filestore::BLOB_EXT))
+}
+
 /// Find which kb owns a BARE `artifact_id` (a raw label — 12-hex id or
 /// legacy file stem) and resolve it to a file path. The pre-v2
 /// `resolve_artifact_kb` in full, kept as its own function so the v2
@@ -1736,6 +1750,15 @@ async fn resolve_artifact_kb<'a>(
 mod tests {
     use super::*;
     use crate::state::OriginConfig;
+
+    #[test]
+    fn is_kbblob_matches_only_the_final_extension() {
+        assert!(is_kbblob(Path::new("a/x.pdf.kbblob")));
+        assert!(is_kbblob(Path::new("a/x.KBBLOB")));
+        assert!(!is_kbblob(Path::new("a/x.kbblob.html")));
+        assert!(!is_kbblob(Path::new("a/x.pdf")));
+        assert!(!is_kbblob(Path::new("a/kbblob")));
+    }
 
     fn origin_with_parent(parent: &str) -> OriginConfig {
         OriginConfig {

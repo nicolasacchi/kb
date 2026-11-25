@@ -192,6 +192,17 @@ export const queryClient = new QueryClient({
 //                                   (`capture_pending`) becomes the full card
 //                                   when the first capture lands. Over-invalidation
 //                                   is accepted: only a mounted card refetches.
+//   ["sessions", "conversation", sid] CONVRAIL — the terminal Conversation
+//                                   rail's `GET /api/sessions/{sid}/view
+//                                   ?fields=conversation` projection
+//                                   (`hooks/useConversation.ts`). staleTime
+//                                   Infinity, no polling; the queryFn sends
+//                                   the held capture_gen back as conv_gen and
+//                                   keeps its rows on `unchanged:true`.
+//                                   Invalidated on session.state (prefix) and
+//                                   session.captured (scoped to the captured
+//                                   sid) below; a derived capture-scoped read,
+//                                   never a live one.
 //   ["sessions", "card", sid, "children"] A4 — the card's paged children
 //                                   (`GET /api/sessions/{sid}/children`,
 //                                   the session page's own useInfiniteQuery).
@@ -610,6 +621,8 @@ export function startSseInvalidationBridge(): () => void {
     invalidate(["sessions", "live"]);
     // A4 — a live-state flip changes the card's `live` + `outcome` lanes.
     invalidate(["sessions", "card"]);
+    // CONVRAIL — the Conversation rail's capture-scoped projection.
+    invalidate(["sessions", "conversation"]);
     // FXA4 — the session page's ChecksSection/title/transcript reader ride
     // `useSessionDetail` under the singular ["session", sid] prefix (NOT
     // under ["sessions"]), so the prefix invalidations above never reach
@@ -713,6 +726,9 @@ export function startSseInvalidationBridge(): () => void {
     const sid = typeof p.session_id === "string" && p.session_id ? p.session_id : null;
     invalidate(sid ? ["sessions", "card", sid] : ["sessions", "card"]);
     invalidate(sid ? ["session", sid] : ["session"]);
+    // CONVRAIL — a landed capture changes the Conversation rail's rows; scoped
+    // to the captured sid (prefix-wide when the payload carries no id).
+    invalidate(sid ? ["sessions", "conversation", sid] : ["sessions", "conversation"]);
   });
   // SL4 — kb-slate/1. `slate.updated {slug, seq, kind, id, topic, re, hide,
   // pin}` fires ONCE PER APPEND (routes/slates.rs emits it inside the

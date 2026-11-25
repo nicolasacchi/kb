@@ -62,10 +62,10 @@ test.describe("BSHELL /terminals/:id", () => {
     await page.goto(`${BASE}/term/${TERM_ID}`);
     const toggle = page.locator('[data-testid="term-rail-toggle"]');
     await expect(toggle).toHaveAttribute("aria-expanded", "true", { timeout: 15_000 });
-    await expect(page.locator('[data-testid="rail-placeholder-conversation"]')).toBeVisible();
+    await expect(page.locator('[data-testid="conv-rail"]')).toBeVisible();
     await toggle.click();
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
-    await expect(page.locator('[data-testid="rail-placeholder-conversation"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="conv-rail"]')).toHaveCount(0);
     await page.reload();
     await expect(page.locator('[data-testid="term-rail-toggle"]')).toHaveAttribute("aria-expanded", "false", {
       timeout: 15_000,

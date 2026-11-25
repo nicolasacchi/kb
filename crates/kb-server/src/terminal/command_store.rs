@@ -1338,6 +1338,26 @@ mod tests {
     }
 
     #[test]
+    fn merge_matches_the_shared_golden() {
+        // The same file the SPA's catalog.test.ts loads: the two merges cannot drift.
+        const GOLDEN: &str =
+            include_str!("../../../../web/src/terminal/commands/merge.golden.json");
+        let doc: Value = serde_json::from_str(GOLDEN).expect("golden parses");
+        let cases = doc["cases"].as_array().expect("cases array");
+        assert!(cases.len() >= 14, "golden carries at least 14 cases");
+        for c in cases {
+            let name = c["name"].as_str().expect("case name");
+            let defaults: BTreeMap<String, OvHarness> =
+                serde_json::from_value(c["defaults"]["harnesses"].clone())
+                    .unwrap_or_else(|e| panic!("{name}: defaults: {e}"));
+            let overlay: OverlayPut = serde_json::from_value(c["overlay"].clone())
+                .unwrap_or_else(|e| panic!("{name}: overlay: {e}"));
+            let got = serde_json::to_value(effective(0, merge(&defaults, &overlay))).unwrap();
+            assert_eq!(got["harnesses"], c["effective"]["harnesses"], "{name}");
+        }
+    }
+
+    #[test]
     fn if_match_forms_parse() {
         let mk = |v: &str| {
             let mut h = HeaderMap::new();
