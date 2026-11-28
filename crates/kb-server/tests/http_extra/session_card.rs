@@ -1753,6 +1753,7 @@ async fn a_beat_only_bound_session_gets_a_live_only_card() {
         "memory",
         "slate",
         "children",
+        "stats",
     ] {
         assert_eq!(card[lane]["available"], false, "{lane}: {card}");
         assert_eq!(card[lane]["reason"], "no capture yet", "{lane}: {card}");
@@ -1946,4 +1947,192 @@ async fn a_registry_row_alone_is_live_only_and_the_capture_row_flips_it_to_the_f
     assert!(!body.contains("capture_pending"), "{body}");
     assert_eq!(card["artifact_id"], "art-flip");
     assert_eq!(card["files"]["total"], 3);
+}
+
+// ---------------------------------------------------------------------------
+// STATSX4 — the `stats` lane over a synthetic capture on disk.
+// ---------------------------------------------------------------------------
+
+/// Write a minimal capture envelope (`<pre>` = the escaped JSONL) at the row's
+/// `source_relative`, under the boot corpus.
+fn write_capture(tmp: &tempfile::TempDir, source_relative: &str, jsonl: &str) {
+    let esc = jsonl
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    let path = tmp.path().join("corpus").join(source_relative);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, format!("<html><body><pre>{esc}</pre></body></html>")).unwrap();
+}
+
+fn claude_line(n: u32, role: &str, ts: &str, msg_id: &str, out: u64) -> String {
+    if role == "user" {
+        return format!(
+            r#"{{"type":"user","uuid":"su-{n}","timestamp":"{ts}","message":{{"role":"user","content":"prompt {n}"}}}}"#
+        );
+    }
+    format!(
+        r#"{{"type":"assistant","uuid":"sa-{n}","timestamp":"{ts}","message":{{"id":"{msg_id}","role":"assistant","model":"synthetic-model","content":[{{"type":"text","text":"x"}}],"usage":{{"input_tokens":10,"output_tokens":{out},"cache_read_input_tokens":100,"cache_creation_input_tokens":5}}}}}}"#
+    )
+}
+
+#[tokio::test]
+async fn stats_lane_dedupes_block_repeats_and_never_carries_a_claude_cost() {
+    let (tmp, addr, paths) = boot().await;
+    let client = reqwest::Client::new();
+    let r = row("art-st", "st-1", 1_000);
+    let jsonl = [
+        claude_line(1, "user", "2026-01-01T00:00:00Z", "", 0),
+        claude_line(2, "assistant", "2026-01-01T00:00:10Z", "msg_a", 7),
+        claude_line(3, "assistant", "2026-01-01T00:00:10Z", "msg_a", 7),
+        claude_line(4, "user", "2026-01-01T00:01:00Z", "", 0),
+        claude_line(5, "assistant", "2026-01-01T00:01:10Z", "msg_b", 3),
+    ]
+    .join("\n");
+    write_capture(&tmp, &r.source_relative, &jsonl);
+    {
+        let mut db = open_db(&paths);
+        db.sessions_upsert(&r).unwrap();
+    }
+    let (status, card, b1) = get_json(&client, addr, "/api/sessions/st-1/card").await;
+    assert_eq!(status, 200, "{card}");
+    let lane = &card["stats"];
+    assert_eq!(lane["available"], true, "{card}");
+    assert_eq!(lane["model"], "synthetic-model");
+    let st = &lane["stats"];
+    assert_eq!(st["output_tokens"], 10, "block repeats counted once: {st}");
+    assert_eq!(st["input_tokens"], 20);
+    assert_eq!(st["assistant_messages"], 2);
+    assert_eq!(st["turns"], 2);
+    // Context now = the LAST record (10 + 100 + 5), not a sum or a max.
+    assert_eq!(st["context_tokens"], 115);
+    assert!(
+        st["cost_usd"].is_null(),
+        "Claude cost is never estimated: {st}"
+    );
+    // Memo proof: a repeat read must NOT re-parse the capture (byte equality
+    // alone would also hold for a deterministic recompute). The counter is
+    // process-wide; the suite runs one test per process under nextest.
+    let before =
+        kb_server::routes::session_card::STATS_BUILDS.load(std::sync::atomic::Ordering::Relaxed);
+    let (_, _, b2) = get_json(&client, addr, "/api/sessions/st-1/card").await;
+    let after =
+        kb_server::routes::session_card::STATS_BUILDS.load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(b1, b2);
+    assert_eq!(
+        after, before,
+        "repeat read re-parsed the capture (no memo hit)"
+    );
+    // A re-capture in the SAME second with the same ended_at but a different
+    // body must miss the memo (length/mtime are part of the key).
+    let jsonl2 = [
+        jsonl.clone(),
+        claude_line(6, "assistant", "2026-01-01T00:01:20Z", "msg_c", 4),
+    ]
+    .join("\n");
+    write_capture(&tmp, &r.source_relative, &jsonl2);
+    let (_, card3, _) = get_json(&client, addr, "/api/sessions/st-1/card").await;
+    assert_eq!(card3["stats"]["stats"]["output_tokens"], 14, "{card3}");
+}
+
+#[tokio::test]
+async fn stats_lane_carries_omp_reported_cost_once_per_response() {
+    let (tmp, addr, paths) = boot().await;
+    let client = reqwest::Client::new();
+    let mut r = row("art-omp", "st-omp", 1_000);
+    r.harness = "omp".into();
+    let line = |n: u32, rid: &str, cost: f64, ctx: u64| {
+        format!(
+            r#"{{"type":"assistant","uuid":"so-{n}","timestamp":"2026-01-01T00:00:{n:02}Z","message":{{"role":"assistant","model":"synthetic-model","content":[{{"type":"text","text":"x"}}],"usage":{{"input_tokens":50,"output_tokens":6}},"harness_usage":{{"schema":"omp-usage/1","response_id":"{rid}","input":11,"output":6,"cache_read":40,"cache_write":2,"cost":{{"total":{cost}}},"context":{{"prompt_tokens":{ctx}}}}}}}}}"#
+        )
+    };
+    let jsonl = [
+        line(1, "r1", 0.25, 5000),
+        line(2, "r1", 0.25, 5000),
+        line(3, "r2", 0.5, 1200),
+    ]
+    .join("\n");
+    write_capture(&tmp, &r.source_relative, &jsonl);
+    {
+        let mut db = open_db(&paths);
+        db.sessions_upsert(&r).unwrap();
+    }
+    let (status, card, _) = get_json(&client, addr, "/api/sessions/st-omp/card").await;
+    assert_eq!(status, 200, "{card}");
+    let st = &card["stats"]["stats"];
+    assert_eq!(st["cost_usd"], 0.75, "{st}");
+    assert_eq!(st["context_tokens"], 1200, "{st}");
+    assert_eq!(st["cache_read_tokens"], 80);
+}
+
+#[tokio::test]
+async fn an_unreadable_capture_drops_the_stats_lane_only() {
+    let (_tmp, addr, paths) = boot().await;
+    let client = reqwest::Client::new();
+    {
+        let mut db = open_db(&paths);
+        db.sessions_upsert(&row("art-nf", "st-nf", 1_000)).unwrap();
+        seed_file(&mut db, "art-nf", "st-nf", 1);
+    }
+    let (status, card, _) = get_json(&client, addr, "/api/sessions/st-nf/card").await;
+    assert_eq!(status, 200, "{card}");
+    assert_eq!(card["stats"]["available"], false, "{card}");
+    assert_eq!(card["stats"]["reason"], "capture unreadable");
+    assert!(card["stats"].get("stats").is_none());
+    assert_eq!(card["summary"]["available"], true);
+    assert_eq!(card["files"]["available"], true);
+    assert_eq!(card["outcome"]["available"], true);
+}
+
+/// The pre-existing card surface is untouched by the stats lane: the key set
+/// minus `stats` is exactly the pre-STATSX4 set, in order, and the rendered
+/// `text` never mentions the lane.
+#[tokio::test]
+async fn stats_lane_is_purely_additive_over_the_existing_card_surface() {
+    let (_tmp, addr, paths) = boot().await;
+    let client = reqwest::Client::new();
+    {
+        let mut db = open_db(&paths);
+        db.sessions_upsert(&row("art-add", "st-add", 1_000))
+            .unwrap();
+        seed_file(&mut db, "art-add", "st-add", 1);
+    }
+    let (status, card, _) = get_json(&client, addr, "/api/sessions/st-add/card").await;
+    assert_eq!(status, 200, "{card}");
+    let keys: Vec<&str> = card
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(|k| k.as_str())
+        .collect();
+    let mut expected = vec![
+        "children",
+        "comments",
+        "commits",
+        "decisions",
+        "files",
+        "kb",
+        "artifact_id",
+        "live",
+        "memory",
+        "outcome",
+        "readings",
+        "research",
+        "schema",
+        "session_id",
+        "slate",
+        "summary",
+        "terminal",
+        "text",
+    ];
+    let mut without: Vec<&str> = keys.iter().copied().filter(|k| *k != "stats").collect();
+    without.sort_unstable();
+    expected.sort_unstable();
+    assert_eq!(without, expected, "{card}");
+    assert!(keys.contains(&"stats"));
+    assert!(!card["text"]
+        .as_str()
+        .unwrap()
+        .to_lowercase()
+        .contains("stats"));
 }

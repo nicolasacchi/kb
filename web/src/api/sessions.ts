@@ -59,6 +59,7 @@ import type { ResearchRollupOut } from "./generated/ResearchRollupOut";
 // W3.A — the projects facet + the by-artifact join + two-lane search.
 import type { ProjectOut } from "./generated/ProjectOut";
 import type { Conversation } from "./generated/Conversation";
+import type { SessionStats } from "./generated/SessionStats";
 import type { SessionsProjectsResponse } from "./generated/SessionsProjectsResponse";
 import type { ByArtifactResponse } from "./generated/ByArtifactResponse";
 import type { RecollectSessionOut } from "./generated/RecollectSessionOut";
@@ -234,6 +235,18 @@ export type SessionCard = {
   slate: SlateLane,
   children: ChildrenLane,
   terminal: TerminalLane,
+  /// STATSX4 — additive; absent from an older daemon.
+  stats?: StatsLane,
+};
+
+/// STATSX4 — the deterministic per-session figures over the newest capture
+/// (`stats` is the generated `SessionStats`). Surfaced, never scored;
+/// `cost_usd` inside it is harness-reported or null, never estimated.
+export type StatsLane = {
+  available: boolean,
+  reason?: string,
+  model?: string,
+  stats?: SessionStats,
 };
 
 export type SummaryLane = {

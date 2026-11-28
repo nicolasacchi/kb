@@ -2,8 +2,8 @@
 import type { SessionTimeStats } from "./SessionTimeStats";
 
 /**
- * Deterministic session statistics. Not serialized by any route in this
- * unit; the derive exists so a later surface only wires a route.
+ * Deterministic session statistics, serialized by the session card's
+ * `stats` lane only.
  */
 export type SessionStats = { input_tokens: number, output_tokens: number, cache_read_tokens: number, cache_write_tokens: number, 
 /**
@@ -28,6 +28,19 @@ usage_conflicts: number,
  * legacy `usage` is used), counted here, never summed.
  */
 usage_schema_unknown: number, 
+/**
+ * STATSX4: tokens the context held at the LAST non-synthetic main-thread
+ * record (Claude `input + cache_read + cache_creation`; omp
+ * `harness_usage.context.prompt_tokens`). `None` = not carried. Never a
+ * percentage here: the window is not in a transcript.
+ */
+context_tokens: number | null, 
+/**
+ * STATSX4: cost the HARNESS reported (omp `harness_usage.cost.total`,
+ * summed once per response). Always `None` for Claude transcripts;
+ * never estimated from a price table.
+ */
+cost_usd: number | null, 
 /**
  * Time figures (wall, active, per-turn, operator wait). Surfaced, never
  * scored.

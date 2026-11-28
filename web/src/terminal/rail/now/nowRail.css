@@ -1,0 +1,109 @@
+/* RAILNOW - the Now tab. Tokens only; one column; 40px targets. */
+.kb-nowrail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-3);
+  min-width: 0;
+  color: var(--ink);
+}
+.kb-nowrail__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.kb-nowrail__sechead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--pad-2);
+}
+.kb-nowrail__h {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--ink);
+}
+.kb-nowrail__fresh,
+.kb-nowrail__muted,
+.kb-nowrail__none {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+}
+.kb-nowrail__none {
+  font-style: italic;
+}
+.kb-nowrail__lead,
+.kb-nowrail__q,
+.kb-nowrail__answer {
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+.kb-nowrail__answer {
+  white-space: pre-wrap;
+}
+.kb-nowrail__needs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-1);
+  padding: var(--pad-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+}
+.kb-nowrail__list,
+.kb-nowrail__chips {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-sm);
+}
+.kb-nowrail__chips {
+  flex-direction: row;
+  flex-wrap: wrap;
+}
+.kb-nowrail__chip {
+  padding: 0 var(--pad-2);
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+}
+.kb-nowrail__sib {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--pad-1);
+  width: 100%;
+  min-height: 40px;
+  padding: var(--pad-1) var(--pad-2);
+  background: var(--bg-card);
+  color: var(--ink);
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.kb-nowrail__sib:hover {
+  border-color: var(--accent);
+}
+.kb-nowrail__stats {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-1);
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+.kb-nowrail__stat {
+  display: flex;
+  flex-direction: column;
+}
+.kb-nowrail__stat dt {
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+}
+.kb-nowrail__stat dd {
+  margin: 0;
+}

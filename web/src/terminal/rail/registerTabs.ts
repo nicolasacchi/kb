@@ -12,6 +12,8 @@ import { BoardRail } from "./board/BoardRail";
 import { useBoardBadge } from "./board/useBoardBadge";
 import { KnowledgeRail } from "./knowledge/KnowledgeRail";
 import { FilesRail } from "../files/FilesRail";
+import { NowRail } from "./now/NowRail";
+import { useNowBadge } from "./now/useNowBadge";
 import { CommandsRail } from "../commands/palette/CommandsRail";
 
 registerRailTab({
@@ -38,6 +40,8 @@ registerRailTab({
 });
 
 registerRailTab({ id: "files", label: "Files", node: createElement(FilesRail) });
+
+registerRailTab({ id: "now", label: "Now", useBadge: useNowBadge, node: createElement(NowRail) });
 
 registerRailTab({
   id: "commands",
