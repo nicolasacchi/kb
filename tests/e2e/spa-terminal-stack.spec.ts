@@ -65,6 +65,9 @@ async function prepare(
   h: Harness,
   grid?: { cols: number; rows: number },
 ): Promise<Ctx> {
+  // HUBSWITCH: the hub's switcher column takes width beside the panel on /terminals/:id.
+  // These geometry specs measure the panel alone, so they start with the column collapsed.
+  await page.addInitScript(() => window.localStorage.setItem("kb-term-switch-open", "0"));
   const api = new Api(request);
   const term = await launch(api, h, grid);
   const sid = newSid();
