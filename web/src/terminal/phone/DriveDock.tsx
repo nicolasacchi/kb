@@ -7,7 +7,7 @@
 // `../takeGrid.ts`: the web outranks a local attach, so it asks only for an
 // owner of any other class), and Release gives the grid back.
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useConfirm } from "../../components/ConfirmProvider";
 import type { TermRow } from "../../api/terms";
@@ -20,24 +20,10 @@ import { releaseGrid, takeGrid, type GridCtx } from "../takeGrid";
 import { fitDims, type PhoneMeasure } from "./fitPhone";
 import { KeyBar } from "./KeyBar";
 import { LANDSCAPE_PHONE_QUERY } from "./queries";
+import { useLandscapePhone } from "./useLandscapePhone";
 import "./drive.css";
 
 export { LANDSCAPE_PHONE_QUERY };
-
-function useLandscapePhone(): boolean {
-  const mq = (): MediaQueryList | null =>
-    typeof window !== "undefined" && typeof window.matchMedia === "function" ? window.matchMedia(LANDSCAPE_PHONE_QUERY) : null;
-  const [on, setOn] = useState<boolean>(() => mq()?.matches ?? false);
-  useEffect(() => {
-    const m = mq();
-    if (!m) return;
-    const f = (): void => setOn(m.matches);
-    f();
-    m.addEventListener("change", f);
-    return () => m.removeEventListener("change", f);
-  }, []);
-  return on;
-}
 
 export interface DriveDockProps {
   termId: string;
@@ -61,10 +47,15 @@ export interface DriveDockProps {
   ownerHint?: { owner: string | null } | null;
   /** Report the runner's answer to a take/release up to the panel that owns the hint. */
   onOwner?: (owner: string | null) => void;
+  /**
+   * BPHONE: false while the stream is not live (reconnecting, ended, ...). The chip then says the
+   * size only (`data-owner="unknown"`) and Release is not offered: nobody can vouch for an owner.
+   */
+  ownerKnown?: boolean;
 }
 
 export function DriveDock(props: DriveDockProps) {
-  const { termId, harness, viewer, row, measure, onTyped, ownerHint, onOwner, grid: liveGrid = null, compact = false } = props;
+  const { termId, harness, viewer, row, measure, onTyped, ownerHint, onOwner, grid: liveGrid = null, compact = false, ownerKnown = true } = props;
   const confirm = useConfirm();
   const queryClient = useQueryClient();
   const { rows: live } = useLiveSessions();
@@ -136,7 +127,7 @@ export function DriveDock(props: DriveDockProps) {
           >
             Fit to phone
           </button>
-          {ownerClass(owner) === "web" ? (
+          {ownerKnown && ownerClass(owner) === "web" ? (
             <>
               <button
                 type="button"
@@ -154,8 +145,16 @@ export function DriveDock(props: DriveDockProps) {
           {liveGrid ? (
             // Unknown owner (the list row is behind the live grid, or there is none):
             // say "checking" and offer no Release until the list vouches for it.
-            <span className="kb-drive__chip" data-testid="kb-drive-grid-chip" data-owner={vouched === undefined ? "checking" : ownerClass(vouched)}>
-              {vouched === undefined ? `${liveGrid.cols}x${liveGrid.rows} · checking` : chipText(liveGrid, vouched)}
+            <span
+              className="kb-drive__chip"
+              data-testid="kb-drive-grid-chip"
+              data-owner={!ownerKnown ? "unknown" : vouched === undefined ? "checking" : ownerClass(vouched)}
+            >
+              {!ownerKnown
+                ? chipText(liveGrid, undefined)
+                : vouched === undefined
+                  ? `${liveGrid.cols}x${liveGrid.rows} · checking`
+                  : chipText(liveGrid, vouched)}
             </span>
           ) : null}
         </div>

@@ -569,3 +569,63 @@ describe("keep in kb", () => {
     expect(set).not.toHaveBeenCalled();
   });
 });
+
+// BPHONE (f): the breadcrumb follows a rotation without a remount.
+describe("breadcrumb follows the viewport", () => {
+  type Listener = () => void;
+  function stubMedia(initial: boolean) {
+    const listeners = new Set<Listener>();
+    const mql = {
+      matches: initial,
+      media: "(max-width: 480px)",
+      addEventListener: vi.fn((_t: string, f: Listener) => listeners.add(f)),
+      removeEventListener: vi.fn((_t: string, f: Listener) => listeners.delete(f)),
+    };
+    vi.stubGlobal("matchMedia", vi.fn(() => mql));
+    return {
+      mql,
+      listeners,
+      set: (matches: boolean) => {
+        mql.matches = matches;
+        act(() => listeners.forEach((f) => f()));
+      },
+    };
+  }
+  const deep = (u: string): Response => {
+    const path = new URL(u, "http://x").searchParams.get("path") ?? "";
+    const next: Record<string, string> = { "": "a", a: "b", "a/b": "c", "a/b/c": "d" };
+    return json(200, ls(`/w/${path}`, path in next ? [ent(next[path], "dir")] : []));
+  };
+  async function descend(): Promise<void> {
+    for (const seg of ["a", "b", "c"]) {
+      await waitFor(() => screen.getByText(`${seg}/`));
+      fireEvent.click(screen.getByText(`${seg}/`));
+    }
+    await waitFor(() => screen.getByText("d/"));
+  }
+  const labels = (): string[] => [...screen.getByTestId("files-crumbs").querySelectorAll(".kb-filesrail__crumb")].map((b) => b.textContent ?? "");
+
+  it("folds when narrow, unfolds on a change event without a remount, folds again, and the listener goes on unmount", async () => {
+    routes = deep;
+    const media = stubMedia(true);
+    const view = mount();
+    await descend();
+    expect(labels()).toEqual(["Working tree", "…", "b", "c"]);
+    media.set(false);
+    expect(labels()).toEqual(["Working tree", "a", "b", "c"]);
+    media.set(true);
+    expect(labels()).toEqual(["Working tree", "…", "b", "c"]);
+    expect(media.listeners.size).toBe(1);
+    view.unmount();
+    expect(media.listeners.size).toBe(0);
+    expect(media.mql.removeEventListener).toHaveBeenCalled();
+  });
+
+  it("is safe without matchMedia (unfolded)", async () => {
+    routes = deep;
+    vi.stubGlobal("matchMedia", undefined);
+    mount();
+    await descend();
+    expect(labels()).toEqual(["Working tree", "a", "b", "c"]);
+  });
+});

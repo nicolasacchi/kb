@@ -49,6 +49,7 @@ function dock(
     onOwner?: (o: string | null) => void;
     grid?: { cols: number; rows: number } | null;
     compact?: boolean;
+    ownerKnown?: boolean;
   } = {},
 ) {
   const qc = new QueryClient();
@@ -222,5 +223,24 @@ describe("DriveDock: composition", () => {
     dock(row());
     expect(maybeById(m!.host, "kb-drive-choicebar")).toBeNull();
     expect(maybeById(m!.host, "kb-drive-keybar")).not.toBeNull();
+  });
+});
+
+// BPHONE (e): while the stream is not live nobody can vouch for an owner.
+describe("DriveDock: the owner chip while not live", () => {
+  const GRID = { cols: 120, rows: 40 };
+
+  it("ownerKnown=false: the chip says the size only, marked unknown, and Release is not offered", () => {
+    dock(row({ grid_owner: "kb-term", cols: 120, rows: 40 } as Partial<TermRow>), () => MEASURE, { grid: GRID, ownerKnown: false });
+    const chip = byId(m!.host, "kb-drive-grid-chip");
+    expect(chip.textContent).toBe("120x40");
+    expect(chip.getAttribute("data-owner")).toBe("unknown");
+    expect(maybeById(m!.host, "kb-drive-release")).toBeNull();
+  });
+
+  it("ownerKnown defaults to true: a web-owned grid still offers Release and names its owner", () => {
+    dock(row({ grid_owner: "kb-term", cols: 120, rows: 40 } as Partial<TermRow>), () => MEASURE, { grid: GRID });
+    expect(byId(m!.host, "kb-drive-grid-chip").getAttribute("data-owner")).toBe("web");
+    expect(maybeById(m!.host, "kb-drive-release")).not.toBeNull();
   });
 });
