@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Drive, SendTextResult } from "../phone/driveApi";
 import { DriveError } from "../phone/driveApi";
 import { PromptsApiError, type PromptList } from "./promptsApi";
-import { sendPrompt, type SendPromptDeps } from "./sendPrompt";
+import { sendPrompt, type SendPromptDeps, type SendPromptOutcome } from "./sendPrompt";
 
 const drive: Drive = { termId: "t1", harness: "omp", viewer: null, confirm: vi.fn(async () => true) };
 const stale = () => new PromptsApiError(412, "urn:kb:errors:prompts-stale", "changed", 5);
@@ -11,6 +11,11 @@ const listWith = (done: number | null, present = true): PromptList => ({
   rev: 5,
   items: present ? [{ id: "q_1", text: "x", created_at: 1, done_at: done, order: 0 }] : [],
 });
+
+/** `marked` of a `sent` outcome (the other kinds have none). */
+function marked(r: SendPromptOutcome): boolean | undefined {
+  return r.kind === "sent" ? r.marked : undefined;
+}
 
 function deps(over: Partial<SendPromptDeps> & { text?: string } = {}) {
   const sent: { text: string; enter: boolean }[] = [];
@@ -104,20 +109,20 @@ describe("sendPrompt", () => {
     const done = deps();
     done.markDone.mockRejectedValueOnce(stale());
     done.refetch.mockResolvedValue(listWith(7));
-    expect((await sendPrompt(done.d)).marked).toBe(true);
+    expect(marked(await sendPrompt(done.d))).toBe(true);
     expect(done.markDone).toHaveBeenCalledTimes(1);
 
     const gone = deps();
     gone.markDone.mockRejectedValueOnce(stale());
     gone.refetch.mockResolvedValue(listWith(null, false));
-    expect((await sendPrompt(gone.d)).marked).toBe(false);
+    expect(marked(await sendPrompt(gone.d))).toBe(false);
     expect(gone.markDone).toHaveBeenCalledTimes(1);
   });
 
   it("a non-412 failure while marking is not retried", async () => {
     const t = deps();
     t.markDone.mockRejectedValue(new PromptsApiError(500, null, "io", null));
-    expect((await sendPrompt(t.d)).marked).toBe(false);
+    expect(marked(await sendPrompt(t.d))).toBe(false);
     expect(t.markDone).toHaveBeenCalledTimes(1);
     expect(t.refetch).not.toHaveBeenCalled();
   });
