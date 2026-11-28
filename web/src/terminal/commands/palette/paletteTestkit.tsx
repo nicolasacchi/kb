@@ -12,6 +12,8 @@ const it = (o: Partial<Item> & { id: string; label: string }): Item => ({ kind: 
 
 export const CATALOGUE: EffectiveCatalogue = {
   rev: 3,
+  overlay: { harnesses: {}, hidden: {} },
+  hidden: {},
   harnesses: {
     claude: {
       groups: [
