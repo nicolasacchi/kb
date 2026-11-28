@@ -87,7 +87,7 @@ async function mockConversation(page: Page, gen: string): Promise<void> {
 }
 
 test.describe("CONVNEED needs-you banner", () => {
-  test("beat text while blocked, no pane resize, gone when unblocked", async ({ page }) => {
+  test("beat text while blocked above the pane, gone when unblocked", async ({ page }) => {
     const live: Live = { blocked: false };
     await installFakeTerminal(page, { total: 300, seedLines: 100 });
     await admit(page);
@@ -98,7 +98,6 @@ test.describe("CONVNEED needs-you banner", () => {
     const pane = page.locator(".kb-termshell__pane");
     await expect(pane).toBeVisible({ timeout: 20_000 });
     await expect(page.locator('[data-testid="needs-you"]')).toHaveCount(0);
-    const before = (await pane.boundingBox())!;
 
     live.blocked = true;
     live.reason = "Synthetic permission needed";
@@ -110,8 +109,10 @@ test.describe("CONVNEED needs-you banner", () => {
     await expect(page.locator('[data-testid="needs-you-text"]')).toHaveText("Synthetic permission needed");
     await expect(page.locator('[data-testid="needs-you-tool"]')).toHaveText("Bash");
     await expect(banner).not.toContainText("Synthetic pending question?");
-    const during = (await pane.boundingBox())!;
-    expect(Math.abs(during.width - before.width)).toBeLessThan(2);
+    // The banner is its own row above the pane, never an overlay on it.
+    const bb = (await banner.boundingBox())!;
+    const pb = (await pane.boundingBox())!;
+    expect(bb.y + bb.height).toBeLessThanOrEqual(pb.y + 1);
 
     live.blocked = false;
     await page.evaluate(() => window.dispatchEvent(new Event("focus")));
