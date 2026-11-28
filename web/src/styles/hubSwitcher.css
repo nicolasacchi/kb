@@ -2,14 +2,30 @@
    Tokens only; sizes in rem/tokens. */
 .kb-hubframe {
   --hub-switch-w: 18rem;
+  position: relative;
   display: grid;
   grid-template-columns: var(--hub-switch-w) minmax(0, 1fr);
   align-items: start;
   gap: var(--pad-2);
   min-width: 0;
 }
+/* Collapsed: the column costs no width. Only a slim tab stays, over the frame's left edge. */
 .kb-hubframe[data-open="0"] {
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+}
+.kb-hubframe[data-open="0"] > .kb-hubframe__side {
+  position: absolute;
+  top: var(--pad-2);
+  left: 0;
+  z-index: var(--z-float);
+  padding: 0;
+}
+.kb-hubframe[data-open="0"] .kb-hubframe__toggle {
+  min-height: 0;
+  padding: var(--pad-2) var(--pad-1);
+  writing-mode: vertical-rl;
+  opacity: 0.85;
 }
 .kb-hubframe__side {
   position: sticky;
