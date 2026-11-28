@@ -10,4 +10,10 @@ describe("TermShell registration", () => {
     expect(typeof TermShell).toBe("function");
     expect(railTabs().some((t) => t.id === "conversation")).toBe(true);
   });
+
+  it("importing the shell registers the Board tab with its live badge hook", () => {
+    const board = railTabs().find((t) => t.id === "board");
+    expect(board?.label).toBe("Board");
+    expect(typeof board?.useBadge).toBe("function");
+  });
 });

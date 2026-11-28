@@ -257,11 +257,13 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | PUT | `/api/terms/commands` | `terminal::command_store::put` |
 | GET | `/api/terms/media/{sha256}` | `terminal::media::serve` |
 | POST | `/api/terms/{id}/enter` | `routes::terms::enter` |
+| GET | `/api/terms/{id}/file` | `terminal::files_read::file` |
 | POST | `/api/terms/{id}/files` | `terminal::upload::terms_files` |
 | GET | `/api/terms/{id}/grid` | `routes::terms::grid` |
 | GET | `/api/terms/{id}/history` | `routes::terms::history` |
 | POST | `/api/terms/{id}/keys` | `routes::terms::keys` |
 | POST | `/api/terms/{id}/kill` | `routes::terms::kill` |
+| GET | `/api/terms/{id}/ls` | `terminal::files_read::ls` |
 | POST | `/api/terms/{id}/paste` | `routes::terms::paste` |
 | GET | `/api/terms/{id}/read` | `routes::terms::read` |
 | POST | `/api/terms/{id}/release-size` | `routes::terms::release_size` |
@@ -275,4 +277,4 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | GET | `/api/users` | `routes::users::list` |
 | GET | `/api/why` | `routes::sessions::why` |
 
-_265 routes._
+_267 routes._
