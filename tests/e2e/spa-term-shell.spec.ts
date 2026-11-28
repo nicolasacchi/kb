@@ -224,3 +224,40 @@ test.describe("BSTATE terminal state overlays", () => {
     await expect(page.getByRole("tabpanel")).toHaveAttribute("aria-labelledby", (await moved.getAttribute("id")) ?? "");
   });
 });
+
+test.describe("CMDPALETTE command palette", () => {
+  test("the header Commands button opens the palette and a paste-mode entry issues exactly one paste, no Enter", async ({ page }) => {
+    const stats = await installFakeTerminal(page, { total: 300, seedLines: 100, drive: true, harness: "claude" });
+    await admit(page);
+    await page.route("**/api/terms/commands", async (route) => {
+      await route.fulfill({
+        json: {
+          rev: 1,
+          harnesses: {
+            claude: {
+              groups: [
+                {
+                  id: "palette-e2e",
+                  label: "Palette e2e",
+                  origin: "default",
+                  items: [{ id: "pe-compact", kind: "command", label: "/palette-compact", text: "/palette-compact", mode: "paste", origin: "default" }],
+                },
+              ],
+            },
+          },
+        },
+      });
+    });
+    await page.goto(`${BASE}/terminals/${TERM_ID}`);
+    await expectLive(page);
+    await page.locator('[data-testid="kb-term-commands-btn"]').click();
+    const dialog = page.getByRole("dialog", { name: "Commands" });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("option", { name: /\/palette-compact/ }).click();
+    await expect(dialog).toBeHidden();
+    await expect.poll(() => stats.drive.filter((c: { op: string }) => c.op === "paste").length).toBe(1);
+    const paste = stats.drive.find((c: { op: string }) => c.op === "paste");
+    expect(paste.json).toEqual({ text: "/palette-compact" });
+    expect(stats.drive.filter((c: { op: string }) => c.op === "enter")).toHaveLength(0);
+  });
+});
