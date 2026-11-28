@@ -126,3 +126,129 @@ describe("CommandSheet", () => {
     expect(document.activeElement).toBe(proxy);
   });
 });
+
+// BPHONE (a): every way out of the sheet hands the key back to the input proxy, so the soft
+// keyboard does not drop. The focus starts INSIDE the sheet (the search field), which is where
+// a real close can come from.
+describe("CommandSheet closes without dropping the soft keyboard", () => {
+  const search = (): HTMLInputElement => document.querySelector(".kb-cmdp__search") as HTMLInputElement;
+
+  it("Close leaves the proxy focused", async () => {
+    const { proxy, onClose } = mountSheet();
+    await ready();
+    search().focus();
+    expect(document.activeElement).toBe(search());
+    act(() => {
+      screen.getByTestId("kb-drive-cmdsheet-close").dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+    });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(proxy);
+  });
+
+  it("Escape leaves the proxy focused", async () => {
+    const { proxy, onClose } = mountSheet();
+    await ready();
+    search().focus();
+    fireEvent.keyDown(search(), { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(proxy);
+  });
+
+  it("the platform close request (Android Back) leaves the proxy focused", async () => {
+    class FakeWatcher {
+      static last: FakeWatcher | null = null;
+      oncancel: (() => void) | null = null;
+      onclose: (() => void) | null = null;
+      constructor() {
+        FakeWatcher.last = this;
+      }
+      destroy(): void {}
+      close(): void {}
+      requestClose(): void {}
+    }
+    (window as unknown as { CloseWatcher?: unknown }).CloseWatcher = FakeWatcher;
+    try {
+      const { proxy, onClose } = mountSheet();
+      await ready();
+      search().focus();
+      act(() => FakeWatcher.last!.onclose!());
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(document.activeElement).toBe(proxy);
+    } finally {
+      delete (window as unknown as { CloseWatcher?: unknown }).CloseWatcher;
+    }
+  });
+
+  it("the args form's Back never takes focus and leaves the proxy focused", async () => {
+    const { proxy } = mountSheet();
+    await ready();
+    fireEvent.click(screen.getByText("/add"));
+    const ta = document.querySelector(".kb-cmdp__field textarea") as HTMLTextAreaElement;
+    ta.focus();
+    expect(document.activeElement).toBe(ta);
+    const back = screen.getByRole("button", { name: "Back" });
+    expect(back.tabIndex).toBe(-1);
+    expect(fireEvent.pointerDown(back)).toBe(false);
+    expect(fireEvent.mouseDown(back)).toBe(false);
+    fireEvent.click(back);
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(document.activeElement).toBe(proxy);
+  });
+
+  it("without direct typing there is no proxy element and nothing throws", async () => {
+    const onClose = vi.fn();
+    render(wrap(<CommandSheet drive={drive()} onClose={onClose} />));
+    await ready();
+    expect(document.querySelector("[data-kb-term-input]")).toBeNull();
+    fireEvent.click(screen.getByText("/add"));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    act(() => {
+      screen.getByTestId("kb-drive-cmdsheet-close").dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+    });
+    fireEvent.keyDown(screen.getByTestId("kb-drive-cmdsheet"), { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(2);
+  });
+});
+
+// BPHONE (c): the landscape sheet keeps the search field behind a toggle.
+describe("CommandSheet search toggle (landscape phone)", () => {
+  function landscape(on: boolean): void {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: on, media: "", addEventListener: vi.fn(), removeEventListener: vi.fn() })),
+    );
+  }
+
+  it("portrait: no toggle, the field is there", async () => {
+    landscape(false);
+    mountSheet();
+    await ready();
+    expect(screen.queryByTestId("kb-cmdp-searchtoggle")).toBeNull();
+    expect(document.querySelector(".kb-cmdp__search")).not.toBeNull();
+  });
+
+  it("landscape: the field is hidden (not rendered, so not tabbable) until the toggle opens it, and hiding it drops the filter and returns the key", async () => {
+    landscape(true);
+    const { proxy } = mountSheet();
+    await ready();
+    const t = screen.getByTestId("kb-cmdp-searchtoggle");
+    expect(t.getAttribute("aria-expanded")).toBe("false");
+    expect(document.querySelector(".kb-cmdp__search")).toBeNull();
+    // The press itself never moves focus off the proxy.
+    expect(fireEvent.mouseDown(t)).toBe(false);
+    expect(document.activeElement).toBe(proxy);
+    fireEvent.click(t);
+    expect(t.getAttribute("aria-expanded")).toBe("true");
+    const field = document.querySelector(".kb-cmdp__search") as HTMLInputElement;
+    expect(field).not.toBeNull();
+    expect(document.activeElement).toBe(field);
+    fireEvent.change(field, { target: { value: "zzz-no-such" } });
+    expect(screen.getByText("No match")).toBeTruthy();
+    fireEvent.click(t);
+    expect(t.getAttribute("aria-expanded")).toBe("false");
+    expect(document.querySelector(".kb-cmdp__search")).toBeNull();
+    expect(screen.queryByText("No match")).toBeNull();
+    expect(document.activeElement).toBe(proxy);
+  });
+});
+

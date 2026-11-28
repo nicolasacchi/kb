@@ -193,74 +193,78 @@ export function KeyBar({ drive, onCaption, onTyped, repliesRef }: KeyBarProps) {
   });
 
   return (
-    <div className="kb-drive__keybar" data-testid="kb-drive-keybar" role="toolbar" aria-label="Terminal keys">
+    // BPHONE: the sheet is a sibling of the toolbar (a dialog is not a toolbar item); the wrap is
+    // the positioning box the sheet floats above.
+    <div className="kb-drive__keybar-wrap">
       {menuOpen ? <CommandSheet drive={drive} onClose={() => setMenuOpen(false)} onTyped={onTyped} /> : null}
-      <div
-        className="kb-drive__keys"
-        data-testid="kb-drive-keys"
-        data-more={more ? "right" : undefined}
-        ref={setKeysEl}
-        onScroll={measureMore}
-      >
-        {direct ? <StickyCtrl mods={direct.mods} /> : null}
-        <button
-          type="button"
-          tabIndex={-1}
-          className="kb-drive__key kb-drive__key--wide"
-          data-testid="kb-drive-key-cmds"
-          aria-label="Commands"
-          aria-haspopup="dialog"
-          aria-expanded={menuOpen}
-          onPointerDown={(e) => {
-            e.preventDefault();
-            setMenuOpen((o) => !o);
-          }}
-          onMouseDown={(e) => e.preventDefault()}
+      <div className="kb-drive__keybar" data-testid="kb-drive-keybar" role="toolbar" aria-label="Terminal keys">
+        <div
+          className="kb-drive__keys"
+          data-testid="kb-drive-keys"
+          data-more={more ? "right" : undefined}
+          ref={setKeysEl}
+          onScroll={measureMore}
         >
-          Cmds
-        </button>
-        {KEYBAR_KEYS.map((k) => {
-          if (k.name === "C-c" || k.name === "C-d") {
+          {direct ? <StickyCtrl mods={direct.mods} /> : null}
+          <button
+            type="button"
+            tabIndex={-1}
+            className="kb-drive__key kb-drive__key--wide"
+            data-testid="kb-drive-key-cmds"
+            aria-label="Cmds, open commands"
+            aria-haspopup="dialog"
+            aria-expanded={menuOpen}
+            onPointerDown={(e) => {
+              e.preventDefault();
+              setMenuOpen((o) => !o);
+            }}
+            onMouseDown={(e) => e.preventDefault()}
+          >
+            Cmds
+          </button>
+          {KEYBAR_KEYS.map((k) => {
+            if (k.name === "C-c" || k.name === "C-d") {
+              return (
+                <button
+                  key={k.name}
+                  type="button"
+                  tabIndex={-1}
+                  className="kb-drive__key"
+                  data-testid={`kb-drive-key-${k.name}`}
+                  aria-label={k.aria}
+                  {...(k.name === "C-c" ? ctrlC : ctrlD)}
+                >
+                  {k.label}
+                </button>
+              );
+            }
+            if (k.name === "Slash") {
+              return (
+                <button
+                  key={k.name}
+                  type="button"
+                  tabIndex={-1}
+                  className="kb-drive__key"
+                  data-testid="kb-drive-key-Slash"
+                  aria-label={k.aria}
+                  {...slash}
+                >
+                  {k.label}
+                </button>
+              );
+            }
             return (
-              <button
+              <NoFocusButton
                 key={k.name}
-                type="button"
-                tabIndex={-1}
-                className="kb-drive__key"
-                data-testid={`kb-drive-key-${k.name}`}
-                aria-label={k.aria}
-                {...(k.name === "C-c" ? ctrlC : ctrlD)}
-              >
-                {k.label}
-              </button>
+                label={k.label}
+                aria={k.aria}
+                testId={`kb-drive-key-${k.name}`}
+                act={k.name === "Enter" ? enter : () => send(k.name)}
+              />
             );
-          }
-          if (k.name === "Slash") {
-            return (
-              <button
-                key={k.name}
-                type="button"
-                tabIndex={-1}
-                className="kb-drive__key"
-                data-testid="kb-drive-key-Slash"
-                aria-label={k.aria}
-                {...slash}
-              >
-                {k.label}
-              </button>
-            );
-          }
-          return (
-            <NoFocusButton
-              key={k.name}
-              label={k.label}
-              aria={k.aria}
-              testId={`kb-drive-key-${k.name}`}
-              act={k.name === "Enter" ? enter : () => send(k.name)}
-            />
-          );
-        })}
-        <span className="kb-drive__replies-host" ref={repliesRef} />
+          })}
+          <span className="kb-drive__replies-host" ref={repliesRef} />
+        </div>
       </div>
     </div>
   );

@@ -230,6 +230,29 @@ describe("KeyBar", () => {
       ta.remove();
     });
 
+    // BPHONE (b): WCAG 2.5.3 - the accessible name carries the visible label; and a dialog is not a
+    // toolbar item.
+    it("the Cmds accessible name contains its visible text", () => {
+      sheetBar(mkDrive());
+      const name = cmds().getAttribute("aria-label") ?? "";
+      expect((cmds().textContent ?? "").length).toBeGreaterThan(0);
+      expect(name.toLowerCase()).toContain((cmds().textContent ?? "").trim().toLowerCase());
+      expect(name).toBe("Cmds, open commands");
+    });
+
+    it("the open sheet is a sibling of the toolbar, never inside it", () => {
+      sheetBar(mkDrive());
+      press(cmds());
+      const dialog = sheet()!;
+      expect(dialog.getAttribute("role")).toBe("dialog");
+      expect(dialog.closest('[role="toolbar"]')).toBeNull();
+      const bar = byId(m!.host, "kb-drive-keybar");
+      expect(bar.getAttribute("role")).toBe("toolbar");
+      expect(bar.contains(dialog)).toBe(false);
+      expect(dialog.parentElement).toBe(bar.parentElement);
+      expect(dialog.parentElement!.classList.contains("kb-drive__keybar-wrap")).toBe(true);
+    });
+
     it("the sheet lists the bound harness's catalogue and a tapped row pastes it, never entering", async () => {
       const ta = document.createElement("textarea");
       document.body.appendChild(ta);

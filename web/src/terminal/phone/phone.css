@@ -31,8 +31,8 @@
   align-items: center;
   gap: var(--pad-2);
   padding: var(--pad-1) var(--pad-2);
-  border-bottom: var(--pad-1) solid var(--rule);
-  font-size: var(--fs-sm);
+  border-bottom: var(--drv-bw) solid var(--rule);
+  font-size: var(--drv-fs);
 }
 
 .kb-term-phone__caption,
@@ -46,15 +46,25 @@
 }
 
 .kb-term-phone__btn {
-  min-height: var(--spine-h);
-  min-width: var(--spine-h);
+  min-height: var(--touch-min);
+  min-width: var(--touch-min);
   padding: 0 var(--pad-2);
   background: var(--bg-card);
   color: var(--ink);
-  border: var(--pad-1) solid var(--rule-hi);
-  border-radius: var(--radius-sm);
-  font-size: var(--fs-sm);
+  border: var(--drv-bw) solid var(--rule-hi);
+  border-radius: var(--drv-radius);
+  font-size: var(--drv-fs);
   cursor: pointer;
+}
+
+.kb-term-phone__btn:active:not(:disabled) {
+  background: var(--bg-card-hi);
+  border-color: var(--accent-bor);
+}
+
+.kb-term-phone__btn:focus-visible {
+  outline: calc(var(--drv-bw) * 2) solid var(--accent);
+  outline-offset: var(--drv-bw);
 }
 
 .kb-term-phone__btn:disabled {
@@ -150,9 +160,9 @@
   gap: var(--pad-2);
   padding: var(--pad-2);
   background: var(--bg-card);
-  border: var(--pad-1) solid var(--rule-hi);
-  border-radius: var(--radius-sm);
-  font-size: var(--fs-sm);
+  border: var(--drv-bw) solid var(--rule-hi);
+  border-radius: var(--drv-radius);
+  font-size: var(--drv-fs);
 }
 
 .kb-term-phone__linkurl {
@@ -174,6 +184,13 @@
   box-sizing: border-box;
   padding-top: env(safe-area-inset-top, 0);
   padding-bottom: env(safe-area-inset-bottom, 0);
+}
+
+/* BPHONE - while the dock shows, it owns the bottom inset (drive.css: its padding is
+ * max(pad, inset)), so the home indicator is cleared once, not twice. Read view hides the
+ * dock and keeps the sheet's own inset. */
+.kb-sheet:has([data-kb-term-root] > div:not([hidden]) > .kb-drive) {
+  padding-bottom: 0;
 }
 
 /* The phone root in native fullscreen fills the screen. */
@@ -214,7 +231,7 @@
   gap: var(--pad-2);
   padding: var(--pad-1) var(--pad-2);
   min-width: 0;
-  border-bottom: var(--pad-1) solid var(--rule);
+  border-bottom: var(--drv-bw) solid var(--rule);
 }
 
 .kb-term-phone__sub {
@@ -222,13 +239,13 @@
   align-items: baseline;
   gap: var(--pad-2);
   padding: var(--pad-1) var(--pad-2);
-  font-size: var(--fs-xs);
+  font-size: var(--drv-fs-sub);
   color: var(--ink-mute);
   min-width: 0;
 }
 
 .kb-term-phone__sub .kb-term-phone__caption {
-  font-size: var(--fs-xs);
+  font-size: var(--drv-fs-sub);
 }
 
 .kb-term-phone__crop {

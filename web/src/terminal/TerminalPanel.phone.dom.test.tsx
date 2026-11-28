@@ -11,6 +11,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 vi.mock("../hooks/useIsMobile", () => ({ useIsMobile: () => true, usePhonePanel: () => true }));
+// BPHONE: what the panel hands the dock, and the callbacks it gave the session.
+const seam = vi.hoisted(() => ({
+  dockProps: [] as Array<{ ownerKnown?: boolean }>,
+  onState: null as null | ((s: Record<string, unknown>) => void),
+}));
+
 vi.mock("@xterm/xterm", () => ({ Terminal: class {} }));
 vi.mock("@xterm/addon-image", () => ({ ImageAddon: class {} }));
 vi.mock("@xterm/addon-webgl", () => ({ WebglAddon: class {} }));
@@ -18,6 +24,9 @@ vi.mock("@xterm/addon-unicode-graphemes", () => ({ UnicodeGraphemesAddon: class 
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
 vi.mock("./session", () => ({
   TermSession: class {
+    constructor(opts: { callbacks: { onState: (s: Record<string, unknown>) => void } }) {
+      seam.onState = opts.callbacks.onState;
+    }
     start(): void {}
     dispose(): void {}
     kick(): void {}
@@ -26,14 +35,20 @@ vi.mock("./session", () => ({
 vi.mock("../hooks/useLiveSessions", () => ({ useLiveSessions: () => ({ rows: [], loading: false }) }));
 vi.mock("./useTerms", () => ({ useTerms: () => ({ terms: [], isLoading: false }) }));
 vi.mock("./phone/PhoneTerminal", () => ({
-  PhoneTerminal: (p: { onClose?: () => void }) => (
+  PhoneTerminal: (p: { onClose?: () => void; renderDrive?: (api: { measure: () => null; fullscreen: boolean }) => unknown }) => (
     <div data-testid="phone-stub">
       <button type="button" data-testid="kb-term-close" onClick={p.onClose} />
+      {p.renderDrive?.({ measure: () => null, fullscreen: false }) as never}
     </div>
   ),
   attachTerm: () => {},
 }));
-vi.mock("./phone/DriveDock", () => ({ DriveDock: () => null }));
+vi.mock("./phone/DriveDock", () => ({
+  DriveDock: (p: { ownerKnown?: boolean }) => {
+    seam.dockProps.push(p);
+    return null;
+  },
+}));
 vi.mock("./gfx", () => ({ attachGfx: () => ({}) }));
 vi.mock("./Lightbox", () => ({ Lightbox: () => null }));
 
@@ -105,5 +120,31 @@ describe("phone sheet", () => {
     });
     expect(window.location.search).toBe("");
     expect(window.location.pathname).toBe("/sessions");
+  });
+
+  // BPHONE (e): the dock is told whether an owner can be vouched for at all.
+  it("passes ownerKnown=false to the dock while the stream is not live, and true while it is", () => {
+    seam.dockProps.length = 0;
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    act(() =>
+      root!.render(
+        <QueryClientProvider client={new QueryClient()}>
+          <TerminalPanel termId="abcd1234" sid="s1" harness="omp" />
+        </QueryClientProvider>,
+      ),
+    );
+    const last = (): boolean | undefined => seam.dockProps[seam.dockProps.length - 1]?.ownerKnown;
+    const base = { epoch: null, applied: 0, resets: 0, gaps: 0, attempt: 0, caption: "x", exitCode: null, blockedReason: null };
+    expect(last()).toBe(true);
+    act(() => seam.onState!({ ...base, phase: "live" }));
+    expect(last()).toBe(true);
+    for (const phase of ["reconnecting", "ended", "expired", "blocked", "sleeping"]) {
+      act(() => seam.onState!({ ...base, phase }));
+      expect(last(), phase).toBe(false);
+    }
+    act(() => seam.onState!({ ...base, phase: "live" }));
+    expect(last()).toBe(true);
   });
 });

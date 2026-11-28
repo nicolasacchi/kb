@@ -27,6 +27,17 @@ export interface CommandListProps {
   /** Called when the Edit commands link is followed. */
   onNavigate?: () => void;
   autoFocus?: boolean;
+  /**
+   * BPHONE (sheet variant only, default false): the search field sits behind a Search toggle
+   * (`aria-expanded`) and is not rendered, so not tabbable, while hidden. The landscape phone
+   * uses it so three 44 px rows fit the capped sheet.
+   */
+  searchToggle?: boolean;
+}
+
+/** Give the key back to the phone's input proxy; a no-op without direct typing (no proxy element). */
+export function refocusTermInput(): void {
+  document.querySelector<HTMLElement>("[data-kb-term-input]")?.focus({ preventScroll: true });
 }
 
 /** Plain-text preview of what an entry sends. */
@@ -58,6 +69,10 @@ function useCatalogue(): { catalogue: Effective; fallback: boolean } {
 
 export function CommandList(props: CommandListProps): ReactElement {
   const { termId, harness, variant, viewer = null, onSent, onNavigate, autoFocus } = props;
+  const toggle = variant === "sheet" && props.searchToggle === true;
+  const [searchOpen, setSearchOpen] = useState(false);
+  const showSearch = !toggle || searchOpen;
+  const sheet = variant === "sheet";
   const uid = useId();
   const confirm = useConfirm();
   const { catalogue, fallback } = useCatalogue();
@@ -167,7 +182,18 @@ export function CommandList(props: CommandListProps): ReactElement {
             </p>
           )}
           <div className="kb-cmdp__formbtns">
-            <button type="button" className="kb-cmdp__btn" onClick={() => setPending(null)}>
+            <button
+              type="button"
+              className="kb-cmdp__btn"
+              // The sheet never takes focus from the input proxy (the soft keyboard must not drop).
+              tabIndex={sheet ? -1 : undefined}
+              onPointerDown={sheet ? (ev) => ev.preventDefault() : undefined}
+              onMouseDown={sheet ? (ev) => ev.preventDefault() : undefined}
+              onClick={() => {
+                setPending(null);
+                if (sheet) refocusTermInput();
+              }}
+            >
               Back
             </button>
             <button type="submit" className="kb-cmdp__btn kb-cmdp__btn--go" disabled={disabled}>
@@ -182,25 +208,48 @@ export function CommandList(props: CommandListProps): ReactElement {
   let offset = 0;
   return (
     <div className={`kb-cmdp kb-cmdp--${variant}`} data-testid="kb-cmdp">
-      <input
-        className="kb-cmdp__search"
-        type="search"
-        role="combobox"
-        aria-label="Search commands"
-        aria-expanded="true"
-        aria-controls={`${uid}-list`}
-        aria-activedescendant={activeIdx >= 0 ? optId(activeIdx) : undefined}
-        aria-autocomplete="list"
-        placeholder="Search commands"
-        value={query}
-        // eslint-disable-next-line jsx-a11y/no-autofocus
-        autoFocus={autoFocus}
-        onChange={(ev) => {
-          setQuery(ev.target.value);
-          setActive(0);
-        }}
-        onKeyDown={onSearchKey}
-      />
+      {toggle && (
+        <button
+          type="button"
+          className="kb-cmdp__searchtoggle"
+          data-testid="kb-cmdp-searchtoggle"
+          aria-expanded={searchOpen}
+          onPointerDown={(ev) => ev.preventDefault()}
+          onMouseDown={(ev) => ev.preventDefault()}
+          onClick={() => {
+            if (searchOpen) {
+              // Hiding the field drops the filter with it, and the key goes back to the proxy.
+              setQuery("");
+              setActive(0);
+              setSearchOpen(false);
+              refocusTermInput();
+            } else setSearchOpen(true);
+          }}
+        >
+          Search
+        </button>
+      )}
+      {showSearch && (
+        <input
+          className="kb-cmdp__search"
+          type="search"
+          role="combobox"
+          aria-label="Search commands"
+          aria-expanded="true"
+          aria-controls={`${uid}-list`}
+          aria-activedescendant={activeIdx >= 0 ? optId(activeIdx) : undefined}
+          aria-autocomplete="list"
+          placeholder="Search commands"
+          value={query}
+          // eslint-disable-next-line jsx-a11y/no-autofocus
+          autoFocus={autoFocus || toggle}
+          onChange={(ev) => {
+            setQuery(ev.target.value);
+            setActive(0);
+          }}
+          onKeyDown={onSearchKey}
+        />
+      )}
       {fallback && <p className="kb-cmdp__caption">Showing shipped commands</p>}
       <div className="kb-cmdp__scroll">
         <div id={`${uid}-list`} role="listbox" aria-label="Commands" className="kb-cmdp__list">

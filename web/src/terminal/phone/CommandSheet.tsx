@@ -18,13 +18,9 @@
 
 import { useRef, type KeyboardEvent } from "react";
 import { useCloseRequest } from "@kb/ui/useCloseRequest";
-import { CommandList } from "../commands/palette/CommandList";
+import { CommandList, refocusTermInput as refocusProxy } from "../commands/palette/CommandList";
 import type { Drive } from "./driveApi";
-
-/** Give the key focus back to the phone's input proxy (a no-op when direct typing is off). */
-function refocusProxy(): void {
-  document.querySelector<HTMLElement>("[data-kb-term-input]")?.focus({ preventScroll: true });
-}
+import { useLandscapePhone } from "./useLandscapePhone";
 
 export interface CommandSheetProps {
   drive: Drive;
@@ -35,14 +31,22 @@ export interface CommandSheetProps {
 
 export function CommandSheet({ drive, onClose, onTyped }: CommandSheetProps) {
   const root = useRef<HTMLDivElement | null>(null);
+  // BPHONE: Close, Escape and the platform close request all end here, so the soft keyboard
+  // never drops (a no-op without direct typing: there is no proxy element).
+  const close = (): void => {
+    refocusProxy();
+    onClose();
+  };
   // Android Back closes the overlay before it leaves the page (a no-op without CloseWatcher).
-  useCloseRequest(true, onClose);
+  useCloseRequest(true, close);
+  // A landscape phone has no room for the search field next to three rows: it sits behind a toggle.
+  const landscape = useLandscapePhone();
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>): void => {
     if (e.key !== "Escape") return;
     e.preventDefault();
     e.stopPropagation();
-    onClose();
+    close();
   };
 
   return (
@@ -66,7 +70,7 @@ export function CommandSheet({ drive, onClose, onTyped }: CommandSheetProps) {
           aria-label="Close commands"
           onPointerDown={(e) => {
             e.preventDefault();
-            onClose();
+            close();
           }}
           onMouseDown={(e) => e.preventDefault()}
         >
@@ -78,6 +82,7 @@ export function CommandSheet({ drive, onClose, onTyped }: CommandSheetProps) {
         harness={drive.harness}
         viewer={drive.viewer}
         variant="sheet"
+        searchToggle={landscape}
         onNavigate={onClose}
         onSent={() => {
           onTyped?.();

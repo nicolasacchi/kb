@@ -20,7 +20,7 @@ describe("the landscape-phone media query", () => {
     expect(LANDSCAPE_PHONE_QUERY).toBe("(pointer: coarse) and (orientation: landscape) and (max-height: 599px)");
   });
 
-  for (const file of ["./drive.css", "./phone.css"]) {
+  for (const file of ["./drive.css", "./phone.css", "../commands/palette/palette.css"]) {
     it(`${file} uses exactly the constant wherever it asks about orientation`, () => {
       const qs = landscapeQueries(read(file));
       expect(qs.length, `${file} has no landscape query`).toBeGreaterThan(0);

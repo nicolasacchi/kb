@@ -6,7 +6,7 @@
 // and never as an href. Nothing is read from terminal bytes. No xterm import.
 
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useId, useRef, useState, type DragEvent, type ReactElement } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type DragEvent, type ReactElement } from "react";
 import { StateCard } from "@kb/ui/StateCard";
 import type { FileUploadAnswer } from "../../api/generated/FileUploadAnswer";
 import type { KbKeep } from "../../api/generated/KbKeep";
@@ -219,13 +219,27 @@ function UploadSection({ termId }: { termId: string }): ReactElement {
   );
 }
 
-/** Narrow screens fold the middle of the path (root + last two stay); evaluated per render. */
-function narrow(): boolean {
-  return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(max-width: 480px)").matches;
+const NARROW_QUERY = "(max-width: 480px)";
+
+/** Narrow screens fold the middle of the path (root + last two stay); follows a rotation live. */
+function useNarrow(): boolean {
+  const mq = (): MediaQueryList | null =>
+    typeof window !== "undefined" && typeof window.matchMedia === "function" ? window.matchMedia(NARROW_QUERY) : null;
+  const [narrow, setNarrow] = useState<boolean>(() => mq()?.matches ?? false);
+  useEffect(() => {
+    const m = mq();
+    if (!m) return;
+    const f = (): void => setNarrow(m.matches);
+    f();
+    m.addEventListener("change", f);
+    return () => m.removeEventListener("change", f);
+  }, []);
+  return narrow;
 }
 
 function Crumbs({ root, path, onGo }: { root: FilesRoot; path: string; onGo: (p: string) => void }): ReactElement {
-  const crumbs = crumbsOf(path, narrow());
+  const narrow = useNarrow();
+  const crumbs = crumbsOf(path, narrow);
   return (
     <nav className="kb-filesrail__crumbs" aria-label="Directory path" data-testid="files-crumbs">
       <button type="button" className="kb-filesrail__crumb" onClick={() => onGo("")}>

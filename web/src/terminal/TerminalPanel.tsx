@@ -876,6 +876,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
               }}
               ownerHint={ownerHint}
               onOwner={onOwner}
+              ownerKnown={!ownerStale}
             />
           )}
         />
