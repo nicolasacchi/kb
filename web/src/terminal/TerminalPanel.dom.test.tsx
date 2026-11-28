@@ -40,6 +40,7 @@ interface FakeTermInst {
   focus: ReturnType<typeof vi.fn>;
   select: ReturnType<typeof vi.fn>;
   paste: ReturnType<typeof vi.fn>;
+  resize: ReturnType<typeof vi.fn>;
 }
 const terms: FakeTermInst[] = [];
 
@@ -147,10 +148,10 @@ vi.mock("@xterm/xterm", () => ({
       this.onDataCb = cb;
     }
     onBinary(): void {}
-    resize(cols: number, rows: number): void {
+    resize = vi.fn((cols: number, rows: number): void => {
       this.cols = cols;
       this.rows = rows;
-    }
+    });
     reset(): void {}
     write(_d: unknown, done?: () => void): void {
       done?.();
@@ -1453,10 +1454,13 @@ describe("BA11Y: accessibility", () => {
     const fetchesBefore = rig.calls?.length;
     const geomBefore = [term.cols, term.rows];
     const sentBefore = sendInputMock.mock.calls.length;
+    const resizeBefore = term.resize.mock.calls.length;
     act(() => sw.click());
     expect(term.options.screenReaderMode).toBe(true);
     expect(window.localStorage.getItem("kb-term-screen-reader")).toBe("1");
     expect(terms.length).toBe(1);
+    expect(term.resize.mock.calls.length).toBe(resizeBefore);
+    expect(rig.calls?.length).toBe(fetchesBefore);
     act(() => (q("kb-term-screen-reader") as HTMLInputElement).click());
     expect(term.options.screenReaderMode).toBe(false);
     expect(terms.length).toBe(1);
@@ -1464,6 +1468,7 @@ describe("BA11Y: accessibility", () => {
     expect(rig.calls?.length).toBe(fetchesBefore);
     expect([term.cols, term.rows]).toEqual(geomBefore);
     expect(sendInputMock.mock.calls.length).toBe(sentBefore);
+    expect(term.resize.mock.calls.length).toBe(resizeBefore);
     // A fresh mount reads the stored choice.
     act(() => (q("kb-term-screen-reader") as HTMLInputElement).click());
     act(() => root?.unmount());
@@ -1486,7 +1491,7 @@ describe("BA11Y: accessibility", () => {
     expect(term.focus).toHaveBeenCalledTimes(1);
   });
 
-  it("focus that left the overlay to nothing is not handed to the terminal when the overlay unmounts", async () => {
+  it("focus blurred to nothing before the overlay unmounts is not handed back (onBlur clears the flag)", async () => {
     await mountPanel();
     const term = await profile();
     set({});
