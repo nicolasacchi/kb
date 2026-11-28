@@ -242,3 +242,18 @@
   max-height: 100vh;
   max-height: 100dvh;
 }
+
+/* HUBPROMPT: the optional first prompt in the confirm view. */
+.kb-launch__field textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 36px;
+  padding: var(--pad-2) var(--pad-3);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+  resize: none;
+}

@@ -35,6 +35,8 @@ import {
   validateCwd,
 } from "../../lib/termLaunch";
 import { useTerms } from "../useTerms";
+import { firstPromptIssue, firstPromptPresent, firstPromptText } from "./firstPrompt";
+import { stashFirstPrompt } from "./firstPromptStash";
 import {
   groupCwdsByProject,
   isPlainResumeToken,
@@ -80,6 +82,8 @@ function LaunchBody({ onClose, onLaunched, prefill }: LaunchDialogProps) {
   const [detent, setDetent] = useState<Detent>("full");
   const [search, setSearch] = useState("");
   const [q, setQ] = useState("");
+  // HUBPROMPT: component state only. Pasted (never sent) once the terminal is live.
+  const [prompt, setPrompt] = useState("");
   const listId = useId();
   const inflight = useRef<AbortController | null>(null);
   const busy = useRef(false);
@@ -209,8 +213,12 @@ function LaunchBody({ onClose, onLaunched, prefill }: LaunchDialogProps) {
     setView("form");
   };
 
+  const promptIssue = firstPromptIssue(prompt);
+  const promptSet = firstPromptPresent(prompt);
+
   const launch = () => {
     if (busy.current) return;
+    if (promptIssue !== null) return;
     const t = target;
     if (!t || validateCwd(t.cwd) !== null || (t.sid !== undefined && !isPlainResumeToken(t.sid))) {
       setView("form");
@@ -228,6 +236,7 @@ function LaunchBody({ onClose, onLaunched, prefill }: LaunchDialogProps) {
         busy.current = false;
         saveLastTermHarness(t.harness);
         saveRecentTermCwd(t.cwd);
+        if (promptSet) stashFirstPrompt(r.id, firstPromptText(prompt));
         onLaunched(r.id, t.harness);
         onClose();
       },
@@ -300,6 +309,34 @@ function LaunchBody({ onClose, onLaunched, prefill }: LaunchDialogProps) {
           </div>
         )}
       </dl>
+      <label className="kb-launch__field">
+        <span>First prompt (optional)</span>
+        <textarea
+          rows={1}
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
+          data-testid="launch-first-prompt"
+          value={prompt}
+          aria-invalid={promptIssue !== null}
+          onChange={(e) => setPrompt(e.target.value)}
+          onKeyDown={(e) => {
+            // Enter must never read as "submit" or add a line: one line only.
+            if (e.key === "Enter") e.preventDefault();
+          }}
+        />
+        <small>Pasted into the terminal when it opens. Not sent: you press Enter.</small>
+      </label>
+      {promptIssue && (
+        <p role="alert" className="kb-launch__err" data-testid="launch-first-prompt-issue">
+          {promptIssue}
+        </p>
+      )}
+      {promptSet && promptIssue === null && (
+        <p className="kb-launch__lead" data-testid="launch-confirm-prompt">
+          First prompt: {firstPromptText(prompt).length} characters
+        </p>
+      )}
       {error && (
         <p role="alert" className="kb-launch__err" data-testid="launch-error">
           {error}
@@ -313,7 +350,7 @@ function LaunchBody({ onClose, onLaunched, prefill }: LaunchDialogProps) {
           type="button"
           className="kb-launch__btn kb-launch__btn--go"
           data-testid="launch-confirm"
-          disabled={launching}
+          disabled={launching || promptIssue !== null}
           onClick={launch}
         >
           {launching ? "Launching…" : "Launch"}

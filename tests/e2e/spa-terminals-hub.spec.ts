@@ -259,3 +259,43 @@ test.describe("HUBHOST launcher in the hub", () => {
     await expect(page.locator('[data-testid="launch-confirm-view"]')).toBeVisible();
   });
 });
+
+// HUBPROMPT - the optional first prompt: confirm-view field, one-line rule, and
+// the text never leaves the page (not in the POST body, not in the URL).
+test.describe("HUBPROMPT first prompt in the launch flow", () => {
+  for (const vp of VIEWPORTS) {
+    test(`at ${vp.name}: a typed prompt is not sent to the server and the URL stays clean`, async ({ page }) => {
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await installFakeTerminal(page, { total: 300, seedLines: 100 });
+      const posted = await mockLaunch(page);
+      const urls: string[] = [];
+      page.on("request", (r) => urls.push(r.url() + (r.postData() ?? "")));
+      await page.goto(`${BASE}/terminals`);
+      await page.locator('[data-testid="hub-new"]').click();
+      await page.locator('[data-testid="launch-cwd"]').fill("/synthetic/new");
+      await page.locator('[data-testid="launch-review"]').click();
+      await page.locator('[data-testid="launch-first-prompt"]').fill("echo synthetic-prompt-text");
+      await expect(page.locator('[data-testid="launch-confirm-prompt"]')).toHaveText("First prompt: 26 characters");
+      await expect(page.locator('[data-testid="launch-confirm-view"] dl')).not.toContainText("synthetic-prompt-text");
+      await expect(page.locator('[data-testid="launch-confirm-prompt"]')).not.toContainText("synthetic-prompt-text");
+      await page.locator('[data-testid="launch-confirm"]').click();
+      await expect.poll(() => posted.length).toBe(1);
+      expect(Object.keys(posted[0]).sort()).toEqual(["cwd", "harness"]);
+      await expect(page).toHaveURL(new RegExp(`/terminals/${TERM_ID}$`), { timeout: 15_000 });
+      expect(urls.filter((u) => u.includes("synthetic-prompt-text"))).toEqual([]);
+    });
+  }
+
+  test("a multi-line prompt shows the caption and disables Launch", async ({ page }) => {
+    await installFakeTerminal(page, { total: 300, seedLines: 100 });
+    const posted = await mockLaunch(page);
+    await page.goto(`${BASE}/terminals`);
+    await page.locator('[data-testid="hub-new"]').click();
+    await page.locator('[data-testid="launch-cwd"]').fill("/synthetic/new");
+    await page.locator('[data-testid="launch-review"]').click();
+    await page.locator('[data-testid="launch-first-prompt"]').fill("first\nsecond");
+    await expect(page.locator('[data-testid="launch-first-prompt-issue"]')).toContainText("One line only");
+    await expect(page.locator('[data-testid="launch-confirm"]')).toBeDisabled();
+    expect(posted).toEqual([]);
+  });
+});

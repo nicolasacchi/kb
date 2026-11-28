@@ -21,8 +21,8 @@ vi.mock("../components/ConfirmProvider", () => ({
 }));
 vi.mock("../terminal/TerminalPanel.lazy", () => ({
   __esModule: true,
-  default: (p: { termId: string; sid: string; harness: string; onClose?: () => void; headerExtra?: React.ReactNode }) => (
-    <div data-testid="mock-panel" data-term={p.termId} data-sid={p.sid} data-harness={p.harness}>
+  default: (p: { termId: string; sid: string; harness: string; onClose?: () => void; headerExtra?: React.ReactNode; initialInput?: string }) => (
+    <div data-testid="mock-panel" data-initial={p.initialInput ?? "<none>"} data-term={p.termId} data-sid={p.sid} data-harness={p.harness}>
       <div data-testid="mock-panel-extra">{p.headerExtra}</div>
       <button type="button" data-testid="mock-panel-close" onClick={() => p.onClose?.()}>
         Close
@@ -32,6 +32,7 @@ vi.mock("../terminal/TerminalPanel.lazy", () => ({
 }));
 
 import TermPageRoute from "./termPage";
+import { resetFirstPromptStash, stashFirstPrompt } from "../terminal/hub/firstPromptStash";
 
 const ROW = {
   id: "t1",
@@ -80,6 +81,7 @@ function mountAt(path: string) {
 
 beforeEach(() => {
   admitted = true;
+  resetFirstPromptStash();
   listStatus = 200;
   listRows = [ROW];
   vi.stubGlobal("matchMedia", (q: string) =>
@@ -185,6 +187,21 @@ describe("/terminals/:id", () => {
     expect(await screen.findByTestId("mock-panel")).toBeTruthy();
     await waitFor(() => expect(screen.getByTestId("state-probe").textContent).toBe("null"));
     expect(screen.getByTestId("mock-panel")).toBeTruthy();
+  });
+
+  it("HUBPROMPT: a stashed first prompt reaches the panel once; a second mount of the id gets none", async () => {
+    stashFirstPrompt("t1", "echo hi");
+    const first = mountAt("/terminals/t1");
+    await waitFor(() => expect(screen.getByTestId("mock-panel").getAttribute("data-initial")).toBe("echo hi"));
+    first.unmount();
+    mountAt("/terminals/t1");
+    expect((await screen.findByTestId("mock-panel")).getAttribute("data-initial")).toBe("<none>");
+  });
+
+  it("HUBPROMPT: another terminal's stash is not handed to this one", async () => {
+    stashFirstPrompt("other", "secret");
+    mountAt("/terminals/t1");
+    expect((await screen.findByTestId("mock-panel")).getAttribute("data-initial")).toBe("<none>");
   });
 
   it("Close goes to the bound session, else to /sessions", async () => {

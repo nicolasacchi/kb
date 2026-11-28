@@ -3,7 +3,7 @@
 // admission bit, then wraps the lazy `TerminalPanel` (the same seam the slot
 // and the launched-terminal host use, so xterm stays out of the main chunk).
 
-import { Suspense, lazy, useEffect, useRef, type ReactElement } from "react";
+import { Suspense, lazy, useEffect, useRef, useState, type ReactElement } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { StateCard } from "@kb/ui/StateCard";
@@ -14,6 +14,7 @@ import { TerminalControls, cwdBase } from "../components/TermControls";
 import { TermShell } from "../terminal/TermShell";
 import { useTerms } from "../terminal/useTerms";
 import { buildHubUrl } from "../terminal/hub/termHub";
+import { takeFirstPrompt } from "../terminal/hub/firstPromptStash";
 
 const TerminalPanel = lazy(() => import("../terminal/TerminalPanel.lazy"));
 
@@ -52,6 +53,13 @@ export default function TermPageRoute(): ReactElement {
   useEffect(() => {
     if (hasStateHint) void navigate({ pathname: location.pathname, search: location.search, hash: location.hash }, { replace: true, state: null });
   }, [hasStateHint, navigate, location.pathname, location.search, location.hash]);
+  // HUBPROMPT: the launch dialog's first prompt, consumed once (an effect, so a
+  // dev double-render cannot eat it); a reload or a second visit gets none.
+  const [first, setFirst] = useState<{ id: string; text: string } | null>(null);
+  useEffect(() => {
+    const text = termId ? takeFirstPrompt(termId) : undefined;
+    if (termId && text !== undefined) setFirst({ id: termId, text });
+  }, [termId]);
   const harness = row?.harness ?? hinted?.harness ?? "terminal";
   const base = row ? cwdBase(row.cwd) : "";
 
@@ -125,6 +133,7 @@ export default function TermPageRoute(): ReactElement {
           termId={termId}
           sid={sessionId ?? ""}
           harness={harness}
+          initialInput={first?.id === termId ? first.text : undefined}
           onClose={close}
           headerExtra={narrow ? controls : undefined}
         />

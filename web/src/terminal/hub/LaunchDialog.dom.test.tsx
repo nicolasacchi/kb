@@ -10,6 +10,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { LaunchDialog, type LaunchDialogProps } from "./LaunchDialog";
 import { toast } from "../../lib/toast";
+import { resetFirstPromptStash, takeFirstPrompt } from "./firstPromptStash";
 import {
   loadLastTermHarness,
   loadRecentTermCwds,
@@ -45,6 +46,7 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  resetFirstPromptStash();
   calls = [];
   launchReply = { status: 200, body: { id: "t9" } };
   sessionRows = [];
@@ -630,5 +632,99 @@ describe("phone Sheet detent (HUBHOST)", () => {
     const sheet = document.querySelector("[data-kb-sheet]") as HTMLElement | null;
     if (sheet) expect(sheet.getAttribute("data-detent")).toBe("full");
     else expect(onClose).toHaveBeenCalled();
+  });
+});
+
+// ------------------------------------------------------------- HUBPROMPT
+
+describe("HUBPROMPT: the optional first prompt", () => {
+  const toConfirm = () => {
+    type("/tmp/x");
+    review();
+  };
+  const prompt = (v: string) => fireEvent.change(screen.getByTestId("launch-first-prompt"), { target: { value: v } });
+
+  it("a typed prompt is stashed under the returned id; the POST body is only harness+cwd", async () => {
+    const { onLaunched } = mount();
+    toConfirm();
+    prompt("echo hi");
+    confirm();
+    await waitFor(() => expect(onLaunched).toHaveBeenCalledWith("t9", expect.any(String)));
+    expect(posts()).toHaveLength(1);
+    expect(Object.keys(posts()[0].body ?? {}).sort()).toEqual(["cwd", "harness"]);
+    expect(JSON.stringify(calls)).not.toContain("echo hi");
+    expect(takeFirstPrompt("t9")).toBe("echo hi");
+  });
+
+  it("the stash is filled before onLaunched runs", async () => {
+    let seen: string | undefined;
+    const { onLaunched } = mount();
+    onLaunched.mockImplementation((id: string) => {
+      seen = takeFirstPrompt(id);
+    });
+    toConfirm();
+    prompt("echo hi");
+    confirm();
+    await waitFor(() => expect(onLaunched).toHaveBeenCalled());
+    expect(seen).toBe("echo hi");
+  });
+
+  it("no prompt (or blank) stashes nothing", async () => {
+    const { onLaunched } = mount();
+    toConfirm();
+    prompt("   ");
+    confirm();
+    await waitFor(() => expect(onLaunched).toHaveBeenCalled());
+    expect(takeFirstPrompt("t9")).toBeUndefined();
+  });
+
+  it("a multi-line prompt shows the caption, disables Launch and sends nothing", () => {
+    mount();
+    toConfirm();
+    prompt("a\nb");
+    expect(screen.getByTestId("launch-first-prompt-issue").textContent).toMatch(/Enter/);
+    const go = screen.getByTestId("launch-confirm") as HTMLButtonElement;
+    expect(go.disabled).toBe(true);
+    fireEvent.click(go);
+    expect(posts()).toHaveLength(0);
+    prompt("a b");
+    expect(screen.queryByTestId("launch-first-prompt-issue")).toBeNull();
+    expect((screen.getByTestId("launch-confirm") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("the confirm view shows the character count, never the text", () => {
+    mount();
+    toConfirm();
+    prompt("my-secret-token");
+    expect(screen.getByTestId("launch-confirm-prompt").textContent).toBe("First prompt: 15 characters");
+    // The field itself holds the value; nothing else in the view may echo it.
+    const echoed = Array.from(screen.getByTestId("launch-confirm-view").querySelectorAll("dl, p, small, span, code")).map((e) => e.textContent ?? "");
+    expect(echoed.join("|")).not.toContain("my-secret-token");
+    expect(document.title).not.toContain("my-secret-token");
+  });
+
+  it("a launch failure keeps the typed prompt and stashes nothing", async () => {
+    launchReply = { status: 500, body: { title: "boom", detail: "no runner" } };
+    vi.spyOn(toast, "err").mockImplementation(() => 0);
+    mount();
+    toConfirm();
+    prompt("echo hi");
+    confirm();
+    await waitFor(() => expect(screen.getByTestId("launch-error")).toBeTruthy());
+    expect((screen.getByTestId("launch-first-prompt") as HTMLTextAreaElement).value).toBe("echo hi");
+    expect(takeFirstPrompt("t9")).toBeUndefined();
+  });
+
+  it("the prompt text never reaches the toast or the console", async () => {
+    launchReply = { status: 500, body: { title: "boom", detail: "no runner" } };
+    const err = vi.spyOn(toast, "err").mockImplementation(() => 0);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mount();
+    toConfirm();
+    prompt("echo hi");
+    confirm();
+    await waitFor(() => expect(err).toHaveBeenCalled());
+    expect(JSON.stringify([err.mock.calls, log.mock.calls, warn.mock.calls])).not.toContain("echo hi");
   });
 });
