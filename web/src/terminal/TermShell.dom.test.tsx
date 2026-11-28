@@ -11,6 +11,15 @@ vi.mock("@kb/ui/useCloseRequest", () => ({ useCloseRequest: closeReq }));
 // The real Conversation tab needs a query client; these tests pin the shell
 // itself against the placeholders (the tab has its own tests).
 vi.mock("./rail/registerTabs", () => ({}));
+// CONVNEED: the banner has its own tests; here only the shell wiring is pinned.
+vi.mock("./needs/NeedsYouBanner", () => ({
+  NeedsYouBanner: ({ onJump }: { onJump: () => void }) => (
+    <div data-testid="needs-you">
+      <button type="button" data-testid="needs-you-jump" onClick={onJump} />
+    </div>
+  ),
+}));
+import { hasPendingJump, resetPendingJumpForTests } from "./needs/pendingJump";
 import { registerRailTab, resetRailTabs } from "./rail/registry";
 import { useTermRail } from "./rail/context";
 
@@ -28,6 +37,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  resetPendingJumpForTests();
   resetRailTabs();
   vi.unstubAllGlobals();
 });
@@ -230,5 +240,52 @@ describe("TermShell layout switch", () => {
     expect(screen.getByTestId("term-shell").getAttribute("data-kb-term-layout")).toBe("phone");
     expect(screen.getByTestId("pane")).toBe(pane);
     expect(pane.isConnected).toBe(true);
+  });
+});
+
+describe("TermShell needs-you banner", () => {
+  const follows = (a: HTMLElement, b: HTMLElement) =>
+    !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+  it("sits between the bar and the body, outside the rail", () => {
+    render(shell({ header: <div data-testid="hdr">h</div> }));
+    const root = screen.getByTestId("term-shell");
+    const banner = screen.getByTestId("needs-you");
+    expect(banner.parentElement).toBe(root);
+    expect(follows(screen.getByTestId("hdr"), banner)).toBe(true);
+    expect(follows(banner, screen.getByTestId("pane"))).toBe(true);
+  });
+
+  it("is still present on the phone with the sheet collapsed, and not inside the sheet", () => {
+    media(true);
+    render(shell());
+    expect(screen.getByTestId("term-sheet-handle").getAttribute("aria-expanded")).toBe("false");
+    const banner = screen.getByTestId("needs-you");
+    expect(screen.getByTestId("term-sheet").contains(banner)).toBe(false);
+  });
+
+  it("jump (desktop) selects the conversation tab, reopens a collapsed rail and requests the row focus", () => {
+    window.localStorage.setItem(RAIL_TAB_KEY, "commands");
+    window.localStorage.setItem(RAIL_OPEN_KEY, "0");
+    render(shell());
+    expect(screen.getByTestId("term-rail-toggle").getAttribute("aria-expanded")).toBe("false");
+    expect(hasPendingJump()).toBe(false);
+    fireEvent.click(screen.getByTestId("needs-you-jump"));
+    expect(window.localStorage.getItem(RAIL_TAB_KEY)).toBe("conversation");
+    expect(window.localStorage.getItem(RAIL_OPEN_KEY)).toBe("1");
+    expect(screen.getByTestId("term-rail-toggle").getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByTestId("rail-placeholder-conversation")).toBeTruthy();
+    expect(hasPendingJump()).toBe(true);
+  });
+
+  it("jump (phone) expands the sheet on the conversation tab", () => {
+    media(true);
+    window.localStorage.setItem(RAIL_TAB_KEY, "commands");
+    render(shell());
+    fireEvent.click(screen.getByTestId("needs-you-jump"));
+    expect(screen.getByTestId("term-sheet-handle").getAttribute("aria-expanded")).toBe("true");
+    expect(window.localStorage.getItem(RAIL_TAB_KEY)).toBe("conversation");
+    expect(screen.getByTestId("rail-placeholder-conversation")).toBeTruthy();
+    expect(hasPendingJump()).toBe(true);
   });
 });

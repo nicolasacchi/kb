@@ -28,6 +28,8 @@ import { useCloseRequest } from "@kb/ui/useCloseRequest";
 import { usePhonePanel } from "../hooks/useIsMobile";
 import { isRailTabId, railTabs, type RailTab, type RailTabId } from "./rail/registry";
 import { TermRailContext, type TermRailContextValue } from "./rail/context";
+import { NeedsYouBanner } from "./needs/NeedsYouBanner";
+import { requestPendingJump } from "./needs/pendingJump";
 import "./rail/registerTabs";
 import "./termShell.css";
 
@@ -201,6 +203,16 @@ export function TermShell(props: TermShellProps): ReactElement {
     });
   }, []);
   const collapseSheet = useCallback(() => setSheetOpen(false), []);
+  // CONVNEED: open the Conversation tab (rail or sheet) and ask it to focus the pending row.
+  const jumpToPending = useCallback(() => {
+    selectTab("conversation");
+    if (phone) setSheetOpen(true);
+    else {
+      setOpen(true);
+      write(RAIL_OPEN_KEY, "1");
+    }
+    requestPendingJump();
+  }, [phone, selectTab]);
   // CloseWatcher / platform close request: no history entry, no listener while collapsed.
   useCloseRequest(phone && sheetOpen, collapseSheet);
 
@@ -235,6 +247,7 @@ export function TermShell(props: TermShellProps): ReactElement {
             </button>
           )}
         </div>
+        <NeedsYouBanner onJump={jumpToPending} />
         <div className="kb-termshell__body">
           <div className="kb-termshell__pane">{props.children}</div>
           {phone ? null : (
