@@ -68,7 +68,10 @@ async function pump(termId: string, qc: QueryClient): Promise<void> {
           transport: transportOverride,
           onProgress: (loaded, total) => set(termId, Q.progress(entry(termId).state, item.id, loaded, total)),
         });
-        set(termId, Q.succeed(entry(termId).state, item.id, res));
+        // A Cancel that lost the race: the file is stored, so the row says so (late)
+        // and Recent lists it once. A real abort lands in the catch below instead.
+        const wasCancelled = entry(termId).state.items.find((i) => i.id === item.id)?.status === "cancelled";
+        set(termId, wasCancelled ? Q.landed(entry(termId).state, item.id, res) : Q.succeed(entry(termId).state, item.id, res));
         addRecent(termId, res);
         void qc.invalidateQueries({ queryKey: ["term", "files", termId, "up"] });
       } catch (err) {

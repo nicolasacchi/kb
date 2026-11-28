@@ -4,9 +4,12 @@ import { DriveError } from "../phone/driveApi";
 import {
   absPath,
   downloadFile,
+  downloadKept,
   FILE_MAX_BYTES,
   listDir,
   pastePath,
+  REVOKE_DELAY_MS,
+  shellQuotePath,
   uploadFile,
   uploadMessage,
   type TransportRequest,
@@ -71,6 +74,44 @@ describe("paste", () => {
     await expect(pastePath("t1", "/up/a\rb")).rejects.toThrow();
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("refuses TAB, ESC, NUL, DEL and C1 controls with no request", async () => {
+    for (const c of ["\t", "\u001b", "\u0000", "\u007f", "\u0085", "\u009b"]) {
+      await expect(pastePath("t1", `/up/a${c}b`)).rejects.toThrow(/control character/);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("posts the shell-quoted path for names with spaces, quotes and $(...)", async () => {
+    const bodies: string[] = [];
+    for (const p of ["/up/a b.pdf", "/up/it's.txt", "/up/$(touch x).txt"]) {
+      await pastePath("t1", p);
+      bodies.push(JSON.parse(fetchMock.mock.calls.at(-1)![1].body as string).text);
+    }
+    expect(bodies).toEqual(["'/up/a b.pdf'", "'/up/it'\\''s.txt'", "'/up/$(touch x).txt'"]);
+    const last = JSON.parse(fetchMock.mock.calls.at(-1)![1].body as string);
+    expect(Object.keys(last)).toEqual(["text"]);
+  });
+});
+
+describe("shellQuotePath", () => {
+  it.each([
+    ["/run/up/a.pdf", "/run/up/a.pdf"],
+    ["/w/a_b-c@1%+=:,.x", "/w/a_b-c@1%+=:,.x"],
+    ["/up/a b", "'/up/a b'"],
+    ["/up/it's", "'/up/it'\\''s'"],
+    ["/up/''", "'/up/'\\'''\\'''"],
+    ["/up/$(touch x)", "'/up/$(touch x)'"],
+    ["/up/`id`", "'/up/`id`'"],
+    ["/up/a;b", "'/up/a;b'"],
+    ['/up/"q"', "'/up/\"q\"'"],
+    ["/up/*", "'/up/*'"],
+    ["/up/café.txt", "'/up/café.txt'"],
+    ["/up/~x", "'/up/~x'"],
+    ["", "''"],
+  ])("%j -> %j", (input, out) => {
+    expect(shellQuotePath(input)).toBe(out);
+  });
 });
 
 describe("listDir + absPath", () => {
@@ -105,7 +146,7 @@ describe("downloadFile", () => {
     delete (URL as unknown as Record<string, unknown>).revokeObjectURL;
   });
 
-  it("fetches with the intent header, clicks an anchor with download=name and revokes the URL", async () => {
+  it("fetches with the intent header, clicks an anchor with download=name", async () => {
     const f = vi.fn(async () => bodyOf([1, 2, 3], "3"));
     vi.stubGlobal("fetch", f);
     const clicks: string[] = [];
@@ -119,7 +160,37 @@ describe("downloadFile", () => {
     expect((init.headers as Record<string, string>)["X-Kb-Intent"]).toBe("terminal");
     expect(clicks).toEqual(["out.txt|blob:x"]);
     expect(progress.at(-1)).toBe(3);
-    expect(revoke).toHaveBeenCalledWith("blob:x");
+    click.mockRestore();
+  });
+
+  it("revokes a saved URL only after the delay, never synchronously after click", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      vi.stubGlobal("fetch", vi.fn(async () => bodyOf([1], "1")));
+      const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+      await downloadFile("t1", "cwd", "a", "a");
+      expect(click).toHaveBeenCalledTimes(1);
+      expect(revoke).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(REVOKE_DELAY_MS - 1);
+      expect(revoke).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(revoke).toHaveBeenCalledWith("blob:x");
+      expect(REVOKE_DELAY_MS).toBeGreaterThanOrEqual(60_000);
+      click.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("downloadKept fetches kept/{id} with the intent header", async () => {
+    const f = vi.fn(async () => bodyOf([1, 2], "2"));
+    vi.stubGlobal("fetch", f);
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    await downloadKept("t1", "id/1", "a.txt", { revokeAfterMs: 1 });
+    const [u, init] = f.mock.calls[0] as unknown as [string, RequestInit];
+    expect(u).toBe("/api/terms/t1/kept/id%2F1");
+    expect((init.headers as Record<string, string>)["X-Kb-Intent"]).toBe("terminal");
+    expect(click).toHaveBeenCalledTimes(1);
     click.mockRestore();
   });
 

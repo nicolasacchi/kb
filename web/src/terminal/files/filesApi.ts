@@ -140,22 +140,22 @@ export interface DownloadOptions {
   onProgress?: (loaded: number, total: number) => void;
   /** Test seam: where the blob URL is created, clicked and revoked. */
   document?: Document;
+  /** How long a SAVED blob URL lives before it is revoked (default 60 s). */
+  revokeAfterMs?: number;
 }
 
+/** A synchronous revoke right after `click()` can cancel the save on Android browsers. */
+export const REVOKE_DELAY_MS = 60_000;
+
 /**
- * `GET …/file`, stream-read for progress, then blob -> object URL -> anchor
- * with `download` -> click. The URL is revoked in `finally`, success or not;
- * a body shorter than `Content-Length` is an error, never a saved file.
+ * `GET <url>`, stream-read for progress, then blob -> object URL -> anchor with
+ * `download` -> click. A body shorter than `Content-Length` is an error, never a
+ * saved file. The URL is revoked immediately when the click fails, and after
+ * `revokeAfterMs` (a delay, so a phone browser can finish the save) on success.
  */
-export async function downloadFile(
-  termId: string,
-  root: FilesRoot,
-  path: string,
-  name: string,
-  opts: DownloadOptions = {},
-): Promise<void> {
+async function downloadFrom(href: string, name: string, opts: DownloadOptions): Promise<void> {
   if (opts.bytes !== undefined && opts.bytes > FILE_MAX_BYTES) throw new DriveError(0, null, FILE_CAP_MESSAGE);
-  const res = await fetch(`${url(termId, "file")}?${lsQuery(root, path)}`, {
+  const res = await fetch(href, {
     headers: { ...INTENT },
     signal: opts.signal,
   });
@@ -183,18 +183,36 @@ export async function downloadFile(
     throw new DriveError(0, null, "The download ended early; the file was not saved.");
   }
   const doc = opts.document ?? document;
-  const href = URL.createObjectURL(new Blob(chunks as BlobPart[]));
+  const objectUrl = URL.createObjectURL(new Blob(chunks as BlobPart[]));
   try {
     const a = doc.createElement("a");
-    a.href = href;
+    a.href = objectUrl;
     a.download = name;
     a.rel = "noopener";
     doc.body.appendChild(a);
     a.click();
     a.remove();
-  } finally {
-    URL.revokeObjectURL(href);
+  } catch (err) {
+    URL.revokeObjectURL(objectUrl);
+    throw err;
   }
+  setTimeout(() => URL.revokeObjectURL(objectUrl), opts.revokeAfterMs ?? REVOKE_DELAY_MS);
+}
+
+/** `GET …/file` (a working-tree or uploads file). */
+export function downloadFile(
+  termId: string,
+  root: FilesRoot,
+  path: string,
+  name: string,
+  opts: DownloadOptions = {},
+): Promise<void> {
+  return downloadFrom(`${url(termId, "file")}?${lsQuery(root, path)}`, name, opts);
+}
+
+/** `GET …/kept/{artifact_id}`: the original of a file kept in kb (same blob + anchor path). */
+export function downloadKept(termId: string, artifactId: string, name: string, opts: DownloadOptions = {}): Promise<void> {
+  return downloadFrom(url(termId, `kept/${encodeURIComponent(artifactId)}`), name, opts);
 }
 
 /** The absolute path of `name` inside the listed directory (`TermLsAnswer.dir`). */
@@ -207,9 +225,27 @@ export function singleLine(text: string): boolean {
   return !/[\r\n]/.test(text);
 }
 
-/** `POST …/paste` with `{text}` only: no Enter, no `enter` key. Throws DriveError. */
-export async function pastePath(termId: string, text: string): Promise<void> {
-  if (!singleLine(text)) throw new DriveError(0, null, "That path has a line break and cannot be pasted.");
-  await paste({ termId, harness: "", viewer: null, confirm: async () => false }, text);
+/** Any C0 control, DEL or C1 control (CR/LF included). */
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
+const SHELL_SAFE = /^[A-Za-z0-9_@%+=:,./-]+$/;
+
+/**
+ * Quote a path for a POSIX shell prompt: unchanged when every character is in
+ * the conservative safe set, else single-quoted with each `'` written `'\''`.
+ * Pure: it does not check for control characters (`pastePath` does).
+ */
+export function shellQuotePath(p: string): string {
+  if (SHELL_SAFE.test(p)) return p;
+  return `'${p.replace(/'/g, "'\\''")}'`;
 }
 
+/**
+ * `POST …/paste` with `{text}` only: the shell-quoted path, no Enter, no
+ * `enter` key. Refuses a line break or any other control character with no
+ * request. Throws DriveError.
+ */
+export async function pastePath(termId: string, text: string): Promise<void> {
+  if (!singleLine(text)) throw new DriveError(0, null, "That path has a line break and cannot be pasted.");
+  if (CONTROL.test(text)) throw new DriveError(0, null, "That path has a control character and cannot be pasted.");
+  await paste({ termId, harness: "", viewer: null, confirm: async () => false }, shellQuotePath(text));
+}

@@ -9,22 +9,21 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useId, useRef, useState, type DragEvent, type ReactElement } from "react";
 import { StateCard } from "@kb/ui/StateCard";
 import type { FileUploadAnswer } from "../../api/generated/FileUploadAnswer";
+import type { KbKeep } from "../../api/generated/KbKeep";
+import type { KeepAnswer } from "../../api/generated/KeepAnswer";
 import type { FsEntry } from "../../api/generated/FsEntry";
 import { toast } from "../../lib/toast";
 import { DriveError } from "../phone/driveApi";
 import { useTermRail } from "../rail/context";
 import { displayName } from "./displayName";
-import { absPath, downloadFile, FILE_CAP_MESSAGE, FILE_MAX_BYTES, pastePath, type FilesRoot } from "./filesApi";
+import { crumbsOf } from "./crumbs";
+import { absPath, downloadFile, downloadKept, FILE_CAP_MESSAGE, FILE_MAX_BYTES, pastePath, type FilesRoot } from "./filesApi";
+import { keepAnswerProblem, keepFile, keepMessage, keepRefusal } from "./keepApi";
 import { useRecent } from "./recentStore";
 import { cancelUpload, clearUploads, enqueueFiles, useUploadQueue } from "./uploadRunner";
 import { useFilesListing } from "./useFilesListing";
-import type { QueueItem } from "./uploadQueue";
+import { fullySent, type QueueItem } from "./uploadQueue";
 import "./filesRail.css";
-
-/** FXSAVE seam: a sibling server unit adds the route; no button in FXUI. */
-export function KeepFromWorkingTree(): null {
-  return null;
-}
 
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -59,23 +58,53 @@ function PasteButton({ termId, text }: { termId: string; text: string }): ReactE
   );
 }
 
-/** The kb keep status of an upload, shown honestly. */
-function KeepStatus({ kb }: { kb: FileUploadAnswer["kb"] }): ReactElement {
+/** "Download original" for a kept file: the stored copy, through the same blob + anchor path. */
+function DownloadKept({ termId, id, name }: { termId: string; id: string; name: string }): ReactElement {
+  const [busy, setBusy] = useState(false);
+  const go = async (): Promise<void> => {
+    setBusy(true);
+    try {
+      await downloadKept(termId, id, name);
+    } catch (err) {
+      toast.err(`${displayName(name)}: ${errText(err, "Could not download the original.")}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button type="button" className="kb-filesrail__btn" data-act="download-kept" disabled={busy} onClick={() => void go()}>
+      Download original
+    </button>
+  );
+}
+
+/**
+ * The kb keep status of a file, shown honestly. The files corpus' kb name is
+ * not on any wire the SPA reads (`KbKeep` carries the id and the stub path
+ * only), so there is NO open-in-kb link: the stub path as text, a Copy action
+ * and, for a stored row, the original download.
+ */
+function KeepStatus({ termId, name, kb }: { termId: string; name: string; kb: KbKeep }): ReactElement {
   const copy = (): void => {
     if (kb.stub_rel && navigator.clipboard) void navigator.clipboard.writeText(kb.stub_rel).catch(() => {});
   };
   if (kb.status === "stored") {
-    // The files corpus' kb name is not on the wire (KbKeep has id + stub_rel), so the
-    // open-in-kb link cannot be built without guessing: show the stub path with a copy action.
     return (
-      <p className="kb-filesrail__keep" data-keep="stored">
-        Kept in kb{kb.stub_rel ? <>: <code className="kb-filesrail__path">{displayName(kb.stub_rel)}</code></> : null}
-        {kb.stub_rel ? (
-          <button type="button" className="kb-filesrail__btn kb-filesrail__btn--quiet" data-act="copy-stub" onClick={copy}>
-            Copy
-          </button>
-        ) : null}
-      </p>
+      <div className="kb-filesrail__keep" data-keep="stored">
+        <p className="kb-filesrail__keep-line">
+          {kb.created === false ? "Already kept in kb" : "Kept in kb"}
+          {kb.inlined ? " (content indexed)" : ""}
+          {kb.stub_rel ? <>: <code className="kb-filesrail__path">{displayName(kb.stub_rel)}</code></> : null}
+        </p>
+        <div className="kb-filesrail__tools">
+          {kb.stub_rel ? (
+            <button type="button" className="kb-filesrail__btn kb-filesrail__btn--quiet" data-act="copy-stub" onClick={copy}>
+              Copy
+            </button>
+          ) : null}
+          {kb.id ? <DownloadKept termId={termId} id={kb.id} name={name} /> : null}
+        </div>
+      </div>
     );
   }
   const why = kb.reason ? `: ${displayName(kb.reason)}` : "";
@@ -87,14 +116,19 @@ function KeepStatus({ kb }: { kb: FileUploadAnswer["kb"] }): ReactElement {
   );
 }
 
-function ResultBlock({ termId, r }: { termId: string; r: FileUploadAnswer }): ReactElement {
+function ResultBlock({ termId, r, late = false }: { termId: string; r: FileUploadAnswer; late?: boolean }): ReactElement {
   return (
     <div className="kb-filesrail__result">
+      {late ? (
+        <p className="kb-filesrail__meta" data-testid="files-late">
+          Cancelled too late: the file was stored.
+        </p>
+      ) : null}
       <code className="kb-filesrail__path" data-testid="files-runner-path">
         {displayName(r.path)}
       </code>
       <PasteButton termId={termId} text={r.path} />
-      <KeepStatus kb={r.kb} />
+      <KeepStatus termId={termId} name={r.name} kb={r.kb} />
     </div>
   );
 }
@@ -118,13 +152,18 @@ function QueueRow({ termId, item }: { termId: string; item: QueueItem }): ReactE
           {pct}%
         </progress>
       ) : null}
-      {item.status === "cancelled" ? <p className="kb-filesrail__meta" data-testid="files-cancelled">cancelled</p> : null}
+      {item.status === "cancelled" ? (
+        <p className="kb-filesrail__meta" data-testid="files-cancelled">
+          cancelled
+          {fullySent(item) ? <span data-testid="files-cancelled-maybe"> (it may still have been stored; check Uploads)</span> : null}
+        </p>
+      ) : null}
       {item.status === "error" ? (
         <p className="kb-filesrail__err" role="alert" data-testid="files-row-error">
           {displayName(item.error ?? "Upload failed")}
         </p>
       ) : null}
-      {item.status === "done" && item.result ? <ResultBlock termId={termId} r={item.result} /> : null}
+      {item.status === "done" && item.result ? <ResultBlock termId={termId} r={item.result} late={item.late} /> : null}
     </li>
   );
 }
@@ -168,7 +207,7 @@ function UploadSection({ termId }: { termId: string }): ReactElement {
         Index content in kb
       </label>
       <p className="kb-filesrail__hint">Session files may contain unscrubbed content. Leave this off unless you want the text searchable in kb.</p>
-      <p className="kb-filesrail__hint">Drop files anywhere on this tab. Up to 32 MiB each.</p>
+      <p className="kb-filesrail__hint">On a phone the chooser decides the sources (camera, gallery or files). On a desktop you can also drop files anywhere on this tab. Up to 32 MiB each.</p>
       {q.items.length > 0 ? (
         <ul className="kb-filesrail__list" data-testid="files-upload-list">
           {q.items.map((i) => (
@@ -180,24 +219,32 @@ function UploadSection({ termId }: { termId: string }): ReactElement {
   );
 }
 
+/** Narrow screens fold the middle of the path (root + last two stay); evaluated per render. */
+function narrow(): boolean {
+  return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(max-width: 480px)").matches;
+}
+
 function Crumbs({ root, path, onGo }: { root: FilesRoot; path: string; onGo: (p: string) => void }): ReactElement {
-  const segs = path === "" ? [] : path.split("/");
+  const crumbs = crumbsOf(path, narrow());
   return (
     <nav className="kb-filesrail__crumbs" aria-label="Directory path" data-testid="files-crumbs">
       <button type="button" className="kb-filesrail__crumb" onClick={() => onGo("")}>
         {root === "cwd" ? "Working tree" : "Uploads"}
       </button>
-      {segs.map((s, i) => {
-        const to = segs.slice(0, i + 1).join("/");
-        return (
-          <span key={to} className="kb-filesrail__crumbwrap">
-            <span aria-hidden="true"> / </span>
-            <button type="button" className="kb-filesrail__crumb" onClick={() => onGo(to)}>
-              {displayName(s)}
-            </button>
-          </span>
-        );
-      })}
+      {crumbs.map((c) => (
+        <span key={c.to} className="kb-filesrail__crumbwrap">
+          <span aria-hidden="true"> / </span>
+          <button
+            type="button"
+            className="kb-filesrail__crumb"
+            data-collapsed={c.collapsed ? "1" : undefined}
+            aria-label={c.collapsed ? "Show the folders in between" : undefined}
+            onClick={() => onGo(c.to)}
+          >
+            {displayName(c.label)}
+          </button>
+        </span>
+      ))}
     </nav>
   );
 }
@@ -209,6 +256,7 @@ function EntryRow({
   path,
   e,
   onOpen,
+  index,
 }: {
   termId: string;
   root: FilesRoot;
@@ -216,8 +264,12 @@ function EntryRow({
   path: string;
   e: FsEntry;
   onOpen: (p: string) => void;
+  index: boolean;
 }): ReactElement {
   const [pct, setPct] = useState<number | null>(null);
+  const [keeping, setKeeping] = useState(false);
+  const [kept, setKept] = useState<KeepAnswer | null>(null);
+  const [keepErr, setKeepErr] = useState<string | null>(null);
   const rel = path === "" ? e.name : `${path}/${e.name}`;
   const download = async (): Promise<void> => {
     setPct(0);
@@ -230,6 +282,30 @@ function EntryRow({
       toast.err(`${displayName(e.name)}: ${errText(err, "Could not download the file.")}`);
     } finally {
       setPct(null);
+    }
+  };
+  const keep = async (): Promise<void> => {
+    const refusal = keepRefusal(e);
+    const fail = (msg: string): void => {
+      setKeepErr(msg);
+      toast.err(`${displayName(e.name)}: ${msg}`);
+    };
+    setKept(null);
+    setKeepErr(null);
+    if (refusal !== null) {
+      fail(refusal);
+      return;
+    }
+    setKeeping(true);
+    try {
+      const a = await keepFile(termId, { root, path: rel, index });
+      const problem = keepAnswerProblem(a);
+      setKept(a);
+      if (problem !== null) toast.err(`${displayName(e.name)}: ${displayName(problem)}`);
+    } catch (err) {
+      fail(keepMessage(err));
+    } finally {
+      setKeeping(false);
     }
   };
   const tooBig = e.kind === "file" && e.bytes > FILE_MAX_BYTES;
@@ -255,7 +331,25 @@ function EntryRow({
           </button>
         ) : null}
         <PasteButton termId={termId} text={absPath(dir, e.name)} />
+        {e.kind === "file" ? (
+          <button type="button" className="kb-filesrail__btn" data-act="keep" disabled={keeping} onClick={() => void keep()}>
+            Keep in kb
+          </button>
+        ) : null}
       </div>
+      {keepErr !== null ? (
+        <p className="kb-filesrail__err" role="alert" data-testid="files-keep-error">
+          {displayName(keepErr)}
+        </p>
+      ) : null}
+      {kept !== null ? (
+        <div className="kb-filesrail__result" data-testid="files-keep-result">
+          <p className="kb-filesrail__meta">
+            {displayName(kept.name)} · {fmtBytes(kept.bytes)}
+          </p>
+          <KeepStatus termId={termId} name={kept.name} kb={kept.kb} />
+        </div>
+      ) : null}
       {tooBig ? <p className="kb-filesrail__hint">{FILE_CAP_MESSAGE}</p> : null}
       {pct !== null ? <progress className="kb-filesrail__bar" max={100} value={pct} aria-label="Downloading" data-testid="files-dl-progress" /> : null}
     </li>
@@ -266,6 +360,7 @@ function BrowseSection({ termId }: { termId: string }): ReactElement {
   const [root, setRoot] = useState<FilesRoot>("cwd");
   const [path, setPath] = useState("");
   const [hidden, setHidden] = useState(false);
+  const [keepIndex, setKeepIndex] = useState(false);
   const q = useFilesListing(termId, root, path);
   const switchRoot = (r: FilesRoot): void => {
     setRoot(r);
@@ -294,7 +389,7 @@ function BrowseSection({ termId }: { termId: string }): ReactElement {
     body = (
       <ul className="kb-filesrail__list">
         {entries.map((e) => (
-          <EntryRow key={e.name} termId={termId} root={root} dir={data?.dir ?? ""} path={path} e={e} onOpen={setPath} />
+          <EntryRow key={`${root}:${path}:${e.name}`} termId={termId} root={root} dir={data?.dir ?? ""} path={path} e={e} onOpen={setPath} index={keepIndex} />
         ))}
       </ul>
     );
@@ -317,6 +412,11 @@ function BrowseSection({ termId }: { termId: string }): ReactElement {
         <input type="checkbox" checked={hidden} data-testid="files-hidden" onChange={(e) => setHidden(e.target.checked)} />
         Show hidden files
       </label>
+      <label className="kb-filesrail__check">
+        <input type="checkbox" checked={keepIndex} data-testid="files-keep-index" onChange={(e) => setKeepIndex(e.target.checked)} />
+        Index content when keeping in kb
+      </label>
+      <p className="kb-filesrail__hint">Keep in kb stores a copy and a stub page. With indexing on, secrets are scrubbed from the text but check it before you rely on that.</p>
       <Crumbs root={root} path={path} onGo={setPath} />
       {data?.truncated ? (
         <p className="kb-filesrail__hint" data-testid="files-truncated">
@@ -329,7 +429,6 @@ function BrowseSection({ termId }: { termId: string }): ReactElement {
         </p>
       ) : null}
       {body}
-      <KeepFromWorkingTree />
     </section>
   );
 }
