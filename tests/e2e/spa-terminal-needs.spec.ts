@@ -99,7 +99,9 @@ test.describe("CONVNEED needs-you banner", () => {
     await expect(pane).toBeVisible({ timeout: 20_000 });
     // Pin the page scrollbar so a banner-driven overflow cannot move the width.
     await page.addStyleTag({ content: "html{overflow-y:scroll}" });
-    const before = (await pane.boundingBox())!;
+    const rail = page.locator(".kb-termshell__rail");
+    const total = async () => (await pane.boundingBox())!.width + (await rail.boundingBox())!.width;
+    const before = await total();
     await expect(page.locator('[data-testid="needs-you"]')).toHaveCount(0);
 
     live.blocked = true;
@@ -116,8 +118,9 @@ test.describe("CONVNEED needs-you banner", () => {
     const bb = (await banner.boundingBox())!;
     const pb = (await pane.boundingBox())!;
     expect(bb.y + bb.height).toBeLessThanOrEqual(pb.y + 1);
-    // The pane keeps its width (the banner is its own row, not a column).
-    expect(Math.abs(pb.width - before.width)).toBeLessThanOrEqual(1);
+    // The banner is its own row, not a column: the pane and rail still share the same width.
+    // (The rail's own blocked badge may widen the rail track, so pane + rail is the invariant.)
+    expect(Math.abs((await total()) - before)).toBeLessThanOrEqual(1);
 
     live.blocked = false;
     await page.evaluate(() => window.dispatchEvent(new Event("focus")));
