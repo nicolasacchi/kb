@@ -135,3 +135,13 @@
     min-width: 40px;
   }
 }
+
+/* A phone held in landscape keeps its height for the grid (POLISH2: the Watch
+ * pane is at least half the sheet): when the extra row holds only the switcher
+ * (no End/switch controls from the page), the row folds away. The Alt chords
+ * stay registered; the button returns in portrait. */
+@media (pointer: coarse) and (orientation: landscape) and (max-height: 599px) {
+  .kb-term-phone__extra:not(:has(.kb-term-phone__btn)) {
+    display: none;
+  }
+}
