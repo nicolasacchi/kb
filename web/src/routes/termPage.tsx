@@ -14,6 +14,7 @@ import { TerminalControls, cwdBase } from "../components/TermControls";
 import { TermShell } from "../terminal/TermShell";
 import { useTerms } from "../terminal/useTerms";
 import { buildHubUrl } from "../terminal/hub/termHub";
+import TermSwitcher from "../terminal/switcher/TermSwitcher";
 import { CommandsButton } from "../terminal/commands/palette/CommandsButton";
 
 const TerminalPanel = lazy(() => import("../terminal/TerminalPanel.lazy"));
@@ -129,7 +130,12 @@ export default function TermPageRoute(): ReactElement {
           harness={harness}
           onClose={close}
           headerExtra={narrow ? controls : undefined}
-          headerActions={phonePanel ? undefined : <CommandsButton termId={termId} harness={harness} />}
+          headerActions={
+            <>
+              {phonePanel ? null : <CommandsButton termId={termId} harness={harness} />}
+              <TermSwitcher currentId={termId} />
+            </>
+          }
         />
       </Suspense>
     </TermShell>

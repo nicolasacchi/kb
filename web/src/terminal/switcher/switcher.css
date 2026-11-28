@@ -1,0 +1,181 @@
+/* TERMSWITCH — the header switcher. Tokens only; the popover is anchored in
+ * place (never portalled) and rows are 40 px targets. */
+.kb-term-switcher {
+  position: relative;
+  flex: none;
+}
+
+.kb-term-switcher__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pad-1);
+}
+
+.kb-term-switcher__count {
+  color: var(--ink-mute);
+}
+
+.kb-term-switcher__badge {
+  background: var(--warn);
+  color: var(--bg);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  min-width: 1.4em;
+  padding: 0 var(--pad-1);
+  text-align: center;
+}
+
+.kb-term-switcher__pop {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: var(--z-popover);
+  margin-top: var(--pad-1);
+  min-width: 260px;
+  max-width: min(360px, calc(100vw - 16px));
+  max-height: min(60dvh, 420px);
+  overflow-y: auto;
+  background: var(--bg-card);
+  color: var(--ink);
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card-hover);
+  padding: var(--pad-1);
+}
+
+.kb-term-switcher__list {
+  outline: none;
+}
+
+.kb-term-switcher__group {
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
+  padding: var(--pad-2) var(--pad-2) var(--pad-1);
+}
+
+.kb-term-switcher__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pad-1) var(--pad-2);
+  min-height: 40px;
+  padding: var(--pad-1) var(--pad-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.kb-term-switcher__row[data-active="true"],
+.kb-term-switcher__row:hover {
+  background: var(--bg-panel);
+}
+
+.kb-term-switcher__row[aria-current="true"] .kb-term-switcher__title {
+  font-weight: 600;
+}
+
+.kb-term-switcher__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-term-switcher__meta {
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
+}
+
+.kb-term-switcher__cap {
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
+  margin: 0;
+  padding: var(--pad-2);
+}
+
+/* Marks differ by SHAPE and text, never colour alone: a filled diamond for
+ * "needs you", a hollow circle for "finished". */
+.kb-term-switcher__mark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pad-1);
+  font-size: var(--fs-xs);
+}
+
+.kb-term-switcher__shape {
+  display: inline-block;
+  width: 0.7em;
+  height: 0.7em;
+}
+
+.kb-term-switcher__mark--asks {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+.kb-term-switcher__mark--asks .kb-term-switcher__shape {
+  background: var(--warn);
+  transform: rotate(45deg);
+}
+
+.kb-term-switcher__mark--finished {
+  color: var(--accent);
+}
+
+.kb-term-switcher__mark--finished .kb-term-switcher__shape {
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+}
+
+@media (pointer: coarse) {
+  .kb-term-switcher__btn {
+    min-height: 40px;
+    min-width: 40px;
+  }
+}
+
+/* The phone's extra row: the switcher sits at the LEFT of it, so a
+ * right-anchored popover would hang off-screen (the sheet body clips it).
+ * Anchor the panel to the row instead and span its full width. Scoped by the
+ * switcher's own presence so no other unit's row styling is touched. */
+.kb-term-phone__extra:has(.kb-term-switcher) {
+  position: relative;
+}
+
+.kb-term-phone__extra .kb-term-switcher {
+  position: static;
+}
+
+.kb-term-phone__extra .kb-term-switcher .kb-term-switcher__pop {
+  left: 0;
+  right: 0;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.kb-term-phone__extra .kb-term__actions:has(.kb-term-switcher) {
+  position: static;
+}
+
+/* A phone held in landscape keeps its height for the grid (POLISH2, pinned by
+ * spa-terminal-phone.spec.ts: the Watch pane is at least half the sheet). When
+ * the extra row holds ONLY the switcher (no page controls, no other header
+ * actions such as the command button) the row folds away; the button returns in
+ * portrait. Dropping this rule fails POLISH2 (watch 161 of 412). */
+@media (pointer: coarse) and (orientation: landscape) and (max-height: 599px) {
+  .kb-term-phone__extra:not(:has(.kb-term-phone__btn)):not(:has(.kb-term__actions > :not(.kb-term-switcher))) {
+    display: none;
+  }
+}
+
+/* The desktop bar is one nowrap row (BHEAD: its height must not change when
+ * chips appear). The switcher adds width, so every button in a bar that carries
+ * it keeps its label on one line and the shrinkable heading/title/chips give
+ * way instead of a verb label wrapping onto a second line. */
+.kb-term__bar:has(.kb-term-switcher) .kb-term__btn,
+.kb-term__bar:has(.kb-term-switcher) .kb-term__more > summary {
+  white-space: nowrap;
+}

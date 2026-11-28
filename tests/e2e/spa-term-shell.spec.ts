@@ -261,3 +261,90 @@ test.describe("CMDPALETTE command palette", () => {
     expect(stats.drive.filter((c: { op: string }) => c.op === "enter")).toHaveLength(0);
   });
 });
+
+test.describe("TERMSWITCH header switcher", () => {
+  const OTHER_ID = "t-e2e-2";
+
+  function termRow(id: string, blocked: boolean) {
+    return {
+      id,
+      harness: "omp",
+      cwd: "/synthetic",
+      started_unix: 1760000000,
+      resume_sid: null,
+      pane_pid: 1,
+      cols: 120,
+      rows: 40,
+      bracket_paste_flag: false,
+      pane_dead: false,
+      exit_code: null,
+      grid_owner: null,
+      conf_version: 1,
+      anchor_pid: null,
+      stale: false,
+      session_id: null,
+      state: "working",
+      blocked,
+    };
+  }
+
+  test("a blocked terminal shows badge 1 and sorts first; a row click and Alt+ArrowDown with the pane focused both navigate", async ({
+    page,
+  }) => {
+    await installFakeTerminal(page, { total: 300, seedLines: 100 });
+    await admit(page);
+    await page.route("**/api/terms", (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ terms: [termRow(TERM_ID, false), termRow(OTHER_ID, true)] }),
+      });
+    });
+    await page.goto(`${BASE}/terminals/${TERM_ID}`);
+    await expectLive(page);
+    const btn = page.locator('[data-testid="kb-term-switcher-btn"]');
+    await expect(btn).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-testid="kb-term-switcher-needs"]')).toHaveText("1");
+    await btn.click();
+    const rows = page.locator('[data-testid="kb-term-switcher-row"]');
+    await expect(rows).toHaveCount(2);
+    await expect(rows.first()).toHaveAttribute("data-term", OTHER_ID);
+    await expect(rows.first()).toContainText("needs you");
+    await rows.first().click();
+    await expect(page).toHaveURL(new RegExp(`/terminals/${OTHER_ID}$`));
+    await expectLive(page);
+    // Pane focused: the chord is taken before xterm sees it.
+    await page.locator(VIEW).click();
+    await page.keyboard.press("Alt+ArrowDown");
+    await expect(page).toHaveURL(new RegExp(`/terminals/${TERM_ID}$`));
+  });
+  test.describe("phone", () => {
+    test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+
+    test("the popover opens inside the viewport, not clipped off the left edge", async ({ page }) => {
+      await installFakeTerminal(page, { total: 300, seedLines: 100 });
+      await admit(page);
+      await page.route("**/api/terms", (route) => {
+        if (route.request().method() !== "GET") return route.continue();
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ terms: [termRow(TERM_ID, false), termRow(OTHER_ID, true)] }),
+        });
+      });
+      await page.goto(`${BASE}/terminals/${TERM_ID}`);
+      const btn = page.locator('[data-testid="kb-term-switcher-btn"]');
+      await expect(btn).toBeVisible({ timeout: 15_000 });
+      await btn.click();
+      const pop = page.locator('[data-testid="kb-term-switcher-pop"]');
+      await expect(pop).toBeVisible();
+      const box = await pop.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.x).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+      const row = page.locator('[data-testid="kb-term-switcher-row"]').first();
+      expect((await row.boundingBox())!.height).toBeGreaterThanOrEqual(40);
+    });
+  });
+});
