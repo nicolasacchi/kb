@@ -456,7 +456,7 @@ export function PhoneTerminal(props: PhoneTerminalProps) {
             ref={setViewport}
           >
             <div className="kb-term-phone__host" ref={hostRef} />
-            {proxyOn && term && viewport && sendInput ? (
+            {proxyOn && term && viewport ? (
               <InputProxy
                 key={`${variant.send}/${variant.sentinel}/${variant.attrs}`}
                 term={term}
