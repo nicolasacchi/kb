@@ -232,3 +232,13 @@
     min-height: var(--touch-min);
   }
 }
+
+/* HUBHOST - phone Sheet height: the shared Sheet sizes in static vh (92vh,
+ * max 100vh), which exceeds the visible area behind a mobile URL bar and clips
+ * the form's footer. Clamp to dynamic viewport units for this sheet only. */
+#kb-launch-sheet.kb-sheet {
+  height: min(var(--sheet-h, 92vh), 92vh);
+  height: min(var(--sheet-h, 92dvh), 92dvh);
+  max-height: 100vh;
+  max-height: 100dvh;
+}
