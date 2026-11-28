@@ -6,6 +6,8 @@ import { act, createElement, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PhoneTerminal, type PhoneMode, type PhoneTerm } from "./PhoneTerminal";
+import { KeyBar } from "./KeyBar";
+import { byId, maybeById, mkDrive, press, rigFetch, type FetchRig } from "./driveTestkit";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -680,5 +682,117 @@ describe("BSTATE: the phone state overlay", () => {
     mount(fakeTerm(true).term);
     expect(host!.querySelector('[data-testid="kb-term-overlay"]')).toBeNull();
     expect(host!.querySelectorAll('[data-testid="kb-term-announce"]')).toHaveLength(1);
+  });
+});
+
+// PHIN2 - the key bar rides the proxy's WS path only while direct typing is on.
+describe("PHIN2 key bar routing and the sticky Ctrl latch", () => {
+  const setSearch = (s: string): void => window.history.replaceState(null, "", `/${s}`);
+  let rig: FetchRig;
+  const proxy = (): HTMLTextAreaElement => host!.querySelector("[data-kb-term-input]") as HTMLTextAreaElement;
+  const bar = (): HTMLElement => byId(host!, "kb-drive-keybar");
+  const withBar = (send: (d: string) => boolean): void => {
+    extraProps = {
+      sendInput: send,
+      renderDrive: () => createElement(KeyBar, { drive: mkDrive(), onCaption: () => undefined }),
+    };
+  };
+  const ctrl = (): HTMLElement => byId(host!, "kb-drive-key-ctrl");
+  afterEach(() => {
+    setSearch("");
+    vi.unstubAllGlobals();
+  });
+  const settle = async (): Promise<void> => {
+    for (let i = 0; i < 4; i += 1) await act(async () => Promise.resolve());
+  };
+
+  it("pref off: the bar uses REST, shows no Ctrl latch and never touches sendInput", async () => {
+    rig = rigFetch();
+    const send = vi.fn(() => true);
+    withBar(send);
+    mount(fakeTerm(false).term);
+    expect(maybeById(host!, "kb-drive-key-ctrl")).toBeNull();
+    press(byId(bar(), "kb-drive-key-Esc"));
+    await settle();
+    expect(rig.urls()).toEqual(["/api/terms/abcd1234/keys"]);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("pref on: a bar key is one WS frame, no REST, and the proxy keeps focus", async () => {
+    setSearch("?direct=1");
+    rig = rigFetch();
+    const send = vi.fn(() => true);
+    withBar(send);
+    mount(fakeTerm(false).term);
+    act(() => proxy().focus());
+    press(byId(bar(), "kb-drive-key-Esc"));
+    press(byId(bar(), "kb-drive-key-Up"));
+    await settle();
+    expect(send.mock.calls).toEqual([["\x1b"], ["\x1b[A"]]);
+    expect(rig.calls).toHaveLength(0);
+    expect(document.activeElement).toBe(proxy());
+  });
+
+  it("an armed bar Ctrl applies to the next soft-keyboard character, then un-presses", () => {
+    setSearch("?direct=1");
+    const send = vi.fn(() => true);
+    withBar(send);
+    mount(fakeTerm(false).term);
+    expect(ctrl().getAttribute("aria-pressed")).toBe("false");
+    press(ctrl());
+    expect(ctrl().getAttribute("aria-pressed")).toBe("true");
+    expect(ctrl().dataset.mod).toBe("armed");
+    act(() => {
+      const el = proxy();
+      el.value = "c";
+      el.dispatchEvent(new InputEvent("input", { inputType: "insertText", bubbles: true }));
+    });
+    expect(send).toHaveBeenCalledWith("\x03");
+    expect(ctrl().getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("proxy blur releases an armed latch", () => {
+    setSearch("?direct=1");
+    withBar(vi.fn(() => true));
+    mount(fakeTerm(false).term);
+    act(() => proxy().focus());
+    press(ctrl());
+    expect(ctrl().getAttribute("aria-pressed")).toBe("true");
+    act(() => proxy().blur());
+    expect(ctrl().getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("entering Read releases an armed latch", () => {
+    setSearch("?direct=1");
+    withBar(vi.fn(() => true));
+    mount(fakeTerm(false).term);
+    press(ctrl());
+    expect(ctrl().getAttribute("aria-pressed")).toBe("true");
+    click('[data-testid="kb-term-phone-mode"]');
+    expect(maybeById(host!, "kb-drive-key-ctrl")).toBeNull();
+    click('[data-testid="kb-term-phone-mode"]');
+    expect(ctrl().getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("a stream that is no longer live releases the latch", () => {
+    setSearch("?direct=1");
+    withBar(vi.fn(() => true));
+    const f = fakeTerm(false);
+    const hostRef = mount(f.term);
+    press(ctrl());
+    expect(ctrl().getAttribute("aria-pressed")).toBe("true");
+    streamOver = { phase: "reconnecting" };
+    act(() => root!.render(createElement(Harness, { term: f.term, hostRef })));
+    expect(ctrl().getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("a refused WS send (not live) toasts and releases the latch", async () => {
+    setSearch("?direct=1");
+    withBar(vi.fn(() => false));
+    mount(fakeTerm(false).term);
+    press(ctrl());
+    press(byId(bar(), "kb-drive-key-Esc"));
+    await settle();
+    expect(ctrl().getAttribute("aria-pressed")).toBe("false");
   });
 });

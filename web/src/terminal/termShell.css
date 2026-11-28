@@ -172,3 +172,11 @@
   overflow: auto;
   min-height: 0;
 }
+/* BA11Y — a visible focus ring on the rail's own controls, both themes. */
+.kb-termshell__tab:focus-visible,
+.kb-termshell__toggle:focus-visible,
+.kb-termshell__handle:focus-visible,
+.kb-termshell__panel:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}

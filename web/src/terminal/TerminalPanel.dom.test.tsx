@@ -24,6 +24,7 @@ interface FakeTermInst {
     minimumContrastRatio?: number;
     drawBoldTextInBrightColors?: boolean;
     customGlyphs?: boolean;
+    screenReaderMode?: boolean;
   };
   element?: HTMLElement;
   clearTextureAtlas: ReturnType<typeof vi.fn>;
@@ -39,6 +40,7 @@ interface FakeTermInst {
   focus: ReturnType<typeof vi.fn>;
   select: ReturnType<typeof vi.fn>;
   paste: ReturnType<typeof vi.fn>;
+  resize: ReturnType<typeof vi.fn>;
 }
 const terms: FakeTermInst[] = [];
 
@@ -111,6 +113,7 @@ vi.mock("@xterm/xterm", () => ({
       minimumContrastRatio?: number;
       drawBoldTextInBrightColors?: boolean;
       customGlyphs?: boolean;
+      screenReaderMode?: boolean;
     }) {
       this.cols = o.cols;
       this.rows = o.rows;
@@ -121,6 +124,7 @@ vi.mock("@xterm/xterm", () => ({
         minimumContrastRatio: o.minimumContrastRatio,
         drawBoldTextInBrightColors: o.drawBoldTextInBrightColors,
         customGlyphs: o.customGlyphs,
+        screenReaderMode: o.screenReaderMode,
       };
       terms.push(this as unknown as FakeTermInst);
     }
@@ -144,10 +148,10 @@ vi.mock("@xterm/xterm", () => ({
       this.onDataCb = cb;
     }
     onBinary(): void {}
-    resize(cols: number, rows: number): void {
+    resize = vi.fn((cols: number, rows: number): void => {
       this.cols = cols;
       this.rows = rows;
-    }
+    });
     reset(): void {}
     write(_d: unknown, done?: () => void): void {
       done?.();
@@ -261,6 +265,7 @@ const PROFILE = {
 };
 
 beforeEach(() => {
+  window.localStorage.clear();
   terms.length = 0;
   lastSession = null;
   sessionStart.mockReset();
@@ -1419,5 +1424,92 @@ describe("BSTATE: the state overlay", () => {
     expect(text("kb-term-grid")).toBe("201x48 · web");
     act(() => lastSession!.sink.resize(100, 30));
     expect(text("kb-term-grid")).toBe("100x30");
+  });
+});
+
+describe("BA11Y: accessibility", () => {
+  const ST = { phase: "live", epoch: null, applied: 0, resets: 0, gaps: 0, attempt: 0, caption: "live", exitCode: null, blockedReason: null };
+  const set = (o: Record<string, unknown>): void => act(() => lastSession!.callbacks.onState({ ...ST, ...o }));
+
+  it("the pane is a region named by harness and project, stable across phase and title changes", async () => {
+    rows = [{ id: "abcd1234", state: "working", cols: 201, rows: 48, grid_owner: null, cwd: "/work/demo" }] as typeof rows;
+    await mountPanel();
+    const term = await profile();
+    const pane = (): HTMLElement => host!.querySelector<HTMLElement>(".kb-term__pane")!;
+    expect(pane().getAttribute("role")).toBe("region");
+    expect(pane().getAttribute("aria-label")).toBe("omp terminal in demo");
+    set({});
+    act(() => term.titleCbs.forEach((cb) => cb("build running")));
+    set({ phase: "reconnecting", caption: "reconnecting in 3s" });
+    expect(pane().getAttribute("aria-label")).toBe("omp terminal in demo");
+  });
+
+  it("the More switch flips screenReaderMode on the same Terminal, persists, and a fresh mount starts with it", async () => {
+    window.localStorage.removeItem("kb-term-screen-reader");
+    await mountPanel();
+    const term = await profile();
+    set({});
+    expect(term.options.screenReaderMode).toBe(false);
+    const sw = q("kb-term-screen-reader") as HTMLInputElement;
+    const fetchesBefore = rig.calls?.length;
+    const geomBefore = [term.cols, term.rows];
+    const sentBefore = sendInputMock.mock.calls.length;
+    const resizeBefore = term.resize.mock.calls.length;
+    act(() => sw.click());
+    expect(term.options.screenReaderMode).toBe(true);
+    expect(window.localStorage.getItem("kb-term-screen-reader")).toBe("1");
+    expect(terms.length).toBe(1);
+    expect(term.resize.mock.calls.length).toBe(resizeBefore);
+    expect(rig.calls?.length).toBe(fetchesBefore);
+    act(() => (q("kb-term-screen-reader") as HTMLInputElement).click());
+    expect(term.options.screenReaderMode).toBe(false);
+    expect(terms.length).toBe(1);
+    expect(window.localStorage.getItem("kb-term-screen-reader")).toBe("0");
+    expect(rig.calls?.length).toBe(fetchesBefore);
+    expect([term.cols, term.rows]).toEqual(geomBefore);
+    expect(sendInputMock.mock.calls.length).toBe(sentBefore);
+    expect(term.resize.mock.calls.length).toBe(resizeBefore);
+    // A fresh mount reads the stored choice.
+    act(() => (q("kb-term-screen-reader") as HTMLInputElement).click());
+    act(() => root?.unmount());
+    host?.remove();
+    terms.length = 0;
+    await mountPanel();
+    const again = await profile();
+    expect(again.options.screenReaderMode).toBe(true);
+    window.localStorage.removeItem("kb-term-screen-reader");
+  });
+
+  it("focus still on the overlay when it unmounts is handed back to the terminal exactly once", async () => {
+    await mountPanel();
+    const term = await profile();
+    set({});
+    set({ phase: "reconnecting", caption: "reconnecting" });
+    act(() => q("kb-term-overlay-action")!.focus());
+    term.focus.mockClear();
+    set({});
+    expect(term.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it("focus blurred to nothing before the overlay unmounts is not handed back (onBlur clears the flag)", async () => {
+    await mountPanel();
+    const term = await profile();
+    set({});
+    set({ phase: "reconnecting", caption: "reconnecting" });
+    const btn = q("kb-term-overlay-action")!;
+    act(() => btn.focus());
+    act(() => btn.blur());
+    expect(document.activeElement === document.body || document.activeElement === null).toBe(true);
+    term.focus.mockClear();
+    set({});
+    expect(term.focus).not.toHaveBeenCalled();
+  });
+
+  it("the overlay detail is the session caption, not a transient status", async () => {
+    await mountPanel();
+    await profile();
+    set({});
+    set({ phase: "reconnecting", caption: "reconnecting in 4s (offline)" });
+    expect(text("kb-term-overlay-detail")).toBe("reconnecting in 4s (offline)");
   });
 });
