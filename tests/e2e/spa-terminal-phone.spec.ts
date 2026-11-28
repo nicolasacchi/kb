@@ -1075,6 +1075,62 @@ test.describe("POLISH2 landscape phone dock @phone", () => {
     expect(Math.abs(centreY(input) - centreY(send))).toBeLessThanOrEqual(4);
   });
 
+  // BPHONE (c): the commands sheet is capped at half the viewport; in landscape its head folds to one
+  // 44 px row, the search field sits behind a toggle, and three whole 44 px rows show.
+  test("BPHONE: at 915x412 the open commands sheet shows three whole 44 px rows and the Search toggle reveals the field", async ({ page }, info) => {
+    test.skip(info.project.name !== "chromium-pixel7", "Android Chrome only");
+    await page.route("**/api/identity", async (route) => {
+      const res = await route.fetch();
+      const j = (await res.json()) as Record<string, unknown>;
+      await route.fulfill({ response: res, json: { ...j, terminal_admitted: true } });
+    });
+    await page.route("**/api/terms/commands", async (route) => {
+      const items = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"].map((n) => ({
+        id: `bp-${n}`,
+        kind: "command",
+        label: `/bp-${n}`,
+        text: `/bp-${n}`,
+        mode: "paste",
+        origin: "default",
+      }));
+      await route.fulfill({ json: { rev: 1, harnesses: { claude: { groups: [{ id: "bphone-e2e", label: "BPHONE e2e", origin: "default", items }] } } } });
+    });
+    await openAt(page, { width: 915, height: 412 }, { harness: "claude" });
+    await expect(page.locator(VP)).toBeVisible({ timeout: 15_000 });
+    const share = async (): Promise<number> => (await box(page, ".kb-term-phone__watch")).height / (await box(page, "[data-kb-sheet]")).height;
+    const tap = async (sel: string): Promise<void> => {
+      const b = await box(page, sel);
+      await page.touchscreen.tap(b.x + b.width / 2, b.y + b.height / 2);
+    };
+    await tap('[data-testid="kb-drive-key-cmds"]');
+    const sheet = page.locator('[data-testid="kb-drive-cmdsheet"]');
+    await expect(sheet).toBeVisible();
+    await expect(page.locator('[data-testid="kb-cmdp-row"]').first()).toContainText("/bp-alpha");
+    // Three whole rows inside the list's own viewport, each a 44 px target.
+    const list = await box(page, ".kb-cmdp--sheet");
+    const rows = await page.locator('[data-testid="kb-cmdp-row"]').evaluateAll((els) =>
+      els.map((e) => {
+        const r = e.getBoundingClientRect();
+        return { top: r.top, bottom: r.bottom, height: r.height };
+      }),
+    );
+    const whole = rows.filter((r) => r.top >= list.y - 0.5 && r.bottom <= list.y + list.height + 0.5);
+    expect(whole.length, JSON.stringify({ list, rows })).toBeGreaterThanOrEqual(3);
+    for (const r of whole) expect(r.height).toBeGreaterThanOrEqual(43.5);
+    // The search field is behind a toggle, not in the tab order while hidden.
+    const toggle = page.locator('[data-testid="kb-cmdp-searchtoggle"]');
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(page.locator(".kb-cmdp__search")).toHaveCount(0);
+    expect((await toggle.boundingBox())!.height).toBeGreaterThanOrEqual(43.5);
+    expect(await share()).toBeGreaterThanOrEqual(0.5);
+    await tap('[data-testid="kb-cmdp-searchtoggle"]');
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator(".kb-cmdp__search")).toBeVisible();
+    // An overlay still: opening the field does not resize the Watch pane.
+    expect(await share()).toBeGreaterThanOrEqual(0.5);
+  });
+
   test("POLISH2 negative control: portrait 412x839 keeps the replies row above the textarea and Send below it", async ({ page }) => {
     await openAt(page, { width: 412, height: 839 });
     await expect(page.locator(VP)).toBeVisible({ timeout: 15_000 });

@@ -211,3 +211,67 @@
 .kb-cmdp__edit {
   color: var(--accent);
 }
+
+/* BPHONE - the Search toggle of the sheet variant (a landscape phone). Like every control of
+ * the sheet it never takes focus on press; the field it reveals does. */
+.kb-cmdp__searchtoggle {
+  align-self: flex-start;
+  min-height: var(--touch-min);
+  padding: 0 var(--pad-2);
+  background: var(--bg-card);
+  color: var(--ink);
+  border: var(--drv-bw, 1px) solid var(--rule-hi);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.kb-cmdp__searchtoggle[aria-expanded="true"] {
+  border-color: var(--accent-bor);
+  background: var(--accent-bg);
+  color: var(--accent-fg);
+}
+
+.kb-cmdp__searchtoggle:focus-visible {
+  outline: calc(var(--drv-bw, 1px) * 2) solid var(--accent);
+  outline-offset: var(--drv-bw, 1px);
+}
+
+/* BPHONE - a landscape phone (the same condition as drive.css; landscapeQuery.test.ts keeps
+ * the two in step). The capped sheet shows at least three whole 44 px rows: the toggle rides
+ * the head row (out of flow, over the title the head drops), rows are one line, group
+ * headings and descriptions fold away. Portrait is untouched. */
+@media (pointer: coarse) and (orientation: landscape) and (max-height: 599px) {
+  .kb-cmdp--sheet {
+    gap: 0;
+    padding-bottom: 0;
+  }
+
+  .kb-cmdp--sheet .kb-cmdp__searchtoggle {
+    position: absolute;
+    top: 0;
+    left: var(--pad-2);
+  }
+
+  .kb-cmdp--sheet .kb-cmdp__search {
+    margin-bottom: var(--pad-1);
+  }
+
+  .kb-cmdp--sheet .kb-cmdp__ghead,
+  .kb-cmdp--sheet .kb-cmdp__desc {
+    display: none;
+  }
+
+  .kb-cmdp--sheet .kb-cmdp__row {
+    flex-wrap: nowrap;
+  }
+
+  .kb-cmdp--sheet .kb-cmdp__label {
+    flex: none;
+  }
+
+  .kb-cmdp--sheet .kb-cmdp__preview {
+    flex: 1 1 0;
+  }
+}
