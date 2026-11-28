@@ -84,7 +84,7 @@ describe("upload", () => {
     expect(seen[1].url).toContain("name=b.json");
     await act(async () => gates[1](ok(answer("b.json"))));
     await flush();
-    expect(screen.getAllByTestId("files-runner-path").map((n) => n.textContent)).toEqual(["/run/up/a.pdf", "/run/up/b.json"]);
+    expect(within(screen.getByTestId("files-upload-list")).getAllByTestId("files-runner-path").map((n) => n.textContent)).toEqual(["/run/up/a.pdf", "/run/up/b.json"]);
   });
 
   it("sends index=1 only when the box is ticked, and the box starts off", async () => {
@@ -183,7 +183,7 @@ describe("upload", () => {
     mount();
     await pick(file("a.pdf"));
     const err = vi.spyOn(toast, "err");
-    await act(async () => fireEvent.click(screen.getByText("Paste path into terminal")));
+    await act(async () => fireEvent.click(within(screen.getByTestId("files-upload-list")).getByText("Paste path into terminal")));
     await flush();
     expect(fetchMock.mock.calls.some((c) => String(c[0]).endsWith("/paste"))).toBe(false);
     expect(err).toHaveBeenCalledWith(expect.stringMatching(/line break/));
@@ -195,7 +195,7 @@ describe("upload", () => {
     setUploadTransport(async () => ok(answer(`f${i}.txt`, kbs[i++])));
     mount();
     await pick(file("f0.txt"), file("f1.txt"), file("f2.txt"));
-    const keeps = Array.from(document.querySelectorAll<HTMLElement>("[data-keep]"));
+    const keeps = Array.from(screen.getByTestId("files-upload-list").querySelectorAll<HTMLElement>("[data-keep]"));
     expect(keeps.map((k) => k.dataset.keep)).toEqual(["stored", "skipped", "failed"]);
     expect(keeps[0].textContent).toContain("files/a.html");
     expect(keeps[1].textContent).toMatch(/Not kept in kb: quota/);

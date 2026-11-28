@@ -170,7 +170,7 @@ function UploadSection({ termId }: { termId: string }): ReactElement {
       <p className="kb-filesrail__hint">Session files may contain unscrubbed content. Leave this off unless you want the text searchable in kb.</p>
       <p className="kb-filesrail__hint">Drop files anywhere on this tab. Up to 32 MiB each.</p>
       {q.items.length > 0 ? (
-        <ul className="kb-filesrail__list">
+        <ul className="kb-filesrail__list" data-testid="files-upload-list">
           {q.items.map((i) => (
             <QueueRow key={i.id} termId={termId} item={i} />
           ))}
@@ -342,8 +342,8 @@ function RecentSection({ termId }: { termId: string }): ReactElement | null {
       <h3 className="kb-filesrail__h">Recent</h3>
       <p className="kb-filesrail__hint">Uploads from this browser session only.</p>
       <ul className="kb-filesrail__list">
-        {recent.map((r) => (
-          <li key={`${r.sha256}:${r.path}`} className="kb-filesrail__row" data-testid="files-recent-row">
+        {recent.map((r, i) => (
+          <li key={`${i}:${r.sha256}:${r.path}`} className="kb-filesrail__row" data-testid="files-recent-row">
             <span className="kb-filesrail__name">{displayName(r.name)}</span>
             <ResultBlock termId={termId} r={r} />
           </li>
