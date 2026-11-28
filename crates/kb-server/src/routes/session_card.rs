@@ -1242,12 +1242,20 @@ fn map_check(c: crate::routes::sessions::SessionCheckOut) -> CardCheckOut {
     }
 }
 
-type StatsKey = (String, String, i64);
+/// `(kb, artifact_id, ended_at, file_len, mtime_nanos)`: the file length and
+/// nanosecond mtime close the same-second re-capture window `ended_at` alone
+/// leaves open.
+type StatsKey = (String, String, i64, u64, u128);
 
-/// STATSX4: a bounded `(kb, artifact_id, ended_at)` memo so the card's
+/// Number of times the stats lane actually parsed a capture (memo misses).
+/// Test seam only: lets a test prove a repeat read is a memo HIT.
+pub static STATS_BUILDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// STATSX4: a bounded `(kb, artifact_id, ended_at, len, mtime)` memo so the card's
 /// invalidation on every `session.state` does not re-walk a large transcript.
-/// The key moves whenever a re-capture lands (`ended_at` bumps), so a hit is
-/// never stale. The guard is never held across an await (invariant #15).
+/// The key moves whenever a re-capture lands (`ended_at`, file length or mtime
+/// changes). Concurrent first reads of one key each parse (no single-flight);
+/// the result is deterministic so the last insert wins harmlessly. The guard is never held across an await (invariant #15).
 fn stats_memo() -> &'static std::sync::Mutex<
     std::collections::HashMap<StatsKey, Arc<kb_core::sessions::stats::SessionStats>>,
 > {
@@ -1267,7 +1275,18 @@ async fn stats_lane(state: &Arc<KbHandles>, session: &SessionOut, session_id: &s
     let Some((kb, artifact_id, abs, mtime_unix)) = locate_capture(state, session_id).await else {
         return StatsLane::unavailable("capture not found");
     };
-    let key: StatsKey = (kb, artifact_id, mtime_unix);
+    let (len, nanos) = match tokio::fs::metadata(&abs).await {
+        Ok(m) => (
+            m.len(),
+            m.modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        ),
+        Err(_) => (0, 0),
+    };
+    let key: StatsKey = (kb, artifact_id, mtime_unix, len, nanos);
     let hit = stats_memo()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -1276,6 +1295,7 @@ async fn stats_lane(state: &Arc<KbHandles>, session: &SessionOut, session_id: &s
     let stats = match hit {
         Some(s) => s,
         None => {
+            STATS_BUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let built = tokio::task::spawn_blocking(move || {
                 let html = std::fs::read_to_string(&abs).map_err(|e| e.to_string())?;
                 let jsonl = kb_core::sessions::recover_jsonl_from_capture(&html)

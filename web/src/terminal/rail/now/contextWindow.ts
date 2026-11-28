@@ -30,3 +30,14 @@ export function contextPercent(tokens: number | null | undefined, model: string 
   if (w === null) return null;
   return Math.min(100, Math.round((tokens / w) * 1000) / 10);
 }
+
+/**
+ * True when the window is an ASSUMPTION: a Claude model id with no 1M marker.
+ * Transcript `message.model` ids carry no `[1m]` suffix, so a 1M-window session
+ * is indistinguishable from a 200k one; callers must label the percentage
+ * approximate and must not show a figure the assumed window cannot hold.
+ */
+export function contextWindowAssumed(model: string | null | undefined): boolean {
+  const w = contextWindow(model);
+  return w === TWO_HUNDRED_K;
+}

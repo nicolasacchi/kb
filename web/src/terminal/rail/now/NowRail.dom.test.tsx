@@ -5,14 +5,14 @@ import { MemoryRouter, useLocation } from "react-router-dom";
 import type { ReactNode } from "react";
 
 const live = vi.hoisted(() => ({ rows: [] as unknown[] }));
-const cardMock = vi.hoisted(() => ({ card: null as unknown }));
+const cardMock = vi.hoisted(() => ({ card: null as unknown, sids: [] as string[] }));
 const convMock = vi.hoisted(() => ({ data: undefined as unknown, calls: [] as unknown[] }));
 const detailMock = vi.hoisted(() => ({ detail: null as unknown }));
 const boardMock = vi.hoisted(() => ({ board: null as unknown }));
 const termsMock = vi.hoisted(() => ({ terms: [] as unknown[], isError: false }));
 
 vi.mock("../../../hooks/useLiveSessions", () => ({ useLiveSessions: () => ({ rows: live.rows, loading: false }) }));
-vi.mock("../../../hooks/useSessionCard", () => ({ useSessionCard: () => ({ card: cardMock.card, loading: false, error: null }) }));
+vi.mock("../../../hooks/useSessionCard", () => ({ useSessionCard: (sid: string) => (cardMock.sids.push(sid), { card: cardMock.card, loading: false, error: null }) }));
 vi.mock("../../../hooks/useConversation", () => ({
   useConversation: (sid: string | undefined) => {
     convMock.calls.push(sid);
@@ -137,11 +137,19 @@ describe("NowRail", () => {
     expect(screen.getByTestId("now-needs-text").textContent).toBe(evil);
     expect(screen.getByTestId("now-answer").textContent).toBe(evil);
     expect(screen.getByTestId("now-ask").textContent).toBe(evil);
+    const sib = screen.getByTestId("now-sibling");
+    expect(sib.textContent).toContain(evil);
+    expect(sib.querySelector("img")).toBeNull();
   });
 
   it("an unbound terminal shows the calm state, still lists siblings, and never fetches a card", () => {
     cardMock.card = null;
+    cardMock.sids = [];
     render(<NowRail />, { wrapper: wrap(undefined) });
+    // useSessionCard is `enabled: !!sid` (hooks/useSessionCard.ts), so an empty
+    // sid is the no-fetch contract; the hook is asserted to receive nothing else.
+    expect(cardMock.sids.length).toBeGreaterThan(0);
+    expect(cardMock.sids.every((x) => x === "")).toBe(true);
     expect(screen.getByText("Not linked to a session yet")).toBeTruthy();
     expect(screen.queryByTestId("now-sec-activity")).toBeNull();
     expect(screen.getByTestId("now-sec-siblings")).toBeTruthy();

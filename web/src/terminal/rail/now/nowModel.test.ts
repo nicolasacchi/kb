@@ -263,7 +263,13 @@ describe("stats", () => {
 
   it("computes a context percentage only with a known window, preferring the live figure", () => {
     const known = deriveStats(card(), row());
-    expect(known.rows.find((r) => r.id === "context")!.value).toBe("50% (100,000 tokens)");
+    expect(known.rows.find((r) => r.id === "context")!.value).toBe("~50% (100,000 tokens)");
+    expect(known.rows.find((r) => r.id === "context")!.source).toMatch(/approximate/);
+    const oneM = deriveStats(card({ stats: { available: true, model: "claude-opus-4-8[1m]", stats: stats({ context_tokens: 400_000 }) } }), row());
+    expect(oneM.rows.find((r) => r.id === "context")!.value).toBe("40% (400,000 tokens)");
+    // A Claude id with no 1M marker above 200k tokens must not clamp to a fake 100%.
+    const over = deriveStats(card({ stats: { available: true, model: "claude-opus-4-8", stats: stats({ context_tokens: 400_000 }) } }), row());
+    expect(over.rows.find((r) => r.id === "context")).toMatchObject({ value: "400,000 tokens", source: expect.stringMatching(/window unknown/) });
     const unknown = deriveStats(card({ stats: { available: true, model: "mystery", stats: stats() } }), row());
     expect(unknown.rows.find((r) => r.id === "context")!.value).toBe("100,000 tokens");
     const live = deriveStats(card(), row({ status: { context_pct: 41.6 } }));

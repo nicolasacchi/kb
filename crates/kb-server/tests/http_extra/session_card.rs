@@ -2010,9 +2010,29 @@ async fn stats_lane_dedupes_block_repeats_and_never_carries_a_claude_cost() {
         st["cost_usd"].is_null(),
         "Claude cost is never estimated: {st}"
     );
-    // A memo hit is byte-identical to the first build.
+    // Memo proof: a repeat read must NOT re-parse the capture (byte equality
+    // alone would also hold for a deterministic recompute). The counter is
+    // process-wide; the suite runs one test per process under nextest.
+    let before =
+        kb_server::routes::session_card::STATS_BUILDS.load(std::sync::atomic::Ordering::Relaxed);
     let (_, _, b2) = get_json(&client, addr, "/api/sessions/st-1/card").await;
+    let after =
+        kb_server::routes::session_card::STATS_BUILDS.load(std::sync::atomic::Ordering::Relaxed);
     assert_eq!(b1, b2);
+    assert_eq!(
+        after, before,
+        "repeat read re-parsed the capture (no memo hit)"
+    );
+    // A re-capture in the SAME second with the same ended_at but a different
+    // body must miss the memo (length/mtime are part of the key).
+    let jsonl2 = [
+        jsonl.clone(),
+        claude_line(6, "assistant", "2026-01-01T00:01:20Z", "msg_c", 4),
+    ]
+    .join("\n");
+    write_capture(&tmp, &r.source_relative, &jsonl2);
+    let (_, card3, _) = get_json(&client, addr, "/api/sessions/st-1/card").await;
+    assert_eq!(card3["stats"]["stats"]["output_tokens"], 14, "{card3}");
 }
 
 #[tokio::test]
@@ -2062,4 +2082,57 @@ async fn an_unreadable_capture_drops_the_stats_lane_only() {
     assert_eq!(card["summary"]["available"], true);
     assert_eq!(card["files"]["available"], true);
     assert_eq!(card["outcome"]["available"], true);
+}
+
+/// The pre-existing card surface is untouched by the stats lane: the key set
+/// minus `stats` is exactly the pre-STATSX4 set, in order, and the rendered
+/// `text` never mentions the lane.
+#[tokio::test]
+async fn stats_lane_is_purely_additive_over_the_existing_card_surface() {
+    let (_tmp, addr, paths) = boot().await;
+    let client = reqwest::Client::new();
+    {
+        let mut db = open_db(&paths);
+        db.sessions_upsert(&row("art-add", "st-add", 1_000))
+            .unwrap();
+        seed_file(&mut db, "art-add", "st-add", 1);
+    }
+    let (status, card, _) = get_json(&client, addr, "/api/sessions/st-add/card").await;
+    assert_eq!(status, 200, "{card}");
+    let keys: Vec<&str> = card
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(|k| k.as_str())
+        .collect();
+    let mut expected = vec![
+        "children",
+        "comments",
+        "commits",
+        "decisions",
+        "files",
+        "kb",
+        "artifact_id",
+        "live",
+        "memory",
+        "outcome",
+        "readings",
+        "research",
+        "schema",
+        "session_id",
+        "slate",
+        "summary",
+        "terminal",
+        "text",
+    ];
+    let mut without: Vec<&str> = keys.iter().copied().filter(|k| *k != "stats").collect();
+    without.sort_unstable();
+    expected.sort_unstable();
+    assert_eq!(without, expected, "{card}");
+    assert!(keys.contains(&"stats"));
+    assert!(!card["text"]
+        .as_str()
+        .unwrap()
+        .to_lowercase()
+        .contains("stats"));
 }

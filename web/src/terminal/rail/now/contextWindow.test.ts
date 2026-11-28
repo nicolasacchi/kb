@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { contextPercent, contextWindow } from "./contextWindow";
+import { contextPercent, contextWindow, contextWindowAssumed } from "./contextWindow";
 
 describe("contextWindow", () => {
   it("knows the Claude families at 200k", () => {
@@ -32,5 +32,14 @@ describe("contextPercent", () => {
   });
   it("caps at 100", () => {
     expect(contextPercent(900_000, "claude-opus-4-8")).toBe(100);
+  });
+});
+
+describe("contextWindowAssumed", () => {
+  it("is true only for a Claude id with no 1M marker", () => {
+    expect(contextWindowAssumed("claude-opus-4-8")).toBe(true);
+    expect(contextWindowAssumed("claude-opus-4-8[1m]")).toBe(false);
+    expect(contextWindowAssumed("mystery")).toBe(false);
+    expect(contextWindowAssumed(null)).toBe(false);
   });
 });

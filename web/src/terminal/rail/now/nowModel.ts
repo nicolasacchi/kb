@@ -14,7 +14,7 @@ import { humanizeDuration, relativeAge } from "../../../lib/time";
 import { joinHub } from "../../hub/termHub";
 import { statusChips, type StatusChip } from "../../statusChips";
 import type { TermMarks } from "../../notify/attention";
-import { contextPercent } from "./contextWindow";
+import { contextPercent, contextWindowAssumed } from "./contextWindow";
 
 export const NOW_SECTION_ORDER = ["needs", "activity", "status", "answer", "asks", "siblings", "stats", "queue"] as const;
 export type NowSectionId = (typeof NOW_SECTION_ORDER)[number];
@@ -217,8 +217,18 @@ export function deriveStats(card: SessionCard | null | undefined, row: LiveStatu
     rows.push({ id: "context", label: "Context", value: `${Math.round(live)}%`, source: "harness-reported, live" });
   } else if (s) {
     const p = contextPercent(s.context_tokens, model);
-    if (p !== null) {
-      rows.push({ id: "context", label: "Context", value: `${p}% (${int(s.context_tokens)} tokens)`, source: "computed from the last capture" });
+    const assumed = contextWindowAssumed(model);
+    const over = assumed && typeof s.context_tokens === "number" && s.context_tokens > 200_000;
+    if (p !== null && over) {
+      // Past the assumed 200k window the model must be a 1M variant: no percentage.
+      rows.push({ id: "context", label: "Context", value: `${int(s.context_tokens)} tokens`, source: "window unknown (above 200k; likely a 1M variant)" });
+    } else if (p !== null) {
+      rows.push({
+        id: "context",
+        label: "Context",
+        value: `${assumed ? "~" : ""}${p}% (${int(s.context_tokens)} tokens)`,
+        source: assumed ? "approximate: assumes a 200k window, computed from the last capture" : "computed from the last capture",
+      });
     } else {
       rows.push({
         id: "context",
