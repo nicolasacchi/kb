@@ -105,7 +105,6 @@ test.describe("CONVNEED needs-you banner", () => {
     const total = async () => (await w(pane)) + (await w(rail));
     const dims = async () =>
       JSON.stringify({ shell: await w(shell), body: await w(page.locator(".kb-termshell__body")), pane: await w(pane), rail: await w(rail) });
-    const dimsBefore = await dims();
     // Let the initial layout settle (terminal fit, panel mount) before the baseline.
     let before = await total();
     for (let i = 0; i < 30; i += 1) {
@@ -116,6 +115,7 @@ test.describe("CONVNEED needs-you banner", () => {
     }
     await expect(page.locator('[data-testid="needs-you"]')).toHaveCount(0);
 
+    const dimsBefore = await dims();
     live.blocked = true;
     live.reason = "Synthetic permission needed";
     live.tool = "Bash";
