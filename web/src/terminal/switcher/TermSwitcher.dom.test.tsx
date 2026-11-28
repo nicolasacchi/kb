@@ -96,22 +96,23 @@ describe("TermSwitcher button", () => {
   it("shows the live count (ended excluded) and no badge when nothing needs you", () => {
     mount();
     expect(screen.getByTestId("kb-term-switcher-count").textContent).toBe("3");
-    expect(screen.queryByTestId("kb-term-switcher-badge")).toBeNull();
-    expect(btn().getAttribute("aria-label")).toBe("Terminals, 3 running");
+    expect(screen.queryByTestId("kb-term-switcher-needs")).toBeNull();
     expect(btn().getAttribute("aria-haspopup")).toBe("listbox");
   });
 
-  it("a blocked sibling shows badge 1 with a matching aria-label", () => {
+  it("a blocked sibling shows needs badge 1 with aria-label '1 need you'", () => {
     m.terms = [...m.terms, term("z", { blocked: true, cwd: "/work/q" })];
     mount();
-    expect(screen.getByTestId("kb-term-switcher-badge").textContent).toBe("1");
-    expect(btn().getAttribute("aria-label")).toBe("Terminals, 4 running, 1 needs you");
+    const badge = screen.getByTestId("kb-term-switcher-needs");
+    expect(badge.textContent).toBe("1");
+    expect(badge.getAttribute("aria-label")).toBe("1 need you");
+    expect(badge.getAttribute("aria-hidden")).toBeNull();
   });
 
-  it("an asks mark from the attention store raises the badge", () => {
+  it("the badge counts tier-needs rows like the hub door (store asks marks do not badge)", () => {
     mount();
     act(() => setMarks({ c: { asks: true, finishedUnseen: false } }));
-    expect(screen.getByTestId("kb-term-switcher-badge").textContent).toBe("1");
+    expect(screen.queryByTestId("kb-term-switcher-needs")).toBeNull();
   });
 });
 
@@ -137,11 +138,14 @@ describe("TermSwitcher popover", () => {
     expect(rowB.textContent).toContain("finished");
     expect(rowC.getAttribute("data-mark")).toBe("asks");
     expect(rowB.getAttribute("data-mark")).toBe("finished");
-    expect(screen.getAllByRole("option").find((o) => o.getAttribute("data-term") === "a")!.getAttribute("aria-current")).toBe("true");
+    const rowA = screen.getAllByRole("option").find((o) => o.getAttribute("data-term") === "a")!;
+    expect(rowA.getAttribute("aria-current")).toBe("true");
+    expect(rowA.getAttribute("aria-selected")).toBe("true");
+    expect(rowB.getAttribute("aria-selected")).toBe("false");
   });
 
   it("lists This project first, needs-you first inside each group", () => {
-    setMarks({ a: { asks: true, finishedUnseen: false } });
+    m.terms = m.terms.map((t) => ((t as TermRow).id === "a" ? term("a", { cwd: "/work/p", started_unix: 10, blocked: true }) : t));
     mount("b");
     fireEvent.click(btn());
     const ids = screen.getAllByRole("option").map((o) => o.getAttribute("data-term"));
@@ -212,7 +216,57 @@ describe("TermSwitcher popover", () => {
   });
 });
 
+describe("TermSwitcher active row", () => {
+  it("starts on the first needs row, not merely the first non-current row", () => {
+    m.terms = [...m.terms, term("z", { blocked: true, cwd: "/work/q", started_unix: 5 })];
+    mount("a");
+    fireEvent.click(btn());
+    const active = screen.getByRole("listbox").getAttribute("aria-activedescendant");
+    expect(document.getElementById(active!)!.getAttribute("data-term")).toBe("z");
+  });
+
+  it("a live re-sort while open never moves Enter onto another terminal", () => {
+    mount("a");
+    fireEvent.click(btn());
+    const list = screen.getByRole("listbox");
+    const activeTerm = () => document.getElementById(list.getAttribute("aria-activedescendant")!)!.getAttribute("data-term");
+    expect(activeTerm()).toBe("b");
+    // c becomes blocked: it sorts ahead of b, shifting every index.
+    m.terms = m.terms.map((t) => ((t as TermRow).id === "c" ? term("c", { cwd: "/work/q", started_unix: 30, blocked: true }) : t));
+    act(() => setMarks({ c: { asks: true, finishedUnseen: false } }));
+    expect(activeTerm()).toBe("b");
+    fireEvent.keyDown(list, { key: "Enter" });
+    expect(where()).toBe("/terminals/b");
+  });
+
+  it("Tab closes the popover", () => {
+    mount();
+    fireEvent.click(btn());
+    fireEvent.keyDown(screen.getByRole("listbox"), { key: "Tab" });
+    expect(screen.queryByTestId("kb-term-switcher-pop")).toBeNull();
+  });
+});
+
 describe("TermSwitcher Alt chords", () => {
+  it("ignores key-repeat but still swallows it so the pane sees nothing", () => {
+    mount("a");
+    const pane = screen.getByTestId("pane");
+    const seen: string[] = [];
+    pane.addEventListener("keydown", (e) => seen.push((e as KeyboardEvent).code));
+    chord("ArrowDown", { repeat: true }, pane);
+    expect(where()).toBe("/terminals/a");
+    expect(seen).toEqual([]);
+  });
+
+  it("with no target (single terminal, or no needs row) the chord passes through to the pane", () => {
+    mount("a"); // nobody needs you
+    const pane = screen.getByTestId("pane");
+    const seen: string[] = [];
+    pane.addEventListener("keydown", (e) => seen.push((e as KeyboardEvent).code));
+    chord("KeyN", {}, pane);
+    expect(seen).toEqual(["KeyN"]);
+  });
+
   it("Alt+ArrowDown / Alt+ArrowUp step through the flat list, wrapping", () => {
     mount("a"); // flat: c, b, a
     chord("ArrowDown");
@@ -226,7 +280,7 @@ describe("TermSwitcher Alt chords", () => {
   });
 
   it("Alt+N goes to the next needs-you terminal", () => {
-    setMarks({ c: { asks: true, finishedUnseen: false } });
+    m.terms = m.terms.map((t) => ((t as TermRow).id === "c" ? term("c", { cwd: "/work/q", blocked: true }) : t));
     mount("a");
     chord("KeyN");
     expect(where()).toBe("/terminals/c");

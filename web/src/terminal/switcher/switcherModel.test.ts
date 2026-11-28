@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { TermRow } from "../../api/terms";
 import type { LiveStatusRow } from "../../api/generated/LiveStatusRow";
-import { joinHub, orderHub, type HubPrefs } from "../hub/termHub";
+import { joinHub, needsYouIds, orderHub, type HubPrefs } from "../hub/termHub";
 import { buildSwitcher } from "./switcherModel";
 
 function term(id: string, o: Partial<TermRow> = {}): TermRow {
@@ -55,14 +55,17 @@ describe("buildSwitcher", () => {
     t[0] = term("a", { cwd: "/work/p", started_unix: 10, blocked: true });
     const m = buildSwitcher(t, live, NO_PREFS, {}, "b");
     expect(m.groups[0].rows.map((r) => r.id)).toEqual(["a", "b"]);
-    expect(m.groups[0].rows[0].mark).toBe("asks");
+    expect(m.groups[0].rows[0]).toMatchObject({ asks: true, finished: false, tier: "needs" });
     expect(m.needs).toBe(1);
   });
 
-  it("an asks mark from the attention store ranks a row ahead of calm siblings", () => {
-    const m = buildSwitcher(terms.slice(0, 3), live, NO_PREFS, { a: { asks: true, finishedUnseen: false } }, "b");
-    expect(m.groups[0].rows.map((r) => r.id)).toEqual(["a", "b"]);
-    expect(m.needs).toBe(1);
+  it("an asks mark from the attention store flags the row but never re-sorts or badges", () => {
+    const m = buildSwitcher(terms.slice(0, 3), live, NO_PREFS, { c: { asks: true, finishedUnseen: false } }, "a");
+    const ref = orderHub(joinHub(terms.slice(0, 3), live, NO_PREFS));
+    expect(m.flat.map((r) => r.id).sort()).toEqual(ref.rows.slice(0, ref.endedStart).map((r) => r.term.id).sort());
+    expect(m.flat.map((r) => r.id)).toEqual(["b", "a", "c"]);
+    expect(m.flat.find((r) => r.id === "c")).toMatchObject({ asks: true, tier: expect.not.stringMatching(/^needs$/) });
+    expect(m.needs).toBe(0);
   });
 
   it("asks beats finished; finished never shows on the current terminal", () => {
@@ -72,16 +75,18 @@ describe("buildSwitcher", () => {
       c: { asks: false, finishedUnseen: true },
     };
     const m = buildSwitcher(terms.slice(0, 3), live, NO_PREFS, marks, "b");
-    const mark = (id: string) => m.flat.find((r) => r.id === id)?.mark;
-    expect(mark("a")).toBe("asks");
-    expect(mark("b")).toBeNull();
-    expect(mark("c")).toBe("finished");
+    const r = (id: string) => m.flat.find((x) => x.id === id);
+    expect(r("a")).toMatchObject({ asks: true, finished: false });
+    expect(r("b")).toMatchObject({ asks: false, finished: false });
+    expect(r("c")).toMatchObject({ asks: false, finished: true });
   });
 
-  it("the current terminal's own block does not count in the badge", () => {
+  it("needs counts tier-needs rows exactly like the hub door badge, current included", () => {
     const t = [term("a", { blocked: true }), term("b")];
-    expect(buildSwitcher(t, live, NO_PREFS, {}, "a").needs).toBe(0);
-    expect(buildSwitcher(t, live, NO_PREFS, {}, "b").needs).toBe(1);
+    const door = needsYouIds(orderHub(joinHub(t, live, NO_PREFS)).rows).length;
+    expect(buildSwitcher(t, live, NO_PREFS, {}, "a").needs).toBe(door);
+    expect(buildSwitcher(t, live, NO_PREFS, {}, "b").needs).toBe(door);
+    expect(door).toBe(1);
   });
 
   it("an unknown current id puts everything under Everywhere", () => {

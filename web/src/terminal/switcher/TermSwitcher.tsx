@@ -17,6 +17,7 @@ import { buildSwitcher, type SwitcherRow } from "./switcherModel";
 import { chordOf, nextId, nextNeedsId } from "./switcherKeys";
 import "./switcher.css";
 
+const markOf = (r: SwitcherRow): "asks" | "finished" | null => (r.asks ? "asks" : r.finished ? "finished" : null);
 const MARK_TEXT = { asks: "needs you", finished: "finished" } as const;
 
 export default function TermSwitcher({ currentId }: { currentId: string }): ReactElement | null {
@@ -36,7 +37,7 @@ function Switcher({ currentId }: { currentId: string }): ReactElement {
     [terms, live, prefs, marks, currentId],
   );
   const [open, setOpen] = useState(false);
-  const [active, setActive] = useState(0);
+  const [activeId, setActiveId] = useState<string | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLDivElement>(null);
@@ -64,20 +65,13 @@ function Switcher({ currentId }: { currentId: string }): ReactElement {
       const chord = chordOf(e);
       if (chord === null) return;
       const { model: m, currentId: cur, go } = latest.current;
-      const to =
-        chord === "needs"
-          ? nextNeedsId(
-              m.flat.map((r) => ({ id: r.id, needs: r.mark === "asks" })),
-              cur,
-            )
-          : nextId(
-              m.flat.map((r) => r.id),
-              cur,
-              chord === "next" ? 1 : -1,
-            );
+      const to = chord === "needs" ? nextNeedsId(m.flat, cur) : nextId(m.flat, cur, chord === "next" ? 1 : -1);
+      // No target: the chord is not ours to steal from the pane.
+      if (to === null) return;
       e.preventDefault();
       e.stopPropagation();
-      if (to !== null) go(to);
+      // Key-repeat must not navigate (and remount terminals) at repeat rate.
+      if (!e.repeat) go(to);
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
@@ -90,6 +84,8 @@ function Switcher({ currentId }: { currentId: string }): ReactElement {
 
   useEffect(() => {
     if (!open) return;
+    // Outside pointerdown closes WITHOUT refocusing the button: the user just
+    // pointed somewhere else (often the terminal) and focus must follow that.
     const onDown = (e: PointerEvent): void => {
       if (root.current && !root.current.contains(e.target as Node)) setOpen(false);
     };
@@ -102,12 +98,21 @@ function Switcher({ currentId }: { currentId: string }): ReactElement {
   }, [open]);
 
   const flat = model.flat;
+  // The active row is keyed by terminal id and its index derived per render, so a
+  // live re-sort (beats, marks) can never move Enter onto another terminal.
+  const activeRow: SwitcherRow | undefined = flat.find((r) => r.id === activeId) ?? flat[0];
+  const activeIdx = activeRow ? flat.indexOf(activeRow) : -1;
   const toggle = (): void => {
     if (!open) {
-      const first = flat.findIndex((r) => !r.current);
-      setActive(first === -1 ? 0 : first);
+      const first =
+        flat.find((r) => r.tier === "needs" && !r.current) ?? flat.find((r) => !r.current) ?? flat[0];
+      setActiveId(first?.id ?? null);
     }
     setOpen(!open);
+  };
+  const step = (to: number): void => {
+    const r = flat[to];
+    if (r) setActiveId(r.id);
   };
 
   const onListKey = (e: KeyboardEvent<HTMLDivElement>): void => {
@@ -116,24 +121,24 @@ function Switcher({ currentId }: { currentId: string }): ReactElement {
     switch (e.key) {
       case "ArrowDown":
         e.preventDefault();
-        if (n > 0) setActive((a) => (a + 1) % n);
+        if (n > 0) step((activeIdx + 1) % n);
         break;
       case "ArrowUp":
         e.preventDefault();
-        if (n > 0) setActive((a) => (a - 1 + n) % n);
+        if (n > 0) step((activeIdx - 1 + n) % n);
         break;
       case "Home":
         e.preventDefault();
-        setActive(0);
+        step(0);
         break;
       case "End":
         e.preventDefault();
-        setActive(Math.max(0, n - 1));
+        step(Math.max(0, n - 1));
         break;
       case "Enter":
       case " ":
         e.preventDefault();
-        if (flat[active]) latest.current.go(flat[active].id);
+        if (activeRow) latest.current.go(activeRow.id);
         break;
       case "Escape":
         e.preventDefault();
@@ -146,9 +151,6 @@ function Switcher({ currentId }: { currentId: string }): ReactElement {
     }
   };
 
-  const label =
-    `Terminals, ${model.count} running` + (model.needs > 0 ? `, ${model.needs} need${model.needs === 1 ? "s" : ""} you` : "");
-  const activeRow: SwitcherRow | undefined = flat[Math.min(active, Math.max(0, flat.length - 1))];
   const loadingCaption = isLoading && terms.length === 0;
   const errorCaption = isError && terms.length === 0;
 
@@ -161,17 +163,20 @@ function Switcher({ currentId }: { currentId: string }): ReactElement {
         data-testid="kb-term-switcher-btn"
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-label={label}
         aria-keyshortcuts="Alt+ArrowDown Alt+ArrowUp Alt+N"
         title="Terminals (Alt+Up / Alt+Down switch, Alt+N next that needs you)"
         onClick={toggle}
       >
-        <span aria-hidden="true">Terminals</span>{" "}
-        <span className="kb-term-switcher__count" data-testid="kb-term-switcher-count" aria-hidden="true">
+        <span>Terminals</span>{" "}
+        <span className="kb-term-switcher__count" data-testid="kb-term-switcher-count">
           {model.count}
         </span>
         {model.needs > 0 ? (
-          <span className="kb-term-switcher__badge" data-testid="kb-term-switcher-badge" aria-hidden="true">
+          <span
+            className="kb-term-switcher__badge"
+            data-testid="kb-term-switcher-needs"
+            aria-label={`${model.needs} need you`}
+          >
             {model.needs}
           </span>
         ) : null}
@@ -214,12 +219,12 @@ function Switcher({ currentId }: { currentId: string }): ReactElement {
                       key={r.id}
                       id={optId(r.id)}
                       role="option"
-                      aria-selected={activeRow?.id === r.id}
+                      aria-selected={r.current}
                       aria-current={r.current ? "true" : undefined}
                       className="kb-term-switcher__row"
                       data-testid="kb-term-switcher-row"
                       data-term={r.id}
-                      data-mark={r.mark ?? undefined}
+                      data-mark={markOf(r) ?? undefined}
                       data-active={activeRow?.id === r.id ? "true" : undefined}
                       onClick={() => latest.current.go(r.id)}
                     >
@@ -229,10 +234,10 @@ function Switcher({ currentId }: { currentId: string }): ReactElement {
                         {g.key === "everywhere" ? ` · ${r.project}` : ""}
                         {r.current ? " · this terminal" : ""}
                       </span>
-                      {r.mark ? (
-                        <span className={`kb-term-switcher__mark kb-term-switcher__mark--${r.mark}`}>
+                      {markOf(r) ? (
+                        <span className={`kb-term-switcher__mark kb-term-switcher__mark--${markOf(r)}`}>
                           <span className="kb-term-switcher__shape" aria-hidden="true" />
-                          {MARK_TEXT[r.mark]}
+                          {MARK_TEXT[markOf(r)!]}
                         </span>
                       ) : null}
                     </div>

@@ -250,7 +250,7 @@ test.describe("TERMSWITCH header switcher", () => {
     await expectLive(page);
     const btn = page.locator('[data-testid="kb-term-switcher-btn"]');
     await expect(btn).toBeVisible({ timeout: 15_000 });
-    await expect(page.locator('[data-testid="kb-term-switcher-badge"]')).toHaveText("1");
+    await expect(page.locator('[data-testid="kb-term-switcher-needs"]')).toHaveText("1");
     await btn.click();
     const rows = page.locator('[data-testid="kb-term-switcher-row"]');
     await expect(rows).toHaveCount(2);
@@ -263,5 +263,33 @@ test.describe("TERMSWITCH header switcher", () => {
     await page.locator(VIEW).click();
     await page.keyboard.press("Alt+ArrowDown");
     await expect(page).toHaveURL(new RegExp(`/terminals/${TERM_ID}$`));
+  });
+  test.describe("phone", () => {
+    test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+
+    test("the popover opens inside the viewport, not clipped off the left edge", async ({ page }) => {
+      await installFakeTerminal(page, { total: 300, seedLines: 100 });
+      await admit(page);
+      await page.route("**/api/terms", (route) => {
+        if (route.request().method() !== "GET") return route.continue();
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ terms: [termRow(TERM_ID, false), termRow(OTHER_ID, true)] }),
+        });
+      });
+      await page.goto(`${BASE}/terminals/${TERM_ID}`);
+      const btn = page.locator('[data-testid="kb-term-switcher-btn"]');
+      await expect(btn).toBeVisible({ timeout: 15_000 });
+      await btn.click();
+      const pop = page.locator('[data-testid="kb-term-switcher-pop"]');
+      await expect(pop).toBeVisible();
+      const box = await pop.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.x).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+      const row = page.locator('[data-testid="kb-term-switcher-row"]').first();
+      expect((await row.boundingBox())!.height).toBeGreaterThanOrEqual(40);
+    });
   });
 });

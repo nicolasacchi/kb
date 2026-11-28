@@ -25,27 +25,25 @@ export function chordOf(e: ChordEvent): SwitcherChord | null {
 }
 
 /**
- * The id after/before `currentId`, wrapping. An unknown current id starts at
- * the first (next) or last (prev) entry. Null when there is nowhere else to go.
+ * The row after/before `currentId`, wrapping, over the listed (flat) order. An
+ * unknown current id starts at the first (next) or last (prev) entry. Null when
+ * there is nowhere else to go.
  */
-export function nextId(ids: readonly string[], currentId: string | null, dir: 1 | -1): string | null {
-  if (ids.length === 0) return null;
-  const i = currentId === null ? -1 : ids.indexOf(currentId);
-  const n = ids.length;
+export function nextId(flat: readonly { id: string }[], currentId: string | null, dir: 1 | -1): string | null {
+  if (flat.length === 0) return null;
+  const i = currentId === null ? -1 : flat.findIndex((r) => r.id === currentId);
+  const n = flat.length;
   const to = i === -1 ? (dir === 1 ? 0 : n - 1) : (i + dir + n) % n;
-  return ids[to] === currentId ? null : ids[to];
+  return flat[to].id === currentId ? null : flat[to].id;
 }
 
-/** The next entry after `currentId` (wrapping) that needs the operator; never the current one. */
-export function nextNeedsId(
-  rows: readonly { id: string; needs: boolean }[],
-  currentId: string | null,
-): string | null {
-  const n = rows.length;
-  const i = currentId === null ? -1 : rows.findIndex((r) => r.id === currentId);
+/** The next tier-`needs` row after `currentId` (wrapping); never the current one. */
+export function nextNeedsId(flat: readonly { id: string; tier: string }[], currentId: string | null): string | null {
+  const n = flat.length;
+  const i = currentId === null ? -1 : flat.findIndex((r) => r.id === currentId);
   for (let k = 1; k <= n; k++) {
-    const r = rows[(i + k + n) % n];
-    if (r.needs && r.id !== currentId) return r.id;
+    const r = flat[(i + k + n) % n];
+    if (r.tier === "needs" && r.id !== currentId) return r.id;
   }
   return null;
 }

@@ -136,12 +136,26 @@
   }
 }
 
-/* A phone held in landscape keeps its height for the grid (POLISH2: the Watch
- * pane is at least half the sheet): when the extra row holds only the switcher
- * (no End/switch controls from the page), the row folds away. The Alt chords
- * stay registered; the button returns in portrait. */
-@media (pointer: coarse) and (orientation: landscape) and (max-height: 599px) {
-  .kb-term-phone__extra:not(:has(.kb-term-phone__btn)) {
-    display: none;
-  }
+/* The phone's extra row: the switcher sits at the LEFT of it, so a
+ * right-anchored popover would hang off-screen (the sheet body clips it).
+ * Anchor the panel to the row instead and span its full width. Scoped by the
+ * switcher's own presence so no other unit's row styling is touched. */
+.kb-term-phone__extra:has(.kb-term-switcher) {
+  position: relative;
+}
+
+.kb-term-phone__extra .kb-term-switcher {
+  position: static;
+}
+
+.kb-term-phone__extra .kb-term-switcher .kb-term-switcher__pop {
+  left: 0;
+  right: 0;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.kb-term-phone__extra .kb-term__actions:has(.kb-term-switcher) {
+  position: static;
 }

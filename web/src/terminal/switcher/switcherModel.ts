@@ -8,7 +8,6 @@ import { joinHub, orderHub, type HubPrefs, type HubRow } from "../hub/termHub";
 import type { TermMarks } from "../notify/attention";
 
 /** `asks`: the terminal needs the operator. `finished`: a turn ended unseen. */
-export type SwitcherMark = "asks" | "finished" | null;
 export type SwitcherGroupKey = "project" | "everywhere";
 
 export interface SwitcherRow {
@@ -16,7 +15,11 @@ export interface SwitcherRow {
   title: string;
   project: string;
   harness: string;
-  mark: SwitcherMark;
+  tier: HubRow["tier"];
+  /** Needs the operator: the attention store says so OR the hub tier is `needs`. */
+  asks: boolean;
+  /** A turn ended unseen; never together with `asks`, never on the current terminal. */
+  finished: boolean;
   current: boolean;
   hub: HubRow;
 }
@@ -33,7 +36,7 @@ export interface SwitcherModel {
   flat: SwitcherRow[];
   /** Live (not ended) terminals, the current one included. */
   count: number;
-  /** Live terminals OTHER than the current one that need the operator. */
+  /** Tier-`needs` live terminals: the same count as the hub door badge. */
   needs: number;
 }
 
@@ -41,14 +44,6 @@ export const GROUP_LABEL: Readonly<Record<SwitcherGroupKey, string>> = {
   project: "This project",
   everywhere: "Everywhere",
 };
-
-function markOf(h: HubRow, marks: TermMarks, current: boolean): SwitcherMark {
-  const m = Object.prototype.hasOwnProperty.call(marks, h.term.id) ? marks[h.term.id] : undefined;
-  if (m?.asks === true || h.tier === "needs") return "asks";
-  // The terminal being viewed has no unseen turn end by definition.
-  if (m?.finishedUnseen === true && !current) return "finished";
-  return null;
-}
 
 export function buildSwitcher(
   terms: readonly TermRow[],
@@ -63,27 +58,31 @@ export function buildSwitcher(
   const project = joined.find((r) => r.term.id === currentId)?.project ?? null;
   const rows: SwitcherRow[] = liveRows.map((hub) => {
     const current = hub.term.id === currentId;
+    const m = Object.prototype.hasOwnProperty.call(marks, hub.term.id) ? marks[hub.term.id] : undefined;
+    const asks = m?.asks === true || hub.tier === "needs";
     return {
       id: hub.term.id,
       title: hub.title,
       project: hub.project,
       harness: hub.term.harness,
-      mark: markOf(hub, marks, current),
+      tier: hub.tier,
+      asks,
+      // The terminal being viewed has no unseen turn end by definition.
+      finished: !asks && !current && m?.finishedUnseen === true,
       current,
       hub,
     };
   });
-  // Stable partition: rows that need the operator first, orderHub order kept.
-  const sorted = [...rows.filter((r) => r.mark === "asks"), ...rows.filter((r) => r.mark !== "asks")];
+  // Order is orderHub's, never a second one (needs rows already lead each group).
   const groups: SwitcherGroup[] = [];
-  const mine = project === null ? [] : sorted.filter((r) => r.project === project);
-  const rest = project === null ? sorted : sorted.filter((r) => r.project !== project);
+  const mine = project === null ? [] : rows.filter((r) => r.project === project);
+  const rest = project === null ? sorted : rows.filter((r) => r.project !== project);
   if (mine.length > 0) groups.push({ key: "project", label: GROUP_LABEL.project, rows: mine });
   if (rest.length > 0) groups.push({ key: "everywhere", label: GROUP_LABEL.everywhere, rows: rest });
   return {
     groups,
     flat: groups.flatMap((g) => g.rows),
     count: rows.length,
-    needs: rows.filter((r) => r.mark === "asks" && !r.current).length,
+    needs: rows.filter((r) => r.tier === "needs").length,
   };
 }
