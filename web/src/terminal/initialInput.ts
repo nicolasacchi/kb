@@ -12,8 +12,15 @@ export function markInitialInputDelivered(termId: string, text: string): void {
   DELIVERED.add(keyOf(termId, text));
 }
 
-/** What gets pasted: one trailing newline stripped (the paste never presses Enter). */
-export const initialInputText = (text: string): string => text.replace(/\r?\n$/, "");
+/**
+ * What gets pasted: one trailing newline stripped (the paste never presses
+ * Enter), then every interior line-break run (with its surrounding blanks)
+ * flattened to one space. A pasted CR is Enter when bracketed paste is off, on
+ * the desktop paste and the phone `sendInput` path alike, so no newline may
+ * survive into either.
+ */
+export const initialInputText = (text: string): string =>
+  text.replace(/\r?\n$/, "").replace(/[ \t]*[\r\n]+[ \t]*/g, " ");
 
 /** Test seam. */
 export function resetInitialInput(): void {
