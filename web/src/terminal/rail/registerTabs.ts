@@ -8,6 +8,8 @@ import { createElement } from "react";
 import { registerRailTab } from "./registry";
 import { ConversationRail } from "./ConversationRail";
 import { ChangesRail } from "./changes/ChangesRail";
+import { BoardRail } from "./board/BoardRail";
+import { useBoardBadge } from "./board/useBoardBadge";
 
 registerRailTab({
   id: "conversation",
@@ -22,3 +24,5 @@ registerRailTab({
   badge: undefined,
   node: createElement(ChangesRail),
 });
+
+registerRailTab({ id: "board", label: "Board", useBadge: useBoardBadge, node: createElement(BoardRail) });
