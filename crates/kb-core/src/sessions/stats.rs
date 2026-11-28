@@ -125,6 +125,49 @@ pub(crate) struct UsageLedger {
     conflicts: u32,
     messages: u32,
     schema_unknown: u32,
+    /// STATSX4: context tokens of the LAST non-synthetic main-thread record
+    /// (not a max: usage is not monotonic across a compaction).
+    context: Option<u64>,
+    /// STATSX4: harness-reported cost, summed once per response key.
+    cost_by_key: HashMap<String, f64>,
+    cost_keyless: f64,
+    cost_seen: bool,
+}
+
+/// STATSX4: the harness-reported cost a record carries
+/// (`harness_usage.cost.total`), omp only. Claude records carry none.
+fn reported_cost(v: &Value) -> Option<f64> {
+    let h = v
+        .get("message")?
+        .get("harness_usage")
+        .filter(|h| h.is_object() && harness_schema_ok(h))?;
+    h.get("cost")?
+        .get("total")?
+        .as_f64()
+        .filter(|c| c.is_finite() && *c >= 0.0)
+}
+
+/// STATSX4: context tokens held by one record: omp's
+/// `harness_usage.context.prompt_tokens` when the record carries the omp
+/// block (None when that block has no snapshot), else Claude's last
+/// `input + cache_read + cache_creation`.
+fn context_reading(v: &Value, usage: &Usage) -> Option<u64> {
+    let msg = v.get("message")?;
+    if let Some(h) = msg
+        .get("harness_usage")
+        .filter(|h| h.is_object() && harness_schema_ok(h))
+    {
+        return h
+            .get("context")
+            .and_then(|c| c.get("prompt_tokens"))
+            .and_then(|x| x.as_u64());
+    }
+    Some(
+        usage
+            .input
+            .saturating_add(usage.cache_read)
+            .saturating_add(usage.cache_write),
+    )
 }
 
 impl UsageLedger {
@@ -161,7 +204,37 @@ impl UsageLedger {
         }
         if let Some(r) = usage_reading(v) {
             self.record(r.key.as_deref(), r.usage);
+            if v.get("isSidechain").and_then(|x| x.as_bool()) != Some(true) {
+                if let Some(c) = context_reading(v, &r.usage) {
+                    self.context = Some(c);
+                }
+            }
+            if let Some(c) = reported_cost(v) {
+                self.record_cost(r.key.as_deref(), c);
+            }
         }
+    }
+
+    fn record_cost(&mut self, key: Option<&str>, cost: f64) {
+        self.cost_seen = true;
+        match key {
+            Some(k)
+                if self.cost_by_key.contains_key(k) || self.cost_by_key.len() < LEDGER_KEY_CAP =>
+            {
+                self.cost_by_key.insert(k.to_string(), cost);
+            }
+            _ => self.cost_keyless += cost,
+        }
+    }
+
+    pub fn context_tokens(&self) -> Option<u64> {
+        self.context
+    }
+
+    /// Harness-reported cost, `None` when no record carried one.
+    pub fn cost_usd(&self) -> Option<f64> {
+        self.cost_seen
+            .then(|| self.cost_by_key.values().sum::<f64>() + self.cost_keyless)
     }
 
     fn add(&mut self, u: Usage) {
@@ -445,8 +518,8 @@ impl TimeAcc {
     }
 }
 
-/// Deterministic session statistics. Not serialized by any route in this
-/// unit; the derive exists so a later surface only wires a route.
+/// Deterministic session statistics, serialized by the session card's
+/// `stats` lane only.
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct SessionStats {
@@ -467,6 +540,15 @@ pub struct SessionStats {
     /// Records whose `harness_usage.schema` was not understood: ignored (the
     /// legacy `usage` is used), counted here, never summed.
     pub usage_schema_unknown: u32,
+    /// STATSX4: tokens the context held at the LAST non-synthetic main-thread
+    /// record (Claude `input + cache_read + cache_creation`; omp
+    /// `harness_usage.context.prompt_tokens`). `None` = not carried. Never a
+    /// percentage here: the window is not in a transcript.
+    pub context_tokens: Option<u64>,
+    /// STATSX4: cost the HARNESS reported (omp `harness_usage.cost.total`,
+    /// summed once per response). Always `None` for Claude transcripts;
+    /// never estimated from a price table.
+    pub cost_usd: Option<f64>,
     /// Time figures (wall, active, per-turn, operator wait). Surfaced, never
     /// scored.
     pub time: SessionTimeStats,
@@ -495,6 +577,8 @@ impl SessionStats {
             assistant_messages: ledger.messages(),
             usage_conflicts: ledger.conflicts(),
             usage_schema_unknown: ledger.schema_unknown(),
+            context_tokens: ledger.context_tokens(),
+            cost_usd: ledger.cost_usd(),
             time,
         }
     }
@@ -692,6 +776,71 @@ mod tests {
         assert_eq!(s.assistant_messages, 1);
         let act = crate::sessions::parse_session_activity(&j);
         assert_eq!(act.token_total, 17);
+    }
+
+    #[test]
+    fn context_tokens_is_the_last_record_not_the_max_across_compaction() {
+        let big =
+            rec(Some("m1"), None, 5, "").replace("\"input_tokens\":10", "\"input_tokens\":900");
+        let j = join(&[big, rec(Some("m2"), None, 4, "")]);
+        // m2 = 10 input + 100 cache_read + 5 cache_creation; m1 would be 1005.
+        assert_eq!(session_stats_for_jsonl(&j).context_tokens, Some(115));
+        assert_eq!(session_stats_for_jsonl("").context_tokens, None);
+    }
+
+    #[test]
+    fn context_tokens_skips_sidechain_and_synthetic_records() {
+        let side = rec(Some("m_side"), None, 8, "").replace(
+            r#"{"type":"assistant","#,
+            r#"{"type":"assistant","isSidechain":true,"#,
+        );
+        let synth = r#"{"type":"assistant","uuid":"s1","message":{"id":"m_s","role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"x"}],"usage":{"input_tokens":99,"output_tokens":99}}}"#;
+        let j = join(&[rec(Some("m1"), None, 1, ""), side, synth.to_string()]);
+        assert_eq!(session_stats_for_jsonl(&j).context_tokens, Some(115));
+    }
+
+    #[test]
+    fn claude_transcripts_never_carry_a_cost() {
+        let j = join(&[user("a"), rec(Some("m1"), None, 1, "")]);
+        assert_eq!(session_stats_for_jsonl(&j).cost_usd, None);
+    }
+
+    #[test]
+    fn omp_cost_and_context_come_from_harness_usage_once_per_response() {
+        let line = |n: u32, rid: &str, cost: &str, ctx: &str| {
+            format!(
+                r#"{{"type":"assistant","uuid":"oc{n}","message":{{"role":"assistant","model":"m-1","content":[{{"type":"text","text":"x"}}],"usage":{{"input_tokens":9999,"output_tokens":6}},"harness_usage":{{"schema":"omp-usage/1","response_id":"{rid}","input":11,"output":6,"cache_read":40,"cache_write":2{cost}{ctx}}}}}}}"#
+            )
+        };
+        let j = join(&[
+            line(
+                1,
+                "r1",
+                r#","cost":{"total":0.25}"#,
+                r#","context":{"prompt_tokens":5000}"#,
+            ),
+            // A repeat of r1 must not add its cost twice.
+            line(
+                2,
+                "r1",
+                r#","cost":{"total":0.25}"#,
+                r#","context":{"prompt_tokens":5000}"#,
+            ),
+            line(
+                3,
+                "r2",
+                r#","cost":{"total":0.5}"#,
+                r#","context":{"prompt_tokens":1200}"#,
+            ),
+            // No snapshot on the last record: the context stays at r2's.
+            line(4, "r3", "", ""),
+        ]);
+        let s = session_stats_for_jsonl(&j);
+        assert_eq!(s.cost_usd, Some(0.75));
+        assert_eq!(s.context_tokens, Some(1200));
+        // No cost anywhere on an omp transcript = None, never 0.
+        let j = join(&[line(5, "r9", "", "")]);
+        assert_eq!(session_stats_for_jsonl(&j).cost_usd, None);
     }
 
     #[test]
@@ -1055,6 +1204,7 @@ mod tests {
         for (name, src) in RANKERS {
             for needle in [
                 "SessionStats",
+                "StatsLane",
                 "session_stats",
                 "UsageLedger",
                 "usage_conflicts",

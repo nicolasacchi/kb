@@ -1059,6 +1059,16 @@ GET  /api/sessions/{session_id}/card        A3 — the ONE read model
                                             `{available: false, reason: "no
                                             terminal runner"}` until the
                                             kb-term track fills it. The
+                                            `stats` lane (STATSX4) is the
+                                            deterministic SessionStats
+                                            (tokens, cache, turns, time,
+                                            context tokens, and a cost
+                                            ONLY when the harness
+                                            reported one) computed per
+                                            request from the newest
+                                            capture, never persisted and
+                                            never read by a ranking
+                                            module. The
                                             daemon fills `text` (plain,
                                             <= 80-char lines); the CLI
                                             prints it verbatim and never

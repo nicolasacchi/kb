@@ -12,8 +12,8 @@
 
 use crate::middleware::{error_to_problem_json, Identity};
 use crate::routes::sessions::{
-    check_out, continued_in, find_session, session_chain_parts, touched_files_for_commit,
-    widen_session_ids, SessionOut,
+    check_out, continued_in, find_session, locate_capture, session_chain_parts,
+    touched_files_for_commit, widen_session_ids, SessionOut,
 };
 use crate::state::KbHandles;
 use axum::{
@@ -53,6 +53,9 @@ const HISTORY_SCAN_CAP: u32 = 500;
 const RAISED_SCAN_CAP: u32 = 1000;
 const RAISED_WINDOW_FALLBACK_SECS: i64 = 86_400;
 const PER_SESSION_MEMORY_LIMIT: u32 = 100;
+/// STATSX4: how many computed stats blocks the memo keeps (a block is a few
+/// hundred bytes; the cap only bounds the key count).
+const STATS_MEMO_CAP: usize = 64;
 
 // ---------------------------------------------------------------------------
 // Children: one predicate helper for the card lane AND /children.
@@ -1239,6 +1242,76 @@ fn map_check(c: crate::routes::sessions::SessionCheckOut) -> CardCheckOut {
     }
 }
 
+type StatsKey = (String, String, i64);
+
+/// STATSX4: a bounded `(kb, artifact_id, ended_at)` memo so the card's
+/// invalidation on every `session.state` does not re-walk a large transcript.
+/// The key moves whenever a re-capture lands (`ended_at` bumps), so a hit is
+/// never stale. The guard is never held across an await (invariant #15).
+fn stats_memo() -> &'static std::sync::Mutex<
+    std::collections::HashMap<StatsKey, Arc<kb_core::sessions::stats::SessionStats>>,
+> {
+    static MEMO: std::sync::OnceLock<
+        std::sync::Mutex<
+            std::collections::HashMap<StatsKey, Arc<kb_core::sessions::stats::SessionStats>>,
+        >,
+    > = std::sync::OnceLock::new();
+    MEMO.get_or_init(Default::default)
+}
+
+/// The `stats` lane: `SessionStats` over the newest capture's transcript,
+/// computed per request (memoised per capture, never persisted). A capture
+/// that cannot be read or has no transcript degrades THIS lane only.
+/// SURFACED, NEVER SCORED (invariant #11).
+async fn stats_lane(state: &Arc<KbHandles>, session: &SessionOut, session_id: &str) -> StatsLane {
+    let Some((kb, artifact_id, abs, mtime_unix)) = locate_capture(state, session_id).await else {
+        return StatsLane::unavailable("capture not found");
+    };
+    let key: StatsKey = (kb, artifact_id, mtime_unix);
+    let hit = stats_memo()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&key)
+        .cloned();
+    let stats = match hit {
+        Some(s) => s,
+        None => {
+            let built = tokio::task::spawn_blocking(move || {
+                let html = std::fs::read_to_string(&abs).map_err(|e| e.to_string())?;
+                let jsonl = kb_core::sessions::recover_jsonl_from_capture(&html)
+                    .ok_or_else(|| "no transcript in capture".to_string())?;
+                Ok::<_, String>(kb_core::sessions::stats::session_stats_for_jsonl(&jsonl))
+            })
+            .await;
+            match built {
+                Ok(Ok(s)) => {
+                    let s = Arc::new(s);
+                    let mut memo = stats_memo().lock().unwrap_or_else(|e| e.into_inner());
+                    if memo.len() >= STATS_MEMO_CAP {
+                        memo.clear();
+                    }
+                    memo.insert(key, s.clone());
+                    s
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!(session_id = %session_id, error = %e, "card stats lane failed");
+                    return StatsLane::unavailable("capture unreadable");
+                }
+                Err(e) => {
+                    tracing::warn!(session_id = %session_id, error = %e, "card stats lane join failed");
+                    return StatsLane::unavailable("stats unavailable");
+                }
+            }
+        }
+    };
+    StatsLane {
+        available: true,
+        reason: None,
+        model: session.model.clone().filter(|m| !m.is_empty()),
+        stats: Some((*stats).clone()),
+    }
+}
+
 async fn outcome_lane(
     session: &SessionOut,
     files_rows: &[FileRow],
@@ -1468,6 +1541,7 @@ fn live_only_card(
         slate: SlateLane::unavailable(CAPTURE_PENDING_REASON),
         children: ChildrenLane::unavailable(CAPTURE_PENDING_REASON),
         terminal,
+        stats: StatsLane::unavailable(CAPTURE_PENDING_REASON),
     };
     card.text = render_text(&card);
     Some(card)
@@ -1515,6 +1589,7 @@ pub async fn card(
         live,
         slate,
         children,
+        stats,
     ) = tokio::join!(
         summary_lane(&state, &session, &session_id),
         files_lane(&state, &session, &session_id),
@@ -1526,7 +1601,8 @@ pub async fn card(
         memory_lane(&state, &session, &read_ids),
         async { live_lane(&state, &session_id) },
         slate_lane(&state, &session, Some(peer), &headers, &session_id),
-        children_lane(&state, &session)
+        children_lane(&state, &session),
+        stats_lane(&state, &session, &session_id)
     );
 
     let outcome = outcome_lane(
@@ -1570,6 +1646,7 @@ pub async fn card(
         slate,
         children,
         terminal,
+        stats,
     };
     card.text = render_text(&card);
     Json(card).into_response()
