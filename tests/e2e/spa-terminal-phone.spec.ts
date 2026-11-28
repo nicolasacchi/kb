@@ -1372,6 +1372,8 @@ test.describe("CONVNEED phone needs-you banner @phone", () => {
     expect(top).toBe(true);
     await jump.tap();
     await expect(page.locator('[data-testid="term-sheet-handle"]')).toHaveAttribute("aria-expanded", "true");
+  });
+});
 
 // PHIN2 - the key bar rides the proxy's WS input path (sticky Ctrl, typed /bg guard) while direct
 // typing is on. Android Chrome only, like PHIN0; the pref is seeded the way PHIN0 seeds it.
