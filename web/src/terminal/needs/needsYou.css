@@ -1,0 +1,73 @@
+/* CONVNEED — the needs-you banner. Tokens only. */
+.kb-needs {
+  box-sizing: border-box;
+  max-width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--pad-3);
+  min-width: 0;
+  padding: var(--pad-2) var(--pad-3);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  color: var(--ink);
+}
+.kb-needs__main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-1);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.kb-needs__main > p {
+  margin: 0;
+}
+.kb-needs__label {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-2);
+  font-size: var(--fs-xs);
+  color: var(--warn);
+}
+.kb-needs__tool {
+  padding: 0 var(--pad-2);
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+}
+.kb-needs__text {
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.kb-needs__opts,
+.kb-needs__last,
+.kb-needs__fresh {
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+  overflow-wrap: anywhere;
+}
+.kb-needs__jump {
+  flex: 0 0 auto;
+  min-height: 44px;
+  background: var(--bg-card);
+  color: var(--ink);
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  padding: var(--pad-1) var(--pad-3);
+  cursor: pointer;
+}
+.kb-needs__jump:hover {
+  border-color: var(--accent);
+}
+[data-kb-term-layout="phone"] .kb-needs {
+  flex-wrap: wrap;
+}
+[data-kb-term-layout="phone"] .kb-needs__jump {
+  width: 100%;
+}

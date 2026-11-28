@@ -5,7 +5,7 @@
 // live. All text is rendered as text nodes. No xterm import (registerTabs.ts
 // keeps this out of the terminal chunk).
 
-import { useEffect, useState, type ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { StateCard } from "@kb/ui/StateCard";
 import type { ConvRow } from "../../api/generated/ConvRow";
@@ -13,6 +13,7 @@ import { conversationKey, useConversation } from "../../hooks/useConversation";
 import { useSessionDetail } from "../../hooks/useSessions";
 import { toast } from "../../lib/toast";
 import { tryWriteClipboardText } from "../clipboard";
+import { clearPendingJump, hasPendingJump, usePendingJumpTick } from "../needs/pendingJump";
 import { useTermRail } from "./context";
 import {
   CONV_FILTERS,
@@ -115,6 +116,35 @@ export function ConversationRail(): ReactElement {
   const { detail } = useSessionDetail(sid ?? null);
   const [filter, setFilter] = useState<ConvFilter>("all");
   const [now, setNow] = useState<number>(() => Date.now());
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const jumpTick = usePendingJumpTick();
+
+  // CONVNEED: a jump request from the needs-you banner scrolls to and focuses
+  // the pending row once rows are rendered. A non-ready state leaves the
+  // request alive only while a capture may still land (loading); a terminal
+  // state (none/empty/error) or a missing pending row clears it.
+  useEffect(() => {
+    if (!hasPendingJump()) return;
+    const root = rootRef.current;
+    if (!root) {
+      if (!q.isPending) clearPendingJump();
+      return;
+    }
+    const chip = root.querySelector('[data-pending="true"]');
+    const row = chip?.closest<HTMLElement>('[data-testid="conv-row"]') ?? null;
+    if (!row) {
+      if (filter !== "all") {
+        setFilter("all");
+        return;
+      }
+      clearPendingJump();
+      return;
+    }
+    clearPendingJump();
+    row.tabIndex = -1;
+    row.scrollIntoView?.({ block: "nearest" });
+    row.focus();
+  }, [jumpTick, q.data, q.isPending, filter]);
 
   // A local re-render tick for the freshness caption: a timer, never a fetch.
   useEffect(() => {
@@ -187,7 +217,7 @@ export function ConversationRail(): ReactElement {
   const rel = detail?.source_relative;
 
   return (
-    <div className="kb-convrail" data-testid="conv-rail">
+    <div className="kb-convrail" data-testid="conv-rail" ref={rootRef}>
       <div className="kb-convrail__bar">
         <div className="kb-convrail__filters" role="radiogroup" aria-label="Filter turns">
           {CONV_FILTERS.map((f) => (

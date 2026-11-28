@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 const toastErr = vi.hoisted(() => vi.fn());
@@ -12,6 +12,7 @@ vi.mock("../../hooks/useSessions", () => ({ useSessionDetail: detailMock }));
 
 import { ConversationRail } from "./ConversationRail";
 import { TermRailContext } from "./context";
+import { requestPendingJump, resetPendingJumpForTests, hasPendingJump } from "../needs/pendingJump";
 
 const NOW = 1_700_000_000;
 const rowsBody = {
@@ -58,6 +59,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  resetPendingJumpForTests();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   toastErr.mockReset();
@@ -192,5 +194,49 @@ describe("ConversationRail", () => {
     await qc.invalidateQueries({ queryKey: ["sessions", "conversation"] });
     expect(await screen.findByTestId("conv-stale")).toBeTruthy();
     expect(screen.getAllByTestId("conv-row")).toHaveLength(3);
+  });
+
+  it("a jump request focuses and scrolls the pending row, then clears", async () => {
+    mockFetch(200);
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    mount("sid-1");
+    const rows = await screen.findAllByTestId("conv-row");
+    expect(rows[2].hasAttribute("tabindex")).toBe(false);
+    act(() => requestPendingJump());
+    await waitFor(() => expect(document.activeElement).toBe(rows[2]));
+    expect(rows[2].getAttribute("tabindex")).toBe("-1");
+    expect(scroll).toHaveBeenCalledWith({ block: "nearest" });
+    expect(rows[0].hasAttribute("tabindex")).toBe(false);
+    expect(hasPendingJump()).toBe(false);
+  });
+
+  it("a request made before the rail loads is honoured once rows render", async () => {
+    mockFetch(200);
+    Element.prototype.scrollIntoView = vi.fn();
+    requestPendingJump();
+    mount("sid-1");
+    const rows = await screen.findAllByTestId("conv-row");
+    await waitFor(() => expect(document.activeElement).toBe(rows[2]));
+  });
+
+  it("no pending row: no throw, nothing focused, the request is cleared", async () => {
+    mockFetch(200, {
+      kb: "demo",
+      conversation: { ...rowsBody, rows: [rowsBody.rows[1]] },
+    });
+    mount("sid-1");
+    await screen.findAllByTestId("conv-row");
+    const before = document.activeElement;
+    act(() => requestPendingJump());
+    await waitFor(() => expect(hasPendingJump()).toBe(false));
+    expect(document.activeElement).toBe(before);
+  });
+
+  it("a request made while the rail shows a terminal non-ready state is cleared, not left to steal focus later", async () => {
+    mockFetch(404, {});
+    mount("sid-1");
+    act(() => requestPendingJump());
+    await waitFor(() => expect(hasPendingJump()).toBe(false));
   });
 });

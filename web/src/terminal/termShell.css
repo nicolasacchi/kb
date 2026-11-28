@@ -172,6 +172,29 @@
   overflow: auto;
   min-height: 0;
 }
+
+/* CONVNEED: desktop the slot is a plain block whose width never feeds the shell's
+ * intrinsic size (contain: inline-size); phone it is a fixed top strip above the modal sheet, never clipped. */
+.kb-termshell__needs {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  contain: inline-size;
+}
+.kb-termshell[data-kb-term-layout="phone"] .kb-termshell__needs {
+  display: block;
+  position: fixed;
+  top: env(safe-area-inset-top, 0);
+  left: 0;
+  right: 0;
+  z-index: var(--z-modal);
+  max-height: 40dvh;
+  overflow-y: auto;
+}
+.kb-termshell[data-kb-term-layout="phone"] .kb-termshell__needs:empty {
+  display: none;
+}
+
 /* BA11Y — a visible focus ring on the rail's own controls, both themes. */
 .kb-termshell__tab:focus-visible,
 .kb-termshell__toggle:focus-visible,
