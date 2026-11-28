@@ -492,6 +492,12 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
         // area (terminal tier; the `gate_read` gate runs in each handler).
         .route("/terms/{id}/ls", get(terminal::files_read::ls))
         .route("/terms/{id}/file", get(terminal::files_read::file))
+        // kbt2 FXSAVE — the verbatim original of a kept file (same gate and
+        // download shape as `/file`; the path comes only from the artifact id).
+        .route(
+            "/terms/{id}/kept/{artifact_id}",
+            get(terminal::files_read::kept_blob),
+        )
         .route(
             "/terms/{id}/release-size",
             post(routes::terms::release_size),
@@ -985,6 +991,15 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
     let terminal_files_routes = Router::new()
         .route("/terms/{id}/files", post(terminal::upload::terms_files))
         .layer(DefaultBodyLimit::max(terminal::upload::FILE_BODY_LIMIT));
+    // FXSAVE — keep a working-area file in the files corpus: a tiny JSON
+    // body on its own sub-router so its 4 KiB limit is separate from the
+    // upload door's.
+    let terminal_files_keep_routes = Router::new()
+        .route(
+            "/terms/{id}/files/keep",
+            post(terminal::upload::terms_files_keep),
+        )
+        .layer(DefaultBodyLimit::max(terminal::upload::KEEP_BODY_LIMIT));
     let review_routes = Router::new()
         // R8 — the whole-document write POST is retired; the CLI (R6) and
         // SPA (R7) both mutate through the fine-grained endpoints below.
@@ -1096,6 +1111,7 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
         .merge(capture_routes)
         .merge(terminal_upload_routes)
         .merge(terminal_files_routes)
+        .merge(terminal_files_keep_routes)
         .merge(history_routes)
         // v0.4 A2 — bearer-token auth on matched /api routes.
         // Loopback bypass keeps local CLI/TUI/SPA flows working without

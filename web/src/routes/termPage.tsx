@@ -8,13 +8,14 @@ import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { StateCard } from "@kb/ui/StateCard";
 import { useIdentity } from "../hooks/useArtifactHost";
-import { useIsMobile } from "../hooks/useIsMobile";
+import { useIsMobile, usePhonePanel } from "../hooks/useIsMobile";
 import { openTermParam } from "../components/TermList";
 import { TerminalControls, cwdBase } from "../components/TermControls";
 import { TermShell } from "../terminal/TermShell";
 import { useTerms } from "../terminal/useTerms";
 import { buildHubUrl } from "../terminal/hub/termHub";
 import TermSwitcher from "../terminal/switcher/TermSwitcher";
+import { CommandsButton } from "../terminal/commands/palette/CommandsButton";
 
 const TerminalPanel = lazy(() => import("../terminal/TerminalPanel.lazy"));
 
@@ -39,6 +40,7 @@ export default function TermPageRoute(): ReactElement {
   // The panel owns the phone/desktop choice; the End/switcher placement keeps the
   // width predicate the hosts always used (a landscape phone keeps the dock tall).
   const narrow = useIsMobile();
+  const phonePanel = usePhonePanel();
   const row = termId ? terms.find((t) => t.id === termId) : undefined;
   const seen = useRef(false);
   if (row) seen.current = true;
@@ -128,7 +130,12 @@ export default function TermPageRoute(): ReactElement {
           harness={harness}
           onClose={close}
           headerExtra={narrow ? controls : undefined}
-          headerActions={<TermSwitcher currentId={termId} />}
+          headerActions={
+            <>
+              {phonePanel ? null : <CommandsButton termId={termId} harness={harness} />}
+              <TermSwitcher currentId={termId} />
+            </>
+          }
         />
       </Suspense>
     </TermShell>

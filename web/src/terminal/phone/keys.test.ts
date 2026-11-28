@@ -1,7 +1,7 @@
 // T18 — the key vocabulary, against the Rust copies it must equal.
 
 import { describe, expect, it } from "vitest";
-import { KEYBAR_KEYS, KEY_NAMES, SLASH_MENU, isKeyName, slashMenuFor } from "./keys";
+import { KEYBAR_KEYS, KEY_NAMES, SLASH_MENU, ctrlArrowBytes, isKeyName, keyBytes, slashMenuFor } from "./keys";
 
 // Node's fs without Node typings (same trick as terminal/wire.test.ts).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -56,5 +56,41 @@ describe("key vocabulary", () => {
     for (const entries of Object.values(SLASH_MENU)) {
       for (const e of entries) expect(e.startsWith("/")).toBe(true);
     }
+  });
+});
+
+// PHIN2 - the raw bytes the direct-typing path sends equal the runner's table.
+describe("keyBytes", () => {
+  /** `name -> bytes` from the arms of `named_key_bytes`, Rust byte-literal escapes decoded. */
+  function runnerBytes(): Map<string, string> {
+    const src = nodeFs.readFileSync(here("../../../../crates/kb-term/src/runner/keys.rs"), "utf8");
+    const body = src.split("pub fn named_key_bytes")[1].split("#[cfg(test)]")[0];
+    const out = new Map<string, string>();
+    for (const m of body.matchAll(/^\s*"([^"]+)"\s*=>\s*b"([^"]*)"/gm)) {
+      out.set(
+        m[1],
+        m[2].replace(/\\x([0-9a-fA-F]{2})/g, (_s, h: string) => String.fromCharCode(parseInt(h, 16))),
+      );
+    }
+    return out;
+  }
+
+  it("equals the runner table for all 24 names (normal cursor-keys mode)", () => {
+    const table = runnerBytes();
+    expect(table.size).toBe(24);
+    for (const name of KEY_NAMES) expect(keyBytes(name, false), name).toBe(table.get(name));
+  });
+
+  it("the arrows follow application cursor-keys mode", () => {
+    expect(["Up", "Down", "Right", "Left"].map((k) => keyBytes(k as "Up", false))).toEqual(["\x1b[A", "\x1b[B", "\x1b[C", "\x1b[D"]);
+    expect(["Up", "Down", "Right", "Left"].map((k) => keyBytes(k as "Up", true))).toEqual(["\x1bOA", "\x1bOB", "\x1bOC", "\x1bOD"]);
+    expect(keyBytes("Esc", true)).toBe("\x1b");
+    expect(keyBytes("S-Tab", true)).toBe("\x1b[Z");
+  });
+
+  it("Ctrl+arrow is the modified form; any other key has none", () => {
+    expect(["Up", "Down", "Right", "Left"].map((k) => ctrlArrowBytes(k as "Up"))).toEqual(["\x1b[1;5A", "\x1b[1;5B", "\x1b[1;5C", "\x1b[1;5D"]);
+    expect(ctrlArrowBytes("Esc")).toBeNull();
+    expect(ctrlArrowBytes("y")).toBeNull();
   });
 });

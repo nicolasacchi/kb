@@ -347,9 +347,16 @@ pub fn store_file(input: StoreInput<'_>) -> Result<StoredFile, FileStoreError> {
     let blob_exists = blob_abs.is_file();
     let stub_exists = stub_abs.is_file();
     let created = !(blob_exists && stub_exists);
+    // An existing stub that already carries inline text (an earlier index=1
+    // keep) stays as is; one that lacks it is upgraded when text is requested.
+    let existing_inlined = !created
+        && std::fs::read_to_string(&stub_abs)
+            .map(|t| t.contains("<pre id=\"content\">"))
+            .unwrap_or(false);
+    let upgrade = !created && inline_text.is_some() && !existing_inlined;
 
-    if created {
-        if !blob_exists {
+    if created || upgrade {
+        if !blob_exists && created {
             let used = blob_bytes_used(input.source_root);
             if used.saturating_add(size) > input.quota_bytes {
                 return Err(FileStoreError::Quota {
@@ -387,7 +394,11 @@ pub fn store_file(input: StoreInput<'_>) -> Result<StoredFile, FileStoreError> {
         mime: mime.to_string(),
         kind,
         size,
-        inlined: inline_text.is_some(),
+        inlined: if created || upgrade {
+            inline_text.is_some()
+        } else {
+            existing_inlined
+        },
         created,
     })
 }
@@ -725,5 +736,21 @@ mod tests {
         // Re-storing the same blob does not count twice.
         let again = mk(t.path(), "a.bin", b"0123456789", 10).unwrap();
         assert!(!again.created);
+    }
+
+    #[test]
+    fn index_requested_after_a_metadata_only_keep_upgrades_the_stub() {
+        let t = tempfile::tempdir().unwrap();
+        let a = put(t.path(), "a.txt", b"hello needle", false).unwrap();
+        assert!(a.created && !a.inlined);
+        assert!(!read(t.path(), &a.stub_rel).contains("id=\"content\""));
+        let b = put(t.path(), "a.txt", b"hello needle", true).unwrap();
+        assert!(!b.created && b.inlined);
+        assert_eq!(a.id, b.id);
+        assert!(read(t.path(), &b.stub_rel).contains("<pre id=\"content\">hello needle"));
+        // index=0 over an inlined stub leaves the text, and says so.
+        let c = put(t.path(), "a.txt", b"hello needle", false).unwrap();
+        assert!(!c.created && c.inlined);
+        assert!(read(t.path(), &c.stub_rel).contains("hello needle"));
     }
 }

@@ -16,4 +16,8 @@ describe("TermShell registration", () => {
     expect(board?.label).toBe("Board");
     expect(typeof board?.useBadge).toBe("function");
   });
+
+  it("importing the shell registers the Files tab", () => {
+    expect(railTabs().find((t) => t.id === "files")?.label).toBe("Files");
+  });
 });

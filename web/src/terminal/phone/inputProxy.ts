@@ -9,6 +9,9 @@
 // variant choice.
 
 import { clipboardAction } from "../input";
+import type { ConfirmFn } from "./driveApi";
+import { createDirectLine, type DirectLine } from "./directLine";
+import { applyCtrl, type StickyMods } from "./stickyMods";
 
 /** The three switchable axes the operator uses to find what works on a given IME. */
 export interface ProxyVariant {
@@ -218,12 +221,21 @@ export interface ProxyCoreOptions {
   hasSelection?: () => boolean;
   /** PHIN1: copy the terminal selection to the clipboard. */
   copy?: () => void;
+  /** PHIN2: the sticky Ctrl latch; applies to the next discrete insertion, never to a composition. */
+  mods?: Pick<StickyMods, "consume">;
+  /** PHIN2: the typed-line mirror shared with the key bar (default: the core's own, configured from `harness`/`confirm`). */
+  line?: DirectLine;
+  /** PHIN2: the harness and confirm host the typed `/bg` Enter guard asks (ignored when `line` is given). */
+  harness?: string;
+  confirm?: ConfirmFn | null;
 }
 
 /** The window in which a beforeinput Enter after a keydown Enter is the same press. */
 export const ENTER_PAIR_MS = 300;
 
 const ARROWS: Record<string, string> = { ArrowUp: "\x1b[A", ArrowDown: "\x1b[B", ArrowRight: "\x1b[C", ArrowLeft: "\x1b[D" };
+/** PHIN2: the arrows with the sticky Ctrl latch applied. */
+const CTRL_ARROWS: Record<string, string> = { ArrowUp: "\x1b[1;5A", ArrowDown: "\x1b[1;5B", ArrowRight: "\x1b[1;5C", ArrowLeft: "\x1b[1;5D" };
 
 export interface ProxyCore {
   /** The value the element must start with. */
@@ -251,13 +263,23 @@ export function createProxyCore(opts: ProxyCoreOptions): ProxyCore {
   let enterAt = -Infinity;
   let sentBytes = 0;
   const enc = new TextEncoder();
+  const line = opts.line ?? createDirectLine();
+  if (!opts.line) line.configure(opts.harness ?? "", opts.confirm ?? null);
 
   const log = (type: string, inputType: string, data: string | null, keyCode: number, comp: boolean, bytes: string, n = 0): void => {
     opts.log?.({ type, inputType, data: escapeCtl(data ?? ""), keyCode, composing: comp, bytes: escapeCtl(bytes), n });
   };
 
   /** Send once; a refusal is logged and leaves every mirror untouched. */
-  const emit = (bytes: string, type: string, inputType: string, data: string | null, keyCode: number, comp: boolean): boolean => {
+  const emit = (
+    bytes: string,
+    type: string,
+    inputType: string,
+    data: string | null,
+    keyCode: number,
+    comp: boolean,
+    track: string = bytes,
+  ): boolean => {
     if (bytes === "") {
       log(type, inputType, data, keyCode, comp, "");
       return true;
@@ -268,6 +290,7 @@ export function createProxyCore(opts: ProxyCoreOptions): ProxyCore {
     }
     const n = enc.encode(bytes).length;
     sentBytes += n;
+    line.feed(track);
     log(type, inputType, data, keyCode, comp, bytes, n);
     return true;
   };
@@ -279,15 +302,31 @@ export function createProxyCore(opts: ProxyCoreOptions): ProxyCore {
   };
 
   /** Diff the element's value against the mirror and send the delta. */
-  const flush = (value: string, type: string, inputType: string, data: string | null, comp: boolean, settleAfter = true): void => {
+  const flush = (
+    value: string,
+    type: string,
+    inputType: string,
+    data: string | null,
+    comp: boolean,
+    settleAfter = true,
+    ctrlOk = !comp,
+  ): void => {
     const next = value;
     const d = diffValue(mirror, next);
     // A zero-width space the user (or the IME) inserted is never typed text.
     const ins = variant.sentinel === "zwsp" ? d.ins.split(ZWSP).join("") : d.ins;
-    const bytes = encodeDiff({ del: d.del, ins });
+    // PHIN2: Ctrl rides a discrete insertion only; composed text goes out plain and the latch stays armed.
+    const ctrl = ctrlOk && ins !== "" && opts.mods?.consume() === true;
+    const bytes = "\x7f".repeat(d.del) + (ctrl ? applyCtrl(newlinesToCr(ins)).out : newlinesToCr(ins));
     if (!emit(bytes, type, inputType, data, 0, comp)) return;
     mirror = next;
     if (settleAfter) settle();
+  };
+
+  /** PHIN2: one Enter through the shared guard (a typed `/bg` on claude asks first). */
+  const sendEnter = (type: string, inputType: string, data: string | null, keyCode: number, comp: boolean): void => {
+    if (!line.pending) opts.mods?.consume();
+    line.enter(() => emit("\r", type, inputType, data, keyCode, comp));
   };
 
   return {
@@ -311,9 +350,9 @@ export function createProxyCore(opts: ProxyCoreOptions): ProxyCore {
           // is over for the diff; the element keeps its value, so the compositionend that
           // follows diffs against an equal mirror and sends nothing.
           composing = false;
-          flush(opts.getValue(), "beforeinput", t, e.data, false, false);
+          flush(opts.getValue(), "beforeinput", t, e.data, false, false, false);
         }
-        emit("\r", "beforeinput", t, e.data, 0, e.isComposing);
+        sendEnter("beforeinput", t, e.data, 0, e.isComposing);
         return true;
       }
       if (t === "deleteContentBackward" && !composing && !e.isComposing && mirror === "") {
@@ -338,7 +377,7 @@ export function createProxyCore(opts: ProxyCoreOptions): ProxyCore {
     },
     onCompositionEnd(e) {
       composing = false;
-      flush(e.value, "compositionend", "", e.data, false);
+      flush(e.value, "compositionend", "", e.data, false, true, false);
     },
     onKeyDown(e) {
       if (e.keyCode === 229 || e.isComposing || composing) {
@@ -364,8 +403,9 @@ export function createProxyCore(opts: ProxyCoreOptions): ProxyCore {
       }
       let bytes: string | null = null;
       if (e.key === "Enter") {
-        bytes = "\r";
         enterAt = now();
+        sendEnter("keydown", "", e.key, e.keyCode, false);
+        return true;
       } else if (e.key === "Backspace") bytes = "\x7f";
       else if (e.key === "Tab") bytes = "\t";
       else if (e.key === "Escape") bytes = "\x1b";
@@ -377,13 +417,15 @@ export function createProxyCore(opts: ProxyCoreOptions): ProxyCore {
         log("keydown", "", e.key, e.keyCode, false, "");
         return false;
       }
+      // PHIN2: a latched Ctrl applies to this special key too (arrows take the modified form, the rest go plain).
+      if (!e.ctrlKey && !e.altKey && !e.metaKey && opts.mods?.consume() === true) bytes = CTRL_ARROWS[e.key] ?? bytes;
       emit(bytes, "keydown", "", e.key, e.keyCode, false);
       return true;
     },
     onPaste(text, bracketed) {
       const body = newlinesToCr(text);
       if (body === "") return true;
-      emit(bracketed ? `\x1b[200~${body}\x1b[201~` : body, "paste", "", text, 0, false);
+      emit(bracketed ? `\x1b[200~${body}\x1b[201~` : body, "paste", "", text, 0, false, body);
       return true;
     },
     reset() {
@@ -391,6 +433,7 @@ export function createProxyCore(opts: ProxyCoreOptions): ProxyCore {
       enterAt = -Infinity;
       opts.setValue?.(rest);
       mirror = rest;
+      line.reset();
     },
   };
 }

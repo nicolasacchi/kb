@@ -1,0 +1,156 @@
+/* FXUI — the Files tab. Tokens only; one column; 40px targets on coarse pointers. */
+.kb-filesrail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-3);
+  min-width: 0;
+  color: var(--ink);
+  border: 1px dashed transparent;
+  border-radius: var(--radius-sm);
+}
+.kb-filesrail[data-dragover="1"] {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+.kb-filesrail__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+  min-width: 0;
+}
+.kb-filesrail__h {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--ink);
+}
+.kb-filesrail__hint,
+.kb-filesrail__meta {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+  overflow-wrap: anywhere;
+}
+.kb-filesrail__err {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--err);
+  overflow-wrap: anywhere;
+}
+.kb-filesrail__tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pad-2);
+}
+.kb-filesrail__btn {
+  background: var(--bg-card);
+  color: var(--ink);
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  padding: var(--pad-1) var(--pad-2);
+  cursor: pointer;
+}
+.kb-filesrail__btn:hover:not(:disabled),
+.kb-filesrail__btn[aria-pressed="true"] {
+  border-color: var(--accent);
+}
+.kb-filesrail__btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.kb-filesrail__btn--quiet {
+  color: var(--ink-mute);
+}
+.kb-filesrail__check {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-2);
+  font-size: var(--fs-xs);
+}
+.kb-filesrail__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.kb-filesrail__row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-1);
+  padding: var(--pad-1) var(--pad-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  min-width: 0;
+  font-size: var(--fs-sm);
+}
+.kb-filesrail__rowhead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--pad-2);
+  min-width: 0;
+}
+.kb-filesrail__name,
+.kb-filesrail__link {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.kb-filesrail__link,
+.kb-filesrail__crumb {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.kb-filesrail__crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  font-size: var(--fs-xs);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.kb-filesrail__crumbwrap {
+  display: inline;
+}
+.kb-filesrail__path {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+.kb-filesrail__result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-1);
+  align-items: flex-start;
+  min-width: 0;
+}
+.kb-filesrail__keep {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+  overflow-wrap: anywhere;
+}
+.kb-filesrail__keep--bad {
+  color: var(--warn);
+}
+.kb-filesrail__bar {
+  width: 100%;
+  height: var(--pad-2);
+  accent-color: var(--accent);
+}
+@media (pointer: coarse) {
+  .kb-filesrail__btn,
+  .kb-filesrail__link,
+  .kb-filesrail__crumb {
+    min-height: 40px;
+    min-width: 40px;
+  }
+}

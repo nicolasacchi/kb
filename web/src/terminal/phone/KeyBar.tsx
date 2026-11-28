@@ -7,11 +7,14 @@
 // cannot interrupt the harness; a held `/` opens the harness's slash menu,
 // whose entries are PASTED and never entered.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { toast } from "../../lib/toast";
 import { CAPTION } from "./planSend";
 import { DriveError, pressEnter, sendKey, sendText, type Drive } from "./driveApi";
-import { KEYBAR_KEYS, slashMenuFor, type KeyName } from "./keys";
+import { KEYBAR_KEYS, ctrlArrowBytes, keyBytes, slashMenuFor, type KeyName } from "./keys";
+import { useDirectInput } from "./directInput";
+import { needsConfirm } from "./guards";
+import type { StickyMods } from "./stickyMods";
 import { useHoldConfirm } from "./useHoldConfirm";
 
 export const CTRL_C_HOLD_MS = 600;
@@ -63,7 +66,36 @@ function NoFocusButton(props: {
   );
 }
 
+/**
+ * PHIN2 - the sticky Ctrl button (direct typing only): one tap arms it for the next key from the
+ * bar or the soft keyboard, a double tap locks it, another tap releases. Like every bar button it
+ * acts on pointerdown and never takes focus.
+ */
+function StickyCtrl({ mods }: { mods: StickyMods }) {
+  const state = useSyncExternalStore(mods.subscribe, mods.getState, mods.getState);
+  return (
+    <button
+      type="button"
+      tabIndex={-1}
+      className="kb-drive__key kb-drive__key--mod"
+      data-testid="kb-drive-key-ctrl"
+      data-mod={state === "off" ? undefined : state}
+      aria-pressed={state !== "off"}
+      aria-label={state === "locked" ? "Control, locked" : "Control, applies to the next key"}
+      onPointerDown={(e) => {
+        e.preventDefault();
+        mods.tap();
+      }}
+      onMouseDown={(e) => e.preventDefault()}
+    >
+      {state === "locked" ? "Ctrl lock" : "Ctrl"}
+    </button>
+  );
+}
+
 export function KeyBar({ drive, onCaption, onTyped, repliesRef }: KeyBarProps) {
+  // PHIN2: non-null = direct typing is on, so keys ride the proxy's WS input path (REST otherwise).
+  const direct = useDirectInput();
   const [menuOpen, setMenuOpen] = useState(false);
   const menu = slashMenuFor(drive.harness);
   // The row scrolls (11 keys do not fit a phone): say so with a fade on the
@@ -84,7 +116,30 @@ export function KeyBar({ drive, onCaption, onTyped, repliesRef }: KeyBarProps) {
     return () => ro.disconnect();
   }, [keysEl, measureMore]);
 
+  /** Direct typing: the key's raw bytes over the shared WS path, a latched Ctrl applied. */
+  const sendDirect = (d: NonNullable<typeof direct>, key: KeyName): void => {
+    onCaption(null);
+    // The latch belongs to the key tapped now, whether or not the Left guard then asks.
+    const ctrl = d.mods.consume();
+    const go = (): void => {
+      const bytes = (ctrl ? ctrlArrowBytes(key) : null) ?? keyBytes(key, d.appCursor());
+      if (!d.send(bytes)) {
+        failed(new Error("not live"));
+        return;
+      }
+      d.line.feed(bytes);
+      onTyped?.();
+    };
+    const copy = needsConfirm(drive.harness, { kind: "key", key });
+    if (copy === null) go();
+    else void drive.confirm(copy).then((ok) => (ok ? go() : undefined), failed);
+  };
+
   const send = (key: KeyName): void => {
+    if (direct) {
+      sendDirect(direct, key);
+      return;
+    }
     onCaption(null);
     sendKey(drive, key).then(
       (r) => {
@@ -96,6 +151,19 @@ export function KeyBar({ drive, onCaption, onTyped, repliesRef }: KeyBarProps) {
 
   const enter = (): void => {
     onCaption(null);
+    if (direct) {
+      // The same Enter the proxy runs: the shared line mirror decides whether a typed /bg asks first.
+      direct.mods.consume();
+      direct.line.enter(() => {
+        if (!direct.send("\r")) {
+          failed(new Error("not live"));
+          return false;
+        }
+        onTyped?.();
+        return true;
+      });
+      return;
+    }
     pressEnter(drive).then(
       () => onTyped?.(),
       (e: unknown) => {
@@ -167,6 +235,7 @@ export function KeyBar({ drive, onCaption, onTyped, repliesRef }: KeyBarProps) {
         ref={setKeysEl}
         onScroll={measureMore}
       >
+        {direct ? <StickyCtrl mods={direct.mods} /> : null}
         {KEYBAR_KEYS.map((k) => {
           if (k.name === "C-c" || k.name === "C-d") {
             return (

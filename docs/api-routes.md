@@ -259,8 +259,10 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | POST | `/api/terms/{id}/enter` | `routes::terms::enter` |
 | GET | `/api/terms/{id}/file` | `terminal::files_read::file` |
 | POST | `/api/terms/{id}/files` | `terminal::upload::terms_files` |
+| POST | `/api/terms/{id}/files/keep` | `terminal::upload::terms_files_keep` |
 | GET | `/api/terms/{id}/grid` | `routes::terms::grid` |
 | GET | `/api/terms/{id}/history` | `routes::terms::history` |
+| GET | `/api/terms/{id}/kept/{artifact_id}` | `terminal::files_read::kept_blob` |
 | POST | `/api/terms/{id}/keys` | `routes::terms::keys` |
 | POST | `/api/terms/{id}/kill` | `routes::terms::kill` |
 | GET | `/api/terms/{id}/ls` | `terminal::files_read::ls` |
@@ -277,4 +279,4 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | GET | `/api/users` | `routes::users::list` |
 | GET | `/api/why` | `routes::sessions::why` |
 
-_267 routes._
+_269 routes._
