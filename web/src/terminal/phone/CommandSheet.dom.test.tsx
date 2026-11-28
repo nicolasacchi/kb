@@ -87,7 +87,7 @@ describe("CommandSheet", () => {
     rig.queueDrive(200, { entered: false, enter_error: { status: 409, detail: "session is waiting on you" } });
     mountSheet();
     await ready();
-    fireEvent.click(screen.getByText("/model"));
+    fireEvent.click(screen.getAllByText("/model")[0]);
     await waitFor(() => expect(rig.drive().length).toBeGreaterThan(0));
     expect(rig.drive()[0].body).toMatchObject({ text: "/model", enter: true });
     await waitFor(() => expect(toastErr).toHaveBeenCalledWith("Enter not sent: session is waiting on you"));

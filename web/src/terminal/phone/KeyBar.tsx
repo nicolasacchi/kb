@@ -202,6 +202,7 @@ export function KeyBar({ drive, onCaption, onTyped, repliesRef }: KeyBarProps) {
         ref={setKeysEl}
         onScroll={measureMore}
       >
+        {direct ? <StickyCtrl mods={direct.mods} /> : null}
         <button
           type="button"
           tabIndex={-1}
@@ -218,7 +219,6 @@ export function KeyBar({ drive, onCaption, onTyped, repliesRef }: KeyBarProps) {
         >
           Cmds
         </button>
-        {direct ? <StickyCtrl mods={direct.mods} /> : null}
         {KEYBAR_KEYS.map((k) => {
           if (k.name === "C-c" || k.name === "C-d") {
             return (
