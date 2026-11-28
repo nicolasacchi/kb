@@ -3,16 +3,30 @@
  * `transform` on the terminal or an ancestor (xterm.js issue 6023): nothing here
  * transforms anything. */
 
+/* BPHONE - ONE token set for the phone chrome: keys, chips, the composer, the title bar
+ * (phone.css reads the same names) and the command sheet share a radius, a gap, a border
+ * width and two type steps. Declared once here, on both roots. */
+.kb-drive,
+.kb-term-phone {
+  --drv-radius: var(--radius-sm);
+  --drv-gap: var(--pad-1);
+  --drv-bw: 1px;
+  --drv-fs: var(--fs-sm);
+  --drv-fs-sub: var(--fs-xs);
+}
+
 .kb-drive {
   flex: none;
   display: flex;
   flex-direction: column;
-  gap: var(--pad-1);
-  padding: var(--pad-1) var(--pad-2) var(--pad-2);
-  border-top: var(--pad-1) solid var(--rule);
+  gap: var(--drv-gap);
+  /* The home indicator never covers the composer (the sheet's own inset is released while
+   * the dock is showing, phone.css). */
+  padding: var(--pad-1) var(--pad-2) max(var(--pad-2), env(safe-area-inset-bottom, 0px));
+  border-top: var(--drv-bw) solid var(--rule);
   background: var(--bg-panel);
   color: var(--ink);
-  font-size: var(--fs-sm);
+  font-size: var(--drv-fs);
 }
 
 .kb-drive__head {
@@ -25,7 +39,7 @@
 
 .kb-drive__keys {
   display: flex;
-  gap: var(--pad-1);
+  gap: var(--drv-gap);
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -40,22 +54,24 @@
   mask-image: linear-gradient(to right, var(--ink) calc(100% - var(--pad-4)), transparent);
 }
 
-.kb-drive__keybar {
+/* The wrap is the box the Commands sheet floats above; the toolbar sits inside it, the sheet
+ * is its sibling (a dialog is not a toolbar item). */
+.kb-drive__keybar-wrap {
   position: relative;
 }
 
-/* >= 44 px targets (the spine height token), a press never selects text. */
+/* >= 44 px targets (the touch token), a press never selects text. */
 .kb-drive__key,
 .kb-drive__send {
   flex: none;
-  min-height: var(--spine-h);
-  min-width: var(--spine-h);
+  min-height: var(--touch-min);
+  min-width: var(--touch-min);
   padding: 0 var(--pad-2);
   background: var(--bg-card);
   color: var(--ink);
-  border: var(--pad-1) solid var(--rule-hi);
-  border-radius: var(--radius-sm);
-  font-size: var(--fs-sm);
+  border: var(--drv-bw) solid var(--rule-hi);
+  border-radius: var(--drv-radius);
+  font-size: var(--drv-fs);
   cursor: pointer;
   touch-action: manipulation;
   user-select: none;
@@ -65,6 +81,22 @@
 
 .kb-drive__key--wide {
   padding: 0 var(--pad-3);
+}
+
+/* BPHONE - pressed and focus. A key acts on pointerdown and never takes focus, so the pressed
+ * look is `:active` (declared BEFORE the Ctrl states, which keep winning), and the ring is for
+ * the controls a keyboard can reach (Fit, Release, Send, the composer). */
+.kb-drive__key:active:not(:disabled),
+.kb-drive__send:active:not(:disabled) {
+  background: var(--bg-card-hi);
+  border-color: var(--accent-bor);
+}
+
+.kb-drive__key:focus-visible,
+.kb-drive__send:focus-visible,
+.kb-drive__input:focus-visible {
+  outline: calc(var(--drv-bw) * 2) solid var(--accent);
+  outline-offset: var(--drv-bw);
 }
 
 .kb-drive__key--choice {
@@ -82,7 +114,7 @@
 
 .kb-drive__key--mod[data-mod="locked"] {
   border-color: var(--accent);
-  border-width: calc(var(--pad-1) * 2);
+  border-width: calc(var(--drv-bw) * 2);
   background: var(--accent-bg);
   color: var(--accent-fg);
   font-weight: 600;
@@ -100,24 +132,29 @@
   border-color: var(--accent-bor);
 }
 
+.kb-drive__send:active:not(:disabled) {
+  background: var(--accent-fill);
+  color: var(--accent-fill-fg);
+}
+
 .kb-drive__choice {
   display: flex;
   flex-direction: column;
-  gap: var(--pad-1);
+  gap: var(--drv-gap);
   padding: var(--pad-1);
-  border: var(--pad-1) solid var(--warn);
+  border: var(--drv-bw) solid var(--warn);
   border-radius: var(--radius-md);
 }
 
 .kb-drive__choice-caption {
   color: var(--ink);
-  font-size: var(--fs-sm);
+  font-size: var(--drv-fs);
 }
 
 .kb-drive__composer {
   display: flex;
   flex-direction: column;
-  gap: var(--pad-1);
+  gap: var(--drv-gap);
 }
 
 .kb-drive__input {
@@ -127,8 +164,8 @@
   padding: var(--pad-2);
   background: var(--bg);
   color: var(--ink);
-  border: var(--pad-1) solid var(--rule-hi);
-  border-radius: var(--radius-sm);
+  border: var(--drv-bw) solid var(--rule-hi);
+  border-radius: var(--drv-radius);
   /* At least 16 px: iOS zooms the page on focus below that. */
   font-size: max(var(--fs-lg), 16px);
   font-family: inherit;
@@ -143,23 +180,23 @@
 .kb-drive__chip {
   padding: var(--pad-1) var(--pad-2);
   background: var(--bg-card);
-  border: var(--pad-1) solid var(--rule);
-  border-radius: var(--radius-pill);
+  border: var(--drv-bw) solid var(--rule);
+  border-radius: var(--drv-radius);
   color: var(--ink-mute);
   font-family: var(--font-mono);
-  font-size: var(--fs-xs);
+  font-size: var(--drv-fs-sub);
   white-space: nowrap;
 }
 
 .kb-drive__caption {
   color: var(--ink-mute);
-  font-size: var(--fs-xs);
+  font-size: var(--drv-fs-sub);
 }
 
 /* FUKEYBAR — the quick-reply chip row scrolls sideways like the key row. */
 .kb-drive__replies {
   display: flex;
-  gap: var(--pad-1);
+  gap: var(--drv-gap);
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -242,7 +279,7 @@
   max-height: min(50dvh, 22rem);
   min-height: 0;
   background: var(--bg-card-hi);
-  border: var(--pad-1) solid var(--rule-hi);
+  border: var(--drv-bw) solid var(--rule-hi);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
   z-index: var(--z-popover);
@@ -259,6 +296,21 @@
 
 .kb-drive__cmdsheet-title {
   margin: 0;
-  font-size: var(--fs-sm);
+  font-size: var(--drv-fs);
   font-weight: 600;
+}
+
+/* BPHONE - a landscape phone (the capture condition twin of POLISH2 above): the sheet is capped
+ * at half the 412 px height, so the head folds to one 44 px row (the title goes, the Search
+ * toggle takes its place) and the list shows at least three whole 44 px rows. The sheet stays
+ * an overlay: the Watch pane never resizes. */
+@media (pointer: coarse) and (orientation: landscape) and (max-height: 599px) {
+  .kb-drive__cmdsheet-head {
+    padding-block: 0;
+    justify-content: flex-end;
+  }
+
+  .kb-drive__cmdsheet-title {
+    display: none;
+  }
 }

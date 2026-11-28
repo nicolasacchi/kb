@@ -616,6 +616,13 @@
   margin: var(--pad-2) 0;
   padding-inline: var(--pad-3);
 }
+/* BPHONE - on a phone the page already insets its content: the list's own inline padding
+ * was a second gutter. */
+@media (max-width: 860px) {
+  .kb-ses__terms {
+    padding-inline: 0;
+  }
+}
 .kb-ses__terms-h {
   margin: 0 0 var(--pad-1);
   font-size: var(--fs-sm);
