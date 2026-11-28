@@ -159,3 +159,14 @@
 .kb-term-phone__extra .kb-term__actions:has(.kb-term-switcher) {
   position: static;
 }
+
+/* A phone held in landscape keeps its height for the grid (POLISH2, pinned by
+ * spa-terminal-phone.spec.ts: the Watch pane is at least half the sheet). When
+ * the extra row holds ONLY the switcher (no page controls, no other header
+ * actions such as the command button) the row folds away; the button returns in
+ * portrait. Dropping this rule fails POLISH2 (watch 161 of 412). */
+@media (pointer: coarse) and (orientation: landscape) and (max-height: 599px) {
+  .kb-term-phone__extra:not(:has(.kb-term-phone__btn)):not(:has(.kb-term__actions > :not(.kb-term-switcher))) {
+    display: none;
+  }
+}
