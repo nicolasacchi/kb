@@ -1,6 +1,6 @@
 // CMDPALETTE: the rail's `commands` tab body: the same list as the palette,
 // inline (no dialog), reading the terminal it sits beside from the rail
-// context. 40 px rows (see palette.css) so it is usable in the phone sheet.
+// context. --touch-min rows (see palette.css) so it is usable in the phone sheet.
 
 import type { ReactElement } from "react";
 import { usePhonePanel } from "../../../hooks/useIsMobile";

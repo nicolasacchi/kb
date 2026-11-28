@@ -48,7 +48,7 @@ export interface KeyBarKey {
   aria: string;
 }
 
-/** The key bar, left to right (Spec 3). Ctrl-C and Ctrl-D are holds, `/` also opens the slash menu on a hold. */
+/** The key bar, left to right (Spec 3). Ctrl-C and Ctrl-D are holds, `/` also opens the command sheet on a hold. */
 export const KEYBAR_KEYS: readonly KeyBarKey[] = [
   { name: "Esc", label: "Esc", aria: "Escape" },
   { name: "Tab", label: "Tab", aria: "Tab" },
@@ -64,20 +64,6 @@ export const KEYBAR_KEYS: readonly KeyBarKey[] = [
   { name: "C-u", label: "Ctrl-U", aria: "Control U" },
   { name: "Slash", label: "/", aria: "Slash (hold for commands)" },
 ];
-
-/**
- * The slash-menu entries per harness (Spec 3). An entry is PASTED, never
- * entered. A harness with no entry here (or an empty list) makes a held `/`
- * behave as a tap.
- */
-export const SLASH_MENU: Readonly<Record<string, readonly string[]>> = {
-  claude: ["/help", "/compact", "/clear", "/model", "/resume"],
-  omp: ["/compact", "/shake", "/tree"],
-};
-
-export function slashMenuFor(harness: string): readonly string[] {
-  return SLASH_MENU[harness] ?? [];
-}
 
 /** The choice-bar buttons (Spec 7): digits 1-4 first, then 5-9 behind a disclosure, then y, n and the movers. */
 export const CHOICE_DIGITS_PRIMARY: readonly KeyName[] = ["1", "2", "3", "4"];

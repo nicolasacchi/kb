@@ -9,11 +9,18 @@ import { toast } from "../../lib/toast";
 import { terminalOwnsEscape } from "./escape";
 import { CAPTION } from "./planSend";
 import { KeyBar, moreToRight } from "./KeyBar";
-import { byId, maybeById, mkDrive, mount, press, rigFetch, settle, type FetchRig, type Mounted } from "./driveTestkit";
+import { byId, click, maybeById, mkDrive, mount, press, rigFetch, settle, type FetchRig, type Mounted } from "./driveTestkit";
 import type { Drive } from "./driveApi";
 import { DirectInputContext, type DirectInput } from "./directInput";
 import { createDirectLine } from "./directLine";
 import { createStickyMods } from "./stickyMods";
+import { wrap } from "../commands/palette/paletteTestkit";
+
+// CMDSHEET: the sheet's list reads the identity gate; not admitted = the shipped catalogue, no fetch.
+vi.mock("../../hooks/useArtifactHost", async (orig) => ({
+  ...(await orig<typeof import("../../hooks/useArtifactHost")>()),
+  useIdentity: () => ({ terminal_admitted: false }),
+}));
 
 let m: Mounted | null = null;
 let rig: FetchRig;
@@ -33,6 +40,10 @@ afterEach(() => {
 function bar(drive: Drive, onCaption = vi.fn(), onTyped = vi.fn()) {
   m = mount(<KeyBar drive={drive} onCaption={onCaption} onTyped={onTyped} />);
   return { onCaption, onTyped };
+}
+
+function sheetBar(drive: Drive) {
+  m = mount(wrap(<KeyBar drive={drive} onCaption={vi.fn()} onTyped={vi.fn()} />));
 }
 
 const keyBody = (i: number): unknown => rig.calls[i].json?.keys;
@@ -195,54 +206,96 @@ describe("KeyBar", () => {
     });
   });
 
-  describe("(c) the slash menu", () => {
+  describe("(c) the command sheet", () => {
     const slash = (): HTMLElement => byId(m!.host, "kb-drive-key-Slash");
+    const cmds = (): HTMLElement => byId(m!.host, "kb-drive-key-cmds");
+    const sheet = (): HTMLElement | null => maybeById(m!.host, "kb-drive-cmdsheet");
 
-    it("a held / opens the harness's menu; picking an entry pastes it and never enters", async () => {
+    it("the Cmds key toggles the sheet on pointerdown, never takes focus, and keeps the proxy focused", () => {
+      const ta = document.createElement("textarea");
+      document.body.appendChild(ta);
+      ta.focus();
+      sheetBar(mkDrive({ harness: "omp" }));
+      expect(cmds().tabIndex).toBe(-1);
+      expect(cmds().getAttribute("aria-expanded")).toBe("false");
+      expect(press(cmds(), "mousedown").defaultPrevented).toBe(true);
+      expect(sheet()).toBeNull();
+      expect(press(cmds(), "pointerdown").defaultPrevented).toBe(true);
+      expect(sheet()).not.toBeNull();
+      expect(cmds().getAttribute("aria-expanded")).toBe("true");
+      expect(document.activeElement).toBe(ta);
+      press(cmds(), "pointerdown");
+      expect(sheet()).toBeNull();
+      expect(document.activeElement).toBe(ta);
+      ta.remove();
+    });
+
+    it("the sheet lists the bound harness's catalogue and a tapped row pastes it, never entering", async () => {
+      const ta = document.createElement("textarea");
+      document.body.appendChild(ta);
+      ta.focus();
+      sheetBar(mkDrive({ harness: "omp" }));
+      press(cmds());
+      const rows = [...sheet()!.querySelectorAll('[data-testid="kb-cmdp-row"]')];
+      expect(rows.map((r) => r.querySelector(".kb-cmdp__label")?.textContent)).toContain("/shake");
+      expect(sheet()!.textContent).not.toContain("/help");
+      const shake = rows.find((r) => r.querySelector(".kb-cmdp__label")?.textContent === "/shake") as HTMLElement;
+      expect(press(shake, "mousedown").defaultPrevented).toBe(true);
+      click(shake);
+      await settle();
+      expect(rig.urls()).toEqual(["/api/terms/abcd1234/paste"]);
+      expect(rig.calls[0].json).toEqual({ text: "/shake", viewer: "ws-abc1234567" });
+      expect(sheet()).toBeNull();
+      expect(document.activeElement).toBe(ta);
+      ta.remove();
+    });
+
+    it("the Close button closes the sheet without taking focus", () => {
+      const ta = document.createElement("textarea");
+      document.body.appendChild(ta);
+      ta.focus();
+      sheetBar(mkDrive());
+      press(cmds());
+      const close = byId(m!.host, "kb-drive-cmdsheet-close");
+      expect(press(close, "mousedown").defaultPrevented).toBe(true);
+      expect(press(close).defaultPrevented).toBe(true);
+      expect(sheet()).toBeNull();
+      expect(document.activeElement).toBe(ta);
+      ta.remove();
+    });
+
+    it("a held / opens the same sheet and the hold's release sends no key", async () => {
       vi.useFakeTimers();
-      bar(mkDrive({ harness: "omp" }));
-      expect(maybeById(m!.host, "kb-drive-slashmenu")).toBeNull();
+      sheetBar(mkDrive({ harness: "omp" }));
+      expect(sheet()).toBeNull();
       press(slash(), "pointerdown");
       await act(async () => {
         vi.advanceTimersByTime(449);
       });
-      expect(maybeById(m!.host, "kb-drive-slashmenu")).toBeNull();
+      expect(sheet()).toBeNull();
       await act(async () => {
         vi.advanceTimersByTime(1);
       });
       press(slash(), "pointerup");
-      const menu = byId(m!.host, "kb-drive-slashmenu");
-      expect([...menu.querySelectorAll("button")].map((b) => b.textContent)).toEqual([
-        "/compact",
-        "/shake",
-        "/tree",
-        "Close",
-      ]);
-      press(byId(m!.host, "kb-drive-slash-shake"));
-      await settle();
-      expect(rig.urls()).toEqual(["/api/terms/abcd1234/paste"]);
-      expect(rig.calls[0].json?.text).toBe("/shake");
-      expect(maybeById(m!.host, "kb-drive-slashmenu")).toBeNull();
-      // The hold's release sent no slash key either.
-      expect(rig.calls).toHaveLength(1);
+      expect(sheet()).not.toBeNull();
+      expect(rig.calls).toHaveLength(0);
     });
 
-    it("a tap on / sends the literal Slash key and opens no menu", async () => {
+    it("a tap on / sends the literal Slash key and opens no sheet", async () => {
       vi.useFakeTimers();
-      bar(mkDrive({ harness: "omp" }));
+      sheetBar(mkDrive({ harness: "omp" }));
       press(slash(), "pointerdown");
       press(slash(), "pointerup");
       await settle();
-      expect(maybeById(m!.host, "kb-drive-slashmenu")).toBeNull();
+      expect(sheet()).toBeNull();
       expect(rig.urls()).toEqual(["/api/terms/abcd1234/keys"]);
       expect(keyBody(0)).toEqual(["Slash"]);
     });
 
-    it("a harness with no menu treats / as an immediate key press", async () => {
-      bar(mkDrive({ harness: "codex" }));
-      press(slash(), "pointerdown");
-      await settle();
-      expect(keyBody(0)).toEqual(["Slash"]);
+    it("the old hard-coded slash menu is gone", () => {
+      sheetBar(mkDrive({ harness: "omp" }));
+      press(cmds());
+      expect(maybeById(m!.host, "kb-drive-slashmenu")).toBeNull();
     });
   });
 
@@ -367,9 +420,11 @@ describe("KeyBar over the direct-typing WS path (PHIN2)", () => {
     };
     const onTyped = vi.fn();
     m = mount(
-      <DirectInputContext.Provider value={direct}>
-        <KeyBar drive={drive} onCaption={vi.fn()} onTyped={onTyped} />
-      </DirectInputContext.Provider>,
+      wrap(
+        <DirectInputContext.Provider value={direct}>
+          <KeyBar drive={drive} onCaption={vi.fn()} onTyped={onTyped} />
+        </DirectInputContext.Provider>,
+      ),
     );
     return { direct, send, onTyped, tick: (ms: number) => (clock += ms) };
   }
@@ -524,20 +579,18 @@ describe("KeyBar over the direct-typing WS path (PHIN2)", () => {
     ta.remove();
   });
 
-  it("the slash-menu entries are still PASTED over REST, never entered", async () => {
-    vi.useFakeTimers();
+  it("direct typing: a sheet entry is still PASTED over REST, never entered", async () => {
     directBar();
-    const slash = byId(m!.host, "kb-drive-key-Slash");
-    press(slash, "pointerdown");
-    await act(async () => {
-      vi.advanceTimersByTime(500);
-    });
-    press(slash, "pointerup");
-    vi.useRealTimers();
-    press(byId(m!.host, "kb-drive-slash-compact"));
+    press(byId(m!.host, "kb-drive-key-cmds"));
+    const row = [...m!.host.querySelectorAll('[data-testid="kb-cmdp-row"]')].find(
+      (r) => r.querySelector(".kb-cmdp__label")?.textContent === "/compact",
+    ) as HTMLElement;
+    click(row);
     await settle();
-    expect(rig.urls()).toEqual(["/api/terms/abcd1234/paste"]);
-    expect(rig.calls[0].json).toMatchObject({ text: "/compact" });
-    expect(rig.calls[0].json?.enter).toBeUndefined();
+    // Drive calls only: an unrelated identity read may share the stubbed fetch.
+    const drive = rig.calls.filter((c) => c.url.startsWith("/api/terms/"));
+    expect(drive.map((c) => c.url)).toEqual(["/api/terms/abcd1234/paste"]);
+    expect(drive[0].json).toMatchObject({ text: "/compact" });
+    expect(drive[0].json?.enter).toBeUndefined();
   });
 });

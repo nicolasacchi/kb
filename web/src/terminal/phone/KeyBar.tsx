@@ -4,14 +4,16 @@
 // composer): every button acts on `pointerdown` and calls `preventDefault()`
 // on both `pointerdown` and `mousedown`, and carries `tabIndex={-1}`. Keys are
 // sent as NAMES only (`keys.ts`). Ctrl-C and Ctrl-D must be HELD (600 ms) so a stray tap
-// cannot interrupt the harness; a held `/` opens the harness's slash menu,
-// whose entries are PASTED and never entered.
+// cannot interrupt the harness. CMDSHEET: the Cmds key and a held `/` both open the
+// command sheet (the effective catalogue, `CommandSheet`), whose entries ride the
+// palette's own send paths; a tapped `/` still sends the literal key.
 
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { toast } from "../../lib/toast";
 import { CAPTION } from "./planSend";
-import { DriveError, pressEnter, sendKey, sendText, type Drive } from "./driveApi";
-import { KEYBAR_KEYS, ctrlArrowBytes, keyBytes, slashMenuFor, type KeyName } from "./keys";
+import { DriveError, pressEnter, sendKey, type Drive } from "./driveApi";
+import { CommandSheet } from "./CommandSheet";
+import { KEYBAR_KEYS, ctrlArrowBytes, keyBytes, type KeyName } from "./keys";
 import { useDirectInput } from "./directInput";
 import { needsConfirm } from "./guards";
 import type { StickyMods } from "./stickyMods";
@@ -97,7 +99,6 @@ export function KeyBar({ drive, onCaption, onTyped, repliesRef }: KeyBarProps) {
   // PHIN2: non-null = direct typing is on, so keys ride the proxy's WS input path (REST otherwise).
   const direct = useDirectInput();
   const [menuOpen, setMenuOpen] = useState(false);
-  const menu = slashMenuFor(drive.harness);
   // The row scrolls (11 keys do not fit a phone): say so with a fade on the
   // side that has more, instead of a key cut in half with no hint.
   const [keysEl, setKeysEl] = useState<HTMLDivElement | null>(null);
@@ -191,43 +192,9 @@ export function KeyBar({ drive, onCaption, onTyped, repliesRef }: KeyBarProps) {
     onTap: () => send("Slash"),
   });
 
-  const pick = (entry: string): void => {
-    setMenuOpen(false);
-    onCaption(null);
-    // An entry is pasted, never entered: a menu or file picker would take an Enter blindly.
-    sendText(drive, entry, { enter: false }).then(
-      (r) => {
-        if (r.kind === "sent") {
-          onTyped?.();
-          onCaption(CAPTION.pastedOnly);
-        }
-      },
-      failed,
-    );
-  };
-
   return (
     <div className="kb-drive__keybar" data-testid="kb-drive-keybar" role="toolbar" aria-label="Terminal keys">
-      {menuOpen && menu.length > 0 ? (
-        <div className="kb-drive__slashmenu" data-testid="kb-drive-slashmenu" role="menu" aria-label="Commands">
-          {menu.map((entry) => (
-            <NoFocusButton
-              key={entry}
-              label={entry}
-              aria={`Paste ${entry}`}
-              testId={`kb-drive-slash-${entry.slice(1)}`}
-              act={() => pick(entry)}
-              wide
-            />
-          ))}
-          <NoFocusButton
-            label="Close"
-            aria="Close commands"
-            testId="kb-drive-slash-close"
-            act={() => setMenuOpen(false)}
-          />
-        </div>
-      ) : null}
+      {menuOpen ? <CommandSheet drive={drive} onClose={() => setMenuOpen(false)} onTyped={onTyped} /> : null}
       <div
         className="kb-drive__keys"
         data-testid="kb-drive-keys"
@@ -236,6 +203,22 @@ export function KeyBar({ drive, onCaption, onTyped, repliesRef }: KeyBarProps) {
         onScroll={measureMore}
       >
         {direct ? <StickyCtrl mods={direct.mods} /> : null}
+        <button
+          type="button"
+          tabIndex={-1}
+          className="kb-drive__key kb-drive__key--wide"
+          data-testid="kb-drive-key-cmds"
+          aria-label="Commands"
+          aria-haspopup="dialog"
+          aria-expanded={menuOpen}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            setMenuOpen((o) => !o);
+          }}
+          onMouseDown={(e) => e.preventDefault()}
+        >
+          Cmds
+        </button>
         {KEYBAR_KEYS.map((k) => {
           if (k.name === "C-c" || k.name === "C-d") {
             return (
@@ -252,7 +235,7 @@ export function KeyBar({ drive, onCaption, onTyped, repliesRef }: KeyBarProps) {
               </button>
             );
           }
-          if (k.name === "Slash" && menu.length > 0) {
+          if (k.name === "Slash") {
             return (
               <button
                 key={k.name}

@@ -19,7 +19,9 @@ import "./palette.css";
 export interface CommandListProps {
   termId: string;
   harness: string;
-  variant: "dialog" | "rail";
+  variant: "dialog" | "rail" | "sheet";
+  /** CMDSHEET: the phone dock's viewer id, so a send carries the same `viewer` the key bar does (absent = none, as before). */
+  viewer?: string | null;
   /** The text reached the pane (sent, or pasted with the Enter refused). */
   onSent?: () => void;
   /** Called when the Edit commands link is followed. */
@@ -55,7 +57,7 @@ function useCatalogue(): { catalogue: Effective; fallback: boolean } {
 }
 
 export function CommandList(props: CommandListProps): ReactElement {
-  const { termId, harness, variant, onSent, onNavigate, autoFocus } = props;
+  const { termId, harness, variant, viewer = null, onSent, onNavigate, autoFocus } = props;
   const uid = useId();
   const confirm = useConfirm();
   const { catalogue, fallback } = useCatalogue();
@@ -75,7 +77,7 @@ export function CommandList(props: CommandListProps): ReactElement {
   async function doSend(ks: Keystrokes): Promise<void> {
     if (busy) return;
     setBusy(true);
-    const drive: Drive = { termId, harness, viewer: null, confirm };
+    const drive: Drive = { termId, harness, viewer, confirm };
     const r = await sendEntry(drive, ks);
     setBusy(false);
     if (r.kind === "sent") onSent?.();

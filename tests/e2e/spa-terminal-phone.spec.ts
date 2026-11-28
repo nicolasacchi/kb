@@ -1407,3 +1407,90 @@ test.describe("PHIN2 phone key bar over WS @phone", () => {
     await expect.poll(() => typed(stats)).toBe("/bg\r");
   });
 });
+
+// CMDSHEET - the phone Commands sheet. The Cmds key opens a floating, non-modal
+// sheet above the key bar that lists the effective catalogue; a row goes through
+// the palette's own send path (one paste, never an Enter) and the input proxy
+// keeps focus the whole time. Android Chrome only (the IME behaviour of Android
+// Firefox is a by-hand check).
+test.describe("CMDSHEET phone commands @phone", () => {
+  const PROXY = "[data-kb-term-input]";
+  const WATCH = ".kb-term-phone__watch";
+
+  test.beforeEach(async ({ page }, info) => {
+    test.skip(info.project.name !== "chromium-pixel7", "Android Chrome only");
+    await page.addInitScript(() => window.localStorage.setItem("kb.term.phoneDirect", "1"));
+    await page.route("**/api/identity", async (route) => {
+      const res = await route.fetch();
+      const j = (await res.json()) as Record<string, unknown>;
+      await route.fulfill({ response: res, json: { ...j, terminal_admitted: true } });
+    });
+    await page.route("**/api/terms/commands", async (route) => {
+      await route.fulfill({
+        json: {
+          rev: 1,
+          harnesses: {
+            claude: {
+              groups: [
+                {
+                  id: "sheet-e2e",
+                  label: "Sheet e2e",
+                  origin: "default",
+                  items: [{ id: "se-compact", kind: "command", label: "/sheet-compact", text: "/sheet-compact", mode: "paste", origin: "default" }],
+                },
+              ],
+            },
+          },
+        },
+      });
+    });
+  });
+
+  const focusedIsProxy = (page: Page) => page.evaluate(() => document.activeElement?.hasAttribute("data-kb-term-input") ?? false);
+  async function tapCentre(page: Page, sel: string): Promise<void> {
+    const b = (await page.locator(sel).first().boundingBox())!;
+    await page.touchscreen.tap(b.x + b.width / 2, b.y + b.height / 2);
+  }
+
+  test("opening the sheet keeps the proxy focused, rows are 44 px, and a row pastes once with no Enter", async ({ page }) => {
+    const stats = (await openPhone(page, { total: 300, seedLines: 300, drive: true, harness: "claude" })) as DriveStats;
+    const vis = (await page.locator(WATCH).boundingBox())!;
+    await page.touchscreen.tap(vis.x + 60, vis.y + 60);
+    await expect(page.locator(PROXY)).toBeFocused();
+    const before = await page.locator(WATCH).boundingBox();
+
+    await tapCentre(page, '[data-testid="kb-drive-key-cmds"]');
+    await expect(page.locator('[data-testid="kb-drive-cmdsheet"]')).toBeVisible();
+    expect(await focusedIsProxy(page)).toBe(true);
+    // An overlay: the Watch pane did not move or resize.
+    expect(await page.locator(WATCH).boundingBox()).toEqual(before);
+    const row = page.locator('[data-testid="kb-cmdp-row"]').first();
+    await expect(row).toContainText("/sheet-compact");
+    expect((await row.boundingBox())!.height).toBeGreaterThanOrEqual(43.5);
+
+    await tapCentre(page, '[data-testid="kb-cmdp-row"]');
+    await expect.poll(() => stats.drive.map((c) => c.op)).toEqual(["paste"]);
+    expect(stats.drive[0].json).toMatchObject({ text: "/sheet-compact" });
+    expect(stats.drive[0].json).not.toHaveProperty("enter");
+    await expect(page.locator('[data-testid="kb-drive-cmdsheet"]')).toHaveCount(0);
+    expect(await focusedIsProxy(page)).toBe(true);
+  });
+
+  test("at 915x412 the Watch pane keeps at least half the sheet with the commands sheet open", async ({ page }) => {
+    await openAt(page, { width: 915, height: 412 }, { harness: "claude" });
+    await expect(page.locator(VP)).toBeVisible({ timeout: 15_000 });
+    const share = async (): Promise<number> => {
+      const sheet = (await page.locator("[data-kb-sheet]").first().boundingBox())!;
+      const watch = (await page.locator(WATCH).first().boundingBox())!;
+      return watch.height / sheet.height;
+    };
+    expect(await share()).toBeGreaterThanOrEqual(0.5);
+    await tapCentre(page, '[data-testid="kb-drive-key-cmds"]');
+    const open = page.locator('[data-testid="kb-drive-cmdsheet"]');
+    await expect(open).toBeVisible();
+    expect(await share()).toBeGreaterThanOrEqual(0.5);
+    const b = (await open.boundingBox())!;
+    expect(b.height).toBeLessThanOrEqual(412 * 0.5 + 1);
+    expect(b.y).toBeGreaterThanOrEqual(0);
+  });
+});
