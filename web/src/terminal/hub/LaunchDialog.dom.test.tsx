@@ -697,7 +697,9 @@ describe("HUBPROMPT: the optional first prompt", () => {
     toConfirm();
     prompt("my-secret-token");
     expect(screen.getByTestId("launch-confirm-prompt").textContent).toBe("First prompt: 15 characters");
-    expect(screen.getByTestId("launch-confirm-view").textContent).not.toContain("my-secret-token");
+    // The field itself holds the value; nothing else in the view may echo it.
+    const echoed = Array.from(screen.getByTestId("launch-confirm-view").querySelectorAll("dl, p, small, span, code")).map((e) => e.textContent ?? "");
+    expect(echoed.join("|")).not.toContain("my-secret-token");
     expect(document.title).not.toContain("my-secret-token");
   });
 

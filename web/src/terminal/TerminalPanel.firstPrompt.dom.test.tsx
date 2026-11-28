@@ -297,10 +297,13 @@ beforeEach(() => {
   };
 });
 
-afterEach(() => {
+afterEach(async () => {
   act(() => root?.unmount());
   host?.remove();
   host = root = null;
+  // The phone sheet pops its own history entry asynchronously on unmount; let
+  // that popstate land before the next test mounts.
+  await settle(6);
   delete (HTMLElement.prototype as unknown as Record<string, unknown>).clientWidth;
   delete (HTMLElement.prototype as unknown as Record<string, unknown>).clientHeight;
   vi.unstubAllGlobals();

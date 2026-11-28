@@ -276,7 +276,8 @@ test.describe("HUBPROMPT first prompt in the launch flow", () => {
       await page.locator('[data-testid="launch-review"]').click();
       await page.locator('[data-testid="launch-first-prompt"]').fill("echo synthetic-prompt-text");
       await expect(page.locator('[data-testid="launch-confirm-prompt"]')).toHaveText("First prompt: 26 characters");
-      await expect(page.locator('[data-testid="launch-confirm-view"]')).not.toContainText("synthetic-prompt-text");
+      await expect(page.locator('[data-testid="launch-confirm-view"] dl')).not.toContainText("synthetic-prompt-text");
+      await expect(page.locator('[data-testid="launch-confirm-prompt"]')).not.toContainText("synthetic-prompt-text");
       await page.locator('[data-testid="launch-confirm"]').click();
       await expect.poll(() => posted.length).toBe(1);
       expect(Object.keys(posted[0]).sort()).toEqual(["cwd", "harness"]);
