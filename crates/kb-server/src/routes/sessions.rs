@@ -7463,7 +7463,7 @@ pub async fn replay(
 /// `mtime_unix` = `row.ended_at` — the same proxy `replay`/`export` use (the
 /// `sessions` row carries no real fs mtime; `ended_at` bumps on every
 /// re-capture, which is exactly the cache-invalidation signal wanted).
-async fn locate_capture(
+pub(crate) async fn locate_capture(
     state: &Arc<KbHandles>,
     session_id: &str,
 ) -> Option<(String, String, std::path::PathBuf, i64)> {

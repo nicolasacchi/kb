@@ -132,6 +132,11 @@ pub struct SessionCard {
     /// Registry-derived per request (kb-server `terminal_lane`); the card
     /// gives agents and the CLI no attach or type surface.
     pub terminal: TerminalLane,
+    /// STATSX4: the deterministic per-session figures (tokens, cache, turns,
+    /// time, context, harness-reported cost) over the newest capture.
+    /// Computed per request, persisted nowhere, SURFACED, NEVER SCORED
+    /// (invariant #11): no ranking module reads it.
+    pub stats: StatsLane,
 }
 
 /// V0048 — one end of a cross-harness handoff link: the other session's
@@ -563,6 +568,31 @@ pub struct SlateLane {
 }
 
 impl SlateLane {
+    pub fn unavailable(reason: impl Into<String>) -> Self {
+        Self {
+            available: false,
+            reason: Some(reason.into()),
+            ..Default::default()
+        }
+    }
+}
+
+/// STATSX4 — the `stats` lane. A failed or impossible read is
+/// `available: false` + a reason (drop-on-error), never an error and never
+/// zeros.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct StatsLane {
+    pub available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The session's model string (the window table's key on the SPA side).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stats: Option<crate::sessions::stats::SessionStats>,
+}
+
+impl StatsLane {
     pub fn unavailable(reason: impl Into<String>) -> Self {
         Self {
             available: false,
@@ -1152,6 +1182,7 @@ mod tests {
             slate: SlateLane::unavailable("no slate"),
             children: ChildrenLane::default(),
             terminal: TerminalLane::unavailable("terminal disabled", false),
+            stats: StatsLane::unavailable("x"),
         }
     }
 
