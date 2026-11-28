@@ -101,7 +101,14 @@ test.describe("CONVNEED needs-you banner", () => {
     await page.addStyleTag({ content: "html{overflow-y:scroll}" });
     const rail = page.locator(".kb-termshell__rail");
     const total = async () => (await pane.boundingBox())!.width + (await rail.boundingBox())!.width;
-    const before = await total();
+    // Let the initial layout settle (terminal fit, panel mount) before the baseline.
+    let before = await total();
+    for (let i = 0; i < 30; i += 1) {
+      await page.waitForTimeout(100);
+      const now = await total();
+      if (Math.abs(now - before) < 0.5 && i > 5) break;
+      before = now;
+    }
     await expect(page.locator('[data-testid="needs-you"]')).toHaveCount(0);
 
     live.blocked = true;
