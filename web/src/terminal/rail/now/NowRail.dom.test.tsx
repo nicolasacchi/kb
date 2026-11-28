@@ -22,6 +22,12 @@ vi.mock("../../../hooks/useConversation", () => ({
 vi.mock("../../../hooks/useSessions", () => ({ useSessionDetail: () => ({ detail: detailMock.detail, loading: false }) }));
 vi.mock("../../../hooks/useSlates", () => ({ useSlateBoard: () => ({ board: boardMock.board, loading: false, error: null }) }));
 vi.mock("../../useTerms", () => ({ useTerms: () => ({ terms: termsMock.terms, isLoading: false, isError: termsMock.isError }) }));
+vi.mock("../../../hooks/useIsMobile", () => ({ usePhonePanel: () => false }));
+vi.mock("../../../components/ConfirmProvider", () => ({ useConfirm: () => async () => true }));
+vi.mock("../../prompts/usePrompts", () => ({
+  useTermPrompts: () => ({ data: { project: "demo", rev: 0, items: [] }, isError: false }),
+  usePromptActions: () => ({ add: vi.fn(), patch: vi.fn(), remove: vi.fn(), current: vi.fn(), refetch: vi.fn() }),
+}));
 vi.mock("../../../hooks/useNowTick", () => ({ useNowTick: () => 1_700_000_000_000 }));
 
 import { NowRail } from "./NowRail";
@@ -170,13 +176,14 @@ describe("NowRail", () => {
     expect(screen.queryByTestId("now-sec-siblings")).toBeNull();
   });
 
-  it("carries the empty, hidden queue seam for PQUI", () => {
+  it("mounts the prompt queue in the seam RAILNOW reserved (last section, visible)", () => {
     const { container } = render(<NowRail />, { wrapper: wrap(SID) });
     const seam = container.querySelector('[data-testid="now-queue"]') as HTMLElement;
     expect(seam.getAttribute("data-seam")).toBe("pqui");
-    expect(seam.hidden).toBe(true);
-    expect(seam.childElementCount).toBe(0);
-    expect(seam.textContent).toBe("");
+    expect(seam.hidden).toBe(false);
+    expect(seam.textContent).toContain("Prompt queue");
+    expect(seam.textContent).toContain("synced by the daemon");
+    expect(container.querySelector('[data-testid="now-rail"]')?.lastElementChild).toBe(seam);
   });
 
   it("shows no cost for a session whose harness reported none", () => {

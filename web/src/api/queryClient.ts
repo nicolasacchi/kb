@@ -638,6 +638,12 @@ export function startSseInvalidationBridge(): () => void {
   on("term.state", () => invalidate(["terms"]));
   // CMDSETTINGS — the command catalogue overlay changed (payload is the rev only).
   on("term.commands", () => invalidate(["term", "commands"]));
+  // PQUI — a project's prompt queue changed (payload {project, rev}). Any rev
+  // change, a drop back to 0 included, is a reload: invalidation never compares
+  // revisions. A payload without a string project invalidates every queue.
+  on("term.prompts", (p) =>
+    invalidate(typeof p.project === "string" ? ["term", "prompts", p.project] : ["term", "prompts"]),
+  );
   // memory.* in full, plus session.captured for the session lens (its
   // queries key under the same ["memories", …] prefix) and
   // artifact.removed (a forgotten memory is a removed artifact).

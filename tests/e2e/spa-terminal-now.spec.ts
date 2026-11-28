@@ -80,7 +80,8 @@ test.describe("RAILNOW Now tab", () => {
     await expect(page.locator('[data-testid="now-answer"]')).toHaveText("synthetic final answer");
     await expect(page.locator('[data-stat="context"]')).toContainText("41%");
     await expect(page.locator('[data-stat="cost"]')).toHaveCount(0);
-    await expect(page.locator('[data-testid="now-queue"]')).toBeHidden();
+    // PQUI filled the seam: the queue section is visible (unbound caption here).
+    await expect(page.locator('[data-testid="now-queue"]')).toBeVisible();
 
     state.blocked = false;
     await expect(tab.locator(".kb-termshell__badge")).toHaveCount(0, { timeout: 25_000 });

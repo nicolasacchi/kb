@@ -280,6 +280,18 @@ describe("SSE → TanStack invalidation bridge (invariant #23)", () => {
     expect(keys()).toEqual([["term", "commands"]]);
   });
 
+  // PQUI — a project's queue event invalidates that project's key only.
+  it("term.prompts invalidates exactly [\"term\", \"prompts\", project]", () => {
+    emit("term.prompts", { project: "demo", rev: 3 });
+    expect(keys()).toEqual([["term", "prompts", "demo"]]);
+  });
+  it("term.prompts without a project invalidates the prefix, and a rev drop to 0 still reloads", () => {
+    emit("term.prompts", { rev: 1 });
+    expect(keys()).toEqual([["term", "prompts"]]);
+    emit("term.prompts", { project: "demo", rev: 0 });
+    expect(keys().at(-1)).toEqual(["term", "prompts", "demo"]);
+  });
+
   // SL4 — the slate bridge. These four cases pin the EXACT key set: a fifth
   // key appearing here (or one of these going missing) is the bug the
   // design's "with the ledger comment and the vitest case that pins the

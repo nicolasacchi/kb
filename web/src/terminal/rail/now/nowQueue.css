@@ -1,0 +1,116 @@
+/* PQUI - the prompt queue in the Now tab. Tokens only; one column; 44 px
+   targets on the phone sheet and on any coarse pointer. */
+.kb-nowq__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+  min-width: 0;
+}
+.kb-nowq__add,
+.kb-nowq__edit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-1);
+  min-width: 0;
+}
+.kb-nowq__addrow,
+.kb-nowq__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--pad-1);
+}
+.kb-nowq__actions {
+  justify-content: flex-start;
+}
+.kb-nowq__input {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  padding: var(--pad-2);
+  background: var(--bg-card);
+  color: var(--ink);
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--fs-sm);
+  resize: vertical;
+}
+.kb-nowq__btn {
+  min-height: 32px;
+  padding: 0 var(--pad-2);
+  background: var(--bg-card);
+  color: var(--ink);
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.kb-nowq__btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.kb-nowq__btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.kb-nowq__btn--go {
+  border-color: var(--accent);
+}
+.kb-nowq__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.kb-nowq__item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-1);
+  min-width: 0;
+  padding: var(--pad-2);
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-sm);
+  overflow-wrap: anywhere;
+}
+.kb-nowq__item--done {
+  opacity: 0.75;
+}
+.kb-nowq__text {
+  margin: 0;
+  font-size: var(--fs-sm);
+  white-space: pre-wrap;
+}
+.kb-nowq__note {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--ink);
+}
+.kb-nowq__sum {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.kb-nowq__done {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+}
+/* The phone sheet and any coarse pointer: 44 px targets. */
+.kb-nowq__body[data-phone="1"] .kb-nowq__btn,
+.kb-nowq__body[data-phone="1"] .kb-nowq__sum {
+  min-height: var(--touch-min);
+  min-width: var(--touch-min);
+}
+@media (pointer: coarse) {
+  .kb-nowq__btn,
+  .kb-nowq__sum {
+    min-height: var(--touch-min);
+    min-width: var(--touch-min);
+  }
+}
