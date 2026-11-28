@@ -170,3 +170,12 @@
     display: none;
   }
 }
+
+/* The desktop bar is one nowrap row (BHEAD: its height must not change when
+ * chips appear). The switcher adds width, so every button in a bar that carries
+ * it keeps its label on one line and the shrinkable heading/title/chips give
+ * way instead of a verb label wrapping onto a second line. */
+.kb-term__bar:has(.kb-term-switcher) .kb-term__btn,
+.kb-term__bar:has(.kb-term-switcher) .kb-term__more > summary {
+  white-space: nowrap;
+}
