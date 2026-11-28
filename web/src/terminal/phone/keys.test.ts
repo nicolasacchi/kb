@@ -1,7 +1,7 @@
 // T18 — the key vocabulary, against the Rust copies it must equal.
 
 import { describe, expect, it } from "vitest";
-import { KEYBAR_KEYS, KEY_NAMES, SLASH_MENU, ctrlArrowBytes, isKeyName, keyBytes, slashMenuFor } from "./keys";
+import { KEYBAR_KEYS, KEY_NAMES, ctrlArrowBytes, isKeyName, keyBytes } from "./keys";
 
 // Node's fs without Node typings (same trick as terminal/wire.test.ts).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -47,15 +47,6 @@ describe("key vocabulary", () => {
     expect(relayNames()).toContain("BSpace");
     expect(relayNames()).toContain("C-d");
     expect(KEYBAR_KEYS.find((k) => k.name === "C-d")?.aria).toMatch(/hold/i);
-  });
-
-  it("the slash menu is per harness, pasted entries only, empty for the rest", () => {
-    expect(slashMenuFor("claude")).toEqual(["/help", "/compact", "/clear", "/model", "/resume"]);
-    expect(slashMenuFor("omp")).toEqual(["/compact", "/shake", "/tree"]);
-    expect(slashMenuFor("codex")).toEqual([]);
-    for (const entries of Object.values(SLASH_MENU)) {
-      for (const e of entries) expect(e.startsWith("/")).toBe(true);
-    }
   });
 });
 

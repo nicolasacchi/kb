@@ -100,22 +100,6 @@
   border-color: var(--accent-bor);
 }
 
-.kb-drive__slashmenu {
-  position: absolute;
-  bottom: 100%;
-  left: 0;
-  right: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--pad-1);
-  padding: var(--pad-2);
-  background: var(--bg-card-hi);
-  border: var(--pad-1) solid var(--rule-hi);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-md);
-  z-index: var(--z-popover);
-}
-
 .kb-drive__choice {
   display: flex;
   flex-direction: column;
@@ -244,4 +228,37 @@
   .kb-drive__composer > .kb-drive__caption {
     flex: 1 1 100%;
   }
+}
+
+/* CMDSHEET - the floating Commands sheet above the key bar. Overlay only: never in flow, so
+ * opening it cannot resize the Watch pane or the grid. Capped for a landscape phone. */
+.kb-drive__cmdsheet {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: min(50dvh, 22rem);
+  min-height: 0;
+  background: var(--bg-card-hi);
+  border: var(--pad-1) solid var(--rule-hi);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  z-index: var(--z-popover);
+}
+
+.kb-drive__cmdsheet-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--pad-2);
+  padding: var(--pad-1) var(--pad-2);
+}
+
+.kb-drive__cmdsheet-title {
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
 }

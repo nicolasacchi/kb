@@ -89,8 +89,16 @@
   max-height: 55vh;
 }
 
-.kb-cmdp--rail .kb-cmdp__scroll {
+.kb-cmdp--rail .kb-cmdp__scroll,
+.kb-cmdp--sheet .kb-cmdp__scroll {
   max-height: none;
+}
+
+/* CMDSHEET: the list fills what the floating sheet leaves under its header. */
+.kb-cmdp--sheet {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 0 var(--pad-2) var(--pad-2);
 }
 
 .kb-cmdp__ghead {
@@ -111,8 +119,9 @@
   cursor: pointer;
 }
 
-/* The rail is also the phone sheet: 40 px rows there, and on any coarse pointer. */
-.kb-cmdp--rail .kb-cmdp__row {
+/* The rail is also the phone sheet: --touch-min (44 px) rows there, and on any coarse pointer. */
+.kb-cmdp--rail .kb-cmdp__row,
+.kb-cmdp--sheet .kb-cmdp__row {
   min-height: var(--touch-min);
 }
 

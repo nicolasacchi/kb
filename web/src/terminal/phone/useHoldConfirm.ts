@@ -2,7 +2,7 @@
 //
 // Pointer handlers for a button that must be HELD for `ms` before it counts:
 // Ctrl-C (600 ms: a stray tap must not interrupt the harness) and the `/`
-// slash menu (450 ms). Releasing early cancels the hold and reports a plain
+// command sheet (450 ms). Releasing early cancels the hold and reports a plain
 // tap; completing the hold fires `onHold` exactly once, and the release that
 // follows is silent. Every handler calls `preventDefault()` on press: a key
 // bar tap must never take focus away from the composer (focus pops the soft
