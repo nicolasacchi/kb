@@ -11,6 +11,7 @@ import { ChangesRail } from "./changes/ChangesRail";
 import { BoardRail } from "./board/BoardRail";
 import { useBoardBadge } from "./board/useBoardBadge";
 import { KnowledgeRail } from "./knowledge/KnowledgeRail";
+import { FilesRail } from "../files/FilesRail";
 
 registerRailTab({
   id: "conversation",
@@ -34,3 +35,5 @@ registerRailTab({
   badge: undefined,
   node: createElement(KnowledgeRail),
 });
+
+registerRailTab({ id: "files", label: "Files", node: createElement(FilesRail) });
