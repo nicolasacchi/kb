@@ -4,14 +4,16 @@
 // over a listbox; an entry with args swaps the list for a small inline form.
 
 import { useId, useMemo, useState, type KeyboardEvent, type ReactElement } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
+import { useIdentity } from "../../../hooks/useArtifactHost";
 import { useConfirm } from "../../../components/ConfirmProvider";
 import { toast } from "../../../lib/toast";
 import { CAPTION } from "../../phone/planSend";
 import type { Drive } from "../../phone/driveApi";
-import { forHarness, groupEntries, searchEntries, toKeystrokes, type Entry, type Keystrokes } from "../catalog";
+import { termCommandsQueryOptions } from "../settings/useTermCommands";
+import { effectiveCatalogue, forHarness, type Effective, groupEntries, searchEntries, toKeystrokes, type Entry, type Keystrokes } from "../catalog";
 import { sendEntry, unsendable } from "./sendEntry";
-import { useCommandCatalogue } from "./useCommandCatalogue";
 import "./palette.css";
 
 export interface CommandListProps {
@@ -43,11 +45,20 @@ function blank(v: string | undefined): boolean {
   return v === undefined || v.trim() === "";
 }
 
+/** The effective catalogue (the settings unit's query, gated on the terminal tier); shipped defaults while it has no data. */
+function useCatalogue(): { catalogue: Effective; fallback: boolean } {
+  const identity = useIdentity();
+  const q = useQuery({ ...termCommandsQueryOptions, enabled: identity?.terminal_admitted === true });
+  const shipped = useMemo(() => effectiveCatalogue(null), []);
+  if (q.data === undefined || q.isError) return { catalogue: shipped, fallback: true };
+  return { catalogue: q.data as unknown as Effective, fallback: false };
+}
+
 export function CommandList(props: CommandListProps): ReactElement {
   const { termId, harness, variant, onSent, onNavigate, autoFocus } = props;
   const uid = useId();
   const confirm = useConfirm();
-  const { catalogue, fallback } = useCommandCatalogue();
+  const { catalogue, fallback } = useCatalogue();
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const [pending, setPending] = useState<Entry | null>(null);
