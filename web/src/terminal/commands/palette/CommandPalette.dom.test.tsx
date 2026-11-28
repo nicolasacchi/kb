@@ -214,12 +214,10 @@ describe("CommandPalette", () => {
     expect(within(dlg).getByRole("link", { name: "Edit commands" }).getAttribute("href")).toBe("/settings#terminal-commands");
   });
 
-  it("on the phone branch a send leaves focus on the button, not the pane", async () => {
+  it("renders no header button on the phone panel (the rail Commands tab serves it)", () => {
     phone.value = true;
-    await openPalette();
-    fireEvent.click(rowFor("/compact"));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(document.activeElement).toBe(screen.getByTestId("kb-term-commands-btn"));
+    mountPage();
+    expect(screen.queryByTestId("kb-term-commands-btn")).toBeNull();
   });
 });
 

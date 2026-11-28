@@ -51,6 +51,11 @@ export function CommandsButton({ termId, harness }: { termId: string; harness: s
     setOpen(false);
   }, [phone]);
 
+  // The phone header has no height to spare (the landscape dock keeps half the
+  // sheet for the pane); the phone reaches the same list through the rail's
+  // Commands tab, so no header button there.
+  if (phone) return <></>;
+
   return (
     <>
       <button
