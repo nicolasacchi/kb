@@ -576,15 +576,6 @@
   flex: none;
 }
 
-/* FUWEBLAUNCH — "New terminal" (components/NewTerminalPanel.tsx) and the
- * inline launched terminal. Mobile sizing lives in mobile.css (860px block). */
-.kb-ses__newterm {
-  padding: 0 var(--pad-3);
-  margin: var(--pad-2) 0;
-}
-.kb-ses__newterm .kb-ses__resume-copy {
-  float: none;
-}
 /* FUTERMPOLISH — Launch / Cancel are ordinary buttons (primary + secondary), not
  * pill links: existing button tokens only. */
 .kb-ses__newterm-btn {
@@ -608,30 +599,6 @@
   color: var(--accent-fg);
   background: var(--accent);
   border-color: var(--accent-bor);
-}
-.kb-ses__newterm-form {
-  display: flex;
-  flex-direction: column;
-  gap: var(--pad-2);
-  margin-top: var(--pad-2);
-  max-width: 640px;
-}
-.kb-ses__newterm-field {
-  display: flex;
-  flex-direction: column;
-  gap: var(--pad-1);
-  color: var(--ink-mute);
-  font-size: var(--fs-sm);
-}
-.kb-ses__newterm-field select,
-.kb-ses__newterm-field input {
-  font: inherit;
-  color: var(--ink);
-  background: var(--bg-panel);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius-sm);
-  padding: var(--pad-1) var(--pad-2);
-  min-width: 0;
 }
 .kb-ses__launched {
   margin: var(--pad-2) 0;
@@ -1757,4 +1724,39 @@
 .kb-sp__outcome-text {
   margin: 0;
   white-space: pre-wrap;
+}
+
+/* HUBHOST - the compact Terminals link and the row's Continue door. */
+.kb-ses__terminals-link {
+  padding: 4px 16px;
+  font: 400 var(--fs-sm)/1.4 var(--font-sans, system-ui);
+}
+.kb-ses__row-continue {
+  display: inline-block;
+  margin: 0 16px 8px;
+  color: var(--ink-mute);
+  font: 400 var(--fs-xs)/1.4 var(--font-sans, system-ui);
+  text-decoration: none;
+}
+.kb-ses__row-continue:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+@media (pointer: coarse), (max-width: 860px) {
+  .kb-ses__row-continue {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+  }
+}
+.kb-ses__handoff a.kb-ses__resume-copy {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+@media (pointer: coarse), (max-width: 860px) {
+  .kb-ses__handoff a.kb-ses__resume-copy {
+    min-height: 44px;
+    padding: 2px 14px;
+  }
 }

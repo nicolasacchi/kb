@@ -527,3 +527,108 @@ describe("aria patterns", () => {
     expect(panel?.getAttribute("aria-labelledby")).toBe(tab.id);
   });
 });
+
+describe("prefill error classes (HUBHOST)", () => {
+  const detailOk = { status: 200, body: srow({ session_id: "sid1", harness: "codex", cwd: "/p/x" }) };
+
+  it("a 404 reads Unknown session, with no Retry and no launch path", async () => {
+    mount({ prefill: { resumeSid: "sid1" } });
+    const e = await screen.findByTestId("launch-prefill-error");
+    expect(e.textContent).toContain("Unknown session");
+    expect(screen.queryByTestId("launch-prefill-retry")).toBeNull();
+    expect((screen.getByTestId("launch-review") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it.each([
+    ["a 500", { status: 500, body: {} }],
+    ["a network failure", "throw" as const],
+  ])("%s is an error with Retry, never Unknown session", async (_n, d) => {
+    details.sid1 = d;
+    mount({ prefill: { resumeSid: "sid1" } });
+    const e = await screen.findByTestId("launch-prefill-error");
+    expect(e.textContent).toContain("Could not load that session");
+    expect(e.textContent).not.toContain("Unknown session");
+    expect(screen.getByTestId("launch-prefill-retry")).toBeTruthy();
+    expect((screen.getByTestId("launch-review") as HTMLButtonElement).disabled).toBe(true);
+    expect(posts()).toHaveLength(0);
+  });
+
+  it("Retry refetches and a recovered server shows the row", async () => {
+    details.sid1 = { status: 500, body: {} };
+    mount({ prefill: { resumeSid: "sid1" } });
+    await screen.findByTestId("launch-prefill-retry");
+    const before = calls.filter((c) => c.url === "/api/sessions/sid1").length;
+    details.sid1 = detailOk;
+    fireEvent.click(screen.getByTestId("launch-prefill-retry"));
+    await waitFor(() => expect((screen.getByTestId("launch-review") as HTMLButtonElement).disabled).toBe(false));
+    expect(calls.filter((c) => c.url === "/api/sessions/sid1").length).toBe(before + 1);
+    expect(screen.queryByTestId("launch-prefill-error")).toBeNull();
+    expect(posts()).toHaveLength(0);
+  });
+});
+
+describe("launch refusals (HUBHOST)", () => {
+  it("renders any problem+json refusal by its title and detail, whatever its type, and stays on confirm", async () => {
+    launchReply = {
+      status: 429,
+      body: { type: "urn:example:anything", title: "Too many terminals", detail: "limit is 3" },
+    };
+    const err = vi.spyOn(toast, "err").mockImplementation(() => 0);
+    const { onLaunched, onClose } = mount();
+    type("/tmp/x");
+    review();
+    confirm();
+    const alert = await screen.findByTestId("launch-error");
+    expect(alert.textContent).toBe("Too many terminals: limit is 3");
+    expect(err).toHaveBeenCalledWith(expect.stringContaining("Too many terminals: limit is 3"));
+    expect(screen.getByTestId("launch-confirm-view")).toBeTruthy();
+    expect((screen.getByTestId("launch-confirm") as HTMLButtonElement).disabled).toBe(false);
+    expect(onLaunched).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("a bodiless failure keeps the status-line message", async () => {
+    vi.spyOn(toast, "err").mockImplementation(() => 0);
+    launchReply = { status: 503, body: "not json" };
+    mount();
+    type("/tmp/x");
+    review();
+    confirm();
+    const alert = await screen.findByTestId("launch-error");
+    expect(alert.textContent).toMatch(/^503/);
+  });
+});
+
+describe("phone Sheet detent (HUBHOST)", () => {
+  const phone = () =>
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: true,
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }));
+
+  it("opens at full and a peek request (Arrow down on the handle) never leaves a clipped peek", () => {
+    phone();
+    mount();
+    const sheet = () => document.querySelector("[data-kb-sheet]") as HTMLElement;
+    expect(sheet().getAttribute("data-detent")).toBe("full");
+    const handle = screen.getByLabelText("Resize");
+    fireEvent.keyDown(handle, { key: "ArrowDown" });
+    expect(sheet().getAttribute("data-detent")).toBe("full");
+    fireEvent.keyDown(handle, { key: "ArrowUp" });
+    expect(sheet().getAttribute("data-detent")).toBe("full");
+  });
+
+  it("a drag-down release never ends at peek: it closes or stays full", () => {
+    phone();
+    const { onClose } = mount();
+    const handle = screen.getByLabelText("Resize");
+    fireEvent.pointerDown(handle, { clientY: 100, pointerId: 1 });
+    fireEvent.pointerMove(handle, { clientY: 160, pointerId: 1 });
+    fireEvent.pointerUp(handle, { clientY: 160, pointerId: 1 });
+    const sheet = document.querySelector("[data-kb-sheet]") as HTMLElement | null;
+    if (sheet) expect(sheet.getAttribute("data-detent")).toBe("full");
+    else expect(onClose).toHaveBeenCalled();
+  });
+});
