@@ -1,0 +1,202 @@
+/* HUBSWITCH - the switcher column on /terminals/:id and the attention marks.
+   Tokens only; sizes in rem/tokens. */
+.kb-hubframe {
+  --hub-switch-w: 18rem;
+  display: grid;
+  grid-template-columns: var(--hub-switch-w) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--pad-2);
+  min-width: 0;
+}
+.kb-hubframe[data-open="0"] {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+.kb-hubframe__side {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-1);
+  max-height: 100dvh;
+  min-width: 0;
+  padding: var(--pad-2) 0 var(--pad-2) var(--pad-3);
+}
+.kb-hubframe__panel {
+  min-height: 0;
+  overflow-y: auto;
+}
+.kb-hubframe__panel[hidden] {
+  display: none;
+}
+.kb-hubframe__main {
+  min-width: 0;
+}
+.kb-hubframe__toggle {
+  align-self: flex-start;
+  min-height: 32px;
+  padding: 0 var(--pad-3);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--ink);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.kb-hubframe__toggle:focus-visible,
+.kb-hubsw__row:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.kb-hubsw {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+  min-width: 0;
+}
+.kb-hubsw__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--pad-2);
+}
+.kb-hubsw__title {
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+.kb-hubsw__count {
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
+}
+.kb-hubsw__count.is-needs {
+  color: var(--warn);
+}
+.kb-hubsw__heading {
+  margin: 0 0 var(--pad-1);
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.kb-hubsw__group {
+  min-width: 0;
+}
+.kb-hubsw__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.kb-hubsw__row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-1);
+  padding: var(--pad-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  color: var(--ink);
+  text-decoration: none;
+}
+.kb-hubsw__row:hover {
+  background: var(--bg-card-hi);
+}
+.kb-hubsw__row[data-tier="needs"] {
+  border-color: var(--warn);
+}
+.kb-hubsw__row[data-tier="ended"] {
+  color: var(--ink-mute);
+}
+.kb-hubsw__row[aria-current="page"] {
+  border-color: var(--accent-bor);
+  background: var(--accent-bg);
+}
+.kb-hubsw__top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--pad-2);
+  min-width: 0;
+}
+.kb-hubsw__name {
+  overflow: hidden;
+  font-size: var(--fs-md);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-hubsw__age {
+  flex: none;
+  color: var(--ink-mute);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.kb-hubsw__sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pad-1) var(--pad-2);
+  min-width: 0;
+}
+.kb-hubsw__tier {
+  padding: 0 var(--pad-2);
+  border-radius: var(--radius-pill);
+  background: var(--bg-card-hi);
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
+}
+.kb-hubsw__tier[data-tier="needs"] {
+  background: color-mix(in oklab, var(--warn) 18%, transparent);
+  color: var(--warn);
+}
+.kb-hubsw__tier[data-tier="working"] {
+  color: var(--accent-soft);
+}
+.kb-hubsw__meta,
+.kb-hubsw__line {
+  overflow: hidden;
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-hubsw__empty {
+  margin: 0;
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
+}
+.kb-hubsw__ended > summary {
+  padding: var(--pad-1) 0;
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.kb-hubsw__ended .kb-hubsw__list {
+  margin-top: var(--pad-1);
+}
+
+/* Attention marks: asks = solid outline, finished = dashed outline, and each
+   carries its own word, so neither depends on colour. */
+.kb-hubmarks {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--pad-1);
+}
+.kb-hubmark {
+  padding: 0 var(--pad-2);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+}
+.kb-hubmark--asks {
+  border: 1px solid var(--warn);
+  color: var(--warn);
+  font-weight: 600;
+}
+.kb-hubmark--finished {
+  border: 1px dashed var(--ink-mute);
+  color: var(--ink);
+}

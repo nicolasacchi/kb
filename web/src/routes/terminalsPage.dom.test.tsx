@@ -25,6 +25,7 @@ vi.mock("../hooks/useLiveSessions", () => ({ useLiveSessions: () => m.live }));
 vi.mock("../hooks/useNowTick", () => ({ useNowTick: () => 1_000_000_000_000 }));
 
 import TerminalsPageRoute from "./terminalsPage";
+import { __resetMarks, setMarks } from "../terminal/notify/attention";
 
 const term = (id: string, o: Partial<TermRow> = {}): TermRow => ({
   id,
@@ -453,5 +454,30 @@ describe("deep link ?launch=1&resume= (HUBHOST, H4)", () => {
     mount("/terminals?launch=1&resume=sid1");
     expect(screen.queryByTestId("launch-modal")).toBeNull();
     expect(posts()).toHaveLength(0);
+  });
+});
+
+describe("/terminals attention marks (HUBSWITCH)", () => {
+  afterEach(() => act(() => __resetMarks()));
+
+  it("each row shows its own asks / finished mark, distinct in text", () => {
+    m.terms = {
+      terms: [term("a", { cwd: "/w/one" }), term("b", { cwd: "/w/two" }), term("c", { cwd: "/w/three" })],
+      isLoading: false,
+      isError: false,
+    };
+    act(() =>
+      setMarks({
+        a: { asks: true, finishedUnseen: false },
+        b: { asks: false, finishedUnseen: true },
+      }),
+    );
+    mount();
+    const row = (id: string) => document.querySelector(`[data-testid="hub-row"][data-term="${id}"]`) as HTMLElement;
+    expect(within(row("a")).getByTestId("mark-asks").textContent).toContain("asks");
+    expect(within(row("a")).queryByTestId("mark-finished")).toBeNull();
+    expect(within(row("b")).getByTestId("mark-finished").textContent).toContain("finished");
+    expect(within(row("b")).queryByTestId("mark-asks")).toBeNull();
+    expect(within(row("c")).queryByTestId("attention-marks")).toBeNull();
   });
 });

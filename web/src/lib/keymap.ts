@@ -48,7 +48,12 @@ export type Scope =
   // same reason `replay` has one: it reuses `j`/`k` (the gallery roving
   // cursor), `m` (marks) and `p` (the reading-list trail), and it is never
   // mounted at the same time as any of those surfaces.
-  | "slates";
+  | "slates"
+  // HUBSWITCH — the terminals hub's switcher keys (`terminal/hub/useSwitchKeys.ts`).
+  // Doc-only for the same reason `replay` is: `[`/`]` are sibling nav in the
+  // reader and `n` is the reading-trail verb, and this surface is never mounted
+  // with them. Never active while the terminal pane or a text field has focus.
+  | "terminals";
 
 export interface Binding {
   /// Space-separated sequence of `KeyboardEvent.key` tokens for a REAL
@@ -226,6 +231,15 @@ export const REGISTRY: readonly Binding[] = [
   { keys: "c", scope: "slates", group: "Slates", label: "Compose a post", actionId: "slate.compose", when: "routes/slateBoard.tsx" },
   { keys: "t", scope: "slates", group: "Slates", label: "Topic filter", actionId: "slate.topic", when: "routes/slateBoard.tsx" },
   { keys: "h", scope: "slates", group: "Slates", label: "History — dropped and superseded posts", actionId: "slate.history", when: "routes/slateBoard.tsx" },
+
+  // Terminals (HUBSWITCH) — the switcher column's own grammar on
+  // /terminals/:id. DOC-ONLY (`scope: "terminals"`), dispatched by ONE document
+  // listener in `terminal/hub/useSwitchKeys.ts`: it ignores the xterm pane,
+  // text fields, dialogs, modifier chords, repeats and IME composition, so a
+  // key typed into the terminal always reaches the terminal. `g n` / `g t` are
+  // taken (Notes / Terminals), hence the bare keys.
+  { keys: "[ / ]", scope: "terminals", group: "Terminals", label: "Previous / next live terminal", actionId: "terminals.stepLive", when: "terminal/hub/HubSwitcher.tsx, desktop /terminals/:id, never while the pane or a text field has focus" },
+  { keys: "n / N", scope: "terminals", group: "Terminals", label: "Next / previous terminal that needs you", actionId: "terminals.stepNeeds", when: "terminal/hub/HubSwitcher.tsx, desktop /terminals/:id, never while the pane or a text field has focus" },
 
   // Marks (W2.6b) — cross-kb bookmarks (`lib/marks.ts`, global — not
   // per-kb: a mark is meant to jump across corpora). `m` then a–z sets a

@@ -301,6 +301,35 @@ describe("groupRegistry", () => {
   });
 });
 
+describe("terminals scope (HUBSWITCH)", () => {
+  const rows = REGISTRY.filter((b) => b.scope === "terminals");
+
+  test("the two switcher rows exist, doc-only, in a Terminals group", () => {
+    expect(rows.map((b) => [b.keys, b.actionId])).toEqual([
+      ["[ / ]", "terminals.stepLive"],
+      ["n / N", "terminals.stepNeeds"],
+    ]);
+    for (const b of rows) {
+      expect(b.group).toBe("Terminals");
+      expect(b.when).toMatch(/never while the pane or a text field has focus/);
+    }
+  });
+
+  test("none of them is globally dispatched, and bare n / N / [ / ] stay unbound at global", () => {
+    for (const key of ["[", "]", "n", "N"]) {
+      expect(resolve(initialKeymapState(), { key }, "global").kind).toBe("none");
+    }
+    expect(REGISTRY.filter((b) => b.scope === "global" && /^[nN\[\]]$/.test(b.keys))).toEqual([]);
+  });
+
+  test("g n and g t keep their global meaning", () => {
+    const gn = resolve(resolve(initialKeymapState(), { key: "g" }, "global").state, { key: "n" }, "global");
+    expect(gn.kind === "matched" && gn.binding.actionId).toBe("nav.notes");
+    const gt = REGISTRY.find((b) => b.scope === "global" && b.keys === "g t");
+    expect(gt?.actionId).not.toMatch(/^terminals\./);
+  });
+});
+
 describe("isEditableTarget", () => {
   const asTarget = (v: unknown) => v as EventTarget | null;
 
