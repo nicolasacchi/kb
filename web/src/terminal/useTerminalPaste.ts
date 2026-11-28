@@ -1,8 +1,9 @@
-// FUTERMPASTE — picture paste and drop on the desktop panel.
+// FUTERMPASTE — picture and file paste and drop on the desktop panel (FXUI: any
+// non-picture file goes through `…/files`, a picture still through `…/upload`).
 //
 // A capture-phase listener on the panel host (the xterm textarea is its
 // descendant, so the host sees the event first). It acts ONLY on a paste that
-// carries a picture file and no `text/plain`; every text paste, xterm's
+// carries a file and no `text/plain`; every text paste, xterm's
 // bracketed paste and Ctrl+Shift+V stay untouched. A dropped file goes the
 // same way. The upload is `upload.ts` (one home); the returned path is pasted
 // into the prompt and NEVER followed by Enter. Nothing here touches the grid.
@@ -10,16 +11,20 @@
 import { useEffect, useRef } from "react";
 import { toast } from "../lib/toast";
 import { DriveError } from "./phone/driveApi";
+import { fetchTransport, fileRefusal, uploadFile } from "./files/filesApi";
 import {
   dragHasFiles,
   droppedFiles,
-  pastedPictureFiles,
+  isPicture,
+  pastedAnyFiles,
   uploadImage,
   uploadRefusal,
 } from "./upload";
 
 export const PASTE_NOTE =
   "Picture path pasted, not sent. Whether the program attaches it depends on the program.";
+
+export const FILE_PASTE_NOTE = "File path pasted, not sent.";
 
 export interface TerminalPasteOptions {
   /** The panel host element ref. */
@@ -47,12 +52,12 @@ export function useTerminalPaste(opts: TerminalPasteOptions): void {
 
     const run = async (files: File[]): Promise<void> => {
       if (busy) {
-        toast.err("Still uploading the previous picture");
+        toast.err("Still uploading the previous file");
         return;
       }
       const ok: File[] = [];
       for (const f of files) {
-        const refusal = uploadRefusal(f);
+        const refusal = isPicture(f) ? uploadRefusal(f) : fileRefusal(f);
         if (refusal !== null) toast.err(refusal);
         else ok.push(f);
       }
@@ -61,23 +66,26 @@ export function useTerminalPaste(opts: TerminalPasteOptions): void {
       try {
         const paths: string[] = [];
         for (const [i, f] of ok.entries()) {
-          ref.current.say(`Uploading picture ${i + 1} of ${ok.length}…`);
-          paths.push((await uploadImage(termId, f, abort.signal)).path);
+          ref.current.say(`Uploading ${isPicture(f) ? "picture" : "file"} ${i + 1} of ${ok.length}…`);
+          const r = isPicture(f)
+            ? await uploadImage(termId, f, abort.signal)
+            : await uploadFile(termId, f, { signal: abort.signal, transport: fetchTransport });
+          paths.push(r.path);
         }
         if (abort.signal.aborted) return;
         ref.current.paste(paths.join(" "));
-        ref.current.say(PASTE_NOTE);
+        ref.current.say(ok.every(isPicture) ? PASTE_NOTE : FILE_PASTE_NOTE);
       } catch (e) {
         if (abort.signal.aborted) return;
         ref.current.say("");
-        toast.err(e instanceof DriveError ? e.detail : "Could not send the picture");
+        toast.err(e instanceof DriveError ? e.detail : "Could not send the file");
       } finally {
         busy = false;
       }
     };
 
     const onPaste = (e: Event): void => {
-      const files = pastedPictureFiles((e as ClipboardEvent).clipboardData);
+      const files = pastedAnyFiles((e as ClipboardEvent).clipboardData);
       if (files.length === 0) return;
       e.preventDefault();
       e.stopPropagation();
