@@ -9,7 +9,6 @@ const base: TermStateOverlayProps = {
   caption: "live",
   exitCode: null,
   blockedReason: null,
-  attempt: 0,
   firstConnect: false,
   onReconnect: () => {},
   onBack: () => {},

@@ -1753,6 +1753,46 @@ POST   /api/terms/{id}/files                Upload ANY file into the
                                             reasons `not-configured` and
                                             `quota`; a kb-side failure
                                             never fails the upload).
+POST   /api/terms/{id}/files/keep           Keep a file of the working
+                                            area in the files corpus
+                                            (`[terminal.files] kb`; unset
+                                            is 409 `terminal-files-not-
+                                            configured`, checked before
+                                            the runner is dialled). JSON
+                                            body (at most 4 KiB, unknown
+                                            fields refused) `{"path",
+                                            "root":"cwd"|"up","index":
+                                            0|1|bool}`; `path` is required.
+                                            The file is read from the
+                                            runner in chunks of at most
+                                            8 MiB into the same spool and
+                                            store as an upload: over 32 MiB
+                                            is 413, empty is 400, a file
+                                            that changes mid-read is 409
+                                            `terminal-file-changed`, quota
+                                            413 `terminal-upload-quota`,
+                                            not-a-file 422, outside-root
+                                            403, runner down 503. Content
+                                            is NOT indexed unless
+                                            `index` is on (default off);
+                                            then the inlined text is
+                                            HTML-escaped and secrets-
+                                            scrubbed. Answer `{"name",
+                                            "bytes","sha256","kb":{...}}`
+                                            with `kb.id` the artifact id.
+                                            Terminal-tier POST gate.
+GET    /api/terms/{id}/kept/{artifact_id}   Download the verbatim original
+                                            of a file kept in the files
+                                            corpus. `gate_read`. The path
+                                            is derived only from the
+                                            artifact id (a file stub of the
+                                            configured files corpus whose
+                                            blob matches its recorded
+                                            sha-256); anything else is one
+                                            identical 404. Always
+                                            `application/octet-stream`,
+                                            `Content-Disposition:
+                                            attachment`, nosniff, no-store.
 GET    /api/terms/{id}/ls                   List one directory of the
                                             terminal's working area.
                                             Query `?path=` (relative to the
@@ -3500,6 +3540,7 @@ POST   /api/terms                           SPA-only terminal launch [terminal]
 POST   /api/terms/{id}/ticket               mint single-use WS ticket [terminal]
 POST   /api/terms/{id}/upload               store a picture, answer its path [terminal]
 POST   /api/terms/{id}/files                upload any file, answer its path + kb id [terminal]
+POST   /api/terms/{id}/files/keep           keep a working-area file in the files corpus [terminal]
 POST   /api/terms/{id}/paste                paste text [terminal]
 POST   /api/terms/{id}/enter                mark entered [terminal]
 POST   /api/terms/{id}/keys                 send keys [terminal]
@@ -3510,6 +3551,7 @@ GET    /api/terms/{id}/history              relay history [terminal]
 GET    /api/terms/{id}/grid                 relay grid report [terminal]
 GET    /api/terms/{id}/ls                   list the working area [terminal]
 GET    /api/terms/{id}/file                 download one file, attachment only [terminal]
+GET    /api/terms/{id}/kept/{artifact_id}   download a kept original, attachment only [terminal]
 POST   /api/terms/{id}/release-size         release grid [terminal]
 POST   /api/terms/{id}/resize               resize grid [terminal]
 POST   /api/terms/{id}/viewer-close         close spa viewer [terminal]
