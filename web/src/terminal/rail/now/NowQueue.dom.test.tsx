@@ -79,10 +79,11 @@ function installFetch() {
 }
 
 let qc: QueryClient;
-function mount(sid: string | undefined = "sid-1"): ReactElement {
+/** `null` = a terminal with no bound session (the default is the bound `sid-1`). */
+function mount(sid: string | null = "sid-1"): ReactElement {
   return (
     <QueryClientProvider client={qc}>
-      <TermRailContext.Provider value={{ termId: "t1", harness: "omp", sid }}>
+      <TermRailContext.Provider value={{ termId: "t1", harness: "omp", sid: sid ?? undefined }}>
         <NowQueueSeam />
       </TermRailContext.Provider>
     </QueryClientProvider>
@@ -258,7 +259,7 @@ describe("NowQueueSeam", () => {
   });
 
   it("an unbound terminal, or a session with no valid project, makes no request", async () => {
-    const { unmount } = render(mount(undefined));
+    const { unmount } = render(mount(null));
     expect(screen.getByTestId("now-queue-unbound").textContent).toBe("Link this terminal to a project to use the queue");
     unmount();
     detailMock.detail = { project_slug: "Not A Slug" };
