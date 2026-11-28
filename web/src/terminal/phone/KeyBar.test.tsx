@@ -433,12 +433,12 @@ describe("KeyBar over the direct-typing WS path (PHIN2)", () => {
     expect(send.mock.calls.map((c) => c[0])).toEqual(["\x1b", "\x1b[1;5A", "\x1b[1;5C", "\x1b[C"]);
   });
 
-  it("a plain key consumes the latch (y goes plain)", () => {
+  it("a key Ctrl does not change consumes the latch and goes plain", () => {
     const { send } = directBar();
     press(ctrl());
-    tap("y");
-    tap("y");
-    expect(send.mock.calls.map((c) => c[0])).toEqual(["y", "y"]);
+    tap("Tab");
+    tap("Tab");
+    expect(send.mock.calls.map((c) => c[0])).toEqual(["\t", "\t"]);
     expect(ctrl().getAttribute("aria-pressed")).toBe("false");
   });
 
