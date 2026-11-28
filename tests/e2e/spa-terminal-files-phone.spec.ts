@@ -91,7 +91,7 @@ test.describe("FXPHONE Files tab on a phone", () => {
       { name: "two.txt", mimeType: "text/plain", buffer: Buffer.from("hello") },
     ]);
     await expect(rail.locator('[data-testid="files-upload-row"]')).toHaveCount(2);
-    await expect(rail.locator('[data-testid="files-runner-path"]')).toHaveCount(2);
+    await expect(rail.locator('[data-testid="files-upload-list"] [data-testid="files-runner-path"]')).toHaveCount(2);
     expect(uploads).toEqual(["one.txt", "two.txt"]);
 
     // Keep a file: index is off.
