@@ -15,6 +15,8 @@ export interface QueueItem {
   total: number;
   error: string | null;
   result: FileUploadAnswer | null;
+  /** True when the user pressed Cancel but the request had already finished: the file IS stored. */
+  late: boolean;
 }
 
 export interface QueueState {
@@ -35,6 +37,7 @@ export function enqueue(s: QueueState, files: File[], index: boolean): QueueStat
     total: file.size,
     error: null,
     result: null,
+    late: false,
   }));
   return { items: [...s.items, ...added], nextId: id };
 }
@@ -58,6 +61,17 @@ export const progress = (s: QueueState, id: number, loaded: number, total: numbe
 
 export const succeed = (s: QueueState, id: number, result: FileUploadAnswer): QueueState =>
   patch(s, id, (i) => (i.status === "uploading" ? { ...i, status: "done", loaded: i.total, result } : i));
+
+/**
+ * A request that finished AFTER Cancel: the file exists on the runner, so the
+ * row becomes `done` (flagged `late`) instead of saying "cancelled". Only a
+ * cancelled row can land; any other status is untouched.
+ */
+export const landed = (s: QueueState, id: number, result: FileUploadAnswer): QueueState =>
+  patch(s, id, (i) => (i.status === "cancelled" ? { ...i, status: "done", loaded: i.total, result, error: null, late: true } : i));
+
+/** True when every byte had been sent before an abort: the server may still have stored it. */
+export const fullySent = (i: QueueItem): boolean => i.total > 0 && i.loaded >= i.total;
 
 /** An error never stalls the queue: the next queued file is still sent. */
 export const fail = (s: QueueState, id: number, error: string): QueueState =>

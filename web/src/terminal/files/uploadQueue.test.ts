@@ -49,6 +49,29 @@ describe("uploadQueue", () => {
     expect(status(s)).toEqual(["cancelled"]);
   });
 
+  it("a request that finishes after Cancel lands as done + late; only a cancelled row can land", () => {
+    let s = Q.enqueue(Q.emptyQueue, [f("a"), f("b")], false);
+    s = Q.start(s, 1);
+    s = Q.cancel(s, 1);
+    s = Q.landed(s, 1, ans);
+    expect(status(s)).toEqual(["done", "queued"]);
+    expect(s.items[0].late).toBe(true);
+    expect(s.items[0].result).toBe(ans);
+    expect(Q.landed(s, 2, ans).items[1].status).toBe("queued");
+    let t = Q.enqueue(Q.emptyQueue, [f("c")], false);
+    t = Q.succeed(Q.start(t, 1), 1, ans);
+    expect(t.items[0].late).toBe(false);
+    expect(Q.landed(t, 1, ans).items[0].late).toBe(false);
+  });
+
+  it("fullySent is true only once every byte left", () => {
+    let s = Q.enqueue(Q.emptyQueue, [f("a", 10)], false);
+    s = Q.progress(Q.start(s, 1), 1, 4, 10);
+    expect(Q.fullySent(s.items[0])).toBe(false);
+    s = Q.progress(s, 1, 10, 10);
+    expect(Q.fullySent(s.items[0])).toBe(true);
+  });
+
   it("tracks progress and clears only finished rows", () => {
     let s = Q.enqueue(Q.emptyQueue, [f("a", 10), f("b"), f("c")], false);
     s = Q.start(s, 1);

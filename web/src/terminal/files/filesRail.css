@@ -1,4 +1,4 @@
-/* FXUI — the Files tab. Tokens only; one column; 40px targets on coarse pointers. */
+/* FXUI — the Files tab. Tokens only; one column; 44px targets on coarse pointers and in the phone layout. */
 .kb-filesrail {
   display: flex;
   flex-direction: column;
@@ -146,11 +146,52 @@
   height: var(--pad-2);
   accent-color: var(--accent);
 }
+.kb-filesrail__keep-line {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.kb-filesrail__crumbs {
+  min-width: 0;
+  max-width: 100%;
+}
+.kb-filesrail__crumb {
+  overflow-wrap: anywhere;
+}
+/* Phone: every control is a 44px target, one column, nothing wider than the sheet. */
 @media (pointer: coarse) {
   .kb-filesrail__btn,
   .kb-filesrail__link,
   .kb-filesrail__crumb {
-    min-height: 40px;
-    min-width: 40px;
+    min-height: 44px;
+    min-width: 44px;
   }
+  .kb-filesrail__check {
+    min-height: 44px;
+  }
+  .kb-filesrail__check input {
+    width: 24px;
+    height: 24px;
+    flex: none;
+  }
+}
+[data-kb-term-layout="phone"] .kb-filesrail__btn,
+[data-kb-term-layout="phone"] .kb-filesrail__link,
+[data-kb-term-layout="phone"] .kb-filesrail__crumb {
+  min-height: 44px;
+  min-width: 44px;
+}
+[data-kb-term-layout="phone"] .kb-filesrail__check {
+  min-height: 44px;
+}
+[data-kb-term-layout="phone"] .kb-filesrail__check input {
+  width: 24px;
+  height: 24px;
+  flex: none;
+}
+[data-kb-term-layout="phone"] .kb-filesrail {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+[data-kb-term-layout="phone"] .kb-filesrail__tools {
+  align-items: stretch;
 }

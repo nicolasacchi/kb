@@ -118,6 +118,46 @@ describe("upload", () => {
     expect(err).not.toHaveBeenCalled();
   });
 
+  it("cancel then the request still resolves: the row is done + late, listed in Recent exactly once", async () => {
+    let gate!: (r: TransportResponse) => void;
+    setUploadTransport(() => new Promise((res) => (gate = res)));
+    mount();
+    await pick(file("a.pdf"));
+    await act(async () => fireEvent.click(within(screen.getAllByTestId("files-upload-row")[0]).getByText("Cancel")));
+    expect(screen.getAllByTestId("files-upload-row")[0].dataset.status).toBe("cancelled");
+    await act(async () => gate(ok(answer("a.pdf"))));
+    await flush();
+    const row = screen.getAllByTestId("files-upload-row")[0];
+    expect(row.dataset.status).toBe("done");
+    expect(screen.queryByTestId("files-cancelled")).toBeNull();
+    expect(within(row).getByTestId("files-late").textContent).toBe("Cancelled too late: the file was stored.");
+    expect(within(row).getByTestId("files-runner-path").textContent).toBe("/run/up/a.pdf");
+    expect(screen.getAllByTestId("files-recent-row")).toHaveLength(1);
+  });
+
+  it("cancel then a real abort: cancelled, NOT in Recent; the may-have-stored note only once every byte was sent", async () => {
+    const sig: AbortSignal[] = [];
+    const prog: Array<(l: number, t: number) => void> = [];
+    setUploadTransport((req) => {
+      sig.push(req.signal!);
+      prog.push(req.onProgress!);
+      return new Promise((_, rej) => req.signal!.addEventListener("abort", () => rej(new DOMException("aborted", "AbortError"))));
+    });
+    mount();
+    await pick(file("a.pdf", 10), file("b.pdf", 10));
+    await act(async () => prog[0](4, 10));
+    await act(async () => fireEvent.click(within(screen.getAllByTestId("files-upload-row")[0]).getByText("Cancel")));
+    await flush();
+    await act(async () => prog[1](10, 10));
+    await act(async () => fireEvent.click(within(screen.getAllByTestId("files-upload-row")[1]).getByText("Cancel")));
+    await flush();
+    const rows = screen.getAllByTestId("files-upload-row");
+    expect(rows.map((r) => r.dataset.status)).toEqual(["cancelled", "cancelled"]);
+    expect(within(rows[0]).queryByTestId("files-cancelled-maybe")).toBeNull();
+    expect(within(rows[1]).getByTestId("files-cancelled-maybe").textContent).toMatch(/may still have been stored; check Uploads/);
+    expect(screen.queryAllByTestId("files-recent-row")).toHaveLength(0);
+  });
+
   it("a server error shows on the row AND as a toast, and later files still go", async () => {
     let n = 0;
     setUploadTransport(async () =>
@@ -215,6 +255,21 @@ describe("upload", () => {
   });
 });
 
+describe("paste quoting", () => {
+  it("single-quotes a path with a space, a quote or $(...) and never sends Enter", async () => {
+    const r = { ...answer("a.pdf"), path: "/run/up/it's $(touch x).pdf" };
+    setUploadTransport(async () => ok(r));
+    mount();
+    await pick(file("a.pdf"));
+    await act(async () => fireEvent.click(within(screen.getAllByTestId("files-upload-row")[0]).getByText("Paste path into terminal")));
+    await flush();
+    const call = fetchMock.mock.calls.find((c) => String(c[0]).endsWith("/paste"))!;
+    const body = JSON.parse(call[1].body as string);
+    expect(body).toEqual({ text: "'/run/up/it'\\''s $(touch x).pdf'" });
+    expect(JSON.stringify(body)).not.toMatch(/enter/i);
+  });
+});
+
 describe("browse", () => {
   const tree = (u: string): Response => {
     const q = new URL(u, "http://x").searchParams;
@@ -299,7 +354,7 @@ describe("browse", () => {
     expect(count()).toBe(2);
   });
 
-  it("downloads with the intent header, blob + anchor, and revokes the URL; paste uses the absolute path", async () => {
+  it("downloads with the intent header, blob + anchor, and revokes the URL after a delay; paste uses the absolute path", async () => {
     routes = (u) => (u.includes("/file?") ? new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { "Content-Length": "3" } }) : tree(u));
     const create = vi.fn(() => "blob:z");
     const revoke = vi.fn();
@@ -308,13 +363,17 @@ describe("browse", () => {
     mount();
     await waitFor(() => screen.getByText("a.txt"));
     const row = screen.getAllByTestId("files-entry")[1];
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     await act(async () => fireEvent.click(within(row).getByText("Download")));
     await flush();
     const call = fetchMock.mock.calls.find((c) => String(c[0]).includes("/file?"))!;
     expect(call[0]).toBe("/api/terms/t1/file?root=cwd&path=a.txt");
     expect((call[1].headers as Record<string, string>)["X-Kb-Intent"]).toBe("terminal");
     expect(click).toHaveBeenCalledTimes(1);
+    expect(revoke).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(60_000);
     expect(revoke).toHaveBeenCalledWith("blob:z");
+    vi.useRealTimers();
     await act(async () => fireEvent.click(within(row).getByText("Paste path into terminal")));
     await flush();
     const p = fetchMock.mock.calls.find((c) => String(c[0]).endsWith("/paste"))!;
@@ -344,5 +403,169 @@ describe("browse", () => {
     expect(text).toContain("\\u{202e}\\u{a}.txt");
     expect(text).not.toContain("\u202e");
     expect(container.querySelector("a[href]")).toBeNull();
+  });
+});
+
+describe("keep in kb", () => {
+  const KEPT = { name: "a.txt", bytes: 12, sha256: "abc", kb: kbOf({ id: "kid1", stub_rel: "files/a.txt.html" }) };
+  const listing = (u: string): Response | null => {
+    if (!u.includes("/ls?")) return null;
+    return json(200, ls("/w", [ent("sub", "dir"), ent("a.txt"), ent("big.bin", "file", { bytes: FILE_MAX_BYTES + 1 })]));
+  };
+  let keepBodies: Array<Record<string, unknown>>;
+  let keepInits: RequestInit[];
+  const keepRoute = (res: () => Response) => (u: string, init?: RequestInit) => {
+    if (u.endsWith("/files/keep")) {
+      keepBodies.push(JSON.parse(init!.body as string));
+      keepInits.push(init!);
+      return res();
+    }
+    return listing(u) ?? json(200, {});
+  };
+  beforeEach(() => {
+    keepBodies = [];
+    keepInits = [];
+  });
+  const keepBtn = (): HTMLElement => within(screen.getAllByTestId("files-entry")[1]).getByText("Keep in kb");
+  const click = async (el: HTMLElement): Promise<void> => {
+    await act(async () => fireEvent.click(el));
+    await flush();
+  };
+
+  it("offers Keep on file rows only, in both roots; the index box starts off with the scrub caption", async () => {
+    routes = keepRoute(() => json(200, KEPT));
+    mount();
+    await waitFor(() => screen.getByText("a.txt"));
+    const rows = screen.getAllByTestId("files-entry");
+    expect(within(rows[0]).queryByText("Keep in kb")).toBeNull();
+    expect(within(rows[1]).getByText("Keep in kb")).toBeTruthy();
+    expect((screen.getByTestId("files-keep-index") as HTMLInputElement).checked).toBe(false);
+    expect(screen.getByText(/secrets are scrubbed from the text but check it/)).toBeTruthy();
+    fireEvent.click(screen.getByTestId("files-root-up"));
+    await waitFor(() => expect(screen.getAllByTestId("files-entry")).toHaveLength(3));
+    expect(screen.getAllByText("Keep in kb")).toHaveLength(2);
+  });
+
+  it("keeps with index:false by default, index:true when ticked, and the up root", async () => {
+    routes = keepRoute(() => json(200, KEPT));
+    mount();
+    await waitFor(() => screen.getByText("a.txt"));
+    await click(keepBtn());
+    fireEvent.click(screen.getByTestId("files-keep-index"));
+    await click(keepBtn());
+    fireEvent.click(screen.getByTestId("files-root-up"));
+    await waitFor(() => expect(screen.getAllByTestId("files-entry")).toHaveLength(3));
+    await click(keepBtn());
+    expect(keepBodies).toEqual([
+      { path: "a.txt", root: "cwd", index: false },
+      { path: "a.txt", root: "cwd", index: true },
+      { path: "a.txt", root: "up", index: true },
+    ]);
+    expect((keepInits[0].headers as Record<string, string>)["X-Kb-Intent"]).toBe("terminal");
+  });
+
+  it("success shows name, size, stub path with Copy, and Download original through kept/{id}", async () => {
+    routes = (u, init) =>
+      u.includes("/kept/") ? new Response(new Uint8Array([1, 2]), { status: 200, headers: { "Content-Length": "2" } }) : keepRoute(() => json(200, KEPT))(u, init) as Response;
+    Object.assign(URL, { createObjectURL: vi.fn(() => "blob:k"), revokeObjectURL: vi.fn() });
+    const aclick = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    mount();
+    await waitFor(() => screen.getByText("a.txt"));
+    await click(keepBtn());
+    const res = screen.getByTestId("files-keep-result");
+    expect(res.textContent).toMatch(/a\.txt · 12\.0? ?B|a\.txt · 12 B/);
+    expect(res.textContent).toContain("Kept in kb");
+    expect(res.textContent).toContain("files/a.txt.html");
+    expect(within(res).getByText("Copy")).toBeTruthy();
+    await click(within(res).getByText("Download original"));
+    const call = fetchMock.mock.calls.find((c) => String(c[0]).includes("/kept/"))!;
+    expect(call[0]).toBe("/api/terms/t1/kept/kid1");
+    expect((call[1].headers as Record<string, string>)["X-Kb-Intent"]).toBe("terminal");
+    expect(aclick).toHaveBeenCalledTimes(1);
+    delete (URL as unknown as Record<string, unknown>).createObjectURL;
+    delete (URL as unknown as Record<string, unknown>).revokeObjectURL;
+  });
+
+  it("created:false reads as Already kept, inlined says so", async () => {
+    routes = keepRoute(() => json(200, { ...KEPT, kb: kbOf({ created: false, inlined: true }) }));
+    mount();
+    await waitFor(() => screen.getByText("a.txt"));
+    await click(keepBtn());
+    expect(screen.getByTestId("files-keep-result").textContent).toMatch(/Already kept in kb \(content indexed\)/);
+  });
+
+  it("a skipped or failed 200 answer is shown honestly and toasted", async () => {
+    const err = vi.spyOn(toast, "err");
+    routes = keepRoute(() => json(200, { ...KEPT, kb: kbOf({ status: "skipped", reason: "not-configured", id: null, stub_rel: null }) }));
+    mount();
+    await waitFor(() => screen.getByText("a.txt"));
+    await click(keepBtn());
+    expect(screen.getByTestId("files-keep-result").textContent).toMatch(/Not kept in kb: not-configured/);
+    expect(err).toHaveBeenCalledWith(expect.stringMatching(/a\.txt: Not kept in kb: not-configured/));
+    cleanup();
+    routes = keepRoute(() => json(200, { ...KEPT, kb: kbOf({ status: "failed", reason: "disk", id: null, stub_rel: null }) }));
+    mount();
+    await waitFor(() => screen.getByText("a.txt"));
+    await click(keepBtn());
+    expect(screen.getByTestId("files-keep-result").textContent).toMatch(/kb keep failed: disk/);
+    expect(err).toHaveBeenCalledWith(expect.stringMatching(/a\.txt: kb keep failed: disk/));
+  });
+
+  it.each([
+    [409, "urn:kb:errors:terminal-files-not-configured", /not configured on this server/],
+    [409, "urn:kb:errors:terminal-file-changed", /changed while it was being read/],
+    [413, "urn:kb:errors:terminal-upload-quota", /quota/],
+    [413, "urn:kb:errors:payload-too-large", /32 MiB/],
+    [503, "urn:kb:errors:terminal-runner-unavailable", /runner is not reachable/],
+    [403, "urn:kb:errors:terminal-outside-root", /outside the root/],
+    [422, "urn:kb:errors:terminal-not-a-file", /not a file/],
+    [404, "urn:kb:errors:not-found", /no such file/],
+    [400, "urn:kb:errors:bad-request", /empty path/],
+  ])("refusal %i %s shows on the row and as a toast", async (status, type, text) => {
+    const err = vi.spyOn(toast, "err");
+    const detail = ({ 403: "outside the root", 422: "not a file", 404: "no such file", 400: "empty path" } as Record<number, string>)[status] ?? "x";
+    routes = keepRoute(() => json(status, { type, detail }));
+    mount();
+    await waitFor(() => screen.getByText("a.txt"));
+    await click(keepBtn());
+    expect(screen.getByTestId("files-keep-error").textContent).toMatch(text);
+    expect(err).toHaveBeenCalledWith(expect.stringMatching(text));
+  });
+
+  it("a file over 32 MiB is refused with no request", async () => {
+    routes = keepRoute(() => json(200, KEPT));
+    const err = vi.spyOn(toast, "err");
+    mount();
+    await waitFor(() => screen.getByText("big.bin"));
+    await click(within(screen.getAllByTestId("files-entry")[2]).getByText("Keep in kb"));
+    expect(keepBodies).toHaveLength(0);
+    expect(err).toHaveBeenCalledWith(expect.stringMatching(/big\.bin: Over the 32 MiB/));
+  });
+
+  it("the button is disabled while a keep is in flight", async () => {
+    let release!: (r: Response) => void;
+    routes = (u) => (u.endsWith("/files/keep") ? (new Promise((r) => (release = r)) as unknown as Response) : (listing(u) ?? json(200, {})));
+    mount();
+    await waitFor(() => screen.getByText("a.txt"));
+    await click(keepBtn());
+    expect((keepBtn() as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => release(json(200, KEPT)));
+    await flush();
+    expect((keepBtn() as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("a hostile name stays plain text in the keep result and touches no web storage", async () => {
+    const hostile = "<b>x</b>‮.txt";
+    routes = (u, init) =>
+      u.endsWith("/files/keep") ? json(200, { ...KEPT, name: hostile, kb: kbOf({ stub_rel: "<i>s</i>" }) }) : json(200, ls("/w", [ent(hostile)]));
+    const set = vi.spyOn(Storage.prototype, "setItem");
+    const { container } = mount();
+    await waitFor(() => screen.getByTestId("files-entry"));
+    await click(screen.getByText("Keep in kb"));
+    const res = screen.getByTestId("files-keep-result");
+    expect(container.querySelector("b, i")).toBeNull();
+    expect(res.textContent).toContain("<b>x</b>\\u{202e}.txt");
+    expect(res.textContent).toContain("<i>s</i>");
+    expect(set).not.toHaveBeenCalled();
   });
 });
