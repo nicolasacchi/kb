@@ -25,6 +25,8 @@ import {
 } from "../api/client";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { useActiveKb } from "../hooks/useActiveKb";
+import { useIdentity } from "../hooks/useArtifactHost";
+import TerminalCommandsSection from "../terminal/commands/settings/TerminalCommandsSection";
 import { relTime } from "../lib/commentFmt";
 import { censusRead, censusReset, CENSUS_LABELS, type Census } from "../lib/census";
 
@@ -201,6 +203,8 @@ export default function Settings() {
   useDocumentTitle("Settings");
   const activeKb = useActiveKb();
   const [identity, setIdentity] = useState<Identity | null>(null);
+  // CMDSETTINGS — the Terminal commands tab exists only for an admitted caller.
+  const terminalAdmitted = useIdentity()?.terminal_admitted === true;
   const [identityError, setIdentityError] = useState<string | null>(null);
   // Re-render once a minute so the uptime badge stays current without
   // hammering setInterval at sub-second granularity.
@@ -256,8 +260,18 @@ export default function Settings() {
         body: () => <Preferences />,
       },
       { id: "census", label: "Census", group: GROUP_YOU, body: () => <CensusSection /> },
+      ...(terminalAdmitted
+        ? [
+            {
+              id: "terminal-commands",
+              label: "Terminal commands",
+              group: GROUP_YOU,
+              body: () => <TerminalCommandsSection />,
+            },
+          ]
+        : []),
     ],
-    [],
+    [terminalAdmitted],
   );
 
   const metaParts: { key: string; node: ReactNode }[] = [];
@@ -333,7 +347,9 @@ export default function Settings() {
 
       <VitalSigns kb={activeKb} />
 
-      <Tabs tabs={tabs} label="settings sections" />
+      {/* Keyed on admission: the identity arrives after first paint, and a
+          remount re-reads `#terminal-commands` once that tab exists. */}
+      <Tabs key={terminalAdmitted ? "term" : "base"} tabs={tabs} label="settings sections" />
     </div>
   );
 }

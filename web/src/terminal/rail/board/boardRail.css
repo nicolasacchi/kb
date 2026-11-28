@@ -1,0 +1,104 @@
+/* RAILBOARD — the Board tab. Tokens only; one column; 40px targets. */
+.kb-boardrail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-3);
+  min-width: 0;
+  color: var(--ink);
+}
+.kb-boardrail__asof,
+.kb-boardrail__fresh,
+.kb-boardrail__none {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+}
+.kb-boardrail__none {
+  font-style: italic;
+}
+.kb-boardrail__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+  min-width: 0;
+}
+.kb-boardrail__sechead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--pad-2);
+}
+.kb-boardrail__h {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--ink);
+}
+.kb-boardrail__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.kb-boardrail__item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.kb-boardrail__item--answered {
+  opacity: 0.6;
+}
+.kb-boardrail .slate-card__act,
+.kb-boardrail__btn,
+.kb-boardrail__input {
+  min-height: 40px;
+}
+.kb-boardrail__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-1);
+}
+.kb-boardrail__label {
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+}
+.kb-boardrail__input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg-card);
+  color: var(--ink);
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-sm);
+  padding: var(--pad-1) var(--pad-2);
+  font-size: var(--fs-sm);
+}
+.kb-boardrail__input:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+.kb-boardrail__formtools {
+  display: flex;
+  gap: var(--pad-2);
+}
+.kb-boardrail__btn {
+  background: var(--bg-card);
+  color: var(--ink);
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  padding: var(--pad-1) var(--pad-3);
+  cursor: pointer;
+}
+.kb-boardrail__btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.kb-boardrail__btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.kb-boardrail[data-phone="1"] .kb-boardrail__formtools .kb-boardrail__btn {
+  flex: 1;
+}

@@ -1800,6 +1800,13 @@ fn every_get_suffix() -> Vec<String> {
         .map(|s| s.to_string())
         .collect();
     v.push(format!("/media/{}", "a".repeat(64)));
+    // FXLS: the working-area listing and download routes take the same
+    // `gate_read` gate, so every refusal row below covers them and asserts
+    // the runner is never dialled.
+    v.push("/abcd1234/ls".to_string());
+    v.push("/abcd1234/file".to_string());
+    v.push("/abcd1234/ls?path=sub&root=up".to_string());
+    v.push("/abcd1234/file?path=a.txt".to_string());
     v
 }
 

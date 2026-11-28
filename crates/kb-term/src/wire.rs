@@ -820,6 +820,33 @@ pub enum Request {
         /// The runner-minted upload token.
         upload: String,
     },
+    /// List one directory of a session's working area (FXLS). `root` is
+    /// `cwd` (the launch-recorded working directory) or `up` (the session's
+    /// upload area); `path` is relative to it, or absolute and then required
+    /// to name a location under that root. The runner answers [`FsLsData`].
+    FsLs {
+        /// Session id.
+        id: String,
+        /// `cwd` or `up`.
+        root: String,
+        /// Directory, relative to the root (empty = the root itself).
+        path: String,
+    },
+    /// Read one chunk of a regular file of a session's working area (FXLS).
+    /// The runner answers a header carrying [`FsGetData`] followed on the
+    /// same connection by exactly `len` raw bytes (the `media` framing).
+    FsGet {
+        /// Session id.
+        id: String,
+        /// `cwd` or `up`.
+        root: String,
+        /// File, relative to the root or absolute under it.
+        path: String,
+        /// Start offset of the chunk.
+        offset: u64,
+        /// Bytes wanted (at most the chunk cap; clipped at end of file).
+        len: u64,
+    },
     /// Tell the tap that `viewer` just typed (T18). The phone's composer,
     /// key bar and choice bar travel over REST, not the WebSocket, so the
     /// relay reports the typing device here; the tap releases an OSC 52
@@ -968,6 +995,52 @@ pub struct FileData {
     /// Lowercase hex sha256 of the bytes.
     pub sha256: String,
     /// The stored file name (`<sha256[..12]>-<stem>.<ext>`).
+    pub name: String,
+}
+
+/// One listed entry of an `fs_ls` reply.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsEntry {
+    /// The entry's file name (valid UTF-8, no control characters).
+    pub name: String,
+    /// `file` or `dir`; nothing else is ever listed.
+    pub kind: String,
+    /// `st_size` for a file, 0 for a directory.
+    pub bytes: u64,
+    /// Modification time, unix seconds.
+    pub mtime_unix: i64,
+    /// Whether the name starts with a dot.
+    pub hidden: bool,
+}
+
+/// Success payload for `fs_ls`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsLsData {
+    /// The root that was listed (`cwd` or `up`).
+    pub root: String,
+    /// The listed directory, relative to the root (empty for the root).
+    pub dir: String,
+    /// At most 500 entries: directories first, then files, each bytewise by name.
+    pub entries: Vec<FsEntry>,
+    /// True iff more entries existed than were returned.
+    pub truncated: bool,
+    /// Entries left out because they are not a regular file or a
+    /// directory (symlinks, fifos, sockets, devices) or their name cannot
+    /// be represented (not UTF-8, control characters).
+    pub skipped: u32,
+}
+
+/// Header payload of a successful `fs_get` reply. The envelope line
+/// carrying it is followed by exactly `len` raw bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsGetData {
+    /// The file's total size in bytes at open time.
+    pub size: u64,
+    /// Number of raw bytes that follow the header line.
+    pub len: u64,
+    /// Modification time, unix seconds.
+    pub mtime_unix: i64,
+    /// The file's own name (final path component).
     pub name: String,
 }
 
