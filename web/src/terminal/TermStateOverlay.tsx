@@ -13,7 +13,6 @@ export interface TermStateOverlayProps {
   caption: string;
   exitCode: number | null;
   blockedReason: string | null;
-  attempt: number;
   /** True until the stream has been live once in this mount. */
   firstConnect: boolean;
   /** Skip the backoff now (the session's `kick()`). */

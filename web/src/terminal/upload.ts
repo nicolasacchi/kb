@@ -72,7 +72,29 @@ export function pastedPictureFiles(dt: DataTransfer | null): File[] {
   return Array.from(dt.files ?? []).filter((f) => f.type.startsWith("image/"));
 }
 
-/** Every file of a drop (the gate then refuses the non-pictures with a message). */
+/** Whether a file takes the picture route (`…/upload`); every other file takes `…/files`. */
+export function isPicture(file: { type: string }): boolean {
+  return (UPLOAD_TYPES as readonly string[]).includes(file.type);
+}
+
+/**
+ * Every file of a paste (pictures and others), or `[]` for a text paste. Same
+ * rule as `pastedPictureFiles`: a clipboard carrying `text/plain` is a TEXT paste.
+ */
+export function pastedAnyFiles(dt: DataTransfer | null): File[] {
+  if (dt === null) return [];
+  if (Array.from(dt.types ?? []).includes("text/plain")) return [];
+  const out: File[] = [];
+  for (const item of Array.from(dt.items ?? [])) {
+    if (item.kind !== "file") continue;
+    const f = item.getAsFile();
+    if (f !== null) out.push(f);
+  }
+  if (out.length > 0) return out;
+  return Array.from(dt.files ?? []);
+}
+
+/** Every file of a drop (pictures go to `…/upload`, the rest to `…/files`). */
 export function droppedFiles(dt: DataTransfer | null): File[] {
   return dt === null ? [] : Array.from(dt.files ?? []);
 }

@@ -154,13 +154,48 @@ describe("a file drop", () => {
     expect(pasted).toEqual(["/up/x.png"]);
   });
 
-  it("a dropped non-picture shows the refusal toast and uploads nothing", async () => {
+  it("FXUI: a dropped PDF uploads via …/files and its path is pasted without Enter", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ path: "/run/up/a.pdf", name: "a.pdf", bytes: 4, kind: "other", sha256: SHA, mime: null, kb: { status: "skipped", reason: "not-configured", id: null, stub_rel: null, created: null, inlined: null } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const ta = mountRig();
+    const pdf = new File([new Uint8Array(4)], "a b.pdf", { type: "application/pdf" });
+    const ev = await fire(ta, "drop", fakeDt({ types: ["Files"], files: [pdf] }));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/terms/abcd1234/files?name=a%20b.pdf");
+    expect((fetchMock.mock.calls[0][1].headers as Record<string, string>)["X-Kb-Intent"]).toBe("terminal");
+    expect(pasted).toEqual(["/run/up/a.pdf"]);
+    expect(pasted[0]).not.toMatch(/[\r\n]/);
+    expect(ev.defaultPrevented).toBe(true);
+    expect(childSaw).toEqual([]);
+  });
+
+  it("FXUI: a PNG still goes via …/upload, not …/files", async () => {
+    const ta = mountRig();
+    await fire(ta, "drop", fakeDt({ types: ["Files"], files: [png(4)] }));
+    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual(["/api/terms/abcd1234/upload"]);
+  });
+
+  it("FXUI: a pasted non-image file takes the …/files route", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ path: "/run/up/n.txt", name: "n.txt", bytes: 2, kind: "other", sha256: SHA, mime: null, kb: { status: "skipped", reason: null, id: null, stub_rel: null, created: null, inlined: null } }), { status: 200 }),
+    );
+    const ta = mountRig();
+    const txt = new File(["hi"], "n.txt", { type: "text/plain" });
+    await fire(ta, "paste", fakeDt({ types: ["Files"], files: [txt] }));
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/terms/abcd1234/files?name=n.txt");
+    expect(pasted).toEqual(["/run/up/n.txt"]);
+  });
+
+  it("FXUI: an oversize non-picture (32 MiB + 1) is refused client-side with a toast", async () => {
     const err = vi.spyOn(toast, "err");
     const ta = mountRig();
-    const pdf = new File([new Uint8Array(4)], "a.pdf", { type: "application/pdf" });
-    await fire(ta, "drop", fakeDt({ types: ["Files"], files: [pdf] }));
+    await fire(ta, "drop", fakeDt({ types: ["Files"], files: [{ name: "big.bin", size: 32 * 1024 * 1024 + 1, type: "" } as File] }));
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(err).toHaveBeenCalledWith(expect.stringMatching(/PNG, JPEG, GIF and WebP/));
+    expect(err).toHaveBeenCalledWith(expect.stringMatching(/32 MiB/));
   });
 });
 
@@ -200,13 +235,13 @@ describe("FUMINPANEL upload hardening", () => {
     expect(pasted).toEqual(["/up/x.png"]);
   });
 
-  it("a drop of two pictures and one non-picture uploads the two, toasts the refusal and joins the paths", async () => {
+  it("a drop of two pictures and one oversize file uploads the two, toasts the refusal and joins the paths", async () => {
     const err = vi.spyOn(toast, "err");
     const ta = mountRig();
-    const note = new File(["hi"], "n.txt", { type: "text/plain" });
+    const note = { name: "big.bin", size: 32 * 1024 * 1024 + 1, type: "" } as File;
     const ev = await fire(ta, "drop", fakeDt({ types: ["Files"], files: [png(4), note, png(4)] }));
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(err).toHaveBeenCalledWith(expect.stringMatching(/Only PNG/));
+    expect(err).toHaveBeenCalledWith(expect.stringMatching(/32 MiB/));
     expect(pasted).toEqual(["/up/x.png /up/x.png"]);
     expect(ev.defaultPrevented).toBe(true);
     // stopPropagation: xterm's own drop handling never sees it.

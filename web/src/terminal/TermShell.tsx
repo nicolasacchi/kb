@@ -125,10 +125,14 @@ function TabSet({
   const refs = useRef<Map<RailTabId, HTMLButtonElement>>(new Map());
   const current = tabs.find((t) => t.id === active) ?? tabs[0];
   const onKey = (e: KeyboardEvent<HTMLDivElement>): void => {
+    // Horizontal tabs: Left/Right/Home/End only (Up/Down stay with the scroller),
+    // and only from a tab itself, never a modifier combo or a nested control.
+    if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+    if ((e.target as Element).getAttribute?.("role") !== "tab") return;
     const i = tabs.findIndex((t) => t.id === current?.id);
     let n = -1;
-    if (e.key === "ArrowRight" || e.key === "ArrowDown") n = (i + 1) % tabs.length;
-    else if (e.key === "ArrowLeft" || e.key === "ArrowUp") n = (i - 1 + tabs.length) % tabs.length;
+    if (e.key === "ArrowRight") n = (i + 1) % tabs.length;
+    else if (e.key === "ArrowLeft") n = (i - 1 + tabs.length) % tabs.length;
     else if (e.key === "Home") n = 0;
     else if (e.key === "End") n = tabs.length - 1;
     if (n < 0) return;
@@ -140,7 +144,7 @@ function TabSet({
   };
   return (
     <>
-      <div className="kb-termshell__tabs" role="tablist" aria-label="Terminal panels" onKeyDown={onKey}>
+      <div className="kb-termshell__tabs" role="tablist" aria-orientation="horizontal" aria-label="Terminal panels" onKeyDown={onKey}>
         {tabs.map((t) => {
           const on = t.id === current?.id;
           return (
@@ -170,6 +174,7 @@ function TabSet({
           role="tabpanel"
           id={`${idBase}-panel`}
           aria-labelledby={`${idBase}-tab-${current.id}`}
+          tabIndex={0}
           className="kb-termshell__panel"
         >
           {current.node}

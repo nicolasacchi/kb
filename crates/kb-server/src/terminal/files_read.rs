@@ -35,6 +35,14 @@
 //! The browser cannot send the intent header on a plain `<a download>`
 //! navigation, so the SPA fetches with the header, takes a blob and saves
 //! it through an object-URL anchor; `ls` is the same fetch returning JSON.
+//! **Kept originals (FXSAVE).** `GET /api/terms/{id}/kept/{artifact_id}`
+//! hands the operator back the verbatim bytes of a file kept in the files
+//! corpus. It takes the SAME `gate_read` gate and the SAME
+//! [`download_response`] shape as `/file`: always octet-stream,
+//! attachment, nosniff, no-store, never the stored or sender-chosen mime.
+//! The blob path is derived ONLY from the artifact id (see [`kept_blob`]);
+//! every failure is one identical 404.
+//!
 //! Nothing here emits an SSE event.
 
 use std::sync::Arc;
@@ -108,7 +116,7 @@ fn parse_query(
 }
 
 /// Map a failed runner call to its response (never carries the socket path).
-fn failure(e: RunnerError) -> Response<Body> {
+pub(crate) fn failure(e: RunnerError) -> Response<Body> {
     match e {
         RunnerError::Unavailable | RunnerError::Timeout => runner_down(),
         RunnerError::TooLarge | RunnerError::BadReply => runner_bad_reply(),
@@ -253,8 +261,188 @@ pub async fn file(
     download_response(size, &name, body)
 }
 
+// ------------------------------------------------------------ kept originals
+
+/// Largest stub file read when locating a kept original (a stub is a few
+/// hundred bytes plus at most 64 KiB of inlined text).
+const STUB_MAX_BYTES: u64 = 512 * 1024;
+
+/// The one 404 every kept-original failure answers with: unknown id, an id
+/// of another kb, a document that is not a file stub, a missing or
+/// mismatching blob, an unconfigured files corpus. Byte-identical across
+/// the cases so the route is no existence oracle.
+fn kept_not_found() -> Response<Body> {
+    no_store(crate::terminal::gate::Problem::response(
+        crate::terminal::gate::ERR_TERMINAL_NOT_FOUND,
+        StatusCode::NOT_FOUND,
+        "Not Found",
+        "no such kept file".to_string(),
+    ))
+}
+
+/// The value of `<meta name="{name}" content="...">` in a stub's `<head>`,
+/// HTML-unescaped. Only the head is searched, so inlined text (which is
+/// escaped and lives in the body) can never forge a value.
+fn stub_meta(html: &str, name: &str) -> Option<String> {
+    let head = &html[..html.find("</head>")?];
+    let needle = format!("<meta name=\"{name}\" content=\"");
+    let start = head.find(&needle)? + needle.len();
+    let raw = &head[start..start + head[start..].find('"')?];
+    Some(
+        raw.replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace("&amp;", "&"),
+    )
+}
+
+/// Locate and read the kept original for the stub at `row_path` (the
+/// indexed path of the document an artifact id resolved to) under the
+/// files corpus `source_root`. `None` for anything that is not exactly a
+/// file stub with one intact sibling blob.
+fn read_kept(
+    source_root: &std::path::Path,
+    row_path: &str,
+    category: Option<&str>,
+) -> Option<(Vec<u8>, String)> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    if category != Some("upload") {
+        return None;
+    }
+    let root = std::fs::canonicalize(source_root).ok()?;
+    let stub = std::fs::canonicalize(row_path).ok()?;
+    if !stub.starts_with(&root) || stub.extension().and_then(|e| e.to_str()) != Some("html") {
+        return None;
+    }
+    let mut html = String::new();
+    std::fs::File::open(&stub)
+        .ok()?
+        .take(STUB_MAX_BYTES)
+        .read_to_string(&mut html)
+        .ok()?;
+    if stub_meta(&html, "kb-category")? != "upload" {
+        return None;
+    }
+    let sha = stub_meta(&html, "kb-upload-sha256")?;
+    if sha.len() != 64
+        || !sha
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return None;
+    }
+    let name = stub_meta(&html, "kb-upload-name").unwrap_or_default();
+    let stem = stub.file_stem()?.to_str()?.to_string();
+    if !stem.starts_with(&sha[..12]) {
+        return None;
+    }
+    // The single sibling `<stem>.<ext>.kbblob` (ext: 1-8 of [a-z0-9]).
+    let mut found: Option<std::path::PathBuf> = None;
+    for entry in std::fs::read_dir(stub.parent()?).ok()?.flatten() {
+        let fname = entry.file_name();
+        let Some(fname) = fname.to_str() else {
+            continue;
+        };
+        let Some(ext) = fname
+            .strip_prefix(stem.as_str())
+            .and_then(|r| r.strip_prefix('.'))
+            .and_then(|r| r.strip_suffix(".kbblob"))
+        else {
+            continue;
+        };
+        let ext_ok = (1..=8).contains(&ext.len())
+            && ext
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit());
+        if !ext_ok {
+            continue;
+        }
+        if found.is_some() {
+            return None;
+        }
+        found = Some(entry.path());
+    }
+    let blob = found?;
+    let meta = std::fs::symlink_metadata(&blob).ok()?;
+    if !meta.is_file() || meta.len() > FILE_MAX_BYTES {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(meta.len() as usize);
+    std::fs::File::open(&blob)
+        .ok()?
+        .take(FILE_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > FILE_MAX_BYTES || hex::encode(Sha256::digest(&bytes)) != sha {
+        return None;
+    }
+    Some((bytes, name))
+}
+
+/// `GET /api/terms/{id}/kept/{artifact_id}` — the verbatim original of a
+/// file kept in the files corpus. `{id}` is only a terminal-shaped
+/// namespace (validated, never matched to the stub's own terminal). The
+/// path is derived ONLY from `{artifact_id}`: the configured files kb's
+/// storage row, whose path must sit beneath that kb's source root, end
+/// `.html`, and be a file stub (`kb-category: upload` with a sha-256 the
+/// blob bytes must match). No query or caller path is read.
+pub async fn kept_blob(
+    State(state): State<Arc<KbHandles>>,
+    Extension(identity): Extension<Identity>,
+    headers: HeaderMap,
+    Path((id, artifact_id)): Path<(String, String)>,
+) -> Response<Body> {
+    if let Err(e) = gate_read(&state, &headers, &identity).await {
+        return e;
+    }
+    if !is_valid_term_id(&id) {
+        return bad_request("invalid terminal id");
+    }
+    let kb = state
+        .config
+        .read()
+        .await
+        .terminal
+        .files_kb()
+        .map(str::to_string);
+    let Some(ctx) = kb.and_then(|n| {
+        state
+            .kbs
+            .iter()
+            .find(|(k, _)| k.as_str() == n)
+            .map(|(_, c)| c)
+    }) else {
+        return kept_not_found();
+    };
+    if artifact_id.is_empty()
+        || artifact_id.len() > 64
+        || !artifact_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return kept_not_found();
+    }
+    let Ok(Some(row)) = ctx.storage.get_by_id(artifact_id).await else {
+        return kept_not_found();
+    };
+    let root = ctx.source_path.clone();
+    let read = tokio::task::spawn_blocking(move || {
+        read_kept(&root, &row.path, row.kb_category.as_deref())
+    })
+    .await;
+    match read {
+        Ok(Some((bytes, name))) => {
+            let len = bytes.len() as u64;
+            download_response(len, &download_name(&name), Body::from(bytes))
+        }
+        _ => kept_not_found(),
+    }
+}
+
 /// The one shape every download answer has.
-fn download_response(size: u64, name: &str, body: Body) -> Response<Body> {
+pub(crate) fn download_response(size: u64, name: &str, body: Body) -> Response<Body> {
     let mut resp = Response::new(body);
     *resp.status_mut() = StatusCode::OK;
     let h = resp.headers_mut();
