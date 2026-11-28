@@ -387,6 +387,6 @@ export function FilesRail(): ReactElement {
 }
 
 /** The "Index content in kb" tickbox is read from the DOM at drop time (one source of truth). */
-function readIndex(root: HTMLElement): boolean {
+function readIndex(root: Element): boolean {
   return root.querySelector<HTMLInputElement>('[data-testid="files-index"]')?.checked ?? false;
 }
