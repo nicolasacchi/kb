@@ -587,8 +587,10 @@ describe("KeyBar over the direct-typing WS path (PHIN2)", () => {
     ) as HTMLElement;
     click(row);
     await settle();
-    expect(rig.urls()).toEqual(["/api/terms/abcd1234/paste"]);
-    expect(rig.calls[0].json).toMatchObject({ text: "/compact" });
-    expect(rig.calls[0].json?.enter).toBeUndefined();
+    // Drive calls only: an unrelated identity read may share the stubbed fetch.
+    const drive = rig.calls.filter((c) => c.url.startsWith("/api/terms/"));
+    expect(drive.map((c) => c.url)).toEqual(["/api/terms/abcd1234/paste"]);
+    expect(drive[0].json).toMatchObject({ text: "/compact" });
+    expect(drive[0].json?.enter).toBeUndefined();
   });
 });
