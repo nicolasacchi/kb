@@ -211,7 +211,7 @@ export function NowRail(): ReactElement {
     [termId, sid, row, card, conv.data, asks, terms, isError, live, marks, nowUnix],
   );
 
-  const open = (id: string): void => navigate(buildHubUrl({ id }));
+  const open = (id: string): void => void navigate(buildHubUrl({ id }));
 
   return (
     <div className="kb-nowrail" data-testid="now-rail" data-linked={model.linked ? "1" : "0"}>
