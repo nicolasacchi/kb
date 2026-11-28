@@ -1,0 +1,252 @@
+/* CMDSETTINGS - Settings > Terminal commands. Tokens only. */
+.tcs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-3);
+}
+.tcs__bar,
+.tcs__row,
+.tcs__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pad-2);
+  align-items: center;
+}
+.tcs__btn {
+  min-height: 32px;
+  padding: var(--pad-1) var(--pad-2);
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.tcs__btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.tcs__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.tcs__btn.is-active {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+.tcs__btn--primary {
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
+  color: var(--accent-fill-fg);
+}
+.tcs__btn--primary:hover:not(:disabled) {
+  color: var(--accent-fill-fg);
+}
+.tcs__btn--danger {
+  border-color: var(--err);
+  color: var(--err);
+}
+.tcs__btn--icon {
+  min-height: 24px;
+  padding: 0 var(--pad-1);
+}
+.tcs__h3 {
+  margin: 0 0 var(--pad-2);
+  font-size: var(--fs-md);
+}
+.tcs__group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+}
+.tcs__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+}
+.tcs__item {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--pad-2);
+  padding: var(--pad-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+}
+.tcs__main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pad-2);
+  min-width: 0;
+  flex: 1 1 260px;
+}
+.tcs__label {
+  font-weight: 600;
+  color: var(--ink-strong);
+}
+.tcs__kind,
+.tcs__muted {
+  color: var(--ink-dim);
+  font-size: var(--fs-sm);
+}
+.tcs__preview {
+  flex-basis: 100%;
+  color: var(--ink-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+.tcs__badge {
+  padding: 0 var(--pad-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  color: var(--ink-dim);
+}
+.tcs__badge--changed {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.tcs__badge--added {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.tcs__badge--unverified,
+.tcs__badge--hidden {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+.tcs__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+  padding: var(--pad-3);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+}
+.tcs__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-1);
+}
+.tcs__field input,
+.tcs__field select,
+.tcs__field textarea,
+.tcs__json,
+.tcs__row select {
+  min-height: 32px;
+  padding: var(--pad-1) var(--pad-2);
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  box-sizing: border-box;
+  max-width: 100%;
+}
+.tcs__json {
+  width: 100%;
+  font-family: var(--font-mono);
+}
+.tcs__fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  min-width: 0;
+}
+.tcs__arg {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+}
+.tcs__chips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pad-1);
+}
+.tcs__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pad-1);
+  padding: 0 var(--pad-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+}
+.tcs__check {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-2);
+}
+.tcs__warn {
+  margin: 0;
+  color: var(--warn);
+  font-size: var(--fs-sm);
+}
+.tcs__notice {
+  margin: 0;
+  color: var(--ok);
+  font-size: var(--fs-sm);
+}
+.tcs__alert {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+  align-items: flex-start;
+  padding: var(--pad-2) var(--pad-3);
+  border: 1px solid var(--err);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+}
+.tcs__alert ul {
+  margin: 0;
+  padding-left: var(--pad-3);
+}
+.tcs__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Phone: one column, 40px+ targets, nothing wider than the screen. */
+@media (max-width: 860px) {
+  .tcs__btn,
+  .tcs__field input,
+  .tcs__field select,
+  .tcs__field textarea,
+  .tcs__row select {
+    min-height: var(--touch-min);
+  }
+  .tcs__btn--icon {
+    min-width: var(--touch-min);
+    min-height: var(--touch-min);
+  }
+  .tcs__item {
+    flex-direction: column;
+  }
+  .tcs__actions .tcs__btn {
+    flex: 1 1 auto;
+  }
+  .tcs__check input {
+    width: 24px;
+    height: 24px;
+  }
+  .tcs__check {
+    min-height: var(--touch-min);
+  }
+}

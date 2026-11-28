@@ -45,6 +45,18 @@ pub(crate) enum MediaReply {
     Err { code: String, message: String },
 }
 
+/// What the runner answered to an `fs_get` request (FXLS).
+#[derive(Debug)]
+pub(crate) enum FsGetReply {
+    /// The chunk: the runner's header and exactly `head.len` raw bytes.
+    Chunk {
+        head: super::wire::FsGetData,
+        bytes: Vec<u8>,
+    },
+    /// The runner refused (`not-found`, `outside-root`, `not-a-file`, ...).
+    Err { code: String, message: String },
+}
+
 /// Why a runner call failed. `Unavailable` never carries the socket
 /// path (the route handler maps it to a fixed 503 body).
 #[derive(Debug)]
@@ -95,6 +107,9 @@ fn op_budget(req: &RunnerRequest, base: Duration) -> Duration {
         RunnerRequest::UploadAppend { .. } | RunnerRequest::UploadCommit { .. } => {
             Duration::from_secs(30)
         }
+        // FXLS — a chunk read: the runner opens, reads up to 8 MiB and
+        // writes it back; a listing walks at most a few thousand entries.
+        RunnerRequest::FsGet { .. } | RunnerRequest::FsLs { .. } => Duration::from_secs(30),
         RunnerRequest::List {} => Duration::from_secs(30),
         _ => base,
     };
@@ -156,6 +171,88 @@ impl UnixRunner {
             Err(_) => Err(RunnerError::Timeout),
             Ok(outcome) => outcome,
         }
+    }
+
+    /// Read one chunk of a terminal file (FXLS). The runner answers one
+    /// envelope header line carrying the file's `size` and the chunk's
+    /// `len`, followed by exactly `len` raw bytes, or one `err` line with
+    /// no bytes. The exchange runs under the per-op budget; a `len` above
+    /// what was asked for is refused before a byte is read (the runner
+    /// is trusted no further than the request).
+    pub(crate) async fn fs_get(
+        &self,
+        id: &str,
+        root: &str,
+        path: &str,
+        offset: u64,
+        len: u64,
+    ) -> Result<FsGetReply, RunnerError> {
+        let req = RunnerRequest::FsGet {
+            id: id.to_string(),
+            root: root.to_string(),
+            path: path.to_string(),
+            offset,
+            len,
+        };
+        let line = serde_json::to_string(&req).map_err(|_| RunnerError::BadReply)?;
+        let budget = op_budget(&req, self.timeout);
+        match tokio::time::timeout(budget, self.fs_get_round_trip(line, len)).await {
+            Err(_) => Err(RunnerError::Timeout),
+            Ok(outcome) => outcome,
+        }
+    }
+
+    async fn fs_get_round_trip(&self, line: String, asked: u64) -> Result<FsGetReply, RunnerError> {
+        let mut stream = tokio::net::UnixStream::connect(&self.path)
+            .await
+            .map_err(|_| RunnerError::Unavailable)?;
+        stream
+            .write_all(line.as_bytes())
+            .await
+            .map_err(|_| RunnerError::Unavailable)?;
+        stream
+            .write_all(b"\n")
+            .await
+            .map_err(|_| RunnerError::Unavailable)?;
+        let mut reader = tokio::io::BufReader::new(stream);
+        let mut header = Vec::new();
+        let n = (&mut reader)
+            .take((MAX_MEDIA_HEADER_BYTES + 1) as u64)
+            .read_until(b'\n', &mut header)
+            .await
+            .map_err(|_| RunnerError::Unavailable)?;
+        if n == 0 {
+            return Err(RunnerError::BadReply);
+        }
+        if header.last() != Some(&b'\n') {
+            return Err(if header.len() > MAX_MEDIA_HEADER_BYTES {
+                RunnerError::TooLarge
+            } else {
+                RunnerError::BadReply
+            });
+        }
+        let text = String::from_utf8(header).map_err(|_| RunnerError::BadReply)?;
+        let reply: RunnerReply =
+            serde_json::from_str(text.trim_end()).map_err(|_| RunnerError::BadReply)?;
+        let data = match reply {
+            RunnerReply::Err { code, message } => return Ok(FsGetReply::Err { code, message }),
+            RunnerReply::Ok { data } => data,
+        };
+        let head: super::wire::FsGetData =
+            serde_json::from_value(data).map_err(|_| RunnerError::BadReply)?;
+        if head.len > asked {
+            return Err(RunnerError::TooLarge);
+        }
+        let mut bytes = Vec::new();
+        (&mut reader)
+            .take(head.len)
+            .read_to_end(&mut bytes)
+            .await
+            .map_err(|_| RunnerError::Unavailable)?;
+        if bytes.len() as u64 != head.len {
+            return Err(RunnerError::BadReply);
+        }
+        Ok(FsGetReply::Chunk { head, bytes })
     }
 
     async fn media_round_trip(&self, line: String) -> Result<MediaReply, RunnerError> {
@@ -798,6 +895,30 @@ mod tests {
     /// Per-op budgets: with the default 5 s base, long ops must wait
     /// far longer than 5 s (their runner durations), input ops use the
     /// base, and an operator-raised base always wins over a floor.
+    #[test]
+    fn fs_ops_get_a_30_second_floor() {
+        let base = Duration::from_secs(5);
+        let get = RunnerRequest::FsGet {
+            id: "abcd1234".to_string(),
+            root: "cwd".to_string(),
+            path: "a.bin".to_string(),
+            offset: 0,
+            len: 1,
+        };
+        assert_eq!(op_budget(&get, base), Duration::from_secs(30));
+        let ls = RunnerRequest::FsLs {
+            id: "abcd1234".to_string(),
+            root: "up".to_string(),
+            path: String::new(),
+        };
+        assert_eq!(op_budget(&ls, base), Duration::from_secs(30));
+        // A longer configured base is never shortened.
+        assert_eq!(
+            op_budget(&get, Duration::from_secs(90)),
+            Duration::from_secs(90)
+        );
+    }
+
     #[test]
     fn op_budget_covers_runner_durations() {
         let base = Duration::from_secs(5);

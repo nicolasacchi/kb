@@ -7,6 +7,10 @@
 import { createElement } from "react";
 import { registerRailTab } from "./registry";
 import { ConversationRail } from "./ConversationRail";
+import { ChangesRail } from "./changes/ChangesRail";
+import { BoardRail } from "./board/BoardRail";
+import { useBoardBadge } from "./board/useBoardBadge";
+import { CommandsRail } from "../commands/palette/CommandsRail";
 
 registerRailTab({
   id: "conversation",
@@ -15,7 +19,14 @@ registerRailTab({
   node: createElement(ConversationRail),
 });
 
-import { CommandsRail } from "../commands/palette/CommandsRail";
+registerRailTab({
+  id: "changes",
+  label: "Changes",
+  badge: undefined,
+  node: createElement(ChangesRail),
+});
+
+registerRailTab({ id: "board", label: "Board", useBadge: useBoardBadge, node: createElement(BoardRail) });
 
 registerRailTab({
   id: "commands",

@@ -274,8 +274,9 @@ describe("SSE → TanStack invalidation bridge (invariant #23)", () => {
     },
   );
 
+  // CMDSETTINGS — the overlay event invalidates the catalogue query only.
   it("term.commands invalidates exactly [\"term\", \"commands\"]", () => {
-    emit("term.commands", { rev: 2 });
+    emit("term.commands", { rev: 3 });
     expect(keys()).toEqual([["term", "commands"]]);
   });
 

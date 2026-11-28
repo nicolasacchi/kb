@@ -254,6 +254,31 @@ pub enum RunnerRequest {
         /// The runner-minted upload token.
         upload: String,
     },
+    /// List one directory of a session's working area (FXLS); the runner
+    /// answers [`TermLsAnswer`].
+    FsLs {
+        /// Session id.
+        id: String,
+        /// `cwd` or `up`.
+        root: String,
+        /// Directory, relative to the root or absolute under it.
+        path: String,
+    },
+    /// Read one chunk of a file of a session's working area (FXLS). The
+    /// runner answers a header carrying [`FsGetData`] followed on the same
+    /// connection by exactly `len` raw bytes.
+    FsGet {
+        /// Session id.
+        id: String,
+        /// `cwd` or `up`.
+        root: String,
+        /// File, relative to the root or absolute under it.
+        path: String,
+        /// Start offset of the chunk.
+        offset: u64,
+        /// Bytes wanted (at most 8 MiB; clipped at end of file).
+        len: u64,
+    },
     /// Tell the tap that `viewer` just typed (T18), so an OSC 52
     /// clipboard write reaches only the device that typed.
     Typed {
@@ -326,6 +351,49 @@ pub struct FileData {
     /// Lowercase hex sha256 of the bytes.
     pub sha256: String,
     /// The stored file name.
+    pub name: String,
+}
+
+// One listed entry of a terminal directory listing (FXLS). Mirrors
+// `kb-term`'s `FsEntry`. (Plain comments: ts-rs would copy doc comments
+// into the generated TS file.)
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsEntry {
+    pub name: String,
+    #[cfg_attr(feature = "ts-export", ts(type = "\"file\" | \"dir\""))]
+    pub kind: String,
+    #[cfg_attr(feature = "ts-export", ts(type = "number"))]
+    pub bytes: u64,
+    #[cfg_attr(feature = "ts-export", ts(type = "number"))]
+    pub mtime_unix: i64,
+    pub hidden: bool,
+}
+
+// The answer of `GET /api/terms/{id}/ls`, exactly the runner's `fs_ls`
+// data (`kb-term`'s `FsLsData`).
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TermLsAnswer {
+    pub root: String,
+    pub dir: String,
+    pub entries: Vec<FsEntry>,
+    pub truncated: bool,
+    pub skipped: u32,
+}
+
+/// Header payload of a successful `fs_get` reply. Mirrors `kb-term`'s
+/// `FsGetData`; unknown fields are tolerated so a newer runner stays
+/// readable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsGetData {
+    /// The file's total size at open time.
+    pub size: u64,
+    /// Number of raw bytes that follow the header line.
+    pub len: u64,
+    /// Modification time, unix seconds.
+    pub mtime_unix: i64,
+    /// The file's own name (final path component).
     pub name: String,
 }
 
@@ -511,6 +579,14 @@ mod tests {
                 include_str!("../../../kb-term/tests/golden/req_upload_abort.json"),
             ),
             (
+                "req_fs_ls",
+                include_str!("../../../kb-term/tests/golden/req_fs_ls.json"),
+            ),
+            (
+                "req_fs_get",
+                include_str!("../../../kb-term/tests/golden/req_fs_get.json"),
+            ),
+            (
                 "req_typed",
                 include_str!("../../../kb-term/tests/golden/req_typed.json"),
             ),
@@ -582,6 +658,23 @@ mod tests {
         let golden = include_str!("../../../kb-term/tests/golden/file_data.json").trim_end();
         let data: FileData = serde_json::from_str(golden).expect("file_data golden");
         assert_eq!(serde_json::to_string(&data).unwrap(), golden);
+    }
+
+    #[test]
+    fn fs_ls_data_matches_the_runner_golden() {
+        let golden = include_str!("../../../kb-term/tests/golden/fs_ls_data.json").trim_end();
+        let data: TermLsAnswer = serde_json::from_str(golden).expect("fs_ls_data golden");
+        assert_eq!(serde_json::to_string(&data).unwrap(), golden);
+    }
+
+    #[test]
+    fn fs_get_data_matches_the_runner_golden() {
+        let golden = include_str!("../../../kb-term/tests/golden/fs_get_data.json").trim_end();
+        let data: FsGetData = serde_json::from_str(golden).expect("fs_get_data golden");
+        assert_eq!(serde_json::to_string(&data).unwrap(), golden);
+        // Additive-reader rule: a newer runner may add a field.
+        let more = golden.replacen('{', "{\"future\":1,", 1);
+        assert!(serde_json::from_str::<FsGetData>(&more).is_ok());
     }
 
     #[test]

@@ -245,6 +245,28 @@ async fn handle_connection<S: Supervisor + 'static>(runner: Arc<Runner<S>>, stre
                 }
                 continue;
             }
+            Ok(crate::wire::Request::FsGet {
+                id,
+                root,
+                path,
+                offset,
+                len,
+            }) => {
+                if respond_fs_get(
+                    &mut write_half,
+                    req_id,
+                    &runner,
+                    (id, root, path),
+                    offset,
+                    len,
+                )
+                .await
+                .is_err()
+                {
+                    return;
+                }
+                continue;
+            }
             Ok(crate::wire::Request::Upload { id, mime, len }) => {
                 // The body follows the request line on this connection. A
                 // refusal before the body is read (or a short body) leaves
@@ -460,6 +482,49 @@ async fn respond_media<S: Supervisor + 'static>(
             let err = crate::wire::Response::Err {
                 code: "internal".to_string(),
                 message: "media read failed".to_string(),
+            };
+            respond(w, id, err).await
+        }
+    }
+}
+
+/// Answer an `fs_get` request (FXLS): the usual envelope header carrying
+/// the [`FsGetData`](crate::wire::FsGetData), then exactly `len` raw file
+/// bytes (the `media` framing). A refusal is the ordinary `err` envelope
+/// with no bytes after it. The session and root are resolved, and the file
+/// opened and read, off the async workers.
+async fn respond_fs_get<S: Supervisor + 'static>(
+    w: &mut tokio::net::unix::OwnedWriteHalf,
+    id: Option<Value>,
+    runner: &Arc<Runner<S>>,
+    target: (String, String, String),
+    offset: u64,
+    len: u64,
+) -> std::io::Result<()> {
+    let (sid, root, path) = target;
+    let resolved = rpc::fs_root(&**runner, &sid, &root).await;
+    let read = match resolved {
+        Ok((dir, _)) => tokio::task::spawn_blocking(move || {
+            crate::runner::files::fs_get(&dir, &path, offset, len)
+        })
+        .await
+        .unwrap_or_else(|_| {
+            Err(crate::runner::RunnerError::Io(
+                "read task failed".to_string(),
+            ))
+        }),
+        Err(e) => Err(e),
+    };
+    match read {
+        Ok((head, bytes)) => {
+            let data = serde_json::to_value(&head).unwrap_or(Value::Null);
+            respond(w, id, crate::wire::Response::Ok { data }).await?;
+            w.write_all(&bytes).await
+        }
+        Err(e) => {
+            let err = crate::wire::Response::Err {
+                code: e.code().to_string(),
+                message: e.message(),
             };
             respond(w, id, err).await
         }

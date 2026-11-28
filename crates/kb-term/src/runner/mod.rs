@@ -19,6 +19,7 @@ pub mod anchor;
 pub mod config;
 pub mod discovery;
 pub mod enter;
+pub mod files;
 pub mod grid;
 pub mod ids;
 pub mod keys;
@@ -102,6 +103,12 @@ pub enum RunnerError {
     Io(String),
     /// Anything else the runner could not complete.
     Internal(String),
+    /// A file read or listing named something that is not a regular file
+    /// (or, for a listing, not a directory): a symlink, fifo, socket or
+    /// device (FXLS).
+    NotAFile(String),
+    /// A file read or listing named a place outside its root (FXLS).
+    OutsideRoot(String),
 }
 
 impl RunnerError {
@@ -133,6 +140,8 @@ impl RunnerError {
             RunnerError::BadImage(_) => "bad-image",
             RunnerError::Io(_) => "io",
             RunnerError::Internal(_) => "internal",
+            RunnerError::NotAFile(_) => "not-a-file",
+            RunnerError::OutsideRoot(_) => "outside-root",
         }
     }
 
@@ -163,6 +172,8 @@ impl RunnerError {
             | RunnerError::GridOwned(m)
             | RunnerError::BadImage(m)
             | RunnerError::Io(m)
+            | RunnerError::NotAFile(m)
+            | RunnerError::OutsideRoot(m)
             | RunnerError::Internal(m) => m.clone(),
         }
     }

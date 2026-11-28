@@ -26805,6 +26805,7 @@ async fn boot_with_terminal(fake: &FakeRunner) -> (tempfile::TempDir, std::net::
         refuse_token_callers: None,
         runner_timeout_secs: None,
         files: None,
+        max_terms: None,
     };
     std::fs::create_dir_all(&paths.config).unwrap();
     std::fs::write(paths.token_file(), FIXTURE_TOKEN).unwrap();
@@ -27930,6 +27931,7 @@ async fn hint_boot(fake: &FakeRunner) -> (tempfile::TempDir, std::net::SocketAdd
         refuse_token_callers: None,
         runner_timeout_secs: None,
         files: None,
+        max_terms: None,
     };
     std::fs::create_dir_all(&paths.config).unwrap();
     std::fs::write(paths.token_file(), FIXTURE_TOKEN).unwrap();

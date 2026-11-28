@@ -903,6 +903,7 @@ async fn boot_terminal(
             refuse_token_callers: None,
             runner_timeout_secs: None,
             files: None,
+            max_terms: None,
         },
     };
     let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
