@@ -55,7 +55,7 @@ use crate::state::KbHandles;
 use crate::terminal::binding::is_valid_term_id;
 use crate::terminal::gate::{gate, Problem};
 use crate::terminal::media::ERR_UNSUPPORTED_MEDIA;
-use crate::terminal::runner_client::{RunnerError, UnixRunner};
+use crate::terminal::runner_client::{FsGetReply, RunnerError, UnixRunner};
 use crate::terminal::wire::{
     FileData, RunnerReply, RunnerRequest, UploadAppendData, UploadBeginData, UploadData,
 };
@@ -277,11 +277,52 @@ struct Spool {
     file: tokio::fs::File,
 }
 
+/// A spool file older than this is a leftover of a crashed process (a live
+/// spool lasts one request), so the boot-time sweep may remove it.
+const SPOOL_STALE_SECS: u64 = 10 * 60;
+
+/// Remove `*.spool` files in `dir` last modified more than `older_than`
+/// ago; younger ones (a concurrent live request) are left alone. Returns
+/// how many were removed. Best effort: nothing here can fail a request.
+fn sweep_stale_spools(dir: &std::path::Path, older_than: std::time::Duration) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let now = std::time::SystemTime::now();
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("spool") {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .ok()
+            .filter(|m| m.is_file())
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| now.duration_since(t).ok())
+            .is_some_and(|age| age > older_than);
+        if stale && std::fs::remove_file(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
 async fn open_spool(state: &Arc<KbHandles>) -> Option<Spool> {
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
+    static SWEPT: AtomicBool = AtomicBool::new(false);
     let dir = state.paths.cache.join("term-upload-spool");
     tokio::fs::create_dir_all(&dir).await.ok()?;
+    // Once per process, at first use: drop spools a crashed run left behind.
+    if !SWEPT.swap(true, Ordering::Relaxed) {
+        let sweep_dir = dir.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            sweep_stale_spools(&sweep_dir, std::time::Duration::from_secs(SPOOL_STALE_SECS))
+        })
+        .await;
+    }
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -439,6 +480,7 @@ async fn keep_in_kb(
     id: &str,
     name: &str,
     index: bool,
+    scrub: bool,
     expected: u64,
 ) -> KbKeep {
     use tokio::io::AsyncWriteExt;
@@ -458,6 +500,15 @@ async fn keep_in_kb(
     let (id, name) = (id.to_string(), name.to_string());
     let now_unix = chrono::Utc::now().timestamp();
     let joined = tokio::task::spawn_blocking(move || {
+        // Session files may hold secrets: the keep door scrubs the text it
+        // inlines with the same secrets-only pass the session surfaces use.
+        let scrub_fn = |text: &str| {
+            kb_core::session_scrub::scrub_transcript(
+                text,
+                &kb_core::session_scrub::ScrubOptions::secrets_only(),
+            )
+            .0
+        };
         // The guard moves in so the spool is removed whatever happens.
         let guard = guard;
         let bytes = std::fs::read(&guard.0)
@@ -474,7 +525,7 @@ async fn keep_in_kb(
             bytes: &bytes,
             tags: &[],
             index_content: index,
-            scrub: None,
+            scrub: scrub.then_some(&scrub_fn as &dyn Fn(&str) -> String),
             now_unix,
             quota_bytes: kb_core::filestore::FILES_QUOTA_BYTES,
         })
@@ -594,7 +645,7 @@ pub async fn terms_files(
         }
     };
 
-    let kb = keep_in_kb(target, spool, &id, &name, index, file.bytes).await;
+    let kb = keep_in_kb(target, spool, &id, &name, index, false, file.bytes).await;
     let mime = (file.kind == "image").then(|| file.mime.clone());
     let answer = FileUploadAnswer {
         path: file.path,
@@ -606,6 +657,225 @@ pub async fn terms_files(
         kb,
     };
     let mut resp = no_store(axum::Json(answer).into_response());
+    resp.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        header::HeaderValue::from_static("nosniff"),
+    );
+    resp
+}
+
+// ---------------------------------------------------------------- keep (FXSAVE)
+
+/// `urn:kb:errors:terminal-files-not-configured` — keeping is the whole
+/// point of the call, so an unset or unloaded `[terminal.files] kb` is a
+/// typed refusal here (the upload door degrades to `skipped` instead).
+pub(crate) const ERR_TERMINAL_FILES_NOT_CONFIGURED: &str =
+    "urn:kb:errors:terminal-files-not-configured";
+/// `urn:kb:errors:terminal-file-changed` — the file's size or mtime moved
+/// between chunk reads, so no consistent copy exists.
+pub(crate) const ERR_TERMINAL_FILE_CHANGED: &str = "urn:kb:errors:terminal-file-changed";
+/// `urn:kb:errors:terminal-keep-failed` — the kb-side store failed.
+pub(crate) const ERR_TERMINAL_KEEP_FAILED: &str = "urn:kb:errors:terminal-keep-failed";
+
+/// The extractor-level limit of the keep route (a tiny JSON body).
+pub(crate) const KEEP_BODY_LIMIT: usize = 4096;
+
+/// `index`: a JSON boolean or the number 0 or 1.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum IndexFlag {
+    Bool(bool),
+    Num(u8),
+}
+
+/// The keep request. Unknown fields are refused.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeepRequest {
+    root: Option<String>,
+    path: String,
+    index: Option<IndexFlag>,
+}
+
+// The keep answer: what was kept plus the kb outcome (`kb.id` is the
+// artifact id). Mirrors `FileUploadAnswer` minus the runner path, kind and
+// mime.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, Serialize)]
+pub struct KeepAnswer {
+    pub name: String,
+    pub bytes: u64,
+    pub sha256: String,
+    pub kb: KbKeep,
+}
+
+fn keep_problem(urn: &'static str, status: StatusCode, detail: &str) -> Response<Body> {
+    no_store(Problem::response(
+        urn,
+        status,
+        status.canonical_reason().unwrap_or("Error"),
+        detail.to_string(),
+    ))
+}
+
+/// `POST /api/terms/{id}/files/keep` — keep a file of the session's working
+/// area (`cwd` or `up/`) in the files corpus without a browser round trip.
+///
+/// The bytes come from the runner through the same `fs_get` chunk reads the
+/// download door uses and land in the same private spool and `keep_in_kb`
+/// store path as an upload. Content is never indexed unless `index` is on
+/// (session files may be unscrubbed); with it on, the inlined text goes
+/// through the secrets scrub.
+pub async fn terms_files_keep(
+    State(state): State<Arc<KbHandles>>,
+    Extension(identity): Extension<Identity>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    body: Result<axum::Json<KeepRequest>, axum::extract::rejection::JsonRejection>,
+) -> Response<Body> {
+    use sha2::{Digest, Sha256};
+    use tokio::io::AsyncWriteExt;
+    if let Err(e) = gate(&state, &headers, &identity).await {
+        return e;
+    }
+    if !is_valid_term_id(&id) {
+        return bad_request("invalid terminal id");
+    }
+    let req = match body {
+        Ok(axum::Json(r)) => r,
+        Err(rej) if rej.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+            return payload_too_large("keep request over 4 KiB");
+        }
+        Err(_) => return bad_request("invalid keep request"),
+    };
+    let root = match req.root.as_deref() {
+        None | Some("cwd") => "cwd",
+        Some("up") => "up",
+        Some(_) => return bad_request("root must be `cwd` or `up`"),
+    };
+    if req.path.is_empty() {
+        return bad_request("path is required");
+    }
+    if req.path.len() > crate::terminal::files_read::PATH_MAX_BYTES {
+        return bad_request("path is longer than 4096 bytes");
+    }
+    if req.path.contains('\0') {
+        return bad_request("path contains a NUL byte");
+    }
+    let index = match req.index {
+        None | Some(IndexFlag::Bool(false)) | Some(IndexFlag::Num(0)) => false,
+        Some(IndexFlag::Bool(true)) | Some(IndexFlag::Num(1)) => true,
+        Some(IndexFlag::Num(_)) => return bad_request("index must be 0, 1 or a boolean"),
+    };
+    let Some(target) = files_target(&state).await else {
+        return keep_problem(
+            ERR_TERMINAL_FILES_NOT_CONFIGURED,
+            StatusCode::CONFLICT,
+            "no files corpus is configured ([terminal.files] kb)",
+        );
+    };
+
+    let runner = runner_for(&state).await;
+    let chunk_cap = CHUNK_MAX_BYTES as u64;
+    let (head, first) = match runner.fs_get(&id, root, &req.path, 0, chunk_cap).await {
+        Err(e) => return crate::terminal::files_read::failure(e),
+        Ok(FsGetReply::Err { code, message }) => return runner_err(&code, &message),
+        Ok(FsGetReply::Chunk { head, bytes }) => (head, bytes),
+    };
+    if head.size > FILE_MAX_BYTES {
+        return payload_too_large("file is over the 32 MiB keep cap");
+    }
+    if head.size == 0 {
+        return bad_request("file is empty");
+    }
+    if first.len() as u64 != head.size.min(chunk_cap) {
+        return runner_bad_reply();
+    }
+    let Some(mut spool) = open_spool(&state).await else {
+        return keep_problem(
+            ERR_TERMINAL_KEEP_FAILED,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "the file could not be staged",
+        );
+    };
+    let mut hasher = Sha256::new();
+    let mut offset: u64 = 0;
+    let mut chunk = first;
+    loop {
+        hasher.update(&chunk);
+        if spool.file.write_all(&chunk).await.is_err() {
+            return keep_problem(
+                ERR_TERMINAL_KEEP_FAILED,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "the file could not be staged",
+            );
+        }
+        offset += chunk.len() as u64;
+        if offset >= head.size {
+            break;
+        }
+        let want = (head.size - offset).min(chunk_cap);
+        chunk = match runner.fs_get(&id, root, &req.path, offset, want).await {
+            Err(e) => return crate::terminal::files_read::failure(e),
+            Ok(FsGetReply::Err { code, message }) => return runner_err(&code, &message),
+            Ok(FsGetReply::Chunk { head: h, bytes }) => {
+                if h.size != head.size || h.mtime_unix != head.mtime_unix {
+                    return keep_problem(
+                        ERR_TERMINAL_FILE_CHANGED,
+                        StatusCode::CONFLICT,
+                        "the file changed while it was being read",
+                    );
+                }
+                if bytes.len() as u64 != want {
+                    return runner_bad_reply();
+                }
+                bytes
+            }
+        };
+    }
+    let sha256 = hex::encode(hasher.finalize());
+    let name = if head.name.is_empty() {
+        crate::terminal::files_read::download_name(&req.path)
+    } else {
+        head.name.clone()
+    };
+    let kb = keep_in_kb(
+        Some(target),
+        Some(spool),
+        &id,
+        &name,
+        index,
+        true,
+        head.size,
+    )
+    .await;
+    match kb.status.as_str() {
+        "stored" => {}
+        _ if kb.reason.as_deref() == Some("quota") => return quota_full(),
+        _ if kb.reason.as_deref() == Some("not-configured") => {
+            return keep_problem(
+                ERR_TERMINAL_FILES_NOT_CONFIGURED,
+                StatusCode::CONFLICT,
+                "no files corpus is configured ([terminal.files] kb)",
+            );
+        }
+        _ => {
+            return keep_problem(
+                ERR_TERMINAL_KEEP_FAILED,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "the file could not be stored in the files corpus",
+            );
+        }
+    }
+    let mut resp = no_store(
+        axum::Json(KeepAnswer {
+            name,
+            bytes: head.size,
+            sha256,
+            kb,
+        })
+        .into_response(),
+    );
     resp.headers_mut().insert(
         header::X_CONTENT_TYPE_OPTIONS,
         header::HeaderValue::from_static("nosniff"),
@@ -688,6 +958,55 @@ mod tests {
                 "application/octet-stream"
             );
         }
+    }
+
+    #[test]
+    fn the_sweep_removes_only_stale_spool_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("1-1-0.spool");
+        let young = dir.path().join("2-2-1.spool");
+        let other = dir.path().join("keep.txt");
+        for p in [&old, &young, &other] {
+            std::fs::write(p, b"x").unwrap();
+        }
+        let long_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        std::fs::File::options()
+            .write(true)
+            .open(&old)
+            .unwrap()
+            .set_modified(long_ago)
+            .unwrap();
+        // An old non-spool file is also untouched.
+        std::fs::File::options()
+            .write(true)
+            .open(&other)
+            .unwrap()
+            .set_modified(long_ago)
+            .unwrap();
+        let n = sweep_stale_spools(dir.path(), std::time::Duration::from_secs(SPOOL_STALE_SECS));
+        assert_eq!(n, 1);
+        assert!(!old.exists(), "the stale spool is removed");
+        assert!(young.exists(), "a live (young) spool is left alone");
+        assert!(other.exists(), "only *.spool files are swept");
+        assert_eq!(
+            sweep_stale_spools(
+                &dir.path().join("missing"),
+                std::time::Duration::from_secs(1)
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn keep_request_shape() {
+        let ok: KeepRequest = serde_json::from_str(r#"{"path":"a.txt","index":1}"#).unwrap();
+        assert!(matches!(ok.index, Some(IndexFlag::Num(1))));
+        let ok: KeepRequest =
+            serde_json::from_str(r#"{"path":"a","root":"up","index":true}"#).unwrap();
+        assert!(matches!(ok.index, Some(IndexFlag::Bool(true))));
+        assert!(serde_json::from_str::<KeepRequest>(r#"{"path":"a","x":1}"#).is_err());
+        assert!(serde_json::from_str::<KeepRequest>(r#"{"root":"cwd"}"#).is_err());
+        assert_eq!(KEEP_BODY_LIMIT, 4096);
     }
 
     #[test]
