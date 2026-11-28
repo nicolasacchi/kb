@@ -132,7 +132,13 @@ test.describe("CONVNEED needs-you banner", () => {
     expect(bb.y + bb.height).toBeLessThanOrEqual(pb.y + 1);
     // The banner is its own row, not a column: the pane and rail still share the same width.
     // (The rail's own blocked badge may widen the rail track, so pane + rail is the invariant.)
-    const dimsAfter = await dims();
+    const wide = await page.evaluate(() =>
+      [...document.querySelectorAll("body *")]
+        .filter((e) => e.getBoundingClientRect().right > window.innerWidth + 0.5)
+        .slice(0, 6)
+        .map((e) => `${e.tagName.toLowerCase()}.${String(e.className).slice(0, 40)}`),
+    );
+    const dimsAfter = (await dims()) + " overflowing=" + JSON.stringify(wide);
     expect(Math.abs((await total()) - before), `before ${dimsBefore} after ${dimsAfter}`).toBeLessThanOrEqual(1);
 
     live.blocked = false;

@@ -1,5 +1,7 @@
 /* CONVNEED — the needs-you banner. Tokens only. */
 .kb-needs {
+  box-sizing: border-box;
+  max-width: 100%;
   display: flex;
   align-items: center;
   gap: var(--pad-3);

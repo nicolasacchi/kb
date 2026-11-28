@@ -173,10 +173,13 @@
   min-height: 0;
 }
 
-/* CONVNEED: desktop the slot is plain flow (display: contents keeps the old box
- * tree); phone it is a fixed top strip above the modal sheet, never clipped. */
+/* CONVNEED: desktop the slot is a plain block whose width never feeds the shell's
+ * intrinsic size (contain: inline-size); phone it is a fixed top strip above the modal sheet, never clipped. */
 .kb-termshell__needs {
-  display: contents;
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  contain: inline-size;
 }
 .kb-termshell[data-kb-term-layout="phone"] .kb-termshell__needs {
   display: block;
