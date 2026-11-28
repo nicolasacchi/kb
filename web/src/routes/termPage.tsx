@@ -14,6 +14,7 @@ import { TerminalControls, cwdBase } from "../components/TermControls";
 import { TermShell } from "../terminal/TermShell";
 import { useTerms } from "../terminal/useTerms";
 import { buildHubUrl } from "../terminal/hub/termHub";
+import { HubFrame } from "../terminal/hub/HubFrame";
 
 const TerminalPanel = lazy(() => import("../terminal/TerminalPanel.lazy"));
 
@@ -119,16 +120,18 @@ export default function TermPageRoute(): ReactElement {
   };
 
   return (
-    <TermShell key={termId} termId={termId} harness={harness} sid={sessionId} header={narrow ? undefined : controls}>
-      <Suspense fallback={<StateCard kind="loading" title="Loading terminal" reason={harness} />}>
-        <TerminalPanel
-          termId={termId}
-          sid={sessionId ?? ""}
-          harness={harness}
-          onClose={close}
-          headerExtra={narrow ? controls : undefined}
-        />
-      </Suspense>
-    </TermShell>
+    <HubFrame termId={termId}>
+      <TermShell key={termId} termId={termId} harness={harness} sid={sessionId} header={narrow ? undefined : controls}>
+        <Suspense fallback={<StateCard kind="loading" title="Loading terminal" reason={harness} />}>
+          <TerminalPanel
+            termId={termId}
+            sid={sessionId ?? ""}
+            harness={harness}
+            onClose={close}
+            headerExtra={narrow ? controls : undefined}
+          />
+        </Suspense>
+      </TermShell>
+    </HubFrame>
   );
 }

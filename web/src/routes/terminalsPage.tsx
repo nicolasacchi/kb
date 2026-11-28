@@ -21,6 +21,7 @@ import { useTerms } from "../terminal/useTerms";
 import { LaunchDialog } from "../terminal/hub/LaunchDialog";
 import { EndTerminalButton } from "../components/TermControls";
 import { loadPrefs } from "../terminal/hub/termPrefs";
+import { AttentionMarks } from "../terminal/hub/AttentionMarks";
 import {
   buildHubUrl,
   filterHub,
@@ -59,6 +60,7 @@ function HubItem({ row, now, onEnded }: { row: HubRow; now: number; onEnded: () 
         </span>
         <span className="kb-hub__main">
           <span className="kb-hub__name">{row.title}</span>
+          <AttentionMarks termId={term.id} />
           <span className="kb-hub__meta">
             {row.project} · {term.harness}
             {live?.last_line ? ` · ${live.last_line}` : ""}
