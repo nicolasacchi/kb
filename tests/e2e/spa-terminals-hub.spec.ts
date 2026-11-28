@@ -267,6 +267,13 @@ const SW_A = "t-sw-a";
 const SW_C = "t-sw-c";
 const SW_D = "t-sw-d";
 
+// The column opens by default only at >= 1600px; the 1280px cases ask for it.
+async function columnOpen(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    if (window.localStorage.getItem("kb-term-switch-open") === null) window.localStorage.setItem("kb-term-switch-open", "1");
+  });
+}
+
 async function switchTerms(page: Page): Promise<void> {
   await page.route("**/api/terms", (route) => {
     if (route.request().method() !== "GET") return route.fallback();
@@ -288,6 +295,7 @@ async function switchTerms(page: Page): Promise<void> {
 test.describe("HUBSWITCH switcher column", () => {
   test("groups This project / Everywhere with the blocked row first; ] steps to the next live terminal", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
+    await columnOpen(page);
     await installFakeTerminal(page, { total: 300, seedLines: 100 });
     await switchTerms(page);
     await page.goto(`${BASE}/terminals/${TERM_ID}`);
@@ -307,8 +315,22 @@ test.describe("HUBSWITCH switcher column", () => {
     await expect(page).toHaveURL(new RegExp(`/terminals/${SW_C}$`));
   });
 
+  test("below 1600px the column starts collapsed, and the keys still work", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await installFakeTerminal(page, { total: 300, seedLines: 100 });
+    await switchTerms(page);
+    await page.goto(`${BASE}/terminals/${TERM_ID}`);
+    await expect(page.locator('[data-testid="hub-switch-toggle"]')).toHaveAttribute("aria-expanded", "false", { timeout: 20_000 });
+    await expect(page.locator('[data-testid="hub-switcher"]')).toHaveCount(0);
+    await expect(page.locator("[data-kb-term]")).toHaveAttribute("data-kb-term-phase", "live", { timeout: 30_000 });
+    await page.locator('[data-testid="hub-switch-toggle"]').focus();
+    await page.keyboard.press("n");
+    await expect(page).toHaveURL(new RegExp(`/terminals/${SW_A}$`));
+  });
+
   test("n from outside the pane lands on the blocked terminal", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
+    await columnOpen(page);
     await installFakeTerminal(page, { total: 300, seedLines: 100 });
     await switchTerms(page);
     await page.goto(`${BASE}/terminals/${TERM_ID}`);
@@ -320,6 +342,7 @@ test.describe("HUBSWITCH switcher column", () => {
 
   test("typing ] into the terminal viewport does not change the URL and reaches the terminal", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
+    await columnOpen(page);
     const stats = await installFakeTerminal(page, { total: 300, seedLines: 100 });
     await switchTerms(page);
     await page.goto(`${BASE}/terminals/${TERM_ID}`);
@@ -332,6 +355,7 @@ test.describe("HUBSWITCH switcher column", () => {
 
   test("the toggle collapses the column and the choice survives a reload", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
+    await columnOpen(page);
     await installFakeTerminal(page, { total: 300, seedLines: 100 });
     await switchTerms(page);
     await page.goto(`${BASE}/terminals/${TERM_ID}`);
@@ -348,7 +372,7 @@ test.describe("HUBSWITCH switcher column", () => {
     await installFakeTerminal(page, { total: 300, seedLines: 100 });
     await switchTerms(page);
     await page.goto(`${BASE}/terminals/${TERM_ID}`);
-    await expect(page.locator("[data-kb-term]")).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator("[data-kb-term-viewport]")).toBeVisible({ timeout: 30_000 });
     await expect(page.locator('[data-testid="hub-switcher"]')).toHaveCount(0);
     await expect(page.locator('[data-testid="hub-switch-toggle"]')).toHaveCount(0);
   });

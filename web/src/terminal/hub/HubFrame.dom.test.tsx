@@ -10,7 +10,7 @@ vi.mock("../useTerms", () => ({ useTerms: () => ({ terms: [], isLoading: false, 
 vi.mock("../../hooks/useLiveSessions", () => ({ useLiveSessions: () => ({ rows: [], loading: false }) }));
 vi.mock("../../hooks/useNowTick", () => ({ useNowTick: () => 1_000_000_000_000 }));
 
-import { HubFrame } from "./HubFrame";
+import { HubFrame, SWITCH_AUTO_OPEN_MIN_WIDTH } from "./HubFrame";
 import { SWITCH_OPEN_KEY } from "./switchModel";
 
 function stubMedia(matches: boolean): void {
@@ -31,18 +31,25 @@ const frame = (id: string, child: React.ReactNode) => (
   </MemoryRouter>
 );
 
+const widthBefore = window.innerWidth;
+const setWidth = (w: number): void => {
+  Object.defineProperty(window, "innerWidth", { configurable: true, writable: true, value: w });
+};
+
 beforeEach(() => {
   window.localStorage.clear();
   stubMedia(false);
+  setWidth(SWITCH_AUTO_OPEN_MIN_WIDTH);
 });
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  setWidth(widthBefore);
 });
 
 describe("HubFrame", () => {
-  it("desktop: the column is shown, open by default", () => {
+  it("desktop: the column is open by default on a wide window", () => {
     render(frame("t1", <Child tag="x" />));
     expect(screen.getByTestId("hub-switcher")).toBeTruthy();
     const t = screen.getByTestId("hub-switch-toggle");
@@ -64,11 +71,27 @@ describe("HubFrame", () => {
     expect(screen.getByTestId("hub-switcher")).toBeTruthy();
   });
 
-  it("a collapsed column mounts no key listener", () => {
+  it("below the auto-open width the column starts collapsed; a stored 1 opens it, a stored 0 closes it", () => {
+    setWidth(SWITCH_AUTO_OPEN_MIN_WIDTH - 1);
+    const { unmount } = render(frame("t1", <Child tag="x" />));
+    expect(screen.queryByTestId("hub-switcher")).toBeNull();
+    expect(screen.getByTestId("hub-switch-toggle").getAttribute("aria-expanded")).toBe("false");
+    unmount();
+    window.localStorage.setItem(SWITCH_OPEN_KEY, "1");
+    const second = render(frame("t1", <Child tag="x" />));
+    expect(screen.getByTestId("hub-switcher")).toBeTruthy();
+    second.unmount();
+    setWidth(SWITCH_AUTO_OPEN_MIN_WIDTH);
+    window.localStorage.setItem(SWITCH_OPEN_KEY, "0");
+    render(frame("t1", <Child tag="x" />));
+    expect(screen.queryByTestId("hub-switcher")).toBeNull();
+  });
+
+  it("a collapsed column keeps the key listener (the keys do not depend on the column)", () => {
     window.localStorage.setItem(SWITCH_OPEN_KEY, "0");
     const add = vi.spyOn(document, "addEventListener");
     render(frame("t1", <Child tag="x" />));
-    expect(add.mock.calls.filter((c) => c[0] === "keydown")).toEqual([]);
+    expect(add.mock.calls.filter((c) => c[0] === "keydown").length).toBe(1);
   });
 
   it("phone: children only, no column, no toggle, no key listener", () => {

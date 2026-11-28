@@ -1,19 +1,17 @@
 // HUBSWITCH — the hub's switcher column on /terminals/:id (desktop). The same
 // client join the hub list runs (joinHub -> orderHub), grouped "This project" /
 // "Everywhere" with a collapsed Ended group, needs-you first, with TERMNOTIFY's
-// attention marks. Fetches nothing of its own: only `useTerms` and
-// `useLiveSessions`. Mounts the `terminals` key scope (useSwitchKeys).
+// attention marks. Fetches nothing of its own (useSwitchRows reads the two
+// shared hooks). The `terminals` key scope is mounted by HubFrame, so the keys
+// work whether the column is open or collapsed.
 
 import { useMemo, useRef, useState, type KeyboardEvent, type ReactElement } from "react";
 import { Link } from "react-router-dom";
-import { useLiveSessions } from "../../hooks/useLiveSessions";
 import { useNowTick } from "../../hooks/useNowTick";
 import { relativeAge } from "../../lib/time";
-import { useTerms } from "../useTerms";
-import { buildHubUrl, joinHub, orderHub, type HubRow, type HubTier } from "./termHub";
-import { loadPrefs } from "./termPrefs";
+import { buildHubUrl, type HubRow, type HubTier } from "./termHub";
+import { useSwitchRows } from "./useSwitchRows";
 import { groupSwitcher } from "./switchModel";
-import { useSwitchKeys } from "./useSwitchKeys";
 import { AttentionMarks } from "./AttentionMarks";
 import "../../styles/hubSwitcher.css";
 
@@ -73,18 +71,14 @@ function SwitchRow({
 }
 
 export function HubSwitcher({ currentId }: { currentId: string | null }): ReactElement {
-  const { terms } = useTerms();
-  const live = useLiveSessions();
   const now = useNowTick();
-  const prefs = useMemo(() => loadPrefs(), []);
-  const all = useMemo(() => orderHub(joinHub(terms, live.rows, prefs)).rows, [terms, live.rows, prefs]);
+  const all = useSwitchRows();
   const currentProject = useMemo(
     () => (currentId === null ? null : (all.find((r) => r.term.id === currentId)?.project ?? null)),
     [all, currentId],
   );
   const groups = useMemo(() => groupSwitcher(all, currentProject), [all, currentProject]);
   const needsCount = useMemo(() => all.filter((r) => r.tier === "needs").length, [all]);
-  useSwitchKeys(all, currentId);
 
   const listRef = useRef<HTMLElement | null>(null);
   const [focusId, setFocusId] = useState<string | null>(null);
