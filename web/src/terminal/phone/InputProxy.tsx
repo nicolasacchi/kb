@@ -15,6 +15,9 @@ import {
   type ProxyVariant,
 } from "./inputProxy";
 import { tryWriteClipboardText } from "../clipboard";
+import type { ConfirmFn } from "./driveApi";
+import type { DirectLine } from "./directLine";
+import type { StickyMods } from "./stickyMods";
 import "./inputProxy.css";
 
 /** The ring the strip shows: the last 20 events and the bytes sent, in memory only. */
@@ -58,7 +61,7 @@ export interface ProxyTerm {
   readonly rows: number;
   readonly element?: HTMLElement | undefined;
   readonly buffer: { readonly active: { readonly cursorX: number; readonly cursorY: number } };
-  readonly modes?: { readonly bracketedPasteMode?: boolean };
+  readonly modes?: { readonly bracketedPasteMode?: boolean; readonly applicationCursorKeysMode?: boolean };
   onWriteParsed?(cb: () => void): { dispose(): void };
   /** PHIN1: the terminal's own selection (Ctrl/Cmd+C copies it instead of sending ^C); absent in a fake. */
   hasSelection?(): boolean;
@@ -75,6 +78,13 @@ export interface InputProxyProps {
   log?: DebugLog | undefined;
   /** PHIN1: the element gained (true) or lost (false) focus; false again when it unmounts. */
   onFocusChange?: ((focused: boolean) => void) | undefined;
+  /** PHIN2: the sticky Ctrl latch shared with the key bar; released when the element blurs. */
+  mods?: StickyMods | undefined;
+  /** PHIN2: the typed-line mirror shared with the key bar (else the core keeps its own). */
+  line?: DirectLine | undefined;
+  /** PHIN2: the harness and confirm host of the typed `/bg` guard (used when no shared `line` is given). */
+  harness?: string | undefined;
+  confirm?: ConfirmFn | null | undefined;
 }
 
 export function InputProxy(props: InputProxyProps) {
@@ -88,6 +98,13 @@ export function InputProxy(props: InputProxyProps) {
   logRef.current = props.log;
   const focusRef = useRef(props.onFocusChange);
   focusRef.current = props.onFocusChange;
+  const modsRef = useRef(props.mods);
+  modsRef.current = props.mods;
+  const confirmRef = useRef(props.confirm);
+  confirmRef.current = props.confirm;
+  const lineProp = props.line;
+  const harnessProp = props.harness;
+  const hasConfirm = props.confirm != null;
 
   // The element at the cursor cell, refreshed on every parsed write.
   useEffect(() => {
@@ -140,6 +157,10 @@ export function InputProxy(props: InputProxyProps) {
         const text = termRef.current.getSelection?.() ?? "";
         if (text !== "") void tryWriteClipboardText(text);
       },
+      mods: { consume: () => modsRef.current?.consume() === true },
+      ...(lineProp ? { line: lineProp } : {}),
+      ...(harnessProp !== undefined ? { harness: harnessProp } : {}),
+      confirm: hasConfirm ? (o) => (confirmRef.current ? confirmRef.current(o) : Promise.resolve(false)) : null,
     });
     put(core.initialValue);
     const onBefore = (e: Event): void => {
@@ -175,6 +196,7 @@ export function InputProxy(props: InputProxyProps) {
     };
     const onBlur = (): void => {
       core.reset();
+      modsRef.current?.release();
       focusRef.current?.(false);
     };
     const onFocus = (): void => focusRef.current?.(true);
@@ -200,7 +222,7 @@ export function InputProxy(props: InputProxyProps) {
       handleRef.current = null;
       focusRef.current?.(false);
     };
-  }, [variant, handleRef]);
+  }, [variant, handleRef, lineProp, harnessProp, hasConfirm]);
 
   const { tag, attrs } = attrsFor(variant.attrs);
   return createElement(tag as string, {

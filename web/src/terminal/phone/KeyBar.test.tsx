@@ -11,6 +11,9 @@ import { CAPTION } from "./planSend";
 import { KeyBar, moreToRight } from "./KeyBar";
 import { byId, maybeById, mkDrive, mount, press, rigFetch, settle, type FetchRig, type Mounted } from "./driveTestkit";
 import type { Drive } from "./driveApi";
+import { DirectInputContext, type DirectInput } from "./directInput";
+import { createDirectLine } from "./directLine";
+import { createStickyMods } from "./stickyMods";
 
 let m: Mounted | null = null;
 let rig: FetchRig;
@@ -343,5 +346,198 @@ describe("FUTERMPOLISH W6d: the key row that scrolls says so", () => {
       if (cw) Object.defineProperty(HTMLElement.prototype, "clientWidth", cw);
       else delete (HTMLElement.prototype as unknown as Record<string, unknown>).clientWidth;
     }
+  });
+});
+
+// PHIN2 - the key bar over the proxy's WS path, with the sticky Ctrl.
+describe("KeyBar over the direct-typing WS path (PHIN2)", () => {
+  function directBar(over: Partial<DirectInput> = {}, drive: Drive = mkDrive()) {
+    let clock = 0;
+    const send = vi.fn((_d: string) => true);
+    const line = createDirectLine();
+    line.configure(drive.harness, drive.confirm);
+    const direct: DirectInput = {
+      send,
+      mods: createStickyMods(() => clock),
+      appCursor: () => false,
+      harness: drive.harness,
+      confirm: drive.confirm,
+      line,
+      ...over,
+    };
+    const onTyped = vi.fn();
+    m = mount(
+      <DirectInputContext.Provider value={direct}>
+        <KeyBar drive={drive} onCaption={vi.fn()} onTyped={onTyped} />
+      </DirectInputContext.Provider>,
+    );
+    return { direct, send, onTyped, tick: (ms: number) => (clock += ms) };
+  }
+  const ctrl = (): HTMLElement => byId(m!.host, "kb-drive-key-ctrl");
+  const tap = (name: string) => press(byId(m!.host, `kb-drive-key-${name}`));
+
+  it("a key is its raw bytes on the WS, with no REST call", async () => {
+    const { send, onTyped } = directBar();
+    for (const name of ["Esc", "Tab", "S-Tab", "Up", "BSpace", "C-u"]) tap(name);
+    // `/` is a hold key: a tap is pointerdown then pointerup.
+    press(byId(m!.host, "kb-drive-key-Slash"), "pointerdown");
+    press(byId(m!.host, "kb-drive-key-Slash"), "pointerup");
+    await settle();
+    expect(send.mock.calls.map((c) => c[0])).toEqual(["\x1b", "\t", "\x1b[Z", "\x1b[A", "\x7f", "\x15", "/"]);
+    expect(rig.calls).toHaveLength(0);
+    expect(onTyped).toHaveBeenCalledTimes(7);
+  });
+
+  it("the arrows follow application cursor-keys mode", () => {
+    const { send } = directBar({ appCursor: () => true });
+    tap("Up");
+    tap("Left");
+    expect(send.mock.calls.map((c) => c[0])).toEqual(["\x1bOA", "\x1bOD"]);
+  });
+
+  it("without the context the bar is the REST bar (no Ctrl button)", async () => {
+    bar(mkDrive());
+    expect(maybeById(m!.host, "kb-drive-key-ctrl")).toBeNull();
+    tap("Esc");
+    await settle();
+    expect(rig.urls()).toEqual(["/api/terms/abcd1234/keys"]);
+  });
+
+  it("Ctrl is first in the bar and aria-pressed goes false, true (armed), true (locked), false", () => {
+    const { tick } = directBar();
+    expect(byId(m!.host, "kb-drive-keys").firstElementChild).toBe(ctrl());
+    expect(ctrl().getAttribute("aria-pressed")).toBe("false");
+    expect(ctrl().textContent).toBe("Ctrl");
+    press(ctrl());
+    expect(ctrl().getAttribute("aria-pressed")).toBe("true");
+    expect(ctrl().dataset.mod).toBe("armed");
+    tick(100);
+    press(ctrl());
+    expect(ctrl().getAttribute("aria-pressed")).toBe("true");
+    expect(ctrl().dataset.mod).toBe("locked");
+    expect(ctrl().textContent).toBe("Ctrl lock");
+    press(ctrl());
+    expect(ctrl().getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("an armed Ctrl takes the next bar key once: Esc and y go plain, Up becomes Ctrl+Up", () => {
+    const { send } = directBar();
+    press(ctrl());
+    tap("Esc");
+    expect(ctrl().getAttribute("aria-pressed")).toBe("false");
+    press(ctrl());
+    tap("Up");
+    press(ctrl());
+    tap("Right");
+    tap("Right");
+    expect(send.mock.calls.map((c) => c[0])).toEqual(["\x1b", "\x1b[1;5A", "\x1b[1;5C", "\x1b[C"]);
+  });
+
+  it("a key Ctrl does not change consumes the latch and goes plain", () => {
+    const { send } = directBar();
+    press(ctrl());
+    tap("Tab");
+    tap("Tab");
+    expect(send.mock.calls.map((c) => c[0])).toEqual(["\t", "\t"]);
+    expect(ctrl().getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("a locked Ctrl keeps applying until tapped off", () => {
+    const { send, tick } = directBar();
+    press(ctrl());
+    tick(100);
+    press(ctrl());
+    tap("Up");
+    tap("Down");
+    expect(send.mock.calls.map((c) => c[0])).toEqual(["\x1b[1;5A", "\x1b[1;5B"]);
+    expect(ctrl().dataset.mod).toBe("locked");
+  });
+
+  it("a refused WS send toasts and sends no REST fallback", async () => {
+    const err = vi.spyOn(toast, "err");
+    directBar({ send: vi.fn(() => false) });
+    tap("Esc");
+    await settle();
+    expect(err).toHaveBeenCalled();
+    expect(rig.calls).toHaveLength(0);
+  });
+
+  it("the Ctrl-C 600 ms hold still works and sends the byte over the WS", async () => {
+    vi.useFakeTimers();
+    const { send } = directBar();
+    const c = (): HTMLElement => byId(m!.host, "kb-drive-key-C-c");
+    press(c(), "pointerdown");
+    press(c(), "pointerup");
+    await act(async () => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(send).not.toHaveBeenCalled();
+    press(c(), "pointerdown");
+    await act(async () => {
+      vi.advanceTimersByTime(600);
+    });
+    expect(send.mock.calls.map((x) => x[0])).toEqual(["\x03"]);
+  });
+
+  it("the Left guard still confirms on claude, and declining sends nothing", async () => {
+    const confirm = vi.fn(async () => false);
+    const { send } = directBar({}, mkDrive({ harness: "claude", confirm }));
+    tap("Left");
+    await settle();
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(send).not.toHaveBeenCalled();
+    confirm.mockResolvedValueOnce(true);
+    tap("Left");
+    await settle();
+    expect(send.mock.calls.map((x) => x[0])).toEqual(["\x1b[D"]);
+  });
+
+  it("Enter is a CR on the WS; a typed /bg on claude asks first and only a yes sends it", async () => {
+    const confirm = vi.fn(async () => false);
+    const { send, direct } = directBar({}, mkDrive({ harness: "claude", confirm }));
+    tap("Enter");
+    expect(send.mock.calls.map((x) => x[0])).toEqual(["\r"]);
+    expect(rig.calls).toHaveLength(0);
+    send.mockClear();
+    direct.line.feed("/bg");
+    tap("Enter");
+    await settle();
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(send).not.toHaveBeenCalled();
+    confirm.mockResolvedValueOnce(true);
+    tap("Enter");
+    await settle();
+    expect(send.mock.calls.map((x) => x[0])).toEqual(["\r"]);
+  });
+
+  it("a bar tap never blurs the focused proxy and is default-prevented", () => {
+    const ta = document.createElement("textarea");
+    document.body.appendChild(ta);
+    ta.focus();
+    directBar();
+    const ev = press(byId(m!.host, "kb-drive-key-Esc"), "pointerdown");
+    expect(ev.defaultPrevented).toBe(true);
+    expect(press(ctrl(), "pointerdown").defaultPrevented).toBe(true);
+    expect(press(ctrl(), "mousedown").defaultPrevented).toBe(true);
+    expect(ctrl().tabIndex).toBe(-1);
+    expect(document.activeElement).toBe(ta);
+    ta.remove();
+  });
+
+  it("the slash-menu entries are still PASTED over REST, never entered", async () => {
+    vi.useFakeTimers();
+    directBar();
+    const slash = byId(m!.host, "kb-drive-key-Slash");
+    press(slash, "pointerdown");
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+    });
+    press(slash, "pointerup");
+    vi.useRealTimers();
+    press(byId(m!.host, "kb-drive-slash-compact"));
+    await settle();
+    expect(rig.urls()).toEqual(["/api/terms/abcd1234/paste"]);
+    expect(rig.calls[0].json).toMatchObject({ text: "/compact" });
+    expect(rig.calls[0].json?.enter).toBeUndefined();
   });
 });

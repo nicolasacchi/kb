@@ -73,6 +73,21 @@
   color: var(--accent-fg);
 }
 
+/* PHIN2 - the sticky Ctrl: armed = accent, locked = accent plus a heavier rule. */
+.kb-drive__key--mod[data-mod="armed"] {
+  border-color: var(--accent-bor);
+  background: var(--accent-bg);
+  color: var(--accent-fg);
+}
+
+.kb-drive__key--mod[data-mod="locked"] {
+  border-color: var(--accent);
+  border-width: calc(var(--pad-1) * 2);
+  background: var(--accent-bg);
+  color: var(--accent-fg);
+  font-weight: 600;
+}
+
 .kb-drive__key:disabled,
 .kb-drive__send:disabled {
   opacity: 0.4;
