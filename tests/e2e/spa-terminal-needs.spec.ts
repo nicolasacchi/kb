@@ -100,7 +100,12 @@ test.describe("CONVNEED needs-you banner", () => {
     // Pin the page scrollbar so a banner-driven overflow cannot move the width.
     await page.addStyleTag({ content: "html{overflow-y:scroll}" });
     const rail = page.locator(".kb-termshell__rail");
-    const total = async () => (await pane.boundingBox())!.width + (await rail.boundingBox())!.width;
+    const shell = page.locator(".kb-termshell");
+    const w = async (l: typeof pane) => (await l.boundingBox())!.width;
+    const total = async () => (await w(pane)) + (await w(rail));
+    const dims = async () =>
+      JSON.stringify({ shell: await w(shell), body: await w(page.locator(".kb-termshell__body")), pane: await w(pane), rail: await w(rail) });
+    const dimsBefore = await dims();
     // Let the initial layout settle (terminal fit, panel mount) before the baseline.
     let before = await total();
     for (let i = 0; i < 30; i += 1) {
@@ -127,7 +132,8 @@ test.describe("CONVNEED needs-you banner", () => {
     expect(bb.y + bb.height).toBeLessThanOrEqual(pb.y + 1);
     // The banner is its own row, not a column: the pane and rail still share the same width.
     // (The rail's own blocked badge may widen the rail track, so pane + rail is the invariant.)
-    expect(Math.abs((await total()) - before)).toBeLessThanOrEqual(1);
+    const dimsAfter = await dims();
+    expect(Math.abs((await total()) - before), `before ${dimsBefore} after ${dimsAfter}`).toBeLessThanOrEqual(1);
 
     live.blocked = false;
     await page.evaluate(() => window.dispatchEvent(new Event("focus")));
