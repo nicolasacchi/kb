@@ -8,6 +8,8 @@
 // bounded debug ring the component keeps); the sole persisted value is the
 // variant choice.
 
+import { clipboardAction } from "../input";
+
 /** The three switchable axes the operator uses to find what works on a given IME. */
 export interface ProxyVariant {
   /** `every`: diff on every input event (composition included). `deferred`: interim text is only shown, one diff at compositionend. */
@@ -197,6 +199,8 @@ export interface KeyEv {
   altKey: boolean;
   metaKey: boolean;
   isComposing: boolean;
+  /** PHIN1: absent = false (Ctrl+Shift+C / Ctrl+Shift+V are the clipboard chords). */
+  shiftKey?: boolean;
 }
 
 export interface ProxyCoreOptions {
@@ -208,6 +212,12 @@ export interface ProxyCoreOptions {
   setValue?: (v: string) => void;
   /** Injectable clock for the Enter keydown + beforeinput dedupe. */
   now?: () => number;
+  /** PHIN1: the element's current value, so an Enter during a composition can flush the composed text first. */
+  getValue?: () => string;
+  /** PHIN1: the terminal has a selection (Ctrl/Cmd+C then copies instead of sending ^C). */
+  hasSelection?: () => boolean;
+  /** PHIN1: copy the terminal selection to the clipboard. */
+  copy?: () => void;
 }
 
 /** The window in which a beforeinput Enter after a keydown Enter is the same press. */
@@ -269,7 +279,7 @@ export function createProxyCore(opts: ProxyCoreOptions): ProxyCore {
   };
 
   /** Diff the element's value against the mirror and send the delta. */
-  const flush = (value: string, type: string, inputType: string, data: string | null, comp: boolean): void => {
+  const flush = (value: string, type: string, inputType: string, data: string | null, comp: boolean, settleAfter = true): void => {
     const next = value;
     const d = diffValue(mirror, next);
     // A zero-width space the user (or the IME) inserted is never typed text.
@@ -277,7 +287,7 @@ export function createProxyCore(opts: ProxyCoreOptions): ProxyCore {
     const bytes = encodeDiff({ del: d.del, ins });
     if (!emit(bytes, type, inputType, data, 0, comp)) return;
     mirror = next;
-    settle();
+    if (settleAfter) settle();
   };
 
   return {
@@ -295,6 +305,13 @@ export function createProxyCore(opts: ProxyCoreOptions): ProxyCore {
           enterAt = -Infinity;
           log("beforeinput", t, e.data, 0, e.isComposing, "dup");
           return true;
+        }
+        if ((composing || e.isComposing) && opts.getValue) {
+          // PHIN1: the composed text goes out BEFORE the carriage return. The composition
+          // is over for the diff; the element keeps its value, so the compositionend that
+          // follows diffs against an equal mirror and sends nothing.
+          composing = false;
+          flush(opts.getValue(), "beforeinput", t, e.data, false, false);
         }
         emit("\r", "beforeinput", t, e.data, 0, e.isComposing);
         return true;
@@ -327,6 +344,23 @@ export function createProxyCore(opts: ProxyCoreOptions): ProxyCore {
       if (e.keyCode === 229 || e.isComposing || composing) {
         log("keydown", "", e.key, e.keyCode, true, "");
         return false;
+      }
+      if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+        // PHIN1: the desktop's clipboard chords. Copy sends nothing; paste is left to the
+        // browser's paste event (onPaste), so the key itself must not be consumed.
+        const act = clipboardAction(
+          { type: "keydown", key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey === true, altKey: false },
+          opts.hasSelection?.() ?? false,
+        );
+        if (act === "copy") {
+          opts.copy?.();
+          log("keydown", "", e.key, e.keyCode, false, "");
+          return true;
+        }
+        if (act === "paste" || e.key.toLowerCase() === "v") {
+          log("keydown", "", e.key, e.keyCode, false, "");
+          return false;
+        }
       }
       let bytes: string | null = null;
       if (e.key === "Enter") {

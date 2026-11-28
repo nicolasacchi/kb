@@ -253,6 +253,21 @@ async fn show_option<S: Supervisor>(runner: &Runner<S>, sock: &Path, key: &str) 
     }
 }
 
+/// The working directory the session was LAUNCHED in (`@kb_cwd`), or
+/// `None` when the holder does not answer or never recorded one. Only an
+/// absolute path is returned. FXLS reads files relative to it; the live
+/// cwd of the pane process is deliberately not consulted (the agent can
+/// change it).
+pub(crate) async fn launch_cwd<S: Supervisor>(
+    runner: &Runner<S>,
+    id: &str,
+) -> Option<std::path::PathBuf> {
+    let sock = runner.holder_socket(id);
+    let raw = show_option(runner, &sock, "@kb_cwd").await?;
+    let p = std::path::PathBuf::from(raw);
+    p.is_absolute().then_some(p)
+}
+
 /// The pids of every client attached to the holder (for adopt checks).
 pub async fn client_pids<S: Supervisor>(runner: &Runner<S>, id: &str) -> Vec<u32> {
     let sock = runner.holder_socket(id);

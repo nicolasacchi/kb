@@ -86,15 +86,24 @@ function Chips({ chips }: { chips: Chip[] | undefined }): ReactElement | null {
   );
 }
 
+function BadgeSpan({ n }: { n: number | undefined }): ReactElement | null {
+  return n !== undefined && n > 0 ? (
+    <span className="kb-termshell__badge" aria-label={`${n} pending`}>
+      {n}
+    </span>
+  ) : null;
+}
+
+/** Calls the tab's own badge hook: one component per tab, so the hook order is stable. */
+function LiveBadge({ use }: { use: () => number | undefined }): ReactElement | null {
+  return <BadgeSpan n={use()} />;
+}
+
 function tabLabel(t: RailTab): ReactNode {
   return (
     <>
       {t.label}
-      {t.badge !== undefined && t.badge > 0 ? (
-        <span className="kb-termshell__badge" aria-label={`${t.badge} pending`}>
-          {t.badge}
-        </span>
-      ) : null}
+      {t.useBadge ? <LiveBadge use={t.useBadge} /> : <BadgeSpan n={t.badge} />}
     </>
   );
 }

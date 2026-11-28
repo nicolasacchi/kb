@@ -15,8 +15,10 @@ pub mod binding;
 pub mod command_store;
 pub mod commands;
 pub mod events;
+pub mod files_read;
 pub mod gate;
 pub mod keys_allow;
+pub mod launch_guard;
 pub mod media;
 pub mod prompts;
 pub mod runner_client;
@@ -51,4 +53,9 @@ pub struct TerminalState {
     /// load-modify-write (`command_store::mutate`). Held across the
     /// blocking-pool file work and the event emit, and nothing else.
     pub(crate) commands_lock: tokio::sync::Mutex<()>,
+    /// kbt2 HUBGUARD — the ONE daemon-wide lock serialising the launch
+    /// route's `list` -> count -> `launch` so concurrent launches cannot
+    /// both pass the `max_terms` check. Held across those runner calls
+    /// only; never across the terminal's lifetime.
+    pub(crate) launch_lock: tokio::sync::Mutex<()>,
 }

@@ -488,6 +488,10 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
         .route("/terms/{id}/read", get(routes::terms::read))
         .route("/terms/{id}/history", get(routes::terms::history))
         .route("/terms/{id}/grid", get(routes::terms::grid))
+        // kbt2 FXLS — list and download files from a terminal's working
+        // area (terminal tier; the `gate_read` gate runs in each handler).
+        .route("/terms/{id}/ls", get(terminal::files_read::ls))
+        .route("/terms/{id}/file", get(terminal::files_read::file))
         .route(
             "/terms/{id}/release-size",
             post(routes::terms::release_size),

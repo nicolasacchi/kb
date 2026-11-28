@@ -110,6 +110,20 @@ describe("TermShell desktop rail", () => {
     expect(screen.getByTestId("term-tab-files").textContent).toContain("2");
   });
 
+  it("a useBadge hook badges its tab live and only above zero", () => {
+    let n: number | undefined = 0;
+    registerRailTab({ id: "board", label: "Board", useBadge: () => n, node: <div /> });
+    const { rerender } = render(shell());
+    expect(screen.getByTestId("term-tab-board").querySelector(".kb-termshell__badge")).toBeNull();
+    n = 3;
+    rerender(shell());
+    expect(screen.getByTestId("term-tab-board").querySelector(".kb-termshell__badge")?.textContent).toBe("3");
+    n = undefined;
+    rerender(shell());
+    expect(screen.getByTestId("term-tab-board").querySelector(".kb-termshell__badge")).toBeNull();
+    expect(screen.getByTestId("term-tab-files").querySelector(".kb-termshell__badge")).toBeNull();
+  });
+
   it("the toggle collapses the rail, hides the panel and persists across a remount", () => {
     const { unmount } = render(shell());
     const toggle = screen.getByTestId("term-rail-toggle");

@@ -20,6 +20,8 @@ export interface RailTab {
   id: RailTabId;
   label: string;
   badge?: number;
+  /** A live badge: a hook the shell calls inside a tiny component (never in a loop), so a tab can badge from its own query. Wins over `badge`. */
+  useBadge?: () => number | undefined;
   node: ReactNode;
 }
 

@@ -1753,6 +1753,91 @@ POST   /api/terms/{id}/files                Upload ANY file into the
                                             reasons `not-configured` and
                                             `quota`; a kb-side failure
                                             never fails the upload).
+GET    /api/terms/{id}/ls                   List one directory of the
+                                            terminal's working area.
+                                            Query `?path=` (relative to the
+                                            root, or absolute and then under
+                                            it; default the root itself) and
+                                            `&root=cwd|up` (default `cwd`:
+                                            the directory the session was
+                                            LAUNCHED in, as recorded at
+                                            launch; `up`: the session's
+                                            upload area). Answers
+                                            `{"root","dir","entries":[{
+                                            "name","kind":"file"|"dir",
+                                            "bytes","mtime_unix","hidden"}],
+                                            "truncated","skipped"}`:
+                                            directories first, then files,
+                                            each bytewise by name; at most
+                                            500 entries and `truncated:true`
+                                            when more existed; `skipped`
+                                            counts what is left out
+                                            (symlinks, fifos, sockets,
+                                            devices, names that are not
+                                            valid UTF-8 or carry control
+                                            characters). Regular files and
+                                            directories only. Containment
+                                            is the kernel's (`openat2` with
+                                            `RESOLVE_BENEATH`, no symlink
+                                            ever followed, inside the root
+                                            either): a path that climbs out
+                                            or names another root is 403
+                                            `urn:kb:errors:terminal-outside-root`,
+                                            a symlink/fifo/socket/device or a
+                                            file where a directory was
+                                            wanted is 422
+                                            `urn:kb:errors:terminal-not-a-file`,
+                                            a missing path 404. `path` over
+                                            4096 bytes, with a NUL, or a
+                                            `root` other than `cwd`/`up` is
+                                            400 and the runner is not
+                                            dialled. Terminal-tier read gate
+                                            (`gate_read`: the
+                                            `X-Kb-Intent: terminal` header
+                                            is REQUIRED, exact Origin when
+                                            present, no token callers, no
+                                            loopback bypass). Runner down
+                                            503. `Cache-Control: no-store`.
+GET    /api/terms/{id}/file                 Download one regular file of the
+                                            working area. Same query and
+                                            gate as `/ls` (`path` is
+                                            required). The answer is ALWAYS
+                                            `Content-Type:
+                                            application/octet-stream`,
+                                            `Content-Disposition: attachment;
+                                            filename="<ascii>";
+                                            filename*=UTF-8''<pct>` (the
+                                            final path component, with
+                                            separators, controls, quotes
+                                            and backslashes removed, at most
+                                            120 bytes, `download` when
+                                            nothing is left),
+                                            `X-Content-Type-Options:
+                                            nosniff`, `Cache-Control:
+                                            no-store` and `Content-Length`:
+                                            never inline, never a sniffed or
+                                            sender-chosen type, so a
+                                            downloaded `.html` cannot render
+                                            on the kb origin. Per-file cap
+                                            32 MiB (the same as an upload):
+                                            a larger file is 413 before any
+                                            byte. The body is streamed from
+                                            the runner one chunk of at most
+                                            8 MiB at a time (never buffered
+                                            whole); if a chunk fails or the
+                                            file changes mid-transfer the
+                                            body ends short of its
+                                            `Content-Length`. The browser
+                                            cannot send the intent header
+                                            on a plain `<a download>`
+                                            navigation: the SPA calls
+                                            `fetch(url, {headers:
+                                            {"X-Kb-Intent":"terminal"}})`,
+                                            takes `await r.blob()` and saves
+                                            it through an object-URL anchor
+                                            with `download`. Errors as for
+                                            `/ls`; a directory is
+                                            422 not-a-file.
 POST   /api/terms/{id}/paste                Body `{text, enter?, viewer?}`; decoded
                                             text over 32 KiB is 413
                                             (the cap counts bytes, so
@@ -3423,6 +3508,8 @@ POST   /api/terms/{id}/take-size            take grid [terminal]
 GET    /api/terms/{id}/read                 relay read [terminal]
 GET    /api/terms/{id}/history              relay history [terminal]
 GET    /api/terms/{id}/grid                 relay grid report [terminal]
+GET    /api/terms/{id}/ls                   list the working area [terminal]
+GET    /api/terms/{id}/file                 download one file, attachment only [terminal]
 POST   /api/terms/{id}/release-size         release grid [terminal]
 POST   /api/terms/{id}/resize               resize grid [terminal]
 POST   /api/terms/{id}/viewer-close         close spa viewer [terminal]
@@ -3450,8 +3537,13 @@ GET    /api/terms/commands                  the effective command catalogue
                                             (shipped defaults + the operator
                                             overlay): {rev, harnesses:{<h>:
                                             {groups:[{id, label, origin,
-                                            items:[{..., origin}]}]}}}, origin
-                                            `default|overlay`; ETag "<rev>",
+                                            items:[{..., origin}]}]}},
+                                            overlay:{harnesses, hidden},
+                                            hidden:{<h>:[id]}}, origin
+                                            `default|overlay`; `overlay` and
+                                            `hidden` are the stored overlay
+                                            verbatim (`hidden` repeats
+                                            `overlay.hidden`); ETag "<rev>",
                                             rev 0 on a fresh daemon [terminal]
 PUT    /api/terms/commands                  replace the overlay {harnesses?,
                                             hidden?} (64 KiB cap, 413 above):

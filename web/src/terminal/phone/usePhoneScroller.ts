@@ -58,6 +58,12 @@ export interface PhoneScrollerArgs {
    * browser still synthesizes the `click` the soft keyboard needs.
    */
   onTapFocus?: () => void;
+  /**
+   * PHIN1 — the operator is moving the view by hand: called when a drag locks an
+   * axis (and on each move after), on every pinch move and while a fling coasts.
+   * Never for a still tap or a long press. Absent = today's behaviour, byte for byte.
+   */
+  onManual?: () => void;
   /** Which event calls `onTapFocus`: the synthesized `click` (default) or the pointerup itself. */
   focusOn?: "click" | "pointerup";
 }
@@ -176,6 +182,8 @@ export function usePhoneScroller(args: PhoneScrollerArgs): void {
   fontRef.current = args.onFont;
   const tapFocusRef = useRef(args.onTapFocus);
   tapFocusRef.current = args.onTapFocus;
+  const manualRef = useRef(args.onManual);
+  manualRef.current = args.onManual;
   const tapFocusOn = args.onTapFocus !== undefined;
   const focusOn = args.focusOn ?? "click";
   longPressRef.current = args.onLongPress;
@@ -223,6 +231,7 @@ export function usePhoneScroller(args: PhoneScrollerArgs): void {
     };
 
     const startMomentum = (v0: number): void => {
+      manualRef.current?.();
       let v = v0;
       let last = performance.now();
       const tick = (): void => {
@@ -231,6 +240,7 @@ export function usePhoneScroller(args: PhoneScrollerArgs): void {
         last = now;
         v = momentumStep(v, dt);
         const moved = applyDy(v * dt);
+        if (moved) manualRef.current?.();
         raf = Math.abs(v) > STOP_V && moved ? requestAnimationFrame(tick) : 0;
       };
       raf = requestAnimationFrame(tick);
@@ -286,6 +296,7 @@ export function usePhoneScroller(args: PhoneScrollerArgs): void {
       ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (pinch && ptrs.size === 2) {
         if (pinch.d0 > 0) {
+          manualRef.current?.();
           const px = pinchFont(pinch.startFont, dist() / pinch.d0);
           if (applyFont(term, wrap, px)) {
             fontRef.current?.(px);
@@ -305,6 +316,7 @@ export function usePhoneScroller(args: PhoneScrollerArgs): void {
         drag.ly = drag.y0;
         clearPress();
       }
+      manualRef.current?.();
       if (drag.axis === "v") {
         applyDy(e.clientY - drag.ly);
         drag.samples.push({ t: now, y: e.clientY });

@@ -636,6 +636,8 @@ export function startSseInvalidationBridge(): () => void {
   on("term.created", () => invalidate(["terms"]));
   on("term.ended", () => invalidate(["terms"]));
   on("term.state", () => invalidate(["terms"]));
+  // CMDSETTINGS — the command catalogue overlay changed (payload is the rev only).
+  on("term.commands", () => invalidate(["term", "commands"]));
   // memory.* in full, plus session.captured for the session lens (its
   // queries key under the same ["memories", …] prefix) and
   // artifact.removed (a forgotten memory is a removed artifact).
