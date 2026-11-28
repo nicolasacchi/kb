@@ -556,7 +556,7 @@ describe("keep in kb", () => {
 
   it("a hostile name stays plain text in the keep result and touches no web storage", async () => {
     const hostile = "<b>x</b>‮.txt";
-    routes = (u, init) =>
+    routes = (u) =>
       u.endsWith("/files/keep") ? json(200, { ...KEPT, name: hostile, kb: kbOf({ stub_rel: "<i>s</i>" }) }) : json(200, ls("/w", [ent(hostile)]));
     const set = vi.spyOn(Storage.prototype, "setItem");
     const { container } = mount();
