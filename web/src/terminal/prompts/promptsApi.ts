@@ -9,9 +9,10 @@
 
 import { currentDaemonBase } from "../../api/base";
 import type { PromptList } from "../../api/generated/PromptList";
+import type { PromptPatch } from "../../api/generated/PromptPatch";
 import { TERMINAL_INTENT_HEADER, TERMINAL_INTENT_VALUE } from "../../api/terms";
 
-export type { PromptList };
+export type { PromptList, PromptPatch };
 export type { PromptItem } from "../../api/generated/PromptItem";
 
 /** Query key of one project's queue; `["term","prompts"]` is the SSE prefix. */
@@ -82,12 +83,6 @@ export async function addPrompt(project: string, text: string, signal?: AbortSig
       signal,
     }),
   );
-}
-
-export interface PromptPatch {
-  text?: string;
-  done?: boolean;
-  position?: number;
 }
 
 /** Edit, mark done/open or move one item. `rev` is the revision the caller saw. */
