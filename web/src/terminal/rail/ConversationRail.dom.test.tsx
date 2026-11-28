@@ -202,12 +202,12 @@ describe("ConversationRail", () => {
     Element.prototype.scrollIntoView = scroll;
     mount("sid-1");
     const rows = await screen.findAllByTestId("conv-row");
-    expect(rows[2].tabIndex).not.toBe(-1);
+    expect(rows[2].hasAttribute("tabindex")).toBe(false);
     act(() => requestPendingJump());
     await waitFor(() => expect(document.activeElement).toBe(rows[2]));
-    expect(rows[2].tabIndex).toBe(-1);
+    expect(rows[2].getAttribute("tabindex")).toBe("-1");
     expect(scroll).toHaveBeenCalledWith({ block: "nearest" });
-    expect(rows[0].tabIndex).not.toBe(-1);
+    expect(rows[0].hasAttribute("tabindex")).toBe(false);
     expect(hasPendingJump()).toBe(false);
   });
 

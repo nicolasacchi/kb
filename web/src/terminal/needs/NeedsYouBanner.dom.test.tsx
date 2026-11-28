@@ -24,13 +24,14 @@ const okConv = (q: string, gen = `${SINCE + 1}-1`) => ({
 });
 
 function mount(sid: string | undefined, onJump = vi.fn()) {
-  const ui = (
+  const ui = () => (
     <TermRailContext.Provider value={{ termId: "t1", harness: "claude", sid }}>
       <NeedsYouBanner onJump={onJump} />
     </TermRailContext.Provider>
   );
-  const r = render(ui);
-  return { ...r, onJump, again: () => r.rerender(ui) };
+  const r = render(ui());
+  // A fresh element each time: re-rendering the identical element would bail out.
+  return { ...r, onJump, again: () => r.rerender(ui()) };
 }
 
 beforeEach(() => {
