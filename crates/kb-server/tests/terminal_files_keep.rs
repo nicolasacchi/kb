@@ -590,7 +590,9 @@ async fn a_file_that_changes_mid_read_is_409_and_a_runner_error_is_502_with_no_s
         f.mtime_changes_from_offset = Some(CHUNK as u64)
     });
     fake.add_file("grown.bin", filler(20 * MIB));
-    fake.edit("grown.bin", |f| f.size_changes_from_offset = Some(CHUNK as u64));
+    fake.edit("grown.bin", |f| {
+        f.size_changes_from_offset = Some(CHUNK as u64)
+    });
     fake.add_file("broken.bin", filler(20 * MIB));
     fake.edit("broken.bin", |f| f.fail_from_offset = Some(CHUNK as u64));
     let st = boot(&fake, true).await;
