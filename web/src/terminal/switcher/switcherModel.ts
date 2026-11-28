@@ -76,7 +76,7 @@ export function buildSwitcher(
   // Order is orderHub's, never a second one (needs rows already lead each group).
   const groups: SwitcherGroup[] = [];
   const mine = project === null ? [] : rows.filter((r) => r.project === project);
-  const rest = project === null ? sorted : rows.filter((r) => r.project !== project);
+  const rest = project === null ? rows : rows.filter((r) => r.project !== project);
   if (mine.length > 0) groups.push({ key: "project", label: GROUP_LABEL.project, rows: mine });
   if (rest.length > 0) groups.push({ key: "everywhere", label: GROUP_LABEL.everywhere, rows: rest });
   return {
