@@ -310,13 +310,23 @@ fn sweep_stale_spools(dir: &std::path::Path, older_than: std::time::Duration) ->
 }
 
 async fn open_spool(state: &Arc<KbHandles>) -> Option<Spool> {
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
-    static SWEPT: AtomicBool = AtomicBool::new(false);
+    static SWEPT: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
     let dir = state.paths.cache.join("term-upload-spool");
     tokio::fs::create_dir_all(&dir).await.ok()?;
-    // Once per process, at first use: drop spools a crashed run left behind.
-    if !SWEPT.swap(true, Ordering::Relaxed) {
+    // Once per spool dir per process, at first use: drop spools a crashed
+    // run left behind.
+    let first = {
+        let mut seen = SWEPT.lock().unwrap_or_else(|e| e.into_inner());
+        if seen.contains(&dir) {
+            false
+        } else {
+            seen.push(dir.clone());
+            true
+        }
+    };
+    if first {
         let sweep_dir = dir.clone();
         let _ = tokio::task::spawn_blocking(move || {
             sweep_stale_spools(&sweep_dir, std::time::Duration::from_secs(SPOOL_STALE_SECS))
@@ -756,6 +766,7 @@ pub async fn terms_files_keep(
     if req.path.is_empty() {
         return bad_request("path is required");
     }
+    // Defence in depth only: the 4 KiB body limit makes this unreachable today.
     if req.path.len() > crate::terminal::files_read::PATH_MAX_BYTES {
         return bad_request("path is longer than 4096 bytes");
     }

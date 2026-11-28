@@ -70,6 +70,8 @@ struct FileSpec {
     fail_from_offset: Option<u64>,
     /// An `fs_get` at an offset >= this answers a different mtime.
     mtime_changes_from_offset: Option<u64>,
+    /// An `fs_get` at an offset >= this answers a different `size`.
+    size_changes_from_offset: Option<u64>,
     /// An `fs_get` at an offset >= this never answers.
     stall_from_offset: Option<u64>,
 }
@@ -180,9 +182,15 @@ fn spawn_fake(dir: &std::path::Path) -> Fake {
                                 f.mtime
                             };
                             let name = serde_json::to_string(&f.name).unwrap();
+                            let total_reported =
+                                if f.size_changes_from_offset.is_some_and(|o| offset >= o) {
+                                    total + 1
+                                } else {
+                                    total
+                                };
                             (
                                 format!(
-                                    "{{\"status\":\"ok\",\"data\":{{\"size\":{total},\"len\":{want},\"mtime_unix\":{mtime},\"name\":{name}}}}}\n"
+                                    "{{\"status\":\"ok\",\"data\":{{\"size\":{total_reported},\"len\":{want},\"mtime_unix\":{mtime},\"name\":{name}}}}}\n"
                                 ),
                                 f.data[start..start + want].to_vec(),
                             )
@@ -581,6 +589,8 @@ async fn a_file_that_changes_mid_read_is_409_and_a_runner_error_is_502_with_no_s
     fake.edit("moving.bin", |f| {
         f.mtime_changes_from_offset = Some(CHUNK as u64)
     });
+    fake.add_file("grown.bin", filler(20 * MIB));
+    fake.edit("grown.bin", |f| f.size_changes_from_offset = Some(CHUNK as u64));
     fake.add_file("broken.bin", filler(20 * MIB));
     fake.edit("broken.bin", |f| f.fail_from_offset = Some(CHUNK as u64));
     let st = boot(&fake, true).await;
@@ -595,6 +605,16 @@ async fn a_file_that_changes_mid_read_is_409_and_a_runner_error_is_502_with_no_s
     );
     assert_eq!(fake.fs_gets("moving.bin"), vec![0, CHUNK as u64]);
     assert_spool_empty(&st.cache, "after a mid-stream change").await;
+
+    let resp = keep(st.addr, r#"{"path":"grown.bin"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        problem(resp).await,
+        (409, "urn:kb:errors:terminal-file-changed".to_string())
+    );
+    assert_spool_empty(&st.cache, "after a mid-stream size change").await;
 
     let resp = keep(st.addr, r#"{"path":"broken.bin"}"#)
         .send()
@@ -759,4 +779,51 @@ async fn every_non_stub_case_is_the_same_404_with_no_existence_oracle() {
         assert_eq!(body, first, "`{what}` differs from `{first_what}`");
     }
     assert!(!first.contains("tampered") && !first.contains("original"));
+}
+
+#[tokio::test]
+async fn keeping_with_index_after_a_metadata_only_keep_upgrades_the_stub_truthfully() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path());
+    fake.add_file("a.txt", b"findable-needle text\n".to_vec());
+    let st = boot(&fake, true).await;
+    let read = |rel: &str| std::fs::read_to_string(st.files_root.join(rel)).unwrap();
+
+    let v0 = keep_ok(st.addr, r#"{"path":"a.txt"}"#).await;
+    assert_eq!(v0["kb"]["inlined"], false, "{v0}");
+    assert!(!read(v0["kb"]["stub_rel"].as_str().unwrap()).contains("findable-needle"));
+
+    let v1 = keep_ok(st.addr, r#"{"path":"a.txt","index":1}"#).await;
+    assert_eq!(v1["kb"]["id"], v0["kb"]["id"]);
+    assert_eq!(v1["kb"]["inlined"], true, "{v1}");
+    assert!(read(v1["kb"]["stub_rel"].as_str().unwrap()).contains("findable-needle"));
+
+    // index 0 over an inlined stub leaves the text and reports it.
+    let v2 = keep_ok(st.addr, r#"{"path":"a.txt","index":0}"#).await;
+    assert_eq!(v2["kb"]["inlined"], true, "{v2}");
+    assert!(read(v2["kb"]["stub_rel"].as_str().unwrap()).contains("findable-needle"));
+}
+
+#[tokio::test]
+async fn the_first_use_sweeps_an_aged_spool_and_spares_a_fresh_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path());
+    fake.add_file("a.txt", filler(100));
+    let st = boot(&fake, true).await;
+    let dir = st.cache.join("term-upload-spool");
+    std::fs::create_dir_all(&dir).unwrap();
+    let old = dir.join("999-1-0.spool");
+    let fresh = dir.join("999-2-0.spool");
+    std::fs::write(&old, b"x").unwrap();
+    std::fs::write(&fresh, b"y").unwrap();
+    let aged = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    std::fs::File::options()
+        .write(true)
+        .open(&old)
+        .unwrap()
+        .set_modified(aged)
+        .unwrap();
+    keep_ok(st.addr, r#"{"path":"a.txt"}"#).await;
+    assert!(!old.exists(), "aged spool must be swept on first use");
+    assert!(fresh.exists(), "a fresh spool belongs to a live request");
 }
