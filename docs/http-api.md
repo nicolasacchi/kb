@@ -3570,11 +3570,15 @@ PATCH  /api/term-prompts/{project}/{item}   {text?, done?, position?} (>=1,
                                             position clamped): If-Match
                                             REQUIRED (428 without, 412
                                             `prompts-stale` + current ETag
+                                            and a numeric `rev` in the body
                                             when stale); a no-op bumps and
                                             emits nothing [terminal]
 DELETE /api/term-prompts/{project}/{item}   remove an item, answer the queue;
                                             If-Match honoured when sent
-                                            (412 when stale) [terminal]
+                                            (412 when stale). Removing the
+                                            last item deletes the ledger
+                                            file: rev 0 again, and the
+                                            project's slot is free [terminal]
 GET    /api/terms/commands                  the effective command catalogue
                                             (shipped defaults + the operator
                                             overlay): {rev, harnesses:{<h>:

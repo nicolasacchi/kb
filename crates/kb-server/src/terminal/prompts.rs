@@ -10,9 +10,12 @@
 //! routes: every handler runs [`gate`] (mutations) or [`gate_read`] (GET)
 //! first, so token callers are refused and loopback does not bypass. The
 //! ledger is mutated ONLY here, under ONE daemon-wide async lock held across
-//! the load-modify-write (no other `.await` happens while it is held), and
-//! written tmp file -> fsync -> rename so a crash leaves the old or the new
-//! file, never a torn one.
+//! the load-modify-write and the emit (the file IO itself runs on the blocking
+//! pool; no other `.await` happens while the guard is held), and written tmp
+//! file -> fsync -> rename so a crash leaves the old or the new file, never a
+//! torn one. A mutation that leaves a project with no items REMOVES its file
+//! (the project is back to rev 0), so the `MAX_PROJECTS` cap recovers; clients
+//! treat any rev change, a regression included, as "reload".
 //!
 //! The document is `{"schema":"kb-term-prompts/1","project","rev","items":[…]}`.
 //! The `Vec` order IS the order (the wire's `order` is the index, so no stored
@@ -356,6 +359,23 @@ fn save_doc(paths: &KbPaths, slug: &SlateSlug, doc: &Doc) -> Result<(), StoreErr
     Ok(())
 }
 
+/// Remove a project's ledger file (absent is fine), then best-effort fsync
+/// the directory.
+fn remove_doc(paths: &KbPaths, slug: &SlateSlug) -> Result<(), StoreError> {
+    match std::fs::remove_file(paths.term_prompts_file(slug)) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => {
+            tracing::warn!(project = %slug, "term-prompts: ledger remove failed");
+            return Err(StoreError::Io);
+        }
+    }
+    if let Ok(d) = std::fs::File::open(paths.term_prompts_dir()) {
+        let _ = d.sync_all();
+    }
+    Ok(())
+}
+
 /// Ledger files in the directory (a `.tmp` leftover is not a project).
 fn count_projects(dir: &Path) -> usize {
     std::fs::read_dir(dir)
@@ -455,7 +475,14 @@ pub(crate) fn apply(
             changed = true;
         }
     }
-    if changed {
+    if changed && doc.items.is_empty() {
+        // An emptied queue frees its slot under `MAX_PROJECTS`: the file is
+        // removed and the project is back to "no file yet" (rev 0). Clients
+        // treat ANY rev change, a regression included, as a reload.
+        remove_doc(paths, slug)?;
+        doc.rev = 0;
+        tracing::debug!(project = %slug, "term-prompts: ledger emptied and removed");
+    } else if changed {
         doc.rev += 1;
         save_doc(paths, slug, &doc)?;
         tracing::debug!(project = %slug, rev = doc.rev, "term-prompts: ledger mutated");
@@ -490,6 +517,37 @@ fn problem(
     detail: &str,
 ) -> Response<Body> {
     no_store(Problem::response(urn, status, title, detail.to_string()))
+}
+
+#[derive(Serialize)]
+struct StaleBody<'a> {
+    r#type: &'static str,
+    title: &'static str,
+    status: u16,
+    detail: &'a str,
+    rev: u64,
+}
+
+/// The 412 problem body: the standard problem fields plus a typed numeric
+/// `rev` (the revision the server holds now), so a client never parses prose.
+fn stale_problem(current: u64) -> Response<Body> {
+    let detail = format!("the queue changed; the current revision is {current}");
+    let body = StaleBody {
+        r#type: ERR_PROMPTS_STALE,
+        title: "Precondition Failed",
+        status: StatusCode::PRECONDITION_FAILED.as_u16(),
+        detail: &detail,
+        rev: current,
+    };
+    let payload = serde_json::to_string(&body).unwrap_or_else(|_| "{}".to_string());
+    no_store(
+        (
+            StatusCode::PRECONDITION_FAILED,
+            [(header::CONTENT_TYPE, "application/problem+json")],
+            payload,
+        )
+            .into_response(),
+    )
 }
 
 fn bad_request(detail: &str) -> Response<Body> {
@@ -541,15 +599,7 @@ fn store_error_response(e: StoreError) -> Response<Body> {
             "Not Found",
             "no such prompt in this project's queue",
         ),
-        StoreError::Stale { current } => with_etag(
-            problem(
-                ERR_PROMPTS_STALE,
-                StatusCode::PRECONDITION_FAILED,
-                "Precondition Failed",
-                &format!("the queue changed; the current revision is {current}"),
-            ),
-            current,
-        ),
+        StoreError::Stale { current } => with_etag(stale_problem(current), current),
         StoreError::Corrupt => problem(
             ERR_PROMPTS_CORRUPT,
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -634,25 +684,36 @@ fn emit_changed(state: &KbHandles, list: &PromptList) {
     );
 }
 
-/// Run one mutation under the daemon-wide lock and finish the response.
-/// The lock is held across the (synchronous) load-modify-write and the
-/// (synchronous) emit and across nothing else.
+/// Run one mutation to completion in ONE detached task: take the daemon-wide
+/// lock, apply on the blocking pool, emit, release. The caller only awaits the
+/// task's `JoinHandle`, so a client that disconnects mid-request can never
+/// leave the file written but the event unsent, or the lock half-released. A
+/// panicked or cancelled task is an `Io` refusal.
 async fn mutate(
-    state: &KbHandles,
+    state: &Arc<KbHandles>,
     slug: &SlateSlug,
     if_match: Option<u64>,
     op: Op,
     ok_status: StatusCode,
 ) -> Response<Body> {
-    let guard = state.terminals.prompts_lock.lock().await;
-    let out = apply(&state.paths, slug, if_match, op, now_unix());
-    if let Ok(applied) = &out {
-        if applied.changed {
-            emit_changed(state, &applied.list);
+    let owner = Arc::clone(state);
+    let paths = Arc::clone(&state.paths);
+    let slug = slug.clone();
+    let task = tokio::spawn(async move {
+        let guard = owner.terminals.prompts_lock.lock().await;
+        let joined =
+            tokio::task::spawn_blocking(move || apply(&paths, &slug, if_match, op, now_unix()))
+                .await;
+        let out = joined.unwrap_or(Err(StoreError::Io));
+        if let Ok(applied) = &out {
+            if applied.changed {
+                emit_changed(&owner, &applied.list);
+            }
         }
-    }
-    drop(guard);
-    match out {
+        drop(guard);
+        out
+    });
+    match task.await.unwrap_or(Err(StoreError::Io)) {
         Ok(applied) => list_response(ok_status, &applied.list),
         Err(e) => store_error_response(e),
     }
@@ -673,9 +734,11 @@ pub async fn list(
         Err(e) => return e,
     };
     // A rename is atomic, so a reader never sees a torn file; no lock.
-    match read_list(&state.paths, &slug) {
-        Ok(list) => list_response(StatusCode::OK, &list),
-        Err(e) => store_error_response(e),
+    let paths = Arc::clone(&state.paths);
+    match tokio::task::spawn_blocking(move || read_list(&paths, &slug)).await {
+        Ok(Ok(list)) => list_response(StatusCode::OK, &list),
+        Ok(Err(e)) => store_error_response(e),
+        Err(_) => store_error_response(StoreError::Io),
     }
 }
 
@@ -963,6 +1026,48 @@ mod tests {
         // An existing project keeps working at the cap.
         let first = SlateSlug::new("p0").unwrap();
         assert!(add(&paths, &first, "y").is_ok());
+    }
+
+    #[test]
+    fn emptying_a_ledger_removes_the_file_and_frees_a_slot_at_the_cap() {
+        let (_t, paths, _s) = fixture();
+        for i in 0..MAX_PROJECTS {
+            let slug = SlateSlug::new(format!("p{i}")).unwrap();
+            add(&paths, &slug, "x").unwrap();
+        }
+        let extra = SlateSlug::new("one-too-many").unwrap();
+        assert_eq!(
+            add(&paths, &extra, "x").unwrap_err(),
+            StoreError::TooManyProjects
+        );
+        // Empty one project through its last item: the file goes away.
+        let first = SlateSlug::new("p0").unwrap();
+        let id = read_list(&paths, &first).unwrap().items[0].id.clone();
+        let r = apply(&paths, &first, Some(1), Op::Delete { id }, 9).unwrap();
+        assert!(r.changed);
+        assert!(r.list.items.is_empty());
+        assert_eq!(r.list.rev, 0, "an emptied project is back to no file");
+        assert!(!paths.term_prompts_file(&first).exists());
+        assert_eq!(read_list(&paths, &first).unwrap().rev, 0);
+        // The freed slot admits a new project.
+        assert!(add(&paths, &extra, "x").is_ok());
+    }
+
+    #[test]
+    fn html_and_template_text_round_trips_verbatim_as_data() {
+        let (_t, paths, slug) = fixture();
+        let tag = "kb-prompt";
+        let hostile = format!(
+            "<img src=x onerror=alert(1)>\n<template id=\"{tag}\">x</template> & \"q\" </script>"
+        );
+        let hostile = hostile.as_str();
+        let l = add(&paths, &slug, hostile).unwrap().list;
+        assert_eq!(
+            l.items[0].text, hostile,
+            "stored and answered byte-for-byte"
+        );
+        let again = read_list(&paths, &slug).unwrap();
+        assert_eq!(again.items[0].text, hostile);
     }
 
     #[test]

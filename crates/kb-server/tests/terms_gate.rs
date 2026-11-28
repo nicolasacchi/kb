@@ -2495,6 +2495,59 @@ async fn twenty_concurrent_adds_lose_nothing() {
     assert_eq!(texts.len(), 20, "no lost write");
 }
 
+/// PQUI carries: the 412 body names the current revision as a number, an
+/// emptied queue removes its ledger file (rev back to 0), and prompt text that
+/// looks like markup round-trips as data.
+#[tokio::test]
+async fn term_prompts_stale_body_has_typed_rev_and_emptying_removes_the_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (tmp, addr) = boot(enabled_terminal(), &fake, false).await;
+    let c = client();
+
+    let tag = "kb-prompt";
+    let hostile = format!("<img src=x onerror=alert(1)> <template id=\"{tag}\">x</template>");
+    let hostile = hostile.as_str();
+    let v = pq_add(&c, addr, "demo", hostile).await;
+    assert_eq!(v["items"][0]["text"], hostile);
+    let id = v["items"][0]["id"].as_str().unwrap().to_string();
+    let item_path = format!("/demo/{id}");
+    let ledger = pq_ledger(&tmp, "demo");
+
+    // A stale PATCH: the typed numeric `rev` is in the problem body.
+    let resp = pq_req(&c, reqwest::Method::PATCH, addr, &item_path)
+        .header("If-Match", "\"0\"")
+        .body("{\"done\":true}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 412);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["type"], "urn:kb:errors:prompts-stale");
+    assert_eq!(body["rev"], 1, "typed numeric rev in the 412 body");
+    assert_eq!(body["status"], 412);
+
+    // Deleting the last item removes the ledger file; the next GET is rev 0.
+    let resp = pq_req(&c, reqwest::Method::DELETE, addr, &item_path)
+        .header("If-Match", "\"1\"")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let v: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(v["rev"], 0);
+    assert_eq!(v["items"].as_array().unwrap().len(), 0);
+    assert!(!ledger.exists(), "the emptied ledger file must be gone");
+    let v: serde_json::Value = pq_get(&c, addr, "/demo")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(v["rev"], 0);
+}
+
 /// One SSE frame per durable mutation, `{project, rev}` only, no text; a
 /// 412 and a no-op PATCH emit nothing.
 #[tokio::test]
@@ -2550,7 +2603,7 @@ async fn term_prompts_emit_exactly_one_text_free_event_per_durable_mutation() {
         .unwrap();
     assert_eq!(noop.status().as_u16(), 200);
     let del = pq_req(&c, reqwest::Method::DELETE, addr, &path)
-        .send() // rev 3
+        .send() // empties the queue: rev 0
         .await
         .unwrap();
     assert_eq!(del.status().as_u16(), 200);
@@ -2590,7 +2643,9 @@ async fn term_prompts_emit_exactly_one_text_free_event_per_durable_mutation() {
     }
     assert_eq!(
         seen,
-        vec![1, 2, 3],
+        // The DELETE empties the queue: the ledger file is removed and the
+        // event names rev 0 (clients treat any rev change as a reload).
+        vec![1, 2, 0],
         "exactly one event per durable mutation: {raw}"
     );
 }
