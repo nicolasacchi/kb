@@ -1,6 +1,6 @@
 // HUBSWITCH — the frame around one terminal's page: on desktop a collapsible
-// switcher column beside the shell; on a phone just the children (the phone
-// switcher lives in the panel's own chrome). HubFrame sits OUTSIDE
+// switcher column beside the shell; on a phone no column (the phone switcher
+// lives in the panel's own chrome). HubFrame sits OUTSIDE
 // `<TermShell key={termId}>`, so switching terminals keeps the column mounted
 // (and its scroll position) while the shell remounts.
 
@@ -38,16 +38,20 @@ function writeOpen(open: boolean): void {
   }
 }
 
-export function HubFrame({ termId, children }: { termId: string | null; children: ReactNode }): ReactElement {
-  const phone = usePhonePanel();
-  if (phone) return <>{children}</>;
-  return <DesktopFrame termId={termId}>{children}</DesktopFrame>;
+/** Mounts the `terminals` key scope; a component so a phone frame can leave it out. */
+function SwitchKeys({ termId }: { termId: string | null }): null {
+  // Lives in the frame, not the column: collapsing the column must not turn the keys off.
+  useSwitchKeys(useSwitchRows(), termId);
+  return null;
 }
 
-function DesktopFrame({ termId, children }: { termId: string | null; children: ReactNode }): ReactElement {
-  // The `terminals` key scope lives here, not in the column: collapsing the
-  // column must not turn the keys off.
-  useSwitchKeys(useSwitchRows(), termId);
+/**
+ * The wrapper and the children's position are the same on a phone and on
+ * desktop, so rotating across the breakpoint never remounts the shell (and
+ * its terminal socket); only the aside and the key scope come and go.
+ */
+export function HubFrame({ termId, children }: { termId: string | null; children: ReactNode }): ReactElement {
+  const phone = usePhonePanel();
   const [open, setOpen] = useState<boolean>(readOpen);
   const panelId = useId();
   const toggle = useCallback(() => {
@@ -57,23 +61,31 @@ function DesktopFrame({ termId, children }: { termId: string | null; children: R
     });
   }, []);
   return (
-    <div className="kb-hubframe" data-open={open ? "1" : "0"} data-testid="hub-frame">
-      <aside className="kb-hubframe__side">
-        <button
-          type="button"
-          className="kb-hubframe__toggle"
-          data-testid="hub-switch-toggle"
-          aria-expanded={open}
-          aria-controls={panelId}
-          onClick={toggle}
-        >
-          {open ? "Hide terminals" : "Terminals"}
-        </button>
-        <div id={panelId} className="kb-hubframe__panel" hidden={!open}>
-          {open ? <HubSwitcher currentId={termId} /> : null}
-        </div>
-      </aside>
+    <div
+      className="kb-hubframe"
+      data-phone={phone ? "1" : "0"}
+      data-open={open ? "1" : "0"}
+      data-testid={phone ? undefined : "hub-frame"}
+    >
+      {phone ? null : (
+        <aside className="kb-hubframe__side">
+          <button
+            type="button"
+            className="kb-hubframe__toggle"
+            data-testid="hub-switch-toggle"
+            aria-expanded={open}
+            aria-controls={panelId}
+            onClick={toggle}
+          >
+            {open ? "Hide terminals" : "Terminals"}
+          </button>
+          <div id={panelId} className="kb-hubframe__panel" hidden={!open}>
+            {open ? <HubSwitcher currentId={termId} /> : null}
+          </div>
+        </aside>
+      )}
       <div className="kb-hubframe__main">{children}</div>
+      {phone ? null : <SwitchKeys termId={termId} />}
     </div>
   );
 }

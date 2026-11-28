@@ -9,6 +9,11 @@
   gap: var(--pad-2);
   min-width: 0;
 }
+/* A phone keeps the wrapper (so rotating never remounts the shell) but shows no column. */
+.kb-hubframe[data-phone="1"] {
+  display: block;
+}
+
 /* Collapsed: the column costs no width. Only a slim tab stays, over the frame's left edge. */
 .kb-hubframe[data-open="0"] {
   grid-template-columns: minmax(0, 1fr);

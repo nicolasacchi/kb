@@ -3,7 +3,7 @@
 // HUBSWITCH — the frame: desktop column + persisted toggle, phone = children only,
 // and the shell child is not remounted when the terminal id changes.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 vi.mock("../useTerms", () => ({ useTerms: () => ({ terms: [], isLoading: false, isError: false }) }));
@@ -112,5 +112,35 @@ describe("HubFrame", () => {
     rerender(frame("t2", <Child tag="x" />));
     expect(screen.getByTestId("child")).toBe(el);
     expect(screen.getByTestId("hub-switcher")).toBe(col);
+  });
+
+  it("rotating across the breakpoint keeps the child element (no remount) and toggles only the column", () => {
+    let phoneNow = false;
+    const listeners = new Set<() => void>();
+    vi.stubGlobal("matchMedia", (q: string) => ({
+      get matches() {
+        return phoneNow;
+      },
+      media: q,
+      addEventListener: (_t: string, l: () => void) => listeners.add(l),
+      removeEventListener: (_t: string, l: () => void) => listeners.delete(l),
+      addListener() {},
+      removeListener() {},
+    }));
+    render(frame("t1", <Child tag="x" />));
+    const el = screen.getByTestId("child");
+    expect(screen.getByTestId("hub-switch-toggle")).toBeTruthy();
+    act(() => {
+      phoneNow = true;
+      listeners.forEach((l) => l());
+    });
+    expect(screen.queryByTestId("hub-switch-toggle")).toBeNull();
+    expect(screen.getByTestId("child")).toBe(el);
+    act(() => {
+      phoneNow = false;
+      listeners.forEach((l) => l());
+    });
+    expect(screen.getByTestId("hub-switch-toggle")).toBeTruthy();
+    expect(screen.getByTestId("child")).toBe(el);
   });
 });
