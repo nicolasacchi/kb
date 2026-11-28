@@ -19,7 +19,7 @@ export function AttentionMarks({ termId }: { termId: string }): ReactElement | n
       ) : null}
       {mark.finishedUnseen ? (
         <span className="kb-hubmark kb-hubmark--finished" data-testid="mark-finished">
-          <span aria-hidden="true">&#10003; </span>finished
+          <span aria-hidden="true">+ </span>finished
         </span>
       ) : null}
     </span>
