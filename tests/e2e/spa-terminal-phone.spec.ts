@@ -1348,3 +1348,29 @@ test.describe("PHIN1 phone cursor-follow @phone", () => {
     await expect.poll(() => num(page, "sl")).toBeGreaterThan(panned);
   });
 });
+
+// CONVNEED: the needs-you banner must stay above the panel's modal Sheet (the
+// panel is portaled to body; an in-flow banner would sit behind its scrim).
+test.describe("CONVNEED phone needs-you banner @phone", () => {
+  test("the banner is visible, topmost and tappable above the terminal sheet", async ({ page }) => {
+    const stats = (await openPhone(page, { total: 500, seedLines: 500, drive: true })) as Stats & {
+      setBlocked(on: boolean, tool?: string): void;
+    };
+    stats.setBlocked(true, "Bash");
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    const banner = page.locator('[data-testid="needs-you"]');
+    await expect(banner).toBeVisible({ timeout: 25_000 });
+    await expect(banner).toBeInViewport();
+    const jump = page.locator('[data-testid="needs-you-jump"]');
+    const box = (await jump.boundingBox())!;
+    expect(box.height).toBeGreaterThanOrEqual(44);
+    // Hit-test the button centre: the topmost element must be the button itself.
+    const top = await page.evaluate(({ x, y }) => {
+      const el = document.elementFromPoint(x, y);
+      return !!el?.closest('[data-testid="needs-you-jump"]');
+    }, { x: box.x + box.width / 2, y: box.y + box.height / 2 });
+    expect(top).toBe(true);
+    await jump.tap();
+    await expect(page.locator('[data-testid="term-sheet-handle"]')).toHaveAttribute("aria-expanded", "true");
+  });
+});

@@ -232,4 +232,11 @@ describe("ConversationRail", () => {
     await waitFor(() => expect(hasPendingJump()).toBe(false));
     expect(document.activeElement).toBe(before);
   });
+
+  it("a request made while the rail shows a terminal non-ready state is cleared, not left to steal focus later", async () => {
+    mockFetch(404, {});
+    mount("sid-1");
+    act(() => requestPendingJump());
+    await waitFor(() => expect(hasPendingJump()).toBe(false));
+  });
 });

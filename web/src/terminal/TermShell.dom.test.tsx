@@ -251,7 +251,8 @@ describe("TermShell needs-you banner", () => {
     render(shell({ header: <div data-testid="hdr">h</div> }));
     const root = screen.getByTestId("term-shell");
     const banner = screen.getByTestId("needs-you");
-    expect(banner.parentElement).toBe(root);
+    expect(banner.parentElement).toBe(screen.getByTestId("term-needs-slot"));
+    expect(screen.getByTestId("term-needs-slot").parentElement).toBe(root);
     expect(follows(screen.getByTestId("hdr"), banner)).toBe(true);
     expect(follows(banner, screen.getByTestId("pane"))).toBe(true);
   });

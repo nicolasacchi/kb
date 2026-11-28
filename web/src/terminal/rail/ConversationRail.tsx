@@ -121,11 +121,15 @@ export function ConversationRail(): ReactElement {
 
   // CONVNEED: a jump request from the needs-you banner scrolls to and focuses
   // the pending row once rows are rendered. A non-ready state leaves the
-  // request alive (it expires); a missing pending row just clears it.
+  // request alive only while a capture may still land (loading); a terminal
+  // state (none/empty/error) or a missing pending row clears it.
   useEffect(() => {
     if (!hasPendingJump()) return;
     const root = rootRef.current;
-    if (!root) return;
+    if (!root) {
+      if (!q.isPending) clearPendingJump();
+      return;
+    }
     const chip = root.querySelector('[data-pending="true"]');
     const row = chip?.closest<HTMLElement>('[data-testid="conv-row"]') ?? null;
     if (!row) {
@@ -140,7 +144,7 @@ export function ConversationRail(): ReactElement {
     row.tabIndex = -1;
     row.scrollIntoView?.({ block: "nearest" });
     row.focus();
-  }, [jumpTick, q.data, filter]);
+  }, [jumpTick, q.data, q.isPending, filter]);
 
   // A local re-render tick for the freshness caption: a timer, never a fetch.
   useEffect(() => {

@@ -172,3 +172,22 @@
   overflow: auto;
   min-height: 0;
 }
+
+/* CONVNEED: desktop the slot is plain flow (display: contents keeps the old box
+ * tree); phone it is a fixed top strip above the modal sheet, never clipped. */
+.kb-termshell__needs {
+  display: contents;
+}
+.kb-termshell[data-kb-term-layout="phone"] .kb-termshell__needs {
+  display: block;
+  position: fixed;
+  top: env(safe-area-inset-top, 0);
+  left: 0;
+  right: 0;
+  z-index: var(--z-modal);
+  max-height: 40dvh;
+  overflow-y: auto;
+}
+.kb-termshell[data-kb-term-layout="phone"] .kb-termshell__needs:empty {
+  display: none;
+}

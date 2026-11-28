@@ -247,7 +247,11 @@ export function TermShell(props: TermShellProps): ReactElement {
             </button>
           )}
         </div>
-        <NeedsYouBanner onJump={jumpToPending} />
+        {/* Phone: the panel's own modal Sheet is portaled to body, above in-flow shell
+            content, so the banner rides a fixed strip at --z-modal (see termShell.css). */}
+        <div className="kb-termshell__needs" data-testid="term-needs-slot">
+          <NeedsYouBanner onJump={jumpToPending} />
+        </div>
         <div className="kb-termshell__body">
           <div className="kb-termshell__pane">{props.children}</div>
           {phone ? null : (

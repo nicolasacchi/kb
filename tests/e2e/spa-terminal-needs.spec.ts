@@ -97,6 +97,7 @@ test.describe("CONVNEED needs-you banner", () => {
     await page.goto(`${BASE}/terminals/${TERM_ID}`);
     const pane = page.locator(".kb-termshell__pane");
     await expect(pane).toBeVisible({ timeout: 20_000 });
+    const before = (await pane.boundingBox())!;
     await expect(page.locator('[data-testid="needs-you"]')).toHaveCount(0);
 
     live.blocked = true;
@@ -113,6 +114,9 @@ test.describe("CONVNEED needs-you banner", () => {
     const bb = (await banner.boundingBox())!;
     const pb = (await pane.boundingBox())!;
     expect(bb.y + bb.height).toBeLessThanOrEqual(pb.y + 1);
+    // The pane keeps its width; any height change is only the banner's own block.
+    expect(Math.abs(pb.width - before.width)).toBeLessThanOrEqual(1);
+    expect(before.height - pb.height).toBeLessThanOrEqual(bb.height + 12 + 1);
 
     live.blocked = false;
     await page.evaluate(() => window.dispatchEvent(new Event("focus")));
