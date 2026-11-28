@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 //
-// BSHELL - a terminal lives at /terminals/:id. The Terminals list's Open is a link
-// that PUSHES the page, and the legacy `/sessions?term=<id>` deep link
-// REDIRECTS there with `replace` (Back never lands on the old URL); an invalid
-// `?term=` value is ignored.
+// BSHELL - a terminal lives at /terminals/:id and the legacy
+// `/sessions?term=<id>` deep link REDIRECTS there with `replace` (Back never
+// lands on the old URL); an invalid `?term=` value is ignored.
+// HUBHOST - /sessions no longer lists terminals or launches them: one compact
+// link to the hub carries the counts.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -97,12 +98,12 @@ const TERM = {
   stale: false,
 };
 
-function stubTerms() {
+function stubTerms(terms: unknown[] = [TERM]) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string | URL) =>
       String(url).includes("/api/terms")
-        ? new Response(JSON.stringify({ terms: [TERM] }), {
+        ? new Response(JSON.stringify({ terms }), {
             status: 200,
             headers: { "Content-Type": "application/json" },
           })
@@ -141,16 +142,6 @@ function mountAt(entries: string[], index?: number) {
 const loc = () => screen.getByTestId("loc").textContent;
 
 describe("/sessions -> /terminals/:id (BSHELL)", () => {
-  it("Open pushes /terminals/<id>; Back returns to the list", async () => {
-    stubTerms();
-    mountAt(["/sessions"]);
-    fireEvent.click(await screen.findByTestId("term-row-open"));
-    await screen.findByTestId("term-page");
-    expect(loc()).toBe("/terminals/t1");
-    fireEvent.click(screen.getByTestId("back"));
-    await waitFor(() => expect(loc()).toBe("/sessions"));
-  });
-
   it("the legacy ?term=<id> link redirects with replace: Back skips it", async () => {
     stubTerms();
     mountAt(["/sessions?q=before", "/sessions?term=t1"], 1);
@@ -164,8 +155,40 @@ describe("/sessions -> /terminals/:id (BSHELL)", () => {
   it("an invalid ?term= value is ignored: no redirect", async () => {
     stubTerms();
     mountAt(["/sessions?term=BAD/.."]);
-    await screen.findByTestId("term-row");
+    await screen.findByTestId("sessions-terminals-link");
     expect(screen.queryByTestId("term-page")).toBeNull();
     expect(loc()).toBe("/sessions?term=BAD/..");
+  });
+});
+
+describe("/sessions terminals trim (HUBHOST)", () => {
+  it("has no terminal list and no launcher, only one link with counts", async () => {
+    stubTerms([TERM, { ...TERM, id: "t2", blocked: true }, { ...TERM, id: "t3", pane_dead: true }]);
+    mountAt(["/sessions"]);
+    const link = await screen.findByTestId("sessions-terminals-link");
+    await waitFor(() => expect(link.textContent).toBe("Terminals (2 running, 1 need you)"));
+    expect(link.getAttribute("href")).toBe("/terminals");
+    expect(screen.queryByTestId("term-list")).toBeNull();
+    expect(screen.queryByTestId("term-row")).toBeNull();
+    expect(screen.queryByTestId("new-terminal")).toBeNull();
+    expect(screen.queryByTestId("new-terminal-open")).toBeNull();
+  });
+
+  it("with zero terminals the link reads plain Terminals", async () => {
+    stubTerms([]);
+    mountAt(["/sessions"]);
+    await waitFor(() => expect(screen.getByTestId("sessions-terminals-link").textContent).toBe("Terminals"));
+  });
+
+  it("not admitted or identity not loaded: no link at all (fail closed)", () => {
+    stubTerms();
+    admitted = false;
+    mountAt(["/sessions"]);
+    expect(screen.queryByTestId("sessions-terminals-link")).toBeNull();
+    cleanup();
+    admitted = undefined;
+    mountAt(["/sessions"]);
+    expect(screen.queryByTestId("sessions-terminals-link")).toBeNull();
+    admitted = true;
   });
 });

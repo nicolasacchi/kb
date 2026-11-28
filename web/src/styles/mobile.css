@@ -535,24 +535,10 @@ body.kb-immersive .kb-folio-colophon {
     cursor: pointer;
   }
 
-  /* FUWEBLAUNCH — New terminal / Resume in a kb terminal: full-width form
-   * fields and 44px touch targets (MB5). the 17px type step (at least 16px) keeps iOS from zooming
-   * the page when the directory input takes focus. */
-  .kb-ses__newterm {
-    padding: 0 var(--pad-3);
-  }
-  .kb-ses__newterm-field select,
-  .kb-ses__newterm-field input {
+  /* Launcher form sizing lives in terminal/hub/LaunchDialog.css; the shared
+   * button class keeps its 44px touch target. */
+  .kb-ses__newterm-btn {
     min-height: 44px;
-    font-size: var(--fs-xl);
-    width: 100%;
-    box-sizing: border-box;
-  }
-  .kb-ses__newterm .kb-ses__newterm-btn,
-  .kb-ses__newterm .kb-ses__resume-copy,
-  .kb-ses__handoff .kb-ses__resume-copy {
-    min-height: 44px;
-    padding: 0 var(--pad-3);
   }
 
   /* ContextBar: scroll the action row horizontally instead of overflowing

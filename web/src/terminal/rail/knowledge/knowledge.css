@@ -1,0 +1,102 @@
+/* RAILKNOW — the Knowledge tab. Tokens only; single column; 40px targets. */
+.kb-knowrail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-3);
+  min-width: 0;
+  color: var(--ink);
+}
+.kb-knowrail__lane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+  min-width: 0;
+}
+.kb-knowrail__h {
+  margin: 0;
+  font-size: var(--fs-md);
+  color: var(--ink);
+}
+.kb-knowrail__sub {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+}
+.kb-knowrail__fresh {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+}
+.kb-knowrail__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.kb-knowrail__row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-1);
+  padding: var(--pad-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  min-width: 0;
+}
+.kb-knowrail__rowhead,
+.kb-knowrail__tools,
+.kb-knowrail__scopes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pad-1);
+}
+.kb-knowrail__title,
+.kb-knowrail__summary,
+.kb-knowrail__query {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--fs-sm);
+}
+.kb-knowrail__summary,
+.kb-knowrail__query {
+  color: var(--ink-mute);
+}
+.kb-knowrail__chip {
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--pad-1);
+}
+.kb-knowrail__btn,
+.kb-knowrail__input {
+  box-sizing: border-box;
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  background: var(--bg-card);
+  color: var(--ink);
+  border: 1px solid var(--rule-hi);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  padding: var(--pad-1) var(--pad-2);
+  cursor: pointer;
+  text-decoration: none;
+}
+.kb-knowrail__input {
+  width: 100%;
+  cursor: text;
+}
+.kb-knowrail__btn:hover,
+.kb-knowrail__input:focus {
+  border-color: var(--accent);
+}
+.kb-knowrail__btn[aria-checked="true"] {
+  border-color: var(--accent);
+}
+.kb-knowrail__btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

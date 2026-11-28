@@ -888,6 +888,35 @@ export async function fetchSession(
   return (await r.json()) as SessionDetail;
 }
 
+/** A non-404 failure of `GET /api/sessions/{id}` (a server error, not "unknown"). */
+export class SessionFetchError extends Error {
+  readonly status: number;
+  constructor(status: number) {
+    super(`session detail: ${status}`);
+    this.name = "SessionFetchError";
+    this.status = status;
+  }
+}
+
+/**
+ * Like `fetchSession`, but only a 404 is `null` ("unknown session"): any other
+ * non-ok answer throws `SessionFetchError` so a caller can tell "does not exist"
+ * from "could not load" (the launcher's prefill must not call a 500 unknown).
+ * `fetchSession` is shared and keeps its lenient null.
+ */
+export async function fetchSessionStrict(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<SessionDetail | null> {
+  const r = await fetch(
+    `${currentDaemonBase()}/api/sessions/${encodeURIComponent(sessionId)}`,
+    { headers: { Accept: "application/json" }, signal },
+  );
+  if (r.status === 404) return null;
+  if (!r.ok) throw new SessionFetchError(r.status);
+  return (await r.json()) as SessionDetail;
+}
+
 const EMPTY_WHY: WhyResponse = { path: "", basename: "", sessions: [] };
 
 // R2 — why is this file the way it is: the touching sessions + their reasoning.
