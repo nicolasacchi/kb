@@ -235,6 +235,8 @@ struct Stack {
     addr: std::net::SocketAddr,
     /// The files corpus source root, when one is configured.
     files_root: Option<std::path::PathBuf>,
+    /// The daemon's cache dir (the private upload spool lives beneath it).
+    cache: std::path::PathBuf,
 }
 
 async fn boot(fake: &Fake, files: bool, prep: impl FnOnce(&std::path::Path)) -> Stack {
@@ -275,6 +277,7 @@ async fn boot(fake: &Fake, files: bool, prep: impl FnOnce(&std::path::Path)) -> 
         ..Default::default()
     };
     let paths = KbPaths::rooted_at(tmp.path(), daemon_name);
+    let cache = paths.cache.clone();
     let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)
         .await
         .expect("serve");
@@ -283,6 +286,7 @@ async fn boot(fake: &Fake, files: bool, prep: impl FnOnce(&std::path::Path)) -> 
         _tmp: tmp,
         addr,
         files_root: files.then_some(files_root),
+        cache,
     }
 }
 
@@ -783,4 +787,77 @@ async fn a_kbblob_is_never_served_on_an_artifact_origin() {
     let missing = get("/nope.kbblob").await;
     assert_eq!(missing.status().as_u16(), 404);
     assert_eq!(missing.text().await.unwrap(), "artifact not found");
+}
+
+// ---------------------------------------------- spool cleanup (FXSAVE carry)
+
+/// Names of the files left in the private upload spool.
+fn spool_leftovers(cache: &std::path::Path) -> Vec<String> {
+    std::fs::read_dir(cache.join("term-upload-spool"))
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The spool is removed by a guard on drop; poll briefly so a handler
+/// future that is dropped after the client went away has time to unwind.
+async fn assert_spool_empty(cache: &std::path::Path, what: &str) {
+    for _ in 0..50 {
+        if spool_leftovers(cache).is_empty() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("{what}: spool not empty: {:?}", spool_leftovers(cache));
+}
+
+#[tokio::test]
+async fn the_spool_is_empty_after_success_a_runner_error_and_a_client_disconnect() {
+    // (a) success: the bytes were kept and the spool is gone.
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path());
+    let st = boot(&fake, true, |_| {}).await;
+    let resp = files_req(st.addr, "?name=a.bin", filler(3 * MIB))
+        .send()
+        .await
+        .unwrap();
+    let v: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(v["kb"]["status"], "stored", "{v}");
+    assert_spool_empty(&st.cache, "after success").await;
+
+    // (b) a runner error mid-stream.
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path());
+    fake.script.lock().unwrap().fail_append_at = Some(1);
+    let st = boot(&fake, true, |_| {}).await;
+    let resp = files_req(st.addr, "?name=a.bin", filler(20 * MIB))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 502);
+    assert_spool_empty(&st.cache, "after a runner error").await;
+
+    // (c) the client disconnects after the first chunk (the handler is
+    // dropped or errors mid-stream; either way the spool must go).
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path());
+    let st = boot(&fake, true, |_| {}).await;
+    {
+        let mut s = tokio::net::TcpStream::connect(st.addr).await.unwrap();
+        let head = format!(
+            "POST /api/terms/{TERM_ID}/files?name=a.bin HTTP/1.1\r\nHost: {}\r\nOrigin: http://{}\r\nx-kb-intent: terminal\r\nContent-Length: {}\r\n\r\n",
+            st.addr,
+            st.addr,
+            20 * MIB
+        );
+        s.write_all(head.as_bytes()).await.unwrap();
+        s.write_all(&filler(9 * MIB)).await.unwrap();
+        wait_for_op(&fake, "upload_append").await;
+        // Dropped here: the connection closes mid-body.
+    }
+    wait_for_op(&fake, "upload_abort").await;
+    assert_spool_empty(&st.cache, "after a client disconnect").await;
 }

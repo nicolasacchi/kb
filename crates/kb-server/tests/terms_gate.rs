@@ -1807,6 +1807,8 @@ fn every_get_suffix() -> Vec<String> {
     v.push("/abcd1234/file".to_string());
     v.push("/abcd1234/ls?path=sub&root=up".to_string());
     v.push("/abcd1234/file?path=a.txt".to_string());
+    // FXSAVE: the kept-original read takes the same `gate_read` gate.
+    v.push("/abcd1234/kept/0123456789abcdef".to_string());
     v
 }
 
@@ -3306,6 +3308,114 @@ async fn files_route_gate_matrix_refuses_before_the_runner_is_dialled() {
         .post(files_url(addr, "BAD_ID"))
         .header("x-kb-intent", "terminal")
         .body(vec![1u8; 16])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 403);
+
+    assert_eq!(
+        fake.conns.load(Ordering::SeqCst),
+        0,
+        "a refused request must never dial the runner"
+    );
+}
+
+// ---------------------------------------------------------------- FXSAVE
+// `POST /api/terms/{id}/files/keep` runs the same handler gate as every other
+// terminal POST, before any id, body or configuration handling. (The blob
+// read `GET .../kept/{artifact_id}` is in `every_get_suffix` above.)
+
+fn keep_url(addr: std::net::SocketAddr, id: &str) -> String {
+    format!("{}/api/terms/{id}/files/keep", base_url(addr))
+}
+
+const KEEP_BODY: &str = r#"{"path":"a.txt"}"#;
+
+#[tokio::test]
+async fn keep_route_disabled_is_a_bodiless_404() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (_tmp, addr) = boot(TerminalSection::default(), &fake, false).await;
+    let resp = client()
+        .post(keep_url(addr, TERM_ID))
+        .header("Origin", origin_header(addr))
+        .header("x-kb-intent", "terminal")
+        .header("content-type", "application/json")
+        .body(KEEP_BODY)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 404);
+    assert!(resp.headers().get("content-type").is_none());
+    let (_s, text) = body_text(resp).await;
+    assert!(text.is_empty(), "bodiless, got: {text}");
+    assert_eq!(fake.conns.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn keep_route_gate_matrix_refuses_before_the_runner_is_dialled() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = spawn_fake(tmp.path(), Default::default());
+    let (_tmp, addr) = boot(enabled_terminal(), &fake, true).await;
+    let c = client();
+    let url = keep_url(addr, TERM_ID);
+    let post = |u: &str| {
+        c.post(u.to_string())
+            .header("content-type", "application/json")
+            .body(KEEP_BODY)
+    };
+
+    // No Origin (loopback does not bypass).
+    let resp = post(&url)
+        .header("x-kb-intent", "terminal")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 403);
+    let (_s, text) = body_text(resp).await;
+    assert_problem(&text, "terminal-origin-refused");
+
+    // A wrong Origin.
+    let resp = post(&url)
+        .header("Origin", "https://evil.example")
+        .header("x-kb-intent", "terminal")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 403);
+    let (_s, text) = body_text(resp).await;
+    assert_problem(&text, "origin-refused");
+
+    // Missing and wrong intent.
+    for intent in [None, Some("nope")] {
+        let mut req = post(&url).header("Origin", origin_header(addr));
+        if let Some(v) = intent {
+            req = req.header("x-kb-intent", v);
+        }
+        let resp = req.send().await.unwrap();
+        assert_eq!(resp.status().as_u16(), 403, "intent {intent:?}");
+        let (_s, text) = body_text(resp).await;
+        assert_problem(&text, "terminal-intent-required");
+    }
+
+    // A token caller is refused by default.
+    let resp = post(&url)
+        .header("Origin", origin_header(addr))
+        .header("x-kb-intent", "terminal")
+        .header("Authorization", format!("Bearer {FIXTURE_TOKEN}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 403);
+    let (_s, text) = body_text(resp).await;
+    assert_problem(&text, "terminal-token-refused");
+
+    // The gate runs before the id and body checks: a refused caller never
+    // learns whether the id or the body was valid.
+    let resp = c
+        .post(keep_url(addr, "BAD_ID"))
+        .header("x-kb-intent", "terminal")
+        .body("not json")
         .send()
         .await
         .unwrap();

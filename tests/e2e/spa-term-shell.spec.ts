@@ -23,13 +23,13 @@ async function expectLive(page: Page): Promise<void> {
 }
 
 test.describe("BSHELL /terminals/:id", () => {
-  test("(a) /sessions row Open lands on /terminals/<id> with the shell and a live viewport", async ({ page }) => {
+  test("(a) a /terminals hub row lands on /terminals/<id> with the shell and a live viewport", async ({ page }) => {
     await installFakeTerminal(page, { total: 300, seedLines: 100 });
     await admit(page);
-    await page.goto(`${BASE}/sessions`);
-    const row = page.locator(`[data-testid="term-row"][data-term="${TERM_ID}"]`);
+    await page.goto(`${BASE}/terminals`);
+    const row = page.locator(`[data-testid="hub-row"][data-term="${TERM_ID}"]`);
     await expect(row).toBeVisible({ timeout: 20_000 });
-    await row.locator('[data-testid="term-row-open"]').click();
+    await row.click();
     await expect(page).toHaveURL(new RegExp(`/terminals/${TERM_ID}$`));
     await expect(page.locator('[data-testid="term-shell"]')).toBeVisible();
     await expect(page.locator('[data-testid="term-shell"]')).toHaveAttribute("data-kb-term-layout", "desktop");
@@ -204,5 +204,23 @@ test.describe("BSTATE terminal state overlays", () => {
     await expect(card).toContainText("exited (code 3)");
     await page.locator('[data-testid="kb-term-overlay-action"]').click();
     await expect(page).not.toHaveURL(new RegExp(`/term/${TERM_ID}$`));
+  });
+
+  test("BA11Y the pane is a named region and the rail tabs follow the tabs pattern", async ({ page }) => {
+    await installFakeTerminal(page, { total: 300, seedLines: 100 });
+    await admit(page);
+    await page.goto(`${BASE}/term/${TERM_ID}`);
+    await expectLive(page);
+    await expect(page.getByRole("region", { name: /terminal/ }).first()).toBeVisible();
+    const list = page.getByRole("tablist");
+    await expect(list.getByRole("tab")).toHaveCount(7);
+    await expect(list.locator('[role="tab"][tabindex="0"]')).toHaveCount(1);
+    const active = list.locator('[role="tab"][aria-selected="true"]');
+    await active.focus();
+    const before = await active.getAttribute("id");
+    await page.keyboard.press("ArrowRight");
+    const moved = list.locator('[role="tab"][aria-selected="true"]');
+    expect(await moved.getAttribute("id")).not.toBe(before);
+    await expect(page.getByRole("tabpanel")).toHaveAttribute("aria-labelledby", (await moved.getAttribute("id")) ?? "");
   });
 });

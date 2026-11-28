@@ -16,8 +16,8 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Icon } from "@kb/ui/icons";
-import { Sheet } from "@kb/ui/Sheet";
-import { fetchSession, fetchSessionsPage } from "../../api/sessions";
+import { Sheet, type Detent } from "@kb/ui/Sheet";
+import { fetchSessionStrict, fetchSessionsPage } from "../../api/sessions";
 import { launchTerm } from "../../api/terms";
 import {
   loadLastTermHarness,
@@ -77,6 +77,7 @@ function LaunchBody({ onClose, onLaunched, prefill }: LaunchDialogProps) {
   const [picked, setPicked] = useState<Target | null>(null);
   const [launching, setLaunching] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [detent, setDetent] = useState<Detent>("full");
   const [search, setSearch] = useState("");
   const [q, setQ] = useState("");
   const listId = useId();
@@ -118,7 +119,7 @@ function LaunchBody({ onClose, onLaunched, prefill }: LaunchDialogProps) {
   const prefillSid = prefill?.resumeSid;
   const prefillQ = useQuery({
     queryKey: ["term-launch-prefill", prefillSid] as const,
-    queryFn: ({ signal }) => fetchSession(prefillSid as string, signal),
+    queryFn: ({ signal }) => fetchSessionStrict(prefillSid as string, signal),
     staleTime: 30_000,
     enabled: prefillSid !== undefined,
     retry: false,
@@ -127,10 +128,15 @@ function LaunchBody({ onClose, onLaunched, prefill }: LaunchDialogProps) {
   // The prefill outcome, derived from the fetched row only.
   let prefillTarget: Target | null = null;
   let prefillError: string | null = null;
+  // A server/network failure is an ERROR with a Retry; only a 404 is "unknown".
+  let prefillRetry = false;
   let prefillLoading = false;
   if (prefillSid !== undefined) {
     if (prefillQ.isPending) prefillLoading = true;
-    else if (prefillQ.isError && !prefillQ.data) prefillError = "Could not load that session.";
+    else if (prefillQ.isError) {
+      prefillError = "Could not load that session.";
+      prefillRetry = true;
+    }
     else if (!prefillQ.data || prefillQ.data.session_id !== prefillSid) {
       prefillError = "Unknown session: nothing to resume.";
     } else {
@@ -228,7 +234,9 @@ function LaunchBody({ onClose, onLaunched, prefill }: LaunchDialogProps) {
       (e: unknown) => {
         if (ctl.signal.aborted) return;
         busy.current = false;
-        const msg = e instanceof Error ? e.message : String(e);
+        // Any problem+json refusal reads "<title>: <detail>" (TermsApiError);
+        // shown verbatim, never keyed on its type or status.
+        const msg = (e instanceof Error ? e.message : String(e)).replace(/:\s*$/, "");
         setError(msg);
         toast.err(`terminal launch failed: ${msg}`);
         setLaunching(false);
@@ -322,9 +330,20 @@ function LaunchBody({ onClose, onLaunched, prefill }: LaunchDialogProps) {
         </div>
       )}
       {prefillError && (
-        <p role="alert" className="kb-launch__err" data-testid="launch-prefill-error">
-          {prefillError}
-        </p>
+        <div role="alert" className="kb-launch__err" data-testid="launch-prefill-error" data-retry={prefillRetry ? "1" : "0"}>
+          <p>{prefillError}</p>
+          {prefillRetry && (
+            <button
+              type="button"
+              className="kb-launch__btn"
+              data-testid="launch-prefill-retry"
+              disabled={prefillQ.isFetching}
+              onClick={() => void prefillQ.refetch()}
+            >
+              Retry
+            </button>
+          )}
+        </div>
       )}
       {prefillTarget && (
         <dl className="kb-launch__facts">
@@ -520,9 +539,12 @@ function LaunchBody({ onClose, onLaunched, prefill }: LaunchDialogProps) {
     return (
       <Sheet
         open
-        detent="full"
+        detent={detent}
+        // The form needs the full height: a peek request (drag or Arrow key)
+        // snaps back to full, only "closed" dismisses. Never a clipped peek.
         onDetentChange={(d) => {
           if (d === "closed") close();
+          else setDetent("full");
         }}
         onClose={close}
         title={title}

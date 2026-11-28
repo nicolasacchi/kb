@@ -1657,7 +1657,7 @@ for (const vp of [
     expect(g.screenH, "Fit filled the view that can be seen").toBeGreaterThan(g.viewH * 0.6);
   });
 
-  test(`FUTERMPOLISH W2: the /sessions New terminal launch stays inside the window at ${vp.width}x${vp.height}`, async ({ page, request }) => {
+  test(`FUTERMPOLISH W2: the /terminals New session launch stays inside the window at ${vp.width}x${vp.height}`, async ({ page, request }) => {
     test.setTimeout(240_000);
     await page.setViewportSize(vp);
     const c = await prepare(page, request, winchHarness(), { cols: 120, rows: 40 });
@@ -1674,10 +1674,11 @@ for (const vp of [
       }
       return route.fallback();
     });
-    await page.goto(`${MAIN}/sessions`);
-    await page.locator('[data-testid="new-terminal-open"]').click();
-    await page.locator('[data-testid="new-terminal-cwd"]').fill("/synthetic");
-    await page.locator('[data-testid="new-terminal-launch"]').click();
+    await page.goto(`${MAIN}/terminals`);
+    await page.locator('[data-testid="hub-new"]').click();
+    await page.locator('[data-testid="launch-cwd"]').fill("/synthetic");
+    await page.locator('[data-testid="launch-review"]').click();
+    await page.locator('[data-testid="launch-confirm"]').click();
     await expect(page.locator("[data-kb-term]")).toBeVisible({ timeout: 30_000 });
     await waitPhase(page, "live");
     await expect
@@ -1958,7 +1959,7 @@ test.describe.serial("T25 in-process restart", () => {
   });
 });
 
-test("FUTERMLIST: End from the /sessions Terminals list asks first, kills the pane, and the row goes away on the lifecycle event", async ({ page, request }) => {
+test("FUTERMLIST: End from the /terminals hub asks first, kills the pane, and the row goes away on the lifecycle event", async ({ page, request }) => {
   test.setTimeout(120_000);
   await page.setViewportSize({ width: 1280, height: 800 });
   const c = await prepare(page, request, idleHarness(), { cols: 120, rows: 40 });
@@ -1971,8 +1972,8 @@ test("FUTERMLIST: End from the /sessions Terminals list asks first, kills the pa
   page.on("request", (r) => {
     if (r.method() === "POST" && /\/api\/terms\/[^/]+\/kill$/.test(r.url())) kills.push(r.url());
   });
-  await page.goto(`${MAIN}/sessions`);
-  const row = page.locator(`[data-testid="term-row"][data-term="${c.term.id}"]`);
+  await page.goto(`${MAIN}/terminals`);
+  const row = page.locator(`[data-testid="hub-item"][data-term="${c.term.id}"]`);
   await expect(row).toBeVisible({ timeout: 30_000 });
   // Cancel: nothing is sent, the pane lives.
   await row.locator('[data-testid="kb-term-end"]').click();

@@ -3,12 +3,23 @@
 // A4 — the /sessions/:sid page against fixture cards (the real kb-term
 // lane does not exist yet, so the terminal slot is only exercised by its
 // invariant test). Each behaviour must fail without the change it pins.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import SessionPage, { ChildrenSection } from "./sessionPage";
 import type { SessionDetail } from "../api/sessions";
+
+// HUBHOST: the Continue door reads the caller's identity (terminal_admitted),
+// not the card, so the identity is a per-test knob.
+const idm = vi.hoisted(() => ({ admitted: true }));
+vi.mock("../hooks/useArtifactHost", async (orig) => {
+  const real = await orig<typeof import("../hooks/useArtifactHost")>();
+  return {
+    ...real,
+    useIdentity: () => ({ ...(real.useIdentity() ?? {}), terminal_admitted: idm.admitted }) as ReturnType<typeof real.useIdentity>,
+  };
+});
 const SID = "abcdef0123456789";
 
 const DETAIL = {
@@ -982,6 +993,9 @@ describe("SessionPage resume in a kb terminal", () => {
     );
     for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
   }
+  beforeEach(() => {
+    idm.admitted = true;
+  });
   const admitted = (extra: Record<string, unknown> = {}) => ({
     available: false,
     reason: "no live terminal",
@@ -995,10 +1009,12 @@ describe("SessionPage resume in a kb terminal", () => {
       mockFetch({ card: fullCard({ terminal: admitted() }), detail: withCwd }),
     );
     renderPage();
-    expect(await screen.findByTestId("session-resume-term-go")).toBeTruthy();
+    const door = await screen.findByTestId("continue-in-terminal");
+    expect(door.getAttribute("href")).toBe(`/terminals?launch=1&resume=${SID}`);
   });
 
   it("hides it when the tier is disabled for the caller", async () => {
+    idm.admitted = false;
     const f = mockFetch({
       card: fullCard({ terminal: { available: false, reason: "terminal disabled", admitted: false } }),
       detail: withCwd,
@@ -1007,7 +1023,7 @@ describe("SessionPage resume in a kb terminal", () => {
     renderPage();
     await screen.findByTestId("session-sec-resume");
     await detailSettled(f);
-    expect(screen.queryByTestId("session-resume-term-go")).toBeNull();
+    expect(screen.queryByTestId("continue-in-terminal")).toBeNull();
   });
 
   it("hides it when the session already has a live bound terminal", async () => {
@@ -1021,7 +1037,7 @@ describe("SessionPage resume in a kb terminal", () => {
     renderPage();
     await screen.findByTestId("session-sec-resume");
     await detailSettled(f);
-    expect(screen.queryByTestId("session-resume-term-go")).toBeNull();
+    expect(screen.queryByTestId("continue-in-terminal")).toBeNull();
   });
 
   it("hides it when the session has no recorded cwd", async () => {
@@ -1030,6 +1046,6 @@ describe("SessionPage resume in a kb terminal", () => {
     renderPage();
     await screen.findByTestId("session-sec-resume");
     await detailSettled(f);
-    expect(screen.queryByTestId("session-resume-term-go")).toBeNull();
+    expect(screen.queryByTestId("continue-in-terminal")).toBeNull();
   });
 });
